@@ -113,6 +113,7 @@ export
 
     # Scene graph
     AbstractObject3D, Object3D, Scene, Group, Mesh, LineObject, PointsObject,
+    AbstractFog, Fog, FogExp2,
     add!, remove!, traverse, collect_meshes,
     get_position, get_rotation, get_scale, get_children, get_parent,
     is_visible, compute_local_matrix, compute_world_matrix,
@@ -121,8 +122,8 @@ export
     # Objects (§2 breadth)
     InstancedMesh, instanced_count, set_instance_matrix!, get_instance_matrix,
     collect_instanced,
-    LineSegments, Sprite, sprite_world_matrix,
-    LOD, add_lod_level!, lod_select,
+    LineSegments, LineLoop, Sprite, sprite_world_matrix,
+    LOD, add_lod_level!, lod_select, lod_update!,
     Bone, Skeleton, skeleton_matrices, SkinnedMesh, apply_skinning,
     Layers, layers_set!, layers_enable!, layers_disable!, layers_toggle!,
     layers_enable_all!, layers_disable_all!, layers_test,
@@ -154,6 +155,7 @@ export
     MeshBasicMaterial, MeshLambertMaterial, MeshPhongMaterial,
     MeshStandardMaterial, MeshNormalMaterial,
     MeshPhysicalMaterial, MeshToonMaterial, MeshMatcapMaterial, MeshDepthMaterial,
+    SpriteMaterial,
     LineBasicMaterial, PointsMaterial, ShaderMaterial,
     material_opacity, material_transparent, is_transparent_material,
 
@@ -187,10 +189,17 @@ export
     loss_mse, loss_l1, loss_ssim, loss_silhouette_iou,
 
     # Controls / Animation / Helpers
-    OrbitControls, orbit_set!, orbit_rotate!, orbit_zoom!, orbit_pan!,
+    OrbitControls, orbit_set!, orbit_save_state!, orbit_reset!,
+    orbit_rotate!, orbit_zoom!, orbit_pan!,
     TrackballControls, trackball_rotate!, FlyControls, fly_translate!, fly_rotate!,
+    PointerLockControls, pointerlock_lock!, pointerlock_unlock!, pointerlock_move!,
+    DragControls, drag_start!, drag_move!, drag_end!,
+    TransformControls, transform_attach!, transform_detach!, transform_set_mode!,
+    transform_set_space!, transform_apply!,
     Clock, clock_elapsed, clock_delta!,
-    KeyframeTrack, AnimationClip, AnimationMixer, mixer_set_time!, mixer_update!,
+    KeyframeTrack, NumberKeyframeTrack, MorphWeightsKeyframeTrack, AnimationClip, AnimationMixer, mixer_set_time!, mixer_update!,
+    CubicSplineKeyframeTrack, CubicSplineQuaternionKeyframeTrack,
+    CubicSplineMorphWeightsKeyframeTrack,
     AxesHelper, GridHelper, BoxHelper, CameraHelper,
     DirectionalLightHelper, PointLightHelper,
 
@@ -202,7 +211,7 @@ export
     # Textures
     Texture, DataTexture, CanvasTexture, DepthTexture, CubeTexture,
     sample_texture, sample_texture_lod, sample_cube, generate_mipmaps!,
-    checker_texture, grid_texture,
+    checker_texture, grid_texture, texture_transform_uv, texture_update_matrix!,
 
     # I/O
     save_ppm, save_ppm_binary, render_target_to_image, test_pattern,
@@ -221,7 +230,7 @@ export
     SpotLightHelper, HemisphereLightHelper, SkeletonHelper, PlaneHelper, PolarGridHelper,
     object_layers,
     sample_texture_linear, sample_texture_auto,
-    add_group!, get_groups, clear_groups!,
+    add_group!, get_groups, clear_groups!, apply_morph_targets,
     render_sprites!,
 
     # Audit round-2 SCOPED feature completions (2026-05-29)

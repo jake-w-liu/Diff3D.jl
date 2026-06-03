@@ -91,19 +91,33 @@ mutable struct RenderCache
     meshes::Vector{Mesh}
     lights::Vector{AbstractLight}
     instanced::Vector{InstancedMesh}
+    transparent::Vector{Mesh}
+    opaque_flat::Vector{Mesh}
+    smooth_meshes::Vector{Mesh}
     tri::Vector{Vec4{Float64}}
     clipped::Vector{Vec4{Float64}}
     sx::Vector{Float64}
     sy::Vector{Float64}
     sz::Vector{Float64}
     colors::Vector{Color3{Float64}}
+    stamp::Matrix{Int}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
     RenderCache(Mesh[], AbstractLight[], InstancedMesh[],
+                Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
-                Color3{Float64}[])
+                Color3{Float64}[], zeros(Int, 0, 0))
+end
+
+function _render_cache_stamp!(cache::RenderCache, H::Int, W::Int)
+    if size(cache.stamp) != (H, W)
+        cache.stamp = zeros(Int, H, W)
+    else
+        fill!(cache.stamp, 0)
+    end
+    return cache.stamp
 end
 
 # Collect into a reused vector (clears then refills), avoiding per-frame allocation.
@@ -147,8 +161,10 @@ end
 
 # ========================== Line / point rasterization ==========================
 
-@inline function _put_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3)
-    (1 <= x <= rt.width && 1 <= y <= rt.height) || return
+@inline function _put_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3,
+                             xlo::Int=1, xhi::Int=rt.width,
+                             ylo::Int=1, yhi::Int=rt.height)
+    (1 <= x <= rt.width && 1 <= y <= rt.height && xlo <= x <= xhi && ylo <= y <= yhi) || return
     @inbounds if z < rt.depth[y, x]
         rt.depth[y, x] = z
         rt.color[y, x, 1] = col.r; rt.color[y, x, 2] = col.g; rt.color[y, x, 3] = col.b
@@ -156,13 +172,16 @@ end
 end
 
 # DDA line with depth interpolation and z-test.
-function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3)
+function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
+                     xlo::Int=1, xhi::Int=rt.width,
+                     ylo::Int=1, yhi::Int=rt.height)
     dx = x1 - x0; dy = y1 - y0
     steps = max(abs(dx), abs(dy))
     steps < 1 && (steps = 1.0)
     @inbounds for s in 0:Int(ceil(steps))
         t = s / steps
-        _put_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t), z0 + (z1 - z0)*t, col)
+        _put_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
+                    z0 + (z1 - z0)*t, col, xlo, xhi, ylo, yhi)
     end
     return nothing
 end
@@ -175,13 +194,15 @@ end
     ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, c.z*iw, true)
 end
 
-"""Rasterize `LineObject` (polyline strips) and `LineSegments` (vertex pairs)."""
-function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera)
+"""Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
+function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
+                       xlo::Int=1, xhi::Int=rt.width,
+                       ylo::Int=1, yhi::Int=rt.height)
     vp = projection_matrix(camera) * view_matrix(camera)
     W, H = rt.width, rt.height
     traverse(scene, function(obj)
         is_visible(obj) || return
-        if obj isa LineObject || obj isa LineSegments
+        if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
             wm = compute_world_matrix(obj); geo = obj.geometry
             col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
             stride = obj isa LineSegments ? 2 : 1
@@ -192,8 +213,15 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                 b = mat4_transform_point(wm, get_vertex(geo, i+1))
                 (ax, ay, az, oka) = _project(vp, a, W, H)
                 (bx, by, bz, okb) = _project(vp, b, W, H)
-                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col)
+                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, xlo, xhi, ylo, yhi)
                 i += stride
+            end
+            if obj isa LineLoop && nv > 2
+                a = mat4_transform_point(wm, get_vertex(geo, nv))
+                b = mat4_transform_point(wm, get_vertex(geo, 1))
+                (ax, ay, az, oka) = _project(vp, a, W, H)
+                (bx, by, bz, okb) = _project(vp, b, W, H)
+                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, xlo, xhi, ylo, yhi)
             end
         end
     end)
@@ -219,15 +247,17 @@ end
         s1x, s1y, z1, iw1, u1, v1, wp1::Vec3,
         s2x, s2y, z2, iw2, u2, v2, wp2::Vec3,
         s3x, s3y, z3, iw3, u3, v3, wp3::Vec3,
-        tint::Color3, tex, clipping_planes)
+        tint::Color3, tex, clipping_planes,
+        xlo::Int, xhi::Int, ylo::Int, yhi::Int)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H)
+    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1, xlo)
+    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
+    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
+    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
+    (min_x <= max_x && min_y <= max_y) || return nothing
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
     @inbounds for py in min_y:max_y
@@ -265,15 +295,20 @@ end
     render_sprites!(rt, scene, camera; clipping_planes=Plane[])
 
 Rasterize every visible [`Sprite`](@ref) under `scene` as a camera-facing
-billboard. Each sprite is a unit quad (corners at local ±0.5) oriented by
-[`sprite_world_matrix`](@ref) so it squarely faces the camera, scaled by the
-sprite's scale, projected, and drawn depth-tested. The sprite material's `map`
-texture (if any) is sampled per pixel and modulated by its `color` tint; without
-a map the flat tint colour is used.
+billboard. Each sprite is a unit quad oriented by [`sprite_world_matrix`](@ref)
+so it squarely faces the camera, shifted by `Sprite.center`, scaled by the
+sprite's scale, projected, and drawn depth-tested. `SpriteMaterial.rotation` is
+applied in the billboard plane, and `SpriteMaterial.size_attenuation=false`
+keeps approximate screen size under perspective projection. The sprite
+material's `map` texture (if any) is sampled per pixel and modulated by its
+`color` tint; without a map the flat tint colour is used.
 """
 function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
-                         clipping_planes=_NO_PLANES)
-    vp = projection_matrix(camera) * view_matrix(camera)
+                         clipping_planes=_NO_PLANES,
+                         xlo::Int=1, xhi::Int=rt.width,
+                         ylo::Int=1, yhi::Int=rt.height)
+    view = view_matrix(camera)
+    vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
     traverse(scene, function(obj)
         (is_visible(obj) && obj isa Sprite) || return
@@ -282,30 +317,49 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
         tint = _material_field(mat, :color)
         tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
         tex = _material_field(mat, :map)
+        rot = _material_field(mat, :rotation)
+        rot === nothing && (rot = 0.0)
+        size_attenuation = _material_field(mat, :size_attenuation)
+        size_attenuation === nothing && (size_attenuation = true)
+        center_world = Vec3(mat4_get(M, 1, 4), mat4_get(M, 2, 4), mat4_get(M, 3, 4))
+        center_view = mat4_transform_vec4(view, Vec4(center_world.x, center_world.y, center_world.z, 1.0))
+        attenuation = size_attenuation ? 1.0 : max(0.0001, -center_view.z)
+        c = cos(rot); s = sin(rot)
+        function xy(x, y)
+            px = x - obj.center.x
+            py = y - obj.center.y
+            return ((c * px - s * py) * attenuation, (s * px + c * py) * attenuation)
+        end
         # Quad corners (local sprite plane) and their UVs (v=0 at the bottom).
-        (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(M, vp, -0.5, -0.5, W, H)
-        (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp,  0.5, -0.5, W, H)
-        (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp,  0.5,  0.5, W, H)
-        (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, -0.5,  0.5, W, H)
+        x0, y0 = xy(0.0, 0.0)
+        x1, y1 = xy(1.0, 0.0)
+        x2, y2 = xy(1.0, 1.0)
+        x3, y3 = xy(0.0, 1.0)
+        (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(M, vp, x0, y0, W, H)
+        (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp, x1, y1, W, H)
+        (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
+        (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
         (ok0 && ok1 && ok2 && ok3) || return
         # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
             s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
-            tint, tex, clipping_planes)
+            tint, tex, clipping_planes, xlo, xhi, ylo, yhi)
         # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
             s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
-            tint, tex, clipping_planes)
+            tint, tex, clipping_planes, xlo, xhi, ylo, yhi)
     end)
     return rt
 end
 
 """Rasterize `PointsObject` vertices as small squares sized by the material."""
-function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera)
+function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
+                        xlo::Int=1, xhi::Int=rt.width,
+                        ylo::Int=1, yhi::Int=rt.height)
     vp = projection_matrix(camera) * view_matrix(camera)
     W, H = rt.width, rt.height
     traverse(scene, function(obj)
@@ -317,8 +371,12 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
             (px, py, pz, ok) = _project(vp, mat4_transform_point(wm, get_vertex(geo, vi)), W, H)
             ok || continue
             cx = round(Int, px); cy = round(Int, py)
-            for dy in -r:r, dx in -r:r
-                _put_pixel!(rt, cx+dx, cy+dy, pz, col)
+            min_px = max(cx - r, xlo)
+            max_px = min(cx + r, xhi)
+            min_py = max(cy - r, ylo)
+            max_py = min(cy + r, yhi)
+            for py in min_py:max_py, px in min_px:max_px
+                _put_pixel!(rt, px, py, pz, col, xlo, xhi, ylo, yhi)
             end
         end
     end)

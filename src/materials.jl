@@ -15,12 +15,35 @@ struct MeshBasicMaterial <: AbstractMaterial
     side::Symbol  # :front, :back, :double
     map::Any      # optional albedo Texture
     vertex_colors::Bool   # modulate by geometry :color attribute when true
+    alpha_test::Float64
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
-                            transparent=false, wireframe=false, side=:front, map=nothing,
-                            vertex_colors=false)
-    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, vertex_colors)
+                           transparent=false, wireframe=false, side=:front, map=nothing,
+                           vertex_colors=false, alpha_test=0.0,
+                           depth_test=true, depth_write=true)
+    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, vertex_colors,
+                      Float64(alpha_test), depth_test, depth_write)
+end
+
+struct SpriteMaterial <: AbstractMaterial
+    color::Color3{Float64}
+    opacity::Float64
+    transparent::Bool
+    map::Any
+    rotation::Float64
+    size_attenuation::Bool
+    depth_test::Bool
+    depth_write::Bool
+end
+
+function SpriteMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
+                        transparent=false, map=nothing, rotation=0.0,
+                        size_attenuation=true, depth_test=true, depth_write=true)
+    SpriteMaterial(color, opacity, transparent, map, Float64(rotation),
+                   size_attenuation, depth_test, depth_write)
 end
 
 # ========================== MeshLambertMaterial ==========================
@@ -37,15 +60,18 @@ struct MeshLambertMaterial <: AbstractMaterial
     emissive_map::Any
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               emissive=Color3(0.0, 0.0, 0.0),
                               opacity=1.0, transparent=false, side=:front,
                               map=nothing, ao_map=nothing, emissive_map=nothing,
-                              vertex_colors=false, light_map=nothing)
+                              vertex_colors=false, light_map=nothing,
+                              depth_test=true, depth_write=true)
     MeshLambertMaterial(color, emissive, opacity, transparent, side, map, ao_map, emissive_map,
-                        vertex_colors, light_map)
+                        vertex_colors, light_map, depth_test, depth_write)
 end
 
 # ========================== MeshPhongMaterial ==========================
@@ -61,15 +87,18 @@ struct MeshPhongMaterial <: AbstractMaterial
     side::Symbol
     map::Any
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             specular=Color3(0.066, 0.066, 0.066),
                             emissive=Color3(0.0, 0.0, 0.0),
                             shininess=30.0, opacity=1.0,
-                            transparent=false, side=:front, map=nothing, light_map=nothing)
+                            transparent=false, side=:front, map=nothing, light_map=nothing,
+                            depth_test=true, depth_write=true)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent, side, map,
-                      light_map)
+                      light_map, depth_test, depth_write)
 end
 
 # ========================== MeshStandardMaterial ==========================
@@ -85,24 +114,41 @@ struct MeshStandardMaterial <: AbstractMaterial
     side::Symbol
     map::Any
     normal_map::Any
+    normal_scale::Float64
     roughness_map::Any
+    metalness_map::Any
+    alpha_map::Any
     ao_map::Any
     emissive_map::Any
     vertex_colors::Bool   # modulate by geometry :color attribute when true
+    alpha_test::Float64
     envmap::Any           # optional CubeTexture for reflection (IBL specular)
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
+    emissive_intensity::Float64
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
+    env_map_intensity::Float64
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
                                emissive=Color3(0.0, 0.0, 0.0),
                                metalness=0.0, roughness=1.0,
                                opacity=1.0, transparent=false, side=:front,
-                               map=nothing, normal_map=nothing, roughness_map=nothing,
+                               map=nothing, normal_map=nothing, normal_scale=1.0,
+                               roughness_map=nothing, metalness_map=nothing, alpha_map=nothing,
                                ao_map=nothing, emissive_map=nothing,
-                               vertex_colors=false, envmap=nothing, light_map=nothing)
+                               vertex_colors=false, alpha_test=0.0,
+                               envmap=nothing, light_map=nothing,
+                               emissive_intensity=1.0, ao_map_intensity=1.0,
+                               light_map_intensity=1.0, env_map_intensity=1.0,
+                               depth_test=true, depth_write=true)
     MeshStandardMaterial(color, emissive, metalness, roughness, opacity, transparent, side,
-                         map, normal_map, roughness_map, ao_map, emissive_map,
-                         vertex_colors, envmap, light_map)
+                         map, normal_map, Float64(normal_scale), roughness_map, metalness_map, alpha_map,
+                         ao_map, emissive_map, vertex_colors, Float64(alpha_test), envmap, light_map,
+                         emissive_intensity, ao_map_intensity, light_map_intensity,
+                         env_map_intensity, depth_test, depth_write)
 end
 
 # ========================== MeshNormalMaterial ==========================
@@ -112,10 +158,13 @@ struct MeshNormalMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     side::Symbol
+    depth_test::Bool
+    depth_write::Bool
 end
 
-function MeshNormalMaterial(; opacity=1.0, transparent=false, side=:front)
-    MeshNormalMaterial(opacity, transparent, side)
+function MeshNormalMaterial(; opacity=1.0, transparent=false, side=:front,
+                            depth_test=true, depth_write=true)
+    MeshNormalMaterial(opacity, transparent, side, depth_test, depth_write)
 end
 
 # ========================== LineBasicMaterial ==========================
@@ -124,10 +173,13 @@ struct LineBasicMaterial <: AbstractMaterial
     color::Color3{Float64}
     linewidth::Float64
     opacity::Float64
+    depth_test::Bool
+    depth_write::Bool
 end
 
-function LineBasicMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0, opacity=1.0)
-    LineBasicMaterial(color, linewidth, opacity)
+function LineBasicMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0, opacity=1.0,
+                           depth_test=true, depth_write=true)
+    LineBasicMaterial(color, linewidth, opacity, depth_test, depth_write)
 end
 
 # ========================== PointsMaterial ==========================
@@ -136,10 +188,15 @@ struct PointsMaterial <: AbstractMaterial
     color::Color3{Float64}
     size::Float64
     opacity::Float64
+    transparent::Bool
+    map::Any
+    depth_test::Bool
+    depth_write::Bool
 end
 
-function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0)
-    PointsMaterial(color, size, opacity)
+function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0,
+                        transparent=false, map=nothing, depth_test=true, depth_write=true)
+    PointsMaterial(color, size, opacity, transparent, map, depth_test, depth_write)
 end
 
 # ========================== MeshPhysicalMaterial ==========================
@@ -158,6 +215,19 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     transparent::Bool
     side::Symbol
     envmap::Any           # optional CubeTexture for reflection (IBL specular)
+    map::Any
+    normal_map::Any
+    normal_scale::Float64
+    roughness_map::Any
+    metalness_map::Any
+    ao_map::Any
+    emissive_map::Any
+    alpha_map::Any
+    emissive_intensity::Float64
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
+    env_map_intensity::Float64
+    alpha_test::Float64
     # --- three.js MeshPhysicalMaterial extensions (added last, keyword defaults) ---
     sheen::Float64                 # retroreflective sheen strength (0 = off)
     sheen_color::Color3{Float64}   # tint of the sheen lobe
@@ -166,19 +236,60 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     iridescence_ior::Float64       # refractive index of the thin film
     iridescence_thickness::Float64 # film thickness in nanometres
     light_map::Any                 # baked indirect-lighting texture (multiplied in)
+    clearcoat_map::Any
+    clearcoat_roughness_map::Any
+    transmission_map::Any
+    thickness::Float64
+    thickness_map::Any
+    attenuation_distance::Float64
+    attenuation_color::Color3{Float64}
+    sheen_color_map::Any
+    sheen_roughness_map::Any
+    iridescence_map::Any
+    iridescence_thickness_map::Any
+    specular_intensity::Float64
+    specular_color::Color3{Float64}
+    specular_intensity_map::Any
+    specular_color_map::Any
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
                                metalness=0.0, roughness=1.0, clearcoat=0.0,
                                clearcoat_roughness=0.0, transmission=0.0, ior=1.5,
                                opacity=1.0, transparent=false, side=:front, envmap=nothing,
+                                map=nothing, normal_map=nothing, normal_scale=1.0,
+                               roughness_map=nothing, metalness_map=nothing, ao_map=nothing, emissive_map=nothing,
+                               alpha_map=nothing, emissive_intensity=1.0, ao_map_intensity=1.0,
+                               light_map_intensity=1.0, env_map_intensity=1.0,
+                               alpha_test=0.0,
                                sheen=0.0, sheen_color=Color3(1.0,1.0,1.0), sheen_roughness=1.0,
                                iridescence=0.0, iridescence_ior=1.3, iridescence_thickness=400.0,
-                               light_map=nothing)
+                               light_map=nothing,
+                               clearcoat_map=nothing, clearcoat_roughness_map=nothing,
+                               transmission_map=nothing, thickness=0.0, thickness_map=nothing,
+                               attenuation_distance=0.0,
+                               attenuation_color=Color3(1.0,1.0,1.0),
+                               sheen_color_map=nothing,
+                               sheen_roughness_map=nothing, iridescence_map=nothing,
+                               iridescence_thickness_map=nothing,
+                               specular_intensity=1.0, specular_color=Color3(1.0,1.0,1.0),
+                               specular_intensity_map=nothing, specular_color_map=nothing,
+                               depth_test=true, depth_write=true)
     MeshPhysicalMaterial(color, emissive, metalness, roughness, clearcoat,
                          clearcoat_roughness, transmission, ior, opacity, transparent, side,
-                         envmap, sheen, sheen_color, sheen_roughness,
-                         iridescence, iridescence_ior, iridescence_thickness, light_map)
+                          envmap, map, normal_map, Float64(normal_scale), roughness_map, metalness_map, ao_map,
+                          emissive_map, alpha_map, emissive_intensity, ao_map_intensity,
+                          light_map_intensity, env_map_intensity, Float64(alpha_test),
+                         sheen, sheen_color, sheen_roughness,
+                         iridescence, iridescence_ior, iridescence_thickness, light_map,
+                         clearcoat_map, clearcoat_roughness_map, transmission_map,
+                         Float64(thickness), thickness_map, Float64(attenuation_distance),
+                         attenuation_color,
+                         sheen_color_map, sheen_roughness_map, iridescence_map,
+                         iridescence_thickness_map, specular_intensity, specular_color,
+                         specular_intensity_map, specular_color_map, depth_test, depth_write)
 end
 
 # ========================== MeshToonMaterial ==========================
@@ -191,11 +302,15 @@ struct MeshToonMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     side::Symbol
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
-                           gradient_steps=3, opacity=1.0, transparent=false, side=:front)
-    MeshToonMaterial(color, emissive, gradient_steps, opacity, transparent, side)
+                           gradient_steps=3, opacity=1.0, transparent=false, side=:front,
+                           depth_test=true, depth_write=true)
+    MeshToonMaterial(color, emissive, gradient_steps, opacity, transparent, side,
+                     depth_test, depth_write)
 end
 
 # ========================== MeshMatcapMaterial ==========================
@@ -209,11 +324,14 @@ struct MeshMatcapMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     side::Symbol
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
-                             opacity=1.0, transparent=false, side=:front)
-    MeshMatcapMaterial(color, matcap, opacity, transparent, side)
+                             opacity=1.0, transparent=false, side=:front,
+                             depth_test=true, depth_write=true)
+    MeshMatcapMaterial(color, matcap, opacity, transparent, side, depth_test, depth_write)
 end
 
 # ========================== MeshDepthMaterial ==========================
@@ -225,10 +343,13 @@ struct MeshDepthMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     side::Symbol
+    depth_test::Bool
+    depth_write::Bool
 end
 
-function MeshDepthMaterial(; near=0.1, far=100.0, opacity=1.0, transparent=false, side=:front)
-    MeshDepthMaterial(near, far, opacity, transparent, side)
+function MeshDepthMaterial(; near=0.1, far=100.0, opacity=1.0, transparent=false, side=:front,
+                           depth_test=true, depth_write=true)
+    MeshDepthMaterial(near, far, opacity, transparent, side, depth_test, depth_write)
 end
 
 # ========================== ShaderMaterial ==========================
@@ -240,9 +361,12 @@ struct ShaderMaterial <: AbstractMaterial
     uniforms::Dict{String, Any}
     program::Any   # optional CPU fragment program: (normal, view_dir, position, uniforms) -> Color3
     side::Symbol
+    depth_test::Bool
+    depth_write::Bool
 end
 
 function ShaderMaterial(; vertex_shader="", fragment_shader="", uniforms=Dict{String,Any}(),
-                         program=nothing, side=:front)
-    ShaderMaterial(vertex_shader, fragment_shader, uniforms, program, side)
+                         program=nothing, side=:front, depth_test=true, depth_write=true)
+    ShaderMaterial(vertex_shader, fragment_shader, uniforms, program, side,
+                   depth_test, depth_write)
 end

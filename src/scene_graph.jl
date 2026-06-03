@@ -78,6 +78,27 @@ function compute_world_matrix(obj::AbstractObject3D)
     end
 end
 
+# ========================== Fog ==========================
+
+abstract type AbstractFog end
+
+struct Fog <: AbstractFog
+    color::Color3{Float64}
+    near::Float64
+    far::Float64
+end
+
+Fog(; color=Color3(1.0, 1.0, 1.0), near::Real=1.0, far::Real=1000.0) =
+    Fog(color, Float64(near), Float64(far))
+
+struct FogExp2 <: AbstractFog
+    color::Color3{Float64}
+    density::Float64
+end
+
+FogExp2(; color=Color3(1.0, 1.0, 1.0), density::Real=0.00025) =
+    FogExp2(color, Float64(density))
+
 # ========================== Scene ==========================
 
 mutable struct Scene <: AbstractObject3D
@@ -90,11 +111,14 @@ mutable struct Scene <: AbstractObject3D
     name::String
     id::Int
     background::Color3{Float64}
+    fog::Union{Nothing, AbstractFog}
 end
 
-function Scene(; background=Color3(0.0, 0.0, 0.0), name="Scene")
+function Scene(; background=Color3(0.0, 0.0, 0.0), fog=nothing, name="Scene")
+    fog === nothing || fog isa AbstractFog ||
+        throw(ArgumentError("Scene fog must be nothing, Fog, or FogExp2"))
     Scene(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
-          nothing, AbstractObject3D[], true, name, _next_id(), background)
+          nothing, AbstractObject3D[], true, name, _next_id(), background, fog)
 end
 
 get_position(o::Scene) = o.position
@@ -145,12 +169,20 @@ mutable struct Mesh <: AbstractObject3D
     geometry::Any  # BufferGeometry
     material::Any  # AbstractMaterial
     flat_shading::Union{Nothing, Bool}  # nothing = follow renderer default; true/false = override
+    cast_shadow::Bool
+    receive_shadow::Bool
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
-function Mesh(geometry, material; name="Mesh", flat_shading=nothing)
+function Mesh(geometry, material; name="Mesh", flat_shading=nothing,
+              cast_shadow::Bool=false, receive_shadow::Bool=false,
+              morph_target_influences=Float64[], morph_target_names=String[])
     Mesh(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
          nothing, AbstractObject3D[], true, name, _next_id(),
-         geometry, material, flat_shading)
+         geometry, material, flat_shading, cast_shadow, receive_shadow,
+         collect(Float64, morph_target_influences),
+         collect(String, morph_target_names))
 end
 
 get_position(o::Mesh) = o.position
@@ -160,6 +192,13 @@ get_children(o::Mesh) = o.children
 get_parent(o::Mesh) = o.parent
 is_visible(o::Mesh) = o.visible
 set_parent!(o::Mesh, p) = (o.parent = p)
+apply_morph_targets(mesh::Mesh) =
+    apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
+
+object_casts_shadow(obj) =
+    hasproperty(obj, :cast_shadow) ? Bool(getproperty(obj, :cast_shadow)) : false
+object_receives_shadow(obj) =
+    hasproperty(obj, :receive_shadow) ? Bool(getproperty(obj, :receive_shadow)) : false
 
 # ========================== Line ==========================
 

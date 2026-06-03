@@ -50,7 +50,9 @@ Simplified PBR shading (Cook-Torrance with GGX distribution).
 """
 function shade_pbr(normal::Vec3, light_dir::Vec3, view_dir::Vec3,
                    light_color::Color3, light_intensity,
-                   albedo::Color3, metalness, roughness)
+                   albedo::Color3, metalness, roughness,
+                   specular_intensity=1.0,
+                   specular_color::Color3=Color3(1.0, 1.0, 1.0))
     α = roughness * roughness
     α2 = α * α
 
@@ -71,12 +73,12 @@ function shade_pbr(normal::Vec3, light_dir::Vec3, view_dir::Vec3,
     G1_v = ndotv / (ndotv * (1 - k) + k + 1e-7)
     G = G1_l * G1_v
 
-    # Schlick Fresnel
-    f0_val = lerp_scalar(0.04, 1.0, metalness)
+    # Schlick Fresnel. KHR_materials_specular modulates only the dielectric F0;
+    # metals continue to use base-color F0.
     F0 = Color3(
-        lerp_scalar(0.04, albedo.r, metalness),
-        lerp_scalar(0.04, albedo.g, metalness),
-        lerp_scalar(0.04, albedo.b, metalness)
+        lerp_scalar(0.04 * specular_intensity * specular_color.r, albedo.r, metalness),
+        lerp_scalar(0.04 * specular_intensity * specular_color.g, albedo.g, metalness),
+        lerp_scalar(0.04 * specular_intensity * specular_color.b, albedo.b, metalness)
     )
     F = Color3(
         F0.r + (1 - F0.r) * (1 - vdoth)^5,
@@ -142,6 +144,8 @@ end
 
 # Optional material texture field (nothing if the material has no such map).
 @inline _material_field(m, f::Symbol) = hasfield(typeof(m), f) ? getfield(m, f) : nothing
+@inline _material_scalar(m, f::Symbol, default::Float64=1.0) =
+    hasfield(typeof(m), f) ? Float64(getfield(m, f)) : default
 
 # Centroid UV of a face (average of its three vertex UVs).
 @inline function _face_centroid_uv(geo::BufferGeometry, i1, i2, i3)
@@ -151,6 +155,29 @@ end
 end
 
 @inline _vertex_uv(geo::BufferGeometry, i) = (geo.uvs[(i-1)*2+1], geo.uvs[(i-1)*2+2])
+
+@inline function _uv2_attribute(geo::BufferGeometry)
+    has_attribute(geo, :uv2) || return nothing
+    attr = get_attribute(geo, :uv2)
+    attr.item_size >= 2 && length(attr.data) >= geo.n_vertices * attr.item_size ? attr : nothing
+end
+
+@inline function _face_centroid_uv_attr(attr::BufferAttribute, i1, i2, i3)
+    s = attr.item_size
+    b1 = (i1-1)*s; b2 = (i2-1)*s; b3 = (i3-1)*s
+    d = attr.data
+    ((d[b1+1] + d[b2+1] + d[b3+1]) / 3,
+     (d[b1+2] + d[b2+2] + d[b3+2]) / 3)
+end
+
+@inline function _vertex_uv_attr(attr::BufferAttribute, i)
+    b = (i - 1) * attr.item_size
+    (attr.data[b + 1], attr.data[b + 2])
+end
+
+@inline _texture_uv_set(tex) = tex isa Texture ? tex.tex_coord : 0
+@inline _map_uv(tex, u, v, u2, v2; default_uv2::Bool=false) =
+    (_texture_uv_set(tex) == 1 || (default_uv2 && _texture_uv_set(tex) == 0)) ? (u2, v2) : (u, v)
 
 # Material opt-in for per-vertex color modulation (three.js `vertexColors`).
 @inline _wants_vertex_colors(m) = hasfield(typeof(m), :vertex_colors) && getfield(m, :vertex_colors)
@@ -172,7 +199,7 @@ end
 # derived from the triangle's world positions and UV gradients (standard
 # tangent-from-UV), then the sampled normal `2·texel-1` is rotated into world.
 function _apply_normal_map(face_n::Vec3, nmap, u, v, p1::Vec3, p2::Vec3, p3::Vec3,
-                           uv1, uv2, uv3)
+                           uv1, uv2, uv3, normal_scale::Real=1.0)
     e1 = p2 - p1; e2 = p3 - p1
     du1 = uv2[1]-uv1[1]; dv1 = uv2[2]-uv1[2]
     du2 = uv3[1]-uv1[1]; dv2 = uv3[2]-uv1[2]
@@ -187,30 +214,183 @@ function _apply_normal_map(face_n::Vec3, nmap, u, v, p1::Vec3, p2::Vec3, p3::Vec
     T = T / tl2
     B = cross(face_n, T)
     s = sample_texture(nmap, u, v)
-    tn = Vec3(s.r*2 - 1, s.g*2 - 1, s.b*2 - 1)
+    ns = Float64(normal_scale)
+    tn = Vec3((s.r*2 - 1) * ns, (s.g*2 - 1) * ns, s.b*2 - 1)
     return normalize(T*tn.x + B*tn.y + face_n*tn.z)
 end
 
-# Per-face roughness override from a roughness map (glTF: G channel = roughness).
-function _apply_roughness_map(m::MeshStandardMaterial, rmap, u, v)
-    rg = sample_texture(rmap, u, v).g
-    MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=m.metalness,
-                         roughness=rg, opacity=m.opacity, transparent=m.transparent,
+# Per-face PBR overrides from packed metalness/roughness maps
+# (glTF metallicRoughnessTexture: B = metalness, G = roughness).
+_physical_pbr_map(m::AbstractMaterial) = nothing
+function _physical_pbr_map(m::MeshPhysicalMaterial)
+    m.roughness_map !== nothing && return m.roughness_map
+    m.metalness_map !== nothing && return m.metalness_map
+    m.clearcoat_map !== nothing && return m.clearcoat_map
+    m.clearcoat_roughness_map !== nothing && return m.clearcoat_roughness_map
+    m.transmission_map !== nothing && return m.transmission_map
+    m.thickness_map !== nothing && return m.thickness_map
+    m.sheen_color_map !== nothing && return m.sheen_color_map
+    m.sheen_roughness_map !== nothing && return m.sheen_roughness_map
+    m.iridescence_map !== nothing && return m.iridescence_map
+    m.iridescence_thickness_map !== nothing && return m.iridescence_thickness_map
+    m.specular_intensity_map !== nothing && return m.specular_intensity_map
+    m.specular_color_map !== nothing && return m.specular_color_map
+    return nothing
+end
+
+function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, u, v)
+    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
+    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, u, v).b
+    MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
+                         roughness=roughness, opacity=m.opacity, transparent=m.transparent,
+                          side=m.side, map=m.map, normal_map=m.normal_map,
+                          normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         alpha_map=m.alpha_map, ao_map=m.ao_map, emissive_map=m.emissive_map,
+                         vertex_colors=m.vertex_colors, alpha_test=m.alpha_test,
+                         envmap=m.envmap, light_map=m.light_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity)
+end
+function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, u, v, u2, v2)
+    ru, rv = roughness_map === nothing ? (u, v) : _map_uv(roughness_map, u, v, u2, v2)
+    mu, mv = metalness_map === nothing ? (u, v) : _map_uv(metalness_map, u, v, u2, v2)
+    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
+    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
+    MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
+                         roughness=roughness, opacity=m.opacity, transparent=m.transparent,
                          side=m.side, map=m.map, normal_map=m.normal_map,
-                         roughness_map=m.roughness_map, ao_map=m.ao_map, emissive_map=m.emissive_map,
-                         vertex_colors=m.vertex_colors, envmap=m.envmap, light_map=m.light_map)
+                         normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         alpha_map=m.alpha_map, ao_map=m.ao_map, emissive_map=m.emissive_map,
+                         vertex_colors=m.vertex_colors, alpha_test=m.alpha_test,
+                         envmap=m.envmap, light_map=m.light_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity)
 end
-function _apply_roughness_map(m::MeshPhysicalMaterial, rmap, u, v)
-    rg = sample_texture(rmap, u, v).g
-    MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=m.metalness,
-                         roughness=rg, clearcoat=m.clearcoat, clearcoat_roughness=m.clearcoat_roughness,
-                         transmission=m.transmission, ior=m.ior, opacity=m.opacity,
+function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v)
+    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
+    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, u, v).b
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, u, v, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, u, v, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, u, v, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, u, v, 2)
+    sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
+        c = sample_texture_linear(m.sheen_color_map, u, v)
+        Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
+    end
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, u, v, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, u, v, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, u, v, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, u, v, 4)
+    specular_color = m.specular_color_map === nothing ? m.specular_color : begin
+        c = sample_texture_linear(m.specular_color_map, u, v)
+        Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
+    end
+    MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
+                          roughness=roughness, clearcoat=clearcoat, clearcoat_roughness=clearcoat_roughness,
+                          transmission=transmission, ior=m.ior, opacity=m.opacity,
+                          transparent=m.transparent, side=m.side, envmap=m.envmap,
+                          map=m.map, normal_map=m.normal_map, normal_scale=m.normal_scale,
+                          roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                          ao_map=m.ao_map, emissive_map=m.emissive_map, alpha_map=m.alpha_map,
+                          emissive_intensity=m.emissive_intensity,
+                          ao_map_intensity=m.ao_map_intensity,
+                          light_map_intensity=m.light_map_intensity,
+                          env_map_intensity=m.env_map_intensity,
+                          alpha_test=m.alpha_test,
+                          sheen=m.sheen, sheen_color=sheen_color, sheen_roughness=sheen_roughness,
+                          iridescence=iridescence, iridescence_ior=m.iridescence_ior,
+                          iridescence_thickness=iridescence_thickness, light_map=m.light_map,
+                          clearcoat_map=m.clearcoat_map,
+                          clearcoat_roughness_map=m.clearcoat_roughness_map,
+                          transmission_map=m.transmission_map,
+                          sheen_color_map=m.sheen_color_map,
+                          sheen_roughness_map=m.sheen_roughness_map,
+                          iridescence_map=m.iridescence_map,
+                          iridescence_thickness_map=m.iridescence_thickness_map,
+                          specular_intensity=specular_intensity,
+                          specular_color=specular_color,
+                          specular_intensity_map=m.specular_intensity_map,
+                          specular_color_map=m.specular_color_map,
+                          thickness=thickness,
+                          thickness_map=m.thickness_map,
+                          attenuation_distance=m.attenuation_distance,
+                         attenuation_color=m.attenuation_color,
+                         depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v, u2, v2)
+    uv_for(tex) = tex === nothing ? (u, v) : _map_uv(tex, u, v, u2, v2)
+    ru, rv = uv_for(roughness_map)
+    mu, mv = uv_for(metalness_map)
+    cu, cv = uv_for(m.clearcoat_map)
+    cru, crv = uv_for(m.clearcoat_roughness_map)
+    tu, tv = uv_for(m.transmission_map)
+    thu, thv = uv_for(m.thickness_map)
+    scu, scv = uv_for(m.sheen_color_map)
+    sru, srv = uv_for(m.sheen_roughness_map)
+    iu, iv = uv_for(m.iridescence_map)
+    itu, itv = uv_for(m.iridescence_thickness_map)
+    siu, siv = uv_for(m.specular_intensity_map)
+    spcu, spcv = uv_for(m.specular_color_map)
+    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
+    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, cu, cv, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, cru, crv, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, tu, tv, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, thu, thv, 2)
+    sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
+        c = sample_texture_linear(m.sheen_color_map, scu, scv)
+        Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
+    end
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, sru, srv, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, iu, iv, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, itu, itv, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, siu, siv, 4)
+    specular_color = m.specular_color_map === nothing ? m.specular_color : begin
+        c = sample_texture_linear(m.specular_color_map, spcu, spcv)
+        Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
+    end
+    MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
+                         roughness=roughness, clearcoat=clearcoat,
+                         clearcoat_roughness=clearcoat_roughness,
+                         transmission=transmission, ior=m.ior, opacity=m.opacity,
                          transparent=m.transparent, side=m.side, envmap=m.envmap,
-                         sheen=m.sheen, sheen_color=m.sheen_color, sheen_roughness=m.sheen_roughness,
-                         iridescence=m.iridescence, iridescence_ior=m.iridescence_ior,
-                         iridescence_thickness=m.iridescence_thickness, light_map=m.light_map)
+                         map=m.map, normal_map=m.normal_map, normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         ao_map=m.ao_map, emissive_map=m.emissive_map, alpha_map=m.alpha_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity,
+                         alpha_test=m.alpha_test,
+                         sheen=m.sheen, sheen_color=sheen_color, sheen_roughness=sheen_roughness,
+                         iridescence=iridescence, iridescence_ior=m.iridescence_ior,
+                         iridescence_thickness=iridescence_thickness, light_map=m.light_map,
+                         clearcoat_map=m.clearcoat_map,
+                         clearcoat_roughness_map=m.clearcoat_roughness_map,
+                         transmission_map=m.transmission_map,
+                         sheen_color_map=m.sheen_color_map,
+                         sheen_roughness_map=m.sheen_roughness_map,
+                         iridescence_map=m.iridescence_map,
+                         iridescence_thickness_map=m.iridescence_thickness_map,
+                         specular_intensity=specular_intensity,
+                         specular_color=specular_color,
+                         specular_intensity_map=m.specular_intensity_map,
+                         specular_color_map=m.specular_color_map,
+                         thickness=thickness,
+                         thickness_map=m.thickness_map,
+                         attenuation_distance=m.attenuation_distance,
+                         attenuation_color=m.attenuation_color,
+                         depth_test=m.depth_test, depth_write=m.depth_write)
 end
-_apply_roughness_map(m::AbstractMaterial, rmap, u, v) = m   # other materials: ignore
+_apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
+_apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m
+_apply_roughness_map(m::AbstractMaterial, rmap, u, v) = _apply_pbr_maps(m, rmap, nothing, u, v)
 
 shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
                  lights::Vector{<:AbstractLight}, cam_pos::Vec3; shadow_fn=nothing) =
@@ -233,11 +413,15 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
     ao_map = _material_field(material, :ao_map)
     emissive_map = _material_field(material, :emissive_map)
     normal_map = _material_field(material, :normal_map)
+    normal_scale = _material_scalar(material, :normal_scale, 1.0)
     roughness_map = _material_field(material, :roughness_map)
+    metalness_map = _material_field(material, :metalness_map)
+    physical_pbr_map = _physical_pbr_map(material)
     light_map = _material_field(material, :light_map)
     use_maps = has_uvs && (albedo_map !== nothing || ao_map !== nothing || emissive_map !== nothing ||
-                           normal_map !== nothing || roughness_map !== nothing ||
-                           light_map !== nothing)
+                           normal_map !== nothing || roughness_map !== nothing || metalness_map !== nothing ||
+                           physical_pbr_map !== nothing || light_map !== nothing)
+    uv2_attr = _uv2_attribute(geo)
 
     # Per-vertex color modulation: material opt-in AND a geometry :color attribute
     # with at least RGB components. Resolved once so the hot loop stays type-stable.
@@ -272,28 +456,52 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
         # modulate the result AFTER (they commute with diffuse lighting).
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
+            u2, v2uv = uv2_attr === nothing ? (u, v) : _face_centroid_uv_attr(uv2_attr, i1, i2, i3)
             if normal_map !== nothing
-                face_n = _apply_normal_map(face_n, normal_map, u, v, v1, v2, v3,
-                                           _vertex_uv(geo, i1), _vertex_uv(geo, i2), _vertex_uv(geo, i3))
+                nu, nv = _map_uv(normal_map, u, v, u2, v2uv)
+                normal_uvs = _texture_uv_set(normal_map) == 1 && uv2_attr !== nothing ?
+                    (_vertex_uv_attr(uv2_attr, i1), _vertex_uv_attr(uv2_attr, i2), _vertex_uv_attr(uv2_attr, i3)) :
+                    (_vertex_uv(geo, i1), _vertex_uv(geo, i2), _vertex_uv(geo, i3))
+                face_n = _apply_normal_map(face_n, normal_map, nu, nv, v1, v2, v3,
+                                           normal_uvs[1], normal_uvs[2], normal_uvs[3],
+                                           normal_scale)
             end
-            roughness_map !== nothing && (eff_mat = _apply_roughness_map(material, roughness_map, u, v))
+            if roughness_map !== nothing || metalness_map !== nothing || physical_pbr_map !== nothing
+                eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2uv)
+            end
         end
 
         color = shade_face(face_n, view_dir, center, eff_mat, lights; shadow_fn=shadow_fn)
 
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
-            albedo_map !== nothing && (color = color * sample_texture(albedo_map, u, v))
+            u2, v2 = uv2_attr === nothing ? (u, v) : _face_centroid_uv_attr(uv2_attr, i1, i2, i3)
+            if albedo_map !== nothing
+                tu, tv = _map_uv(albedo_map, u, v, u2, v2)
+                color = color * sample_texture_linear(albedo_map, tu, tv)
+            end
             if ao_map !== nothing
-                ao = sample_texture(ao_map, u, v); color = Color3(color.r*ao.r, color.g*ao.g, color.b*ao.b)
+                tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
+                ao = sample_texture(ao_map, tu, tv)
+                aoi = _material_scalar(material, :ao_map_intensity)
+                aor = 1.0 + (ao.r - 1.0) * aoi
+                aog = 1.0 + (ao.g - 1.0) * aoi
+                aob = 1.0 + (ao.b - 1.0) * aoi
+                color = Color3(color.r*aor, color.g*aog, color.b*aob)
             end
             # lightMap: baked indirect lighting, multiplied into the lit result
             # (like aoMap) so pre-baked GI tints the surface (three.js lightMap).
             if light_map !== nothing
-                lm = sample_texture(light_map, u, v)
-                color = Color3(color.r*lm.r, color.g*lm.g, color.b*lm.b)
+                tu, tv = _map_uv(light_map, u, v, u2, v2; default_uv2=true)
+                lm = sample_texture(light_map, tu, tv)
+                lmi = _material_scalar(material, :light_map_intensity)
+                color = Color3(color.r*lm.r*lmi, color.g*lm.g*lmi, color.b*lm.b*lmi)
             end
-            emissive_map !== nothing && (color = color + sample_texture(emissive_map, u, v))
+            if emissive_map !== nothing
+                tu, tv = _map_uv(emissive_map, u, v, u2, v2)
+                color = color + sample_texture_linear(emissive_map, tu, tv) *
+                        _material_scalar(material, :emissive_intensity)
+            end
         end
 
         # Per-vertex color: multiply the face's average vertex RGB into the result
@@ -307,7 +515,8 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
         # Fresnel reflection. Uses `eff_mat` so a roughness-map override applies.
         if env_map !== nothing
             color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                               eff_mat.color, eff_mat.metalness, eff_mat.roughness)
+                                               eff_mat.color, eff_mat.metalness, eff_mat.roughness) *
+                            _material_scalar(eff_mat, :env_map_intensity)
         end
 
         colors[fi] = clamp_color(color)
@@ -496,6 +705,12 @@ end
     # Beer-Lambert tint: longer optical path near grazing darkens/colours more.
     path = 1.0 / max(ndotv, 1e-3)
     att = Color3(m.color.r^path, m.color.g^path, m.color.b^path)
+    if m.thickness > 0.0 && m.attenuation_distance > 0.0
+        volume_path = path * m.thickness / m.attenuation_distance
+        att = att * Color3(m.attenuation_color.r^volume_path,
+                           m.attenuation_color.g^volume_path,
+                           m.attenuation_color.b^volume_path)
+    end
     Color3(background.r * att.r * transmit,
            background.g * att.g * transmit,
            background.b * att.b * transmit)
@@ -522,7 +737,8 @@ _direct_response(m::MeshPhongMaterial, n, v, lc, li, ldir) =
 _direct_response(m::MeshStandardMaterial, n, v, lc, li, ldir) =
     shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness)
 function _direct_response(m::MeshPhysicalMaterial, n, v, lc, li, ldir)
-    base = shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness)
+    base = shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness,
+                     m.specular_intensity, m.specular_color)
     cc = m.clearcoat * _clearcoat_spec(n, ldir, v, m.clearcoat_roughness) * max(dot(n, ldir), 0.0)
     result = base + lc * (cc * li)
     # Retroreflective sheen lobe (Charlie distribution), scaled by the light.
@@ -556,6 +772,44 @@ end
 @inline _transmission_response(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, fc::Color3) =
     m.transmission > 0.0 ? _transmission_fill(m, n, v, fc) : Color3(0.0, 0.0, 0.0)
 
+@inline function _rect_area_basis(light::RectAreaLight)
+    f = normalize(light.target - light.position)
+    ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
+    u = normalize(cross(ref, f))
+    v = cross(f, u)
+    return f, u, v
+end
+
+function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
+                             light::RectAreaLight)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + _direct_response(m, normal, view_dir, light.color, li, ldir)
+    end
+    return result
+end
+
+function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
+                           position::Vec3, light::RectAreaLight, shadow_fn)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_response(m, normal, view_dir, position, light) * vis
+end
+
 function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
                            position::Vec3, light, shadow_fn)
     if _is_fill_light(light)
@@ -571,7 +825,7 @@ function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
 end
 
 function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights, shadow_fn)
-    result = m.emissive
+    result = m.emissive * _material_scalar(m, :emissive_intensity)
     for light in lights
         result = _accumulate_light(result, m, normal, view_dir, position, light, shadow_fn)
     end
@@ -588,7 +842,12 @@ end
 
 function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
                     material::MeshMatcapMaterial, lights; shadow_fn=nothing)
-    # Procedural matcap: brighter where the surface faces the viewer.
+    if material.matcap isa Texture
+        u = clamp(normal.x * 0.5 + 0.5, 0.0, 1.0)
+        v = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0)
+        return material.color * sample_texture_linear(material.matcap, u, v)
+    end
+    # Procedural fallback: brighter where the surface faces the viewer.
     f = max(dot(normal, view_dir), 0.0)
     material.color * (0.35 + 0.65 * f)
 end

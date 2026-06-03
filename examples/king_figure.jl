@@ -38,7 +38,8 @@ function build_scene()
                   MeshStandardMaterial(color = Color3(1.0, 1.0, 1.0), metalness = 0.0, roughness = 0.92,
                                        map = checker_texture(n = 12, cell = 12,
                                              a = Color3(0.60, 0.62, 0.67),
-                                             b = Color3(0.34, 0.36, 0.42))); name = "ground")
+                                             b = Color3(0.34, 0.36, 0.42)));
+                  name = "ground", receive_shadow = true)
     ground.rotation = Euler(-π/2, 0.0, 0.0)
     ground.position = Vec3(0.0, 0.0, 0.0)
     add!(scene, ground)
@@ -46,7 +47,8 @@ function build_scene()
     # Reflective sphere — PBR metal (metalness-roughness workflow).
     sphere = Mesh(SphereGeometry(radius = 1.0, width_segments = 64, height_segments = 48),
                   MeshStandardMaterial(color = Color3(0.95, 0.78, 0.22),
-                                       metalness = 0.9, roughness = 0.25); name = "sphere")
+                                       metalness = 0.9, roughness = 0.25);
+                  name = "sphere", cast_shadow = true)
     sphere.position = Vec3(-2.3, 1.0, 0.0)
     add!(scene, sphere)
 
@@ -55,7 +57,8 @@ function build_scene()
                MeshStandardMaterial(color = Color3(1.0, 1.0, 1.0), metalness = 0.0, roughness = 0.6,
                                     map = checker_texture(n = 4, cell = 16,
                                           a = Color3(0.85, 0.30, 0.22),
-                                          b = Color3(0.95, 0.82, 0.32))); name = "box")
+                                          b = Color3(0.95, 0.82, 0.32)));
+               name = "box", cast_shadow = true)
     box.position = Vec3(0.2, 0.75, -1.7)
     box.rotation = Euler(0.0, π/6, 0.0)
     add!(scene, box)
@@ -63,20 +66,22 @@ function build_scene()
     # Glossy torus knot — Blinn-Phong specular highlight.
     knot = Mesh(TorusKnotGeometry(radius = 0.9, tube = 0.30, tubular_segments = 128, radial_segments = 16),
                 MeshPhongMaterial(color = Color3(0.15, 0.55, 0.85),
-                                  specular = Color3(0.9, 0.9, 0.9), shininess = 80.0); name = "knot")
+                                  specular = Color3(0.9, 0.9, 0.9), shininess = 80.0);
+                name = "knot", cast_shadow = true)
     knot.position = Vec3(2.4, 1.2, 0.4)
     add!(scene, knot)
 
     # Rougher PBR cylinder.
     cyl = Mesh(CylinderGeometry(radius_top = 0.55, radius_bottom = 0.55, height = 1.6, radial_segments = 48),
                MeshStandardMaterial(color = Color3(0.25, 0.70, 0.45),
-                                    metalness = 0.1, roughness = 0.6); name = "cylinder")
+                                    metalness = 0.1, roughness = 0.6);
+               name = "cylinder", cast_shadow = true)
     cyl.position = Vec3(1.1, 0.8, 2.1)
     add!(scene, cyl)
 
     # Normal-mapped icosahedron — surface orientation visualised as RGB.
     ico = Mesh(IcosahedronGeometry(radius = 0.85),
-               MeshNormalMaterial(); name = "icosahedron")
+               MeshNormalMaterial(); name = "icosahedron", cast_shadow = true)
     ico.position = Vec3(-1.1, 0.85, 2.3)
     ico.rotation = Euler(0.3, 0.6, 0.0)
     add!(scene, ico)

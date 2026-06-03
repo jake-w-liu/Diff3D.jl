@@ -22,11 +22,27 @@ function positions_geometry(points)
     BufferGeometry(positions, Float64[], Float64[], collect(1:length(points)), length(points), 0)
 end
 
+function checker_texture()
+    data = zeros(Float64, 4, 4, 4)
+    a = (0.10, 0.14, 0.18, 1.0)
+    b = (0.86, 0.68, 0.26, 1.0)
+    for y in 1:4, x in 1:4
+        data[y, x, :] .= isodd(x + y) ? a : b
+    end
+    Texture(data; filter=:nearest, wrap_s=:repeat, wrap_t=:repeat, repeat=Vec2(4.0, 4.0))
+end
+
 function build_instancing_case()
     scene = Scene(background=Color3(0.006, 0.008, 0.012))
+    add!(scene, AmbientLight(color=Color3(0.22, 0.26, 0.32), intensity=0.7))
+    add!(scene, DirectionalLight(color=Color3(0.95, 0.98, 1.0), intensity=1.15,
+                                 position=Vec3(4.0, 7.0, 3.0)))
+    add!(scene, PointLight(color=Color3(0.35, 0.72, 1.0), intensity=18.0,
+                           distance=9.0, position=Vec3(-2.8, 2.2, 2.6)))
 
     floor = Mesh(PlaneGeometry(width=17.0, height=17.0, width_segments=4, height_segments=4),
-                 MeshStandardMaterial(color=Color3(0.22, 0.24, 0.28), roughness=0.9);
+                 MeshStandardMaterial(color=Color3(0.58, 0.60, 0.64), roughness=0.9,
+                                      map=checker_texture());
                  name="floor")
     floor.rotation = Euler(-pi/2, 0.0, 0.0)
     add!(scene, floor)
@@ -65,13 +81,28 @@ function build_particles_case()
     add!(scene, PointsObject(positions_geometry(pts),
                              PointsMaterial(color=Color3(0.62, 0.88, 1.0), size=3.0)))
 
+    for (i, idx) in enumerate(1:90:length(pts))
+        halo = Sprite(MeshBasicMaterial(color=Color3(1.0, 0.66, 0.18)); name="particle_halo_$i")
+        halo.position = pts[idx]
+        halo.scale = Vec3(0.22, 0.22, 0.22)
+        add!(scene, halo)
+    end
+
     WebGLExportCase("particles", "Particles",
-                    "Three.jl PointsObject exported to live WebGL.",
+                    "Three.jl PointsObject and Sprite markers exported to live WebGL.",
                     scene; target=Vec3(0.0, 0.1, 0.0), radius=8.2, height=1.8, fov=pi/3.1)
 end
 
 function build_postfx_case()
     scene = Scene(background=Color3(0.055, 0.060, 0.075))
+    add!(scene, AmbientLight(color=Color3(0.36, 0.38, 0.42), intensity=0.55))
+    add!(scene, HemisphereLight(color=Color3(0.42, 0.55, 0.76),
+                                ground_color=Color3(0.22, 0.18, 0.12),
+                                intensity=0.45))
+    add!(scene, DirectionalLight(color=Color3(1.0, 0.92, 0.78), intensity=1.1,
+                                 position=Vec3(-3.5, 6.0, 4.0)))
+    add!(scene, PointLight(color=Color3(0.95, 0.40, 0.30), intensity=12.0,
+                           distance=8.0, position=Vec3(3.0, 2.4, -2.6)))
     floor = Mesh(PlaneGeometry(width=17.0, height=19.0, width_segments=4, height_segments=4),
                  MeshStandardMaterial(color=Color3(0.42, 0.45, 0.52), roughness=0.88);
                  name="floor")
@@ -101,6 +132,16 @@ end
 
 function build_keyframe_case()
     scene = Scene(background=Color3(0.01, 0.012, 0.018))
+    add!(scene, AmbientLight(color=Color3(0.20, 0.24, 0.30), intensity=0.65))
+    add!(scene, DirectionalLight(color=Color3(0.78, 0.90, 1.0), intensity=1.0,
+                                 position=Vec3(3.0, 6.0, -4.0)))
+    add!(scene, PointLight(color=Color3(1.0, 0.70, 0.24), intensity=10.0,
+                           distance=7.0, position=Vec3(0.0, 2.1, 0.0)))
+    spot = SpotLight(color=Color3(0.95, 0.35, 0.24), intensity=6.0,
+                     distance=8.0, angle=pi/5, penumbra=0.35,
+                     position=Vec3(-2.8, 4.0, 2.2))
+    spot.target = Vec3(0.0, 0.4, 0.0)
+    add!(scene, spot)
     floor = Mesh(PlaneGeometry(width=14.0, height=14.0, width_segments=4, height_segments=4),
                  MeshStandardMaterial(color=Color3(0.18, 0.20, 0.24), roughness=0.92);
                  name="floor")
@@ -114,6 +155,11 @@ function build_keyframe_case()
         tower.position = Vec3(x, h/2, z)
         add!(scene, tower)
     end
+
+    rail = [Vec3(3.8*cos(2pi*i/96), 0.06, 2.7*sin(2pi*i/96)) for i in 0:95]
+    add!(scene, LineLoop(positions_geometry(rail),
+                         LineBasicMaterial(color=Color3(0.94, 0.76, 0.28));
+                         name="train_rail_loop"))
 
     tracks = AbstractKeyframeTrack[]
     times = [0.0, 2.0, 4.0, 6.0, 8.0]

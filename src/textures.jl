@@ -12,11 +12,29 @@ mutable struct Texture
     filter::Symbol                     # :nearest | :bilinear
     mipmaps::Vector{Array{Float64, 3}} # optional pyramid (level 1 = base/2)
     colorspace::Symbol                 # :srgb | :linear  (three.js Texture.colorSpace)
+    offset::Vec2{Float64}              # UV offset (three.js Texture.offset)
+    repeat::Vec2{Float64}              # UV repeat/scale (three.js Texture.repeat)
+    rotation::Float64                  # radians around `center`
+    center::Vec2{Float64}              # UV transform pivot
+    matrix::Mat3{Float64}              # UV transform matrix
+    matrix_auto_update::Bool           # recompute matrix from offset/repeat/rotation/center
+    tex_coord::Int                     # glTF textureInfo.texCoord / UV set index (0 => uv, 1 => uv2)
 end
 
 function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=:bilinear,
-                 mipmaps::Vector{Array{Float64,3}}=Array{Float64,3}[], colorspace::Symbol=:srgb)
-    Texture(data, wrap_s, wrap_t, filter, mipmaps, colorspace)
+                 mipmaps::Vector{Array{Float64,3}}=Array{Float64,3}[], colorspace::Symbol=:srgb,
+                 offset=Vec2(0.0, 0.0), repeat=Vec2(1.0, 1.0),
+                 rotation::Real=0.0, center=Vec2(0.0, 0.0),
+                 matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0)
+    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
+    tex = Texture(data, wrap_s, wrap_t, filter, mipmaps, colorspace,
+                  Vec2(Float64(offset.x), Float64(offset.y)),
+                  Vec2(Float64(repeat.x), Float64(repeat.y)),
+                  Float64(rotation),
+                  Vec2(Float64(center.x), Float64(center.y)),
+                  Mat3{Float64}(Tuple(Float64(x) for x in matrix.e)),
+                  matrix_auto_update, Int(tex_coord))
+    matrix_auto_update ? texture_update_matrix!(tex) : tex
 end
 DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
@@ -50,6 +68,32 @@ end
     Color3(tex.data[y, x, 1], tex.data[y, x, 2], tex.data[y, x, 3])
 end
 
+@inline function texture_transform_uv(tex::Texture, u, v)
+    tex.matrix_auto_update && texture_update_matrix!(tex)
+    e = tex.matrix.e
+    return (e[1] * u + e[2] * v + e[3],
+            e[4] * u + e[5] * v + e[6])
+end
+
+"""
+    texture_update_matrix!(tex)
+
+Recompute `tex.matrix` from `offset`, `repeat`, `rotation`, and `center`,
+matching three.js `Texture.updateMatrix`/`Matrix3.setUvTransform`.
+"""
+function texture_update_matrix!(tex::Texture)
+    sx, sy = tex.repeat.x, tex.repeat.y
+    tx, ty = tex.offset.x, tex.offset.y
+    cx, cy = tex.center.x, tex.center.y
+    c = cos(tex.rotation)
+    s = sin(tex.rotation)
+    tex.matrix = Mat3{Float64}((
+        sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx,
+       -sy * s, sy * c,  sy * (s * cx - c * cy) + cy + ty,
+        0.0,    0.0,     1.0))
+    return tex
+end
+
 """
     sample_texture(tex, u, v) -> Color3
 
@@ -57,6 +101,7 @@ Sample the texture at UV `(u,v)` ∈ [0,1]² (outside handled by the wrap modes)
 using nearest or bilinear filtering. `v=0` is the bottom row.
 """
 function sample_texture(tex::Texture, u, v)
+    u, v = texture_transform_uv(tex, u, v)
     H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
@@ -67,6 +112,33 @@ function sample_texture(tex::Texture, u, v)
     tx = fx - x0; ty = fy - y0
     c00 = _texel(tex, x0,   y0);   c10 = _texel(tex, x0+1, y0)
     c01 = _texel(tex, x0,   y0+1); c11 = _texel(tex, x0+1, y0+1)
+    top = c00 * (1 - tx) + c10 * tx
+    bot = c01 * (1 - tx) + c11 * tx
+    return top * (1 - ty) + bot * ty
+end
+
+@inline function _texel_channel(tex::Texture, ix::Int, iy::Int, channel::Int, default=1.0)
+    H, W, C = size(tex.data)
+    1 <= channel <= C || return default
+    x = _wrap_coord(ix, W, tex.wrap_s) + 1
+    y = _wrap_coord(iy, H, tex.wrap_t) + 1
+    tex.data[y, x, channel]
+end
+
+function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
+    u, v = texture_transform_uv(tex, u, v)
+    H, W, _ = size(tex.data)
+    fx = u * W - 0.5
+    fy = (1 - v) * H - 0.5
+    if tex.filter === :nearest
+        return _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default)
+    end
+    x0 = floor(Int, fx); y0 = floor(Int, fy)
+    tx = fx - x0; ty = fy - y0
+    c00 = _texel_channel(tex, x0,   y0,   channel, default)
+    c10 = _texel_channel(tex, x0+1, y0,   channel, default)
+    c01 = _texel_channel(tex, x0,   y0+1, channel, default)
+    c11 = _texel_channel(tex, x0+1, y0+1, channel, default)
     top = c00 * (1 - tx) + c10 * tx
     bot = c01 * (1 - tx) + c11 * tx
     return top * (1 - ty) + bot * ty
@@ -115,7 +187,10 @@ function sample_texture_lod(tex::Texture, u, v, lod::Int)
     lod <= 0 && return sample_texture(tex, u, v)
     isempty(tex.mipmaps) && return sample_texture(tex, u, v)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
-    tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=tex.filter)
+    tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=tex.filter,
+                  colorspace=tex.colorspace, offset=tex.offset, repeat=tex.repeat,
+                  rotation=tex.rotation, center=tex.center, matrix=tex.matrix,
+                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord)
     return sample_texture(tmp, u, v)
 end
 

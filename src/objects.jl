@@ -1,6 +1,6 @@
 # --------------------------------------------------------------------------
 # Additional scene-graph objects mirroring three.js: InstancedMesh,
-# LineSegments, Sprite, LOD, Bone/Skeleton/SkinnedMesh, plus the Layers
+# LineSegments, LineLoop, Sprite, LOD, Bone/Skeleton/SkinnedMesh, plus the Layers
 # bitmask and a one-pass world-matrix cache (matrixWorldAutoUpdate analogue).
 # --------------------------------------------------------------------------
 
@@ -35,13 +35,17 @@ mutable struct InstancedMesh <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    cast_shadow::Bool
+    receive_shadow::Bool
     instance_matrices::Vector{Mat4{Float64}}
 end
 
-function InstancedMesh(geometry, material, count::Int; name="InstancedMesh")
+function InstancedMesh(geometry, material, count::Int; name="InstancedMesh",
+                       cast_shadow::Bool=false, receive_shadow::Bool=false)
     mats = [Mat4{Float64}() for _ in 1:count]
     InstancedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-                  true, name, _next_id(), geometry, material, mats)
+                  true, name, _next_id(), geometry, material,
+                  cast_shadow, receive_shadow, mats)
 end
 
 get_position(o::InstancedMesh) = o.position
@@ -92,6 +96,35 @@ get_parent(o::LineSegments) = o.parent
 is_visible(o::LineSegments) = o.visible
 set_parent!(o::LineSegments, p) = (o.parent = p)
 
+# ========================== LineLoop ==========================
+# Geometry vertices interpreted as a closed polyline; the final vertex reconnects to the first.
+
+mutable struct LineLoop <: AbstractObject3D
+    position::Vec3{Float64}
+    rotation::Euler{Float64}
+    scale::Vec3{Float64}
+    parent::Union{Nothing, AbstractObject3D}
+    children::Vector{AbstractObject3D}
+    visible::Bool
+    name::String
+    id::Int
+    geometry::Any
+    material::Any
+end
+
+function LineLoop(geometry, material; name="LineLoop")
+    LineLoop(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
+             true, name, _next_id(), geometry, material)
+end
+
+get_position(o::LineLoop) = o.position
+get_rotation(o::LineLoop) = o.rotation
+get_scale(o::LineLoop) = o.scale
+get_children(o::LineLoop) = o.children
+get_parent(o::LineLoop) = o.parent
+is_visible(o::LineLoop) = o.visible
+set_parent!(o::LineLoop, p) = (o.parent = p)
+
 # ========================== Sprite ==========================
 # A camera-facing billboard.
 
@@ -105,11 +138,12 @@ mutable struct Sprite <: AbstractObject3D
     name::String
     id::Int
     material::Any
+    center::Vec2{Float64}
 end
 
-function Sprite(material; name="Sprite")
+function Sprite(material; name="Sprite", center=Vec2(0.5, 0.5))
     Sprite(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-           true, name, _next_id(), material)
+           true, name, _next_id(), material, center)
 end
 
 get_position(o::Sprite) = o.position
@@ -149,12 +183,12 @@ mutable struct LOD <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
-    levels::Vector{Tuple{Float64, AbstractObject3D}}   # (min distance, object), ascending
+    levels::Vector{Tuple{Float64, Float64, AbstractObject3D}}   # (min distance, hysteresis, object), ascending
 end
 
 function LOD(; name="LOD")
     LOD(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-        true, name, _next_id(), Tuple{Float64, AbstractObject3D}[])
+        true, name, _next_id(), Tuple{Float64, Float64, AbstractObject3D}[])
 end
 
 get_position(o::LOD) = o.position
@@ -165,8 +199,12 @@ get_parent(o::LOD) = o.parent
 is_visible(o::LOD) = o.visible
 set_parent!(o::LOD, p) = (o.parent = p)
 
-function add_lod_level!(lod::LOD, distance::Real, obj::AbstractObject3D)
-    push!(lod.levels, (Float64(distance), obj))
+function add_lod_level!(lod::LOD, distance::Real, obj::AbstractObject3D; hysteresis::Real=0.0)
+    dist = Float64(distance)
+    hyst = Float64(hysteresis)
+    isfinite(dist) && dist >= 0 || throw(ArgumentError("LOD distance must be finite and non-negative"))
+    isfinite(hyst) && hyst >= 0 || throw(ArgumentError("LOD hysteresis must be finite and non-negative"))
+    push!(lod.levels, (dist, hyst, obj))
     add!(lod, obj)
     sort!(lod.levels, by = first)
     return lod
@@ -175,11 +213,37 @@ end
 """Highest-distance LOD level whose threshold ≤ `distance` (three.js `getObjectForDistance`)."""
 function lod_select(lod::LOD, distance::Real)
     isempty(lod.levels) && return nothing
-    chosen = lod.levels[1][2]
-    for (d, obj) in lod.levels
+    chosen = lod.levels[1][3]
+    for (d, _, obj) in lod.levels
         distance >= d ? (chosen = obj) : break
     end
     return chosen
+end
+
+"""
+Update child visibility using three.js-style LOD thresholds and hysteresis.
+Returns the selected level object, or `nothing` when the LOD has no levels.
+"""
+function lod_update!(lod::LOD, distance::Real)
+    isempty(lod.levels) && return nothing
+    d = Float64(distance)
+    isfinite(d) || throw(ArgumentError("LOD update distance must be finite"))
+
+    chosen_index = 1
+    for i in 2:length(lod.levels)
+        threshold, hysteresis, obj = lod.levels[i]
+        level_distance = is_visible(obj) ? threshold * (1 - hysteresis) : threshold
+        if d >= level_distance
+            chosen_index = i
+        else
+            break
+        end
+    end
+
+    for (i, (_, _, obj)) in enumerate(lod.levels)
+        hasproperty(obj, :visible) && setproperty!(obj, :visible, i == chosen_index)
+    end
+    return lod.levels[chosen_index][3]
 end
 
 # ========================== Bone / Skeleton / SkinnedMesh ==========================
@@ -234,15 +298,19 @@ mutable struct SkinnedMesh <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    cast_shadow::Bool
+    receive_shadow::Bool
     skeleton::Skeleton
     skin_indices::Vector{NTuple{4,Int}}     # bone indices per vertex (1-based)
     skin_weights::Vector{NTuple{4,Float64}} # blend weights per vertex
 end
 
 function SkinnedMesh(geometry, material, skeleton::Skeleton,
-                     skin_indices, skin_weights; name="SkinnedMesh")
+                     skin_indices, skin_weights; name="SkinnedMesh",
+                     cast_shadow::Bool=false, receive_shadow::Bool=false)
     SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-                true, name, _next_id(), geometry, material, skeleton,
+                true, name, _next_id(), geometry, material,
+                cast_shadow, receive_shadow, skeleton,
                 skin_indices, skin_weights)
 end
 

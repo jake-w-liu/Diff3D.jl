@@ -144,12 +144,12 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
                 push!(hits, Intersection(t, p, obj, vi))
             end
         end
-    elseif obj isa LineObject || obj isa LineSegments
+    elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         wm = compute_world_matrix(obj)
         geo = obj.geometry
         thr = rc.line_threshold
-        # LineSegments: disjoint pairs (1-2, 3-4, ...). LineObject: a polyline
-        # connecting consecutive vertices (1-2, 2-3, ...), matching three.js.
+        # LineSegments: disjoint pairs. LineObject: consecutive vertices.
+        # LineLoop closes the final vertex back to the first, matching three.js.
         step = obj isa LineSegments ? 2 : 1
         nv = geo.n_vertices
         @inbounds for vi in 1:step:(nv - 1)
@@ -159,6 +159,14 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
             if dist < thr && rc.near <= t <= rc.far
                 # face_index = the segment's start vertex index (three.js index).
                 push!(hits, Intersection(t, seg_pt, obj, vi))
+            end
+        end
+        if obj isa LineLoop && nv > 2
+            a = mat4_transform_point(wm, get_vertex(geo, nv))
+            b = mat4_transform_point(wm, get_vertex(geo, 1))
+            t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
+            if dist < thr && rc.near <= t <= rc.far
+                push!(hits, Intersection(t, seg_pt, obj, nv))
             end
         end
     end

@@ -53,14 +53,15 @@ function instancing_bloom_demo()
     add!(scene, DirectionalLight(color=Color3(0.35, 0.56, 1.0), intensity=0.55, position=Vec3(-7.0, 4.0, -6.0)))
 
     ground = Mesh(PlaneGeometry(width=22.0, height=22.0, width_segments=28, height_segments=28),
-                  MeshStandardMaterial(color=Color3(0.32, 0.34, 0.40), roughness=0.95))
+                  MeshStandardMaterial(color=Color3(0.32, 0.34, 0.40), roughness=0.95);
+                  receive_shadow=true)
     ground.rotation = Euler(-pi/2, 0.0, 0.0)
     add!(scene, ground)
 
     mat = MeshStandardMaterial(color=Color3(0.28, 0.76, 0.95), metalness=0.25, roughness=0.32)
     geo = IcosahedronGeometry(radius=0.34)
     n = 13
-    inst = InstancedMesh(geo, mat, n*n)
+    inst = InstancedMesh(geo, mat, n*n; cast_shadow=true)
     k = 0
     for ix in 1:n, iz in 1:n
         x = (ix - (n + 1) / 2) * 0.82
@@ -147,7 +148,8 @@ function postprocessing_dof_demo()
 
     floor_tex = checker_texture(n=12, cell=8, a=Color3(0.55, 0.57, 0.64), b=Color3(0.26, 0.28, 0.34))
     floor = Mesh(PlaneGeometry(width=20.0, height=24.0, width_segments=24, height_segments=24),
-                 MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0), roughness=0.88, map=floor_tex))
+                 MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0), roughness=0.88, map=floor_tex);
+                 receive_shadow=true)
     floor.rotation = Euler(-pi/2, 0.0, 0.0)
     add!(scene, floor)
 
@@ -158,8 +160,8 @@ function postprocessing_dof_demo()
         radius = 0.38 + 0.055 * row
         mat = MeshStandardMaterial(color=colors[mod1(row + col, length(colors))], metalness=0.15, roughness=0.42)
         obj = isodd(row + col) ?
-            Mesh(SphereGeometry(radius=radius, width_segments=32, height_segments=20), mat) :
-            Mesh(TorusKnotGeometry(radius=radius, tube=0.13, tubular_segments=56, radial_segments=10), mat)
+            Mesh(SphereGeometry(radius=radius, width_segments=32, height_segments=20), mat; cast_shadow=true) :
+            Mesh(TorusKnotGeometry(radius=radius, tube=0.13, tubular_segments=56, radial_segments=10), mat; cast_shadow=true)
         obj.position = Vec3(x, radius + 0.05, z)
         obj.rotation = Euler(0.2row, 0.35col, 0.1row)
         add!(scene, obj)

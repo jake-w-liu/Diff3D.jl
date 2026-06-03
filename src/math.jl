@@ -78,6 +78,8 @@ Color3(hex::UInt32) = Color3(
     ((hex >> 8)  & 0xFF) / 255.0,
     (hex         & 0xFF) / 255.0
 )
+Base.convert(::Type{Color3{T}}, c::Color3) where {T<:Real} =
+    Color3{T}(convert(T, c.r), convert(T, c.g), convert(T, c.b))
 
 Base.:+(a::Color3, b::Color3) = Color3(a.r + b.r, a.g + b.g, a.b + b.b)
 Base.:*(a::Color3, s::Real) = Color3(a.r * s, a.g * s, a.b * s)

@@ -1,8 +1,33 @@
 using Test
 using Three
 using ForwardDiff
+using TOML
 
 @testset "Three.jl" begin
+
+    @testset "Official examples parity registry" begin
+        registry_path = joinpath(@__DIR__, "..", "examples", "examples_registry.toml")
+        registry = TOML.parsefile(registry_path)
+        @test registry["schema_version"] == 1
+        examples = registry["examples"]
+        @test length(examples) >= 8
+        ids = String[e["upstream_id"] for e in examples]
+        @test length(unique(ids)) == length(ids)
+        @test "threejs_webgl_animation_keyframes" in ids
+        valid_status = Set(["covered", "partial", "planned"])
+        for entry in examples
+            @test startswith(entry["upstream_id"], "threejs_")
+            @test startswith(entry["upstream_url"], "https://threejs.org/examples/#")
+            @test entry["status"] in valid_status
+            @test entry["prerequisites"] isa Vector
+            @test entry["known_deviations"] isa Vector
+            @test entry["verification"] isa Vector
+            if entry["status"] != "planned"
+                script = joinpath(@__DIR__, "..", entry["local_script"])
+                @test isfile(script)
+            end
+        end
+    end
 
     @testset "Vec3 arithmetic" begin
         a = Vec3(1.0, 2.0, 3.0)
@@ -47,6 +72,12 @@ using ForwardDiff
         c_hex = Color3(UInt32(0xFF8000))
         @test c_hex.r ≈ 1.0
         @test c_hex.g ≈ 128/255 atol=0.01
+    end
+
+    @testset "Light constructors" begin
+        target = Vec3(1.0, 0.5, -2.0)
+        light = SpotLight(position=Vec3(2.0, 3.0, 4.0), target=target)
+        @test light.target == target
     end
 
     @testset "Mat4 identity and transform" begin
@@ -198,6 +229,13 @@ using ForwardDiff
         m3 = MeshStandardMaterial(metalness=0.8, roughness=0.2)
         @test m3.metalness ≈ 0.8
         @test m3.roughness ≈ 0.2
+        m4 = MeshStandardMaterial(color=Color3(1, 0, 0))
+        @test m4.color === Color3(1.0, 0.0, 0.0)
+        m5 = MeshPhysicalMaterial(sheen_color=Color3(1, 1, 1))
+        @test m5.sheen_color === Color3(1.0, 1.0, 1.0)
+        @test m5.thickness ≈ 0.0
+        @test m5.attenuation_distance ≈ 0.0
+        @test m5.attenuation_color === Color3(1.0, 1.0, 1.0)
     end
 
     @testset "Shading — Lambert" begin
@@ -416,22 +454,768 @@ using ForwardDiff
     end
 
     @testset "I/O — WebGL HTML export" begin
-        scene = Scene(background=Color3(0.01, 0.02, 0.03))
-        mesh = Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.2, 0.7, 1.0)); name="export_box")
+        scene = Scene(background=Color3(0.01, 0.02, 0.03),
+                      fog=Fog(color=Color3(0.6, 0.7, 0.8), near=2.0, far=18.0))
+        ambient = AmbientLight(color=Color3(0.2, 0.3, 0.4), intensity=0.5)
+        add!(scene, ambient)
+        shadow_dir = DirectionalLight(color=Color3(1.0, 0.9, 0.8), intensity=1.2,
+                                      position=Vec3(1.0, 2.0, 3.0),
+                                      cast_shadow=true)
+        add!(scene, shadow_dir)
+        add!(scene, PointLight(color=Color3(0.4, 0.7, 1.0), intensity=6.0,
+                               distance=8.0, decay=2.0, position=Vec3(1.0, 1.5, 2.0),
+                               cast_shadow=true))
+        add!(scene, DirectionalLight(color=Color3(0.5, 0.6, 0.7), intensity=0.8,
+                                     position=Vec3(-2.0, 3.0, 1.0)))
+        spot = SpotLight(color=Color3(1.0, 0.5, 0.3), intensity=4.0,
+                         distance=9.0, angle=pi/5, penumbra=0.25, decay=2.0,
+                         position=Vec3(0.0, 4.0, 3.0), cast_shadow=true)
+        spot.target = Vec3(0.0, 0.0, 0.0)
+        add!(scene, spot)
+        add!(scene, HemisphereLight(color=Color3(0.25, 0.35, 0.5),
+                                    ground_color=Color3(0.08, 0.07, 0.04),
+                                    intensity=0.6))
+        rect = RectAreaLight(color=Color3(0.9, 0.8, 0.6), intensity=0.7,
+                             width=2.0, height=1.0, position=Vec3(0.0, 3.0, 1.0))
+        rect.target = Vec3(0.0, 0.0, 0.0)
+        add!(scene, rect)
+        mesh = Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.2, 0.7, 1.0));
+                    name="export_box", cast_shadow=true, receive_shadow=true)
         add!(scene, mesh)
-        clip = AnimationClip("move", [KeyframeTrack(mesh, :position, [0.0, 1.0],
-                                                    [Vec3(0.0,0.0,0.0), Vec3(1.0,0.0,0.0)])])
+        drawable_child = Mesh(BoxGeometry(width=0.2,height=0.2,depth=0.2),
+                              MeshBasicMaterial(color=Color3(0.9,0.2,0.2));
+                              name="export_drawable_parent_child")
+        drawable_child.position = Vec3(0.0, 0.8, 0.0)
+        add!(mesh, drawable_child)
+        normal_material_mesh = Mesh(TorusKnotGeometry(radius=0.35, tube=0.12,
+                                                      tubular_segments=24, radial_segments=6),
+                                    MeshNormalMaterial();
+                                    name="export_normal_material")
+        normal_material_mesh.position = Vec3(0.0, 1.25, 0.0)
+        add!(scene, normal_material_mesh)
+        depth_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
+                                   MeshDepthMaterial(near=1.0, far=8.0);
+                                   name="export_depth_material")
+        depth_material_mesh.position = Vec3(0.9, 1.25, 0.0)
+        add!(scene, depth_material_mesh)
+        toon_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
+                                  MeshToonMaterial(color=Color3(1.0, 0.75, 0.25),
+                                                   emissive=Color3(0.05, 0.02, 0.0),
+                                                   gradient_steps=4);
+                                  name="export_toon_material")
+        toon_material_mesh.position = Vec3(1.8, 1.25, 0.0)
+        add!(scene, toon_material_mesh)
+        matcap_data = zeros(Float64, 3, 3, 3)
+        matcap_data[:, :, 1] .= 0.2
+        matcap_data[:, :, 2] .= 0.35
+        matcap_data[:, :, 3] .= 0.8
+        matcap_data[2, 2, :] .= (1.0, 0.6, 0.3)
+        matcap_material_mesh = Mesh(TorusGeometry(radius=0.28, tube=0.1,
+                                                  radial_segments=10, tubular_segments=24),
+                                    MeshMatcapMaterial(color=Color3(0.95, 0.55, 0.85),
+                                                       matcap=Texture(matcap_data; filter=:nearest,
+                                                                      colorspace=:linear));
+                                    name="export_matcap_material")
+        matcap_material_mesh.position = Vec3(2.7, 1.25, 0.0)
+        add!(scene, matcap_material_mesh)
+        basic_material_mesh = Mesh(TorusGeometry(radius=0.28, tube=0.1,
+                                                 radial_segments=10, tubular_segments=24),
+                                   MeshBasicMaterial(color=Color3(0.35, 0.95, 0.75));
+                                   name="export_basic_material")
+        basic_material_mesh.position = Vec3(3.6, 1.25, 0.0)
+        add!(scene, basic_material_mesh)
+        lambert_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
+                                     MeshLambertMaterial(color=Color3(0.95, 0.45, 0.28),
+                                                         emissive=Color3(0.02, 0.0, 0.0));
+                                     name="export_lambert_material")
+        lambert_material_mesh.position = Vec3(4.5, 1.25, 0.0)
+        add!(scene, lambert_material_mesh)
+        phong_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
+                                   MeshPhongMaterial(color=Color3(0.42, 0.7, 1.0),
+                                                     specular=Color3(1.0, 0.92, 0.72),
+                                                     shininess=72.0);
+                                   name="export_phong_material")
+        phong_material_mesh.position = Vec3(5.4, 1.25, 0.0)
+        add!(scene, phong_material_mesh)
+        texdata = zeros(Float64, 2, 2, 4)
+        texdata[1,1,:] .= (1.0, 0.0, 0.0, 1.0)
+        texdata[1,2,:] .= (0.0, 1.0, 0.0, 0.5)
+        texdata[2,1,:] .= (0.0, 0.0, 1.0, 1.0)
+        texdata[2,2,:] .= (1.0, 1.0, 1.0, 1.0)
+        textured = Mesh(PlaneGeometry(width=0.8, height=0.8),
+                        MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0),
+                                          opacity=0.5, transparent=true,
+                                          side=:double,
+                                          depth_test=false,
+                                          depth_write=false,
+                                          map=Texture(texdata; offset=Vec2(0.25, 0.0),
+                                                      repeat=Vec2(2.0, 1.0),
+                                                      rotation=0.2,
+                                                      center=Vec2(0.5, 0.5)));
+                        name="export_textured")
+        textured.position = Vec3(1.5, 0.0, 0.0)
+        add!(scene, textured)
+        alphadata = ones(Float64, 2, 2, 3)
+        alphadata[:, :, 2] .= [0.25 0.75; 1.0 0.5]
+        alpha_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                            MeshStandardMaterial(color=Color3(0.8, 0.8, 0.8),
+                                                 alpha_map=Texture(alphadata; filter=:nearest),
+                                                 alpha_test=0.4);
+                            name="export_alpha_map")
+        alpha_mapped.position = Vec3(-1.5, 0.0, 0.0)
+        add!(scene, alpha_mapped)
+        emissive_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                               MeshStandardMaterial(color=Color3(0.1, 0.1, 0.1),
+                                                    emissive=Color3(0.2, 0.4, 1.0),
+                                                    emissive_map=Texture(texdata; filter=:nearest),
+                                                    emissive_intensity=1.5);
+                               name="export_emissive_map")
+        emissive_mapped.position = Vec3(-2.2, 0.0, 0.0)
+        add!(scene, emissive_mapped)
+        ao_light_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                               MeshStandardMaterial(color=Color3(0.9, 0.9, 0.9),
+                                                    ao_map=Texture(alphadata; filter=:nearest),
+                                                    light_map=Texture(texdata; filter=:nearest),
+                                                    ao_map_intensity=0.75,
+                                                    light_map_intensity=0.5);
+                               name="export_ao_light_map")
+        set_attribute!(ao_light_mapped.geometry, :uv2, fill(0.25, ao_light_mapped.geometry.n_vertices * 2), 2)
+        ao_light_mapped.position = Vec3(-2.9, 0.0, 0.0)
+        add!(scene, ao_light_mapped)
+        pbrdata = ones(Float64, 2, 2, 3)
+        pbrdata[:, :, 2] .= [0.2 0.8; 0.4 1.0]
+        pbrdata[:, :, 3] .= [1.0 0.3; 0.7 0.1]
+        rough_metal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                  MeshStandardMaterial(color=Color3(0.7, 0.7, 0.72),
+                                                       roughness=0.9,
+                                                       metalness=0.8,
+                                                       roughness_map=Texture(pbrdata; filter=:nearest),
+                                                       metalness_map=Texture(pbrdata; filter=:nearest));
+                                  name="export_rough_metal_map")
+        rough_metal_mapped.position = Vec3(-3.6, 0.0, 0.0)
+        add!(scene, rough_metal_mapped)
+        normaldata = fill(0.5, 2, 2, 3)
+        normaldata[:, :, 1] .= [1.0 0.0; 1.0 0.0]
+        normaldata[:, :, 2] .= [0.5 1.0; 0.0 0.5]
+        normaldata[:, :, 3] .= 1.0
+        normal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                             MeshStandardMaterial(color=Color3(0.55, 0.65, 0.95),
+                                                  normal_map=Texture(normaldata; filter=:nearest),
+                                                  normal_scale=0.35);
+                             name="export_normal_map")
+        normal_mapped.position = Vec3(-4.3, 0.0, 0.0)
+        add!(scene, normal_mapped)
+        envfaces = ntuple(i -> Texture(fill(Float64(i) / 6, 2, 2, 3); filter=:nearest), 6)
+        env_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                          MeshStandardMaterial(color=Color3(0.05, 0.05, 0.05),
+                                               metalness=1.0,
+                                               roughness=0.15,
+                                               envmap=CubeTexture(envfaces),
+                                               env_map_intensity=0.6);
+                          name="export_env_map")
+        env_mapped.position = Vec3(-5.0, 0.0, 0.0)
+        add!(scene, env_mapped)
+        physical_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                               MeshPhysicalMaterial(color=Color3(0.7, 0.72, 0.78),
+                                                    roughness=0.25,
+                                                    metalness=0.2,
+                                                    clearcoat=0.8,
+                                                    clearcoat_roughness=0.15,
+                                                    transmission=0.35,
+                                                    thickness=0.8,
+                                                    attenuation_distance=2.0,
+                                                    attenuation_color=Color3(0.8, 0.7, 0.6),
+                                                    ior=1.45,
+                                                    sheen=0.4,
+                                                    sheen_color=Color3(0.8, 0.6, 0.4),
+                                                    sheen_roughness=0.7,
+                                                    iridescence=0.5,
+                                                    iridescence_ior=1.35,
+                                                    iridescence_thickness=450.0,
+                                                    specular_intensity=0.65,
+                                                    specular_color=Color3(0.9, 0.8, 0.7),
+                                                    clearcoat_map=Texture(pbrdata; filter=:nearest),
+                                                    clearcoat_roughness_map=Texture(pbrdata; filter=:nearest),
+                                                    transmission_map=Texture(pbrdata; filter=:nearest),
+                                                    thickness_map=Texture(pbrdata; filter=:nearest),
+                                                    sheen_color_map=Texture(texdata; filter=:nearest),
+                                                    sheen_roughness_map=Texture(pbrdata; filter=:nearest),
+                                                    iridescence_map=Texture(pbrdata; filter=:nearest),
+                                                    iridescence_thickness_map=Texture(pbrdata; filter=:nearest),
+                                                    specular_intensity_map=Texture(pbrdata; filter=:nearest),
+                                                    specular_color_map=Texture(texdata; filter=:nearest),
+                                                    envmap=CubeTexture(envfaces),
+                                                    env_map_intensity=0.4);
+                               name="export_physical_extensions")
+        physical_mapped.position = Vec3(-5.7, 0.0, 0.0)
+        add!(scene, physical_mapped)
+        line_color_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                        Float64[], Float64[], Int[], 3, 0)
+        set_attribute!(line_color_geo, :color,
+                       [1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0], 3)
+        add!(scene, LineLoop(line_color_geo,
+                              LineBasicMaterial(color=Color3(1.0, 0.2, 0.1)); name="export_loop"))
+        sp = Sprite(SpriteMaterial(color=Color3(1.0, 0.8, 0.2),
+                                   map=Texture(texdata; filter=:nearest),
+                                   rotation=0.3,
+                                   size_attenuation=false);
+                    name="export_sprite", center=Vec2(0.25, 0.75))
+        sp.position = Vec3(0.0, 0.0, 1.0)
+        sp.scale = Vec3(0.4, 0.4, 0.4)
+        parent = Group()
+        parent.position = Vec3(2.0, 0.0, 0.0)
+        add!(parent, sp)
+        add!(scene, parent)
+        morph_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                   Float64[], Float64[], Int[1,2,3], 3, 1)
+        set_attribute!(morph_geo, :morphPosition0,
+                       [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0], 3)
+        morph_mesh = Mesh(morph_geo, MeshBasicMaterial(color=Color3(0.7,0.2,0.9));
+                          name="export_morph", morph_target_influences=[0.5])
+        add!(scene, morph_mesh)
+        skin_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                  Float64[], Float64[], Int[1,2,3], 3, 1)
+        bone = Bone(name="export_bone")
+        skeleton = Skeleton([bone])
+        bone.position = Vec3(2.0, 0.0, 0.0)
+        skinned = SkinnedMesh(skin_geo, MeshBasicMaterial(color=Color3(0.2,0.9,0.6)),
+                              skeleton, fill((1,1,1,1), 3),
+                              fill((1.0,0.0,0.0,0.0), 3); name="export_skin")
+        add!(scene, skinned)
+        hidden_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.9,0.4,0.1));
+                           name="export_visibility")
+        hidden_mesh.visible = false
+        add!(scene, hidden_mesh)
+        hidden_group = Group(name="export_visibility_group")
+        hidden_group.visible = false
+        grouped_visible = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.1,0.7,0.9));
+                               name="export_group_visibility_child")
+        add!(hidden_group, grouped_visible)
+        add!(scene, hidden_group)
+        hidden_light = PointLight(color=Color3(1.0,0.6,0.2), intensity=2.0; name="export_visibility_light")
+        hidden_light.visible = false
+        add!(scene, hidden_light)
+        euler_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.4,0.4,1.0));
+                          name="export_euler_rotation")
+        euler_mesh.position = Vec3(4.2, 0.0, 0.0)
+        add!(scene, euler_mesh)
+        euler_component_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(1.0,0.4,0.4));
+                                    name="export_euler_component_rotation")
+        euler_component_mesh.position = Vec3(4.9, 0.0, 0.0)
+        add!(scene, euler_component_mesh)
+        animated_group = Group(name="export_animated_group")
+        animated_group.position = Vec3(0.5, 0.0, 0.0)
+        grouped_motion_child = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.2,1.0,0.5));
+                                    name="export_group_motion_child")
+        grouped_motion_child.position = Vec3(0.25, 0.0, 0.0)
+        add!(animated_group, grouped_motion_child)
+        add!(scene, animated_group)
+        instanced_motion = InstancedMesh(BoxGeometry(width=0.2,height=0.2,depth=0.2),
+                                         MeshBasicMaterial(color=Color3(0.9,0.9,0.2)), 2;
+                                         name="export_instanced_motion")
+        instanced_motion.position = Vec3(5.6, 0.0, 0.0)
+        set_instance_matrix!(instanced_motion, 1, mat4_translation(-0.6, 0.0, 0.0))
+        set_instance_matrix!(instanced_motion, 2, mat4_translation(0.6, 0.0, 0.0))
+        add!(scene, instanced_motion)
+        clip = AnimationClip("move", AbstractKeyframeTrack[
+            KeyframeTrack(mesh, :position, [0.0, 0.5, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.4,0.8,0.0), Vec3(1.0,0.0,0.0)];
+                          interpolation=:cubic),
+            CubicSplineKeyframeTrack(mesh, :scale, [0.0, 1.0],
+                                     [Vec3(1.0,1.0,1.0), Vec3(1.2,1.2,1.2)],
+                                     [Vec3(0.0,0.0,0.0), Vec3(0.0,0.0,0.0)],
+                                     [Vec3(0.0,0.0,0.0), Vec3(0.0,0.0,0.0)]),
+            KeyframeTrack(bone, :position, [0.0, 1.0],
+                          [Vec3(2.0,0.0,0.0), Vec3(3.0,0.0,0.0)]),
+            NumberKeyframeTrack(mesh, "position.y", [0.0, 1.0], [0.0, 0.35]),
+            QuaternionKeyframeTrack(mesh, :quaternion, [0.0, 1.0],
+                                    [Quaternion(), quat_from_euler(0.0, pi / 4, 0.0)]),
+            NumberKeyframeTrack(mesh, "opacity", [0.0, 1.0], [0.25, 0.85]),
+            NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.25, 0.85]),
+            NumberKeyframeTrack(mesh, "color.r", [0.0, 1.0], [0.2, 1.0]),
+            NumberKeyframeTrack(mesh, "material.color.g", [0.0, 1.0], [0.3, 0.9]),
+            NumberKeyframeTrack(physical_mapped, "material.emissiveIntensity", [0.0, 1.0], [1.5, 0.25]),
+            NumberKeyframeTrack(physical_mapped, "material.envMapIntensity", [0.0, 1.0], [0.4, 0.9]),
+            NumberKeyframeTrack(physical_mapped, "material.clearcoatRoughness", [0.0, 1.0], [0.15, 0.65]),
+            NumberKeyframeTrack(physical_mapped, "material.sheenColor.r", [0.0, 1.0], [0.8, 0.2]),
+            NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1]),
+            NumberKeyframeTrack(sp, "material.sizeAttenuation", [0.0, 1.0], [1.0, 0.0]),
+            NumberKeyframeTrack(phong_material_mesh, "shininess", [0.0, 1.0], [72.0, 12.0]),
+            NumberKeyframeTrack(phong_material_mesh, "specular.g", [0.0, 1.0], [0.92, 0.2]),
+            NumberKeyframeTrack(ambient, "intensity", [0.0, 1.0], [0.1, 0.9]),
+            NumberKeyframeTrack(ambient, "color.g", [0.0, 1.0], [0.3, 0.8]),
+            MorphWeightsKeyframeTrack(morph_mesh, :morph_target_influences,
+                                      [0.0, 1.0], [[0.0], [1.0]]),
+            NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[0]",
+                                [0.0, 1.0], [0.0, 0.75]),
+            NumberKeyframeTrack(hidden_mesh, "visible", [0.0, 1.0], [0.0, 1.0]),
+            NumberKeyframeTrack(hidden_group, "visible", [0.0, 1.0], [0.0, 1.0]),
+            NumberKeyframeTrack(hidden_light, "visible", [0.0, 1.0], [0.0, 1.0]),
+            KeyframeTrack(euler_mesh, :rotation, [0.0, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.0,pi/2,0.0)]),
+            NumberKeyframeTrack(euler_component_mesh, "rotation.y",
+                                [0.0, 1.0], [0.0, pi/3]),
+            KeyframeTrack(animated_group, :position, [0.0, 1.0],
+                          [Vec3(0.5,0.0,0.0), Vec3(1.5,0.0,0.0)]),
+            KeyframeTrack(instanced_motion, :position, [0.0, 1.0],
+                          [Vec3(5.6,0.0,0.0), Vec3(5.6,0.8,0.0)]),
+            CubicSplineMorphWeightsKeyframeTrack(morph_mesh, :morph_target_influences,
+                                                 [0.0, 1.0], [[0.0], [1.0]],
+                                                 [[0.0], [0.0]], [[0.0], [0.0]])
+        ])
+        sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
+                                      Three._web_collect_drawables(scene)))
+        @test occursin("\"mode\":\"sprite\"", sprite_drawable)
+        @test occursin("\"indices\":[0,1,2,0,2,3]", sprite_drawable)
+        @test occursin("\"spriteCenter\":[0.25,0.75]", sprite_drawable)
+        @test occursin("\"spriteRotation\":0.29999999999999999", sprite_drawable)
+        @test occursin("\"spriteSizeAttenuation\":false", sprite_drawable)
+        @test occursin("\"texture\":", sprite_drawable)
+        @test occursin("\"transparent\":true", sprite_drawable)
+        lod = LOD(name="export_lod")
+        lod_near = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_near")
+        lod_far = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_far")
+        add_lod_level!(lod, 0.0, lod_near)
+        add_lod_level!(lod, 10.0, lod_far; hysteresis=0.25)
+        add!(scene, lod)
+        lod_near_drawables = join(Three._web_collect_drawables(scene, Set{Int}(), 5.0), ",")
+        @test occursin("\"name\":\"export_lod_near\"", lod_near_drawables)
+        @test occursin("\"name\":\"export_lod_far\"", lod_near_drawables)
+        @test occursin("\"lodGroup\":$(lod.id)", lod_near_drawables)
+        @test occursin("\"lodDistance\":10", lod_near_drawables)
+        @test occursin("\"lodHysteresis\":0.25", lod_near_drawables)
         f = tempname() * ".html"
         save_webgl_html(f, [WebGLExportCase("case", "Case", "Generated from </script><script>alert(1)</script>", scene;
-                                            target=Vec3(0.0,0.0,0.0), animations=[clip])];
+                                            target=Vec3(0.0,0.0,0.0), animations=[clip],
+                                            tone_mapping=:aces, tone_exposure=1.35,
+                                            output_color_space=:srgb,
+                                            clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])];
                         title="A & <B>")
         html = read(f, String)
         @test occursin("<title>A &amp; &lt;B&gt;</title>", html)
+        @test occursin("preserveDrawingBuffer:true", html)
         @test occursin("\"name\":\"export_box\"", html)
+        @test occursin("\"name\":\"export_drawable_parent_child\"", html)
+        @test occursin("\"parentId\":$(mesh.id)", html)
+        @test occursin("\"parentMatrix\":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]", html)
+        @test occursin("\"basePosition\":[0,0,0]", html)
+        @test occursin("\"baseEuler\":[0,0,0]", html)
+        @test occursin("\"baseEulerOrder\":\"XYZ\"", html)
+        @test occursin("\"baseScale\":[1,1,1]", html)
+        @test occursin("\"baseQuaternion\":[0,0,0,1]", html)
+        @test occursin("\"name\":\"export_normal_material\"", html)
+        @test occursin("\"materialType\":\"normal\"", html)
+        @test occursin("uMaterialMode", html)
+        @test occursin("uMaterialMode==1", html)
+        @test occursin("n*.5+.5", html)
+        @test occursin("\"name\":\"export_depth_material\"", html)
+        @test occursin("\"materialType\":\"depth\"", html)
+        @test occursin("\"depthNear\":1", html)
+        @test occursin("\"depthFar\":8", html)
+        @test occursin("uMaterialMode==2", html)
+        @test occursin("uDepthNear", html)
+        @test occursin("uDepthFar", html)
+        @test occursin("viewDistance-uDepthNear", html)
+        @test occursin("\"name\":\"export_toon_material\"", html)
+        @test occursin("\"materialType\":\"toon\"", html)
+        @test occursin("\"toonSteps\":4", html)
+        @test occursin("uMaterialMode==3", html)
+        @test occursin("uToonSteps", html)
+        @test occursin("toonBand", html)
+        @test occursin("ceil(clamp(d,0.0,1.0)*uToonSteps)/uToonSteps", html)
+        @test occursin("\"name\":\"export_matcap_material\"", html)
+        @test occursin("\"materialType\":\"matcap\"", html)
+        @test occursin("\"matcapTexture\":", html)
+        @test occursin("uMaterialMode==4", html)
+        @test occursin("uUseMatcapMap", html)
+        @test occursin("uMatcapMap", html)
+        @test occursin("uViewNormalMat", html)
+        @test occursin("viewN=normalize(uViewNormalMat*n)", html)
+        @test occursin("matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x))", html)
+        @test occursin("vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5)", html)
+        @test occursin("texture2D(uMatcapMap,muv)", html)
+        @test occursin("0.35+0.65*f", html)
+        @test occursin("\"name\":\"export_basic_material\"", html)
+        @test occursin("\"materialType\":\"basic\"", html)
+        @test occursin("uMaterialMode==5", html)
+        @test occursin("vec3 bc=mix(base,uFogColor,fogFactor(viewDistance))", html)
+        @test occursin("o.materialType===\"basic\"?5", html)
+        @test occursin("\"name\":\"export_lambert_material\"", html)
+        @test occursin("\"materialType\":\"lambert\"", html)
+        @test occursin("uMaterialMode==6", html)
+        @test occursin("\"name\":\"export_phong_material\"", html)
+        @test occursin("\"materialType\":\"phong\"", html)
+        @test occursin("\"shininess\":72", html)
+        @test occursin("\"property\":\"shininess\"", html)
+        @test occursin("shininess:o.shininess", html)
+        @test occursin("\"specularColor\":[1,0.92000000000000004,0.71999999999999997]", html)
+        @test occursin("\"property\":\"specularColor\",\"component\":2", html)
+        @test occursin("uMaterialMode==7", html)
+        @test occursin("uShininess", html)
+        @test occursin("o.materialType===\"phong\"?7", html)
+        @test occursin("\"name\":\"export_alpha_map\"", html)
+        @test occursin("\"name\":\"export_emissive_map\"", html)
+        @test occursin("\"name\":\"export_ao_light_map\"", html)
+        @test occursin("\"name\":\"export_rough_metal_map\"", html)
+        @test occursin("\"name\":\"export_normal_map\"", html)
+        @test occursin("\"name\":\"export_env_map\"", html)
+        @test occursin("\"name\":\"export_physical_extensions\"", html)
+        @test occursin("\"name\":\"export_sprite\"", html)
+        @test occursin("spriteProgram", html)
+        @test occursin("uCameraRight", html)
+        @test occursin("uSpriteCenter", html)
+        @test occursin("uSpriteRotation", html)
+        @test occursin("uSpriteSizeAttenuation", html)
+        @test occursin("uUseSpriteMap", html)
+        @test occursin("texture2D(uSpriteMap,vUv)", html)
+        @test occursin("\"emissiveTexture\":", html)
+        @test occursin("\"emissive\":[0.20000000000000001,0.40000000000000002,1]", html)
+        @test occursin("\"emissiveIntensity\":1.5", html)
+        @test occursin("uUseEmissiveMap", html)
+        @test occursin("uEmissiveIntensity", html)
+        @test occursin("uEmissiveMap", html)
+        @test occursin("\"uv2s\":", html)
+        @test occursin("attribute vec2 aUv2", html)
+        @test occursin("varying vec2 vUv,vUv2", html)
+        @test occursin("o.uv2Buf=buf(o.uv2s||o.uvs)", html)
+        @test occursin("attrib(p,\"aUv2\",o.uv2Buf,2)", html)
+        @test occursin("\"texCoord\":0", html)
+        @test occursin("function texCoord(t,def=0)", html)
+        @test occursin("vec2 uvFor(mat3 m, int set)", html)
+        @test occursin("uAlphaMatrix", html)
+        @test occursin("uAoMatrix", html)
+        @test occursin("uniformTexMatrix(p,\"uAoMatrix\",o.aoTexture)", html)
+        @test occursin("uMapTexCoord", html)
+        @test occursin("uAoTexCoord", html)
+        @test occursin("uLightTexCoord", html)
+        @test occursin("texCoord(o.aoTexture,1)", html)
+        @test occursin("texture2D(uAoMap,aoUv)", html)
+        @test occursin("texture2D(uLightMap,lightUv)", html)
+        @test occursin("\"aoTexture\":", html)
+        @test occursin("\"lightTexture\":", html)
+        @test occursin("\"aoIntensity\":0.75", html)
+        @test occursin("\"lightMapIntensity\":0.5", html)
+        @test occursin("uUseAoMap", html)
+        @test occursin("uUseLightMap", html)
+        @test occursin("uAoMap", html)
+        @test occursin("uLightMap", html)
+        @test occursin("\"roughnessTexture\":", html)
+        @test occursin("\"metalnessTexture\":", html)
+        @test occursin("\"roughness\":0.90000000000000002", html)
+        @test occursin("\"metalness\":0.80000000000000004", html)
+        @test occursin("uUseRoughnessMap", html)
+        @test occursin("uUseMetalnessMap", html)
+        @test occursin("uRoughnessMap", html)
+        @test occursin("uMetalnessMap", html)
+        @test occursin("\"normalTexture\":", html)
+        @test occursin("\"normalScale\":0.34999999999999998", html)
+        @test occursin("OES_standard_derivatives", html)
+        @test occursin("uUseNormalMap", html)
+        @test occursin("uNormalScale", html)
+        @test occursin("map.xy*=uNormalScale", html)
+        @test occursin("uNormalMap", html)
+        @test occursin("mappedNormal", html)
+        @test occursin("\"envTexture\":{\"colors\":[", html)
+        @test occursin("\"envMapIntensity\":0.59999999999999998", html)
+        @test occursin("uUseEnvMap", html)
+        @test occursin("uEnvMapIntensity", html)
+        @test occursin("uEnvColor[0]", html)
+        @test occursin("envColor", html)
+        @test occursin("\"clearcoat\":0.80000000000000004", html)
+        @test occursin("\"clearcoatRoughness\":0.14999999999999999", html)
+        @test occursin("\"transmission\":0.34999999999999998", html)
+        @test occursin("\"thickness\":0.80000000000000004", html)
+        @test occursin("\"attenuationDistance\":2", html)
+        @test occursin("\"attenuationColor\":[0.80000000000000004,0.69999999999999996,0.59999999999999998]", html)
+        @test occursin("\"ior\":1.45", html)
+        @test occursin("\"sheen\":0.40000000000000002", html)
+        @test occursin("\"sheenColor\":[0.80000000000000004,0.59999999999999998,0.40000000000000002]", html)
+        @test occursin("\"sheenRoughness\":0.69999999999999996", html)
+        @test occursin("\"iridescence\":0.5", html)
+        @test occursin("\"iridescenceIor\":1.3500000000000001", html)
+        @test occursin("\"iridescenceThickness\":450", html)
+        @test occursin("\"specularIntensity\":0.65000000000000002", html)
+        @test occursin("\"specularColor\":[0.90000000000000002,0.80000000000000004,0.69999999999999996]", html)
+        @test occursin("\"clearcoatTexture\":", html)
+        @test occursin("\"clearcoatRoughnessTexture\":", html)
+        @test occursin("\"transmissionTexture\":", html)
+        @test occursin("\"thicknessTexture\":", html)
+        @test occursin("\"sheenColorTexture\":", html)
+        @test occursin("\"sheenRoughnessTexture\":", html)
+        @test occursin("\"iridescenceTexture\":", html)
+        @test occursin("\"iridescenceThicknessTexture\":", html)
+        @test occursin("\"specularIntensityTexture\":", html)
+        @test occursin("\"specularColorTexture\":", html)
+        @test occursin("uClearcoat", html)
+        @test occursin("physicalTexturesEnabled", html)
+        @test occursin("packedTexture", html)
+        @test occursin("uUsePhysicalScalarMap", html)
+        @test occursin("uPhysicalScalarMap", html)
+        @test occursin("uUsePhysicalScalar2Map", html)
+        @test occursin("uPhysicalScalar2Map", html)
+        @test occursin("uTransmission", html)
+        @test occursin("uThickness", html)
+        @test occursin("uAttenuationDistance", html)
+        @test occursin("uAttenuationColor", html)
+        @test occursin("volAtt", html)
+        @test occursin("uSheenColor", html)
+        @test occursin("uUseSheenColorMap", html)
+        @test occursin("uSheenColorMap", html)
+        @test occursin("uIridescenceThickness", html)
+        @test occursin("uSpecularColor", html)
+        @test occursin("uUseSpecularColorMap", html)
+        @test occursin("uSpecularColorMap", html)
+        @test occursin("o.physicalScalarTex=physicalTexturesEnabled?makeTexture", html)
+        @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture]", html)
+        @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])", html)
+        @test occursin("texture2D(uPhysicalScalarMap,phys1Uv)", html)
+        @test occursin("float thickness=max(uThickness*phys2.a,0.0)", html)
+        @test occursin("float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor;", html)
+        @test occursin("gl.activeTexture(gl.TEXTURE11)", html)
+        @test !occursin("gl.activeTexture(gl.TEXTURE16)", html)
+        @test occursin("iridescenceTint", html)
+        @test occursin("\"clippingPlanes\":[[1,0,0,0]]", html)
+        @test occursin("uClipCount", html)
+        @test occursin("uClipPlane[0]", html)
+        @test occursin("function clipping", html)
+        @test occursin("if(clipped(vWorld)) discard", html)
+        @test occursin("\"fog\":{\"type\":\"linear\",\"color\":[0.59999999999999998,0.69999999999999996,0.80000000000000004],\"near\":2,\"far\":18}", html)
+        @test occursin("function fog", html)
+        @test occursin("uFogType", html)
+        @test occursin("uFogColor", html)
+        @test occursin("fogFactor", html)
+        @test occursin("\"name\":\"export_morph\"", html)
+        @test occursin("\"positions\":[0,0,0.5,1,0,0.5,0,1,0.5]", html)
+        @test occursin("\"basePositions\":[0,0,0,1,0,0,0,1,0]", html)
+        @test occursin("\"morphTargets\":[[0,0,1,0,0,1,0,0,1]]", html)
+        @test occursin("\"morphWeights\":[0.5]", html)
+        @test occursin("\"kind\":\"weights\"", html)
+        @test occursin("\"property\":\"morph_target_influences\"", html)
+        @test occursin("\"inTangents\":[0,0]", html)
+        @test occursin("function updateMorph", html)
+        @test occursin("morphById", html)
+        @test occursin("\"name\":\"export_skin\"", html)
+        @test occursin("\"positions\":[0,0,0,1,0,0,0,1,0]", html)
+        @test occursin("\"skin\":{\"indices\":[0,0,0,0,0,0,0,0,0,0,0,0]", html)
+        @test occursin("\"weights\":[1,0,0,0,1,0,0,0,1,0,0,0]", html)
+        @test occursin("\"bones\":[{\"id\":", html)
+        @test occursin("\"name\":\"export_bone\"", html)
+        @test occursin("\"basePosition\":[2,0,0]", html)
+        @test occursin("\"baseScale\":[1,1,1]", html)
+        @test occursin("\"baseQuaternion\":[0,0,0,1]", html)
+        @test occursin("\"bindInverses\":[[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]]", html)
+        @test occursin("const nodeById = new Map()", html)
+        @test occursin("const MAX_BONES=64", html)
+        @test occursin("attribute vec4 aSkinIndex", html)
+        @test occursin("uniform mat4 uBoneMatrices[64]", html)
+        @test occursin("mat4 skinMatrix()", html)
+        @test occursin("mat3(skin)*aNormal", html)
+        @test occursin("o.shaderSkin", html)
+        @test occursin("o.skinIndexBuf=buf", html)
+        @test occursin("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)
+        @test occursin("function skinMatrices", html)
+        @test occursin("uUseSkin", html)
+        @test occursin("function updateSkin", html)
+        @test occursin("setNodeAnim", html)
+        @test occursin("o.animPos=o.basePosition.slice()", html)
+        @test occursin("b.animPos=b.basePosition.slice()", html)
+        @test occursin("M4.mul(n.parentMatrix||M4.ident(),M4.trs", html)
+        @test occursin("\"name\":\"export_visibility\"", html)
+        @test occursin("\"name\":\"export_group_visibility_child\"", html)
+        @test occursin("\"name\":\"export_visibility_light\"", html)
+        @test occursin("\"name\":\"export_euler_rotation\"", html)
+        @test occursin("\"name\":\"export_euler_component_rotation\"", html)
+        @test occursin("\"name\":\"export_animated_group\"", html)
+        @test occursin("\"name\":\"export_group_motion_child\"", html)
+        @test occursin("\"name\":\"export_instanced_motion\"", html)
+        @test occursin("\"instanceMatrix\":[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]", html)
+        @test occursin("\"nodes\":[", html)
+        @test occursin("\"parentId\":$(animated_group.id)", html)
+        @test occursin("\"visible\":false", html)
+        @test occursin("\"visibilityStates\":[", html)
+        @test occursin("\"property\":\"visible\"", html)
+        @test occursin("visibilityById", html)
+        @test occursin("baseVisible", html)
+        @test occursin("visible:l.visible!==false", html)
+        @test occursin("if(l.visible===false) continue", html)
+        @test occursin("if(prop===\"visible\")", html)
         @test occursin("\"animations\"", html)
+        @test occursin("\"interpolation\":\"cubic\"", html)
+        @test occursin("\"interpolation\":\"cubicspline\"", html)
+        @test occursin("\"property\":\"quaternion\"", html)
+        @test occursin("prop===\"quaternion\"", html)
+        @test occursin("function eulerToQuat", html)
+        @test occursin("prop===\"rotation\"", html)
+        @test occursin("n.animEuler", html)
+        @test occursin("for(const n of c.nodes||[])", html)
+        @test occursin("function updateTransformGraph", html)
+        @test occursin("nodeMap.set(n.id,n)", html)
+        @test occursin("nodeMap.set(o.id,o)", html)
+        @test occursin("o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident()", html)
+        @test occursin("M4.mul(world,o.instanceMatrix||M4.ident())", html)
+        @test occursin("o.baseTransparent=!!o.transparent", html)
+        @test occursin("o.animTransparent=o.baseTransparent", html)
+        @test occursin("if(prop===\"opacity\") o.animTransparent", html)
+        @test occursin("o.animTransparent==null?o.transparent:o.animTransparent", html)
+        @test occursin("\"kind\":\"number\"", html)
+        @test occursin("\"property\":\"opacity\"", html)
+        @test occursin("\"property\":\"color\"", html)
+        @test occursin("\"property\":\"color\",\"component\":2", html)
+        @test occursin("\"property\":\"emissiveIntensity\"", html)
+        @test occursin("\"property\":\"envMapIntensity\"", html)
+        @test occursin("\"property\":\"clearcoatRoughness\"", html)
+        @test occursin("\"property\":\"sheenColor\",\"component\":1", html)
+        @test occursin("\"property\":\"spriteRotation\"", html)
+        @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
+        @test occursin("prop===\"visible\"||prop===\"spriteSizeAttenuation\"", html)
+        @test occursin("\"component\":1", html)
+        @test occursin("\"component\":2", html)
+        @test occursin("assignComponent", html)
+        @test occursin("baseRenderable", html)
+        @test occursin("setRenderableAnim", html)
+        @test occursin("resetRenderableAnim", html)
+        @test occursin("baseLight", html)
+        @test occursin("lightById", html)
+        @test occursin("setLightAnim", html)
+        @test occursin("resetLightAnim", html)
+        @test occursin("tr.component||0", html)
+        @test occursin("function catmull3", html)
+        @test occursin("function catmullN", html)
+        @test occursin("function hermiteN", html)
+        @test occursin("\"lights\":[{\"type\":\"ambient\"", html)
+        @test occursin("\"id\":$(ambient.id)", html)
+        @test occursin("\"type\":\"directional\"", html)
+        @test occursin("\"castShadow\":true", html)
+        @test occursin("\"receiveShadow\":true", html)
+        @test occursin("\"receiveShadow\":false", html)
+        @test occursin("\"shadow\":{\"type\":\"directionalStatic\",\"size\":64", html)
+        @test occursin("\"shadow\":{\"type\":\"pointStatic\",\"size\":64", html)
+        @test occursin("\"shadow\":{\"type\":\"spotStatic\",\"size\":64", html)
+        @test occursin("\"pcfRadius\":1", html)
+        @test occursin("makeShadowTexture", html)
+        @test occursin("shadowTexturesEnabled", html)
+        @test occursin("uDirShadowMap", html)
+        @test occursin("uDirShadowMatrix", html)
+        @test occursin("uShadowDirIndex", html)
+        @test occursin("uShadowKind", html)
+        @test occursin("uShadowKind==3", html)
+        @test occursin("shadow={kind:3,index:idx", html)
+        @test occursin("const objShadow=(o.receiveShadow!==false)&&light.shadow", html)
+        @test occursin("shadowFactor", html)
+        @test occursin("gl.activeTexture(gl.TEXTURE12)", html)
+        @test occursin("\"type\":\"point\"", html)
+        @test occursin("\"type\":\"spot\"", html)
+        @test occursin("\"type\":\"hemisphere\"", html)
+        @test occursin("\"type\":\"rectArea\"", html)
+        @test !occursin("\"type\":\"rectAreaApprox\"", html)
+        @test occursin("\"groundColor\"", html)
+        @test occursin("\"coneCos\"", html)
+        @test occursin("\"width\":2", html)
+        @test occursin("\"height\":1", html)
+        @test occursin("\"position\"", html)
+        @test occursin("\"forward\"", html)
+        @test occursin("\"u\":[", html)
+        @test occursin("\"v\":[", html)
+        @test occursin("\"distance\":8", html)
+        @test occursin("\"decay\":2", html)
+        @test occursin("\"direction\"", html)
+        @test occursin("\"side\":\"front\"", html)
+        @test occursin("\"side\":\"double\"", html)
+        @test occursin("const MAX_DIR=4", html)
+        @test occursin("const int MAX_RECT=4", html)
+        @test occursin("uDirLight[0]", html)
+        @test occursin("uSpotCount", html)
+        @test occursin("uHemiCount", html)
+        @test occursin("uRectCount", html)
+        @test occursin("uRectPos[0]", html)
+        @test occursin("rectNode", html)
+        @test occursin("objectDepth", html)
+        @test occursin("function lodChoices", html)
+        @test occursin("lod.get(o.lodGroup)===o", html)
+        @test occursin("\"lodGroup\":$(lod.id)", html)
+        @test occursin("\"lodDistance\":10", html)
+        @test occursin("\"lodHysteresis\":0.25", html)
+        @test occursin("c.lodState||(c.lodState=new Map())", html)
+        @test occursin("o.lodHysteresis||0", html)
+        @test occursin("lodChoices(active,eye)", html)
+        @test occursin(".sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye))", html)
         @test occursin("Uint32Array", html)
+        @test occursin("line_loop", html)
+        @test occursin("\"uvs\"", html)
+        @test occursin("\"colors\":[1,0,0,0,1,0,0,0,1]", html)
+        @test occursin("attribute vec3 aColor", html)
+        @test occursin("vColor=aColor", html)
+        @test occursin("uColor*vColor", html)
+        @test occursin("o.colorBuf=buf(o.colors)", html)
+        @test occursin("attrib(p,\"aColor\",o.colorBuf)", html)
+        @test occursin("\"texture\":{\"width\":2,\"height\":2", html)
+        @test occursin("\"alphaTexture\":{\"width\":2,\"height\":2", html)
+        @test occursin("\"alphaTest\":0.40000000000000002", html)
+        @test occursin("uUseAlphaMap", html)
+        @test occursin("uAlphaMap", html)
+        @test occursin("uAlphaTest", html)
+        @test occursin("if(outAlpha<uAlphaTest) discard", html)
+        @test occursin("\"offset\":[0.25,0]", html)
+        @test occursin("\"repeat\":[2,1]", html)
+        @test occursin("\"rotation\":0.20000000000000001", html)
+        @test occursin("\"center\":[0.5,0.5]", html)
+        @test occursin("\"matrixAutoUpdate\":true", html)
+        @test occursin("\"matrix\":[", html)
+        @test occursin("uMapMatrix", html)
+        @test occursin("function texMatrix(t)", html)
+        @test occursin("uniformTexMatrix(p,\"uAlphaMatrix\",o.alphaTexture)", html)
+        @test occursin("uniformMatrix3fv", html)
+        @test occursin("\"opacity\":0.5", html)
+        @test occursin("\"transparent\":true", html)
+        @test occursin("\"depthTest\":false", html)
+        @test occursin("\"depthWrite\":false", html)
+        @test occursin("o.depthTest===false", html)
+        @test occursin("gl.depthMask(o.depthWrite!==false)", html)
+        @test occursin("const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false));", html)
+        @test occursin("o.floor && eye[1]", html) == false
+        @test occursin("\"floor\":", html) == false
+        @test occursin("targetOffset=[0,0,0]", html)
+        @test occursin("panMode=e.button===2||e.shiftKey", html)
+        @test occursin("contextmenu", html)
+        @test occursin("targetOffset=add(targetOffset", html)
+        @test occursin("const pointers=new Map()", html)
+        @test occursin("function pointerDistance", html)
+        @test occursin("function panBy", html)
+        @test occursin("pinchMode=true", html)
+        @test occursin("pinchDist/nd", html)
+        @test occursin("try{ canvas.setPointerCapture", html)
+        @test occursin("\"loop\":\"repeat\"", html)
+        @test occursin("\"repetitions\":-1", html)
+        @test occursin("\"clampWhenFinished\":false", html)
+        @test occursin("\"timeScale\":1", html)
+        @test occursin("function clipTime", html)
+        @test occursin("sampleTrack(tr,ct)", html)
+        @test occursin("canvas.tabIndex = 0", html)
+        @test occursin("canvas.focus()", html)
+        @test occursin("keydown", html)
+        @test occursin("ArrowLeft", html)
+        @test occursin("zoomBy(.92)", html)
+        @test occursin("\"toneMapping\":\"aces\"", html)
+        @test occursin("\"toneMappingMode\":3", html)
+        @test occursin("\"toneExposure\":1.3500000000000001", html)
+        @test occursin("\"outputColorSpace\":\"srgb\"", html)
+        @test occursin("\"outputColorSpaceMode\":1", html)
+        @test occursin("uToneMapping", html)
+        @test occursin("uToneExposure", html)
+        @test occursin("uOutputColorSpace", html)
+        @test occursin("function tone(c)", html)
+        @test occursin("vec3 toneMap", html)
+        @test occursin("vec3 outputColor", html)
+        @test occursin("pow(c,vec3(1.0/2.4))", html)
+        @test occursin("uToneMapping==2", html)
+        @test occursin("uToneMapping==3", html)
+        @test occursin("outputColor(toneMap(c))", html)
+        @test occursin("draw(o,view,proj,eye,basis,light,clip,fg,tm)", html)
         @test occursin("</script><script>alert", html) == false
         @test occursin("KeyframeTrack", html) == false
+        @test_throws ArgumentError WebGLExportCase("bad", "Bad", "Bad", scene; tone_mapping=:filmic)
+        @test_throws ArgumentError WebGLExportCase("bad", "Bad", "Bad", scene; tone_exposure=-0.1)
+        @test_throws ArgumentError WebGLExportCase("bad", "Bad", "Bad", scene; output_color_space=:display_p3)
         @test_throws ArgumentError save_webgl_html(tempname() * ".html", WebGLExportCase[])
         rm(f)
     end
@@ -519,6 +1303,33 @@ using ForwardDiff
         @test rt.color[16, 16, 1] ≈ 0.6 atol=1e-6
         @test rt.color[16, 16, 2] ≈ 0.4 atol=1e-6
         @test rt.color[16, 16, 3] ≈ 0.2 atol=1e-6
+    end
+
+    @testset "Smooth shading — vertex colors are interpolated" begin
+        geo = PlaneGeometry(width=2.0, height=2.0)
+        set_attribute!(geo, :color, fill(0.0, 4 * geo.n_vertices), 4)
+        cattr = get_attribute(geo, :color)
+        for vi in 1:geo.n_vertices
+            cattr.data[(vi - 1) * 4 + 2] = 0.35
+            cattr.data[(vi - 1) * 4 + 4] = 0.25
+        end
+
+        cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+        cam.position = Vec3(0.0, 0.0, 3.0)
+
+        scene_on = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene_on, Mesh(geo, MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), vertex_colors=true)))
+        rt_on = RenderTarget(32, 32); render!(rt_on, scene_on, cam; shading=:smooth)
+        @test rt_on.color[16, 16, 1] ≈ 0.0 atol=1e-6
+        @test rt_on.color[16, 16, 2] ≈ 0.35 atol=1e-6
+        @test rt_on.color[16, 16, 3] ≈ 0.0 atol=1e-6
+
+        scene_off = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene_off, Mesh(geo, MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0))))
+        rt_off = RenderTarget(32, 32); render!(rt_off, scene_off, cam; shading=:smooth)
+        @test rt_off.color[16, 16, 1] ≈ 1.0 atol=1e-6
+        @test rt_off.color[16, 16, 2] ≈ 1.0 atol=1e-6
+        @test rt_off.color[16, 16, 3] ≈ 1.0 atol=1e-6
     end
 
     @testset "Near-plane clipping — geometry fully behind camera is dropped" begin
@@ -817,11 +1628,20 @@ using ForwardDiff
         near = Mesh(BoxGeometry(), MeshBasicMaterial())
         far  = Mesh(SphereGeometry(), MeshBasicMaterial())
         add_lod_level!(lod, 0.0, near)
-        add_lod_level!(lod, 10.0, far)
+        add_lod_level!(lod, 10.0, far; hysteresis=0.2)
+        @test lod.levels[2][2] ≈ 0.2
         @test lod_select(lod, 5.0) === near
         @test lod_select(lod, 10.0) === far
         @test lod_select(lod, 100.0) === far
         @test lod_select(lod, 0.0) === near
+        @test lod_update!(lod, 5.0) === near
+        @test near.visible && !far.visible
+        @test lod_update!(lod, 12.0) === far
+        @test !near.visible && far.visible
+        @test lod_update!(lod, 9.0) === far
+        @test !near.visible && far.visible
+        @test lod_update!(lod, 7.5) === near
+        @test near.visible && !far.visible
     end
 
     @testset "Raycaster — ray/triangle and scene picking" begin
@@ -1045,6 +1865,16 @@ using ForwardDiff
         graze = shade_face(Vec3(1.0,0,0.0), v, Vec3(), m, AbstractLight[])
         @test front.r > graze.r                            # facing camera is brighter
         @test front.r ≈ 1.0 && graze.r ≈ 0.35
+
+        data = zeros(Float64, 3, 3, 3)
+        data[2, 2, :] .= (1.0, 0.25, 0.5)
+        tex = Texture(data; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp,
+                      colorspace=:linear)
+        textured = MeshMatcapMaterial(color=Color3(0.5, 1.0, 1.0), matcap=tex)
+        c = shade_face(Vec3(0.0,0,1.0), v, Vec3(), textured, AbstractLight[])
+        @test c.r ≈ 0.5
+        @test c.g ≈ 0.25
+        @test c.b ≈ 0.5
     end
 
     @testset "MeshPhysicalMaterial — clearcoat adds highlight" begin
@@ -1101,18 +1931,36 @@ using ForwardDiff
 
     @testset "RectAreaLight — facing vs behind" begin
         mat = MeshLambertMaterial(color=Color3(1.0,1.0,1.0))
-        lights = AbstractLight[RectAreaLight(intensity=1.0, position=Vec3(0.0,0,5.0))]
+        lights = AbstractLight[RectAreaLight(intensity=10.0, position=Vec3(0.0,0,5.0))]
         front = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, lights)
         back  = shade_face(Vec3(0.0,0,-1.0), Vec3(0.0,0,1), Vec3(), mat, lights)
         @test front.r > back.r
         @test back.r ≈ 0.0
+
+        away = RectAreaLight(intensity=10.0, position=Vec3(0.0,0,5.0))
+        away.target = Vec3(0.0, 0.0, 6.0)
+        dark = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[away])
+        @test dark.r ≈ 0.0
+
+        small = RectAreaLight(intensity=10.0, width=1.0, height=1.0, position=Vec3(0.0,0,5.0))
+        large = RectAreaLight(intensity=10.0, width=4.0, height=4.0, position=Vec3(0.0,0,5.0))
+        csmall = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[small])
+        clarge = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[large])
+        @test clarge.r > csmall.r
+
+        near = RectAreaLight(intensity=10.0, width=1.0, height=1.0, position=Vec3(0.0,0,3.0))
+        far = RectAreaLight(intensity=10.0, width=1.0, height=1.0, position=Vec3(0.0,0,8.0))
+        cnear = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[near])
+        cfar = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[far])
+        @test cnear.r > cfar.r
     end
 
     @testset "Shadow mapping" begin
         scene = Scene()
         ground = Mesh(PlaneGeometry(width=40.0, height=40.0), MeshLambertMaterial())
         ground.rotation = Euler(-π/2, 0.0, 0.0); add!(scene, ground)
-        box = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshLambertMaterial())
+        box = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshLambertMaterial();
+                   cast_shadow=true)
         box.position = Vec3(0.0, 4.0, 0.0); add!(scene, box)
         key = DirectionalLight(position=Vec3(0.0,10.0,0.0)); key.target = Vec3(0.0,0,0)
         sm = compute_shadow_map(scene, key; resolution=512)
@@ -1124,9 +1972,12 @@ using ForwardDiff
         # End-to-end: an angled key light casts the box's shadow onto visible
         # ground beside it. Enabling shadows can only darken, and darkens a region.
         scene2 = Scene()
-        g2 = Mesh(PlaneGeometry(width=20.0,height=20.0), MeshLambertMaterial(color=Color3(0.9,0.9,0.9)))
+        g2 = Mesh(PlaneGeometry(width=20.0,height=20.0,width_segments=20,height_segments=20),
+                  MeshLambertMaterial(color=Color3(0.9,0.9,0.9));
+                  receive_shadow=true)
         g2.rotation = Euler(-π/2,0.0,0.0); add!(scene2, g2)
-        b2 = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshLambertMaterial(color=Color3(0.8,0.2,0.2)))
+        b2 = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshLambertMaterial(color=Color3(0.8,0.2,0.2));
+                  cast_shadow=true)
         b2.position = Vec3(0.0, 1.0, 0.0); add!(scene2, b2)
         add!(scene2, AmbientLight(intensity=0.15))
         k2 = DirectionalLight(intensity=1.0, position=Vec3(6.0,8.0,2.0))
@@ -1245,6 +2096,32 @@ using ForwardDiff
         # Bilinear gives an intermediate value at a texel boundary.
         texb = checker_texture(n=2, cell=1, filter=:bilinear)
         @test 0.0 < sample_texture(texb, 0.5, 0.5).r < 1.0
+
+        # Texture offset/repeat/rotation/center mirror three.js texture transforms.
+        data = zeros(Float64, 2, 2, 3)
+        data[1,1,1] = 0.1; data[1,2,1] = 0.2
+        data[2,1,1] = 0.3; data[2,2,1] = 0.4
+        base = Texture(data; filter=:nearest, wrap_s=:repeat, wrap_t=:repeat)
+        shifted = Texture(copy(data); filter=:nearest, offset=Vec2(0.5, 0.0))
+        @test sample_texture(shifted, 0.25, 0.75).r == sample_texture(base, 0.75, 0.75).r
+        repeated = Texture(copy(data); repeat=Vec2(2.0, 1.0))
+        @test texture_transform_uv(repeated, 0.25, 0.5)[1] ≈ 0.5
+        rotated = Texture(copy(data); rotation=π/2, center=Vec2(0.5, 0.5))
+        ru, rv = texture_transform_uv(rotated, 0.5, 0.75)
+        @test ru ≈ 0.75
+        @test rv ≈ 0.5
+        @test rotated.matrix_auto_update
+        @test rotated.matrix.e[1] ≈ 0.0 atol=1e-12
+        manual = Texture(copy(data); matrix=Mat3{Float64}((2.0,0.0,0.25,
+                                                           0.0,3.0,-0.5,
+                                                           0.0,0.0,1.0)),
+                         matrix_auto_update=false)
+        @test texture_transform_uv(manual, 0.25, 0.5) == (0.75, 1.0)
+        manual.offset = Vec2(0.9, 0.9)
+        @test texture_transform_uv(manual, 0.25, 0.5) == (0.75, 1.0)
+        manual.matrix_auto_update = true
+        texture_update_matrix!(manual)
+        @test texture_transform_uv(manual, 0.25, 0.5) == (1.15, 1.4)
     end
 
     @testset "Mipmaps" begin
@@ -1346,8 +2223,31 @@ using ForwardDiff
         @test abs(cam.position.x) > 1.0                          # camera actually moved
         orbit_zoom!(oc, 0.5)
         @test norm(cam.position - oc.target) ≈ r0 * 0.5 atol=1e-9
+        saved_position = cam.position
+        saved_target = oc.target
+        orbit_save_state!(oc)
         orbit_set!(oc; azimuth=0.0, polar=π/2, radius=3.0)
         @test norm(cam.position - oc.target) ≈ 3.0 atol=1e-9
+        orbit_reset!(oc)
+        @test cam.position == saved_position
+        @test oc.target == saved_target
+        @test cam.target == saved_target
+
+        constrained_cam = PerspectiveCamera()
+        constrained_cam.position = Vec3(0.0, 0.0, 5.0)
+        constrained_cam.target = Vec3(0.0, 0.0, 0.0)
+        constrained = OrbitControls(constrained_cam;
+                                     min_distance=2.0, max_distance=4.0,
+                                     min_polar_angle=π/4, max_polar_angle=3π/4,
+                                     min_azimuth_angle=-0.5, max_azimuth_angle=0.5)
+        orbit_set!(constrained; azimuth=2.0, polar=0.01, radius=10.0)
+        sph = Three.cartesian_to_spherical(constrained.camera.position - constrained.target)
+        @test sph.radius ≈ 4.0 atol=1e-9
+        @test sph.phi ≈ π/4 atol=1e-9
+        @test sph.theta ≈ 0.5 atol=1e-9
+        orbit_zoom!(constrained, 0.01)
+        sph = Three.cartesian_to_spherical(constrained.camera.position - constrained.target)
+        @test sph.radius ≈ 2.0 atol=1e-9
     end
 
     @testset "FlyControls" begin
@@ -1356,6 +2256,92 @@ using ForwardDiff
         fly_translate!(fc, 1.0, 0.0, 0.0)                        # move forward (toward -z)
         @test cam.position.z ≈ 4.0 atol=1e-9
         @test cam.target.z ≈ -1.0 atol=1e-9                      # target shifts with camera
+    end
+
+    @testset "PointerLockControls" begin
+        cam = PerspectiveCamera(); cam.position = Vec3(0.0,0,0); cam.target = Vec3(0.0,0,-1.0)
+        pc = PointerLockControls(cam; pointer_speed=1.0)
+        target0 = cam.target
+        pointerlock_move!(pc, 100, 0)
+        @test cam.target == target0                              # ignored while unlocked
+        pointerlock_lock!(pc)
+        pointerlock_move!(pc, 100, 0)
+        @test pc.is_locked
+        @test !isapprox(cam.target.x, target0.x; atol=1e-9)
+        locked_target = cam.target
+        pointerlock_unlock!(pc)
+        pointerlock_move!(pc, 100, 0)
+        @test cam.target == locked_target
+
+        constrained_cam = PerspectiveCamera()
+        constrained_cam.position = Vec3(0.0, 0.0, 0.0)
+        constrained_cam.target = Vec3(0.0, 0.0, -1.0)
+        constrained_pc = PointerLockControls(constrained_cam;
+                                             min_polar_angle=π/4,
+                                             max_polar_angle=3π/4)
+        pointerlock_lock!(constrained_pc)
+        pointerlock_move!(constrained_pc, 0, -10_000)
+        sph = Three.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
+        @test sph.phi ≈ π/4 atol=1e-9
+        pointerlock_move!(constrained_pc, 0, 10_000)
+        sph = Three.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
+        @test sph.phi ≈ 3π/4 atol=1e-9
+        @test_throws ArgumentError PointerLockControls(PerspectiveCamera();
+                                                       min_polar_angle=1.0,
+                                                       max_polar_angle=0.5)
+    end
+
+    @testset "DragControls" begin
+        cam = PerspectiveCamera()
+        mesh = Mesh(BoxGeometry(), MeshBasicMaterial())
+        dc = DragControls([mesh], cam)
+        drag_move!(dc, Vec3(1.0,0,0))
+        @test mesh.position == Vec3(0.0,0,0)                     # no selected object
+        drag_start!(dc, mesh)
+        drag_move!(dc, Vec3(1.0,2.0,3.0))
+        @test mesh.position == Vec3(1.0,2.0,3.0)
+        drag_end!(dc)
+        drag_move!(dc, Vec3(1.0,0,0))
+        @test mesh.position == Vec3(1.0,2.0,3.0)
+        @test_throws ArgumentError drag_start!(dc, Group())
+    end
+
+    @testset "TransformControls" begin
+        cam = PerspectiveCamera()
+        obj = Group()
+        tc = TransformControls(cam)
+        transform_apply!(tc, Vec3(1.0,1.0,1.0))
+        @test obj.position == Vec3(0.0,0,0)                     # detached transform is a no-op
+        transform_attach!(tc, obj)
+        transform_apply!(tc, Vec3(1.0,2.0,3.0))
+        @test obj.position == Vec3(1.0,2.0,3.0)
+        transform_set_mode!(tc, :scale)
+        transform_apply!(tc, Vec3(2.0,3.0,4.0))
+        @test obj.scale == Vec3(2.0,3.0,4.0)
+        transform_set_mode!(tc, :rotate)
+        transform_apply!(tc, Vec3(0.1,0.2,0.3))
+        @test obj.rotation.x ≈ 0.1 atol=1e-12
+        @test obj.rotation.y ≈ 0.2 atol=1e-12
+        @test obj.rotation.z ≈ 0.3 atol=1e-12
+        local_obj = Group()
+        local_obj.rotation = Euler(0.0, π/2, 0.0)
+        local_tc = TransformControls(cam; space=:local)
+        transform_attach!(local_tc, local_obj)
+        transform_apply!(local_tc, Vec3(1.0, 0.0, 0.0))
+        @test local_obj.position.x ≈ 0.0 atol=1e-12
+        @test local_obj.position.z ≈ -1.0 atol=1e-12
+        transform_set_space!(local_tc, :world)
+        transform_apply!(local_tc, Vec3(1.0, 0.0, 0.0))
+        @test local_obj.position.x ≈ 1.0 atol=1e-12
+        @test local_obj.position.z ≈ -1.0 atol=1e-12
+        transform_detach!(tc)
+        transform_set_mode!(tc, :translate)
+        transform_apply!(tc, Vec3(1.0,1.0,1.0))
+        @test obj.position == Vec3(1.0,2.0,3.0)
+        @test_throws ArgumentError TransformControls(cam; mode=:skew)
+        @test_throws ArgumentError TransformControls(cam; space=:screen)
+        @test_throws ArgumentError transform_set_mode!(tc, :skew)
+        @test_throws ArgumentError transform_set_space!(tc, :screen)
     end
 
     @testset "Clock" begin
@@ -1377,6 +2363,27 @@ using ForwardDiff
         mixer_update!(mx, 1.0)                                   # now t=1.5
         @test mesh.position.x ≈ 10.0
         @test mesh.position.y ≈ 2.5
+        mixer_set_time!(mx, 2.5)                                  # default repeat loop
+        @test mesh.position.x ≈ 5.0
+        once_clip = AnimationClip("once", [tr]; loop=:once, clamp_when_finished=true)
+        mixer_set_time!(AnimationMixer(once_clip), 2.5)
+        @test mesh.position.x ≈ 10.0
+        @test mesh.position.y ≈ 5.0
+        once_reset = AnimationMixer(AnimationClip("once_reset", [tr]; loop=:once))
+        mixer_set_time!(once_reset, 2.5)
+        @test mesh.position.x ≈ 0.0
+        pingpong = AnimationMixer(AnimationClip("pingpong", [tr]; loop=:pingpong))
+        mixer_set_time!(pingpong, 2.5)
+        @test mesh.position.x ≈ 10.0
+        @test mesh.position.y ≈ 2.5
+        scaled = AnimationMixer(AnimationClip("scaled", [tr]; time_scale=2.0))
+        mixer_set_time!(scaled, 0.25)
+        @test mesh.position.x ≈ 5.0
+        finite = AnimationMixer(AnimationClip("finite", [tr]; repetitions=1, clamp_when_finished=true))
+        mixer_set_time!(finite, 3.0)
+        @test mesh.position.x ≈ 10.0
+        @test mesh.position.y ≈ 5.0
+        mesh.position = Vec3(10.0, 2.5, 0.0)
         step = KeyframeTrack(mesh, :position, [0.0, 1.0, 2.0],
                              [Vec3(0.0,0,0), Vec3(10.0,0,0), Vec3(20.0,0,0)];
                              interpolation=:step)
@@ -1385,12 +2392,155 @@ using ForwardDiff
         @test sample_track(step, 1.5).x ≈ 10.0
         @test_throws ArgumentError KeyframeTrack(mesh, :position, [0.0], [Vec3(0.0,0,0)];
                                                  interpolation=:bogus)
+        cubic = CubicSplineKeyframeTrack(mesh, :position, [0.0, 1.0],
+                                         [Vec3(0.0,0,0), Vec3(1.0,0,0)],
+                                         [Vec3(0.0,0,0), Vec3(0.0,0,0)],
+                                         [Vec3(0.0,0,0), Vec3(0.0,0,0)])
+        @test sample_track(cubic, 0.0).x ≈ 0.0
+        @test sample_track(cubic, 0.5).x ≈ 0.5
+        @test sample_track(cubic, 1.0).x ≈ 1.0
+
+        num = NumberKeyframeTrack(mesh, "position.x", [0.0, 1.0], [1.0, 3.0])
+        @test num.property === :position
+        @test num.component == 1
+        @test sample_track(num, 0.25) ≈ 1.5
+        mixer_set_time!(AnimationMixer(AnimationClip("position_x", [num])), 0.5)
+        @test mesh.position.x ≈ 2.0
+        @test mesh.position.y ≈ 2.5
+        sy = NumberKeyframeTrack(mesh, ".scale[y]", [0.0, 1.0], [1.0, 5.0];
+                                 interpolation=:step)
+        mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy])), 0.5)
+        @test mesh.scale.y ≈ 1.0
+        mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy])), 1.0)
+        @test mesh.scale.y ≈ 5.0
+        vis = NumberKeyframeTrack(mesh, "visible", [0.0, 1.0], [1.0, 0.0])
+        mixer_set_time!(AnimationMixer(AnimationClip("visible", [vis])), 0.25)
+        @test mesh.visible === true
+        mixer_set_time!(AnimationMixer(AnimationClip("visible", [vis])), 0.75)
+        @test mesh.visible === false
+        morph_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.0, 0.0])
+        mw = NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[1]",
+                                 [0.0, 1.0], [0.0, 0.8])
+        mixer_set_time!(AnimationMixer(AnimationClip("morph_component", [mw])), 0.5)
+        @test morph_mesh.morph_target_influences ≈ [0.0, 0.4]
+
+        material_mesh = Mesh(BoxGeometry(),
+                             MeshStandardMaterial(color=Color3(0.1, 0.2, 0.3),
+                                                  opacity=0.25, roughness=0.9))
+        opacity = NumberKeyframeTrack(material_mesh, "opacity",
+                                      [0.0, 1.0], [0.25, 0.75])
+        red = NumberKeyframeTrack(material_mesh, "color.r",
+                                  [0.0, 1.0], [0.1, 0.9])
+        rough = NumberKeyframeTrack(material_mesh, "roughness",
+                                    [0.0, 1.0], [0.9, 0.2])
+        material_opacity = NumberKeyframeTrack(material_mesh, "material.opacity",
+                                               [0.0, 1.0], [0.25, 0.85])
+        material_blue = NumberKeyframeTrack(material_mesh, "material.color.b",
+                                            [0.0, 1.0], [0.3, 0.9])
+        material_emissive_intensity =
+            NumberKeyframeTrack(material_mesh, "material.emissiveIntensity",
+                                [0.0, 1.0], [1.0, 3.0])
+        material_ao_intensity =
+            NumberKeyframeTrack(material_mesh, "material.aoMapIntensity",
+                                [0.0, 1.0], [1.0, 0.5])
+        material_env_intensity =
+            NumberKeyframeTrack(material_mesh, "material.envMapIntensity",
+                                [0.0, 1.0], [1.0, 2.0])
+        sprite_material = Sprite(SpriteMaterial(rotation=0.1, size_attenuation=true))
+        sprite_material_rotation =
+            NumberKeyframeTrack(sprite_material, "material.rotation",
+                                [0.0, 1.0], [0.1, 0.9])
+        sprite_size_attenuation =
+            NumberKeyframeTrack(sprite_material, "material.sizeAttenuation",
+                                [0.0, 1.0], [0.4, 0.0])
+        @test material_opacity.property === :opacity
+        @test material_blue.property === :color
+        @test material_blue.component == 3
+        @test material_emissive_intensity.property === :emissive_intensity
+        @test material_ao_intensity.property === :ao_map_intensity
+        @test material_env_intensity.property === :env_map_intensity
+        @test sprite_material_rotation.property === :material_rotation
+        @test sprite_size_attenuation.property === :size_attenuation
+        mixer_set_time!(AnimationMixer(AnimationClip("material_numbers",
+                                                    [opacity, red, rough,
+                                                     material_opacity,
+                                                     material_blue,
+                                                     material_emissive_intensity,
+                                                     material_ao_intensity,
+                                                     material_env_intensity,
+                                                     sprite_material_rotation,
+                                                     sprite_size_attenuation])), 0.5)
+        @test material_mesh.material.opacity ≈ 0.55
+        @test material_mesh.material.color.r ≈ 0.5
+        @test material_mesh.material.color.g ≈ 0.2
+        @test material_mesh.material.color.b ≈ 0.6
+        @test material_mesh.material.roughness ≈ 0.55
+        @test material_mesh.material.emissive_intensity ≈ 2.0
+        @test material_mesh.material.ao_map_intensity ≈ 0.75
+        @test material_mesh.material.env_map_intensity ≈ 1.5
+        @test sprite_material.material.rotation ≈ 0.5
+        @test sprite_material.material.size_attenuation === false
+
+        physical_mesh = Mesh(BoxGeometry(),
+                             MeshPhysicalMaterial(clearcoat_roughness=0.0,
+                                                  sheen_color=Color3(1.0, 1.0, 1.0)))
+        physical_clearcoat_roughness =
+            NumberKeyframeTrack(physical_mesh, "material.clearcoatRoughness",
+                                [0.0, 1.0], [0.0, 0.8])
+        physical_sheen_red =
+            NumberKeyframeTrack(physical_mesh, "material.sheenColor.r",
+                                [0.0, 1.0], [1.0, 0.2])
+        @test physical_clearcoat_roughness.property === :clearcoat_roughness
+        @test physical_sheen_red.property === :sheen_color
+        @test physical_sheen_red.component == 1
+        mixer_set_time!(AnimationMixer(AnimationClip("physical_material_numbers",
+                                                     [physical_clearcoat_roughness,
+                                                      physical_sheen_red])), 0.5)
+        @test physical_mesh.material.clearcoat_roughness ≈ 0.4
+        @test physical_mesh.material.sheen_color.r ≈ 0.6
+
+        phong_material_mesh = Mesh(BoxGeometry(),
+                                   MeshPhongMaterial(color=Color3(0.2, 0.4, 0.8),
+                                                     shininess=20.0))
+        shiny = NumberKeyframeTrack(phong_material_mesh, "shininess",
+                                    [0.0, 1.0], [20.0, 80.0])
+        mixer_set_time!(AnimationMixer(AnimationClip("phong_shininess",
+                                                    [shiny])), 0.5)
+        @test phong_material_mesh.material.shininess ≈ 50.0
+        spec_green = NumberKeyframeTrack(phong_material_mesh, "specular.g",
+                                         [0.0, 1.0], [0.2, 0.8])
+        mixer_set_time!(AnimationMixer(AnimationClip("phong_specular",
+                                                    [spec_green])), 0.5)
+        @test phong_material_mesh.material.specular.g ≈ 0.5
+
+        color = KeyframeTrack(material_mesh, :color, [0.0, 1.0],
+                              [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
+        mixer_set_time!(AnimationMixer(AnimationClip("material_color", [color])), 0.5)
+        @test material_mesh.material.color.r ≈ 0.5
+        @test material_mesh.material.color.g ≈ 0.5
+        @test material_mesh.material.color.b ≈ 0.5
+
+        light = PointLight(color=Color3(0.2, 0.3, 0.4), intensity=1.0)
+        lint = NumberKeyframeTrack(light, "intensity", [0.0, 1.0], [1.0, 3.0])
+        lgreen = NumberKeyframeTrack(light, "color.g", [0.0, 1.0], [0.3, 0.9])
+        mixer_set_time!(AnimationMixer(AnimationClip("light_binding", [lint, lgreen])), 0.5)
+        @test light.intensity ≈ 2.0
+        @test light.color.r ≈ 0.2
+        @test light.color.g ≈ 0.6
+        lvis = NumberKeyframeTrack(light, "visible", [0.0, 1.0], [1.0, 0.0])
+        mixer_set_time!(AnimationMixer(AnimationClip("light_visibility", [lvis])), 0.75)
+        @test light.visible === false
     end
 
     @testset "Helpers" begin
         ax = AxesHelper(2.0)
         @test ax isa LineSegments
         @test ax.geometry.n_vertices == 6                        # 3 segments
+        loop = LineLoop(BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                       Float64[], Float64[], Int[], 3, 0),
+                        LineBasicMaterial())
+        @test loop isa LineLoop
+        @test get_children(loop) == AbstractObject3D[]
         @test has_attribute(ax.geometry, :color)
         @test GridHelper(10.0, 5).geometry.n_vertices == 24      # 6 lines × 2 dirs × 2 verts
         bh = BoxHelper(Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshBasicMaterial()))
@@ -1500,7 +2650,9 @@ using ForwardDiff
         campos = Vec3(0.0, 0.0, 3.0)
         # A normal map that decodes to (0,0,1) leaves shading unchanged.
         flatmap = DataTexture(cat(fill(0.5,4,4), fill(0.5,4,4), fill(1.0,4,4); dims=3))
-        mk(nm) = MeshStandardMaterial(color=Color3(0.8,0.8,0.8), metalness=0.0, roughness=1.0, normal_map=nm)
+        mk(nm; scale=1.0) = MeshStandardMaterial(color=Color3(0.8,0.8,0.8),
+                                                 metalness=0.0, roughness=1.0,
+                                                 normal_map=nm, normal_scale=scale)
         base = shade_mesh_faces(geo, wm, mk(nothing), light, campos)
         same = shade_mesh_faces(geo, wm, mk(flatmap), light, campos)
         @test base[1].r ≈ same[1].r atol=1e-9
@@ -1508,11 +2660,26 @@ using ForwardDiff
         tiltmap = DataTexture(cat(fill(0.95,4,4), fill(0.5,4,4), fill(0.7,4,4); dims=3))
         tilt = shade_mesh_faces(geo, wm, mk(tiltmap), light, campos)
         @test abs(tilt[1].r - base[1].r) > 1e-3
+        zero_scale = shade_mesh_faces(geo, wm, mk(tiltmap; scale=0.0), light, campos)
+        @test zero_scale[1].r ≈ base[1].r atol=1e-9
+        n0 = Vec3(0.0, 0.0, 1.0)
+        n_half = Three._apply_normal_map(n0, tiltmap, 0.5, 0.5,
+                                         Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),
+                                         (0.0,0.0), (1.0,0.0), (0.0,1.0), 0.5)
+        n_full = Three._apply_normal_map(n0, tiltmap, 0.5, 0.5,
+                                         Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),
+                                         (0.0,0.0), (1.0,0.0), (0.0,1.0), 1.0)
+        @test dot(n_half, n0) > dot(n_full, n0)
         # Roughness map overrides the material roughness per face (PBR result moves).
         rmap = DataTexture(fill(0.9, 4, 4, 3))
         sharp = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05), light, campos)
         mapped = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05, roughness_map=rmap), light, campos)
-        @test abs(sharp[1].r - mapped[1].r) > 1e-4
+        @test abs(sharp[1].r - mapped[1].r) > 1e-6
+        eff = Three._apply_pbr_maps(MeshStandardMaterial(metalness=0.5, roughness=0.8,
+                                                         roughness_map=rmap, metalness_map=rmap),
+                                    rmap, rmap, 0.5, 0.5)
+        @test eff.roughness ≈ 0.72
+        @test eff.metalness ≈ 0.45
     end
 
     @testset "In-renderer MSAA" begin
@@ -1534,6 +2701,14 @@ using ForwardDiff
         a2 = @allocated render_pooled!(r2, scene, cam, cache)
         a3 = @allocated render_pooled!(r2, scene, cam, cache)
         @test a3 <= a2                                         # allocation does not grow per frame
+
+        cache2 = RenderCache(); r3 = RenderTarget(64,64); render!(r3, scene, cam; cache=cache2)
+        @test maximum(abs.(r1.color .- r3.color)) < 1e-12
+        default_alloc = @allocated render!(r1, scene, cam)
+        cached_alloc1 = @allocated render!(r3, scene, cam; cache=cache2)
+        cached_alloc2 = @allocated render!(r3, scene, cam; cache=cache2)
+        @test cached_alloc2 <= cached_alloc1
+        @test cached_alloc2 < default_alloc
     end
 
     @testset "Reverse-mode AD — matches ForwardDiff" begin
@@ -1555,9 +2730,6 @@ using ForwardDiff
     end
 
 
-    # Three.jl audit round-2 regression tests (staged 2026-05-29)
-    # Each block FAILS on the pre-fix code and PASSES after the applied fix.
-    # Merge into test/runtests.jl @testset during the verification pass.
     @testset "Audit round 2 — bug regressions" begin
 
         # [A:math+raycaster] #3 mat4_inverse has no singular-matrix guard; det==0 (e.g. zero-scale object) yields inv_d
@@ -1783,6 +2955,289 @@ using ForwardDiff
         # [E:loaders] #19 _gltf_accessor ignores bufferView.byteStride; interleaved buffers decode to garbage
         let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteStride"=>12.0)]); out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
 
+        @testset "glTF accessor signed/normalized/sparse decoding" begin
+            let buf = UInt8[0x80, 0x00, 0x7f],
+                gltf = Dict{String,Any}(
+                    "accessors"=>[Dict{String,Any}("bufferView"=>0.0, "count"=>3.0,
+                                                   "type"=>"SCALAR", "componentType"=>5120.0,
+                                                   "normalized"=>true)],
+                    "bufferViews"=>[Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0)])
+                out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0)
+                @test ncomp == 1 && cnt == 3
+                @test out[1] ≈ -1.0
+                @test out[2] ≈ 0.0
+                @test out[3] ≈ 1.0
+            end
+            let buf = UInt8[]
+                value_offset = length(buf)
+                append!(buf, reinterpret(UInt8, Float32[0.0f0, 0.0f0, 0.0f0]))
+                index_offset = length(buf)
+                append!(buf, reinterpret(UInt8, UInt16[1]))
+                sparse_value_offset = length(buf)
+                append!(buf, reinterpret(UInt8, Float32[5.0f0]))
+                gltf = Dict{String,Any}(
+                    "accessors"=>[Dict{String,Any}(
+                        "bufferView"=>0.0, "count"=>3.0, "type"=>"SCALAR", "componentType"=>5126.0,
+                        "sparse"=>Dict{String,Any}(
+                            "count"=>1.0,
+                            "indices"=>Dict{String,Any}("bufferView"=>1.0, "componentType"=>5123.0),
+                            "values"=>Dict{String,Any}("bufferView"=>2.0)))],
+                    "bufferViews"=>[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset)),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset)),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(sparse_value_offset))])
+                out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0)
+                @test ncomp == 1 && cnt == 3
+                @test out == [0.0, 5.0, 0.0]
+            end
+        end
+
+        @testset "glTF mesh attribute loading" begin
+            let buf = UInt8[], views = Any[], accessors = Any[]
+                function add_f32_accessor(data, typ, item_size)
+                    offset = length(buf)
+                    append!(buf, reinterpret(UInt8, Float32.(data)))
+                    push!(views, Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(offset)))
+                    push!(accessors, Dict{String,Any}("bufferView"=>Float64(length(views)-1),
+                                                      "componentType"=>5126.0,
+                                                      "count"=>Float64(length(data) ÷ item_size),
+                                                      "type"=>typ))
+                    return length(accessors) - 1
+                end
+                pos = add_f32_accessor([0,0,0, 1,0,0, 0,1,0], "VEC3", 3)
+                uv0 = add_f32_accessor([0,0, 1,0, 0,1], "VEC2", 2)
+                uv1 = add_f32_accessor([0.1,0.2, 0.3,0.4, 0.5,0.6], "VEC2", 2)
+                col = add_f32_accessor([1,0,0,1, 0,1,0,1, 0,0,1,1], "VEC4", 4)
+                tan = add_f32_accessor([1,0,0,1, 1,0,0,1, 1,0,0,1], "VEC4", 4)
+                gltf = Dict{String,Any}(
+                    "scenes"=>[Dict{String,Any}("nodes"=>Any[0.0])],
+                    "scene"=>0.0,
+                    "nodes"=>[Dict{String,Any}("mesh"=>0.0)],
+                    "meshes"=>[Dict{String,Any}("primitives"=>Any[
+                        Dict{String,Any}("attributes"=>Dict{String,Any}(
+                            "POSITION"=>Float64(pos),
+                            "TEXCOORD_0"=>Float64(uv0),
+                            "TEXCOORD_1"=>Float64(uv1),
+                            "COLOR_0"=>Float64(col),
+                            "TANGENT"=>Float64(tan)))] )],
+                    "bufferViews"=>views,
+                    "accessors"=>accessors)
+                scene = Three._gltf_build_scene(gltf, [buf])
+                grp = only(get_children(scene))
+                mesh = only(get_children(grp))
+                geo = mesh.geometry
+                @test geo.uvs == [0.0,0.0, 1.0,0.0, 0.0,1.0]
+                @test has_attribute(geo, :uv2)
+                @test isapprox(get_attribute(geo, :uv2).data,
+                                [0.1,0.2, 0.3,0.4, 0.5,0.6]; atol=1e-7)
+                @test get_attribute(geo, :uv2).item_size == 2
+                @test has_attribute(geo, :color)
+                @test get_attribute(geo, :color).item_size == 4
+                @test has_attribute(geo, :tangent)
+                @test get_attribute(geo, :tangent).item_size == 4
+            end
+        end
+
+        @testset "glTF material texture binding" begin
+            let dir = mktempdir()
+                texpath = joinpath(dir, "base.png")
+                save_png(texpath, fill(0.5, 2, 2, 3))
+                buf = UInt8[]
+                append!(buf, reinterpret(UInt8, Float32[0,0,0, 1,0,0, 0,1,0]))
+                pos_len = length(buf)
+                append!(buf, reinterpret(UInt8, Float32[0,0, 1,0, 0,1]))
+                gltf = Dict{String,Any}(
+                    "scenes"=>[Dict{String,Any}("nodes"=>Any[0.0])],
+                    "scene"=>0.0,
+                    "nodes"=>[Dict{String,Any}("mesh"=>0.0)],
+                    "meshes"=>[Dict{String,Any}("primitives"=>Any[
+                        Dict{String,Any}("attributes"=>Dict{String,Any}("POSITION"=>0.0,
+                                                                        "TEXCOORD_0"=>1.0),
+                                         "material"=>0.0)])],
+                    "bufferViews"=>[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(pos_len))],
+                    "accessors"=>[
+                        Dict{String,Any}("bufferView"=>0.0, "componentType"=>5126.0,
+                                         "count"=>3.0, "type"=>"VEC3"),
+                        Dict{String,Any}("bufferView"=>1.0, "componentType"=>5126.0,
+                                         "count"=>3.0, "type"=>"VEC2")],
+                    "samplers"=>[Dict{String,Any}("wrapS"=>33071.0, "wrapT"=>33648.0,
+                                                 "magFilter"=>9728.0)],
+                    "images"=>[Dict{String,Any}("uri"=>"base.png")],
+                    "textures"=>[Dict{String,Any}("source"=>0.0, "sampler"=>0.0)],
+                    "materials"=>[Dict{String,Any}(
+                        "doubleSided"=>true,
+                        "alphaMode"=>"BLEND",
+                        "emissiveFactor"=>Any[0.1,0.2,0.3],
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorFactor"=>Any[0.8,0.7,0.6,0.5],
+                            "metallicFactor"=>0.25,
+                            "roughnessFactor"=>0.75,
+                            "baseColorTexture"=>Dict{String,Any}(
+                                "index"=>0.0, "texCoord"=>0.0,
+                                "extensions"=>Dict{String,Any}(
+                                    "KHR_texture_transform"=>Dict{String,Any}(
+                                        "offset"=>Any[0.25, 0.5],
+                                        "scale"=>Any[2.0, 3.0],
+                                        "rotation"=>0.75,
+                                        "texCoord"=>1.0))),
+                            "metallicRoughnessTexture"=>Dict{String,Any}("index"=>0.0, "texCoord"=>1.0)),
+                        "normalTexture"=>Dict{String,Any}("index"=>0.0, "texCoord"=>1.0, "scale"=>0.25),
+                        "occlusionTexture"=>Dict{String,Any}("index"=>0.0, "texCoord"=>1.0, "strength"=>0.35),
+                        "emissiveTexture"=>Dict{String,Any}("index"=>0.0, "texCoord"=>1.0),
+                        "extensions"=>Dict{String,Any}(
+                            "KHR_materials_emissive_strength"=>Dict{String,Any}(
+                                "emissiveStrength"=>2.5)))])
+                scene = Three._gltf_build_scene(gltf, [buf]; dir=dir)
+                mat = only(get_children(only(get_children(scene)))).material
+                @test mat isa MeshStandardMaterial
+                @test mat.color.r ≈ 0.8 && mat.opacity ≈ 0.5
+                @test mat.transparent && mat.side === :double
+                @test mat.emissive.r ≈ 0.1 && mat.metalness ≈ 0.25 && mat.roughness ≈ 0.75
+                @test mat.map isa Texture && mat.map.colorspace === :srgb
+                @test mat.map.tex_coord == 1
+                @test mat.map.offset == Vec2(0.25, 0.5)
+                @test mat.map.repeat == Vec2(2.0, 3.0)
+                @test mat.map.rotation ≈ 0.75
+                expected_matrix = Mat3{Float64}((
+                    2.0*cos(0.75), 2.0*sin(0.75), 0.25,
+                    -3.0*sin(0.75), 3.0*cos(0.75), 0.5,
+                    0.0, 0.0, 1.0))
+                @test maximum(abs.(collect(mat.map.matrix.e) .- collect(expected_matrix.e))) < 1e-12
+                @test Three.texture_transform_uv(mat.map, 0.0, 0.0) == (expected_matrix.e[3], expected_matrix.e[6])
+                @test mat.map.wrap_s === :clamp && mat.map.wrap_t === :mirror
+                @test mat.map.filter === :nearest
+                @test mat.normal_map isa Texture && mat.normal_map.colorspace === :linear && mat.normal_map.tex_coord == 1
+                @test mat.normal_scale ≈ 0.25
+                @test mat.roughness_map isa Texture && mat.roughness_map.colorspace === :linear && mat.roughness_map.tex_coord == 1
+                @test mat.metalness_map === mat.roughness_map
+                @test mat.ao_map isa Texture && mat.ao_map.colorspace === :linear && mat.ao_map.tex_coord == 1
+                @test mat.emissive_map isa Texture && mat.emissive_map.colorspace === :srgb && mat.emissive_map.tex_coord == 1
+                @test mat.ao_map_intensity ≈ 0.35
+                @test mat.emissive_intensity ≈ 2.5
+                gltf["materials"][1]["alphaMode"] = "MASK"
+                gltf["materials"][1]["alphaCutoff"] = 0.42
+                masked_scene = Three._gltf_build_scene(gltf, [buf]; dir=dir)
+                masked = only(get_children(only(get_children(masked_scene)))).material
+                @test masked isa MeshStandardMaterial
+                @test !masked.transparent
+                @test masked.alpha_test ≈ 0.42
+            end
+
+            let dir = mktempdir()
+                texpath = joinpath(dir, "unlit.png")
+                save_png(texpath, fill(0.75, 1, 1, 3))
+                gltf = Dict{String,Any}(
+                    "scenes"=>[Dict{String,Any}("nodes"=>Any[0.0])],
+                    "scene"=>0.0,
+                    "nodes"=>Any[],
+                    "meshes"=>Any[],
+                    "images"=>[Dict{String,Any}("uri"=>"unlit.png")],
+                    "textures"=>[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorFactor"=>Any[0.2,0.3,0.4,0.6],
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)),
+                        "alphaMode"=>"BLEND",
+                        "extensions"=>Dict{String,Any}("KHR_materials_unlit"=>Dict{String,Any}()))])
+                mat = Three._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat isa MeshBasicMaterial
+                @test mat.color == Color3(0.2, 0.3, 0.4)
+                @test mat.opacity ≈ 0.6 && mat.transparent
+                @test mat.map isa Texture && mat.map.colorspace === :srgb
+            end
+
+            let dir = mktempdir()
+                texpath = joinpath(dir, "physical.png")
+                save_png(texpath, fill(0.5, 2, 2, 3))
+                gltf = Dict{String,Any}(
+                    "images"=>[Dict{String,Any}("uri"=>"physical.png")],
+                    "textures"=>[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorFactor"=>Any[0.2,0.3,0.4,0.75],
+                            "metallicFactor"=>0.6,
+                            "roughnessFactor"=>0.35,
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0),
+                            "metallicRoughnessTexture"=>Dict{String,Any}("index"=>0.0)),
+                        "alphaMode"=>"BLEND",
+                        "doubleSided"=>true,
+                        "emissiveFactor"=>Any[0.1,0.2,0.3],
+                        "normalTexture"=>Dict{String,Any}("index"=>0.0),
+                        "occlusionTexture"=>Dict{String,Any}("index"=>0.0, "strength"=>0.55),
+                        "emissiveTexture"=>Dict{String,Any}("index"=>0.0),
+                        "extensions"=>Dict{String,Any}(
+                            "KHR_materials_clearcoat"=>Dict{String,Any}(
+                                "clearcoatFactor"=>0.7,
+                                "clearcoatRoughnessFactor"=>0.25,
+                                "clearcoatTexture"=>Dict{String,Any}("index"=>0.0),
+                                "clearcoatRoughnessTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_transmission"=>Dict{String,Any}(
+                                "transmissionFactor"=>0.45,
+                                "transmissionTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_ior"=>Dict{String,Any}("ior"=>1.33),
+                            "KHR_materials_volume"=>Dict{String,Any}(
+                                "thicknessFactor"=>0.9,
+                                "thicknessTexture"=>Dict{String,Any}("index"=>0.0),
+                                "attenuationDistance"=>3.0,
+                                "attenuationColor"=>Any[0.7,0.8,0.9]),
+                            "KHR_materials_sheen"=>Dict{String,Any}(
+                                "sheenColorFactor"=>Any[0.5,0.25,0.125],
+                                "sheenRoughnessFactor"=>0.8,
+                                "sheenColorTexture"=>Dict{String,Any}("index"=>0.0),
+                                "sheenRoughnessTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_iridescence"=>Dict{String,Any}(
+                                "iridescenceFactor"=>0.4,
+                                "iridescenceIor"=>1.6,
+                                "iridescenceThicknessMinimum"=>100.0,
+                                "iridescenceThicknessMaximum"=>500.0,
+                                "iridescenceTexture"=>Dict{String,Any}("index"=>0.0),
+                                "iridescenceThicknessTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_specular"=>Dict{String,Any}(
+                                "specularFactor"=>0.65,
+                                "specularColorFactor"=>Any[0.9,0.8,0.7],
+                                "specularTexture"=>Dict{String,Any}("index"=>0.0),
+                                "specularColorTexture"=>Dict{String,Any}("index"=>0.0))))])
+                mat = Three._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat isa MeshPhysicalMaterial
+                @test mat.color == Color3(0.2, 0.3, 0.4)
+                @test mat.emissive == Color3(0.1, 0.2, 0.3)
+                @test mat.opacity ≈ 0.75 && mat.transparent && mat.side === :double
+                @test mat.metalness ≈ 0.6 && mat.roughness ≈ 0.35
+                @test mat.map isa Texture && mat.map.colorspace === :srgb
+                @test mat.normal_map isa Texture && mat.normal_map.colorspace === :linear
+                @test mat.roughness_map isa Texture && mat.metalness_map === mat.roughness_map
+                @test mat.ao_map isa Texture && mat.ao_map_intensity ≈ 0.55
+                @test mat.emissive_map isa Texture && mat.emissive_map.colorspace === :srgb
+                @test mat.clearcoat ≈ 0.7
+                @test mat.clearcoat_roughness ≈ 0.25
+                @test mat.clearcoat_map isa Texture
+                @test mat.clearcoat_roughness_map isa Texture
+                @test mat.transmission ≈ 0.45
+                @test mat.transmission_map isa Texture
+                @test mat.ior ≈ 1.33
+                @test mat.thickness ≈ 0.9
+                @test mat.thickness_map isa Texture
+                @test mat.attenuation_distance ≈ 3.0
+                @test mat.attenuation_color == Color3(0.7, 0.8, 0.9)
+                @test mat.sheen ≈ 0.5
+                @test mat.sheen_color == Color3(0.5, 0.25, 0.125)
+                @test mat.sheen_roughness ≈ 0.8
+                @test mat.sheen_color_map isa Texture && mat.sheen_color_map.colorspace === :srgb
+                @test mat.sheen_roughness_map isa Texture
+                @test mat.iridescence ≈ 0.4
+                @test mat.iridescence_ior ≈ 1.6
+                @test mat.iridescence_thickness ≈ 300.0
+                @test mat.iridescence_map isa Texture
+                @test mat.iridescence_thickness_map isa Texture
+                @test mat.specular_intensity ≈ 0.65
+                @test mat.specular_color == Color3(0.9, 0.8, 0.7)
+                @test mat.specular_intensity_map isa Texture
+                @test mat.specular_color_map isa Texture && mat.specular_color_map.colorspace === :srgb
+            end
+        end
+
         # [E:loaders] #20 load_obj normal guard fails to recompute when only SOME faces had normals, leaving zer
         let dir = mktempdir(); path = joinpath(dir, "partial_normals.obj"); open(path, "w") do io; println(io, "v 0 0 0"); println(io, "v 1 0 0"); println(io, "v 0 1 0"); println(io, "v 1 1 0"); println(io, "vn 0 0 1"); println(io, "f 1//1 2//1 3//1"); println(io, "f 2 4 3") end; geo = load_obj(path); zero_norm = false; b = 1; while b <= length(geo.normals); if geo.normals[b]==0.0 && geo.normals[b+1]==0.0 && geo.normals[b+2]==0.0; zero_norm = true; break end; b += 3 end; @test !zero_norm end
 
@@ -1829,9 +3284,21 @@ using ForwardDiff
             @test oc.enable_damping
             start = oc.camera.position
             orbit_rotate!(oc, 0.2, 0.0)
+            orbit_zoom!(oc, 0.8)
+            orbit_pan!(oc, 0.5, 0.0)
             # No motion yet (within fp noise) because velocity is only queued.
             @test isapprox(oc.camera.position.x, start.x; atol=1e-12)
             @test isapprox(oc.camera.position.z, start.z; atol=1e-12)
+            @test oc.v_azimuth != 0.0
+            @test oc.v_zoom != 0.0
+            @test oc.v_pan != Vec3(0.0, 0.0, 0.0)
+            orbit_reset!(oc)
+            @test oc.camera.position == oc.position0
+            @test oc.target == oc.target0
+            @test oc.v_azimuth == 0.0
+            @test oc.v_zoom == 0.0
+            @test oc.v_pan == Vec3(0.0, 0.0, 0.0)
+            orbit_rotate!(oc, 0.2, 0.0)
             orbit_update!(oc)
             p1 = oc.camera.position
             @test !isapprox(p1.x, start.x; atol=1e-9)   # now it moved
@@ -1896,6 +3363,72 @@ using ForwardDiff
             mixer_set_time!(mixer, 0.5)
             @test obj.rotation isa Euler
             @test isapprox(obj.rotation.y, pi/4; atol=1e-9)
+
+            qalias_obj = Group()
+            qalias = QuaternionKeyframeTrack(qalias_obj, :quaternion, [0.0, 1.0], [q0, q1])
+            mixer_set_time!(AnimationMixer(AnimationClip("quat_alias",
+                                                        AbstractKeyframeTrack[qalias])), 0.5)
+            @test qalias_obj.rotation isa Euler
+            @test isapprox(qalias_obj.rotation.y, pi/4; atol=1e-9)
+
+            euler_obj = Group()
+            euler_track = KeyframeTrack(euler_obj, :rotation, [0.0, 1.0],
+                                        [Vec3(0.0, 0.0, 0.0), Vec3(0.0, pi/2, 0.0)])
+            mixer_set_time!(AnimationMixer(AnimationClip("euler_rotation",
+                                                        AbstractKeyframeTrack[euler_track])), 1.0)
+            @test euler_obj.rotation isa Euler
+            @test isapprox(euler_obj.rotation.y, pi/2; atol=1e-12)
+        end
+
+        @testset "CubicSplineQuaternionKeyframeTrack Hermite" begin
+            obj = Group()
+            q0 = Quaternion(0.0, 0.0, 0.0, 1.0)
+            q1 = Quaternion(0.0, sin(pi/4), 0.0, cos(pi/4))
+            z = Quaternion(0.0, 0.0, 0.0, 0.0)
+            tr = CubicSplineQuaternionKeyframeTrack(obj, :rotation, [0.0, 1.0],
+                                                    [q0, q1], [z, z], [z, z])
+            q = sample_track(tr, 0.5)
+            @test isapprox(sqrt(q.x^2 + q.y^2 + q.z^2 + q.w^2), 1.0; atol=1e-12)
+            mixer = AnimationMixer(AnimationClip("cubic_rot", AbstractKeyframeTrack[tr]))
+            mixer_set_time!(mixer, 0.5)
+            @test obj.rotation isa Euler
+            @test isfinite(obj.rotation.y)
+        end
+
+        @testset "MorphWeightsKeyframeTrack playback" begin
+            geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                 Float64[], Float64[], Int[1,2,3], 3, 1)
+            mesh = Mesh(geo, MeshBasicMaterial(); morph_target_influences=[0.0, 1.0])
+            tr = MorphWeightsKeyframeTrack(mesh, :morph_target_influences,
+                                           [0.0, 1.0],
+                                           [[0.0, 1.0], [1.0, 0.0]])
+            @test sample_track(tr, 0.25) ≈ [0.25, 0.75]
+            mixer = AnimationMixer(AnimationClip("weights", AbstractKeyframeTrack[tr]))
+            mixer_set_time!(mixer, 0.5)
+            @test mesh.morph_target_influences ≈ [0.5, 0.5]
+
+            parent = Group()
+            child = Mesh(geo, MeshBasicMaterial(); morph_target_influences=[0.0])
+            add!(parent, child)
+            tr_parent = MorphWeightsKeyframeTrack(parent, :morph_target_influences,
+                                                  [0.0, 1.0], [[0.0], [1.0]];
+                                                  interpolation=:step)
+            mixer_set_time!(AnimationMixer(AnimationClip("node_weights",
+                                                        AbstractKeyframeTrack[tr_parent])), 0.5)
+            @test child.morph_target_influences == [0.0]
+            mixer_set_time!(AnimationMixer(AnimationClip("node_weights",
+                                                        AbstractKeyframeTrack[tr_parent])), 1.0)
+            @test child.morph_target_influences == [1.0]
+
+            tr_cubic = CubicSplineMorphWeightsKeyframeTrack(mesh, :morph_target_influences,
+                                                            [0.0, 1.0],
+                                                            [[0.0, 1.0], [1.0, 0.0]],
+                                                            [[0.0, 0.0], [0.0, 0.0]],
+                                                            [[0.0, 0.0], [0.0, 0.0]])
+            @test sample_track(tr_cubic, 0.5) ≈ [0.5, 0.5]
+            mixer_set_time!(AnimationMixer(AnimationClip("cubic_weights",
+                                                        AbstractKeyframeTrack[tr_cubic])), 0.5)
+            @test mesh.morph_target_influences ≈ [0.5, 0.5]
         end
 
         # [CTRL:controls] SpotLightHelper / HemisphereLightHelper / SkeletonHelper / PlaneHelper / PolarGr
@@ -1968,6 +3501,14 @@ using ForwardDiff
             rcl2 = Raycaster(Vec3(0.0,0.0,0.0), Vec3(1.0,0.0,0.0); line_threshold=0.25)
             @test isempty(raycast(rcl2, ls))                 # gap 0.5 > 0.25 -> rejected
 
+            # --- LineLoop: final vertex connects back to the first ---
+            loop = LineLoop(posgeo([(1.0,-1.0,0.4), (2.0,-1.0,0.4), (1.0,1.0,0.4)]),
+                            LineBasicMaterial())
+            hloop = raycast(rcl, loop)
+            @test !isempty(hloop)
+            @test all(h -> h.object === loop, hloop)
+            @test any(h -> h.face_index == 3, hloop)
+
             # --- LineObject polyline connects consecutive vertices (1-2, 2-3) ---
             poly = LineObject(posgeo([(1.0,-1.0,0.0),(1.0,0.0,0.0),(1.0,1.0,0.0)]), LineBasicMaterial())
             @test length(raycast(rayx(), poly)) == 2         # two segments both meet the ray
@@ -2018,6 +3559,20 @@ using ForwardDiff
             @test isapprox(sample_texture_linear(lo, 0.5, 0.5).r, 0.04/12.92; atol=1e-12)
             hi = Texture(ones(2, 2, 3); filter=:nearest)
             @test isapprox(sample_texture_linear(hi, 0.5, 0.5).r, 1.0; atol=1e-12)
+
+            geo = PlaneGeometry(width=2.0, height=2.0)
+            mat_srgb = MeshBasicMaterial(color=Color3(1.0,1.0,1.0), map=base)
+            cols = shade_mesh_faces(geo, Mat4(), mat_srgb, AbstractLight[], Vec3(0.0,0.0,3.0))
+            @test all(c -> isapprox(c.r, expect; atol=1e-9), cols)
+            mat_linear = MeshBasicMaterial(color=Color3(1.0,1.0,1.0), map=datatex)
+            cols_linear = shade_mesh_faces(geo, Mat4(), mat_linear, AbstractLight[], Vec3(0.0,0.0,3.0))
+            @test all(c -> isapprox(c.r, 0.5; atol=1e-12), cols_linear)
+
+            scene = Scene(background=Color3(0.0,0.0,0.0))
+            add!(scene, Mesh(PlaneGeometry(width=4.0, height=4.0), mat_srgb))
+            cam = PerspectiveCamera(aspect=1.0); cam.position = Vec3(0.0,0.0,5.0)
+            rt = RenderTarget(32, 32); render!(rt, scene, cam; shading=:smooth)
+            @test isapprox(rt.color[16, 16, 1], expect; atol=2e-2)
         end
 
         # [TEX:textures] Automatic mipmap LOD selection (sample_texture_auto)
@@ -2229,11 +3784,96 @@ using ForwardDiff
             @test any(i -> rt_tex.color[i] < 0.1, eachindex(rt_tex.color)) && sum(rt_plain.color) > 0.0
         end
 
+        @testset "smooth-path AO light emissive and roughness maps" begin
+            cam = PerspectiveCamera(aspect=1.0)
+            cam.position = Vec3(0.0, 0.0, 5.0)
+            color_tex = Texture(fill(0.5, 2, 2, 3); filter=:nearest, colorspace=:srgb)
+            data_tex = Texture(fill(0.5, 2, 2, 3); filter=:nearest, colorspace=:linear)
+            mat = MeshLambertMaterial(color=Color3(1.0,1.0,1.0),
+                                      map=color_tex, ao_map=data_tex,
+                                      light_map=data_tex, emissive_map=color_tex)
+            scene = Scene()
+            add!(scene, Mesh(PlaneGeometry(width=4.0, height=4.0), mat))
+            add!(scene, AmbientLight(intensity=1.0))
+            rt = RenderTarget(32, 32)
+            render!(rt, scene, cam; shading=:smooth)
+            decoded = ((0.5 + 0.055) / 1.055)^2.4
+            expected = decoded * 0.5 * 0.5 + decoded
+            @test isapprox(rt.color[16, 16, 1], expected; atol=2e-2)
+
+            rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
+            rough_map = Texture(rough_data; filter=:nearest, colorspace=:linear)
+            pbr = MeshStandardMaterial(color=Color3(0.8,0.8,0.8), roughness=0.05,
+                                       roughness_map=rough_map)
+            direct = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
+                                pbr, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
+            mapped = Three._apply_roughness_map(pbr, rough_map, 0.5, 0.5)
+            direct_mapped = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
+                                       mapped, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
+            @test direct_mapped.r < direct.r
+        end
+
+        @testset "smooth-path light map samples secondary UVs" begin
+            cam = PerspectiveCamera(aspect=1.0)
+            cam.position = Vec3(0.0, 0.0, 5.0)
+            geo = PlaneGeometry(width=4.0, height=4.0)
+            geo.uvs[:] = repeat([0.75, 0.5], geo.n_vertices)
+            set_attribute!(geo, :uv2, repeat([0.25, 0.5], geo.n_vertices), 2)
+            data = ones(Float64, 2, 2, 3)
+            data[:, 1, :] .= 0.2
+            data[:, 2, :] .= 1.0
+            mat = MeshLambertMaterial(color=Color3(1.0,1.0,1.0),
+                                      light_map=Texture(data; filter=:nearest, colorspace=:linear))
+            scene = Scene()
+            add!(scene, Mesh(geo, mat))
+            add!(scene, AmbientLight(intensity=0.5))
+            rt = RenderTarget(32, 32)
+            render!(rt, scene, cam; shading=:smooth)
+            @test rt.color[16, 16, 1] < 0.2
+        end
+
+        @testset "texture tex_coord selects secondary UVs" begin
+            geo = BufferGeometry([0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0],
+                                 [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0],
+                                 [0.25,0.5, 0.25,0.5, 0.25,0.5],
+                                 [1,2,3], 3, 1)
+            set_attribute!(geo, :uv2, [0.75,0.5, 0.75,0.5, 0.75,0.5], 2)
+            data = zeros(Float64, 1, 2, 3)
+            data[1, 1, 3] = 1.0
+            data[1, 2, 1] = 1.0
+            tex = Texture(data; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp,
+                          colorspace=:linear, tex_coord=1)
+            mat = MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), map=tex)
+            c = only(shade_mesh_faces(geo, Mat4(), mat, AbstractLight[], Vec3(0.0,0.0,1.0)))
+            @test c.r ≈ 1.0
+            @test c.b ≈ 0.0
+        end
+
+        @testset "AO texture tex_coord selects secondary UVs" begin
+            geo = BufferGeometry([0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0],
+                                 [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0],
+                                 [0.75,0.5, 0.75,0.5, 0.75,0.5],
+                                 [1,2,3], 3, 1)
+            set_attribute!(geo, :uv2, [0.25,0.5, 0.25,0.5, 0.25,0.5], 2)
+            data = ones(Float64, 1, 2, 3)
+            data[1, 1, :] .= 0.2
+            data[1, 2, :] .= 1.0
+            mat = MeshLambertMaterial(color=Color3(1.0,1.0,1.0),
+                                      ao_map=Texture(data; filter=:nearest,
+                                                     wrap_s=:clamp, wrap_t=:clamp,
+                                                     colorspace=:linear, tex_coord=1))
+            c = only(shade_mesh_faces(geo, Mat4(), mat,
+                                      AbstractLight[AmbientLight(intensity=1.0)],
+                                      Vec3(0.0,0.0,1.0)))
+            @test c.r < 0.3
+        end
+
         # [SHD:shadows] PCF soft shadows (PCFShadowMap parity)
         @testset "PCF soft shadows" begin
             scene = Scene()
             # Occluder box above the ground plane.
-            box = Mesh(BoxGeometry(width=2.0, height=2.0, depth=2.0), MeshBasicMaterial())
+            box = Mesh(BoxGeometry(width=2.0, height=2.0, depth=2.0), MeshBasicMaterial();
+                       cast_shadow=true)
             box.position = Vec3(0.0, 2.0, 0.0)
             add!(scene, box)
             key = DirectionalLight(position=Vec3(0.0, 10.0, 0.0), intensity=1.0)
@@ -2304,6 +3944,29 @@ using ForwardDiff
             @test isapprox(Three._direct_response(ms,n,vd,lc,li,ldback).r, Three._direct_response(m0,n,vd,lc,li,ldback).r)  # no sheen when light behind
         end
 
+        # [A:material-light-lobes] KHR_materials_specular (MeshPhysicalMaterial)
+        @testset "physical specular" begin
+            n = Three.Vec3(0.0,0.0,1.0)
+            vd = Three.Vec3(0.0,0.0,1.0)
+            ld = Three.Vec3(0.0,0.0,1.0)
+            lc = Three.Color3(1.0,1.0,1.0); li = 1.0
+            base = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+                                              roughness=0.2, metalness=0.0)
+            muted = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+                                               roughness=0.2, metalness=0.0,
+                                               specular_intensity=0.0)
+            red = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+                                             roughness=0.2, metalness=0.0,
+                                             specular_color=Three.Color3(1.0,0.0,0.0))
+            cbase = Three._direct_response(base, n, vd, lc, li, ld)
+            cmuted = Three._direct_response(muted, n, vd, lc, li, ld)
+            cred = Three._direct_response(red, n, vd, lc, li, ld)
+            @test cbase.r > cmuted.r
+            @test cmuted.r ≈ 0.0
+            @test cred.r > cred.g
+            @test cred.r > cred.b
+        end
+
         # [A:material-light-lobes] Iridescence (MeshPhysicalMaterial)
         @testset "iridescence" begin
             n = Three.Vec3(0.0,0.0,1.0); vd = Three.Vec3(0.0,0.0,1.0)
@@ -2329,6 +3992,99 @@ using ForwardDiff
             @test Three._transmission_response(m0, n, vd, bg) == Three.Color3(0.0,0.0,0.0)
             t = Three._transmission_response(mt, n, vd, Three.Color3(1.0,1.0,1.0))
             @test isapprox(t.r, 0.96; rtol=1e-6)   # clear glass normal incidence: 1 - Fresnel(0.04)
+            mv = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+                                            transmission=1.0, ior=1.5,
+                                            thickness=1.0,
+                                            attenuation_distance=1.0,
+                                            attenuation_color=Three.Color3(0.5,0.25,0.125))
+            tv = Three._transmission_response(mv, n, vd, Three.Color3(1.0,1.0,1.0))
+            @test tv.r ≈ 0.48
+            @test tv.g ≈ 0.24
+            @test tv.b ≈ 0.12
+            tdata = fill(0.0, 1, 1, 3)
+            tdata[1,1,1] = 0.9
+            tdata[1,1,2] = 0.5
+            tdata[1,1,3] = 0.1
+            mm = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+                                            transmission=1.0, ior=1.5,
+                                            thickness=1.0,
+                                            thickness_map=Three.Texture(tdata; filter=:nearest, colorspace=:linear),
+                                            attenuation_distance=1.0,
+                                            attenuation_color=Three.Color3(0.25,1.0,1.0))
+            em = Three._apply_pbr_maps(mm, nothing, nothing, 0.5, 0.5)
+            @test em.thickness ≈ 0.5
+            tm = Three._transmission_response(em, n, vd, Three.Color3(1.0,1.0,1.0))
+            @test tm.r ≈ 0.48
+            @test tm.g ≈ 0.96
+            @test tm.b ≈ 0.96
+            scalar_data = zeros(1, 1, 4)
+            scalar_data[1,1,1] = 0.25
+            scalar_data[1,1,2] = 0.5
+            scalar_data[1,1,3] = 0.75
+            scalar_data[1,1,4] = 0.4
+            scalar_tex = Three.Texture(scalar_data; filter=:nearest, colorspace=:linear)
+            color_tex = Three.Texture(reshape([0.2, 0.4, 0.6], 1, 1, 3); filter=:nearest, colorspace=:linear)
+            mp = Three.MeshPhysicalMaterial(clearcoat=0.8,
+                                            clearcoat_map=scalar_tex,
+                                            clearcoat_roughness=0.6,
+                                            clearcoat_roughness_map=scalar_tex,
+                                            transmission=0.9,
+                                            transmission_map=scalar_tex,
+                                            sheen_color=Three.Color3(1.0,0.5,0.25),
+                                            sheen_color_map=color_tex,
+                                            sheen_roughness=0.5,
+                                            sheen_roughness_map=scalar_tex,
+                                            iridescence=0.7,
+                                            iridescence_map=scalar_tex,
+                                            iridescence_thickness=400.0,
+                                            iridescence_thickness_map=scalar_tex,
+                                            specular_intensity=0.8,
+                                            specular_intensity_map=scalar_tex,
+                                            specular_color_map=color_tex)
+            ep = Three._apply_pbr_maps(mp, nothing, nothing, 0.5, 0.5)
+            @test ep.clearcoat ≈ 0.2
+            @test ep.clearcoat_roughness ≈ 0.3
+            @test ep.transmission ≈ 0.225
+            @test ep.sheen_color.r ≈ 0.2
+            @test ep.sheen_color.g ≈ 0.2
+            @test ep.sheen_color.b ≈ 0.15
+            @test ep.sheen_roughness ≈ 0.2
+            @test ep.iridescence ≈ 0.175
+            @test ep.iridescence_thickness ≈ 200.0
+            @test ep.specular_intensity ≈ 0.32
+            @test ep.specular_color.r ≈ 0.2
+            @test ep.specular_color.g ≈ 0.4
+            @test ep.specular_color.b ≈ 0.6
+            split_data = ones(Float64, 1, 2, 4)
+            split_data[1,1,2] = 0.3
+            split_data[1,2,2] = 0.9
+            rough_uv0 = Three.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=0)
+            thick_uv1 = Three.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=1)
+            split = Three.MeshPhysicalMaterial(roughness=0.8, roughness_map=rough_uv0,
+                                               thickness=1.0, thickness_map=thick_uv1)
+            split_eff = Three._apply_pbr_maps(split, rough_uv0, nothing, 0.75, 0.5, 0.25, 0.5)
+            @test split_eff.roughness ≈ 0.72
+            @test split_eff.thickness ≈ 0.3
+            geo = Three.BufferGeometry([0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0],
+                                       [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0],
+                                       [0.5,0.5, 0.5,0.5, 0.5,0.5],
+                                       Int[1,2,3], 3, 1)
+            m_plain = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+                                                 transmission=1.0, thickness=1.0,
+                                                 attenuation_distance=1.0,
+                                                 attenuation_color=Three.Color3(0.25,1.0,1.0))
+            m_mapped = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+                                                  transmission=1.0, thickness=1.0,
+                                                  thickness_map=Three.Texture(fill(0.5, 1, 1, 3);
+                                                                              filter=:nearest, colorspace=:linear),
+                                                  attenuation_distance=1.0,
+                                                  attenuation_color=Three.Color3(0.25,1.0,1.0))
+            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.1)]
+            c_plain = only(Three.shade_mesh_faces(geo, Three.Mat4(), m_plain, lights, Three.Vec3(0.0,0.0,1.0)))
+            c_mapped = only(Three.shade_mesh_faces(geo, Three.Mat4(), m_mapped, lights, Three.Vec3(0.0,0.0,1.0)))
+            @test c_mapped.r > c_plain.r
+            @test c_mapped.g ≈ c_plain.g
+            @test c_mapped.b ≈ c_plain.b
             # non-physical material yields no transmission term
             @test Three._transmission_response(Three.MeshStandardMaterial(), n, vd, bg) == Three.Color3(0.0,0.0,0.0)
         end
@@ -2350,6 +4106,21 @@ using ForwardDiff
             cl = Three.shade_mesh_faces(geo, wm, m_lm, lights, cam)
             @test cl[1].r < cp[1].r            # 0.5 light map darkens the result
             @test isapprox(cl[1].r, cp[1].r * 0.5; rtol=1e-6)
+        end
+
+        @testset "light map samples secondary UVs" begin
+            geo = Three.PlaneGeometry(width=1.0, height=1.0)
+            Three.compute_vertex_normals!(geo)
+            geo.uvs[:] = repeat([0.75, 0.5], geo.n_vertices)
+            Three.set_attribute!(geo, :uv2, repeat([0.25, 0.5], geo.n_vertices), 2)
+            data = ones(Float64, 2, 2, 3)
+            data[:, 1, :] .= 0.2
+            data[:, 2, :] .= 1.0
+            lm = Three.Texture(data; filter=:nearest, colorspace=:linear)
+            m_lm = Three.MeshStandardMaterial(color=Three.Color3(1.0,1.0,1.0), roughness=0.8, light_map=lm)
+            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.5)]
+            cols = Three.shade_mesh_faces(geo, Three.Mat4(), m_lm, lights, Three.Vec3(0.0,0.0,3.0))
+            @test cols[1].r < 0.2
         end
 
         # [A:material-light-lobes] IES profiles (SpotLight/PointLight)
@@ -2559,6 +4330,39 @@ using ForwardDiff
             @test isapprox(rt2.color[5,5,1], bg.r; atol=1e-9)
         end
 
+        @testset "scissor restricts line point and sprite rasterization" begin
+            cam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+                                     near=0.1, far=100.0)
+            cam.position = Vec3(0.0, 0.0, 5.0); cam.target = Vec3(0.0, 0.0, 0.0)
+            function render_scissored(scene)
+                rt = RenderTarget(40, 40)
+                render!(rt, scene, cam; scissor=(20,20,20,20), scissor_test=true)
+                @test rt.color[5,5,1] == 0.0 && rt.color[5,5,2] == 0.0 && rt.color[5,5,3] == 0.0
+                @test rt.depth[5,5] == Inf
+                @test maximum(@view rt.color[25:40, 25:40, :]) > 0.5
+            end
+
+            line_geo = BufferGeometry()
+            line_geo.positions = [-0.9, 0.9, 0.0, 0.9, -0.9, 0.0]
+            line_geo.n_vertices = 2
+            line_scene = Scene(background=Color3(0.1, 0.1, 0.1))
+            add!(line_scene, LineObject(line_geo, LineBasicMaterial(color=Color3(1.0, 0.0, 0.0))))
+            render_scissored(line_scene)
+
+            point_geo = BufferGeometry()
+            point_geo.positions = [0.5, -0.5, 0.0]
+            point_geo.n_vertices = 1
+            point_scene = Scene(background=Color3(0.1, 0.1, 0.1))
+            add!(point_scene, PointsObject(point_geo, PointsMaterial(color=Color3(1.0, 0.0, 0.0), size=60.0)))
+            render_scissored(point_scene)
+
+            sprite_scene = Scene(background=Color3(0.1, 0.1, 0.1))
+            sprite = Sprite(SpriteMaterial(color=Color3(1.0, 0.0, 0.0)))
+            sprite.scale = Vec3(3.0, 3.0, 3.0)
+            add!(sprite_scene, sprite)
+            render_scissored(sprite_scene)
+        end
+
         # [D:renderer-state] sort_objects (WebGLRenderer.sortObjects front-to-back opaque)
         @testset "sort_objects is pixel-invariant for opaque meshes" begin
             function build_scene()
@@ -2755,6 +4559,265 @@ using ForwardDiff
             @test p.z ≈ -sqrt(2.0) atol=1e-9
         end
 
+        @testset "load_gltf_asset CUBICSPLINE animation" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_times = length(bin); append_f32!([0, 1])
+            off_trans = length(bin); append_f32!([
+                0,0,0, 0,0,0, 0,0,0,
+                0,0,0, 1,0,0, 0,0,0
+            ])
+            off_rot = length(bin); append_f32!([
+                0,0,0,0, 0,0,0,1, 0,0,0,0,
+                0,0,0,0, 0,sin(pi/4),0,cos(pi/4), 0,0,0,0
+            ])
+            write(joinpath(dir, "cubic.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"cubic_node"}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"cubic.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_trans,"byteLength":72},
+               {"buffer":0,"byteOffset":$off_rot,"byteLength":96}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":1,"componentType":5126,"count":6,"type":"VEC3"},
+               {"bufferView":2,"componentType":5126,"count":6,"type":"VEC4"}],
+             "animations":[{"name":"cubic","samplers":[
+               {"input":0,"output":1,"interpolation":"CUBICSPLINE"},
+               {"input":0,"output":2,"interpolation":"CUBICSPLINE"}],
+               "channels":[
+                 {"sampler":0,"target":{"node":0,"path":"translation"}},
+                 {"sampler":1,"target":{"node":0,"path":"rotation"}}]}]}
+            """
+            path = joinpath(dir, "cubic.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            @test length(asset.animations) == 1
+            @test asset.animations[1].tracks[1] isa CubicSplineKeyframeTrack
+            @test asset.animations[1].tracks[2] isa CubicSplineQuaternionKeyframeTrack
+            target = get_children(asset.scene)[1]
+            mixer = AnimationMixer(asset.animations[1])
+            mixer_set_time!(mixer, 0.5)
+            @test target.position.x ≈ 0.5
+            @test target.rotation isa Euler
+            @test isfinite(target.rotation.y)
+        end
+
+        @testset "load_gltf_asset cameras and punctual lights" begin
+            dir = mktempdir()
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,
+             "scenes":[{"nodes":[0,1,2,3]}],
+             "buffers":[],
+             "nodes":[
+               {"name":"main_camera","translation":[1,2,3],"camera":0},
+               {"name":"ortho_camera","translation":[0,0,4],"camera":1},
+               {"name":"sun","translation":[0,1,0],"extensions":{"KHR_lights_punctual":{"light":0}}},
+               {"name":"lamp","translation":[2,3,4],"extensions":{"KHR_lights_punctual":{"light":1}}}],
+             "cameras":[
+               {"type":"perspective","perspective":{"yfov":0.7,"aspectRatio":1.5,"znear":0.2,"zfar":50}},
+               {"type":"orthographic","orthographic":{"xmag":4,"ymag":2,"znear":0.1,"zfar":20}}],
+             "extensions":{"KHR_lights_punctual":{"lights":[
+               {"type":"directional","color":[0.8,0.7,0.6],"intensity":2.5},
+               {"type":"spot","color":[1,0.5,0.25],"intensity":3,"range":9,
+                "spot":{"innerConeAngle":0.2,"outerConeAngle":0.5}}]}}}
+            """
+            path = joinpath(dir, "camera_light.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            nodes = get_children(asset.scene)
+            cam = nodes[1]
+            ortho = nodes[2]
+            sun = nodes[3]
+            lamp = nodes[4]
+            @test cam isa PerspectiveCamera
+            @test cam.name == "main_camera"
+            @test cam.position == Vec3(1.0, 2.0, 3.0)
+            @test cam.fov ≈ 0.7
+            @test cam.aspect ≈ 1.5
+            @test cam.near ≈ 0.2
+            @test cam.far ≈ 50.0
+            @test cam.target.z ≈ 2.0
+            @test ortho isa OrthographicCamera
+            @test ortho.left ≈ -2.0
+            @test ortho.right ≈ 2.0
+            @test ortho.bottom ≈ -1.0
+            @test ortho.top ≈ 1.0
+            @test sun isa DirectionalLight
+            @test sun.color.r ≈ 0.8
+            @test sun.intensity ≈ 2.5
+            @test sun.target.z ≈ -1.0
+            @test lamp isa SpotLight
+            @test lamp.position == Vec3(2.0, 3.0, 4.0)
+            @test lamp.distance ≈ 9.0
+            @test lamp.angle ≈ 0.5
+            @test lamp.penumbra ≈ 0.6
+            @test lamp.target.z ≈ 3.0
+        end
+
+        @testset "load_gltf_asset skin binding" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            append_u16!(xs) = append!(bin, reinterpret(UInt8, UInt16.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_joints = length(bin); append_u16!([0,0,0,0, 0,0,0,0, 0,0,0,0])
+            off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+            off_inv = length(bin); append_f32!([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])
+            write(joinpath(dir, "skin.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+             "nodes":[{"name":"skinned","mesh":0,"skin":0},{"name":"joint"}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"skin.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_joints,"byteLength":24},
+               {"buffer":0,"byteOffset":$off_weights,"byteLength":48},
+               {"buffer":0,"byteOffset":$off_inv,"byteLength":64}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},
+               {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
+               {"bufferView":3,"componentType":5126,"count":1,"type":"MAT4"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+             "skins":[{"joints":[1],"inverseBindMatrices":3}]}
+            """
+            path = joinpath(dir, "skin.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            root = get_children(asset.scene)[1]
+            joint = get_children(asset.scene)[2]
+            sm = get_children(root)[1]
+            @test joint isa Bone
+            @test sm isa SkinnedMesh
+            @test length(sm.skeleton.bones) == 1
+            @test sm.skeleton.bones[1] === joint
+            @test sm.skin_indices == fill((1,1,1,1), 3)
+            p0 = apply_skinning(sm)
+            @test p0[2].x ≈ 1.0
+            joint.position = Vec3(2.0, 0.0, 0.0)
+            p1 = apply_skinning(sm)
+            @test p1[1].x ≈ 2.0
+            @test p1[2].x ≈ 3.0
+        end
+
+        @testset "load_gltf_asset morph targets" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_morph = length(bin); append_f32!([0,0,1, 0,0,1, 0,0,1])
+            write(joinpath(dir, "morph.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"morph_node","mesh":0,"weights":[0.25]}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"morph.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_morph,"byteLength":36}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],
+             "meshes":[{"weights":[0.75],
+               "primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1}]}]}]}
+            """
+            path = joinpath(dir, "morph.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            mesh = get_children(get_children(asset.scene)[1])[1]
+            @test mesh isa Mesh
+            @test mesh.morph_target_influences == [0.25]
+            @test has_attribute(mesh.geometry, :morphPosition0)
+            morphed = apply_morph_targets(mesh)
+            @test morphed[1].z ≈ 0.25
+            @test morphed[2].x ≈ 1.0
+            @test morphed[2].z ≈ 0.25
+        end
+
+        @testset "load_gltf_asset morph weight animation" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_morph = length(bin); append_f32!([0,0,1, 0,0,1, 0,0,1])
+            off_times = length(bin); append_f32!([0, 1])
+            off_weights = length(bin); append_f32!([0, 1])
+            write(joinpath(dir, "morph_anim.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"morph_anim_node","mesh":0,"weights":[0]}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"morph_anim.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_morph,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_weights,"byteLength":8}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":2,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":3,"componentType":5126,"count":2,"type":"SCALAR"}],
+             "meshes":[{"weights":[0],
+               "primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1}]}]}],
+             "animations":[{"name":"morph_weights","samplers":[
+               {"input":2,"output":3,"interpolation":"LINEAR"}],
+               "channels":[{"sampler":0,"target":{"node":0,"path":"weights"}}]}]}
+            """
+            path = joinpath(dir, "morph_anim.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            @test length(asset.animations) == 1
+            @test asset.animations[1].tracks[1] isa MorphWeightsKeyframeTrack
+            mesh = get_children(get_children(asset.scene)[1])[1]
+            mixer = AnimationMixer(asset.animations[1])
+            mixer_set_time!(mixer, 0.5)
+            @test mesh.morph_target_influences ≈ [0.5]
+            @test apply_morph_targets(mesh)[1].z ≈ 0.5
+        end
+
+        @testset "load_gltf_asset cubic morph weight animation" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_morph = length(bin); append_f32!([0,0,1, 0,0,1, 0,0,1])
+            off_times = length(bin); append_f32!([0, 1])
+            # in, value, out for each keyframe; zero tangents produce smoothstep-like interpolation.
+            off_weights = length(bin); append_f32!([0, 0, 0, 0, 1, 0])
+            write(joinpath(dir, "morph_cubic.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"morph_cubic_node","mesh":0,"weights":[0]}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"morph_cubic.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_morph,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_weights,"byteLength":24}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":2,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":3,"componentType":5126,"count":6,"type":"SCALAR"}],
+             "meshes":[{"weights":[0],
+               "primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1}]}]}],
+             "animations":[{"name":"morph_cubic","samplers":[
+               {"input":2,"output":3,"interpolation":"CUBICSPLINE"}],
+               "channels":[{"sampler":0,"target":{"node":0,"path":"weights"}}]}]}
+            """
+            path = joinpath(dir, "morph_cubic.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            @test asset.animations[1].tracks[1] isa CubicSplineMorphWeightsKeyframeTrack
+            mesh = get_children(get_children(asset.scene)[1])[1]
+            mixer_set_time!(AnimationMixer(asset.animations[1]), 0.5)
+            @test mesh.morph_target_influences ≈ [0.5]
+            @test apply_morph_targets(mesh)[1].z ≈ 0.5
+        end
+
         # [F:loaders] Stanford PLY loader (load_ply)
         @testset "load_ply ascii + binary" begin
             # Reference single coloured triangle with explicit normals.
@@ -2801,8 +4864,7 @@ using ForwardDiff
 
     end
 
-    # Regression tests for the deep-debug correctness fixes (2026-05-29). Each
-    # assertion fails under the original bug, so they lock the fixes in place.
+    # Regression tests for correctness fixes found during audit.
     @testset "Deep-debug regression fixes" begin
         FD = Three.ForwardDiff
         # CRITICAL: soft-rasterizer distance gradients are finite on an edge

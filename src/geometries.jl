@@ -74,6 +74,23 @@ end
 get_attribute(g::BufferGeometry, name::Symbol) = g.attributes[name]
 has_attribute(g::BufferGeometry, name::Symbol) = haskey(g.attributes, name)
 
+function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
+    out = [get_vertex(g, vi) for vi in 1:g.n_vertices]
+    for (ti, weight) in enumerate(influences)
+        weight == 0 && continue
+        name = Symbol("morphPosition$(ti - 1)")
+        has_attribute(g, name) || continue
+        attr = get_attribute(g, name)
+        attr.item_size == 3 || error("$name attribute must have item size 3")
+        length(attr.data) == g.n_vertices * 3 || error("$name count does not match geometry")
+        @inbounds for vi in 1:g.n_vertices
+            base = 3vi - 2
+            out[vi] = out[vi] + Vec3(attr.data[base], attr.data[base + 1], attr.data[base + 2]) * Float64(weight)
+        end
+    end
+    return out
+end
+
 """Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
 function compute_bounding_box(g::BufferGeometry)
     g.n_vertices == 0 && return Box3()

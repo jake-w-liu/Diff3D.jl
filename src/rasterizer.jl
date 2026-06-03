@@ -166,6 +166,8 @@ struct ShadeVtx
     wp::Vec3{Float64}   # world-space position
     wn::Vec3{Float64}   # world-space normal (unnormalised; normalised per pixel)
     uv::Vec2{Float64}   # texture coordinate (for per-pixel material maps)
+    uv2::Vec2{Float64}  # secondary texture coordinate (AO/light maps)
+    vc::Color3{Float64} # vertex color factor (for material vertex_colors)
 end
 
 @inline function _lerp_shadevtx(a::ShadeVtx, b::ShadeVtx, t)
@@ -173,7 +175,18 @@ end
                   a.vp.z + t*(b.vp.z - a.vp.z), a.vp.w + t*(b.vp.w - a.vp.w)),
              Vec3(a.wp.x + t*(b.wp.x - a.wp.x), a.wp.y + t*(b.wp.y - a.wp.y), a.wp.z + t*(b.wp.z - a.wp.z)),
              Vec3(a.wn.x + t*(b.wn.x - a.wn.x), a.wn.y + t*(b.wn.y - a.wn.y), a.wn.z + t*(b.wn.z - a.wn.z)),
-             Vec2(a.uv.x + t*(b.uv.x - a.uv.x), a.uv.y + t*(b.uv.y - a.uv.y)))
+             Vec2(a.uv.x + t*(b.uv.x - a.uv.x), a.uv.y + t*(b.uv.y - a.uv.y)),
+             Vec2(a.uv2.x + t*(b.uv2.x - a.uv2.x), a.uv2.y + t*(b.uv2.y - a.uv2.y)),
+             Color3(a.vc.r + t*(b.vc.r - a.vc.r),
+                    a.vc.g + t*(b.vc.g - a.vc.g),
+                    a.vc.b + t*(b.vc.b - a.vc.b)))
+end
+
+@inline function _vertex_color(attr::BufferAttribute, vi)
+    s = attr.item_size
+    b = (vi - 1) * s
+    d = attr.data
+    Color3(d[b + 1], d[b + 2], d[b + 3])
 end
 
 function _clip_near_attr!(out::Vector{ShadeVtx}, verts::Vector{ShadeVtx}, n::Int, near)
@@ -199,17 +212,18 @@ end
 
 # Per-pixel (smooth) triangle. World position and normal are interpolated
 # perspective-correctly, then the shading model is evaluated per pixel. When the
-# material carries a UV-indexed albedo/normal map, the texture coordinate is also
+# material carries UV-indexed material maps, the texture coordinate is also
 # interpolated perspective-correctly and the maps are applied per pixel using the
-# same helpers (`sample_texture`, `_apply_normal_map`) as the flat path — so a
+# same helpers (`sample_texture_linear`, `_apply_normal_map`) as the flat path — so a
 # textured surface looks identical under flat and smooth shading. `clipping_planes`
 # discards fragments on the negative side of any plane (interpolated world pos).
 @inline function _rasterize_tri_smooth!(rt::RenderTarget,
-        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2,
-        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2,
-        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2,
+        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
+        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
+        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
         material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
-        albedo_map, normal_map, clipping_planes;
+        albedo_map, normal_map, roughness_map, metalness_map, physical_pbr_map, ao_map, emissive_map, light_map,
+        normal_scale, clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int))
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
@@ -221,6 +235,14 @@ end
     max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
     has_albedo = albedo_map !== nothing
     has_normalmap = normal_map !== nothing
+    has_roughness = roughness_map !== nothing
+    has_metalness = metalness_map !== nothing
+    has_physical_pbr = physical_pbr_map !== nothing
+    has_ao = ao_map !== nothing
+    has_emissive = emissive_map !== nothing
+    has_lightmap = light_map !== nothing
+    has_uv_maps = has_albedo || has_normalmap || has_roughness || has_metalness || has_physical_pbr ||
+                  has_ao || has_emissive || has_lightmap
     has_clip = !isempty(clipping_planes)
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
@@ -242,22 +264,64 @@ end
             wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
+            vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
+                        a0*vc1.g + a1*vc2.g + a2*vc3.g,
+                        a0*vc1.b + a1*vc2.b + a2*vc3.b)
             # Perspective-correct UV, computed only when a map is active so the
             # no-map path keeps its original per-pixel cost.
-            if has_albedo || has_normalmap
+            if has_uv_maps
                 u = a0*uv1.x + a1*uv2.x + a2*uv3.x
                 v = a0*uv1.y + a1*uv2.y + a2*uv3.y
+                u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
+                v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
                 # normalMap perturbs the shading normal before lighting (same
-                # helper as the flat path); the tangent frame uses the triangle's
-                # world vertices and per-vertex UVs.
-                has_normalmap && (wn = _apply_normal_map(wn, normal_map, u, v, wp1, wp2, wp3,
-                                                         (uv1.x, uv1.y), (uv2.x, uv2.y), (uv3.x, uv3.y)))
+                # helper as the flat path); the tangent frame uses the UV set
+                # selected by the texture metadata.
+                if has_normalmap
+                    nu, nv = _map_uv(normal_map, u, v, u2, v2)
+                    normal_uvs = _texture_uv_set(normal_map) == 1 ?
+                        ((uv2_1.x, uv2_1.y), (uv2_2.x, uv2_2.y), (uv2_3.x, uv2_3.y)) :
+                        ((uv1.x, uv1.y), (uv2.x, uv2.y), (uv3.x, uv3.y))
+                    wn = _apply_normal_map(wn, normal_map, nu, nv, wp1, wp2, wp3,
+                                           normal_uvs[1], normal_uvs[2], normal_uvs[3],
+                                           normal_scale)
+                end
+                if has_roughness || has_metalness || has_physical_pbr
+                    eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2)
+                else
+                    eff_mat = material
+                end
                 vd = normalize(cam_pos - wp)
-                col = shade_face(wn, vd, wp, material, lights; shadow_fn=shadow_fn)
-                has_albedo && (col = col * sample_texture(albedo_map, u, v))
+                col = shade_face(wn, vd, wp, eff_mat, lights; shadow_fn=shadow_fn)
+                col = Color3(col.r * vc.r, col.g * vc.g, col.b * vc.b)
+                if has_albedo
+                    tu, tv = _map_uv(albedo_map, u, v, u2, v2)
+                    col = col * sample_texture_linear(albedo_map, tu, tv)
+                end
+                if has_ao
+                    tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
+                    ao = sample_texture(ao_map, tu, tv)
+                    aoi = _material_scalar(material, :ao_map_intensity)
+                    aor = 1.0 + (ao.r - 1.0) * aoi
+                    aog = 1.0 + (ao.g - 1.0) * aoi
+                    aob = 1.0 + (ao.b - 1.0) * aoi
+                    col = Color3(col.r * aor, col.g * aog, col.b * aob)
+                end
+                if has_lightmap
+                    tu, tv = _map_uv(light_map, u, v, u2, v2; default_uv2=true)
+                    lm = sample_texture(light_map, tu, tv)
+                    lmi = _material_scalar(material, :light_map_intensity)
+                    col = Color3(col.r * lm.r * lmi, col.g * lm.g * lmi, col.b * lm.b * lmi)
+                end
+                if has_emissive
+                    tu, tv = _map_uv(emissive_map, u, v, u2, v2)
+                    col = col + sample_texture_linear(emissive_map, tu, tv) *
+                          _material_scalar(material, :emissive_intensity)
+                end
             else
                 vd = normalize(cam_pos - wp)
                 col = shade_face(wn, vd, wp, material, lights; shadow_fn=shadow_fn)
+                col = Color3(col.r * vc.r, col.g * vc.g, col.b * vc.b)
             end
             col = clamp_color(col)
             rt.depth[py, px] = z
@@ -280,6 +344,7 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
     sz = Vector{Float64}(undef, 8); iw = Vector{Float64}(undef, 8)
     for mesh in meshes
         !is_visible(mesh) && continue
+        mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
         world_mat = compute_world_matrix(mesh)
         modelview = view * world_mat
         normal_mat = mat4_transpose(mat4_inverse(world_mat))
@@ -289,12 +354,24 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         # per-pixel path must agree with the per-face path on which faces survive.
         side = material_side(mat)
         has_normals = length(geo.normals) >= geo.n_vertices * 3
-        # Per-pixel material maps (albedo + normalMap), applied only when the
+        # Per-pixel material maps, applied only when the
         # geometry carries UVs and the material exposes the map. Matches the flat
-        # path's `map`/`normal_map` handling so textured surfaces agree.
+        # path's material-map handling so textured surfaces agree.
         has_uvs = length(geo.uvs) >= geo.n_vertices * 2
         albedo_map = has_uvs ? _material_field(mat, :map) : nothing
         normal_map = has_uvs ? _material_field(mat, :normal_map) : nothing
+        normal_scale = _material_scalar(mat, :normal_scale, 1.0)
+        roughness_map = has_uvs ? _material_field(mat, :roughness_map) : nothing
+        metalness_map = has_uvs ? _material_field(mat, :metalness_map) : nothing
+        physical_pbr_map = has_uvs ? _physical_pbr_map(mat) : nothing
+        ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
+        emissive_map = has_uvs ? _material_field(mat, :emissive_map) : nothing
+        light_map = has_uvs ? _material_field(mat, :light_map) : nothing
+        uv2_attr = _uv2_attribute(geo)
+        color_attr = (_wants_vertex_colors(mat) && has_attribute(geo, :color)) ?
+                     get_attribute(geo, :color) : nothing
+        use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
+                            length(color_attr.data) >= geo.n_vertices * color_attr.item_size
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
             if side !== :double
@@ -313,7 +390,9 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                 wn = mat4_transform_direction(normal_mat, nrm)
                 vp = mat4_transform_vec4(modelview, Vec4(v.x, v.y, v.z, 1.0))
                 uv = has_uvs ? Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2]) : Vec2(0.0, 0.0)
-                tri[slot] = ShadeVtx(vp, wp, wn, uv)
+                uv2 = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
+                vc = use_vertex_colors ? _vertex_color(color_attr, vi) : Color3(1.0, 1.0, 1.0)
+                tri[slot] = ShadeVtx(vp, wp, wn, uv, uv2, vc)
             end
             m = _clip_near_attr!(clipped, tri, 3, near)
             m < 3 && continue
@@ -331,10 +410,11 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
             end
             @inbounds for k in 2:(m - 1)
                 _rasterize_tri_smooth!(rt,
-                    sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv,
-                    sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv,
-                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv,
-                    mat, lights, cam_pos, shadow_fn, albedo_map, normal_map, clipping_planes;
+                    sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
+                    sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
+                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
+                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, normal_map, roughness_map, metalness_map, physical_pbr_map,
+                    ao_map, emissive_map, light_map, normal_scale, clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
             end
         end
@@ -391,12 +471,18 @@ interpolated as a vertex varying across each triangle, matching three.js without
 `EXT_frag_depth`. It is applied to the opaque and transparent mesh passes; sprite,
 line, and point primitives continue to write NDC z, so enable it for scenes whose
 occlusion is dominated by mesh geometry.
+
+Pass `cache=RenderCache()` when rendering repeated frames with the same target
+shape to reuse traversal lists, pass buckets, triangle scratch buffers, and the
+transparent-pass stamp buffer. Leaving `cache=nothing` preserves the historical
+allocation behavior.
 """
 function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                  shading::Symbol=:flat, shadows::Bool=false, shadow_resolution::Int=512,
                  frustum_cull::Bool=true, clipping_planes::AbstractVector{<:Plane}=_NO_PLANES,
                  scissor::Union{Nothing,NTuple{4,Int}}=nothing, scissor_test::Bool=false,
-                 sort_objects::Bool=true, logarithmic_depth::Bool=false)
+                 sort_objects::Bool=true, logarithmic_depth::Bool=false,
+                 cache=nothing)
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
@@ -431,29 +517,53 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # Precompute 1/log2(far+1) once per frame for the logarithmic depth encoding.
     inv_log_far = log_depth ? 1.0 / log2(far + 1.0) : 1.0
 
-    meshes = collect_meshes(scene)
-    lights = collect_lights(scene)
+    if cache === nothing
+        meshes = collect_meshes(scene)
+        lights = collect_lights(scene)
+    else
+        meshes = _collect_into!(cache.meshes, scene, m -> m isa Mesh)
+        lights = _collect_into!(cache.lights, scene, l -> l isa AbstractLight)
+    end
     shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution) : nothing
 
     # View-projection frustum for culling whole meshes that fall offscreen.
     frustum = frustum_cull ? frustum_from_matrix(proj * view) : nothing
 
     # Reused scratch buffers (bounded allocation per frame).
-    tri = Vector{Vec4{Float64}}(undef, 3)
-    clipped = Vector{Vec4{Float64}}(undef, 0)
-    sizehint!(clipped, 6)
-    sx = Vector{Float64}(undef, 8)
-    sy = Vector{Float64}(undef, 8)
-    sz = Vector{Float64}(undef, 8)
+    if cache === nothing
+        tri = Vector{Vec4{Float64}}(undef, 3)
+        clipped = Vector{Vec4{Float64}}(undef, 0)
+        sizehint!(clipped, 6)
+        sx = Vector{Float64}(undef, 8)
+        sy = Vector{Float64}(undef, 8)
+        sz = Vector{Float64}(undef, 8)
+    else
+        tri = cache.tri
+        clipped = cache.clipped
+        empty!(clipped)
+        sx = cache.sx
+        sy = cache.sy
+        sz = cache.sz
+    end
+    colorbuf = cache === nothing ? nothing : cache.colors
 
     # Opaque pass first (writes the depth buffer). Per-mesh shading mode honours
     # the mesh's `flat_shading` override, else the renderer default. Opaque meshes
     # are collected (not drawn inline) so they can optionally be drawn front-to-
     # back; the z-buffer keeps opaque output order-independent, so this affects
     # only overdraw work, never the final pixels.
-    transparent = Mesh[]
-    opaque_flat = Mesh[]
-    smooth_meshes = Mesh[]
+    if cache === nothing
+        transparent = Mesh[]
+        opaque_flat = Mesh[]
+        smooth_meshes = Mesh[]
+    else
+        transparent = cache.transparent
+        opaque_flat = cache.opaque_flat
+        smooth_meshes = cache.smooth_meshes
+        empty!(transparent)
+        empty!(opaque_flat)
+        empty!(smooth_meshes)
+    end
     for mesh in meshes
         !is_visible(mesh) && continue
         wm = compute_world_matrix(mesh)
@@ -470,26 +580,32 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # Front-to-back draw order for opaque meshes (nearest first = largest, least-
     # negative view-space z). Pure draw-order optimisation; pixels are unchanged.
     if sort_objects
-        sort!(opaque_flat, by = m -> -_mesh_view_depth(m, view))
-        sort!(smooth_meshes, by = m -> -_mesh_view_depth(m, view))
+        _sort_meshes_by_depth!(opaque_flat, view, true)
+        _sort_meshes_by_depth!(smooth_meshes, view, true)
     end
 
     for mesh in opaque_flat
+        mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
         _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                              lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                             shadow_fn=shadow_fn, clipping_planes=clipping_planes,
+                             shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
+                             colorbuf=colorbuf,
                              xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                              log_depth=log_depth, inv_log_far=inv_log_far)
     end
 
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
-    for im in collect_instanced(scene)
+    instanced = cache === nothing ? collect_instanced(scene) :
+                _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
+    for im in instanced
         !is_visible(im) && continue
+        mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         base = compute_world_matrix(im)
         for M in im.instance_matrices
             _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
                                  lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 shadow_fn=shadow_fn, clipping_planes=clipping_planes,
+                                 shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
+                                 colorbuf=colorbuf,
                                  xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                  log_depth=log_depth, inv_log_far=inv_log_far)
         end
@@ -507,27 +623,31 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # order is required for correct blending and is kept regardless of
     # `sort_objects`.
     if !isempty(transparent)
-        sort!(transparent, by = m -> _mesh_view_depth(m, view))   # farthest first
-        stamp = zeros(Int, H, W)          # ensures each pixel blends ≤ once per mesh
+        _sort_meshes_by_depth!(transparent, view, false)
+        stamp = cache === nothing ? zeros(Int, H, W) : _render_cache_stamp!(cache, H, W)
+        # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
         for mesh in transparent
+            mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
             sid += 1
             α = material_opacity(mesh.material)
             _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                                  lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=shadow_fn,
+                                 alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
                                  clipping_planes=clipping_planes,
+                                 colorbuf=colorbuf,
                                  xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                  log_depth=log_depth, inv_log_far=inv_log_far)
         end
     end
 
     # Camera-facing sprites (billboards), depth-tested against the mesh passes.
-    render_sprites!(rt, scene, camera; clipping_planes=clipping_planes)
+    render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
+                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
 
     # Line and point primitives (depth-tested against the mesh passes).
-    render_lines!(rt, scene, camera)
-    render_points!(rt, scene, camera)
+    render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
 
     return rt
 end
@@ -561,6 +681,40 @@ function _mesh_view_depth(mesh, view::Mat4)
     o = mat4_transform_point(w, Vec3(0.0, 0.0, 0.0))
     v = mat4_transform_vec4(view, Vec4(o.x, o.y, o.z, 1.0))
     return v.z
+end
+
+struct _MeshDepthOrder{T<:Real}
+    view::Mat4{T}
+    nearest_first::Bool
+end
+
+function (order::_MeshDepthOrder)(a, b)
+    da = _mesh_view_depth(a, order.view)
+    db = _mesh_view_depth(b, order.view)
+    return order.nearest_first ? da > db : da < db
+end
+
+function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4, nearest_first::Bool)
+    n = length(meshes)
+    n <= 1 && return meshes
+    if n <= 32
+        @inbounds for i in 2:n
+            mesh = meshes[i]
+            depth = _mesh_view_depth(mesh, view)
+            j = i - 1
+            while j >= 1
+                prev_depth = _mesh_view_depth(meshes[j], view)
+                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
+                should_shift || break
+                meshes[j + 1] = meshes[j]
+                j -= 1
+            end
+            meshes[j + 1] = mesh
+        end
+    else
+        sort!(meshes, lt=_MeshDepthOrder(view, nearest_first))
+    end
+    return meshes
 end
 
 # Material transparency helpers (some materials lack these fields).

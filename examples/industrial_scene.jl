@@ -29,7 +29,8 @@ function build_scene()
     # Large textured ground plane (checkerboard albedo), receives shadows.
     gtex = checker_texture(n = 24, cell = 6, a = Color3(0.55, 0.57, 0.62), b = Color3(0.30, 0.32, 0.38))
     ground = Mesh(PlaneGeometry(width = 44.0, height = 44.0, width_segments = 40, height_segments = 40),
-                  MeshStandardMaterial(color = Color3(1.0, 1.0, 1.0), roughness = 0.92, map = gtex); name = "ground")
+                  MeshStandardMaterial(color = Color3(1.0, 1.0, 1.0), roughness = 0.92, map = gtex);
+                  name = "ground", receive_shadow = true)
     ground.rotation = Euler(-π/2, 0.0, 0.0)
     add!(scene, ground)
 
@@ -44,7 +45,8 @@ function build_scene()
         mat = MeshStandardMaterial(color = textured ? Color3(1.0, 1.0, 1.0) : cols[(idx % 4) + 1],
                                    metalness = 0.1, roughness = 0.45,
                                    map = textured ? stex : nothing)
-        s = Mesh(SphereGeometry(radius = 0.85, width_segments = 64, height_segments = 48), mat)
+        s = Mesh(SphereGeometry(radius = 0.85, width_segments = 64, height_segments = 48), mat;
+                 cast_shadow = true)
         s.position = Vec3(ix * 2.4, 0.85, iz * 2.4)
         add!(scene, s)
     end

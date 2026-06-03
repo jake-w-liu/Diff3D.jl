@@ -209,8 +209,7 @@ end
 Decode an 8-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [0,1].
 Implements full INFLATE (stored/fixed/dynamic Huffman) and all five PNG filters.
 """
-function load_png(path::String)
-    bytes = read(path)
+function _decode_png(bytes::Vector{UInt8})
     bytes[1:8] == UInt8[137,80,78,71,13,10,26,10] || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2
     idat = UInt8[]
@@ -262,6 +261,10 @@ function load_png(path::String)
         prev = cur
     end
     return img
+end
+
+function load_png(path::String)
+    _decode_png(read(path))
 end
 
 """Load a PNG into a [`Texture`]."""
@@ -492,48 +495,281 @@ end
 # Read accessor `ai` (0-based) as a vector of Float64 tuples / scalars.
 function _gltf_accessor(gltf, buffers, ai::Int)
     acc = gltf["accessors"][ai + 1]
-    bv = gltf["bufferViews"][Int(acc["bufferView"]) + 1]
-    buf = buffers[Int(bv["buffer"]) + 1]
-    offset = Int(get(bv, "byteOffset", 0.0)) + Int(get(acc, "byteOffset", 0.0))
     count = Int(acc["count"])
     ncomp = _GLTF_COMP_SIZE[acc["type"]]
-    ctype = Int(acc["componentType"])     # 5126=float,5125=uint32,5123=ushort,5121=ubyte
-    compbytes = (ctype == 5126 || ctype == 5125) ? 4 :
-                ctype == 5123 ? 2 : ctype == 5121 ? 1 :
-                error("glTF componentType $ctype")
-    stride = Int(get(bv, "byteStride", 0.0))   # 0 (or absent) => tightly packed
-    out = Vector{Float64}(undef, count * ncomp)
-    io = IOBuffer(buf)
-    read_comp() = ctype == 5126 ? Float64(read(io, Float32)) :
-                  ctype == 5125 ? Float64(read(io, UInt32)) :
-                  ctype == 5123 ? Float64(read(io, UInt16)) :
-                  Float64(read(io, UInt8))
-    if stride == 0 || stride == ncomp * compbytes
-        seek(io, offset)
-        for k in 1:count*ncomp
-            out[k] = read_comp()
-        end
-    else
-        # Interleaved buffer view: seek to each element start before reading.
-        for e in 0:count-1
-            seek(io, offset + e * stride)
-            base = e * ncomp
-            for c in 1:ncomp
-                out[base + c] = read_comp()
-            end
+    ctype = Int(acc["componentType"])
+    normalized = Bool(get(acc, "normalized", false))
+    out = zeros(Float64, count * ncomp)
+
+    compbytes = _gltf_component_bytes(ctype)
+
+    if haskey(acc, "bufferView")
+        bv = gltf["bufferViews"][Int(acc["bufferView"]) + 1]
+        buf = buffers[Int(bv["buffer"]) + 1]
+        offset = Int(get(bv, "byteOffset", 0.0)) + Int(get(acc, "byteOffset", 0.0))
+        stride = Int(get(bv, "byteStride", 0.0))   # 0 (or absent) => tightly packed
+        stride = stride == 0 ? ncomp * compbytes : stride
+        _gltf_read_accessor_payload!(out, buf, offset, count, ncomp, ctype, stride, normalized)
+    end
+
+    if haskey(acc, "sparse")
+        sparse = acc["sparse"]
+        scount = Int(sparse["count"])
+        indices_def = sparse["indices"]
+        values_def = sparse["values"]
+        ibv = gltf["bufferViews"][Int(indices_def["bufferView"]) + 1]
+        vbv = gltf["bufferViews"][Int(values_def["bufferView"]) + 1]
+        ibuf = buffers[Int(ibv["buffer"]) + 1]
+        vbuf = buffers[Int(vbv["buffer"]) + 1]
+        ioffset = Int(get(ibv, "byteOffset", 0.0)) + Int(get(indices_def, "byteOffset", 0.0))
+        voffset = Int(get(vbv, "byteOffset", 0.0)) + Int(get(values_def, "byteOffset", 0.0))
+        ictype = Int(indices_def["componentType"])
+        icompbytes = _gltf_component_bytes(ictype)
+        vstride = ncomp * compbytes
+        tmp = Vector{Float64}(undef, ncomp)
+        for s in 0:scount-1
+            idx = Int(_gltf_read_component(ibuf, ioffset + s * icompbytes, ictype, false))
+            0 <= idx < count || error("glTF sparse accessor index $idx out of bounds")
+            _gltf_read_accessor_payload!(tmp, vbuf, voffset + s * vstride, 1, ncomp,
+                                         ctype, vstride, normalized)
+            copyto!(out, idx * ncomp + 1, tmp, 1, ncomp)
         end
     end
     return (out, ncomp, count)
 end
 
-function _gltf_material(gltf, mi)
+function _gltf_component_bytes(ctype::Int)
+    ctype == 5120 && return 1  # BYTE
+    ctype == 5121 && return 1  # UNSIGNED_BYTE
+    ctype == 5122 && return 2  # SHORT
+    ctype == 5123 && return 2  # UNSIGNED_SHORT
+    ctype == 5125 && return 4  # UNSIGNED_INT
+    ctype == 5126 && return 4  # FLOAT
+    error("glTF componentType $ctype")
+end
+
+function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, normalized::Bool)
+    io = IOBuffer(buf)
+    seek(io, offset)
+    if ctype == 5126
+        return Float64(read(io, Float32))
+    elseif ctype == 5125
+        v = read(io, UInt32)
+        return normalized ? Float64(v) / Float64(typemax(UInt32)) : Float64(v)
+    elseif ctype == 5123
+        v = read(io, UInt16)
+        return normalized ? Float64(v) / Float64(typemax(UInt16)) : Float64(v)
+    elseif ctype == 5121
+        v = read(io, UInt8)
+        return normalized ? Float64(v) / Float64(typemax(UInt8)) : Float64(v)
+    elseif ctype == 5122
+        v = read(io, Int16)
+        return normalized ? max(Float64(v) / Float64(typemax(Int16)), -1.0) : Float64(v)
+    elseif ctype == 5120
+        v = read(io, Int8)
+        return normalized ? max(Float64(v) / Float64(typemax(Int8)), -1.0) : Float64(v)
+    end
+    error("glTF componentType $ctype")
+end
+
+function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::Vector{UInt8}, offset::Int,
+                                      count::Int, ncomp::Int, ctype::Int, stride::Int,
+                                      normalized::Bool)
+    compbytes = _gltf_component_bytes(ctype)
+    for e in 0:count-1
+        base_offset = offset + e * stride
+        base = e * ncomp
+        for c in 0:ncomp-1
+            out[base + c + 1] = _gltf_read_component(buf, base_offset + c * compbytes,
+                                                     ctype, normalized)
+        end
+    end
+    return out
+end
+
+_gltf_wrap_mode(v) = Int(v) == 33071 ? :clamp : Int(v) == 33648 ? :mirror : :repeat
+_gltf_filter_mode(v) = Int(v) in (9728, 9984, 9986) ? :nearest : :bilinear
+
+function _gltf_texture_transform(texinfo)
+    ext = get(get(texinfo, "extensions", Dict{String,Any}()),
+              "KHR_texture_transform", Dict{String,Any}())
+    offset = get(ext, "offset", [0.0, 0.0])
+    scale = get(ext, "scale", [1.0, 1.0])
+    rotation = Float64(get(ext, "rotation", 0.0))
+    tex_coord = Int(get(ext, "texCoord", get(texinfo, "texCoord", 0.0)))
+    return (Vec2(Float64(offset[1]), Float64(offset[2])),
+            Vec2(Float64(scale[1]), Float64(scale[2])),
+            rotation,
+            tex_coord)
+end
+
+function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb)
+    texinfo === nothing && return nothing
+    haskey(gltf, "textures") || return nothing
+    ti = Int(texinfo["index"])
+    texdef = gltf["textures"][ti + 1]
+    haskey(texdef, "source") || return nothing
+    imgdef = gltf["images"][Int(texdef["source"]) + 1]
+    bytes = if haskey(imgdef, "uri")
+        uri = String(imgdef["uri"])
+        startswith(uri, "data:") ? base64_decode(split(uri, ",", limit=2)[2]) : read(joinpath(dir, uri))
+    elseif haskey(imgdef, "bufferView")
+        bv = gltf["bufferViews"][Int(imgdef["bufferView"]) + 1]
+        buf = buffers[Int(bv["buffer"]) + 1]
+        off = Int(get(bv, "byteOffset", 0.0)) + 1
+        len = Int(bv["byteLength"])
+        buf[off:(off + len - 1)]
+    else
+        return nothing
+    end
+    data = _decode_png(bytes)
+    sampler = haskey(texdef, "sampler") && haskey(gltf, "samplers") ?
+              gltf["samplers"][Int(texdef["sampler"]) + 1] : Dict{String,Any}()
+    offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
+    Texture(data;
+            wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0)),
+            wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0)),
+            filter=_gltf_filter_mode(get(sampler, "magFilter", get(sampler, "minFilter", 9729.0))),
+            colorspace=colorspace,
+            offset=offset,
+            repeat=scale,
+            rotation=rotation,
+            tex_coord=tex_coord)
+end
+
+function _gltf_material(gltf, buffers, dir::String, mi)
     mi === nothing && return MeshStandardMaterial()
     m = gltf["materials"][Int(mi) + 1]
     pbr = get(m, "pbrMetallicRoughness", Dict{String,Any}())
+    extensions = get(m, "extensions", Dict{String,Any}())
     bc = get(pbr, "baseColorFactor", [1.0,1.0,1.0,1.0])
+    emissive = get(m, "emissiveFactor", [0.0,0.0,0.0])
+    alpha_mode = String(get(m, "alphaMode", "OPAQUE"))
+    alpha_test = alpha_mode == "MASK" ? Float64(get(m, "alphaCutoff", 0.5)) : 0.0
+    opacity = Float64(bc[4])
+    transparent = alpha_mode == "BLEND" || (alpha_mode != "MASK" && opacity < 1.0)
+    side = Bool(get(m, "doubleSided", false)) ? :double : :front
+    base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
+                                       colorspace=:srgb)
+    if haskey(extensions, "KHR_materials_unlit")
+        return MeshBasicMaterial(color=Color3(bc[1], bc[2], bc[3]),
+                                  opacity=opacity,
+                                  transparent=transparent,
+                                  side=side,
+                                  map=base_color_texture,
+                                  alpha_test=alpha_test)
+    end
+    metallic_roughness_texture = _gltf_texture(gltf, buffers, dir,
+                                               get(pbr, "metallicRoughnessTexture", nothing);
+                                               colorspace=:linear)
+    normal_info = get(m, "normalTexture", nothing)
+    normal_scale = normal_info isa AbstractDict ? Float64(get(normal_info, "scale", 1.0)) : 1.0
+    occ = get(m, "occlusionTexture", nothing)
+    emissive_strength = Float64(get(get(extensions, "KHR_materials_emissive_strength",
+                                        Dict{String,Any}()), "emissiveStrength", 1.0))
+    ao_strength = occ isa AbstractDict ? Float64(get(occ, "strength", 1.0)) : 1.0
+    physical_extension_keys = ("KHR_materials_clearcoat",
+                               "KHR_materials_transmission",
+                               "KHR_materials_ior",
+                               "KHR_materials_volume",
+                               "KHR_materials_sheen",
+                               "KHR_materials_iridescence",
+                               "KHR_materials_specular")
+    if any(k -> haskey(extensions, k), physical_extension_keys)
+        clearcoat_ext = get(extensions, "KHR_materials_clearcoat", Dict{String,Any}())
+        transmission_ext = get(extensions, "KHR_materials_transmission", Dict{String,Any}())
+        ior_ext = get(extensions, "KHR_materials_ior", Dict{String,Any}())
+        volume_ext = get(extensions, "KHR_materials_volume", Dict{String,Any}())
+        sheen_ext = get(extensions, "KHR_materials_sheen", Dict{String,Any}())
+        iridescence_ext = get(extensions, "KHR_materials_iridescence", Dict{String,Any}())
+        specular_ext = get(extensions, "KHR_materials_specular", Dict{String,Any}())
+        sheen_color_factor = get(sheen_ext, "sheenColorFactor", [0.0, 0.0, 0.0])
+        attenuation_color = get(volume_ext, "attenuationColor", [1.0, 1.0, 1.0])
+        specular_color_factor = get(specular_ext, "specularColorFactor", [1.0, 1.0, 1.0])
+        thickness_min = Float64(get(iridescence_ext, "iridescenceThicknessMinimum", 100.0))
+        thickness_max = Float64(get(iridescence_ext, "iridescenceThicknessMaximum", 400.0))
+        return MeshPhysicalMaterial(color=Color3(bc[1], bc[2], bc[3]),
+                                    emissive=Color3(emissive[1], emissive[2], emissive[3]),
+                                    metalness=Float64(get(pbr, "metallicFactor", 1.0)),
+                                    roughness=Float64(get(pbr, "roughnessFactor", 1.0)),
+                                     opacity=opacity,
+                                     transparent=transparent,
+                                     alpha_test=alpha_test,
+                                     side=side,
+                                     map=base_color_texture,
+                                     normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
+                                                              colorspace=:linear),
+                                     normal_scale=normal_scale,
+                                     roughness_map=metallic_roughness_texture,
+                                    metalness_map=metallic_roughness_texture,
+                                    ao_map=_gltf_texture(gltf, buffers, dir, occ;
+                                                         colorspace=:linear),
+                                    emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
+                                                               colorspace=:srgb),
+                                    emissive_intensity=emissive_strength,
+                                    ao_map_intensity=ao_strength,
+                                    clearcoat=Float64(get(clearcoat_ext, "clearcoatFactor", 0.0)),
+                                    clearcoat_roughness=Float64(get(clearcoat_ext, "clearcoatRoughnessFactor", 0.0)),
+                                    clearcoat_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatTexture", nothing);
+                                                                colorspace=:linear),
+                                    clearcoat_roughness_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatRoughnessTexture", nothing);
+                                                                          colorspace=:linear),
+                                    transmission=Float64(get(transmission_ext, "transmissionFactor", 0.0)),
+                                    transmission_map=_gltf_texture(gltf, buffers, dir, get(transmission_ext, "transmissionTexture", nothing);
+                                                                   colorspace=:linear),
+                                    thickness=Float64(get(volume_ext, "thicknessFactor", 0.0)),
+                                    thickness_map=_gltf_texture(gltf, buffers, dir, get(volume_ext, "thicknessTexture", nothing);
+                                                                colorspace=:linear),
+                                    attenuation_distance=Float64(get(volume_ext, "attenuationDistance", 0.0)),
+                                    attenuation_color=Color3(attenuation_color[1],
+                                                             attenuation_color[2],
+                                                             attenuation_color[3]),
+                                    ior=Float64(get(ior_ext, "ior", 1.5)),
+                                    sheen=maximum(Float64.(sheen_color_factor)),
+                                    sheen_color=Color3(sheen_color_factor[1],
+                                                       sheen_color_factor[2],
+                                                       sheen_color_factor[3]),
+                                    sheen_roughness=Float64(get(sheen_ext, "sheenRoughnessFactor", 0.0)),
+                                    sheen_color_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenColorTexture", nothing);
+                                                                  colorspace=:srgb),
+                                    sheen_roughness_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenRoughnessTexture", nothing);
+                                                                      colorspace=:linear),
+                                    iridescence=Float64(get(iridescence_ext, "iridescenceFactor", 0.0)),
+                                    iridescence_ior=Float64(get(iridescence_ext, "iridescenceIor", 1.3)),
+                                    iridescence_thickness=0.5 * (thickness_min + thickness_max),
+                                    iridescence_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceTexture", nothing);
+                                                                  colorspace=:linear),
+                                    iridescence_thickness_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceThicknessTexture", nothing);
+                                                                            colorspace=:linear),
+                                    specular_intensity=Float64(get(specular_ext, "specularFactor", 1.0)),
+                                    specular_color=Color3(specular_color_factor[1],
+                                                          specular_color_factor[2],
+                                                          specular_color_factor[3]),
+                                    specular_intensity_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularTexture", nothing);
+                                                                         colorspace=:linear),
+                                    specular_color_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularColorTexture", nothing);
+                                                                     colorspace=:srgb))
+    end
     MeshStandardMaterial(color=Color3(bc[1], bc[2], bc[3]),
+                         emissive=Color3(emissive[1], emissive[2], emissive[3]),
                          metalness=Float64(get(pbr, "metallicFactor", 1.0)),
-                         roughness=Float64(get(pbr, "roughnessFactor", 1.0)))
+                         roughness=Float64(get(pbr, "roughnessFactor", 1.0)),
+                          opacity=opacity,
+                          transparent=transparent,
+                          alpha_test=alpha_test,
+                          side=side,
+                          map=base_color_texture,
+                          normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
+                                                   colorspace=:linear),
+                          normal_scale=normal_scale,
+                          roughness_map=metallic_roughness_texture,
+                         metalness_map=metallic_roughness_texture,
+                         ao_map=_gltf_texture(gltf, buffers, dir, occ;
+                                              colorspace=:linear),
+                         emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
+                                                    colorspace=:srgb),
+                         emissive_intensity=emissive_strength,
+                         ao_map_intensity=ao_strength)
 end
 
 function _gltf_node_matrix(node)
@@ -590,20 +826,145 @@ function _gltf_decompose(M::Mat4)
     return (position, Euler(_x, _y, _z, :XYZ), Vec3(sx, sy, sz))
 end
 
+function _gltf_transform_direction(M::Mat4, v::Vec3)
+    o = mat4_transform_point(M, Vec3(0.0, 0.0, 0.0))
+    p = mat4_transform_point(M, v)
+    d = p - o
+    n = norm(d)
+    return n > 0 ? d / n : v
+end
+
+function _gltf_color3(v)
+    Color3(Float64(v[1]), Float64(v[2]), Float64(v[3]))
+end
+
+function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
+    camdef = gltf["cameras"][camera_idx + 1]
+    typ = String(camdef["type"])
+    cam = if typ == "perspective"
+        p = camdef["perspective"]
+        PerspectiveCamera(fov=Float64(p["yfov"]),
+                          aspect=Float64(get(p, "aspectRatio", 1.0)),
+                          near=Float64(p["znear"]),
+                          far=Float64(get(p, "zfar", 1000.0)),
+                          name=name)
+    elseif typ == "orthographic"
+        o = camdef["orthographic"]
+        xmag = Float64(o["xmag"])
+        ymag = Float64(o["ymag"])
+        OrthographicCamera(left=-xmag/2, right=xmag/2,
+                           bottom=-ymag/2, top=ymag/2,
+                           near=Float64(o["znear"]),
+                           far=Float64(o["zfar"]),
+                           name=name)
+    else
+        error("unsupported glTF camera type: $typ")
+    end
+    pos, rot, scl = _gltf_decompose(M)
+    cam.position = pos
+    cam.rotation = rot
+    cam.scale = scl
+    cam.target = pos + _gltf_transform_direction(M, Vec3(0.0, 0.0, -1.0))
+    cam.up = _gltf_transform_direction(M, Vec3(0.0, 1.0, 0.0))
+    return cam
+end
+
+function _gltf_punctual_lights(gltf)
+    ext = get(gltf, "extensions", Dict{String,Any}())
+    lights_ext = get(ext, "KHR_lights_punctual", nothing)
+    lights_ext === nothing && return Any[]
+    return get(lights_ext, "lights", Any[])
+end
+
+function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
+    lights = _gltf_punctual_lights(gltf)
+    ldef = lights[light_idx + 1]
+    typ = String(ldef["type"])
+    color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]))
+    intensity = Float64(get(ldef, "intensity", 1.0))
+    pos, rot, scl = _gltf_decompose(M)
+    light = if typ == "directional"
+        DirectionalLight(color=color, intensity=intensity, position=pos, name=name)
+    elseif typ == "point"
+        PointLight(color=color, intensity=intensity,
+                   distance=Float64(get(ldef, "range", 0.0)),
+                   position=pos, name=name)
+    elseif typ == "spot"
+        spot = get(ldef, "spot", Dict{String,Any}())
+        outer = Float64(get(spot, "outerConeAngle", pi/4))
+        inner = Float64(get(spot, "innerConeAngle", 0.0))
+        penumbra = outer > 0 ? clamp(1.0 - inner / outer, 0.0, 1.0) : 0.0
+        SpotLight(color=color, intensity=intensity,
+                  distance=Float64(get(ldef, "range", 0.0)),
+                  angle=outer, penumbra=penumbra,
+                  position=pos, name=name)
+    else
+        error("unsupported glTF punctual light type: $typ")
+    end
+    light.rotation = rot
+    light.scale = scl
+    if light isa DirectionalLight || light isa SpotLight
+        light.target = pos + _gltf_transform_direction(M, Vec3(0.0, 0.0, -1.0))
+    end
+    return light
+end
+
+function _gltf_joint_node_set(gltf)
+    out = Set{Int}()
+    for skin in get(gltf, "skins", Any[])
+        for j in get(skin, "joints", Any[])
+            push!(out, Int(j))
+        end
+    end
+    return out
+end
+
+function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int; indices::Bool=false)
+    has_attribute(geo, name) || error("glTF skinned mesh is missing $name")
+    attr = get_attribute(geo, name)
+    attr.item_size == 4 || error("glTF $name accessor must be VEC4")
+    length(attr.data) == nverts * 4 || error("glTF $name count does not match POSITION")
+    if indices
+        return [ntuple(k -> Int(round(attr.data[4i - 4 + k])) + 1, 4) for i in 1:nverts]
+    end
+    tuples = NTuple{4,Float64}[]
+    sizehint!(tuples, nverts)
+    for i in 1:nverts
+        w = ntuple(k -> Float64(attr.data[4i - 4 + k]), 4)
+        s = sum(w)
+        push!(tuples, s > 0 ? ntuple(k -> w[k] / s, 4) : w)
+    end
+    return tuples
+end
+
+function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
+    haskey(skin, "inverseBindMatrices") || return nothing
+    data, ncomp, count = _gltf_accessor(gltf, buffers, Int(skin["inverseBindMatrices"]))
+    ncomp == 16 || error("glTF inverseBindMatrices accessor must be MAT4")
+    count == joint_count || error("glTF inverseBindMatrices count must match joints")
+    return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16)) for i in 1:count]
+end
+
 # Build a `Scene` from a parsed glTF document and its decoded buffers. Shared by
 # `load_gltf` (text/embedded buffers) and `load_glb` (binary container, where
 # the BIN chunk is supplied as buffer 0). `buffers` must already contain the raw
 # bytes for every buffer referenced by the document.
-function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false)
+function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String="")
     scene = Scene()
     node_objects = Dict{Int, AbstractObject3D}()
+    joint_nodes = _gltf_joint_node_set(gltf)
 
-    function build_primitive(prim)
+    function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[])
         attrs = prim["attributes"]
         pos, _, nverts = _gltf_accessor(gltf, buffers, Int(attrs["POSITION"]))
         normals = Float64[]
         if haskey(attrs, "NORMAL")
             normals, _, _ = _gltf_accessor(gltf, buffers, Int(attrs["NORMAL"]))
+        end
+        uvs = Float64[]
+        if haskey(attrs, "TEXCOORD_0")
+            uvs, uvcomp, _ = _gltf_accessor(gltf, buffers, Int(attrs["TEXCOORD_0"]))
+            uvcomp == 2 || error("glTF TEXCOORD_0 accessor must be VEC2")
         end
         if haskey(prim, "indices")
             idxf, _, _ = _gltf_accessor(gltf, buffers, Int(prim["indices"]))
@@ -611,30 +972,91 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false)
         else
             indices = collect(1:nverts)
         end
-        geo = BufferGeometry(pos, normals, Float64[], indices, nverts, length(indices) ÷ 3)
+        geo = BufferGeometry(pos, normals, uvs, indices, nverts, length(indices) ÷ 3)
+        for (gltf_name, local_name) in (
+            ("TEXCOORD_1", :uv2),
+            ("COLOR_0", :color),
+            ("TANGENT", :tangent),
+            ("JOINTS_0", :skinIndex),
+            ("WEIGHTS_0", :skinWeight),
+        )
+            haskey(attrs, gltf_name) || continue
+            data, item_size, attr_count = _gltf_accessor(gltf, buffers, Int(attrs[gltf_name]))
+            attr_count == nverts || error("glTF $gltf_name count does not match POSITION")
+            set_attribute!(geo, local_name, data, item_size)
+        end
+        for (ti, target) in enumerate(get(prim, "targets", Any[]))
+            for (gltf_name, local_prefix) in (
+                ("POSITION", "morphPosition"),
+                ("NORMAL", "morphNormal"),
+                ("TANGENT", "morphTangent"),
+            )
+                haskey(target, gltf_name) || continue
+                data, item_size, attr_count = _gltf_accessor(gltf, buffers, Int(target[gltf_name]))
+                attr_count == nverts || error("glTF morph target $gltf_name count does not match POSITION")
+                set_attribute!(geo, Symbol(local_prefix * string(ti - 1)), data, item_size)
+            end
+        end
         isempty(normals) && compute_vertex_normals!(geo)
-        mat = _gltf_material(gltf, get(prim, "material", nothing))
-        Mesh(geo, mat)
+        mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
+        if skin_idx === nothing
+            return Mesh(geo, mat; morph_target_influences=morph_weights)
+        end
+        skin = gltf["skins"][Int(skin_idx) + 1]
+        bones = Bone[]
+        for j in skin["joints"]
+            bone = node_objects[Int(j)]
+            bone isa Bone || error("glTF skin joint node was not loaded as a Bone")
+            push!(bones, bone)
+        end
+        inv = _gltf_inverse_bind_matrices(gltf, buffers, skin, length(bones))
+        skeleton = inv === nothing ? Skeleton(bones) : Skeleton(bones, inv)
+        skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts; indices=true)
+        skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
+        return SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights)
+    end
+
+    function create_node_object!(node_idx)
+        node = gltf["nodes"][node_idx + 1]
+        M = _gltf_node_matrix(node)
+        node_name = String(get(node, "name", "node_$node_idx"))
+        obj = if haskey(node, "camera")
+            _gltf_camera(gltf, Int(node["camera"]), node_name, M)
+        elseif haskey(node, "extensions") &&
+               haskey(node["extensions"], "KHR_lights_punctual") &&
+               haskey(node["extensions"]["KHR_lights_punctual"], "light")
+            light_idx = Int(node["extensions"]["KHR_lights_punctual"]["light"])
+            _gltf_node_light(gltf, light_idx, node_name, M)
+        elseif node_idx in joint_nodes
+            Bone(name=node_name)
+        else
+            Group()
+        end
+        pos, rot, scl = _gltf_decompose(M)   # full TRS, not just translation
+        obj.position = pos
+        obj.rotation = rot
+        obj.scale = scl
+        obj.name = node_name
+        node_objects[node_idx] = obj
+    end
+
+    for node_idx in 0:(length(get(gltf, "nodes", Any[])) - 1)
+        create_node_object!(node_idx)
     end
 
     function add_node!(parent, node_idx)
         node = gltf["nodes"][node_idx + 1]
-        grp = Group()
-        M = _gltf_node_matrix(node)
-        pos, rot, scl = _gltf_decompose(M)   # full TRS, not just translation
-        grp.position = pos
-        grp.rotation = rot
-        grp.scale = scl
-        node_objects[node_idx] = grp
-        add!(parent, grp)
+        obj = node_objects[node_idx]
+        add!(parent, obj)
         if haskey(node, "mesh")
             mesh_def = gltf["meshes"][Int(node["mesh"]) + 1]
+            morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
             for prim in mesh_def["primitives"]
-                add!(grp, build_primitive(prim))
+                add!(obj, build_primitive(prim, get(node, "skin", nothing), morph_weights))
             end
         end
         for child in get(node, "children", Any[])
-            add_node!(grp, Int(child))
+            add_node!(obj, Int(child))
         end
     end
 
@@ -657,6 +1079,58 @@ function _gltf_track_values(data::Vector{Float64}, ncomp::Int, count::Int, path:
     end
 end
 
+function _gltf_weight_values(data::Vector{Float64}, ncomp::Int, key_count::Int)
+    ncomp >= 1 || error("glTF weights animation accessor must have at least one component")
+    length(data) == key_count * ncomp ||
+        error("glTF weights animation input/output keyframe counts differ")
+    return [collect(@view data[(i - 1) * ncomp + 1:i * ncomp]) for i in 1:key_count]
+end
+
+function _gltf_cubic_weight_values(data::Vector{Float64}, ncomp::Int, key_count::Int)
+    ncomp >= 1 || error("glTF CUBICSPLINE weights animation accessor must have at least one component")
+    length(data) == key_count * 3 * ncomp ||
+        error("glTF CUBICSPLINE weights output count must be 3x input count")
+    ins = Vector{Float64}[]
+    vals = Vector{Float64}[]
+    outs = Vector{Float64}[]
+    sizehint!(ins, key_count); sizehint!(vals, key_count); sizehint!(outs, key_count)
+    for i in 1:key_count
+        base = (i - 1) * 3 * ncomp
+        push!(ins, collect(@view data[base + 1:base + ncomp]))
+        push!(vals, collect(@view data[base + ncomp + 1:base + 2ncomp]))
+        push!(outs, collect(@view data[base + 2ncomp + 1:base + 3ncomp]))
+    end
+    return ins, vals, outs
+end
+
+function _gltf_cubic_vec3_values(data::Vector{Float64}, ncomp::Int, key_count::Int, path::String)
+    ncomp == 3 || error("glTF CUBICSPLINE $path animation accessor must be VEC3")
+    length(data) == key_count * 3 * ncomp || error("glTF CUBICSPLINE output count must be 3x input count")
+    ins = Vec3{Float64}[]; vals = Vec3{Float64}[]; outs = Vec3{Float64}[]
+    sizehint!(ins, key_count); sizehint!(vals, key_count); sizehint!(outs, key_count)
+    for i in 1:key_count
+        base = (i - 1) * 9
+        push!(ins, Vec3(data[base+1], data[base+2], data[base+3]))
+        push!(vals, Vec3(data[base+4], data[base+5], data[base+6]))
+        push!(outs, Vec3(data[base+7], data[base+8], data[base+9]))
+    end
+    return ins, vals, outs
+end
+
+function _gltf_cubic_quat_values(data::Vector{Float64}, ncomp::Int, key_count::Int)
+    ncomp == 4 || error("glTF CUBICSPLINE rotation animation accessor must be VEC4")
+    length(data) == key_count * 3 * ncomp || error("glTF CUBICSPLINE output count must be 3x input count")
+    ins = Quaternion{Float64}[]; vals = Quaternion{Float64}[]; outs = Quaternion{Float64}[]
+    sizehint!(ins, key_count); sizehint!(vals, key_count); sizehint!(outs, key_count)
+    for i in 1:key_count
+        base = (i - 1) * 12
+        push!(ins, Quaternion(data[base+1], data[base+2], data[base+3], data[base+4]))
+        push!(vals, quat_normalize(Quaternion(data[base+5], data[base+6], data[base+7], data[base+8])))
+        push!(outs, Quaternion(data[base+9], data[base+10], data[base+11], data[base+12]))
+    end
+    return ins, vals, outs
+end
+
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
@@ -670,18 +1144,39 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             node_idx = Int(target["node"])
             haskey(node_objects, node_idx) || continue
             path = String(target["path"])
-            path in ("translation", "rotation", "scale") || continue
+            path in ("translation", "rotation", "scale", "weights") || continue
             sampler = samplers[Int(ch["sampler"]) + 1]
             interpolation = Symbol(lowercase(String(get(sampler, "interpolation", "LINEAR"))))
-            interpolation === :cubicspline &&
-                error("glTF CUBICSPLINE animation interpolation is not supported yet")
             times, tncomp, tcount = _gltf_accessor(gltf, buffers, Int(sampler["input"]))
             tncomp == 1 || error("glTF animation input accessor must be SCALAR")
             out, ncomp, count = _gltf_accessor(gltf, buffers, Int(sampler["output"]))
+            obj = node_objects[node_idx]
+            if path == "weights"
+                if interpolation === :cubicspline
+                    ins, vals, outs = _gltf_cubic_weight_values(out, ncomp, tcount)
+                    push!(tracks, CubicSplineMorphWeightsKeyframeTrack(
+                        obj, :morph_target_influences, times, vals, ins, outs))
+                    continue
+                end
+                vals = _gltf_weight_values(out, ncomp, tcount)
+                push!(tracks, MorphWeightsKeyframeTrack(obj, :morph_target_influences,
+                                                        times, vals; interpolation=interpolation))
+                continue
+            end
+            if interpolation === :cubicspline
+                if path == "rotation"
+                    ins, vals, outs = _gltf_cubic_quat_values(out, ncomp, tcount)
+                    push!(tracks, CubicSplineQuaternionKeyframeTrack(obj, :rotation, times, vals, ins, outs))
+                else
+                    ins, vals, outs = _gltf_cubic_vec3_values(out, ncomp, tcount, path)
+                    prop = path == "translation" ? :position : :scale
+                    push!(tracks, CubicSplineKeyframeTrack(obj, prop, times, vals, ins, outs))
+                end
+                continue
+            end
             vals = _gltf_track_values(out, ncomp, count, path)
             vals === nothing && continue
             length(times) == length(vals) || error("glTF animation input/output keyframe counts differ")
-            obj = node_objects[node_idx]
             if path == "rotation"
                 push!(tracks, QuaternionKeyframeTrack(obj, :rotation, times, vals))
             else
@@ -695,8 +1190,8 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
     return clips
 end
 
-function _gltf_build_asset(gltf, buffers)
-    scene, node_objects = _gltf_build_scene(gltf, buffers; return_nodes=true)
+function _gltf_build_asset(gltf, buffers; dir::String="")
+    scene, node_objects = _gltf_build_scene(gltf, buffers; return_nodes=true, dir=dir)
     return GLTFAsset(scene, _gltf_animation_clips(gltf, buffers, node_objects))
 end
 
@@ -711,7 +1206,7 @@ function load_gltf(path::String)
     gltf = _json_parse(read(path, String))
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in gltf["buffers"]]
-    return _gltf_build_scene(gltf, buffers)
+    return _gltf_build_scene(gltf, buffers; dir=dir)
 end
 
 """
@@ -726,7 +1221,7 @@ function load_gltf_asset(path::String)
     gltf = _json_parse(read(path, String))
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in gltf["buffers"]]
-    return _gltf_build_asset(gltf, buffers)
+    return _gltf_build_asset(gltf, buffers; dir=dir)
 end
 
 # Resolve a glTF buffer that may reference the GLB binary chunk. A buffer with no
@@ -790,7 +1285,7 @@ function load_glb(path::String)
     gltf = _json_parse(String(json_bytes))
     dir = dirname(path)
     buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in gltf["buffers"]]
-    return _gltf_build_scene(gltf, buffers)
+    return _gltf_build_scene(gltf, buffers; dir=dir)
 end
 
 """Load a binary glTF (`.glb`) and return both scene and animation clips."""
@@ -826,5 +1321,5 @@ function load_glb_asset(path::String)
     gltf = _json_parse(String(json_bytes))
     dir = dirname(path)
     buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in gltf["buffers"]]
-    return _gltf_build_asset(gltf, buffers)
+    return _gltf_build_asset(gltf, buffers; dir=dir)
 end

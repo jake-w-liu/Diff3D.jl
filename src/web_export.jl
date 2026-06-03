@@ -15,15 +15,46 @@ struct WebGLExportCase
     radius::Float64
     height::Float64
     fov::Float64
+    tone_mapping::Symbol
+    tone_exposure::Float64
+    output_color_space::Symbol
     animations::Vector{AnimationClip}
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function WebGLExportCase(id::String, title::String, subtitle::String, scene::Scene;
                          target=Vec3(0.0, 0.0, 0.0), radius::Real=8.0,
                          height::Real=3.0, fov::Real=pi/4,
-                         animations::AbstractVector{AnimationClip}=AnimationClip[])
+                         tone_mapping::Symbol=:none,
+                         tone_exposure::Real=1.0,
+                         output_color_space::Symbol=:srgb,
+                         animations::AbstractVector{AnimationClip}=AnimationClip[],
+                         clipping_planes::AbstractVector{<:Plane}=Plane{Float64}[])
+    _web_tone_mapping_id(tone_mapping)
+    _web_output_color_space_id(output_color_space)
+    exposure = Float64(tone_exposure)
+    (isfinite(exposure) && exposure >= 0.0) ||
+        throw(ArgumentError("tone_exposure must be finite and non-negative"))
     WebGLExportCase(id, title, subtitle, scene, target, Float64(radius),
-                    Float64(height), Float64(fov), collect(AnimationClip, animations))
+                    Float64(height), Float64(fov), tone_mapping, exposure,
+                    output_color_space,
+                    collect(AnimationClip, animations),
+                    [Plane(Vec3(Float64(p.normal.x), Float64(p.normal.y), Float64(p.normal.z)),
+                           Float64(p.constant)) for p in clipping_planes])
+end
+
+function _web_tone_mapping_id(tone_mapping::Symbol)
+    tone_mapping === :none && return 0
+    tone_mapping === :linear && return 1
+    tone_mapping === :reinhard && return 2
+    tone_mapping === :aces && return 3
+    throw(ArgumentError("unsupported WebGL export tone_mapping: $tone_mapping"))
+end
+
+function _web_output_color_space_id(output_color_space::Symbol)
+    output_color_space === :linear && return 0
+    output_color_space === :srgb && return 1
+    throw(ArgumentError("unsupported WebGL export output_color_space: $output_color_space"))
 end
 
 _js_str(s::AbstractString) = "\"" * replace(s,
@@ -31,9 +62,14 @@ _js_str(s::AbstractString) = "\"" * replace(s,
     "\r"=>"\\r", "\t"=>"\\t", "</"=>"<\\/") * "\""
 _js_num(x::Real) = isfinite(Float64(x)) ? @sprintf("%.17g", Float64(x)) : "0"
 _js_array(xs) = "[" * join((_js_num(x) for x in xs), ",") * "]"
+_js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"
 _js_vec(v::Vec3) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "," * _js_num(v.z) * "]"
+_js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
+                          _js_num(q.z) * "," * _js_num(q.w) * "]"
 _js_color(c::Color3) = "[" * _js_num(c.r) * "," * _js_num(c.g) * "," * _js_num(c.b) * "]"
 _js_mat(m::Mat4) = _js_array(m.e)
+_js_plane(p::Plane) = "[" * _js_num(p.normal.x) * "," * _js_num(p.normal.y) * "," *
+                      _js_num(p.normal.z) * "," * _js_num(p.constant) * "]"
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
 
 function _web_material_color(mat)
@@ -48,51 +84,485 @@ end
 
 _web_material_size(mat) = hasproperty(mat, :size) ? Float64(getproperty(mat, :size)) : 4.0
 _web_material_glow(mat) = mat isa MeshBasicMaterial ? 0.35 : mat isa PointsMaterial ? 1.0 : 0.08
+_web_material_opacity(mat) = hasproperty(mat, :opacity) ? clamp(Float64(getproperty(mat, :opacity)), 0.0, 1.0) : 1.0
+_web_material_alpha_test(mat) =
+    hasproperty(mat, :alpha_test) ? clamp(Float64(getproperty(mat, :alpha_test)), 0.0, 1.0) : 0.0
+_web_material_alpha_texture(mat) =
+    hasproperty(mat, :alpha_map) && getproperty(mat, :alpha_map) isa Texture ? getproperty(mat, :alpha_map) : nothing
+_web_material_emissive_texture(mat) =
+    hasproperty(mat, :emissive_map) && getproperty(mat, :emissive_map) isa Texture ? getproperty(mat, :emissive_map) : nothing
+_web_material_ao_texture(mat) =
+    hasproperty(mat, :ao_map) && getproperty(mat, :ao_map) isa Texture ? getproperty(mat, :ao_map) : nothing
+_web_material_light_texture(mat) =
+    hasproperty(mat, :light_map) && getproperty(mat, :light_map) isa Texture ? getproperty(mat, :light_map) : nothing
+_web_material_roughness_texture(mat) =
+    hasproperty(mat, :roughness_map) && getproperty(mat, :roughness_map) isa Texture ? getproperty(mat, :roughness_map) : nothing
+_web_material_metalness_texture(mat) =
+    hasproperty(mat, :metalness_map) && getproperty(mat, :metalness_map) isa Texture ? getproperty(mat, :metalness_map) : nothing
+_web_material_normal_texture(mat) =
+    hasproperty(mat, :normal_map) && getproperty(mat, :normal_map) isa Texture ? getproperty(mat, :normal_map) : nothing
+_web_material_normal_scale(mat) =
+    hasproperty(mat, :normal_scale) ? Float64(getproperty(mat, :normal_scale)) : 1.0
+_web_material_matcap_texture(mat) =
+    hasproperty(mat, :matcap) && getproperty(mat, :matcap) isa Texture ? getproperty(mat, :matcap) : nothing
+_web_material_clearcoat_texture(mat) =
+    hasproperty(mat, :clearcoat_map) && getproperty(mat, :clearcoat_map) isa Texture ? getproperty(mat, :clearcoat_map) : nothing
+_web_material_clearcoat_roughness_texture(mat) =
+    hasproperty(mat, :clearcoat_roughness_map) && getproperty(mat, :clearcoat_roughness_map) isa Texture ? getproperty(mat, :clearcoat_roughness_map) : nothing
+_web_material_transmission_texture(mat) =
+    hasproperty(mat, :transmission_map) && getproperty(mat, :transmission_map) isa Texture ? getproperty(mat, :transmission_map) : nothing
+_web_material_thickness_texture(mat) =
+    hasproperty(mat, :thickness_map) && getproperty(mat, :thickness_map) isa Texture ? getproperty(mat, :thickness_map) : nothing
+_web_material_sheen_color_texture(mat) =
+    hasproperty(mat, :sheen_color_map) && getproperty(mat, :sheen_color_map) isa Texture ? getproperty(mat, :sheen_color_map) : nothing
+_web_material_sheen_roughness_texture(mat) =
+    hasproperty(mat, :sheen_roughness_map) && getproperty(mat, :sheen_roughness_map) isa Texture ? getproperty(mat, :sheen_roughness_map) : nothing
+_web_material_iridescence_texture(mat) =
+    hasproperty(mat, :iridescence_map) && getproperty(mat, :iridescence_map) isa Texture ? getproperty(mat, :iridescence_map) : nothing
+_web_material_iridescence_thickness_texture(mat) =
+    hasproperty(mat, :iridescence_thickness_map) && getproperty(mat, :iridescence_thickness_map) isa Texture ? getproperty(mat, :iridescence_thickness_map) : nothing
+_web_material_specular_intensity_texture(mat) =
+    hasproperty(mat, :specular_intensity_map) && getproperty(mat, :specular_intensity_map) isa Texture ? getproperty(mat, :specular_intensity_map) : nothing
+_web_material_specular_color_texture(mat) =
+    hasproperty(mat, :specular_color_map) && getproperty(mat, :specular_color_map) isa Texture ? getproperty(mat, :specular_color_map) : nothing
+_web_material_env_texture(mat) =
+    hasproperty(mat, :envmap) && getproperty(mat, :envmap) isa CubeTexture ? getproperty(mat, :envmap) : nothing
+_web_material_emissive_color(mat) =
+    hasproperty(mat, :emissive) ? getproperty(mat, :emissive) : Color3(0.0, 0.0, 0.0)
+_web_material_emissive_intensity(mat) =
+    hasproperty(mat, :emissive_intensity) ? Float64(getproperty(mat, :emissive_intensity)) : 1.0
+_web_material_ao_intensity(mat) =
+    hasproperty(mat, :ao_map_intensity) ? Float64(getproperty(mat, :ao_map_intensity)) : 1.0
+_web_material_light_intensity(mat) =
+    hasproperty(mat, :light_map_intensity) ? Float64(getproperty(mat, :light_map_intensity)) : 1.0
+_web_material_roughness(mat) =
+    hasproperty(mat, :roughness) ? clamp(Float64(getproperty(mat, :roughness)), 0.0, 1.0) : 0.65
+_web_material_metalness(mat) =
+    hasproperty(mat, :metalness) ? clamp(Float64(getproperty(mat, :metalness)), 0.0, 1.0) : 0.0
+_web_material_env_intensity(mat) =
+    hasproperty(mat, :env_map_intensity) ? Float64(getproperty(mat, :env_map_intensity)) : 1.0
+_web_material_clearcoat(mat) =
+    hasproperty(mat, :clearcoat) ? clamp(Float64(getproperty(mat, :clearcoat)), 0.0, 1.0) : 0.0
+_web_material_clearcoat_roughness(mat) =
+    hasproperty(mat, :clearcoat_roughness) ? clamp(Float64(getproperty(mat, :clearcoat_roughness)), 0.0, 1.0) : 0.0
+_web_material_transmission(mat) =
+    hasproperty(mat, :transmission) ? clamp(Float64(getproperty(mat, :transmission)), 0.0, 1.0) : 0.0
+_web_material_thickness(mat) =
+    hasproperty(mat, :thickness) ? max(Float64(getproperty(mat, :thickness)), 0.0) : 0.0
+_web_material_attenuation_distance(mat) =
+    hasproperty(mat, :attenuation_distance) ? max(Float64(getproperty(mat, :attenuation_distance)), 0.0) : 0.0
+_web_material_attenuation_color(mat) =
+    hasproperty(mat, :attenuation_color) ? getproperty(mat, :attenuation_color) : Color3(1.0, 1.0, 1.0)
+_web_material_ior(mat) =
+    hasproperty(mat, :ior) ? max(Float64(getproperty(mat, :ior)), 1.0) : 1.5
+_web_material_sheen(mat) =
+    hasproperty(mat, :sheen) ? clamp(Float64(getproperty(mat, :sheen)), 0.0, 1.0) : 0.0
+_web_material_sheen_color(mat) =
+    hasproperty(mat, :sheen_color) ? getproperty(mat, :sheen_color) : Color3(1.0, 1.0, 1.0)
+_web_material_sheen_roughness(mat) =
+    hasproperty(mat, :sheen_roughness) ? clamp(Float64(getproperty(mat, :sheen_roughness)), 0.0, 1.0) : 1.0
+_web_material_iridescence(mat) =
+    hasproperty(mat, :iridescence) ? clamp(Float64(getproperty(mat, :iridescence)), 0.0, 1.0) : 0.0
+_web_material_iridescence_ior(mat) =
+    hasproperty(mat, :iridescence_ior) ? max(Float64(getproperty(mat, :iridescence_ior)), 1.0) : 1.3
+_web_material_iridescence_thickness(mat) =
+    hasproperty(mat, :iridescence_thickness) ? max(Float64(getproperty(mat, :iridescence_thickness)), 0.0) : 400.0
+_web_material_specular_intensity(mat) =
+    hasproperty(mat, :specular_intensity) ? clamp(Float64(getproperty(mat, :specular_intensity)), 0.0, 1.0) : 1.0
+_web_material_specular_color(mat) =
+    hasproperty(mat, :specular_color) ? getproperty(mat, :specular_color) :
+    hasproperty(mat, :specular) ? getproperty(mat, :specular) : Color3(1.0, 1.0, 1.0)
+_web_material_shininess(mat) =
+    hasproperty(mat, :shininess) ? max(Float64(getproperty(mat, :shininess)), 0.0001) : 32.0
 
-function _web_geo_object(geo::BufferGeometry)
-    normals = length(geo.normals) == length(geo.positions) ? geo.normals : zeros(Float64, length(geo.positions))
-    indices = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
-    return "\"positions\":" * _js_array(geo.positions) *
-           ",\"normals\":" * _js_array(normals) *
-           ",\"indices\":" * _js_array(indices .- 1)
+function _web_texture_average_color(tex::Texture)
+    H, W, C = size(tex.data)
+    n = H * W
+    r = sum(@view tex.data[:, :, 1]) / n
+    g = C >= 2 ? sum(@view tex.data[:, :, 2]) / n : r
+    b = C >= 3 ? sum(@view tex.data[:, :, 3]) / n : r
+    return Color3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0))
 end
 
-function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles")
-    geo = obj.geometry
-    mat = obj.material
-    m = matrix === nothing ? world : matrix
-    floor = occursin("floor", lowercase(getproperty(obj, :name)))
+function _web_env_json(env)
+    env isa CubeTexture || return "null"
+    colors = join((_js_color(_web_texture_average_color(face)) for face in env.faces), ",")
+    return "{\"colors\":[" * colors * "]}"
+end
+
+function _web_fog_json(fog)
+    fog === nothing && return "null"
+    if fog isa Fog
+        return "{\"type\":\"linear\",\"color\":" * _js_color(fog.color) *
+               ",\"near\":" * _js_num(fog.near) *
+               ",\"far\":" * _js_num(fog.far) * "}"
+    elseif fog isa FogExp2
+        return "{\"type\":\"exp2\",\"color\":" * _js_color(fog.color) *
+               ",\"density\":" * _js_num(fog.density) * "}"
+    end
+    return "null"
+end
+_web_material_transparent(mat) =
+    (hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))) ||
+    _web_material_opacity(mat) < 1.0 ||
+    _web_material_alpha_texture(mat) isa Texture
+_web_material_side(mat) = hasproperty(mat, :side) ? String(getproperty(mat, :side)) : "front"
+_web_material_depth_test(mat) =
+    hasproperty(mat, :depth_test) ? Bool(getproperty(mat, :depth_test)) : true
+_web_material_depth_write(mat) =
+    hasproperty(mat, :depth_write) ? Bool(getproperty(mat, :depth_write)) : true
+_web_material_depth_near(mat) =
+    hasproperty(mat, :near) ? max(Float64(getproperty(mat, :near)), 1e-6) : 0.1
+_web_material_depth_far(mat) =
+    hasproperty(mat, :far) ? max(Float64(getproperty(mat, :far)), _web_material_depth_near(mat) + 1e-6) : 100.0
+_web_material_toon_steps(mat) =
+    hasproperty(mat, :gradient_steps) ? max(Float64(getproperty(mat, :gradient_steps)), 1.0) : 3.0
+_web_material_sprite_rotation(mat) =
+    hasproperty(mat, :rotation) ? Float64(getproperty(mat, :rotation)) : 0.0
+_web_material_sprite_size_attenuation(mat) =
+    hasproperty(mat, :size_attenuation) ? Bool(getproperty(mat, :size_attenuation)) : true
+
+function _web_texture_json(tex)
+    tex isa Texture || return "null"
+    tex.matrix_auto_update && texture_update_matrix!(tex)
+    H, W, C = size(tex.data)
+    rgba = Int[]
+    sizehint!(rgba, 4 * H * W)
+    @inbounds for y in 1:H, x in 1:W
+        r = clamp(tex.data[y, x, 1], 0.0, 1.0)
+        g = C >= 2 ? clamp(tex.data[y, x, 2], 0.0, 1.0) : r
+        b = C >= 3 ? clamp(tex.data[y, x, 3], 0.0, 1.0) : r
+        a = C >= 4 ? clamp(tex.data[y, x, 4], 0.0, 1.0) : 1.0
+        append!(rgba, (round(Int, 255r), round(Int, 255g), round(Int, 255b), round(Int, 255a)))
+    end
     return "{" *
-           "\"id\":" * string(obj.id) *
-           ",\"name\":" * _js_str(getproperty(obj, :name)) *
-           ",\"mode\":" * _js_str(mode) *
-           ",\"matrix\":" * _js_mat(m) *
-           ",\"color\":" * _js_color(_web_material_color(mat)) *
-           ",\"pointSize\":" * _js_num(_web_material_size(mat)) *
-           ",\"glow\":" * _js_num(_web_material_glow(mat)) *
-           ",\"floor\":" * (floor ? "true" : "false") *
-           "," * _web_geo_object(geo) *
+           "\"width\":" * string(W) *
+           ",\"height\":" * string(H) *
+           ",\"wrapS\":" * _js_str(String(tex.wrap_s)) *
+           ",\"wrapT\":" * _js_str(String(tex.wrap_t)) *
+           ",\"filter\":" * _js_str(String(tex.filter)) *
+           ",\"offset\":[" * _js_num(tex.offset.x) * "," * _js_num(tex.offset.y) * "]" *
+           ",\"repeat\":[" * _js_num(tex.repeat.x) * "," * _js_num(tex.repeat.y) * "]" *
+           ",\"rotation\":" * _js_num(tex.rotation) *
+           ",\"center\":[" * _js_num(tex.center.x) * "," * _js_num(tex.center.y) * "]" *
+           ",\"matrix\":[" * join((_js_num(x) for x in tex.matrix.e), ",") * "]" *
+           ",\"matrixAutoUpdate\":" * (tex.matrix_auto_update ? "true" : "false") *
+           ",\"texCoord\":" * string(tex.tex_coord) *
+           ",\"data\":[" * join(rgba, ",") * "]" *
            "}"
 end
 
-function _web_collect_drawables(root::AbstractObject3D)
+function _web_material_texture(mat)
+    if hasproperty(mat, :map)
+        tex = getproperty(mat, :map)
+        tex isa Texture && return tex
+    end
+    return nothing
+end
+
+const WEB_SHADOW_RESOLUTION = 64
+
+function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight})
+    (hasproperty(light, :cast_shadow) && getproperty(light, :cast_shadow)) || return "null"
+    sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION, pcf_radius=1)
+    H, W = size(sm.depth)
+    data = Int[]
+    sizehint!(data, H * W)
+    @inbounds for y in H:-1:1, x in 1:W
+        d = sm.depth[y, x]
+        z = isfinite(d) ? clamp((d + 1.0) * 0.5, 0.0, 1.0) : 1.0
+        push!(data, round(Int, 255z))
+    end
+    return "{" *
+           "\"type\":" * _js_str(light isa DirectionalLight ? "directionalStatic" :
+                                 light isa PointLight ? "pointStatic" : "spotStatic") *
+           ",\"size\":" * string(W) *
+           ",\"bias\":" * _js_num(sm.bias * 0.5) *
+           ",\"pcfRadius\":" * string(sm.pcf_radius) *
+           ",\"matrix\":" * _js_mat(sm.light_vp) *
+           ",\"data\":[" * join(data, ",") * "]" *
+           "}"
+end
+
+function _web_light_json(light::AmbientLight)
+    return "{" *
+           "\"type\":\"ambient\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           "}"
+end
+
+function _web_light_json(light::DirectionalLight, scene::Scene)
+    pos = get_position(light)
+    target = light.target
+    dir = normalize(pos - target)
+    return "{" *
+           "\"type\":\"directional\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           ",\"direction\":" * _js_vec(dir) *
+           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
+           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           "}"
+end
+
+function _web_light_json(light::PointLight, scene::Scene)
+    return "{" *
+           "\"type\":\"point\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           ",\"position\":" * _js_vec(get_position(light)) *
+           ",\"distance\":" * _js_num(light.distance) *
+           ",\"decay\":" * _js_num(light.decay) *
+           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
+           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           "}"
+end
+
+function _web_light_json(light::SpotLight, scene::Scene)
+    pos = get_position(light)
+    target = light.target
+    dir = normalize(target - pos)
+    penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
+    cone = clamp(Float64(light.angle), 0.0, pi)
+    inner = cone * (1.0 - penumbra)
+    return "{" *
+           "\"type\":\"spot\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           ",\"position\":" * _js_vec(pos) *
+           ",\"direction\":" * _js_vec(dir) *
+           ",\"distance\":" * _js_num(light.distance) *
+           ",\"decay\":" * _js_num(light.decay) *
+           ",\"coneCos\":" * _js_num(cos(cone)) *
+           ",\"penumbraCos\":" * _js_num(cos(inner)) *
+           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
+           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           "}"
+end
+
+function _web_light_json(light::HemisphereLight)
+    return "{" *
+           "\"type\":\"hemisphere\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"groundColor\":" * _js_color(light.ground_color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           "}"
+end
+
+function _web_light_json(light::RectAreaLight)
+    pos = get_position(light)
+    forward = normalize(light.target - pos)
+    ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
+    u = normalize(cross(ref, forward))
+    v = cross(forward, u)
+    return "{" *
+           "\"type\":\"rectArea\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"color\":" * _js_color(light.color) *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           ",\"position\":" * _js_vec(pos) *
+           ",\"forward\":" * _js_vec(forward) *
+           ",\"u\":" * _js_vec(u) *
+           ",\"v\":" * _js_vec(v) *
+           ",\"width\":" * _js_num(light.width) *
+           ",\"height\":" * _js_num(light.height) *
+           "}"
+end
+
+_web_light_json(light::AbstractLight) = nothing
+_web_light_json(light::AbstractLight, scene::Scene) = _web_light_json(light)
+
+function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}())
+    lights = String[]
+    for light in collect_lights(scene)
+        is_visible(light) || light.id in force_ids || continue
+        item = _web_light_json(light, scene)
+        item !== nothing && push!(lights, item)
+    end
+    return "[" * join(lights, ",") * "]"
+end
+
+function _web_flatten_vec3(vs::AbstractVector{<:Vec3})
+    out = Vector{Float64}(undef, 3 * length(vs))
+    for (i, v) in enumerate(vs)
+        j = 3i - 2
+        out[j] = v.x
+        out[j + 1] = v.y
+        out[j + 2] = v.z
+    end
+    return out
+end
+
+function _web_positions(obj, geo::BufferGeometry)
+    if obj isa Mesh && !isempty(obj.morph_target_influences)
+        return _web_flatten_vec3(apply_morph_targets(obj))
+    end
+    return geo.positions
+end
+
+function _web_morph_targets_json(obj, geo::BufferGeometry)
+    obj isa Mesh || return "\"morphTargets\":[],\"morphWeights\":[]"
+    targets = String[]
+    i = 0
+    while true
+        name = Symbol("morphPosition$i")
+        has_attribute(geo, name) || break
+        attr = get_attribute(geo, name)
+        attr.item_size == 3 && length(attr.data) == length(geo.positions) || break
+        push!(targets, _js_array(attr.data))
+        i += 1
+    end
+    weights = isempty(targets) ? Float64[] : Float64.(obj.morph_target_influences)
+    return "\"basePositions\":" * _js_array(geo.positions) *
+           ",\"morphTargets\":[" * join(targets, ",") * "]" *
+           ",\"morphWeights\":" * _js_array(weights)
+end
+
+function _web_skin_json(obj, geo::BufferGeometry)
+    obj isa SkinnedMesh || return "\"skin\":null"
+    length(obj.skin_indices) == geo.n_vertices || error("skinned mesh skin_indices length must match vertex count")
+    length(obj.skin_weights) == geo.n_vertices || error("skinned mesh skin_weights length must match vertex count")
+    indices = Int[]
+    weights = Float64[]
+    sizehint!(indices, 4 * geo.n_vertices)
+    sizehint!(weights, 4 * geo.n_vertices)
+    for vi in 1:geo.n_vertices
+        append!(indices, obj.skin_indices[vi] .- 1)
+        append!(weights, obj.skin_weights[vi])
+    end
+    bones = String[]
+    bind_inverses = String[]
+    for (i, bone) in enumerate(obj.skeleton.bones)
+        rot = get_rotation(bone)
+        parent = get_parent(bone)
+        parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
+        push!(bones, "{\"id\":" * string(bone.id) *
+                     ",\"name\":" * _js_str(bone.name) *
+                     ",\"matrix\":" * _js_mat(compute_world_matrix(bone)) *
+                     ",\"parentMatrix\":" * _js_mat(parent_matrix) *
+                     ",\"basePosition\":" * _js_vec(get_position(bone)) *
+                     ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
+                     ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
+                     ",\"baseScale\":" * _js_vec(get_scale(bone)) *
+                     ",\"baseQuaternion\":" *
+                         _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
+                     "}")
+        push!(bind_inverses, _js_mat(obj.skeleton.bind_inverses[i]))
+    end
+    return "\"basePositions\":" * _js_array(geo.positions) *
+           ",\"skin\":{\"indices\":" * _js_array(indices) *
+           ",\"weights\":" * _js_array(weights) *
+           ",\"bones\":[" * join(bones, ",") * "]" *
+           ",\"bindInverses\":[" * join(bind_inverses, ",") * "]}"
+end
+
+function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions)
+    normals = length(geo.normals) == length(geo.positions) ? geo.normals : zeros(Float64, length(geo.positions))
+    uvs = length(geo.uvs) == 2 * geo.n_vertices ? geo.uvs : zeros(Float64, 2 * geo.n_vertices)
+    uv2s = if has_attribute(geo, :uv2)
+        attr = get_attribute(geo, :uv2)
+        attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices ?
+            [attr.data[(i-1)*attr.item_size + j] for i in 1:geo.n_vertices for j in 1:2] : uvs
+    else
+        uvs
+    end
+    colors = if has_attribute(geo, :color)
+        attr = get_attribute(geo, :color)
+        attr.item_size == 3 && length(attr.data) == 3 * geo.n_vertices ? attr.data : ones(Float64, 3 * geo.n_vertices)
+    else
+        ones(Float64, 3 * geo.n_vertices)
+    end
+    indices = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    return "\"positions\":" * _js_array(positions) *
+           ",\"normals\":" * _js_array(normals) *
+           ",\"uvs\":" * _js_array(uvs) *
+           ",\"uv2s\":" * _js_array(uv2s) *
+           ",\"colors\":" * _js_array(colors) *
+           ",\"indices\":" * _js_array(indices .- 1)
+end
+
+function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractVector{Bool})
+    parts = String[]
+    for (id, visible) in zip(ids, values)
+        push!(parts, "{\"id\":" * string(id) *
+                    ",\"visible\":" * (visible ? "true" : "false") * "}")
+    end
+    return "[" * join(parts, ",") * "]"
+end
+
+function _web_material_type(mat)
+    mat isa MeshBasicMaterial && return "basic"
+    mat isa MeshNormalMaterial && return "normal"
+    mat isa MeshDepthMaterial && return "depth"
+    mat isa MeshToonMaterial && return "toon"
+    mat isa MeshMatcapMaterial && return "matcap"
+    mat isa MeshLambertMaterial && return "lambert"
+    mat isa MeshPhongMaterial && return "phong"
+    return "lit"
+end
+
+function _web_transform_node_json(obj::AbstractObject3D)
+    rot = get_rotation(obj)
+    parent = get_parent(obj)
+    parent_id = parent === nothing ? 0 : parent.id
+    parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
+    return "{" *
+           "\"id\":" * string(obj.id) *
+           ",\"name\":" * _js_str(getproperty(obj, :name)) *
+           ",\"parentId\":" * string(parent_id) *
+           ",\"matrix\":" * _js_mat(compute_world_matrix(obj)) *
+           ",\"parentMatrix\":" * _js_mat(parent_matrix) *
+           ",\"basePosition\":" * _js_vec(get_position(obj)) *
+           ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
+           ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
+           ",\"baseScale\":" * _js_vec(get_scale(obj)) *
+           ",\"baseQuaternion\":" *
+               _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
+           "}"
+end
+
+function _web_is_drawable(obj::AbstractObject3D)
+    return obj isa Mesh || obj isa SkinnedMesh || obj isa InstancedMesh ||
+           obj isa PointsObject || obj isa LineObject || obj isa LineLoop ||
+           obj isa LineSegments || obj isa Sprite
+end
+
+function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}())
     out = String[]
+    function forced_subtree(obj::AbstractObject3D)
+        obj.id in force_ids && return true
+        for child in get_children(obj)
+            forced_subtree(child) && return true
+        end
+        return false
+    end
     function visit(obj::AbstractObject3D)
-        is_visible(obj) || return
-        world = compute_world_matrix(obj)
-        if obj isa Mesh
-            push!(out, _web_drawable_json(obj, world; mode="triangles"))
-        elseif obj isa InstancedMesh
-            parent = compute_world_matrix(obj)
-            for im in obj.instance_matrices
-                push!(out, _web_drawable_json(obj, parent * im; mode="triangles"))
+        (is_visible(obj) || forced_subtree(obj)) || return
+        if !(obj isa Scene) && !_web_is_drawable(obj) && !(obj isa AbstractLight)
+            push!(out, _web_transform_node_json(obj))
+        end
+        if obj isa LOD
+            for (_, _, child) in obj.levels
+                visit(child)
             end
-        elseif obj isa PointsObject
-            push!(out, _web_drawable_json(obj, world; mode="points"))
-        elseif obj isa LineObject
-            push!(out, _web_drawable_json(obj, world; mode="line_strip"))
-        elseif obj isa LineSegments
-            push!(out, _web_drawable_json(obj, world; mode="lines"))
         end
         for child in get_children(obj)
             visit(child)
@@ -102,6 +572,268 @@ function _web_collect_drawables(root::AbstractObject3D)
     return out
 end
 
+function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles",
+                            transform_obj::AbstractObject3D=obj,
+                            instance_matrix=nothing,
+                            morph_target_ids::AbstractVector{Int}=Int[],
+                            visibility_target_ids::AbstractVector{Int}=Int[],
+                            visibility_values::AbstractVector{Bool}=Bool[],
+                            lod_group_id::Int=0,
+                            lod_distance::Real=0.0,
+                            lod_hysteresis::Real=0.0,
+                            sprite_center::Vec2{Float64}=Vec2(0.5, 0.5),
+                            sprite_rotation::Real=0.0,
+                            sprite_size_attenuation::Bool=true)
+    geo = obj.geometry
+    mat = obj.material
+    m = matrix === nothing ? world : matrix
+    rot = get_rotation(transform_obj)
+    parent = get_parent(transform_obj)
+    parent_id = parent === nothing ? 0 : parent.id
+    parent_matrix = if matrix === nothing
+        parent === nothing ? Mat4() : compute_world_matrix(parent)
+    else
+        Mat4()
+    end
+    visibility_ids = isempty(visibility_target_ids) ? [obj.id] : visibility_target_ids
+    visibility = isempty(visibility_values) ? [is_visible(obj)] : visibility_values
+    return "{" *
+           "\"id\":" * string(obj.id) *
+           ",\"name\":" * _js_str(getproperty(obj, :name)) *
+           ",\"mode\":" * _js_str(mode) *
+           ",\"visible\":" * (is_visible(obj) ? "true" : "false") *
+           ",\"castShadow\":" * (object_casts_shadow(obj) ? "true" : "false") *
+           ",\"receiveShadow\":" * (object_receives_shadow(obj) ? "true" : "false") *
+           ",\"visibilityStates\":" * _web_visibility_states_json(visibility_ids, visibility) *
+           ",\"lodGroup\":" * string(lod_group_id) *
+           ",\"lodDistance\":" * _js_num(lod_distance) *
+           ",\"lodHysteresis\":" * _js_num(lod_hysteresis) *
+           ",\"parentId\":" * string(parent_id) *
+           ",\"matrix\":" * _js_mat(m) *
+           ",\"parentMatrix\":" * _js_mat(parent_matrix) *
+           ",\"instanceMatrix\":" * (instance_matrix === nothing ? "null" : _js_mat(instance_matrix)) *
+           ",\"basePosition\":" * _js_vec(get_position(transform_obj)) *
+           ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
+           ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
+           ",\"baseScale\":" * _js_vec(get_scale(transform_obj)) *
+           ",\"baseQuaternion\":" *
+               _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
+           ",\"materialType\":" * _js_str(_web_material_type(mat)) *
+           ",\"depthNear\":" * _js_num(_web_material_depth_near(mat)) *
+           ",\"depthFar\":" * _js_num(_web_material_depth_far(mat)) *
+           ",\"toonSteps\":" * _js_num(_web_material_toon_steps(mat)) *
+           ",\"color\":" * _js_color(_web_material_color(mat)) *
+           ",\"opacity\":" * _js_num(_web_material_opacity(mat)) *
+           ",\"alphaTest\":" * _js_num(_web_material_alpha_test(mat)) *
+           ",\"transparent\":" * (_web_material_transparent(mat) ? "true" : "false") *
+           ",\"side\":" * _js_str(_web_material_side(mat)) *
+           ",\"depthTest\":" * (_web_material_depth_test(mat) ? "true" : "false") *
+           ",\"depthWrite\":" * (_web_material_depth_write(mat) ? "true" : "false") *
+           ",\"pointSize\":" * _js_num(_web_material_size(mat)) *
+           ",\"spriteCenter\":" * _js_vec(sprite_center) *
+           ",\"spriteRotation\":" * _js_num(sprite_rotation) *
+           ",\"spriteSizeAttenuation\":" * (sprite_size_attenuation ? "true" : "false") *
+           ",\"glow\":" * _js_num(_web_material_glow(mat)) *
+           ",\"texture\":" * _web_texture_json(_web_material_texture(mat)) *
+           ",\"alphaTexture\":" * _web_texture_json(_web_material_alpha_texture(mat)) *
+           ",\"emissiveTexture\":" * _web_texture_json(_web_material_emissive_texture(mat)) *
+           ",\"aoTexture\":" * _web_texture_json(_web_material_ao_texture(mat)) *
+           ",\"lightTexture\":" * _web_texture_json(_web_material_light_texture(mat)) *
+           ",\"roughnessTexture\":" * _web_texture_json(_web_material_roughness_texture(mat)) *
+           ",\"metalnessTexture\":" * _web_texture_json(_web_material_metalness_texture(mat)) *
+           ",\"normalTexture\":" * _web_texture_json(_web_material_normal_texture(mat)) *
+           ",\"normalScale\":" * _js_num(_web_material_normal_scale(mat)) *
+           ",\"matcapTexture\":" * _web_texture_json(_web_material_matcap_texture(mat)) *
+           ",\"clearcoatTexture\":" * _web_texture_json(_web_material_clearcoat_texture(mat)) *
+           ",\"clearcoatRoughnessTexture\":" * _web_texture_json(_web_material_clearcoat_roughness_texture(mat)) *
+           ",\"transmissionTexture\":" * _web_texture_json(_web_material_transmission_texture(mat)) *
+           ",\"thicknessTexture\":" * _web_texture_json(_web_material_thickness_texture(mat)) *
+           ",\"sheenColorTexture\":" * _web_texture_json(_web_material_sheen_color_texture(mat)) *
+           ",\"sheenRoughnessTexture\":" * _web_texture_json(_web_material_sheen_roughness_texture(mat)) *
+           ",\"iridescenceTexture\":" * _web_texture_json(_web_material_iridescence_texture(mat)) *
+           ",\"iridescenceThicknessTexture\":" * _web_texture_json(_web_material_iridescence_thickness_texture(mat)) *
+           ",\"specularIntensityTexture\":" * _web_texture_json(_web_material_specular_intensity_texture(mat)) *
+           ",\"specularColorTexture\":" * _web_texture_json(_web_material_specular_color_texture(mat)) *
+           ",\"envTexture\":" * _web_env_json(_web_material_env_texture(mat)) *
+           ",\"emissive\":" * _js_color(_web_material_emissive_color(mat)) *
+           ",\"emissiveIntensity\":" * _js_num(_web_material_emissive_intensity(mat)) *
+           ",\"aoIntensity\":" * _js_num(_web_material_ao_intensity(mat)) *
+           ",\"lightMapIntensity\":" * _js_num(_web_material_light_intensity(mat)) *
+           ",\"roughness\":" * _js_num(_web_material_roughness(mat)) *
+           ",\"metalness\":" * _js_num(_web_material_metalness(mat)) *
+           ",\"envMapIntensity\":" * _js_num(_web_material_env_intensity(mat)) *
+           ",\"clearcoat\":" * _js_num(_web_material_clearcoat(mat)) *
+           ",\"clearcoatRoughness\":" * _js_num(_web_material_clearcoat_roughness(mat)) *
+           ",\"transmission\":" * _js_num(_web_material_transmission(mat)) *
+           ",\"thickness\":" * _js_num(_web_material_thickness(mat)) *
+           ",\"attenuationDistance\":" * _js_num(_web_material_attenuation_distance(mat)) *
+           ",\"attenuationColor\":" * _js_color(_web_material_attenuation_color(mat)) *
+           ",\"ior\":" * _js_num(_web_material_ior(mat)) *
+           ",\"sheen\":" * _js_num(_web_material_sheen(mat)) *
+           ",\"sheenColor\":" * _js_color(_web_material_sheen_color(mat)) *
+           ",\"sheenRoughness\":" * _js_num(_web_material_sheen_roughness(mat)) *
+           ",\"iridescence\":" * _js_num(_web_material_iridescence(mat)) *
+           ",\"iridescenceIor\":" * _js_num(_web_material_iridescence_ior(mat)) *
+           ",\"iridescenceThickness\":" * _js_num(_web_material_iridescence_thickness(mat)) *
+           ",\"specularIntensity\":" * _js_num(_web_material_specular_intensity(mat)) *
+           ",\"specularColor\":" * _js_color(_web_material_specular_color(mat)) *
+           ",\"shininess\":" * _js_num(_web_material_shininess(mat)) *
+           ",\"morphTargetIds\":" * _js_array(unique([morph_target_ids; obj.id])) *
+           "," * _web_morph_targets_json(obj, geo) *
+           "," * _web_skin_json(obj, geo) *
+           "," * _web_geo_object(geo, _web_positions(obj, geo)) *
+           "}"
+end
+
+function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
+    ids = Set{Int}()
+    for clip in animations, track in clip.tracks
+        push!(ids, track.target.id)
+    end
+    return ids
+end
+
+function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
+                                camera_distance::Real=0.0)
+    out = String[]
+    function forced_subtree(obj::AbstractObject3D)
+        obj.id in force_ids && return true
+        for child in get_children(obj)
+            forced_subtree(child) && return true
+        end
+        return false
+    end
+    function visit(obj::AbstractObject3D, ancestors::Vector{AbstractObject3D},
+                   lod_group_id::Int=0, lod_distance::Real=0.0,
+                   lod_hysteresis::Real=0.0)
+        (is_visible(obj) || forced_subtree(obj)) || return
+        if obj isa LOD
+            for (distance, hysteresis, child) in obj.levels
+                visit(child, [ancestors; obj], obj.id, distance, hysteresis)
+            end
+            return
+        end
+        world = compute_world_matrix(obj)
+        ancestor_ids = [a.id for a in ancestors]
+        visibility_ids = [ancestor_ids; obj.id]
+        visibility_values = [is_visible(a) for a in ancestors]
+        push!(visibility_values, is_visible(obj))
+        if obj isa Mesh || obj isa SkinnedMesh
+            push!(out, _web_drawable_json(obj, world; mode="triangles",
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=visibility_ids,
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis))
+        elseif obj isa InstancedMesh
+            parent = compute_world_matrix(obj)
+            for im in obj.instance_matrices
+                push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
+                                              instance_matrix=im,
+                                              morph_target_ids=ancestor_ids,
+                                              visibility_target_ids=visibility_ids,
+                                              visibility_values=visibility_values,
+                                              lod_group_id=lod_group_id,
+                                              lod_distance=lod_distance,
+                                              lod_hysteresis=lod_hysteresis))
+            end
+        elseif obj isa PointsObject
+            push!(out, _web_drawable_json(obj, world; mode="points",
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=visibility_ids,
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis))
+        elseif obj isa LineObject
+            push!(out, _web_drawable_json(obj, world; mode="line_strip",
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=visibility_ids,
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis))
+        elseif obj isa LineLoop
+            push!(out, _web_drawable_json(obj, world; mode="line_loop",
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=visibility_ids,
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis))
+        elseif obj isa LineSegments
+            push!(out, _web_drawable_json(obj, world; mode="lines",
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=visibility_ids,
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis))
+        elseif obj isa Sprite
+            mat = obj.material
+            geo = BufferGeometry(Float64[0.0, 0.0, 0.0,
+                                         1.0, 0.0, 0.0,
+                                         1.0, 1.0, 0.0,
+                                         0.0, 1.0, 0.0],
+                                 Float64[0.0, 0.0, 1.0,
+                                         0.0, 0.0, 1.0,
+                                         0.0, 0.0, 1.0,
+                                         0.0, 0.0, 1.0],
+                                 Float64[0.0, 0.0,
+                                         1.0, 0.0,
+                                         1.0, 1.0,
+                                         0.0, 1.0],
+                                 Int[1, 2, 3, 1, 3, 4], 4, 2)
+            proxy = Mesh(geo, MeshBasicMaterial(color=_web_material_color(mat),
+                                                opacity=_web_material_opacity(mat),
+                                                transparent=_web_material_transparent(mat) ||
+                                                            _web_material_texture(mat) isa Texture,
+                                                side=:double,
+                                                map=_web_material_texture(mat),
+                                                depth_test=_web_material_depth_test(mat),
+                                                depth_write=_web_material_depth_write(mat));
+                         name=obj.name)
+            push!(out, _web_drawable_json(proxy, world; mode="sprite",
+                                          transform_obj=obj,
+                                          morph_target_ids=ancestor_ids,
+                                          visibility_target_ids=[ancestor_ids; obj.id],
+                                          visibility_values=visibility_values,
+                                          lod_group_id=lod_group_id,
+                                          lod_distance=lod_distance,
+                                          lod_hysteresis=lod_hysteresis,
+                                          sprite_center=obj.center,
+                                          sprite_rotation=_web_material_sprite_rotation(mat),
+                                          sprite_size_attenuation=_web_material_sprite_size_attenuation(mat)))
+        end
+        next_ancestors = [ancestors; obj]
+        for child in get_children(obj)
+            visit(child, next_ancestors, lod_group_id, lod_distance, lod_hysteresis)
+        end
+    end
+    visit(root, AbstractObject3D[])
+    return out
+end
+
+function _web_track_property_name(prop::Symbol)
+    prop === :specular && return "specularColor"
+    prop === :emissive_intensity && return "emissiveIntensity"
+    prop === :ao_map_intensity && return "aoIntensity"
+    prop === :light_map_intensity && return "lightMapIntensity"
+    prop === :env_map_intensity && return "envMapIntensity"
+    prop === :clearcoat_roughness && return "clearcoatRoughness"
+    prop === :sheen_color && return "sheenColor"
+    prop === :sheen_roughness && return "sheenRoughness"
+    prop === :iridescence_ior && return "iridescenceIor"
+    prop === :iridescence_thickness && return "iridescenceThickness"
+    prop === :specular_intensity && return "specularIntensity"
+    prop === :specular_color && return "specularColor"
+    prop === :material_rotation && return "spriteRotation"
+    prop === :size_attenuation && return "spriteSizeAttenuation"
+    prop === :size && return "pointSize"
+    return String(prop)
+end
+
 function _web_track_json(tr::KeyframeTrack)
     values = Float64[]
     for v in tr.values
@@ -109,10 +841,22 @@ function _web_track_json(tr::KeyframeTrack)
     end
     return "{" *
            "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(String(tr.property)) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
            ",\"kind\":\"vec3\"" *
            ",\"times\":" * _js_array(tr.times) *
            ",\"values\":" * _js_array(values) *
+           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
+           "}"
+end
+
+function _web_track_json(tr::NumberKeyframeTrack)
+    return "{" *
+           "\"target\":" * string(tr.target.id) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
+           ",\"component\":" * string(tr.component) *
+           ",\"kind\":\"number\"" *
+           ",\"times\":" * _js_array(tr.times) *
+           ",\"values\":" * _js_array(tr.values) *
            ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
            "}"
 end
@@ -124,11 +868,109 @@ function _web_track_json(tr::QuaternionKeyframeTrack)
     end
     return "{" *
            "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(String(tr.property)) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
            ",\"kind\":\"quat\"" *
            ",\"times\":" * _js_array(tr.times) *
            ",\"values\":" * _js_array(values) *
            ",\"interpolation\":\"slerp\"" *
+           "}"
+end
+
+function _web_track_json(tr::MorphWeightsKeyframeTrack)
+    values = Float64[]
+    stride = isempty(tr.values) ? 0 : length(tr.values[1])
+    for v in tr.values
+        length(v) == stride || error("morph-weight keyframes must have matching lengths")
+        append!(values, v)
+    end
+    return "{" *
+           "\"target\":" * string(tr.target.id) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
+           ",\"kind\":\"weights\"" *
+           ",\"stride\":" * string(stride) *
+           ",\"times\":" * _js_array(tr.times) *
+           ",\"values\":" * _js_array(values) *
+           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
+           "}"
+end
+
+function _web_track_json(tr::CubicSplineMorphWeightsKeyframeTrack)
+    values = Float64[]
+    in_tangents = Float64[]
+    out_tangents = Float64[]
+    stride = isempty(tr.values) ? 0 : length(tr.values[1])
+    for v in tr.values
+        length(v) == stride || error("morph-weight keyframes must have matching lengths")
+        append!(values, v)
+    end
+    for v in tr.in_tangents
+        length(v) == stride || error("morph-weight in-tangents must match keyframe length")
+        append!(in_tangents, v)
+    end
+    for v in tr.out_tangents
+        length(v) == stride || error("morph-weight out-tangents must match keyframe length")
+        append!(out_tangents, v)
+    end
+    return "{" *
+           "\"target\":" * string(tr.target.id) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
+           ",\"kind\":\"weights\"" *
+           ",\"stride\":" * string(stride) *
+           ",\"times\":" * _js_array(tr.times) *
+           ",\"values\":" * _js_array(values) *
+           ",\"inTangents\":" * _js_array(in_tangents) *
+           ",\"outTangents\":" * _js_array(out_tangents) *
+           ",\"interpolation\":\"cubicspline\"" *
+           "}"
+end
+
+function _web_track_json(tr::CubicSplineKeyframeTrack)
+    values = Float64[]
+    in_tangents = Float64[]
+    out_tangents = Float64[]
+    for v in tr.values
+        append!(values, (v.x, v.y, v.z))
+    end
+    for v in tr.in_tangents
+        append!(in_tangents, (v.x, v.y, v.z))
+    end
+    for v in tr.out_tangents
+        append!(out_tangents, (v.x, v.y, v.z))
+    end
+    return "{" *
+           "\"target\":" * string(tr.target.id) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
+           ",\"kind\":\"vec3\"" *
+           ",\"times\":" * _js_array(tr.times) *
+           ",\"values\":" * _js_array(values) *
+           ",\"inTangents\":" * _js_array(in_tangents) *
+           ",\"outTangents\":" * _js_array(out_tangents) *
+           ",\"interpolation\":\"cubicspline\"" *
+           "}"
+end
+
+function _web_track_json(tr::CubicSplineQuaternionKeyframeTrack)
+    values = Float64[]
+    in_tangents = Float64[]
+    out_tangents = Float64[]
+    for q in tr.values
+        append!(values, (q.x, q.y, q.z, q.w))
+    end
+    for q in tr.in_tangents
+        append!(in_tangents, (q.x, q.y, q.z, q.w))
+    end
+    for q in tr.out_tangents
+        append!(out_tangents, (q.x, q.y, q.z, q.w))
+    end
+    return "{" *
+           "\"target\":" * string(tr.target.id) *
+           ",\"property\":" * _js_str(_web_track_property_name(tr.property)) *
+           ",\"kind\":\"quat\"" *
+           ",\"times\":" * _js_array(tr.times) *
+           ",\"values\":" * _js_array(values) *
+           ",\"inTangents\":" * _js_array(in_tangents) *
+           ",\"outTangents\":" * _js_array(out_tangents) *
+           ",\"interpolation\":\"cubicspline\"" *
            "}"
 end
 
@@ -137,6 +979,10 @@ function _web_clip_json(clip::AnimationClip)
     return "{" *
            "\"name\":" * _js_str(clip.name) *
            ",\"duration\":" * _js_num(clip.duration) *
+           ",\"loop\":" * _js_str(String(clip.loop)) *
+           ",\"repetitions\":" * string(clip.repetitions) *
+           ",\"clampWhenFinished\":" * (clip.clamp_when_finished ? "true" : "false") *
+           ",\"timeScale\":" * _js_num(clip.time_scale) *
            ",\"tracks\":[" * tracks * "]" *
            "}"
 end
@@ -147,11 +993,21 @@ function _web_case_json(case::WebGLExportCase)
            ",\"title\":" * _js_str(case.title) *
            ",\"subtitle\":" * _js_str(case.subtitle) *
            ",\"background\":" * _js_color(case.scene.background) *
+           ",\"fog\":" * _web_fog_json(case.scene.fog) *
            ",\"target\":" * _js_vec(case.target) *
            ",\"radius\":" * _js_num(case.radius) *
            ",\"height\":" * _js_num(case.height) *
            ",\"fov\":" * _js_num(case.fov) *
-           ",\"objects\":[" * join(_web_collect_drawables(case.scene), ",") * "]" *
+           ",\"toneMapping\":" * _js_str(String(case.tone_mapping)) *
+           ",\"toneMappingMode\":" * string(_web_tone_mapping_id(case.tone_mapping)) *
+           ",\"toneExposure\":" * _js_num(case.tone_exposure) *
+           ",\"outputColorSpace\":" * _js_str(String(case.output_color_space)) *
+           ",\"outputColorSpaceMode\":" * string(_web_output_color_space_id(case.output_color_space)) *
+           ",\"clippingPlanes\":[" * join((_js_plane(p) for p in case.clipping_planes), ",") * "]" *
+           ",\"lights\":" * _web_lights_json(case.scene, _web_animation_target_ids(case.animations)) *
+           ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, _web_animation_target_ids(case.animations)), ",") * "]" *
+           ",\"objects\":[" * join(_web_collect_drawables(case.scene, _web_animation_target_ids(case.animations),
+                                                          case.radius), ",") * "]" *
            ",\"animations\":[" * join((_web_clip_json(c) for c in case.animations), ",") * "]" *
            "}"
 end
@@ -207,8 +1063,10 @@ function _webgl_html(data_json::String, title::String)
   <script>
   const DATA = $data_json;
   const canvas = document.getElementById("canvas");
-  const gl = canvas.getContext("webgl", {antialias:true});
+  canvas.tabIndex = 0;
+  const gl = canvas.getContext("webgl", {antialias:true, preserveDrawingBuffer:true});
   if (!gl) throw new Error("WebGL is not available");
+  gl.getExtension("OES_standard_derivatives");
 
   const M4 = {
     ident(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; },
@@ -221,49 +1079,368 @@ function _webgl_html(data_json::String, title::String)
     lookAt(eye,target,up){ const z=norm(sub(eye,target)), x=norm(cross(up,z)), y=cross(z,x); return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,eye),-dot(y,eye),-dot(z,eye),1]; },
     normal3(m){ const a=m[0],b=m[1],c=m[2],d=m[4],e=m[5],f=m[6],g=m[8],h=m[9],i=m[10]; const A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,D=-(b*i-c*h),E=a*i-c*g,F=-(a*h-b*g),G=b*f-c*e,H=-(a*f-c*d),I=a*e-b*d; const det=a*A+b*B+c*C; if(Math.abs(det)<1e-10) return [1,0,0,0,1,0,0,0,1]; const inv=1/det; return [A*inv,B*inv,C*inv,D*inv,E*inv,F*inv,G*inv,H*inv,I*inv]; }
   };
+  const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
   const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const scale=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
   const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
   const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
   const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
   const mix=(a,b,t)=>a+(b-a)*t;
   const mix3=(a,b,t)=>[mix(a[0],b[0],t),mix(a[1],b[1],t),mix(a[2],b[2],t)];
+  const sub3=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const scale3=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+  const add3=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+  function hermite3(p1,p2,m1,m2,u){ const u2=u*u,u3=u2*u,h00=2*u3-3*u2+1,h10=u3-2*u2+u,h01=-2*u3+3*u2,h11=u3-u2; return add3(add3(scale3(p1,h00),scale3(m1,h10)),add3(scale3(p2,h01),scale3(m2,h11))); }
+  function catmull3(times,values,i,u,stride){ const lo=i, hi=Math.min(i+1,times.length-1), h=times[hi]-times[lo]; const p1=values.slice(lo*stride,lo*stride+3), p2=values.slice(hi*stride,hi*stride+3); let m1,m2; if(lo>0){ const p0=values.slice((lo-1)*stride,(lo-1)*stride+3); m1=scale3(sub3(p2,p0),h/(times[hi]-times[lo-1])); } else m1=sub3(p2,p1); if(hi+1<times.length){ const p3=values.slice((hi+1)*stride,(hi+1)*stride+3); m2=scale3(sub3(p3,p1),h/(times[hi+1]-times[lo])); } else m2=sub3(p2,p1); return hermite3(p1,p2,m1,m2,u); }
+  const scaleN=(a,s)=>a.map(v=>v*s);
+  const addN=(a,b)=>a.map((v,i)=>v+b[i]);
+  const mixN=(a,b,t)=>a.map((v,i)=>mix(v,b[i],t));
+  const norm4=q=>{ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; return [q[0]/l,q[1]/l,q[2]/l,q[3]/l]; };
+  function hermiteN(p1,p2,m1,m2,u){ const u2=u*u,u3=u2*u,h00=2*u3-3*u2+1,h10=u3-2*u2+u,h01=-2*u3+3*u2,h11=u3-u2; return addN(addN(scaleN(p1,h00),scaleN(m1,h10)),addN(scaleN(p2,h01),scaleN(m2,h11))); }
+  function catmullN(times,values,i,u,stride){ const lo=i, hi=Math.min(i+1,times.length-1), h=times[hi]-times[lo]; const p1=values.slice(lo*stride,lo*stride+stride), p2=values.slice(hi*stride,hi*stride+stride); let m1,m2; if(lo>0){ const p0=values.slice((lo-1)*stride,(lo-1)*stride+stride); m1=scaleN(p2.map((v,j)=>v-p0[j]),h/(times[hi]-times[lo-1])); } else m1=p2.map((v,j)=>v-p1[j]); if(hi+1<times.length){ const p3=values.slice((hi+1)*stride,(hi+1)*stride+stride); m2=scaleN(p3.map((v,j)=>v-p1[j]),h/(times[hi+1]-times[lo])); } else m2=p2.map((v,j)=>v-p1[j]); return hermiteN(p1,p2,m1,m2,u); }
   function slerp(a,b,t){ let cos=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3]; if(cos<0){ b=[-b[0],-b[1],-b[2],-b[3]]; cos=-cos; } if(cos>.9995){ const q=[mix(a[0],b[0],t),mix(a[1],b[1],t),mix(a[2],b[2],t),mix(a[3],b[3],t)]; const l=Math.hypot(...q)||1; return q.map(v=>v/l); } const th=Math.acos(cos), s=Math.sin(th); return [Math.sin((1-t)*th)/s*a[0]+Math.sin(t*th)/s*b[0], Math.sin((1-t)*th)/s*a[1]+Math.sin(t*th)/s*b[1], Math.sin((1-t)*th)/s*a[2]+Math.sin(t*th)/s*b[2], Math.sin((1-t)*th)/s*a[3]+Math.sin(t*th)/s*b[3]]; }
 
-  const VSH=`attribute vec3 aPosition; attribute vec3 aNormal; uniform mat4 uModel,uView,uProj; uniform mat3 uNormalMat; varying vec3 vNormal,vWorld; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vNormal=normalize(uNormalMat*aNormal); gl_Position=uProj*uView*w; }`;
-  const FSH=`precision mediump float; varying vec3 vNormal,vWorld; uniform vec3 uColor,uCamera; uniform float uGlow; void main(){ vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; vec3 l=normalize(vec3(.55,.9,.42)); vec3 v=normalize(uCamera-vWorld); vec3 h=normalize(l+v); float d=max(dot(n,l),0.0); float s=pow(max(dot(n,h),0.0),32.0); vec3 c=uColor*(.18+.82*d)+s*vec3(.9,.95,1.0)+uGlow*uColor*.28; gl_FragColor=vec4(c,1.0); }`;
-  const CVSH=`attribute vec3 aPosition; uniform mat4 uModel,uView,uProj; void main(){ gl_Position=uProj*uView*uModel*vec4(aPosition,1.0); }`;
-  const CFSH=`precision mediump float; uniform vec3 uColor; uniform float uGlow; void main(){ gl_FragColor=vec4(uColor*(.75+.65*uGlow),1.0); }`;
-  const PVSH=`attribute vec3 aPosition; uniform mat4 uModel,uView,uProj; uniform float uPointSize; void main(){ gl_Position=uProj*uView*uModel*vec4(aPosition,1.0); gl_PointSize=uPointSize; }`;
-  const PFSH=`precision mediump float; uniform vec3 uColor; uniform float uGlow; void main(){ vec2 d=gl_PointCoord-vec2(.5); float r=dot(d,d); if(r>.25) discard; float a=smoothstep(.25,0.0,r); gl_FragColor=vec4(uColor*(.65+uGlow*.85)*a,1.0); }`;
+  const MAX_BONES=64;
+  const VSH=`attribute vec3 aPosition; attribute vec3 aNormal; attribute vec3 aColor; attribute vec2 aUv; attribute vec2 aUv2; attribute vec4 aSkinIndex; attribute vec4 aSkinWeight; uniform mat4 uModel,uView,uProj; uniform mat3 uNormalMat; uniform int uUseSkin; uniform mat4 uBoneMatrices[64]; varying vec3 vNormal,vWorld,vColor; varying vec2 vUv,vUv2; mat4 boneMat(float idx){ for(int i=0;i<64;i++){ if(float(i)==idx) return uBoneMatrices[i]; } return mat4(1.0); } mat4 skinMatrix(){ if(uUseSkin==0) return mat4(1.0); return aSkinWeight.x*boneMat(aSkinIndex.x)+aSkinWeight.y*boneMat(aSkinIndex.y)+aSkinWeight.z*boneMat(aSkinIndex.z)+aSkinWeight.w*boneMat(aSkinIndex.w); } void main(){ mat4 skin=skinMatrix(); vec4 w=uModel*(skin*vec4(aPosition,1.0)); vWorld=w.xyz; vUv=aUv; vUv2=aUv2; vColor=aColor; vNormal=normalize(uNormalMat*(mat3(skin)*aNormal)); gl_Position=uProj*uView*w; }`;
+  const FSH=`precision mediump float; const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; varying vec3 vNormal,vWorld; varying vec2 vUv; uniform vec3 uColor,uCamera,uAmbientColor; uniform vec3 uDirColor[MAX_DIR],uDirLight[MAX_DIR]; uniform vec3 uPointColor[MAX_POINT],uPointPos[MAX_POINT]; uniform vec3 uSpotColor[MAX_SPOT],uSpotPos[MAX_SPOT],uSpotDir[MAX_SPOT]; uniform vec3 uHemiSky[MAX_HEMI],uHemiGround[MAX_HEMI]; uniform vec2 uMapOffset,uMapRepeat,uMapCenter; uniform float uGlow,uOpacity,uUseMap,uUseAlphaMap,uMapRotation,uToneExposure,uShininess; uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uToneMapping,uOutputColorSpace; uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT]; uniform sampler2D uMap,uAlphaMap; vec2 txUv(vec2 uv){ uv-=uMapCenter; float c=cos(uMapRotation), s=sin(uMapRotation); uv=vec2(c*uv.x+s*uv.y,-s*uv.x+c*uv.y); return uv*uMapRepeat+uMapCenter+uMapOffset; } float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; } float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; vec3 v=normalize(uCamera-vWorld); vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0); for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); } for(int i=0;i<MAX_DIR;i++){ if(i>=uDirCount) break; vec3 l=normalize(uDirLight[i]); vec3 h=normalize(l+v); float d=max(dot(n,l),0.0); diffuse+=uDirColor[i]*d; specular+=uDirColor[i]*pow(max(dot(n,h),0.0),uShininess); } for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float a=attenuation(dist,uPointDistance[i],uPointDecay[i]); diffuse+=uPointColor[i]*max(dot(n,l),0.0)*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*max(dot(n,l),0.0)*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } vec2 uv=txUv(vUv); vec4 tex=mix(vec4(1.0),texture2D(uMap,uv),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,uv).g,uUseAlphaMap); vec3 base=uColor*tex.rgb; vec3 c=base*diffuse+specular+uGlow*base*.28; gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a*alphaTex); }`;
+  const FSH_EMISSIVE=`#extension GL_OES_standard_derivatives : enable
+  precision mediump float;
+  const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; const int MAX_RECT=4; const int MAX_CLIP=4;
+  varying vec3 vNormal,vWorld,vColor; varying vec2 vUv,vUv2;
+  uniform mat3 uViewNormalMat;
+  uniform vec3 uColor,uCamera,uAmbientColor,uEmissive,uFogColor;
+  uniform float uToneExposure;
+  uniform vec3 uEnvColor[6];
+  uniform vec3 uDirColor[MAX_DIR],uDirLight[MAX_DIR],uPointColor[MAX_POINT],uPointPos[MAX_POINT],uSpotColor[MAX_SPOT],uSpotPos[MAX_SPOT],uSpotDir[MAX_SPOT],uHemiSky[MAX_HEMI],uHemiGround[MAX_HEMI],uRectColor[MAX_RECT],uRectPos[MAX_RECT],uRectForward[MAX_RECT],uRectU[MAX_RECT],uRectV[MAX_RECT];
+  uniform vec2 uRectSize[MAX_RECT];
+  uniform mat3 uMapMatrix,uAlphaMatrix,uEmissiveMatrix,uAoMatrix,uLightMatrix,uRoughnessMatrix,uMetalnessMatrix,uNormalMatrix,uPhysicalScalarMatrix,uPhysicalScalar2Matrix,uSheenColorMatrix,uSpecularColorMatrix;
+  uniform mat4 uDirShadowMatrix;
+  uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseMatcapMap,uUseEnvMap,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uShininess,uFogNear,uFogFar,uFogDensity,uShadowBias,uShadowTexel,uDepthNear,uDepthFar,uToonSteps;
+  uniform vec3 uSheenColor,uSpecularColor,uAttenuationColor;
+  uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowDirIndex,uShadowKind,uMaterialMode,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uPhysicalScalarTexCoord,uPhysicalScalar2TexCoord,uSheenColorTexCoord,uSpecularColorTexCoord;
+  uniform vec4 uClipPlane[MAX_CLIP];
+  uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT];
+  uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uMatcapMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uDirShadowMap;
+  vec2 txUv(mat3 m, vec2 uv){ vec3 q=m*vec3(uv,1.0); return q.xy; }
+  vec2 uvFor(mat3 m, int set){ return set==1?txUv(m,vUv2):txUv(m,vUv); }
+  float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; }
+  float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); }
+  bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; }
+  float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; }
+  vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); }
+  vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; }
+  float toonBand(float d){ return uMaterialMode==3?ceil(clamp(d,0.0,1.0)*uToonSteps)/uToonSteps:d; }
+  vec3 mappedNormal(vec3 n, vec2 uv){ if(uUseNormalMap<0.5) return n; vec3 map=texture2D(uNormalMap,uv).xyz*2.0-1.0; map.xy*=uNormalScale; vec3 q1=dFdx(vWorld), q2=dFdy(vWorld); vec2 st1=dFdx(uv), st2=dFdy(uv); vec3 s=normalize(q1*st2.t-q2*st1.t); vec3 t=normalize(-q1*st2.s+q2*st1.s); return normalize(mat3(s,t,n)*map); }
+  vec3 envColor(vec3 dir){ vec3 a=abs(dir); if(a.x>=a.y && a.x>=a.z) return dir.x>0.0?uEnvColor[0]:uEnvColor[1]; if(a.y>=a.x && a.y>=a.z) return dir.y>0.0?uEnvColor[2]:uEnvColor[3]; return dir.z>0.0?uEnvColor[4]:uEnvColor[5]; }
+  vec3 iridescenceTint(float ndv){ float phase=uIridescenceThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159; return .5+.5*cos(vec3(phase,phase+2.094,phase+4.188)); }
+  float rectNode(int i){ return i==0?-0.7745967:(i==1?0.0:0.7745967); }
+  float rectWeight(int i){ return i==1?0.8888889:0.5555556; }
+  float shadowFactor(vec3 p){ if(uShadowDirIndex<0) return 1.0; vec4 q=uDirShadowMatrix*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias; float sum=0.0; for(int yy=-1;yy<=1;yy++) for(int xx=-1;xx<=1;xx++){ vec2 off=vec2(float(xx),float(yy))*uShadowTexel; float stored=texture2D(uDirShadowMap,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; } return sum/9.0; }
+  void main(){ if(clipped(vWorld)) discard; vec2 uv=uvFor(uMapMatrix,uMapTexCoord); vec2 alphaUv=uvFor(uAlphaMatrix,uAlphaTexCoord); vec2 emissiveUv=uvFor(uEmissiveMatrix,uEmissiveTexCoord); vec2 aoUv=uvFor(uAoMatrix,uAoTexCoord); vec2 lightUv=uvFor(uLightMatrix,uLightTexCoord); vec2 roughnessUv=uvFor(uRoughnessMatrix,uRoughnessTexCoord); vec2 metalnessUv=uvFor(uMetalnessMatrix,uMetalnessTexCoord); vec2 normalUv=uvFor(uNormalMatrix,uNormalTexCoord); vec2 phys1Uv=uvFor(uPhysicalScalarMatrix,uPhysicalScalarTexCoord); vec2 phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalar2TexCoord); vec2 sheenColorUv=uvFor(uSheenColorMatrix,uSheenColorTexCoord); vec2 specularColorUv=uvFor(uSpecularColorMatrix,uSpecularColorTexCoord); vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; n=mappedNormal(n,normalUv); float viewDistance=length(uCamera-vWorld); if(uMaterialMode==1){ vec3 nc=clamp(n*.5+.5,0.0,1.0); nc=mix(nc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(nc),uOpacity); return; } if(uMaterialMode==2){ float g=1.0-clamp((viewDistance-uDepthNear)/max(uDepthFar-uDepthNear,0.000001),0.0,1.0); vec3 dc=vec3(g); dc=mix(dc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(dc),uOpacity); return; } vec3 v=normalize(uCamera-vWorld); if(uMaterialMode==4){ float f=max(dot(n,v),0.0); vec3 viewN=normalize(uViewNormalMat*n); vec3 viewDir=normalize(uViewNormalMat*v); vec3 matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x)); vec3 matcapY=cross(viewDir,matcapX); vec2 muv=clamp(vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5),0.0,1.0); vec3 fallback=vec3(0.35+0.65*f); vec3 mc=uColor*mix(fallback,texture2D(uMatcapMap,muv).rgb,uUseMatcapMap); mc=mix(mc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(mc)),uOpacity); return; } vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0);
+    for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); }
+    for(int i=0;i<MAX_DIR;i++){ if(i>=uDirCount) break; vec3 l=normalize(uDirLight[i]); vec3 h=normalize(l+v); float d=toonBand(max(dot(n,l),0.0)); float sh=(uShadowKind==1&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; diffuse+=uDirColor[i]*d*sh; specular+=uDirColor[i]*pow(max(dot(n,h),0.0),uShininess)*sh; }
+    for(int i=0;i<MAX_RECT;i++){ if(i>=uRectCount) break; float hx=max(uRectSize[i].x,0.0)*0.5; float hy=max(uRectSize[i].y,0.0)*0.5; float area=hx*hy; vec3 f=normalize(uRectForward[i]); for(int ix=0;ix<3;ix++){ for(int iy=0;iy<3;iy++){ float x=rectNode(ix), y=rectNode(iy); vec3 sp=uRectPos[i]+uRectU[i]*(hx*x)+uRectV[i]*(hy*y); vec3 lv=sp-vWorld; float dist2=max(dot(lv,lv),0.0001); vec3 l=lv*inversesqrt(dist2); float emit=max(dot(-l,f),0.0); float a=area*rectWeight(ix)*rectWeight(iy)*emit/dist2; vec3 h=normalize(l+v); diffuse+=uRectColor[i]*max(dot(n,l),0.0)*a; specular+=uRectColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } } }
+    for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float sh=(uShadowKind==3&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; float a=attenuation(dist,uPointDistance[i],uPointDecay[i])*sh; diffuse+=uPointColor[i]*toonBand(max(dot(n,l),0.0))*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
+    for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float sh=(uShadowKind==2&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone*sh; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*toonBand(max(dot(n,l),0.0))*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
+    vec4 tex=mix(vec4(1.0),texture2D(uMap,uv),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,alphaUv).g,uUseAlphaMap); float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; if(uMaterialMode==5){ vec3 bc=mix(base,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(bc)),outAlpha); return; } vec3 ao=mix(vec3(1.0),texture2D(uAoMap,aoUv).rgb,uUseAoMap); vec3 lm=mix(vec3(1.0),texture2D(uLightMap,lightUv).rgb,uUseLightMap); vec3 emissiveTex=mix(vec3(1.0),texture2D(uEmissiveMap,emissiveUv).rgb,uUseEmissiveMap); float rough=clamp(uRoughness*mix(1.0,texture2D(uRoughnessMap,roughnessUv).g,uUseRoughnessMap),0.02,1.0); float metal=clamp(uMetalness*mix(1.0,texture2D(uMetalnessMap,metalnessUv).b,uUseMetalnessMap),0.0,1.0); vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),texture2D(uSheenColorMap,sheenColorUv).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),texture2D(uSpecularColorMap,specularColorUv).rgb,uUseSpecularColorMap); if(uMaterialMode==6){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } if(uMaterialMode==7){ metal=0.0; rough=0.02; clearcoat=0.0; transmission=0.0; specIntensity=1.0; } if(uMaterialMode==3){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } vec3 aoMix=mix(vec3(1.0),ao,uAoIntensity); vec3 lightMix=mix(vec3(1.0),lm,uLightMapIntensity); vec3 env=envColor(reflect(-v,n))*uUseEnvMap*uEnvMapIntensity; float ndv=max(dot(n,v),0.0); float iorF0=pow((uIor-1.0)/(uIor+1.0),2.0); float fresnel=iorF0+(1.0-iorF0)*pow(1.0-ndv,5.0); vec3 specTint=mix(specColor,specColor*(.5+.5*cos(vec3(iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+2.094,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+4.188))),iridescence); float specScale=mix(1.0,2.0,metal)*(1.0-rough*.7)*specIntensity; float coatPower=mix(96.0,18.0,clearcoatRough); vec3 coat=specular*pow(max(ndv,0.0),coatPower)*clearcoat; vec3 sheen=diffuse*sheenColor*uSheen*(0.15+0.35*sheenRough)*pow(1.0-ndv,2.0); vec3 transmitted=env*base*transmission*(1.0-fresnel); vec3 lit=base*diffuse*(1.0-metal*.55)*(1.0-transmission*.7)+specular*specScale*mix(specTint,base*specTint,metal); vec3 c=lit*aoMix*lightMix+coat+sheen+transmitted+env*(0.12+metal*.88)*(1.0-rough*.45)+uGlow*base*.28+uEmissive*emissiveTex*uEmissiveIntensity; c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
+  const FSH_EMISSIVE_VOLUME=FSH_EMISSIVE
+    .replace("float transmission=clamp(uTransmission*phys1.b,0.0,1.0);",
+             "float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0);")
+    .replace("vec3 specTint=mix(specColor",
+             "float vol=step(0.000001,thickness)*step(0.000001,uAttenuationDistance); vec3 volAtt=mix(vec3(1.0),pow(max(uAttenuationColor,vec3(0.0)),vec3(thickness/max(ndv,0.001)/max(uAttenuationDistance,0.000001))),vol); vec3 specTint=mix(specColor")
+    .replace("vec3 transmitted=env*base*transmission*(1.0-fresnel);",
+             "vec3 transmitted=env*base*volAtt*transmission*(1.0-fresnel);");
+  const FSH_EMISSIVE_CORE=FSH_EMISSIVE_VOLUME
+    .replace(",uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap","")
+    .replace(",uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap","")
+    .replace("vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),texture2D(uSheenColorMap,sheenColorUv).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),texture2D(uSpecularColorMap,specularColorUv).rgb,uUseSpecularColorMap);",
+             "float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor; float sheenRough=clamp(uSheenRoughness,0.0,1.0); float iridescence=clamp(uIridescence,0.0,1.0); float iridThickness=uIridescenceThickness; float specIntensity=clamp(uSpecularIntensity,0.0,1.0); vec3 specColor=uSpecularColor;");
+  const CVSH=`attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uModel,uView,uProj; varying vec3 vWorld,vColor; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; }`;
+  const CFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec3 c=uColor*vColor*(.75+.65*uGlow); c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity); }`;
+  const PVSH=`attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uModel,uView,uProj; uniform float uPointSize; varying vec3 vWorld,vColor; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; gl_PointSize=uPointSize; }`;
+  const PFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUsePointMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uPointMap; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 d=gl_PointCoord-vec2(.5); float r=dot(d,d); if(r>.25) discard; float a=smoothstep(.25,0.0,r); vec4 tex=mix(vec4(1.0),texture2D(uPointMap,gl_PointCoord),uUsePointMap); vec3 c=mix(uColor*vColor*tex.rgb*(.65+uGlow*.85)*a,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*a*tex.a); }`;
+  const SVSH=`attribute vec3 aPosition; attribute vec3 aColor; attribute vec2 aUv; uniform mat4 uModel,uView,uProj; uniform vec3 uCameraRight,uCameraUp; uniform vec2 uSpriteCenter; uniform float uSpriteRotation,uSpriteSizeAttenuation; varying vec3 vWorld,vColor; varying vec2 vUv; void main(){ vec2 p=aPosition.xy-uSpriteCenter; float c=cos(uSpriteRotation), s=sin(uSpriteRotation); p=vec2(c*p.x-s*p.y,s*p.x+c*p.y); vec3 center=uModel[3].xyz; float sx=length(uModel[0].xyz); float sy=length(uModel[1].xyz); vec4 cv=uView*vec4(center,1.0); float atten=mix(max(0.0001,-cv.z),1.0,uSpriteSizeAttenuation); vec3 w=center+uCameraRight*p.x*sx*atten+uCameraUp*p.y*sy*atten; vWorld=w; vColor=aColor; vUv=aUv; gl_Position=uProj*uView*vec4(w,1.0); }`;
+  const SFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; varying vec2 vUv; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUseSpriteMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uSpriteMap; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec4 tex=mix(vec4(1.0),texture2D(uSpriteMap,vUv),uUseSpriteMap); vec3 base=uColor*vColor*tex.rgb*(.75+.55*uGlow); vec3 c=mix(base,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a); }`;
   function shader(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
   function program(vs,fs){ const p=gl.createProgram(); gl.attachShader(p,shader(gl.VERTEX_SHADER,vs)); gl.attachShader(p,shader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
-  const meshProgram=program(VSH,FSH), colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH);
-  function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),gl.STATIC_DRAW); return b; }
+  const maxTextureUnits=gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) || 8;
+  const physicalTexturesEnabled=maxTextureUnits>=12;
+  const meshProgram=program(VSH,physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE), colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH);
+  function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
+  function isPow2(v){ return (v & (v - 1)) === 0; }
+  function wrapMode(v){ return v==="mirror"?gl.MIRRORED_REPEAT:(v==="clamp"?gl.CLAMP_TO_EDGE:gl.REPEAT); }
+  function makeTexture(t){
+    if(!t) return null;
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,t.width,t.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(t.data));
+    const pot=isPow2(t.width)&&isPow2(t.height);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,pot?wrapMode(t.wrapS):gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,pot?wrapMode(t.wrapT):gl.CLAMP_TO_EDGE);
+    const filter=t.filter==="nearest"?gl.NEAREST:gl.LINEAR;
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,filter);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,filter);
+    return tex;
+  }
+  function makeShadowTexture(s){
+    if(!s) return null;
+    const rgba=new Uint8Array(s.size*s.size*4);
+    for(let i=0;i<s.data.length;i++){ const v=s.data[i]; rgba[4*i]=v; rgba[4*i+1]=v; rgba[4*i+2]=v; rgba[4*i+3]=255; }
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,s.size,s.size,0,gl.RGBA,gl.UNSIGNED_BYTE,rgba);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    return tex;
+  }
+  function packedTexture(items, channels){
+    const base=items.find(t=>t);
+    if(!base) return null;
+    const out=Object.assign({},base,{data:new Array(4*base.width*base.height).fill(255)});
+    for(let y=0;y<base.height;y++) for(let x=0;x<base.width;x++){
+      const dst=4*(y*base.width+x);
+      for(let k=0;k<4;k++){
+        const src=items[k];
+        if(!src) continue;
+        const sx=Math.min(src.width-1,Math.floor(x*src.width/base.width));
+        const sy=Math.min(src.height-1,Math.floor(y*src.height/base.height));
+        out.data[dst+k]=src.data[4*(sy*src.width+sx)+channels[k]];
+      }
+    }
+    return out;
+  }
+  function transformPoint(m,p){ const x=p[0],y=p[1],z=p[2]; return [m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14]]; }
+  function eulerToQuat(e,order="XYZ"){ const x=e[0],y=e[1],z=e[2], c1=Math.cos(x/2), c2=Math.cos(y/2), c3=Math.cos(z/2), s1=Math.sin(x/2), s2=Math.sin(y/2), s3=Math.sin(z/2); if(order==="YXZ") return [s1*c2*c3+c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3+s1*s2*s3]; if(order==="ZXY") return [s1*c2*c3-c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3-s1*s2*s3]; if(order==="ZYX") return [s1*c2*c3-c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3+s1*s2*s3]; if(order==="YZX") return [s1*c2*c3+c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3-s1*s2*s3]; if(order==="XZY") return [s1*c2*c3-c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3+s1*s2*s3]; return [s1*c2*c3+c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3-s1*s2*s3]; }
+  function buildNode(n){ n.parentMatrix=(n.parentMatrix||M4.ident()).slice(); n.basePosition=(n.basePosition||[0,0,0]).slice(); n.baseEuler=(n.baseEuler||[0,0,0]).slice(); n.baseEulerOrder=n.baseEulerOrder||"XYZ"; n.baseScale=(n.baseScale||[1,1,1]).slice(); n.baseQuaternion=(n.baseQuaternion||eulerToQuat(n.baseEuler,n.baseEulerOrder)).slice(); n.baseMatrix=n.matrix.slice(); n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); return n; }
   function buildObj(o){
-    o.baseMatrix=o.matrix.slice(); o.animPos=[0,0,0]; o.animScale=[1,1,1]; o.animQuat=[0,0,0,1];
-    o.posBuf=buf(o.positions); o.nrmBuf=buf(o.normals);
+    o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceSource=!!o.instanceMatrix; o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
+    o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),shininess:o.shininess,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
+    o.visibilityStates=(o.visibilityStates&&o.visibilityStates.length)?o.visibilityStates:[{id:o.id,visible:o.visible!==false}]; for(const s of o.visibilityStates) s.baseVisible=s.visible!==false;
+    o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=!!(o.morphTargets&&o.morphTargets.length);
+    o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES);
+    o.skinDirty=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&!o.shaderSkin); if(o.skin){ for(const b of o.skin.bones){ b.parentMatrix=(b.parentMatrix||M4.ident()).slice(); b.basePosition=(b.basePosition||[0,0,0]).slice(); b.baseEuler=(b.baseEuler||[0,0,0]).slice(); b.baseEulerOrder=b.baseEulerOrder||"XYZ"; b.baseScale=(b.baseScale||[1,1,1]).slice(); b.baseQuaternion=(b.baseQuaternion||eulerToQuat(b.baseEuler,b.baseEulerOrder)).slice(); b.baseMatrix=b.matrix.slice(); b.matrix=b.baseMatrix.slice(); b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); } }
+    const vertexCount=o.positions.length/3, defaultSkinIndex=new Array(vertexCount*4).fill(0), defaultSkinWeight=new Array(vertexCount*4).fill(0); for(let i=0;i<vertexCount;i++) defaultSkinWeight[4*i]=1;
+    o.posBuf=buf(o.positions,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.nrmBuf=buf(o.normals); o.uvBuf=buf(o.uvs); o.uv2Buf=buf(o.uv2s||o.uvs); o.colorBuf=buf(o.colors); o.skinIndexBuf=buf(o.skin?o.skin.indices:defaultSkinIndex); o.skinWeightBuf=buf(o.skin?o.skin.weights:defaultSkinWeight); o.tex=makeTexture(o.texture); o.alphaTex=makeTexture(o.alphaTexture); o.emissiveTex=makeTexture(o.emissiveTexture); o.aoTex=makeTexture(o.aoTexture); o.lightTex=makeTexture(o.lightTexture); o.roughnessTex=makeTexture(o.roughnessTexture); o.metalnessTex=makeTexture(o.metalnessTexture); o.normalTex=makeTexture(o.normalTexture); o.matcapTex=makeTexture(o.matcapTexture); o.physicalScalarTex=physicalTexturesEnabled?makeTexture(packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3])):null; o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])):null; o.sheenColorTex=physicalTexturesEnabled?makeTexture(o.sheenColorTexture):null; o.specularColorTex=physicalTexturesEnabled?makeTexture(o.specularColorTexture):null;
     const maxIndex=o.indices.reduce((m,v)=>Math.max(m,v),0);
     o.indexType=maxIndex>65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     if(o.indexType===gl.UNSIGNED_INT && !gl.getExtension("OES_element_index_uint")) throw new Error("OES_element_index_uint is required for this exported geometry");
     o.idxBuf=buf(o.indices,gl.ELEMENT_ARRAY_BUFFER,o.indexType===gl.UNSIGNED_INT ? Uint32Array : Uint16Array);
     o.count=o.indices.length; return o;
   }
+  for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
   for(const c of DATA.cases) c.objects=c.objects.map(buildObj);
+  const shadowTexturesEnabled=maxTextureUnits>=13;
+  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay||2}; }
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
-  function attrib(p,name,b){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,3,gl.FLOAT,false,0,0); }
-  function sampleTrack(tr,t){ const times=tr.times; if(times.length===0) return null; const dur=times[times.length-1] || 1; t=((t%dur)+dur)%dur; let i=0; while(i+1<times.length && times[i+1]<t)i++; const stride=tr.kind==="quat"?4:3; if(tr.interpolation==="step") return tr.values.slice(i*stride,i*stride+stride); const a=times[i], b=times[Math.min(i+1,times.length-1)]; const u=b===a?0:(t-a)/(b-a); const p=tr.values.slice(i*stride,i*stride+stride), q=tr.values.slice(Math.min(i+1,times.length-1)*stride,Math.min(i+1,times.length-1)*stride+stride); return tr.kind==="quat"?slerp(p,q,u):mix3(p,q,u); }
-  function applyAnimations(c,t){ for(const o of c.objects){ o.animPos=[0,0,0]; o.animScale=[1,1,1]; o.animQuat=[0,0,0,1]; o.matrix=o.baseMatrix; } for(const clip of c.animations) for(const tr of clip.tracks){ const v=sampleTrack(tr,t); const objs=objectById.get(tr.target)||[]; for(const o of objs){ if(tr.property==="position") o.animPos=v; else if(tr.property==="scale") o.animScale=v; else if(tr.property==="rotation") o.animQuat=v; o.matrix=M4.mul(o.baseMatrix,M4.trs(o.animPos,o.animQuat,o.animScale)); } } }
-  function draw(o,view,proj,eye){ const p=o.mode==="points"?pointProgram:(o.mode==="triangles"?meshProgram:colorProgram); gl.useProgram(p); attrib(p,"aPosition",o.posBuf); if(o.mode==="triangles") attrib(p,"aNormal",o.nrmBuf); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); gl.uniformMatrix4fv(gl.getUniformLocation(p,"uModel"),false,new Float32Array(o.matrix)); gl.uniformMatrix4fv(gl.getUniformLocation(p,"uView"),false,new Float32Array(view)); gl.uniformMatrix4fv(gl.getUniformLocation(p,"uProj"),false,new Float32Array(proj)); gl.uniform3fv(gl.getUniformLocation(p,"uColor"),new Float32Array(o.color)); gl.uniform1f(gl.getUniformLocation(p,"uGlow"),o.glow||0); if(o.mode==="triangles"){ gl.uniformMatrix3fv(gl.getUniformLocation(p,"uNormalMat"),false,new Float32Array(M4.normal3(o.matrix))); gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye)); } if(o.mode==="points") gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),Math.max(2,o.pointSize*1.5)); const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)); gl.drawElements(mode,o.count,o.indexType,0); }
+  const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
+  const morphById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const id of (o.morphTargetIds||[o.id])){ if(!morphById.has(id)) morphById.set(id,[]); morphById.get(id).push(o); }
+  const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); }
+  const nodeById = new Map(); for(const c of DATA.cases) for(const n of c.nodes||[]){ if(!nodeById.has(n.id)) nodeById.set(n.id,[]); nodeById.get(n.id).push(n); } for(const c of DATA.cases) for(const o of c.objects) if(o.skin) for(const b of o.skin.bones){ if(!nodeById.has(b.id)) nodeById.set(b.id,[]); nodeById.get(b.id).push(b); }
+  function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
+  function sampleTrack(tr,t){ const times=tr.times; if(times.length===0) return null; const stride=tr.kind==="quat"?4:(tr.kind==="weights"?tr.stride:(tr.kind==="number"?1:3)); if(t<=times[0]) return tr.values.slice(0,stride); if(t>=times[times.length-1]){ const j=times.length-1; return tr.values.slice(j*stride,j*stride+stride); } let i=0; while(i+1<times.length && times[i+1]<t)i++; if(tr.interpolation==="step") return tr.values.slice(i*stride,i*stride+stride); const hi=Math.min(i+1,times.length-1); const a=times[i], b=times[hi]; const u=b===a?0:(t-a)/(b-a); if(tr.interpolation==="cubic" && tr.kind==="vec3") return catmull3(times,tr.values,i,u,stride); if(tr.interpolation==="cubic" && tr.kind==="number") return catmullN(times,tr.values,i,u,stride); const p=tr.values.slice(i*stride,i*stride+stride), q=tr.values.slice(hi*stride,hi*stride+stride); if(tr.interpolation==="cubicspline"){ const h=b-a; const m1=scaleN(tr.outTangents.slice(i*stride,i*stride+stride),h), m2=scaleN(tr.inTangents.slice(hi*stride,hi*stride+stride),h); const r=hermiteN(p,q,m1,m2,u); return tr.kind==="quat"?norm4(r):r; } return tr.kind==="quat"?slerp(p,q,u):(tr.kind==="weights"?mixN(p,q,u):(tr.kind==="number"?[mix(p[0],q[0],u)]:mix3(p,q,u))); }
+  function clipTime(clip,t){ const d=clip.duration||0; if(d<=0) return 0; const x=t*(clip.timeScale==null?1:clip.timeScale), loop=clip.loop||"repeat", reps=clip.repetitions==null?-1:clip.repetitions, clamp=!!clip.clampWhenFinished; if(loop==="once"){ if(x<=0) return 0; if(x>=d) return clamp?d:0; return x; } const finite=reps>=0; const r=finite?Math.max(0,reps):Infinity; if(r===0) return 0; if(finite && x>=d*r){ if(!clamp) return 0; return loop==="pingpong" && r%2===0 ? 0 : d; } if(loop==="pingpong"){ const y=((x%(2*d))+(2*d))%(2*d); return y<=d?y:2*d-y; } const y=((x%d)+d)%d; return x>0 && Math.abs(y)<1e-9?d:y; }
+  function updateMorph(o){ if(!(o.morphTargets&&o.morphTargets.length&&o.morphDirty)) return; const p=o.basePositions.slice(); for(let ti=0;ti<o.morphTargets.length;ti++){ const w=o.morphWeights[ti]||0, d=o.morphTargets[ti]; if(!w) continue; for(let i=0;i<p.length;i++) p[i]+=d[i]*w; } o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.morphDirty=false; }
+  function skinMatrices(o){ const out=new Array(MAX_BONES*16).fill(0); for(let i=0;i<MAX_BONES;i++){ out[i*16]=1; out[i*16+5]=1; out[i*16+10]=1; out[i*16+15]=1; } if(o.shaderSkin){ for(let i=0;i<o.skin.bones.length;i++){ const m=M4.mul(o.skin.bones[i].matrix,o.skin.bindInverses[i]); for(let j=0;j<16;j++) out[i*16+j]=m[j]; } } return out; }
+  function updateSkin(o){ if(!(o.skin&&o.skinDirty)) return; if(o.shaderSkin){ o.skinDirty=false; return; } const skin=o.skin, p=new Array(o.basePositions.length).fill(0), mats=skin.bones.map((b,i)=>M4.mul(b.matrix,skin.bindInverses[i])); for(let vi=0;vi<o.basePositions.length/3;vi++){ const base=[o.basePositions[3*vi],o.basePositions[3*vi+1],o.basePositions[3*vi+2]]; for(let k=0;k<4;k++){ const w=skin.weights[4*vi+k]||0, bi=skin.indices[4*vi+k]||0; if(!w) continue; const q=transformPoint(mats[bi],base); p[3*vi]+=q[0]*w; p[3*vi+1]+=q[1]*w; p[3*vi+2]+=q[2]*w; } } o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.skinDirty=false; }
+  function assignComponent(dst,component,v){ if(component>0) dst[component-1]=v[0]; else for(let i=0;i<Math.min(dst.length,v.length);i++) dst[i]=v[i]; return dst; }
+  function setRenderableAnim(o,prop,v,component=0){ if(!(prop in o)) return false; if(prop==="visible"||prop==="spriteSizeAttenuation"){ o[prop]=v[0]>=.5; return true; } if(Array.isArray(o[prop])) assignComponent(o[prop],component,v); else o[prop]=component>0?v[0]:v[0]; if(prop==="opacity") o.animTransparent=(o.baseTransparent||false)||o.opacity<1; return true; }
+  function resetRenderableAnim(o){ const b=o.baseRenderable; if(!b)return; for(const k in b) o[k]=Array.isArray(b[k])?b[k].slice():b[k]; o.animTransparent=o.baseTransparent; for(const s of (o.visibilityStates||[])) s.visible=s.baseVisible; }
+  function setLightAnim(l,prop,v,component=0){ if(!(prop in l)) return false; if(prop==="visible"){ l.visible=v[0]>=.5; return true; } if(Array.isArray(l[prop])) assignComponent(l[prop],component,v); else l[prop]=component>0?v[0]:v[0]; return true; }
+  function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=Array.isArray(b[k])?b[k].slice():b[k]; }
+  function setNodeAnim(n,prop,v,component=0){ if(prop==="position") assignComponent(n.animPos,component,v); else if(prop==="scale") assignComponent(n.animScale,component,v); else if(prop==="quaternion") assignComponent(n.animQuat,component,v); else if(prop==="rotation"){ assignComponent(n.animEuler,component,v); n.animQuat=eulerToQuat(n.animEuler,n.baseEulerOrder||"XYZ"); } n.matrix=M4.mul(n.parentMatrix||M4.ident(),M4.trs(n.animPos,n.animQuat,n.animScale)); }
+  function updateTransformGraph(c){ const nodeMap=new Map(); for(const n of c.nodes||[]){ const p=n.parentId?nodeMap.get(n.parentId):null; n.parentMatrix=p?p.matrix:M4.ident(); n.matrix=M4.mul(n.parentMatrix,M4.trs(n.animPos,n.animQuat,n.animScale)); nodeMap.set(n.id,n); } c.nodeMap=nodeMap; for(const o of c.objects){ const p=o.parentId?nodeMap.get(o.parentId):null; if(p) o.parentMatrix=p.matrix; const local=M4.trs(o.animPos,o.animQuat,o.animScale), world=M4.mul(o.parentMatrix||M4.ident(),local); o.transformMatrix=world; o.matrix=M4.mul(world,o.instanceMatrix||M4.ident()); if(!o.instanceSource) nodeMap.set(o.id,o); } }
+  function applyAnimations(c,t){ for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; resetRenderableAnim(o); if(o.morphTargets&&o.morphTargets.length){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t); for(const tr of clip.tracks){ const v=sampleTrack(tr,ct); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ if((tr.component||0)>0) o.morphWeights[tr.component-1]=v[0]; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
+  const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;
+  function padded3(items, limit, fn){ const out=new Array(limit*3).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*3]=v[0]; out[i*3+1]=v[1]; out[i*3+2]=v[2]; } return out; }
+  function padded2(items, limit, fn){ const out=new Array(limit*2).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*2]=v[0]; out[i*2+1]=v[1]; } return out; }
+  function padded1(items, limit, fn, fill=0){ const out=new Array(limit).fill(fill); for(let i=0;i<Math.min(limit,items.length);i++) out[i]=fn(items[i]); return out; }
+  function clipping(c){ const planes=c.clippingPlanes||[], out=new Array(16).fill(0); for(let i=0;i<Math.min(4,planes.length);i++){ const p=planes[i]; out[i*4]=p[0]; out[i*4+1]=p[1]; out[i*4+2]=p[2]; out[i*4+3]=p[3]; } return {count:Math.min(4,planes.length), planes:out}; }
+  function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near||1,far:f.far||1000,density:f.density||0}; }
+  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay||2}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay||2,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
+  function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
+  function uniform2v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
+  function uniform4v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
+  function uniform1fv(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1fv(loc,new Float32Array(val)); }
+  function uniform1f(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1f(loc,val); }
+  function uniform1i(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1i(loc,val); }
+  function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ gl.disable(gl.CULL_FACE); return; } gl.enable(gl.CULL_FACE); gl.cullFace(o.side==="back"?gl.FRONT:gl.BACK); }
+  function tone(c){ return {mode:c.toneMappingMode||0, exposure:c.toneExposure==null?1:c.toneExposure, output:c.outputColorSpaceMode||0}; }
+  function texCoord(t,def=0){ return t&&t.texCoord!=null?t.texCoord:def; }
+  function texMatrix(t){ const tm=(t&&t.matrix)||[1,0,0,0,1,0,0,0,1]; return [tm[0],tm[3],tm[6],tm[1],tm[4],tm[7],tm[2],tm[5],tm[8]]; }
+  function uniformTexMatrix(p,name,t){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
+  function draw(o,view,proj,eye,basis,light,clip,fg,tm){
+    applySide(o);
+    if(o.depthTest===false) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(o.depthWrite!==false);
+    const p=o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?meshProgram:colorProgram));
+    gl.useProgram(p);
+    attrib(p,"aPosition",o.posBuf);
+    attrib(p,"aColor",o.colorBuf);
+    if(o.mode==="triangles"){ attrib(p,"aNormal",o.nrmBuf); attrib(p,"aUv",o.uvBuf,2); attrib(p,"aUv2",o.uv2Buf,2); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); }
+    if(o.mode==="sprite"){ attrib(p,"aUv",o.uvBuf,2); }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf);
+    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uModel"),false,new Float32Array(o.matrix));
+    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uView"),false,new Float32Array(view));
+    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uProj"),false,new Float32Array(proj));
+    gl.uniform3fv(gl.getUniformLocation(p,"uColor"),new Float32Array(o.color));
+    gl.uniform1f(gl.getUniformLocation(p,"uGlow"),o.glow||0);
+    gl.uniform1f(gl.getUniformLocation(p,"uOpacity"),o.opacity);
+    uniform1i(p,"uClipCount",clip.count);
+    uniform4v(p,"uClipPlane[0]",clip.planes);
+    uniform1i(p,"uToneMapping",tm.mode);
+    uniform1f(p,"uToneExposure",tm.exposure);
+    uniform1i(p,"uOutputColorSpace",tm.output);
+    gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye));
+    gl.uniform3fv(gl.getUniformLocation(p,"uFogColor"),new Float32Array(fg.color));
+    uniform1i(p,"uFogType",fg.type);
+    gl.uniform1f(gl.getUniformLocation(p,"uFogNear"),fg.near);
+    gl.uniform1f(gl.getUniformLocation(p,"uFogFar"),fg.far);
+    gl.uniform1f(gl.getUniformLocation(p,"uFogDensity"),fg.density);
+    if(o.mode==="triangles"){
+      gl.uniformMatrix3fv(gl.getUniformLocation(p,"uNormalMat"),false,new Float32Array(M4.normal3(o.matrix)));
+      gl.uniformMatrix3fv(gl.getUniformLocation(p,"uViewNormalMat"),false,new Float32Array(M4.normal3(view)));
+      uniform1i(p,"uUseSkin",o.shaderSkin?1:0);
+      uniform1i(p,"uMaterialMode",o.materialType==="normal"?1:(o.materialType==="depth"?2:(o.materialType==="toon"?3:(o.materialType==="matcap"?4:(o.materialType==="basic"?5:(o.materialType==="lambert"?6:(o.materialType==="phong"?7:0)))))));
+      uniform1f(p,"uDepthNear",o.depthNear==null?0.1:o.depthNear);
+      uniform1f(p,"uDepthFar",o.depthFar==null?100:o.depthFar);
+      uniform1f(p,"uToonSteps",o.toonSteps==null?3:o.toonSteps);
+      const boneLoc=gl.getUniformLocation(p,"uBoneMatrices[0]"); if(boneLoc!==null) gl.uniformMatrix4fv(boneLoc,false,new Float32Array(skinMatrices(o)));
+      gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye));
+      gl.uniform3fv(gl.getUniformLocation(p,"uAmbientColor"),new Float32Array(light.ambient));
+      uniform3v(p,"uDirLight[0]",light.direction); uniform3v(p,"uDirColor[0]",light.dirColor); uniform1i(p,"uDirCount",light.dirCount);
+      const objShadow=(o.receiveShadow!==false)&&light.shadow;
+      uniform1i(p,"uShadowDirIndex",objShadow?light.shadow.index:-1);
+      uniform1i(p,"uShadowKind",objShadow?light.shadow.kind:0);
+      gl.uniformMatrix4fv(gl.getUniformLocation(p,"uDirShadowMatrix"),false,new Float32Array(objShadow?light.shadow.matrix:M4.ident()));
+      uniform1f(p,"uShadowBias",objShadow?light.shadow.bias:0.0015);
+      uniform1f(p,"uShadowTexel",objShadow?light.shadow.texel:0.015625);
+      uniform3v(p,"uPointColor[0]",light.pointColor); uniform3v(p,"uPointPos[0]",light.pointPosition); uniform1i(p,"uPointCount",light.pointCount);
+      uniform1fv(p,"uPointDistance[0]",light.pointDistance); uniform1fv(p,"uPointDecay[0]",light.pointDecay);
+      uniform3v(p,"uSpotColor[0]",light.spotColor); uniform3v(p,"uSpotPos[0]",light.spotPosition); uniform3v(p,"uSpotDir[0]",light.spotDirection); uniform1i(p,"uSpotCount",light.spotCount);
+      uniform1fv(p,"uSpotDistance[0]",light.spotDistance); uniform1fv(p,"uSpotDecay[0]",light.spotDecay); uniform1fv(p,"uSpotConeCos[0]",light.spotConeCos); uniform1fv(p,"uSpotPenumbraCos[0]",light.spotPenumbraCos);
+      uniform3v(p,"uHemiSky[0]",light.hemiSky); uniform3v(p,"uHemiGround[0]",light.hemiGround); uniform1i(p,"uHemiCount",light.hemiCount);
+      uniform3v(p,"uRectColor[0]",light.rectColor); uniform3v(p,"uRectPos[0]",light.rectPosition); uniform3v(p,"uRectForward[0]",light.rectForward);
+      uniform3v(p,"uRectU[0]",light.rectU); uniform3v(p,"uRectV[0]",light.rectV); uniform2v(p,"uRectSize[0]",light.rectSize); uniform1i(p,"uRectCount",light.rectCount);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseMap"),o.tex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseAlphaMap"),o.alphaTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseEmissiveMap"),o.emissiveTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseAoMap"),o.aoTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseLightMap"),o.lightTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseRoughnessMap"),o.roughnessTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseMetalnessMap"),o.metalnessTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseNormalMap"),o.normalTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseMatcapMap"),o.matcapTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUsePhysicalScalarMap"),o.physicalScalarTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseSheenColorMap"),o.sheenColorTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUsePhysicalScalar2Map"),o.physicalScalar2Tex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseSpecularColorMap"),o.specularColorTex?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseEnvMap"),o.envTexture?1:0);
+      uniform1i(p,"uMapTexCoord",texCoord(o.texture,0));
+      uniform1i(p,"uAlphaTexCoord",texCoord(o.alphaTexture,0));
+      uniform1i(p,"uEmissiveTexCoord",texCoord(o.emissiveTexture,0));
+      uniform1i(p,"uAoTexCoord",texCoord(o.aoTexture,1));
+      uniform1i(p,"uLightTexCoord",texCoord(o.lightTexture,1));
+      uniform1i(p,"uRoughnessTexCoord",texCoord(o.roughnessTexture,0));
+      uniform1i(p,"uMetalnessTexCoord",texCoord(o.metalnessTexture,0));
+      uniform1i(p,"uNormalTexCoord",texCoord(o.normalTexture,0));
+      uniform1i(p,"uPhysicalScalarTexCoord",texCoord(o.clearcoatTexture||o.clearcoatRoughnessTexture||o.transmissionTexture||o.sheenRoughnessTexture,0));
+      uniform1i(p,"uPhysicalScalar2TexCoord",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture,0));
+      uniform1i(p,"uSheenColorTexCoord",texCoord(o.sheenColorTexture,0));
+      uniform1i(p,"uSpecularColorTexCoord",texCoord(o.specularColorTexture,0));
+      gl.uniform3fv(gl.getUniformLocation(p,"uEmissive"),new Float32Array(o.emissive||[0,0,0]));
+      gl.uniform1f(gl.getUniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity||1);
+      gl.uniform1f(gl.getUniformLocation(p,"uAoIntensity"),o.aoIntensity||1);
+      gl.uniform1f(gl.getUniformLocation(p,"uLightMapIntensity"),o.lightMapIntensity||1);
+      gl.uniform1f(gl.getUniformLocation(p,"uEnvMapIntensity"),o.envMapIntensity||1);
+      gl.uniform1f(gl.getUniformLocation(p,"uAlphaTest"),o.alphaTest||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uNormalScale"),o.normalScale==null?1:o.normalScale);
+      uniform3v(p,"uEnvColor[0]",o.envTexture?o.envTexture.colors.flat():new Array(18).fill(0));
+      gl.uniform1f(gl.getUniformLocation(p,"uRoughness"),o.roughness==null?.65:o.roughness);
+      gl.uniform1f(gl.getUniformLocation(p,"uMetalness"),o.metalness||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uClearcoat"),o.clearcoat||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uClearcoatRoughness"),o.clearcoatRoughness||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uTransmission"),o.transmission||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uThickness"),o.thickness||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uAttenuationDistance"),o.attenuationDistance||0);
+      gl.uniform3fv(gl.getUniformLocation(p,"uAttenuationColor"),new Float32Array(o.attenuationColor||[1,1,1]));
+      gl.uniform1f(gl.getUniformLocation(p,"uIor"),o.ior||1.5);
+      gl.uniform1f(gl.getUniformLocation(p,"uSheen"),o.sheen||0);
+      gl.uniform3fv(gl.getUniformLocation(p,"uSheenColor"),new Float32Array(o.sheenColor||[1,1,1]));
+      gl.uniform1f(gl.getUniformLocation(p,"uSheenRoughness"),o.sheenRoughness==null?1:o.sheenRoughness);
+      gl.uniform1f(gl.getUniformLocation(p,"uIridescence"),o.iridescence||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uIridescenceIor"),o.iridescenceIor||1.3);
+      gl.uniform1f(gl.getUniformLocation(p,"uIridescenceThickness"),o.iridescenceThickness==null?400:o.iridescenceThickness);
+      gl.uniform1f(gl.getUniformLocation(p,"uSpecularIntensity"),o.specularIntensity==null?1:o.specularIntensity);
+      gl.uniform3fv(gl.getUniformLocation(p,"uSpecularColor"),new Float32Array(o.specularColor||[1,1,1]));
+      gl.uniform1f(gl.getUniformLocation(p,"uShininess"),o.shininess==null?32:o.shininess);
+      uniformTexMatrix(p,"uMapMatrix",o.texture);
+      uniformTexMatrix(p,"uAlphaMatrix",o.alphaTexture);
+      uniformTexMatrix(p,"uEmissiveMatrix",o.emissiveTexture);
+      uniformTexMatrix(p,"uAoMatrix",o.aoTexture);
+      uniformTexMatrix(p,"uLightMatrix",o.lightTexture);
+      uniformTexMatrix(p,"uRoughnessMatrix",o.roughnessTexture);
+      uniformTexMatrix(p,"uMetalnessMatrix",o.metalnessTexture);
+      uniformTexMatrix(p,"uNormalMatrix",o.normalTexture);
+      uniformTexMatrix(p,"uPhysicalScalarMatrix",o.clearcoatTexture||o.clearcoatRoughnessTexture||o.transmissionTexture||o.sheenRoughnessTexture);
+      uniformTexMatrix(p,"uPhysicalScalar2Matrix",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture);
+      uniformTexMatrix(p,"uSheenColorMatrix",o.sheenColorTexture);
+      uniformTexMatrix(p,"uSpecularColorMatrix",o.specularColorTexture);
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uMap"),0); }
+      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(gl.getUniformLocation(p,"uAlphaMap"),1); }
+      if(o.emissiveTex){ gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,o.emissiveTex); gl.uniform1i(gl.getUniformLocation(p,"uEmissiveMap"),2); }
+      if(o.aoTex){ gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D,o.aoTex); gl.uniform1i(gl.getUniformLocation(p,"uAoMap"),3); }
+      if(o.lightTex){ gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D,o.lightTex); gl.uniform1i(gl.getUniformLocation(p,"uLightMap"),4); }
+      if(o.roughnessTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.roughnessTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
+      if(o.metalnessTex){ gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D,o.metalnessTex); gl.uniform1i(gl.getUniformLocation(p,"uMetalnessMap"),6); }
+      if(o.normalTex){ gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D,o.normalTex); gl.uniform1i(gl.getUniformLocation(p,"uNormalMap"),7); }
+      if(o.matcapTex){ gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D,o.matcapTex); gl.uniform1i(gl.getUniformLocation(p,"uMatcapMap"),7); }
+      if(o.physicalScalarTex){ gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalarTex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalarMap"),8); }
+      if(o.physicalScalar2Tex){ gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalar2Tex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalar2Map"),9); }
+      if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSheenColorMap"),10); }
+      if(o.specularColorTex){ gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D,o.specularColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSpecularColorMap"),11); }
+      if(objShadow&&light.shadow.tex){ gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D,light.shadow.tex); gl.uniform1i(gl.getUniformLocation(p,"uDirShadowMap"),12); }
+    }
+    if(o.mode==="points"){
+      gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),Math.max(2,o.pointSize*1.5));
+      gl.uniform1f(gl.getUniformLocation(p,"uUsePointMap"),o.tex?1:0);
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uPointMap"),0); }
+    }
+    if(o.mode==="sprite"){
+      gl.uniform3fv(gl.getUniformLocation(p,"uCameraRight"),new Float32Array(basis.right));
+      gl.uniform3fv(gl.getUniformLocation(p,"uCameraUp"),new Float32Array(basis.up));
+      gl.uniform2fv(gl.getUniformLocation(p,"uSpriteCenter"),new Float32Array(o.spriteCenter||[.5,.5]));
+      gl.uniform1f(gl.getUniformLocation(p,"uSpriteRotation"),o.spriteRotation||0);
+      gl.uniform1f(gl.getUniformLocation(p,"uSpriteSizeAttenuation"),o.spriteSizeAttenuation===false?0:1);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseSpriteMap"),o.tex?1:0);
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uSpriteMap"),0); }
+    }
+    const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
+    gl.drawElements(mode,o.count,o.indexType,0);
+  }
   const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats");
-  let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, dragging=false, lx=0, ly=0;
+  let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, targetOffset=[0,0,0], dragging=false, panMode=false, pinchMode=false, lx=0, ly=0, pinchDist=0, pinchCenter=[0,0];
+  window.__threejlDebug={activeObjectCount:()=>active.objects.length};
+  const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
-  function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
+  function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
   function resize(){ const r=canvas.getBoundingClientRect(), dpr=Math.min(devicePixelRatio||1,2); const w=Math.max(1,Math.round(r.width*dpr)), h=Math.max(1,Math.round(r.height*dpr)); if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; } }
-  function render(){ resize(); const t=performance.now()*.001; applyAnimations(active,t); const target=active.target; const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const view=M4.lookAt(eye,target,[0,1,0]); const proj=M4.perspective(active.fov,canvas.width/canvas.height,.1,180); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of active.objects){ if(o.floor && eye[1]<.02) continue; draw(o,view,proj,eye); drawn++; } stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
-  canvas.addEventListener("pointerdown",e=>{ dragging=true; lx=e.clientX; ly=e.clientY; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener("pointermove",e=>{ if(!dragging)return; const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); });
-  canvas.addEventListener("pointerup",()=>dragging=false); canvas.addEventListener("pointercancel",()=>dragging=false);
-  canvas.addEventListener("wheel",e=>{ e.preventDefault(); dist=Math.max(2.5,Math.min(24,dist*(1+Math.sign(e.deltaY)*.08))); },{passive:false});
+  function objectDepth(o,eye){ const x=o.matrix[12]-eye[0], y=o.matrix[13]-eye[1], z=o.matrix[14]-eye[2]; return x*x+y*y+z*z; }
+  function lodChoices(c,eye){ const objects=c.objects, state=c.lodState||(c.lodState=new Map()), groups=new Map(), choices=new Map(); for(const o of objects){ if(!o.lodGroup) continue; if(!groups.has(o.lodGroup)) groups.set(o.lodGroup,[]); groups.get(o.lodGroup).push(o); } for(const [id,levels] of groups){ levels.sort((a,b)=>(a.lodDistance||0)-(b.lodDistance||0)); const d=Math.sqrt(objectDepth(levels[0],eye)); const current=state.get(id); let chosen=levels[0]; for(let i=1;i<levels.length;i++){ const o=levels[i], threshold=(o.lodDistance||0)*(o===current?1-(o.lodHysteresis||0):1); if(d>=threshold) chosen=o; else break; } state.set(id,chosen); choices.set(id,chosen); } return choices; }
+  function pointerList(){ return Array.from(pointers.values()); }
+  function pointerCenter(ps){ return [(ps[0].x+ps[1].x)*.5,(ps[0].y+ps[1].y)*.5]; }
+  function pointerDistance(ps){ return Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)||1; }
+  function panBy(dx,dy){ const forward=norm([-Math.cos(pitch)*Math.cos(yaw),-Math.sin(pitch),-Math.cos(pitch)*Math.sin(yaw)]); let right=norm(cross(forward,[0,1,0])); if(!isFinite(right[0])) right=[1,0,0]; const up=cross(right,forward), s=dist*.0015; targetOffset=add(targetOffset,add(scale(right,-dx*s),scale(up,dy*s))); }
+  function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); }
+  function render(){ resize(); const t=performance.now()*.001; applyAnimations(active,t); const target=add(active.target,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const view=M4.lookAt(eye,target,[0,1,0]); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,[0,1,0])); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const proj=M4.perspective(active.fov,canvas.width/canvas.height,.1,180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  canvas.addEventListener("contextmenu",e=>e.preventDefault());
+  canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; panMode=e.button===2||e.shiftKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
+  canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); } });
+  function endPointer(e){ pointers.delete(e.pointerId); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { dragging=ps.length>0; pinchMode=false; panMode=false; if(ps.length===1){ lx=ps[0].x; ly=ps[0].y; } } }
+  canvas.addEventListener("pointerup",endPointer); canvas.addEventListener("pointercancel",endPointer);
+  canvas.addEventListener("keydown",e=>{ const k=e.key; if(k==="ArrowLeft"){ panBy(-32,0); e.preventDefault(); } else if(k==="ArrowRight"){ panBy(32,0); e.preventDefault(); } else if(k==="ArrowUp"){ panBy(0,-32); e.preventDefault(); } else if(k==="ArrowDown"){ panBy(0,32); e.preventDefault(); } else if(k==="+"||k==="="){ zoomBy(.92); e.preventDefault(); } else if(k==="-"){ zoomBy(1.08); e.preventDefault(); } });
+  canvas.addEventListener("wheel",e=>{ e.preventDefault(); zoomBy(1+Math.sign(e.deltaY)*.08); },{passive:false});
   setCase(active.id); requestAnimationFrame(render);
   </script>
 </body>

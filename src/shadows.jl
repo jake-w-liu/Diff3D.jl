@@ -16,14 +16,27 @@ end
 ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias::Float64) =
     ShadowMap(depth, light_vp, bias, 0)
 
-# World-space bounding sphere of all meshes under the scene.
-function _scene_bounds(meshes)
+function _expand_shadow_bounds!(box::Box3, geo, world::Mat4)
+    for vi in 1:geo.n_vertices
+        box = box3_expand_by_point(box, mat4_transform_point(world, get_vertex(geo, vi)))
+    end
+    return box
+end
+
+# World-space bounding sphere of all shadow-casting drawables under the scene.
+function _scene_bounds(meshes, instanced)
     box = Box3()
     for mesh in meshes
         is_visible(mesh) || continue
-        wm = compute_world_matrix(mesh); geo = mesh.geometry
-        for vi in 1:geo.n_vertices
-            box = box3_expand_by_point(box, mat4_transform_point(wm, get_vertex(geo, vi)))
+        (object_casts_shadow(mesh) || object_receives_shadow(mesh)) || continue
+        box = _expand_shadow_bounds!(box, mesh.geometry, compute_world_matrix(mesh))
+    end
+    for im in instanced
+        is_visible(im) || continue
+        (object_casts_shadow(im) || object_receives_shadow(im)) || continue
+        base = compute_world_matrix(im)
+        for M in im.instance_matrices
+            box = _expand_shadow_bounds!(box, im.geometry, base * M)
         end
     end
     center = (box.min + box.max) * 0.5
@@ -78,6 +91,21 @@ end
     return nothing
 end
 
+function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int, geo, mvp::Mat4)
+    for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        c1 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i1)))
+        c2 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i2)))
+        c3 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i3)))
+        (c1.w <= 1e-6 || c2.w <= 1e-6 || c3.w <= 1e-6) && continue
+        _raster_depth!(depth, W, H,
+            (c1.x/c1.w+1)*0.5*W, (1-c1.y/c1.w)*0.5*H, c1.z/c1.w,
+            (c2.x/c2.w+1)*0.5*W, (1-c2.y/c2.w)*0.5*H, c2.z/c2.w,
+            (c3.x/c3.w+1)*0.5*W, (1-c3.y/c3.w)*0.5*H, c3.z/c3.w)
+    end
+    return depth
+end
+
 """
     compute_shadow_map(scene, light; resolution=512, bias=3e-3, pcf_radius=0)
 
@@ -91,24 +119,27 @@ default `pcf_radius=0` reproduces the original single-sample hard shadow exactly
 function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_radius::Int=0)
     pcf_radius >= 0 || throw(ArgumentError("pcf_radius must be >= 0, got $pcf_radius"))
     meshes = collect_meshes(scene)
-    center, radius = _scene_bounds(meshes)
+    instanced = collect_instanced(scene)
+    has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
+                 any(im -> is_visible(im) && object_casts_shadow(im), instanced)
+    has_caster ||
+        return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), bias, pcf_radius)
+    center, radius = _scene_bounds(meshes, instanced)
     vp = _light_view_proj(light, center, radius)
     W = H = resolution
     depth = fill(Inf, H, W)
     for mesh in meshes
         is_visible(mesh) || continue
+        object_casts_shadow(mesh) || continue
         wm = compute_world_matrix(mesh); geo = mesh.geometry
-        mvp = vp * wm
-        for fi in 1:geo.n_faces
-            i1, i2, i3 = get_face(geo, fi)
-            c1 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i1)))
-            c2 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i2)))
-            c3 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i3)))
-            (c1.w <= 1e-6 || c2.w <= 1e-6 || c3.w <= 1e-6) && continue
-            _raster_depth!(depth, W, H,
-                (c1.x/c1.w+1)*0.5*W, (1-c1.y/c1.w)*0.5*H, c1.z/c1.w,
-                (c2.x/c2.w+1)*0.5*W, (1-c2.y/c2.w)*0.5*H, c2.z/c2.w,
-                (c3.x/c3.w+1)*0.5*W, (1-c3.y/c3.w)*0.5*H, c3.z/c3.w)
+        _raster_shadow_geometry!(depth, W, H, geo, vp * wm)
+    end
+    for im in instanced
+        is_visible(im) || continue
+        object_casts_shadow(im) || continue
+        base = compute_world_matrix(im)
+        for M in im.instance_matrices
+            _raster_shadow_geometry!(depth, W, H, im.geometry, vp * base * M)
         end
     end
     return ShadowMap(depth, vp, bias, pcf_radius)

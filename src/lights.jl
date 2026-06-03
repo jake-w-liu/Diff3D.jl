@@ -190,10 +190,11 @@ mutable struct DirectionalLight <: AbstractLight
 end
 
 function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
-                           position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight")
+                           position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
+                           cast_shadow=false)
     DirectionalLight(position, Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
-                     color, intensity, Vec3(), false)
+                     color, intensity, Vec3(), cast_shadow)
 end
 
 get_position(o::DirectionalLight) = o.position
@@ -224,11 +225,11 @@ mutable struct PointLight <: AbstractLight
 end
 
 function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
-                     distance=0.0, decay=2.0, position=Vec3(),
-                     name="PointLight", ies_profile=nothing)
+                    distance=0.0, decay=2.0, position=Vec3(),
+                    name="PointLight", cast_shadow=false, ies_profile=nothing)
     PointLight(position, Euler(), Vec3(1.0,1.0,1.0),
                nothing, AbstractObject3D[], true, name, _next_id(),
-               color, intensity, distance, decay, false, ies_profile)
+               color, intensity, distance, decay, cast_shadow, ies_profile)
 end
 
 get_position(o::PointLight) = o.position
@@ -262,12 +263,13 @@ mutable struct SpotLight <: AbstractLight
 end
 
 function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
-                    distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
-                    position=Vec3(0.0, 1.0, 0.0), name="SpotLight", ies_profile=nothing)
+                   distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
+                   position=Vec3(0.0, 1.0, 0.0), name="SpotLight",
+                   target=Vec3(), cast_shadow=false, ies_profile=nothing)
     SpotLight(position, Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
               color, intensity, distance, angle, penumbra, decay,
-              Vec3(), false, ies_profile)
+              target, cast_shadow, ies_profile)
 end
 
 get_position(o::SpotLight) = o.position
