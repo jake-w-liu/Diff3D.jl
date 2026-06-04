@@ -997,7 +997,7 @@ _line_geo(positions::Vector{Float64}) =
     BufferGeometry(positions, Float64[], Float64[], collect(1:length(positions)÷3),
                    length(positions) ÷ 3, 0)
 
-"""Three line segments along +x (red), +y (green), +z (blue)."""
+"""Diff3D line segments along +x (red), +y (green), +z (blue)."""
 function AxesHelper(size=1.0)
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
     geo = _line_geo(pos)

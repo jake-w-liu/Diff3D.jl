@@ -2,13 +2,13 @@
 # CPU rasterizer and reports timing (warmup + repetitions, median/IQR/min),
 # per-frame allocation, and the hardware environment. Writes a CSV record.
 #
-#   julia --project=Three.jl Three.jl/examples/scalability_bench.jl
+#   julia --project=Diff3D.jl Diff3D.jl/examples/scalability_bench.jl
 #
 # Output: logs/threejs_scalability.csv
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
-using Three
+using Diff3D
 using Printf
 
 const ROOT = normpath(joinpath(@__DIR__, "..", ".."))

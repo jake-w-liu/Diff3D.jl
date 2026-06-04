@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_buffergeometry_lines
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -40,7 +40,7 @@ function build_case()
                              name="buffergeometry_line_segments"))
 
     WebGLExportCase("buffergeometry_lines", "BufferGeometry Lines",
-                    "LineSegments generated from raw Three.jl BufferGeometry attributes.",
+                    "LineSegments generated from raw Diff3D.jl BufferGeometry attributes.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=8.0, height=2.8,
                     fov=pi/4.2)
 end

@@ -9,8 +9,8 @@ release.
 - Confirm exported API documentation coverage:
 
   ```julia
-  using Three
-  missing = [n for n in names(Three) if isdefined(Three, n) && !Docs.hasdoc(Three, n)]
+  using Diff3D
+  missing = [n for n in names(Diff3D) if isdefined(Diff3D, n) && !Docs.hasdoc(Diff3D, n)]
   isempty(missing)
   ```
 

@@ -30,11 +30,11 @@ def smoke_html(path: Path) -> int:
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                 }"""
             )
-            speed_state = page.evaluate("() => window.__threejlDebug.animationSpeed()")
+            speed_state = page.evaluate("() => window.__diff3dDebug.animationSpeed()")
             if abs(speed_state - 1.75) > 1e-6:
                 errors.append(f"{path}: speed control did not update runtime speed")
             page.locator("#playToggle").click()
-            if not page.evaluate("() => window.__threejlDebug.animationPaused()"):
+            if not page.evaluate("() => window.__diff3dDebug.animationPaused()"):
                 errors.append(f"{path}: pause control did not update runtime state")
             page.locator("#playToggle").click()
 
@@ -91,7 +91,7 @@ def smoke_html(path: Path) -> int:
             page.wait_for_timeout(350)
             draw_counts = page.evaluate(
                 """() => {
-                    const expected = window.__threejlDebug.activeObjectCount();
+                    const expected = window.__diff3dDebug.activeObjectCount();
                     const actual = Number((document.getElementById('stats').textContent.match(/\\d+/) || ['0'])[0]);
                     return { expected, actual };
                 }"""

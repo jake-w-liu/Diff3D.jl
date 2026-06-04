@@ -1,9 +1,9 @@
 # --------------------------------------------------------------------------
 # Browser/WebGL export for interactive examples.
 #
-# The exporter serializes Three.jl scene objects into a standalone HTML file
+# The exporter serializes Diff3D.jl scene objects into a standalone HTML file
 # with a small generic WebGL runtime. Scene construction, geometry generation,
-# materials, transforms, instancing, and keyframe clips come from Three.jl.
+# materials, transforms, instancing, and keyframe clips come from Diff3D.jl.
 # --------------------------------------------------------------------------
 
 struct WebGLExportCase
@@ -1053,8 +1053,8 @@ function _webgl_html(data_json::String, title::String)
   <main>
     <header>
       <div>
-        <h1>Three.jl Live WebGL Showcase</h1>
-        <p>Scenes, geometry, materials, instancing, and keyframes are exported from Three.jl. Drag to orbit; wheel to zoom.</p>
+        <h1>Diff3D.jl Live WebGL Showcase</h1>
+        <p>Scenes, geometry, materials, instancing, and keyframes are exported from Diff3D.jl. Drag to orbit; wheel to zoom.</p>
       </div>
       <div class="top">
         <div class="controls" aria-label="Animation playback">
@@ -1433,7 +1433,7 @@ function _webgl_html(data_json::String, title::String)
   }
   const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats"), speedEl=document.getElementById("speed"), speedValue=document.getElementById("speedValue"), playToggle=document.getElementById("playToggle");
   let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, targetOffset=[0,0,0], dragging=false, panMode=false, pinchMode=false, lx=0, ly=0, pinchDist=0, pinchCenter=[0,0], animTime=0, lastFrameTime=performance.now()*.001, animSpeed=1, animPaused=false;
-  window.__threejlDebug={activeObjectCount:()=>active.objects.length, animationTime:()=>animTime, animationSpeed:()=>animSpeed, animationPaused:()=>animPaused};
+  window.__diff3dDebug={activeObjectCount:()=>active.objects.length, animationTime:()=>animTime, animationSpeed:()=>animSpeed, animationPaused:()=>animPaused};
   const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
   function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
@@ -1463,14 +1463,14 @@ function _webgl_html(data_json::String, title::String)
 end
 
 """
-    save_webgl_html(path, cases; title="Three.jl Live WebGL Showcase")
+    save_webgl_html(path, cases; title="Diff3D.jl Live WebGL Showcase")
 
 Export one or more `WebGLExportCase`s to a standalone interactive HTML file.
 The browser runtime is intentionally small; the scene data is produced from
-Three.jl objects, materials, instancing, and optional `AnimationClip`s.
+Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
 """
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
-                         title::String="Three.jl Live WebGL Showcase")
+                         title::String="Diff3D.jl Live WebGL Showcase")
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
     data = "{\"cases\":[" * join((_web_case_json(c) for c in cases), ",") * "]}"
     open(path, "w") do io

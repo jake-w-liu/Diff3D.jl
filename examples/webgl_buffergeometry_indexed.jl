@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_buffergeometry_indexed
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -56,7 +56,7 @@ function build_case()
     add!(scene, mesh)
 
     WebGLExportCase("buffergeometry_indexed", "BufferGeometry Indexed",
-                    "Indexed mesh surface generated from Three.jl BufferGeometry indices.",
+                    "Indexed mesh surface generated from Diff3D.jl BufferGeometry indices.",
                     scene; target=Vec3(0.0, 0.1, 0.0), radius=7.0, height=2.4,
                     fov=pi/4.2)
 end

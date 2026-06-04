@@ -1,6 +1,6 @@
-# Three.jl
+# Diff3D.jl
 
-Three.jl is a Julia-native 3D graphics and differentiable rendering package.
+Diff3D.jl is a Julia-native 3D graphics and differentiable rendering package.
 It combines a three.js-inspired scene API with CPU rendering, differentiable
 soft rasterization, asset loaders, animation/control helpers, and standalone
 WebGL HTML export.
@@ -8,7 +8,7 @@ WebGL HTML export.
 ## Minimal Render
 
 ```julia
-using Three
+using Diff3D
 
 scene = Scene(background = Color3(0.03, 0.04, 0.05))
 camera = PerspectiveCamera(fov = pi / 3, aspect = 1.0, near = 0.1, far = 100.0)
@@ -50,7 +50,7 @@ save_png("cube.png", target.color)
 
 ```julia
 using Pkg
-Pkg.test("Three")
+Pkg.test("Diff3D")
 ```
 
 The repository also includes a browser smoke test for generated WebGL output:

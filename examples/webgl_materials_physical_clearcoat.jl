@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_materials_physical_clearcoat
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -111,7 +111,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-physical-clearcoat", "Materials Physical Clearcoat",
-                    "MeshPhysicalMaterial clearcoat and clearcoat texture maps are exported through Three.jl's compact physical shader branch.",
+                    "MeshPhysicalMaterial clearcoat and clearcoat texture maps are exported through Diff3D.jl's compact physical shader branch.",
                     scene; target=Vec3(0.0, 0.85, 0.0), radius=6.8, height=2.8,
                     fov=pi / 4.2, animations=[clip],
                     tone_mapping=:aces, tone_exposure=1.05,

@@ -9,7 +9,7 @@
 # deforms into a target ellipsoid. Initialisation
 # sensitivity is probed across three random seeds.
 #
-#   julia --project=Three.jl Three.jl/examples/inverse_geometry.jl
+#   julia --project=Diff3D.jl Diff3D.jl/examples/inverse_geometry.jl
 #
 # Outputs:
 #   paper/data/inverse_geometry_convergence.csv   (loss per iteration, 3 seeds)
@@ -32,7 +32,7 @@ else
 end
 Pkg.instantiate()
 
-using Three
+using Diff3D
 using PlotlySupply
 using Printf
 using Random

@@ -1,5 +1,5 @@
 using Test
-using Three
+using Diff3D
 using ForwardDiff
 using TOML
 
@@ -9,7 +9,7 @@ deterministic_array(dims::Int...) =
 deterministic_bytes(n::Int) =
     UInt8[mod(53 * i + 19, 256) for i in 1:n]
 
-@testset "Three.jl" begin
+@testset "Diff3D.jl" begin
 
     @testset "Official examples parity registry" begin
         registry_path = joinpath(@__DIR__, "..", "examples", "examples_registry.toml")
@@ -425,11 +425,11 @@ deterministic_bytes(n::Int) =
 
     @testset "PNG/PDF checksum oracles" begin
         # CRC-32/ISO-HDLC standard check value for "123456789".
-        @test Three._crc32(Vector{UInt8}(codeunits("123456789"))) == 0xcbf43926
+        @test Diff3D._crc32(Vector{UInt8}(codeunits("123456789"))) == 0xcbf43926
         # CRC of the IEND chunk type (no data) — fixed PNG constant.
-        @test Three._crc32(Vector{UInt8}(codeunits("IEND"))) == 0xae426082
+        @test Diff3D._crc32(Vector{UInt8}(codeunits("IEND"))) == 0xae426082
         # Adler-32 of "Wikipedia" — canonical reference value.
-        @test Three._adler32(Vector{UInt8}(codeunits("Wikipedia"))) == 0x11e60398
+        @test Diff3D._adler32(Vector{UInt8}(codeunits("Wikipedia"))) == 0x11e60398
     end
 
     @testset "I/O — PNG export structure" begin
@@ -770,7 +770,7 @@ deterministic_bytes(n::Int) =
                                                  [[0.0], [0.0]], [[0.0], [0.0]])
         ])
         sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
-                                      Three._web_collect_drawables(scene)))
+                                      Diff3D._web_collect_drawables(scene)))
         @test occursin("\"mode\":\"sprite\"", sprite_drawable)
         @test occursin("\"indices\":[0,1,2,0,2,3]", sprite_drawable)
         @test occursin("\"spriteCenter\":[0.25,0.75]", sprite_drawable)
@@ -784,7 +784,7 @@ deterministic_bytes(n::Int) =
         add_lod_level!(lod, 0.0, lod_near)
         add_lod_level!(lod, 10.0, lod_far; hysteresis=0.25)
         add!(scene, lod)
-        lod_near_drawables = join(Three._web_collect_drawables(scene, Set{Int}(), 5.0), ",")
+        lod_near_drawables = join(Diff3D._web_collect_drawables(scene, Set{Int}(), 5.0), ",")
         @test occursin("\"name\":\"export_lod_near\"", lod_near_drawables)
         @test occursin("\"name\":\"export_lod_far\"", lod_near_drawables)
         @test occursin("\"lodGroup\":$(lod.id)", lod_near_drawables)
@@ -1432,7 +1432,7 @@ deterministic_bytes(n::Int) =
         """
         f = tempname() * ".stl"
         write(f, ascii)
-        @test !Three._looks_binary_stl(f)            # detected as ASCII
+        @test !Diff3D._looks_binary_stl(f)            # detected as ASCII
         geo = load_stl(f)
         @test geo.n_faces == 1
         @test geo.n_vertices == 3
@@ -2162,7 +2162,7 @@ deterministic_bytes(n::Int) =
 
     @testset "DEFLATE inflate + base64" begin
         data = deterministic_bytes(1000)
-        @test zlib_inflate(Three._zlib_store(data)) == data    # stored-block round-trip
+        @test zlib_inflate(Diff3D._zlib_store(data)) == data    # stored-block round-trip
         @test base64_decode("TWFu") == Vector{UInt8}(codeunits("Man"))
         @test base64_decode("TWE=") == Vector{UInt8}(codeunits("Ma"))
         @test base64_decode("TQ==") == Vector{UInt8}(codeunits("M"))
@@ -2247,12 +2247,12 @@ deterministic_bytes(n::Int) =
                                      min_polar_angle=π/4, max_polar_angle=3π/4,
                                      min_azimuth_angle=-0.5, max_azimuth_angle=0.5)
         orbit_set!(constrained; azimuth=2.0, polar=0.01, radius=10.0)
-        sph = Three.cartesian_to_spherical(constrained.camera.position - constrained.target)
+        sph = Diff3D.cartesian_to_spherical(constrained.camera.position - constrained.target)
         @test sph.radius ≈ 4.0 atol=1e-9
         @test sph.phi ≈ π/4 atol=1e-9
         @test sph.theta ≈ 0.5 atol=1e-9
         orbit_zoom!(constrained, 0.01)
-        sph = Three.cartesian_to_spherical(constrained.camera.position - constrained.target)
+        sph = Diff3D.cartesian_to_spherical(constrained.camera.position - constrained.target)
         @test sph.radius ≈ 2.0 atol=1e-9
     end
 
@@ -2287,10 +2287,10 @@ deterministic_bytes(n::Int) =
                                              max_polar_angle=3π/4)
         pointerlock_lock!(constrained_pc)
         pointerlock_move!(constrained_pc, 0, -10_000)
-        sph = Three.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
+        sph = Diff3D.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
         @test sph.phi ≈ π/4 atol=1e-9
         pointerlock_move!(constrained_pc, 0, 10_000)
-        sph = Three.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
+        sph = Diff3D.cartesian_to_spherical(constrained_cam.target - constrained_cam.position)
         @test sph.phi ≈ 3π/4 atol=1e-9
         @test_throws ArgumentError PointerLockControls(PerspectiveCamera();
                                                        min_polar_angle=1.0,
@@ -2669,10 +2669,10 @@ deterministic_bytes(n::Int) =
         zero_scale = shade_mesh_faces(geo, wm, mk(tiltmap; scale=0.0), light, campos)
         @test zero_scale[1].r ≈ base[1].r atol=1e-9
         n0 = Vec3(0.0, 0.0, 1.0)
-        n_half = Three._apply_normal_map(n0, tiltmap, 0.5, 0.5,
+        n_half = Diff3D._apply_normal_map(n0, tiltmap, 0.5, 0.5,
                                          Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),
                                          (0.0,0.0), (1.0,0.0), (0.0,1.0), 0.5)
-        n_full = Three._apply_normal_map(n0, tiltmap, 0.5, 0.5,
+        n_full = Diff3D._apply_normal_map(n0, tiltmap, 0.5, 0.5,
                                          Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),
                                          (0.0,0.0), (1.0,0.0), (0.0,1.0), 1.0)
         @test dot(n_half, n0) > dot(n_full, n0)
@@ -2681,7 +2681,7 @@ deterministic_bytes(n::Int) =
         sharp = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05), light, campos)
         mapped = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05, roughness_map=rmap), light, campos)
         @test abs(sharp[1].r - mapped[1].r) > 1e-6
-        eff = Three._apply_pbr_maps(MeshStandardMaterial(metalness=0.5, roughness=0.8,
+        eff = Diff3D._apply_pbr_maps(MeshStandardMaterial(metalness=0.5, roughness=0.8,
                                                          roughness_map=rmap, metalness_map=rmap),
                                     rmap, rmap, 0.5, 0.5)
         @test eff.roughness ≈ 0.72
@@ -2845,24 +2845,24 @@ deterministic_bytes(n::Int) =
 
         # [C:shading+rasterizer] #11 shade_phong: Blinn-Phong specular not masked by N·L, leaks onto back-lit faces (N·L<0 
         @testset "Bug11 phong specular masked by N·L" begin
-            n  = Three.Vec3(0.0, 0.0, 1.0)
-            ld = Three.Vec3(0.8, 0.0, -0.6)   # dot(n,ld) = -0.6 < 0: light behind surface
-            vd = Three.Vec3(0.0, 0.0, 1.0)    # half-vec has +z so N·H ≈ 0.447 > 0
-            c  = Three.shade_phong(n, ld, vd, Three.Color3(1.0,1.0,1.0), 1.0,
-                                   Three.Color3(0.5,0.5,0.5), Three.Color3(1.0,1.0,1.0), 4.0)
+            n  = Diff3D.Vec3(0.0, 0.0, 1.0)
+            ld = Diff3D.Vec3(0.8, 0.0, -0.6)   # dot(n,ld) = -0.6 < 0: light behind surface
+            vd = Diff3D.Vec3(0.0, 0.0, 1.0)    # half-vec has +z so N·H ≈ 0.447 > 0
+            c  = Diff3D.shade_phong(n, ld, vd, Diff3D.Color3(1.0,1.0,1.0), 1.0,
+                                   Diff3D.Color3(0.5,0.5,0.5), Diff3D.Color3(1.0,1.0,1.0), 4.0)
             # OLD: specular leaks (c.r ≈ 0.04 > 0); NEW: masked to 0 (diffuse also 0 here)
             @test c.r < 1e-9 && c.g < 1e-9 && c.b < 1e-9
         end
 
         # [C:shading+rasterizer] #13 light_contribution(SpotLight): ignores light.distance (range cutoff), unlike PointLigh
         @testset "Bug13 spotlight honours distance" begin
-            pos = Three.Vec3(0.0, 0.0, -3.0)                       # 3 units down the cone axis
-            sl_inf = Three.SpotLight(intensity=1.0, distance=0.0, decay=2.0, position=Three.Vec3(0.0,0.0,0.0))
-            sl_inf.target = Three.Vec3(0.0, 0.0, -1.0)
-            sl_fin = Three.SpotLight(intensity=1.0, distance=5.0, decay=2.0, position=Three.Vec3(0.0,0.0,0.0))
-            sl_fin.target = Three.Vec3(0.0, 0.0, -1.0)
-            _, li_inf, _ = Three.light_contribution(sl_inf, pos)
-            _, li_fin, _ = Three.light_contribution(sl_fin, pos)
+            pos = Diff3D.Vec3(0.0, 0.0, -3.0)                       # 3 units down the cone axis
+            sl_inf = Diff3D.SpotLight(intensity=1.0, distance=0.0, decay=2.0, position=Diff3D.Vec3(0.0,0.0,0.0))
+            sl_inf.target = Diff3D.Vec3(0.0, 0.0, -1.0)
+            sl_fin = Diff3D.SpotLight(intensity=1.0, distance=5.0, decay=2.0, position=Diff3D.Vec3(0.0,0.0,0.0))
+            sl_fin.target = Diff3D.Vec3(0.0, 0.0, -1.0)
+            _, li_inf, _ = Diff3D.light_contribution(sl_inf, pos)
+            _, li_fin, _ = Diff3D.light_contribution(sl_fin, pos)
             # dwin = 1 - (3/5)^2 = 0.64; OLD ignored distance so li_fin == li_inf
             @test isapprox(li_fin, li_inf * 0.64; rtol=1e-9)
             @test li_fin < li_inf * 0.99
@@ -2870,33 +2870,33 @@ deterministic_bytes(n::Int) =
 
         # [C:shading+rasterizer] #14 Smooth (per-pixel) render path performs no back-face culling, unlike the flat path.
         @testset "Bug14 smooth path back-face culling" begin
-            cam = Three.PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0); cam.position = Three.Vec3(0.0,0.0,4.0)
-            sf = Three.Scene(background=Three.Color3(0.0,0.0,0.0))
-            pf = Three.Mesh(Three.PlaneGeometry(width=4.0,height=4.0), Three.MeshBasicMaterial(color=Three.Color3(1.0,1.0,1.0), side=:front))
-            pf.rotation = Three.Euler(0.0, π, 0.0); Three.add!(sf, pf)   # plane flipped to face away
-            rtf = Three.RenderTarget(40,40); Three.render!(rtf, sf, cam; shading=:smooth)
+            cam = Diff3D.PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0); cam.position = Diff3D.Vec3(0.0,0.0,4.0)
+            sf = Diff3D.Scene(background=Diff3D.Color3(0.0,0.0,0.0))
+            pf = Diff3D.Mesh(Diff3D.PlaneGeometry(width=4.0,height=4.0), Diff3D.MeshBasicMaterial(color=Diff3D.Color3(1.0,1.0,1.0), side=:front))
+            pf.rotation = Diff3D.Euler(0.0, π, 0.0); Diff3D.add!(sf, pf)   # plane flipped to face away
+            rtf = Diff3D.RenderTarget(40,40); Diff3D.render!(rtf, sf, cam; shading=:smooth)
             @test count(>(0.5), rtf.color[:,:,1]) == 0                  # NEW: front-side away face culled in smooth path; OLD: rendered (>100)
-            sd = Three.Scene(background=Three.Color3(0.0,0.0,0.0))
-            pd = Three.Mesh(Three.PlaneGeometry(width=4.0,height=4.0), Three.MeshBasicMaterial(color=Three.Color3(1.0,1.0,1.0), side=:double))
-            pd.rotation = Three.Euler(0.0, π, 0.0); Three.add!(sd, pd)
-            rtd = Three.RenderTarget(40,40); Three.render!(rtd, sd, cam; shading=:smooth)
+            sd = Diff3D.Scene(background=Diff3D.Color3(0.0,0.0,0.0))
+            pd = Diff3D.Mesh(Diff3D.PlaneGeometry(width=4.0,height=4.0), Diff3D.MeshBasicMaterial(color=Diff3D.Color3(1.0,1.0,1.0), side=:double))
+            pd.rotation = Diff3D.Euler(0.0, π, 0.0); Diff3D.add!(sd, pd)
+            rtd = Diff3D.RenderTarget(40,40); Diff3D.render!(rtd, sd, cam; shading=:smooth)
             @test count(>(0.5), rtd.color[:,:,1]) > 100                 # :double still renders in both old and new
         end
 
         # [C:shading+rasterizer] #15 Lit shading loops a Vector{AbstractLight} (abstract eltype) causing dynamic dispatch +
         @testset "Bug15 _shade_lit output unchanged (function barrier)" begin
             # Behaviour-preserving: a mixed light set must give the exact same shaded color.
-            n  = Three.Vec3(0.0, 0.0, 1.0); vd = Three.Vec3(0.0, 0.0, 1.0); p = Three.Vec3(0.0,0.0,0.0)
-            mat = Three.MeshLambertMaterial(color=Three.Color3(0.8,0.4,0.2))
-            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.3)]
-            d = Three.DirectionalLight(intensity=0.9, position=Three.Vec3(0.0,0.0,5.0)); d.target = Three.Vec3(0.0,0.0,0.0)
+            n  = Diff3D.Vec3(0.0, 0.0, 1.0); vd = Diff3D.Vec3(0.0, 0.0, 1.0); p = Diff3D.Vec3(0.0,0.0,0.0)
+            mat = Diff3D.MeshLambertMaterial(color=Diff3D.Color3(0.8,0.4,0.2))
+            lights = Diff3D.AbstractLight[Diff3D.AmbientLight(intensity=0.3)]
+            d = Diff3D.DirectionalLight(intensity=0.9, position=Diff3D.Vec3(0.0,0.0,5.0)); d.target = Diff3D.Vec3(0.0,0.0,0.0)
             push!(lights, d)
-            c = Three.shade_face(n, vd, p, mat, lights)
+            c = Diff3D.shade_face(n, vd, p, mat, lights)
             # Independent hand recomputation of the same accumulation order: emissive + ambient fill + lambert direct.
-            amb = mat.color * (Three.Color3(1.0,1.0,1.0) * 0.3)
-            ldir = Three.normalize(d.position - d.target)                 # = (0,0,1)
-            ndotl = max(Three.dot(n, ldir), 0.0)                          # = 1.0
-            dir = mat.color * (Three.Color3(1.0,1.0,1.0)) * (ndotl * 0.9)
+            amb = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * 0.3)
+            ldir = Diff3D.normalize(d.position - d.target)                 # = (0,0,1)
+            ndotl = max(Diff3D.dot(n, ldir), 0.0)                          # = 1.0
+            dir = mat.color * (Diff3D.Color3(1.0,1.0,1.0)) * (ndotl * 0.9)
             expect = mat.emissive + amb + dir
             @test isapprox(c.r, expect.r; atol=1e-12) && isapprox(c.g, expect.g; atol=1e-12) && isapprox(c.b, expect.b; atol=1e-12)
         end
@@ -2956,10 +2956,10 @@ deterministic_bytes(n::Int) =
         end
 
         # [E:loaders] #1 load_gltf/add_node! drops rotation+scale: only translation copied into Group.position
-        let M = mat4_translation(1.0,2.0,3.0) * quat_to_mat4(Quaternion(0.0, sin(pi/4), 0.0, cos(pi/4))) * mat4_scaling(2.0,3.0,4.0); pos, rot, scl = Three._gltf_decompose(M); g = Group(); g.position = pos; g.rotation = rot; g.scale = scl; w = compute_world_matrix(g); p_world = mat4_transform_point(w, Vec3(1.0,0.0,0.0)); p_ref = mat4_transform_point(M, Vec3(1.0,0.0,0.0)); @test isapprox(p_world.x, p_ref.x; atol=1e-9) && isapprox(p_world.y, p_ref.y; atol=1e-9) && isapprox(p_world.z, p_ref.z; atol=1e-9); @test isapprox(scl.x, 2.0; atol=1e-9) && isapprox(scl.y, 3.0; atol=1e-9) && isapprox(scl.z, 4.0; atol=1e-9) end
+        let M = mat4_translation(1.0,2.0,3.0) * quat_to_mat4(Quaternion(0.0, sin(pi/4), 0.0, cos(pi/4))) * mat4_scaling(2.0,3.0,4.0); pos, rot, scl = Diff3D._gltf_decompose(M); g = Group(); g.position = pos; g.rotation = rot; g.scale = scl; w = compute_world_matrix(g); p_world = mat4_transform_point(w, Vec3(1.0,0.0,0.0)); p_ref = mat4_transform_point(M, Vec3(1.0,0.0,0.0)); @test isapprox(p_world.x, p_ref.x; atol=1e-9) && isapprox(p_world.y, p_ref.y; atol=1e-9) && isapprox(p_world.z, p_ref.z; atol=1e-9); @test isapprox(scl.x, 2.0; atol=1e-9) && isapprox(scl.y, 3.0; atol=1e-9) && isapprox(scl.z, 4.0; atol=1e-9) end
 
         # [E:loaders] #19 _gltf_accessor ignores bufferView.byteStride; interleaved buffers decode to garbage
-        let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteStride"=>12.0)]); out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
+        let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteStride"=>12.0)]); out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
 
         @testset "glTF accessor signed/normalized/sparse decoding" begin
             let buf = UInt8[0x80, 0x00, 0x7f],
@@ -2968,7 +2968,7 @@ deterministic_bytes(n::Int) =
                                                    "type"=>"SCALAR", "componentType"=>5120.0,
                                                    "normalized"=>true)],
                     "bufferViews"=>[Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0)])
-                out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0)
+                out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0)
                 @test ncomp == 1 && cnt == 3
                 @test out[1] ≈ -1.0
                 @test out[2] ≈ 0.0
@@ -2992,7 +2992,7 @@ deterministic_bytes(n::Int) =
                         Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset)),
                         Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset)),
                         Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(sparse_value_offset))])
-                out, ncomp, cnt = Three._gltf_accessor(gltf, [buf], 0)
+                out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0)
                 @test ncomp == 1 && cnt == 3
                 @test out == [0.0, 5.0, 0.0]
             end
@@ -3028,7 +3028,7 @@ deterministic_bytes(n::Int) =
                             "TANGENT"=>Float64(tan)))] )],
                     "bufferViews"=>views,
                     "accessors"=>accessors)
-                scene = Three._gltf_build_scene(gltf, [buf])
+                scene = Diff3D._gltf_build_scene(gltf, [buf])
                 grp = only(get_children(scene))
                 mesh = only(get_children(grp))
                 geo = mesh.geometry
@@ -3095,7 +3095,7 @@ deterministic_bytes(n::Int) =
                         "extensions"=>Dict{String,Any}(
                             "KHR_materials_emissive_strength"=>Dict{String,Any}(
                                 "emissiveStrength"=>2.5)))])
-                scene = Three._gltf_build_scene(gltf, [buf]; dir=dir)
+                scene = Diff3D._gltf_build_scene(gltf, [buf]; dir=dir)
                 mat = only(get_children(only(get_children(scene)))).material
                 @test mat isa MeshStandardMaterial
                 @test mat.color.r ≈ 0.8 && mat.opacity ≈ 0.5
@@ -3111,7 +3111,7 @@ deterministic_bytes(n::Int) =
                     -3.0*sin(0.75), 3.0*cos(0.75), 0.5,
                     0.0, 0.0, 1.0))
                 @test maximum(abs.(collect(mat.map.matrix.e) .- collect(expected_matrix.e))) < 1e-12
-                @test Three.texture_transform_uv(mat.map, 0.0, 0.0) == (expected_matrix.e[3], expected_matrix.e[6])
+                @test Diff3D.texture_transform_uv(mat.map, 0.0, 0.0) == (expected_matrix.e[3], expected_matrix.e[6])
                 @test mat.map.wrap_s === :clamp && mat.map.wrap_t === :mirror
                 @test mat.map.filter === :nearest
                 @test mat.normal_map isa Texture && mat.normal_map.colorspace === :linear && mat.normal_map.tex_coord == 1
@@ -3124,7 +3124,7 @@ deterministic_bytes(n::Int) =
                 @test mat.emissive_intensity ≈ 2.5
                 gltf["materials"][1]["alphaMode"] = "MASK"
                 gltf["materials"][1]["alphaCutoff"] = 0.42
-                masked_scene = Three._gltf_build_scene(gltf, [buf]; dir=dir)
+                masked_scene = Diff3D._gltf_build_scene(gltf, [buf]; dir=dir)
                 masked = only(get_children(only(get_children(masked_scene)))).material
                 @test masked isa MeshStandardMaterial
                 @test !masked.transparent
@@ -3147,7 +3147,7 @@ deterministic_bytes(n::Int) =
                             "baseColorTexture"=>Dict{String,Any}("index"=>0.0)),
                         "alphaMode"=>"BLEND",
                         "extensions"=>Dict{String,Any}("KHR_materials_unlit"=>Dict{String,Any}()))])
-                mat = Three._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
                 @test mat isa MeshBasicMaterial
                 @test mat.color == Color3(0.2, 0.3, 0.4)
                 @test mat.opacity ≈ 0.6 && mat.transparent
@@ -3205,7 +3205,7 @@ deterministic_bytes(n::Int) =
                                 "specularColorFactor"=>Any[0.9,0.8,0.7],
                                 "specularTexture"=>Dict{String,Any}("index"=>0.0),
                                 "specularColorTexture"=>Dict{String,Any}("index"=>0.0))))])
-                mat = Three._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
                 @test mat isa MeshPhysicalMaterial
                 @test mat.color == Color3(0.2, 0.3, 0.4)
                 @test mat.emissive == Color3(0.1, 0.2, 0.3)
@@ -3251,22 +3251,22 @@ deterministic_bytes(n::Int) =
         let dir = mktempdir(); path = joinpath(dir, "partial_normals_grp.obj"); open(path, "w") do io; println(io, "v 0 0 0"); println(io, "v 1 0 0"); println(io, "v 0 1 0"); println(io, "v 1 1 0"); println(io, "vn 0 0 1"); println(io, "usemtl mat0"); println(io, "f 1//1 2//1 3//1"); println(io, "f 2 4 3") end; geo, face_mtl, mats = load_obj_groups(path); zero_norm = false; b = 1; while b <= length(geo.normals); if geo.normals[b]==0.0 && geo.normals[b+1]==0.0 && geo.normals[b+2]==0.0; zero_norm = true; break end; b += 3 end; @test !zero_norm end
 
         # [F:soft+differentiable+inverse+losses] #21 soft_rasterizer.jl depth aggregation softmax overflow/underflow (exp(-z/gamma) with no
-        @test let v=[Vec3(-0.5,-0.5,0.0),Vec3(0.5,-0.5,0.0),Vec3(0.0,0.5,0.0)], f=[(1,2,3)], c=[Color3(1.0,0.0,0.0)], vp=Three.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)), cfg=Three.SoftRasterizerConfig(sigma=1.0,gamma=1e-4,bg_color=Color3(0.0,0.0,0.0)); img=Three.soft_render(v,f,c,vp,16,16,cfg); all(isfinite,img) && maximum(img) > 1e-3 end
+        @test let v=[Vec3(-0.5,-0.5,0.0),Vec3(0.5,-0.5,0.0),Vec3(0.0,0.5,0.0)], f=[(1,2,3)], c=[Color3(1.0,0.0,0.0)], vp=Diff3D.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)), cfg=Diff3D.SoftRasterizerConfig(sigma=1.0,gamma=1e-4,bg_color=Color3(0.0,0.0,0.0)); img=Diff3D.soft_render(v,f,c,vp,16,16,cfg); all(isfinite,img) && maximum(img) > 1e-3 end
 
         # [F:soft+differentiable+inverse+losses] #23 soft_rasterizer.jl inverted bbox margin (3.0/max(sigma,eps) shrinks band as sigma grow
-        @test let v=[Vec3(0.0,0.0,0.0),Vec3(2.0,0.0,0.0),Vec3(0.0,2.0,0.0)], f=[(1,2,3)], c=[Color3(1.0,1.0,1.0)], vp=Three.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)); cfg_small=Three.SoftRasterizerConfig(sigma=0.25,gamma=1.0); cfg_big=Three.SoftRasterizerConfig(sigma=8.0,gamma=1.0); img_s=Three.soft_render(v,f,c,vp,64,64,cfg_small); img_b=Three.soft_render(v,f,c,vp,64,64,cfg_big); sum(img_b) > sum(img_s) end
+        @test let v=[Vec3(0.0,0.0,0.0),Vec3(2.0,0.0,0.0),Vec3(0.0,2.0,0.0)], f=[(1,2,3)], c=[Color3(1.0,1.0,1.0)], vp=Diff3D.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)); cfg_small=Diff3D.SoftRasterizerConfig(sigma=0.25,gamma=1.0); cfg_big=Diff3D.SoftRasterizerConfig(sigma=8.0,gamma=1.0); img_s=Diff3D.soft_render(v,f,c,vp,64,64,cfg_small); img_b=Diff3D.soft_render(v,f,c,vp,64,64,cfg_big); sum(img_b) > sum(img_s) end
 
         # [F:soft+differentiable+inverse+losses] #29 soft_rasterizer.jl non-differentiable background branch (if total_weight>eps ... else 
-        @test let vp=Three.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)), f=[(1,2,3)], c=[Color3(1.0,1.0,1.0)]; g=Three.ForwardDiff.gradient(p->begin verts=[Vec3(p[1],p[2],0.0),Vec3(p[3],p[4],0.0),Vec3(p[5],p[6],0.0)]; cfg=Three.SoftRasterizerConfig(sigma=1.0,gamma=1.0,bg_color=Color3(0.0,0.0,0.0)); img=Three.soft_render(verts,f,c,vp,24,24,cfg); sum(img) end, [-0.5,-0.5,0.5,-0.5,0.0,0.5]); all(isfinite,g) && any(x->abs(x)>1e-6, g) end
+        @test let vp=Diff3D.Mat4{Float64}(ntuple(k->(k==1||k==6||k==11||k==16) ? 1.0 : 0.0,16)), f=[(1,2,3)], c=[Color3(1.0,1.0,1.0)]; g=Diff3D.ForwardDiff.gradient(p->begin verts=[Vec3(p[1],p[2],0.0),Vec3(p[3],p[4],0.0),Vec3(p[5],p[6],0.0)]; cfg=Diff3D.SoftRasterizerConfig(sigma=1.0,gamma=1.0,bg_color=Color3(0.0,0.0,0.0)); img=Diff3D.soft_render(verts,f,c,vp,24,24,cfg); sum(img) end, [-0.5,-0.5,0.5,-0.5,0.0,0.5]); all(isfinite,g) && any(x->abs(x)>1e-6, g) end
 
         # [F:soft+differentiable+inverse+losses] #2 differentiable.jl + soft_render_scene/differentiable_render defaults gave zero gradient
-        @test let cam=Three.PerspectiveCamera(fov=π/3,aspect=1.0,near=0.1,far=10.0); cam.position=Vec3(0.0,0.0,3.0); cam.target=Vec3(0.0,0.0,0.0); cam.up=Vec3(0.0,1.0,0.0); vp=projection_matrix(cam)*view_matrix(cam); faces=[(1,2,3)]; fcols=[Color3(1.0,0.2,0.2)]; rf=Three.vertex_render_fn(faces, fcols, vp, 24, 24); p0=[-0.5,-0.5,0.0, 0.5,-0.5,0.0, 0.0,0.5,0.0]; g=Three.ForwardDiff.gradient(p->sum(rf(p)), p0); all(isfinite,g) && any(x->abs(x)>1e-8, g) end
+        @test let cam=Diff3D.PerspectiveCamera(fov=π/3,aspect=1.0,near=0.1,far=10.0); cam.position=Vec3(0.0,0.0,3.0); cam.target=Vec3(0.0,0.0,0.0); cam.up=Vec3(0.0,1.0,0.0); vp=projection_matrix(cam)*view_matrix(cam); faces=[(1,2,3)]; fcols=[Color3(1.0,0.2,0.2)]; rf=Diff3D.vertex_render_fn(faces, fcols, vp, 24, 24); p0=[-0.5,-0.5,0.0, 0.5,-0.5,0.0, 0.0,0.5,0.0]; g=Diff3D.ForwardDiff.gradient(p->sum(rf(p)), p0); all(isfinite,g) && any(x->abs(x)>1e-8, g) end
 
         # [F:soft+differentiable+inverse+losses] #24 inverse.jl numerical_gradient used O(delta) forward difference instead of mandated O(h
-        @test let f=(p->p[1]^3 + 2*p[1]*p[2]^2), p=[1.3, 0.7]; g=Three.numerical_gradient(f, p; δ=1e-3); exact=[3*p[1]^2 + 2*p[2]^2, 4*p[1]*p[2]]; isapprox(g, exact; rtol=1e-5) end
+        @test let f=(p->p[1]^3 + 2*p[1]*p[2]^2), p=[1.3, 0.7]; g=Diff3D.numerical_gradient(f, p; δ=1e-3); exact=[3*p[1]^2 + 2*p[2]^2, 4*p[1]*p[2]]; isapprox(g, exact; rtol=1e-5) end
 
         # [F:soft+differentiable+inverse+losses] #22 losses.jl loss_ssim and loss_silhouette_iou forced same eltype T for image and target 
-        @test let img=Three.ForwardDiff.Dual.(deterministic_array(9,9,3)), tgt=deterministic_array(9,9,3); v1=Three.loss_ssim(img, tgt); v2=Three.loss_silhouette_iou(img, tgt); isfinite(Three.ForwardDiff.value(v1)) && isfinite(Three.ForwardDiff.value(v2)) end
+        @test let img=Diff3D.ForwardDiff.Dual.(deterministic_array(9,9,3)), tgt=deterministic_array(9,9,3); v1=Diff3D.loss_ssim(img, tgt); v2=Diff3D.loss_silhouette_iou(img, tgt); isfinite(Diff3D.ForwardDiff.value(v1)) && isfinite(Diff3D.ForwardDiff.value(v2)) end
 
     end
 
@@ -3610,7 +3610,7 @@ deterministic_bytes(n::Int) =
 
         # [GEO:geometry-groups] BufferGeometry draw groups (multi-material per geometry)
         @testset "BufferGeometry draw groups (three.js parity)" begin
-            using Three
+            using Diff3D
             # add_group! / get_groups round-trip with three.js (start,count,material_index) semantics
             g = BufferGeometry()
             @test isempty(get_groups(g))
@@ -3813,7 +3813,7 @@ deterministic_bytes(n::Int) =
                                        roughness_map=rough_map)
             direct = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
                                 pbr, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
-            mapped = Three._apply_roughness_map(pbr, rough_map, 0.5, 0.5)
+            mapped = Diff3D._apply_roughness_map(pbr, rough_map, 0.5, 0.5)
             direct_mapped = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
                                        mapped, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
             @test direct_mapped.r < direct.r
@@ -3936,37 +3936,37 @@ deterministic_bytes(n::Int) =
 
         # [A:material-light-lobes] Sheen lobe (MeshPhysicalMaterial)
         @testset "sheen lobe" begin
-            n = Three.Vec3(0.0,0.0,1.0)
-            vd = Three.Vec3(0.0,0.0,1.0)
-            ld = Three.normalize(Three.Vec3(0.7,0.0,0.7))
-            lc = Three.Color3(1.0,1.0,1.0); li = 1.0
-            m0 = Three.MeshPhysicalMaterial(color=Three.Color3(0.5,0.5,0.5))
-            ms = Three.MeshPhysicalMaterial(color=Three.Color3(0.5,0.5,0.5), sheen=1.0, sheen_color=Three.Color3(1.0,1.0,1.0), sheen_roughness=1.0)
-            base = Three._direct_response(m0, n, vd, lc, li, ld)
-            withs = Three._direct_response(ms, n, vd, lc, li, ld)
+            n = Diff3D.Vec3(0.0,0.0,1.0)
+            vd = Diff3D.Vec3(0.0,0.0,1.0)
+            ld = Diff3D.normalize(Diff3D.Vec3(0.7,0.0,0.7))
+            lc = Diff3D.Color3(1.0,1.0,1.0); li = 1.0
+            m0 = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.5,0.5,0.5))
+            ms = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.5,0.5,0.5), sheen=1.0, sheen_color=Diff3D.Color3(1.0,1.0,1.0), sheen_roughness=1.0)
+            base = Diff3D._direct_response(m0, n, vd, lc, li, ld)
+            withs = Diff3D._direct_response(ms, n, vd, lc, li, ld)
             @test withs.r > base.r          # off-specular sheen adds energy
-            @test isapprox(base.r, Three._direct_response(m0,n,vd,lc,li,ld).r)
-            ldback = Three.normalize(Three.Vec3(0.0,0.0,-1.0))
-            @test isapprox(Three._direct_response(ms,n,vd,lc,li,ldback).r, Three._direct_response(m0,n,vd,lc,li,ldback).r)  # no sheen when light behind
+            @test isapprox(base.r, Diff3D._direct_response(m0,n,vd,lc,li,ld).r)
+            ldback = Diff3D.normalize(Diff3D.Vec3(0.0,0.0,-1.0))
+            @test isapprox(Diff3D._direct_response(ms,n,vd,lc,li,ldback).r, Diff3D._direct_response(m0,n,vd,lc,li,ldback).r)  # no sheen when light behind
         end
 
         # [A:material-light-lobes] KHR_materials_specular (MeshPhysicalMaterial)
         @testset "physical specular" begin
-            n = Three.Vec3(0.0,0.0,1.0)
-            vd = Three.Vec3(0.0,0.0,1.0)
-            ld = Three.Vec3(0.0,0.0,1.0)
-            lc = Three.Color3(1.0,1.0,1.0); li = 1.0
-            base = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+            n = Diff3D.Vec3(0.0,0.0,1.0)
+            vd = Diff3D.Vec3(0.0,0.0,1.0)
+            ld = Diff3D.Vec3(0.0,0.0,1.0)
+            lc = Diff3D.Color3(1.0,1.0,1.0); li = 1.0
+            base = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.0,0.0,0.0),
                                               roughness=0.2, metalness=0.0)
-            muted = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+            muted = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.0,0.0,0.0),
                                                roughness=0.2, metalness=0.0,
                                                specular_intensity=0.0)
-            red = Three.MeshPhysicalMaterial(color=Three.Color3(0.0,0.0,0.0),
+            red = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.0,0.0,0.0),
                                              roughness=0.2, metalness=0.0,
-                                             specular_color=Three.Color3(1.0,0.0,0.0))
-            cbase = Three._direct_response(base, n, vd, lc, li, ld)
-            cmuted = Three._direct_response(muted, n, vd, lc, li, ld)
-            cred = Three._direct_response(red, n, vd, lc, li, ld)
+                                             specular_color=Diff3D.Color3(1.0,0.0,0.0))
+            cbase = Diff3D._direct_response(base, n, vd, lc, li, ld)
+            cmuted = Diff3D._direct_response(muted, n, vd, lc, li, ld)
+            cred = Diff3D._direct_response(red, n, vd, lc, li, ld)
             @test cbase.r > cmuted.r
             @test cmuted.r ≈ 0.0
             @test cred.r > cred.g
@@ -3975,35 +3975,35 @@ deterministic_bytes(n::Int) =
 
         # [A:material-light-lobes] Iridescence (MeshPhysicalMaterial)
         @testset "iridescence" begin
-            n = Three.Vec3(0.0,0.0,1.0); vd = Three.Vec3(0.0,0.0,1.0)
-            ld = Three.normalize(Three.Vec3(0.2,0.0,1.0))
-            lc = Three.Color3(1.0,1.0,1.0); li = 1.0
-            m0 = Three.MeshPhysicalMaterial(color=Three.Color3(0.5,0.5,0.5), roughness=0.3)
-            mi = Three.MeshPhysicalMaterial(color=Three.Color3(0.5,0.5,0.5), roughness=0.3, iridescence=1.0, iridescence_ior=1.3, iridescence_thickness=400.0)
-            base = Three._direct_response(m0, n, vd, lc, li, ld)
-            irid = Three._direct_response(mi, n, vd, lc, li, ld)
+            n = Diff3D.Vec3(0.0,0.0,1.0); vd = Diff3D.Vec3(0.0,0.0,1.0)
+            ld = Diff3D.normalize(Diff3D.Vec3(0.2,0.0,1.0))
+            lc = Diff3D.Color3(1.0,1.0,1.0); li = 1.0
+            m0 = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.5,0.5,0.5), roughness=0.3)
+            mi = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.5,0.5,0.5), roughness=0.3, iridescence=1.0, iridescence_ior=1.3, iridescence_thickness=400.0)
+            base = Diff3D._direct_response(m0, n, vd, lc, li, ld)
+            irid = Diff3D._direct_response(mi, n, vd, lc, li, ld)
             @test all(isfinite, (irid.r, irid.g, irid.b))
             @test !(isapprox(irid.r, base.r) && isapprox(irid.g, base.g) && isapprox(irid.b, base.b))  # thin-film tints the highlight
             # iridescence=0 reproduces base exactly
-            m0b = Three.MeshPhysicalMaterial(color=Three.Color3(0.5,0.5,0.5), roughness=0.3, iridescence=0.0)
-            @test isapprox(Three._direct_response(m0b,n,vd,lc,li,ld).r, base.r)
+            m0b = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.5,0.5,0.5), roughness=0.3, iridescence=0.0)
+            @test isapprox(Diff3D._direct_response(m0b,n,vd,lc,li,ld).r, base.r)
         end
 
         # [A:material-light-lobes] Transmission approximation (MeshPhysicalMaterial)
         @testset "transmission approximation" begin
-            n = Three.Vec3(0.0,0.0,1.0); vd = Three.Vec3(0.0,0.0,1.0)
-            bg = Three.Color3(0.5,0.5,0.5)
-            m0 = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0), transmission=0.0, ior=1.5)
-            mt = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0), transmission=1.0, ior=1.5)
-            @test Three._transmission_response(m0, n, vd, bg) == Three.Color3(0.0,0.0,0.0)
-            t = Three._transmission_response(mt, n, vd, Three.Color3(1.0,1.0,1.0))
+            n = Diff3D.Vec3(0.0,0.0,1.0); vd = Diff3D.Vec3(0.0,0.0,1.0)
+            bg = Diff3D.Color3(0.5,0.5,0.5)
+            m0 = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0), transmission=0.0, ior=1.5)
+            mt = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0), transmission=1.0, ior=1.5)
+            @test Diff3D._transmission_response(m0, n, vd, bg) == Diff3D.Color3(0.0,0.0,0.0)
+            t = Diff3D._transmission_response(mt, n, vd, Diff3D.Color3(1.0,1.0,1.0))
             @test isapprox(t.r, 0.96; rtol=1e-6)   # clear glass normal incidence: 1 - Fresnel(0.04)
-            mv = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+            mv = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0),
                                             transmission=1.0, ior=1.5,
                                             thickness=1.0,
                                             attenuation_distance=1.0,
-                                            attenuation_color=Three.Color3(0.5,0.25,0.125))
-            tv = Three._transmission_response(mv, n, vd, Three.Color3(1.0,1.0,1.0))
+                                            attenuation_color=Diff3D.Color3(0.5,0.25,0.125))
+            tv = Diff3D._transmission_response(mv, n, vd, Diff3D.Color3(1.0,1.0,1.0))
             @test tv.r ≈ 0.48
             @test tv.g ≈ 0.24
             @test tv.b ≈ 0.12
@@ -4011,15 +4011,15 @@ deterministic_bytes(n::Int) =
             tdata[1,1,1] = 0.9
             tdata[1,1,2] = 0.5
             tdata[1,1,3] = 0.1
-            mm = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+            mm = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0),
                                             transmission=1.0, ior=1.5,
                                             thickness=1.0,
-                                            thickness_map=Three.Texture(tdata; filter=:nearest, colorspace=:linear),
+                                            thickness_map=Diff3D.Texture(tdata; filter=:nearest, colorspace=:linear),
                                             attenuation_distance=1.0,
-                                            attenuation_color=Three.Color3(0.25,1.0,1.0))
-            em = Three._apply_pbr_maps(mm, nothing, nothing, 0.5, 0.5)
+                                            attenuation_color=Diff3D.Color3(0.25,1.0,1.0))
+            em = Diff3D._apply_pbr_maps(mm, nothing, nothing, 0.5, 0.5)
             @test em.thickness ≈ 0.5
-            tm = Three._transmission_response(em, n, vd, Three.Color3(1.0,1.0,1.0))
+            tm = Diff3D._transmission_response(em, n, vd, Diff3D.Color3(1.0,1.0,1.0))
             @test tm.r ≈ 0.48
             @test tm.g ≈ 0.96
             @test tm.b ≈ 0.96
@@ -4028,15 +4028,15 @@ deterministic_bytes(n::Int) =
             scalar_data[1,1,2] = 0.5
             scalar_data[1,1,3] = 0.75
             scalar_data[1,1,4] = 0.4
-            scalar_tex = Three.Texture(scalar_data; filter=:nearest, colorspace=:linear)
-            color_tex = Three.Texture(reshape([0.2, 0.4, 0.6], 1, 1, 3); filter=:nearest, colorspace=:linear)
-            mp = Three.MeshPhysicalMaterial(clearcoat=0.8,
+            scalar_tex = Diff3D.Texture(scalar_data; filter=:nearest, colorspace=:linear)
+            color_tex = Diff3D.Texture(reshape([0.2, 0.4, 0.6], 1, 1, 3); filter=:nearest, colorspace=:linear)
+            mp = Diff3D.MeshPhysicalMaterial(clearcoat=0.8,
                                             clearcoat_map=scalar_tex,
                                             clearcoat_roughness=0.6,
                                             clearcoat_roughness_map=scalar_tex,
                                             transmission=0.9,
                                             transmission_map=scalar_tex,
-                                            sheen_color=Three.Color3(1.0,0.5,0.25),
+                                            sheen_color=Diff3D.Color3(1.0,0.5,0.25),
                                             sheen_color_map=color_tex,
                                             sheen_roughness=0.5,
                                             sheen_roughness_map=scalar_tex,
@@ -4047,7 +4047,7 @@ deterministic_bytes(n::Int) =
                                             specular_intensity=0.8,
                                             specular_intensity_map=scalar_tex,
                                             specular_color_map=color_tex)
-            ep = Three._apply_pbr_maps(mp, nothing, nothing, 0.5, 0.5)
+            ep = Diff3D._apply_pbr_maps(mp, nothing, nothing, 0.5, 0.5)
             @test ep.clearcoat ≈ 0.2
             @test ep.clearcoat_roughness ≈ 0.3
             @test ep.transmission ≈ 0.225
@@ -4064,92 +4064,92 @@ deterministic_bytes(n::Int) =
             split_data = ones(Float64, 1, 2, 4)
             split_data[1,1,2] = 0.3
             split_data[1,2,2] = 0.9
-            rough_uv0 = Three.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=0)
-            thick_uv1 = Three.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=1)
-            split = Three.MeshPhysicalMaterial(roughness=0.8, roughness_map=rough_uv0,
+            rough_uv0 = Diff3D.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=0)
+            thick_uv1 = Diff3D.Texture(split_data; filter=:nearest, colorspace=:linear, tex_coord=1)
+            split = Diff3D.MeshPhysicalMaterial(roughness=0.8, roughness_map=rough_uv0,
                                                thickness=1.0, thickness_map=thick_uv1)
-            split_eff = Three._apply_pbr_maps(split, rough_uv0, nothing, 0.75, 0.5, 0.25, 0.5)
+            split_eff = Diff3D._apply_pbr_maps(split, rough_uv0, nothing, 0.75, 0.5, 0.25, 0.5)
             @test split_eff.roughness ≈ 0.72
             @test split_eff.thickness ≈ 0.3
-            geo = Three.BufferGeometry([0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0],
+            geo = Diff3D.BufferGeometry([0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0],
                                        [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0],
                                        [0.5,0.5, 0.5,0.5, 0.5,0.5],
                                        Int[1,2,3], 3, 1)
-            m_plain = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+            m_plain = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0),
                                                  transmission=1.0, thickness=1.0,
                                                  attenuation_distance=1.0,
-                                                 attenuation_color=Three.Color3(0.25,1.0,1.0))
-            m_mapped = Three.MeshPhysicalMaterial(color=Three.Color3(1.0,1.0,1.0),
+                                                 attenuation_color=Diff3D.Color3(0.25,1.0,1.0))
+            m_mapped = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0),
                                                   transmission=1.0, thickness=1.0,
-                                                  thickness_map=Three.Texture(fill(0.5, 1, 1, 3);
+                                                  thickness_map=Diff3D.Texture(fill(0.5, 1, 1, 3);
                                                                               filter=:nearest, colorspace=:linear),
                                                   attenuation_distance=1.0,
-                                                  attenuation_color=Three.Color3(0.25,1.0,1.0))
-            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.1)]
-            c_plain = only(Three.shade_mesh_faces(geo, Three.Mat4(), m_plain, lights, Three.Vec3(0.0,0.0,1.0)))
-            c_mapped = only(Three.shade_mesh_faces(geo, Three.Mat4(), m_mapped, lights, Three.Vec3(0.0,0.0,1.0)))
+                                                  attenuation_color=Diff3D.Color3(0.25,1.0,1.0))
+            lights = Diff3D.AbstractLight[Diff3D.AmbientLight(intensity=0.1)]
+            c_plain = only(Diff3D.shade_mesh_faces(geo, Diff3D.Mat4(), m_plain, lights, Diff3D.Vec3(0.0,0.0,1.0)))
+            c_mapped = only(Diff3D.shade_mesh_faces(geo, Diff3D.Mat4(), m_mapped, lights, Diff3D.Vec3(0.0,0.0,1.0)))
             @test c_mapped.r > c_plain.r
             @test c_mapped.g ≈ c_plain.g
             @test c_mapped.b ≈ c_plain.b
             # non-physical material yields no transmission term
-            @test Three._transmission_response(Three.MeshStandardMaterial(), n, vd, bg) == Three.Color3(0.0,0.0,0.0)
+            @test Diff3D._transmission_response(Diff3D.MeshStandardMaterial(), n, vd, bg) == Diff3D.Color3(0.0,0.0,0.0)
         end
 
         # [A:material-light-lobes] Light map (lit materials)
         @testset "light map multiplied in" begin
-            geo = Three.PlaneGeometry(width=1.0, height=1.0)
-            Three.compute_vertex_normals!(geo)
+            geo = Diff3D.PlaneGeometry(width=1.0, height=1.0)
+            Diff3D.compute_vertex_normals!(geo)
             dim = fill(0.5, 2, 2, 3)            # uniform 0.5 light map
-            lm = Three.Texture(dim)
-            m_plain = Three.MeshStandardMaterial(color=Three.Color3(1.0,1.0,1.0), roughness=0.8)
-            m_lm    = Three.MeshStandardMaterial(color=Three.Color3(1.0,1.0,1.0), roughness=0.8, light_map=lm)
+            lm = Diff3D.Texture(dim)
+            m_plain = Diff3D.MeshStandardMaterial(color=Diff3D.Color3(1.0,1.0,1.0), roughness=0.8)
+            m_lm    = Diff3D.MeshStandardMaterial(color=Diff3D.Color3(1.0,1.0,1.0), roughness=0.8, light_map=lm)
             # Keep the plain result below 1 so the light map multiplies before any
             # clamp and the exact 0.5 ratio holds (intensity 1.0 would clamp to 1.0).
-            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.5)]
-            cam = Three.Vec3(0.0,0.0,3.0)
-            wm = Three.Mat4()
-            cp = Three.shade_mesh_faces(geo, wm, m_plain, lights, cam)
-            cl = Three.shade_mesh_faces(geo, wm, m_lm, lights, cam)
+            lights = Diff3D.AbstractLight[Diff3D.AmbientLight(intensity=0.5)]
+            cam = Diff3D.Vec3(0.0,0.0,3.0)
+            wm = Diff3D.Mat4()
+            cp = Diff3D.shade_mesh_faces(geo, wm, m_plain, lights, cam)
+            cl = Diff3D.shade_mesh_faces(geo, wm, m_lm, lights, cam)
             @test cl[1].r < cp[1].r            # 0.5 light map darkens the result
             @test isapprox(cl[1].r, cp[1].r * 0.5; rtol=1e-6)
         end
 
         @testset "light map samples secondary UVs" begin
-            geo = Three.PlaneGeometry(width=1.0, height=1.0)
-            Three.compute_vertex_normals!(geo)
+            geo = Diff3D.PlaneGeometry(width=1.0, height=1.0)
+            Diff3D.compute_vertex_normals!(geo)
             geo.uvs[:] = repeat([0.75, 0.5], geo.n_vertices)
-            Three.set_attribute!(geo, :uv2, repeat([0.25, 0.5], geo.n_vertices), 2)
+            Diff3D.set_attribute!(geo, :uv2, repeat([0.25, 0.5], geo.n_vertices), 2)
             data = ones(Float64, 2, 2, 3)
             data[:, 1, :] .= 0.2
             data[:, 2, :] .= 1.0
-            lm = Three.Texture(data; filter=:nearest, colorspace=:linear)
-            m_lm = Three.MeshStandardMaterial(color=Three.Color3(1.0,1.0,1.0), roughness=0.8, light_map=lm)
-            lights = Three.AbstractLight[Three.AmbientLight(intensity=0.5)]
-            cols = Three.shade_mesh_faces(geo, Three.Mat4(), m_lm, lights, Three.Vec3(0.0,0.0,3.0))
+            lm = Diff3D.Texture(data; filter=:nearest, colorspace=:linear)
+            m_lm = Diff3D.MeshStandardMaterial(color=Diff3D.Color3(1.0,1.0,1.0), roughness=0.8, light_map=lm)
+            lights = Diff3D.AbstractLight[Diff3D.AmbientLight(intensity=0.5)]
+            cols = Diff3D.shade_mesh_faces(geo, Diff3D.Mat4(), m_lm, lights, Diff3D.Vec3(0.0,0.0,3.0))
             @test cols[1].r < 0.2
         end
 
         # [A:material-light-lobes] IES profiles (SpotLight/PointLight)
         @testset "IES profile and parser" begin
             ies = """IESNA:LM-63-2002\nTILT=NONE\n1 1000 1.0 5 1 1 1 0.0 0.0 0.0\n1.0 1.0 100.0\n0 30 60 90 120\n0.0\n1000 800 400 100 0\n"""
-            p = Three.parse_ies(ies)
+            p = Diff3D.parse_ies(ies)
             @test p.angles == [0.0,30.0,60.0,90.0,120.0]
             @test p.candela == [1000.0,800.0,400.0,100.0,0.0]
-            @test Three.ies_candela(p, 45.0) == 600.0          # interpolate 800<->400
-            @test Three.ies_intensity(p, 0.0) == 1.0           # peak
-            @test Three.ies_intensity(p, 120.0) == 0.0         # tail
-            @test Three.ies_intensity(p, 200.0) == 0.0         # clamp above
-            @test_throws ArgumentError Three.IESProfile([0.0,90.0],[1.0])
+            @test Diff3D.ies_candela(p, 45.0) == 600.0          # interpolate 800<->400
+            @test Diff3D.ies_intensity(p, 0.0) == 1.0           # peak
+            @test Diff3D.ies_intensity(p, 120.0) == 0.0         # tail
+            @test Diff3D.ies_intensity(p, 200.0) == 0.0         # clamp above
+            @test_throws ArgumentError Diff3D.IESProfile([0.0,90.0],[1.0])
             # SpotLight integration: a profile that is dark off-axis cuts the contribution
-            pos = Three.Vec3(0.0,0.0,0.0)
-            sl_plain = Three.SpotLight(position=Three.Vec3(0.0,2.0,0.0), angle=Float64(pi/2), decay=0.0)
-            sl_plain.target = Three.Vec3(0.0,0.0,0.0)
-            prof = Three.IESProfile([0.0,5.0,90.0],[1.0,0.0,0.0])  # only lit very near axis
-            sl_ies = Three.SpotLight(position=Three.Vec3(0.0,2.0,0.0), angle=Float64(pi/2), decay=0.0, ies_profile=prof)
-            sl_ies.target = Three.Vec3(0.0,0.0,0.0)
-            side = Three.Vec3(5.0,0.0,0.0)                      # far off the downward axis
-            _, li_plain, _ = Three.light_contribution(sl_plain, side)
-            _, li_ies, _   = Three.light_contribution(sl_ies, side)
+            pos = Diff3D.Vec3(0.0,0.0,0.0)
+            sl_plain = Diff3D.SpotLight(position=Diff3D.Vec3(0.0,2.0,0.0), angle=Float64(pi/2), decay=0.0)
+            sl_plain.target = Diff3D.Vec3(0.0,0.0,0.0)
+            prof = Diff3D.IESProfile([0.0,5.0,90.0],[1.0,0.0,0.0])  # only lit very near axis
+            sl_ies = Diff3D.SpotLight(position=Diff3D.Vec3(0.0,2.0,0.0), angle=Float64(pi/2), decay=0.0, ies_profile=prof)
+            sl_ies.target = Diff3D.Vec3(0.0,0.0,0.0)
+            side = Diff3D.Vec3(5.0,0.0,0.0)                      # far off the downward axis
+            _, li_plain, _ = Diff3D.light_contribution(sl_plain, side)
+            _, li_ies, _   = Diff3D.light_contribution(sl_ies, side)
             @test li_ies < li_plain                            # IES darkens off-axis
         end
 
@@ -4221,7 +4221,7 @@ deterministic_bytes(n::Int) =
 
         # [C:postfx] bloom_pass
         @testset "bloom_pass" begin
-            using Three
+            using Diff3D
             # Bright single pixel surrounded by dark: bloom spreads a non-negative glow.
             img = zeros(Float64, 9, 9, 3); img[5,5,1]=1.0; img[5,5,2]=1.0; img[5,5,3]=1.0
             comp = EffectComposer(); add_pass!(comp, bloom_pass(threshold=0.8, intensity=0.6, radius=2))
@@ -4238,7 +4238,7 @@ deterministic_bytes(n::Int) =
 
         # [C:postfx] fxaa_pass
         @testset "fxaa_pass" begin
-            using Three
+            using Diff3D
             # Sharp vertical luma edge: at least one interior pixel is blended.
             img = zeros(Float64, 5, 6, 3)
             for i in 1:5, j in 4:6, c in 1:3; img[i,j,c] = 1.0; end
@@ -4253,7 +4253,7 @@ deterministic_bytes(n::Int) =
 
         # [C:postfx] outline_pass
         @testset "outline_pass" begin
-            using Three
+            using Diff3D
             rt = RenderTarget(8, 8)
             # A foreground square (small depth) on an Inf background => silhouette edges.
             rt.depth .= Inf
@@ -4274,7 +4274,7 @@ deterministic_bytes(n::Int) =
 
         # [C:postfx] ssao_pass
         @testset "ssao_pass" begin
-            using Three
+            using Diff3D
             rt = RenderTarget(10, 10)
             # A wide far background plane with a small near patch (occluder) in the middle.
             rt.depth .= 5.0
@@ -4293,7 +4293,7 @@ deterministic_bytes(n::Int) =
 
         # [C:postfx] bokeh_pass
         @testset "bokeh_pass" begin
-            using Three
+            using Diff3D
             rt = RenderTarget(11, 11)
             rt.depth .= 1.0                                  # everything on one plane
             # In focus on that plane => zero CoC => unchanged.
@@ -4421,22 +4421,22 @@ deterministic_bytes(n::Int) =
 
         # [E:soft-accel] Uniform tile-grid spatial acceleration for the soft rasterizer
         @testset "soft rasterizer tile acceleration parity" begin
-            using Three
+            using Diff3D
             # Build a scene with several faces spread across the image so that tile
             # binning is exercised (multiple tiles, multiple faces per tile).
             T = Float64
-            verts = Three.Vec3{T}[
-                Three.Vec3(-0.8, -0.8, 0.2), Three.Vec3(-0.1, -0.8, 0.2), Three.Vec3(-0.45, -0.1, 0.2),
-                Three.Vec3(0.1, 0.1, 0.5),  Three.Vec3(0.85, 0.1, 0.5),  Three.Vec3(0.45, 0.8, 0.5),
-                Three.Vec3(-0.6, 0.2, 0.1), Three.Vec3(0.0, 0.2, 0.1),   Three.Vec3(-0.3, 0.75, 0.1),
+            verts = Diff3D.Vec3{T}[
+                Diff3D.Vec3(-0.8, -0.8, 0.2), Diff3D.Vec3(-0.1, -0.8, 0.2), Diff3D.Vec3(-0.45, -0.1, 0.2),
+                Diff3D.Vec3(0.1, 0.1, 0.5),  Diff3D.Vec3(0.85, 0.1, 0.5),  Diff3D.Vec3(0.45, 0.8, 0.5),
+                Diff3D.Vec3(-0.6, 0.2, 0.1), Diff3D.Vec3(0.0, 0.2, 0.1),   Diff3D.Vec3(-0.3, 0.75, 0.1),
             ]
             faces = NTuple{3,Int}[(1,2,3), (4,5,6), (7,8,9)]
-            colors = Three.Color3{T}[Three.Color3(0.9,0.1,0.1), Three.Color3(0.1,0.9,0.1), Three.Color3(0.1,0.1,0.9)]
+            colors = Diff3D.Color3{T}[Diff3D.Color3(0.9,0.1,0.1), Diff3D.Color3(0.1,0.9,0.1), Diff3D.Color3(0.1,0.1,0.9)]
             # Identity-ish view-projection: NDC == world xy, so screen coords span the image.
-            vp = Three.Mat4{T}(ntuple(k -> T(k==1 ? 1 : k==6 ? 1 : k==11 ? 1 : k==16 ? 1 : 0), 16))
-            cfg = Three.SoftRasterizerConfig(sigma=1.5, gamma=0.8, bg_color=Three.Color3(0.0,0.0,0.0))
+            vp = Diff3D.Mat4{T}(ntuple(k -> T(k==1 ? 1 : k==6 ? 1 : k==11 ? 1 : k==16 ? 1 : 0), 16))
+            cfg = Diff3D.SoftRasterizerConfig(sigma=1.5, gamma=0.8, bg_color=Diff3D.Color3(0.0,0.0,0.0))
             W, H = 64, 48
-            img = Three.soft_render(verts, faces, colors, vp, W, H, cfg)
+            img = Diff3D.soft_render(verts, faces, colors, vp, W, H, cfg)
             @test size(img) == (H, W, 3)
             @test all(isfinite, img)
             # The image must contain real rendered (non-background) content from the
@@ -4449,9 +4449,9 @@ deterministic_bytes(n::Int) =
             using ForwardDiff
             function loss(x)
                 Tx = eltype(x)                                   # promote vertices to the AD type
-                vv = Three.Vec3{Tx}[Three.Vec3(Tx(p.x), Tx(p.y), Tx(p.z)) for p in verts]
-                vv[5] = Three.Vec3(x[1], vv[5].y, vv[5].z)
-                im = Three.soft_render(vv, faces, colors, vp, W, H, cfg)  # Dual verts, Float64 colors
+                vv = Diff3D.Vec3{Tx}[Diff3D.Vec3(Tx(p.x), Tx(p.y), Tx(p.z)) for p in verts]
+                vv[5] = Diff3D.Vec3(x[1], vv[5].y, vv[5].z)
+                im = Diff3D.soft_render(vv, faces, colors, vp, W, H, cfg)  # Dual verts, Float64 colors
                 sum(im)
             end
             g = ForwardDiff.gradient(loss, [verts[5].x])
@@ -4468,7 +4468,7 @@ deterministic_bytes(n::Int) =
                            UInt8.(collect("ABCABCABCABCABCABCABCABCABCABC")),
                            UInt8.(0:255), UInt8.(0:255))
             # zlib stream of `payload` (RFC1950 header 0x78 0x9c + DEFLATE + Adler32).
-            # Round-trip through Three's own pure-Julia inflate must equal payload.
+            # Round-trip through Diff3D's own pure-Julia inflate must equal payload.
             # Generate the compressed bytes here so the test is self-contained: use the
             # stored-block form is too weak to exercise Huffman, so we assert on a known
             # dynamic-Huffman vector captured from zlib level 6.
@@ -4476,7 +4476,7 @@ deterministic_bytes(n::Int) =
             # The exact zlib bytes are environment-dependent; instead assert the inflate
             # of a hand-built fixed-Huffman stored+match stream. Use a stored block that
             # the decoder must still parse, then a fixed-Huffman block:
-            out = Three.inflate(UInt8[0x01,0x03,0x00,0xfc,0xff,0x41,0x42,0x43])  # stored: "ABC"
+            out = Diff3D.inflate(UInt8[0x01,0x03,0x00,0xfc,0xff,0x41,0x42,0x43])  # stored: "ABC"
             @test out == UInt8[0x41,0x42,0x43]
         end
 
@@ -4504,10 +4504,10 @@ deterministic_bytes(n::Int) =
             glb = vcat(le32(0x46546C67), le32(2), le32(12 + length(body)), body)
             path = tempname() * ".glb"
             write(path, glb)
-            scene = Three.load_glb(path)
-            @test scene isa Three.Scene
+            scene = Diff3D.load_glb(path)
+            @test scene isa Diff3D.Scene
             # The triangle mesh must be reachable under the scene graph.
-            @test !isempty(Three.collect_meshes(scene))
+            @test !isempty(Diff3D.collect_meshes(scene))
             rm(path; force=true)
         end
 
@@ -4837,12 +4837,12 @@ deterministic_bytes(n::Int) =
                 "element face 1\nproperty list uchar int vertex_indices\nend_header\n" *
                 "0 0 0 0 0 1 255 0 0\n1 0 0 0 0 1 0 255 0\n0 1 0 0 0 1 0 0 255\n3 0 1 2\n"
             pa = tempname() * ".ply"; write(pa, ascii)
-            ga = Three.load_ply(pa)
+            ga = Diff3D.load_ply(pa)
             @test ga.positions == expect_pos
             @test ga.normals == [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0]
             @test ga.indices == [1,2,3]
-            @test Three.has_attribute(ga, :color)
-            @test Three.get_attribute(ga, :color).data == expect_col
+            @test Diff3D.has_attribute(ga, :color)
+            @test Diff3D.get_attribute(ga, :color).data == expect_col
             rm(pa; force=true)
             # --- binary_little_endian ---
             hdr = "ply\nformat binary_little_endian 1.0\nelement vertex 3\n" *
@@ -4861,10 +4861,10 @@ deterministic_bytes(n::Int) =
             push!(body, 0x03)
             for u in Int32[0,1,2]; append!(body, reinterpret(UInt8, [u])); end
             pb = tempname() * ".ply"; write(pb, body)
-            gb = Three.load_ply(pb)
+            gb = Diff3D.load_ply(pb)
             @test gb.positions == expect_pos
             @test gb.indices == [1,2,3]
-            @test Three.get_attribute(gb, :color).data == expect_col
+            @test Diff3D.get_attribute(gb, :color).data == expect_col
             rm(pb; force=true)
         end
 
@@ -4872,7 +4872,7 @@ deterministic_bytes(n::Int) =
 
     # Regression tests for correctness fixes found during audit.
     @testset "Deep-debug regression fixes" begin
-        FD = Three.ForwardDiff
+        FD = Diff3D.ForwardDiff
         # CRITICAL: soft-rasterizer distance gradients are finite on an edge
         # (sqrt(0) previously yielded an Inf derivative -> NaN gradient).
         g1 = FD.gradient(p -> point_segment_distance(p[1],p[2], 0.0,0.0, 2.0,0.0), [1.0,0.0])
@@ -4936,14 +4936,14 @@ deterministic_bytes(n::Int) =
 
         # normal matrix == transpose(inverse).
         Mn = mat4_scaling(2.0,1.0,1.0)
-        @test maximum(abs.(collect(Three.mat4_normal_matrix(Mn).e) .- collect(mat4_transpose(mat4_inverse(Mn)).e))) < 1e-12
+        @test maximum(abs.(collect(Diff3D.mat4_normal_matrix(Mn).e) .- collect(mat4_transpose(mat4_inverse(Mn)).e))) < 1e-12
 
         # quat_normalize(zero) -> identity, no NaN.
         qz = quat_normalize(Quaternion(0.0,0.0,0.0,0.0))
         @test all(isfinite, (qz.x,qz.y,qz.z,qz.w)) && isapprox(qz.w, 1.0)
 
         # glTF node decomposition preserves reflections (negative determinant).
-        pr, er, sr = Three._gltf_decompose(mat4_scaling(-1.0,1.0,1.0))
+        pr, er, sr = Diff3D._gltf_decompose(mat4_scaling(-1.0,1.0,1.0))
         Rr = quat_to_mat4(quat_from_euler(er.x, er.y, er.z; order=er.order))
         prp = mat4_transform_point(mat4_translation(pr.x,pr.y,pr.z) * Rr * mat4_scaling(sr.x,sr.y,sr.z), Vec3(1.0,0.0,0.0))
         @test isapprox(prp.x, -1.0; atol=1e-6) && abs(prp.y) < 1e-6 && abs(prp.z) < 1e-6

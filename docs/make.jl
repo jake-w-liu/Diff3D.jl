@@ -1,13 +1,13 @@
 using Documenter
-using Three
+using Diff3D
 
 gallery_output = joinpath(@__DIR__, "src", "assets", "gallery", "example_gallery.html")
 include(joinpath(@__DIR__, "..", "examples", "example_gallery.jl"))
 main(output_path=gallery_output)
 
 makedocs(
-    sitename = "Three.jl",
-    modules = [Three],
+    sitename = "Diff3D.jl",
+    modules = [Diff3D],
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         size_threshold_warn = 400_000,
@@ -26,7 +26,7 @@ makedocs(
 
 if get(ENV, "CI", "false") == "true"
     deploydocs(
-        repo = "github.com/jake-w-liu/Three.jl.git",
+        repo = "github.com/jake-w-liu/Diff3D.jl.git",
         devbranch = "main",
         devurl = "stable",
     )

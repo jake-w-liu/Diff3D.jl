@@ -1,6 +1,6 @@
 # Offline interactive showcase.
 #
-# This pre-renders orbit frames with Three.jl, then writes an HTML viewer where
+# This pre-renders orbit frames with Diff3D.jl, then writes an HTML viewer where
 # each case is clickable and horizontal mouse/touch drag changes the camera angle.
 # It is not WebGL; every frame is rendered by the Julia implementation.
 #
@@ -13,7 +13,7 @@
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 const FRAME_DIR = joinpath(OUT, "interactive_frames")
@@ -189,7 +189,7 @@ function write_html(cases::Vector{OrbitCase})
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Three.jl Interactive Showcase</title>
+  <title>Diff3D.jl Interactive Showcase</title>
   <style>
     :root { color-scheme: dark; --bg:#090c12; --panel:#141923; --text:#edf3fb; --muted:#9aa7b8; --edge:#2a3342; --accent:#55c7ff; }
     * { box-sizing: border-box; }
@@ -218,7 +218,7 @@ function write_html(cases::Vector{OrbitCase})
   <main>
     <header>
       <div>
-        <h1>Three.jl Interactive Showcase</h1>
+        <h1>Diff3D.jl Interactive Showcase</h1>
         <p>Click a case, then drag horizontally on the render to orbit through Julia-rendered frames.</p>
       </div>
       <p><span id="counter">1 / $NFRAMES</span></p>

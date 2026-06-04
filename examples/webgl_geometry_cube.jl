@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_geometry_cube
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -47,7 +47,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("geometry-cube", "Geometry Cube",
-                    "Standalone rotating textured cube generated from Three.jl.",
+                    "Standalone rotating textured cube generated from Diff3D.jl.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=5.0, height=1.4,
                     fov=pi / 4, animations=[clip])
 end

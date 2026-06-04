@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_points_sprites
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -66,7 +66,7 @@ function build_case()
     end
 
     WebGLExportCase("points_sprites", "Points Sprites",
-                    "Textured billboard sprite quads exported from Three.jl Sprite proxies.",
+                    "Textured billboard sprite quads exported from Diff3D.jl Sprite proxies.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=8.0, height=2.6,
                     fov=pi/4.0)
 end

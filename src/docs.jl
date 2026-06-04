@@ -327,7 +327,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
 )
 
 const _GENERIC_DOCS = Dict{Symbol,String}(
-    :dot => "Dot product for Three.jl vector types.",
+    :dot => "Dot product for Diff3D.jl vector types.",
     :cross => "Cross product for `Vec3` values.",
     :norm => "Euclidean vector norm.",
     :normalize => "Return a unit vector, or zero for near-zero input.",

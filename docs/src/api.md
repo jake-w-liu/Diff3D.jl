@@ -25,7 +25,7 @@ documented and checked by Documenter.
 ## Complete Exported API
 
 ```@autodocs
-Modules = [Three]
+Modules = [Diff3D]
 Private = false
 ```
 

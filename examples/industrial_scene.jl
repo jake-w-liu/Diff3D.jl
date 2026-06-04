@@ -2,12 +2,12 @@
 # UV-mapped textures, rendered by the engine's z-buffer rasterizer and exported
 # through its own PNG/PDF writer.
 #
-#   julia --project=Three.jl Three.jl/examples/industrial_scene.jl
+#   julia --project=Diff3D.jl Diff3D.jl/examples/industrial_scene.jl
 #
 # Output: paper/figs/fig_industrial_scene.{pdf,png}; prints triangle count / time.
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
-using Three
+using Diff3D
 
 const PROJECT_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const FIGS = joinpath(PROJECT_ROOT, "paper", "figs")

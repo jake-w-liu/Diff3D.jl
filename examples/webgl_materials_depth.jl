@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_materials_depth
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -45,7 +45,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-depth", "Materials Depth",
-                    "MeshDepthMaterial maps camera distance to grayscale in the Three.jl WebGL exporter.",
+                    "MeshDepthMaterial maps camera distance to grayscale in the Diff3D.jl WebGL exporter.",
                     scene; target=Vec3(0.0, 0.25, -0.8), radius=7.0, height=1.8,
                     fov=pi / 4, animations=[clip],
                     tone_mapping=:none, output_color_space=:srgb)

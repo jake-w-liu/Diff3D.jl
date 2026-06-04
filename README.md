@@ -1,6 +1,6 @@
-# Three.jl
+# Diff3D.jl
 
-Three.jl is a Julia-native 3D graphics and differentiable rendering package with
+Diff3D.jl is a Julia-native 3D graphics and differentiable rendering package with
 an API shaped after three.js. It includes a CPU rasterizer, soft differentiable
 rasterization, scene graph primitives, geometry generators, materials, lights,
 animation controls, loaders, and self-contained WebGL HTML export.
@@ -14,7 +14,7 @@ the package is registered and downstream users have validated their workflows.
 Current verification performed during the publication audit:
 
 - `Pkg.test()` passes with 2,975 tests.
-- Exported API doc coverage is complete: `Docs.hasdoc(Three, name)` is true for
+- Exported API doc coverage is complete: `Docs.hasdoc(Diff3D, name)` is true for
   all exported names.
 - `examples/output/live_webgl_showcase.html` passes the headless browser WebGL
   smoke test with Chromium/SwiftShader.
@@ -25,23 +25,23 @@ From a local checkout:
 
 ```julia
 using Pkg
-Pkg.activate("path/to/Three.jl")
+Pkg.activate("path/to/Diff3D.jl")
 Pkg.instantiate()
-using Three
+using Diff3D
 ```
 
 For development in another Julia environment:
 
 ```julia
 using Pkg
-Pkg.develop(path = "path/to/Three.jl")
-using Three
+Pkg.develop(path = "path/to/Diff3D.jl")
+using Diff3D
 ```
 
 ## Quick Start
 
 ```julia
-using Three
+using Diff3D
 
 scene = Scene(background = Color3(0.03, 0.04, 0.05))
 camera = PerspectiveCamera(fov = pi / 3, aspect = 1.0, near = 0.1, far = 100.0)
@@ -93,7 +93,7 @@ Julia help mode is available for every exported public name:
 Julia documentation on GitHub Pages:
 
 ```text
-https://jake-w-liu.github.io/Three.jl/stable/
+https://jake-w-liu.github.io/Diff3D.jl/stable/
 ```
 
 The GitHub Pages documentation is built by
@@ -104,7 +104,7 @@ repository's `gh-pages` deployment branch.
 The example gallery is published inside the docs at:
 
 ```text
-https://jake-w-liu.github.io/Three.jl/stable/gallery/
+https://jake-w-liu.github.io/Diff3D.jl/stable/gallery/
 ```
 
 A Documenter.jl scaffold is provided in `docs/`. To build it locally:
@@ -154,7 +154,7 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 Run API documentation coverage:
 
 ```powershell
-julia --project=. -e 'using Three; missing = [n for n in names(Three) if isdefined(Three, n) && !Docs.hasdoc(Three, n)]; @show missing'
+julia --project=. -e 'using Diff3D; missing = [n for n in names(Diff3D) if isdefined(Diff3D, n) && !Docs.hasdoc(Diff3D, n)]; @show missing'
 ```
 
 Run the browser smoke test for a generated HTML export:

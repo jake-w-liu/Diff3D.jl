@@ -1,14 +1,14 @@
 # Renders the paper's king figure: a single composition exercising the scene
 # graph, every built-in geometry, the full material hierarchy, and multiple
-# light types, then exports it through Three.jl's own PNG/PDF writer.
+# light types, then exports it through Diff3D.jl's own PNG/PDF writer.
 #
-#   julia --project=Three.jl Three.jl/examples/king_figure.jl
+#   julia --project=Diff3D.jl Diff3D.jl/examples/king_figure.jl
 #
 # Output: paper/figs/fig_king_scene.{pdf,png}
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
-using Three
+using Diff3D
 
 const PROJECT_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const FIGS = joinpath(PROJECT_ROOT, "paper", "figs")

@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_materials_matcap
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -64,7 +64,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-matcap", "Materials Matcap",
-                    "MeshMatcapMaterial supports texture-backed matcaps with a procedural fallback in the Three.jl WebGL exporter.",
+                    "MeshMatcapMaterial supports texture-backed matcaps with a procedural fallback in the Diff3D.jl WebGL exporter.",
                     scene; target=Vec3(0.0, 0.35, 0.0), radius=7.0, height=2.0,
                     fov=pi / 4, animations=[clip],
                     tone_mapping=:aces, tone_exposure=1.0,

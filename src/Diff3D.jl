@@ -1,5 +1,5 @@
 """
-    Three
+    Diff3D
 
 A differentiable three-dimensional graphics engine in Julia, mirroring the
 three.js API with native automatic differentiation support.
@@ -16,7 +16,7 @@ Core subsystems:
 - Image loss functions (MSE, SSIM, Silhouette IoU)
 - Inverse rendering optimizer (gradient descent, Adam)
 """
-module Three
+module Diff3D
 
 using LinearAlgebra: norm as la_norm, dot as la_dot, cross as la_cross
 using Printf
@@ -242,4 +242,4 @@ export
     bloom_pass, fxaa_pass, outline_pass, ssao_pass, bokeh_pass,
     load_glb, load_glb_asset, load_ply
 
-end # module Three
+end # module Diff3D

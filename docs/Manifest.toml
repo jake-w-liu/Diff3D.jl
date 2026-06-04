@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "c8ddbe84482bc6dec11a22362b1e245f64be3537"
+project_hash = "3021cc0afa3367c7976c3499a4d4641befbaad4d"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -47,6 +47,12 @@ version = "1.3.0+1"
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
+
+[[deps.Diff3D]]
+deps = ["ForwardDiff", "LinearAlgebra", "Printf"]
+path = ".."
+uuid = "72681062-5925-4945-963f-74d9429756fe"
+version = "0.1.0"
 
 [[deps.DiffResults]]
 deps = ["StaticArraysCore"]
@@ -393,12 +399,6 @@ version = "1.10.0"
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
-
-[[deps.Three]]
-deps = ["ForwardDiff", "LinearAlgebra", "Printf"]
-path = "C:\\Users\\User\\EMPIRE\\projects\\ongoing\\2026_151\\Three.jl"
-uuid = "72681062-5925-4945-963f-74d9429756fe"
-version = "0.1.0"
 
 [[deps.TranscodingStreams]]
 git-tree-sha1 = "0c45878dcfdcfa8480052b6ab162cdd138781742"

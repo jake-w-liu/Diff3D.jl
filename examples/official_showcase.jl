@@ -1,4 +1,4 @@
-# Three.jl official-example-inspired showcase.
+# Diff3D.jl official-example-inspired showcase.
 #
 # Inspired by recurring themes in the official three.js examples:
 # instancing, particles/points, sprites, shadows, bloom, outlines, SSAO,
@@ -16,7 +16,7 @@
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 using Random
 
 const OUT = joinpath(@__DIR__, "output")
@@ -183,7 +183,7 @@ function postprocessing_dof_demo()
 end
 
 function main()
-    println("Three.jl showcase inspired by official three.js examples")
+    println("Diff3D.jl showcase inspired by official three.js examples")
     paths = String[]
     push!(paths, instancing_bloom_demo())
     push!(paths, particles_sprites_demo())

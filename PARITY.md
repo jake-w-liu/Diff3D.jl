@@ -1,11 +1,11 @@
-# Three.jl parity with three.js
+# Diff3D.jl parity with three.js
 
 This project is not yet a 1:1 implementation of three.js. It implements a
 Julia-native subset of the scene graph, math types, geometry generators,
 materials, loaders, animation helpers, CPU rasterization, and a standalone
 WebGL HTML exporter for interactive examples.
 
-The current browser demos are generated from Three.jl scenes by
+The current browser demos are generated from Diff3D.jl scenes by
 `save_webgl_html`. They do not embed three.js, and they are not a full
 replacement for three.js `WebGLRenderer`.
 
@@ -52,7 +52,7 @@ replacement for three.js `WebGLRenderer`.
   `KHR_materials_specular` mapped into `MeshPhysicalMaterial`,
   and translation/rotation/scale animation tracks including `CUBICSPLINE`,
   linear/step/`CUBICSPLINE` morph-weight animation tracks, cameras, `KHR_lights_punctual`
-  directional/point/spot lights, and basic skinned-mesh binding to Three.jl
+  directional/point/spot lights, and basic skinned-mesh binding to Diff3D.jl
   `Bone`/`Skeleton`/`SkinnedMesh` objects, and CPU-side morph target position
   evaluation.
 - Export/demo: standalone WebGL HTML export for meshes, instancing, points,
@@ -396,7 +396,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse glTF `KHR_texture_transform` offset, scale, rotation, and
   extension-level `texCoord` overrides into `Texture` transform metadata so
   loaded material maps share the same CPU sampling and per-sampler compact
-  browser export transform path as native Three.jl textures.
+  browser export transform path as native Diff3D.jl textures.
 - Done: parse glTF `normalTexture.scale` into material normal-map strength and
   apply it in flat CPU shading, smooth CPU rasterization, and compact browser
   WebGL normal-map shading.
@@ -554,19 +554,19 @@ Parallel audits split the remaining work into five critical tracks:
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added a standalone partial port for `webgl_geometry_cube` via
-  `examples/webgl_geometry_cube.jl`, using Three.jl `BoxGeometry`, a generated
+  `examples/webgl_geometry_cube.jl`, using Diff3D.jl `BoxGeometry`, a generated
   texture map, and quaternion keyframe playback for the rotating cube. Exact
   upstream texture asset and `WebGLRenderer` internals remain documented
   deviations.
 - Added a standalone partial port for `webgl_animation_keyframes` via
-  `examples/webgl_animation_keyframes.jl`, using procedural Three.jl geometry
+  `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset
   loading/layout remains a documented deviation.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.
 - Added a standalone partial port for `webgl_helpers` via
-  `examples/webgl_helpers.jl`, covering Three.jl axes, grid, polar grid, box,
+  `examples/webgl_helpers.jl`, covering Diff3D.jl axes, grid, polar grid, box,
   camera, plane, and light helpers in the browser exporter. Exact upstream
   helper layout remains a documented deviation.
 - Added a standalone partial port for `webgl_buffergeometry_uint` via
@@ -591,47 +591,47 @@ Parallel audits split the remaining work into five critical tracks:
   with sampled material maps plus sprite center/rotation/size-attenuation
   support.
 - Added a standalone partial port for `webgl_instancing_dynamic` via
-  `examples/webgl_instancing_dynamic.jl`, using Three.jl `InstancedMesh`,
+  `examples/webgl_instancing_dynamic.jl`, using Diff3D.jl `InstancedMesh`,
   generated instance matrices, shadows, fog, tone mapping, and quaternion/scale
   animation. The compact exporter currently serializes instances as generated
   drawables instead of GPU instanced draw calls, so exact upstream renderer
   instancing remains a documented deviation.
 - Added a standalone partial port for `webgl_materials_normal` via
-  `examples/webgl_materials_normal.jl`, using Three.jl `MeshNormalMaterial`,
+  `examples/webgl_materials_normal.jl`, using Diff3D.jl `MeshNormalMaterial`,
   primitive geometry generators, orbit interaction, and the browser
   normal-material shader branch. Exact three.js ShaderLib internals and the
   upstream object layout remain documented deviations.
 - Added a standalone partial port for `webgl_materials_depth` via
-  `examples/webgl_materials_depth.jl`, using Three.jl `MeshDepthMaterial`,
+  `examples/webgl_materials_depth.jl`, using Diff3D.jl `MeshDepthMaterial`,
   primitive geometry generators, orbit interaction, and the browser
   depth-material shader branch. Exact three.js depth-packing variants and the
   upstream object layout remain documented deviations.
 - Added a standalone partial port for `webgl_materials_variations_basic` via
-  `examples/webgl_materials_variations_basic.jl`, using Three.jl
+  `examples/webgl_materials_variations_basic.jl`, using Diff3D.jl
   `MeshBasicMaterial`, primitive geometry generators, orbit interaction,
   texture maps, and the browser unlit material shader branch. Exact three.js
   ShaderLib basic-material internals and the upstream object layout remain
   documented deviations.
 - Added a standalone partial port for `webgl_materials_variations_toon` via
-  `examples/webgl_materials_variations_toon.jl`, using Three.jl
+  `examples/webgl_materials_variations_toon.jl`, using Diff3D.jl
   `MeshToonMaterial`, primitive geometry generators, orbit interaction, and the
   browser toon-material shader branch. Exact three.js gradient-map behavior and
   the upstream object layout remain documented deviations.
 - Added a standalone partial port for `webgl_materials_matcap` via
-  `examples/webgl_materials_matcap.jl`, using Three.jl `MeshMatcapMaterial`,
+  `examples/webgl_materials_matcap.jl`, using Diff3D.jl `MeshMatcapMaterial`,
   primitive geometry generators, orbit interaction, and the browser matcap
   shader branch with one generated texture-backed material. Exact upstream
   matcap texture assets and object layout remain documented deviations.
 - Added standalone partial ports for `webgl_materials_variations_lambert` and
   `webgl_materials_variations_phong` via
   `examples/webgl_materials_variations_lambert.jl` and
-  `examples/webgl_materials_variations_phong.jl`, using Three.jl
+  `examples/webgl_materials_variations_phong.jl`, using Diff3D.jl
   `MeshLambertMaterial` and `MeshPhongMaterial`, primitive geometry generators,
   orbit interaction, texture-map coverage, and the compact browser Lambert and
   Phong material branches. Exact three.js ShaderLib internals and upstream
   object layouts remain documented deviations.
 - Added a standalone partial port for `webgl_materials_physical_clearcoat` via
-  `examples/webgl_materials_physical_clearcoat.jl`, using Three.jl
+  `examples/webgl_materials_physical_clearcoat.jl`, using Diff3D.jl
   `MeshPhysicalMaterial`, scalar clearcoat controls, generated clearcoat and
   clearcoat-roughness texture maps, shadows, fog, tone mapping, animation, and
   the compact browser physical-material shader branch. Exact three.js

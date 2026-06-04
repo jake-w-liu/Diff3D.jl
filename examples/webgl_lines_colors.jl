@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_lines_colors
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -61,7 +61,7 @@ function build_case()
     end
 
     WebGLExportCase("lines_colors", "Lines Colors",
-                    "Per-vertex line colors exported from Three.jl BufferGeometry.",
+                    "Per-vertex line colors exported from Diff3D.jl BufferGeometry.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=8.0, height=3.0,
                     fov=pi/4.2)
 end

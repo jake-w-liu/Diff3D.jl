@@ -1,4 +1,4 @@
-# Renders the inverse-rendering before/after panel as real Three.jl output.
+# Renders the inverse-rendering before/after panel as real Diff3D.jl output.
 #
 # Task: material inference. Per-face surface colors of a cube are unknown and
 # initialised to neutral gray; ForwardDiff gradients through the differentiable
@@ -10,13 +10,13 @@
 # Optimization runs at low resolution (stable, fast gradients); the displayed
 # panels are re-rendered at high resolution from the same recovered colors.
 #
-#   julia --project=Three.jl Three.jl/examples/inverse_figure.jl
+#   julia --project=Diff3D.jl Diff3D.jl/examples/inverse_figure.jl
 #
 # Output: paper/figs/fig_inverse_render.{pdf,png}
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
-using Three
+using Diff3D
 using Printf
 
 const PROJECT_ROOT = normpath(joinpath(@__DIR__, "..", ".."))

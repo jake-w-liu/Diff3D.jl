@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # --------------------------------------------------------------------------
-# Three.jl — Heuristic Validation Experiments
+# Diff3D.jl — Heuristic Validation Experiments
 #
 # Generates:
 #   paper/data/inverse_rendering_convergence.csv
@@ -27,7 +27,7 @@ else
 end
 Pkg.instantiate()
 
-using Three
+using Diff3D
 using ForwardDiff
 using Printf
 using Random
@@ -436,7 +436,7 @@ end
 # ============================================================
 
 function main()
-    println("Three.jl — Heuristic Validation Experiments")
+    println("Diff3D.jl — Heuristic Validation Experiments")
     println("=" ^ 60)
 
     conv_data = experiment_inverse_convergence()

@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_helpers
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -60,7 +60,7 @@ function build_case()
     add!(scene, CameraHelper(cam; color=Color3(0.95, 0.95, 1.0)))
 
     WebGLExportCase("helpers", "Helpers",
-                    "Three.jl helper objects exported as interactive line geometry.",
+                    "Diff3D.jl helper objects exported as interactive line geometry.",
                     scene; target=Vec3(0.0, 0.8, 0.0), radius=7.4, height=3.4,
                     fov=pi/4.3)
 end

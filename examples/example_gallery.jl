@@ -1,4 +1,4 @@
-# Three.jl example gallery.
+# Diff3D.jl example gallery.
 #
 # Run:
 #   julia --project=. examples/example_gallery.jl
@@ -11,7 +11,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     Pkg.activate(joinpath(@__DIR__, ".."))
 end
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 
@@ -313,7 +313,7 @@ function main(; output_path=joinpath(OUT, "example_gallery.html"))
         build_instancing_case(),
         build_particles_case(),
     ]
-    html = save_webgl_html(output_path, cases; title="Three.jl Example Gallery")
+    html = save_webgl_html(output_path, cases; title="Diff3D.jl Example Gallery")
     println("EXAMPLE_GALLERY_OK $html")
     return html
 end

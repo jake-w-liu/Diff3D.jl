@@ -1213,7 +1213,7 @@ end
     load_gltf_asset(path) -> GLTFAsset
 
 Load a glTF 2.0 file and return both the scene and parsed animation clips.
-Node `translation`, `rotation`, and `scale` channels are mapped to Three.jl
+Node `translation`, `rotation`, and `scale` channels are mapped to Diff3D.jl
 `KeyframeTrack` / `QuaternionKeyframeTrack` objects targeting the loaded scene
 nodes, so an `AnimationMixer(asset.animations[1])` can play them back.
 """

@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_buffergeometry_points
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -39,7 +39,7 @@ function build_case()
                              name="buffergeometry_points_cloud"))
 
     WebGLExportCase("buffergeometry_points", "BufferGeometry Points",
-                    "Point cloud generated from raw Three.jl BufferGeometry attributes.",
+                    "Point cloud generated from raw Diff3D.jl BufferGeometry attributes.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=8.0, height=2.5,
                     fov=pi/4.0)
 end

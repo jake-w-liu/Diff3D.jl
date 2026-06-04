@@ -1,6 +1,6 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-Three = "72681062-5925-4945-963f-74d9429756fe"
+Diff3D = "72681062-5925-4945-963f-74d9429756fe"
 
 [compat]
 Documenter = "1"

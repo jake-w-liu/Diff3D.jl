@@ -1,10 +1,10 @@
-# Standalone Three.jl port for:
+# Standalone Diff3D.jl port for:
 #   https://threejs.org/examples/#webgl_materials_normal
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using Three
+using Diff3D
 
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
@@ -53,7 +53,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-normal", "Materials Normal",
-                    "MeshNormalMaterial colorizes generated Three.jl normals in the browser.",
+                    "MeshNormalMaterial colorizes generated Diff3D.jl normals in the browser.",
                     scene; target=Vec3(0.0, 0.3, 0.0), radius=6.8, height=2.0,
                     fov=pi / 4, animations=[clip],
                     tone_mapping=:none, output_color_space=:srgb)
