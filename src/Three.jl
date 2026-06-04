@@ -87,6 +87,9 @@ include("web_export.jl")
 include("loaders.jl")
 include("loaders_extra.jl")
 
+# ========================== API documentation ==========================
+include("docs.jl")
+
 # ========================== Exports ==========================
 export
     # Math

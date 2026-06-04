@@ -1,11 +1,10 @@
 name = "Three"
-uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+uuid = "72681062-5925-4945-963f-74d9429756fe"
 version = "0.1.0"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-PlotlySupply = "a389b534-8bca-4fe3-8ff2-14829cd8824f"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 [compat]

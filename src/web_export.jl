@@ -1028,6 +1028,12 @@ function _webgl_html(data_json::String, title::String)
     header { display:flex; justify-content:space-between; align-items:end; gap:16px; margin-bottom:16px; }
     h1 { margin:0 0 6px; font-size:26px; letter-spacing:0; }
     p { margin:0; color:var(--muted); line-height:1.45; }
+    .top { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:10px; }
+    .controls { display:flex; align-items:center; gap:9px; padding:8px 10px; border:1px solid var(--edge); border-radius:8px; background:var(--panel); }
+    .controls button { width:34px; height:30px; display:grid; place-items:center; text-align:center; padding:0; border-radius:6px; }
+    .controls label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; white-space:nowrap; }
+    .controls input { width:116px; accent-color:var(--accent); }
+    .controls output { min-width:32px; color:var(--text); font-variant-numeric:tabular-nums; text-align:right; }
     .layout { display:grid; grid-template-columns:minmax(0, 1fr) 300px; gap:16px; align-items:start; }
     .stage { border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#020305; }
     canvas { display:block; width:100%; aspect-ratio:16 / 10; touch-action:none; cursor:grab; }
@@ -1050,7 +1056,13 @@ function _webgl_html(data_json::String, title::String)
         <h1>Three.jl Live WebGL Showcase</h1>
         <p>Scenes, geometry, materials, instancing, and keyframes are exported from Three.jl. Drag to orbit; wheel to zoom.</p>
       </div>
-      <p id="stats">loading</p>
+      <div class="top">
+        <div class="controls" aria-label="Animation playback">
+          <button id="playToggle" type="button" title="Pause animation" aria-label="Pause animation">||</button>
+          <label for="speed">Speed <input id="speed" type="range" min="0" max="2.5" step="0.05" value="1"><output id="speedValue">1.00x</output></label>
+        </div>
+        <p id="stats">loading</p>
+      </div>
     </header>
     <section class="layout">
       <div class="stage">
@@ -1419,9 +1431,9 @@ function _webgl_html(data_json::String, title::String)
     const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
     gl.drawElements(mode,o.count,o.indexType,0);
   }
-  const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats");
-  let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, targetOffset=[0,0,0], dragging=false, panMode=false, pinchMode=false, lx=0, ly=0, pinchDist=0, pinchCenter=[0,0];
-  window.__threejlDebug={activeObjectCount:()=>active.objects.length};
+  const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats"), speedEl=document.getElementById("speed"), speedValue=document.getElementById("speedValue"), playToggle=document.getElementById("playToggle");
+  let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, targetOffset=[0,0,0], dragging=false, panMode=false, pinchMode=false, lx=0, ly=0, pinchDist=0, pinchCenter=[0,0], animTime=0, lastFrameTime=performance.now()*.001, animSpeed=1, animPaused=false;
+  window.__threejlDebug={activeObjectCount:()=>active.objects.length, animationTime:()=>animTime, animationSpeed:()=>animSpeed, animationPaused:()=>animPaused};
   const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
   function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
@@ -1433,7 +1445,9 @@ function _webgl_html(data_json::String, title::String)
   function pointerDistance(ps){ return Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)||1; }
   function panBy(dx,dy){ const forward=norm([-Math.cos(pitch)*Math.cos(yaw),-Math.sin(pitch),-Math.cos(pitch)*Math.sin(yaw)]); let right=norm(cross(forward,[0,1,0])); if(!isFinite(right[0])) right=[1,0,0]; const up=cross(right,forward), s=dist*.0015; targetOffset=add(targetOffset,add(scale(right,-dx*s),scale(up,dy*s))); }
   function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); }
-  function render(){ resize(); const t=performance.now()*.001; applyAnimations(active,t); const target=add(active.target,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const view=M4.lookAt(eye,target,[0,1,0]); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,[0,1,0])); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const proj=M4.perspective(active.fov,canvas.width/canvas.height,.1,180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  speedEl.addEventListener("input",()=>{ animSpeed=Number(speedEl.value); speedValue.textContent=animSpeed.toFixed(2)+"x"; });
+  playToggle.addEventListener("click",()=>{ animPaused=!animPaused; playToggle.textContent=animPaused?">":"||"; playToggle.title=animPaused?"Play animation":"Pause animation"; playToggle.setAttribute("aria-label",playToggle.title); });
+  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const target=add(active.target,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const view=M4.lookAt(eye,target,[0,1,0]); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,[0,1,0])); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const proj=M4.perspective(active.fov,canvas.width/canvas.height,.1,180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; panMode=e.button===2||e.shiftKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); } });

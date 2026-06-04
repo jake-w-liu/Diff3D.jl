@@ -22,6 +22,22 @@ def smoke_html(path: Path) -> int:
         page.wait_for_selector("canvas")
         page.wait_for_timeout(1000)
 
+        speed = page.locator("#speed")
+        if speed.count():
+            speed.evaluate(
+                """el => {
+                    el.value = '1.75';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }"""
+            )
+            speed_state = page.evaluate("() => window.__threejlDebug.animationSpeed()")
+            if abs(speed_state - 1.75) > 1e-6:
+                errors.append(f"{path}: speed control did not update runtime speed")
+            page.locator("#playToggle").click()
+            if not page.evaluate("() => window.__threejlDebug.animationPaused()"):
+                errors.append(f"{path}: pause control did not update runtime state")
+            page.locator("#playToggle").click()
+
         buttons = page.locator("button[data-case]")
         count = max(1, buttons.count())
         for i in range(count):
