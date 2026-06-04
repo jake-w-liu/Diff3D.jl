@@ -10,6 +10,7 @@ makedocs(
     modules = [Three],
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
+        size_threshold_warn = 400_000,
         size_threshold = 400_000,
     ),
     pages = [
@@ -19,10 +20,14 @@ makedocs(
         "Publication Audit" => "audit.md",
     ],
     checkdocs = :exports,
+    doctest = true,
+    warnonly = false,
 )
 
-deploydocs(
-    repo = "github.com/jake-w-liu/Three.jl.git",
-    devbranch = "main",
-    devurl = "stable",
-)
+if get(ENV, "CI", "false") == "true"
+    deploydocs(
+        repo = "github.com/jake-w-liu/Three.jl.git",
+        devbranch = "main",
+        devurl = "stable",
+    )
+end

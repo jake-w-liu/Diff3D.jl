@@ -3,6 +3,12 @@ using Three
 using ForwardDiff
 using TOML
 
+deterministic_array(dims::Int...) =
+    reshape([mod(37 * i + 11, 101) / 100 for i in 1:prod(dims)], dims)
+
+deterministic_bytes(n::Int) =
+    UInt8[mod(53 * i + 19, 256) for i in 1:n]
+
 @testset "Three.jl" begin
 
     @testset "Official examples parity registry" begin
@@ -346,14 +352,14 @@ using TOML
     end
 
     @testset "Loss functions" begin
-        img1 = rand(8, 8, 3)
+        img1 = deterministic_array(8, 8, 3)
         img2 = copy(img1)
 
         @test loss_mse(img1, img2) ≈ 0.0 atol=1e-15
         @test loss_l1(img1, img2) ≈ 0.0 atol=1e-15
 
         # Different images should have positive loss
-        img3 = rand(8, 8, 3)
+        img3 = reverse(img1; dims=1)
         @test loss_mse(img1, img3) > 0.0
         @test loss_l1(img1, img3) > 0.0
     end
@@ -2037,7 +2043,7 @@ using TOML
     end
 
     @testset "EffectComposer post-processing" begin
-        img = rand(8, 8, 3)
+        img = deterministic_array(8, 8, 3)
         comp = EffectComposer(); add_pass!(comp, grayscale_pass)
         g = compose(comp, img)
         @test g[3,4,1] ≈ g[3,4,2] && g[3,4,2] ≈ g[3,4,3]   # grayscale ⇒ equal channels
@@ -2125,7 +2131,7 @@ using TOML
     end
 
     @testset "Mipmaps" begin
-        t = DataTexture(rand(8,8,3)); generate_mipmaps!(t)
+        t = DataTexture(deterministic_array(8,8,3)); generate_mipmaps!(t)
         @test length(t.mipmaps) == 3                       # 8 → 4 → 2 → 1
         @test size(t.mipmaps[1]) == (4,4,3)
         @test size(t.mipmaps[3]) == (1,1,3)
@@ -2155,7 +2161,7 @@ using TOML
     end
 
     @testset "DEFLATE inflate + base64" begin
-        data = rand(UInt8, 1000)
+        data = deterministic_bytes(1000)
         @test zlib_inflate(Three._zlib_store(data)) == data    # stored-block round-trip
         @test base64_decode("TWFu") == Vector{UInt8}(codeunits("Man"))
         @test base64_decode("TWE=") == Vector{UInt8}(codeunits("Ma"))
@@ -2551,7 +2557,7 @@ using TOML
     end
 
     @testset "Alpha PNG round-trip" begin
-        rgba = rand(8, 10, 4)
+        rgba = deterministic_array(8, 10, 4)
         f = tempname() * ".png"; save_png_rgba(f, rgba)
         dec = load_png(f); rm(f)
         @test size(dec) == (8, 10, 4)
@@ -3260,7 +3266,7 @@ using TOML
         @test let f=(p->p[1]^3 + 2*p[1]*p[2]^2), p=[1.3, 0.7]; g=Three.numerical_gradient(f, p; δ=1e-3); exact=[3*p[1]^2 + 2*p[2]^2, 4*p[1]*p[2]]; isapprox(g, exact; rtol=1e-5) end
 
         # [F:soft+differentiable+inverse+losses] #22 losses.jl loss_ssim and loss_silhouette_iou forced same eltype T for image and target 
-        @test let img=Three.ForwardDiff.Dual.(rand(9,9,3)), tgt=rand(9,9,3); v1=Three.loss_ssim(img, tgt); v2=Three.loss_silhouette_iou(img, tgt); isfinite(Three.ForwardDiff.value(v1)) && isfinite(Three.ForwardDiff.value(v2)) end
+        @test let img=Three.ForwardDiff.Dual.(deterministic_array(9,9,3)), tgt=deterministic_array(9,9,3); v1=Three.loss_ssim(img, tgt); v2=Three.loss_silhouette_iou(img, tgt); isfinite(Three.ForwardDiff.value(v1)) && isfinite(Three.ForwardDiff.value(v2)) end
 
     end
 

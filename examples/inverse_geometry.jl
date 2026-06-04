@@ -18,9 +18,20 @@
 # --------------------------------------------------------------------------
 
 using Pkg
-Pkg.activate(joinpath(@__DIR__, ".."))
-plotly_path = joinpath(@__DIR__, "..", "..", "PlotlySupply.jl")
-isdir(plotly_path) && Pkg.develop(path = plotly_path)
+
+const THREE_ROOT = normpath(joinpath(@__DIR__, ".."))
+const PLOTLYSUPPLY_ROOT = normpath(joinpath(@__DIR__, "..", "..", "PlotlySupply.jl"))
+
+# Keep figure-only plotting dependencies out of the package environment.
+Pkg.activate(; temp=true)
+Pkg.develop(path=THREE_ROOT)
+if isdir(PLOTLYSUPPLY_ROOT)
+    Pkg.develop(path=PLOTLYSUPPLY_ROOT)
+else
+    Pkg.add("PlotlySupply")
+end
+Pkg.instantiate()
+
 using Three
 using PlotlySupply
 using Printf

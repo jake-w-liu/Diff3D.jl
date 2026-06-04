@@ -35,7 +35,7 @@ release.
 
 ## Release Blockers To Resolve Outside Code
 
-- Choose a repository license.
+- Keep the top-level MIT `LICENSE` file present for registry license detection.
 - Decide whether this repository is a package-only artifact or a reproducible
   research artifact; that determines whether committing `Manifest.toml` is
   appropriate.

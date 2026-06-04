@@ -167,7 +167,7 @@ python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
 
 Before public release or registry submission:
 
-- Choose and commit a license approved by the repository owner.
+- Keep the top-level MIT `LICENSE` file present for registry license detection.
 - Decide whether `Manifest.toml` should remain committed. Julia packages often
   omit it, while applications/reproducible research artifacts often keep it.
 - Add CI for `Pkg.test()`, documentation build, and at least one WebGL smoke

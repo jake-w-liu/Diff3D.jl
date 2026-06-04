@@ -12,8 +12,19 @@
 # --------------------------------------------------------------------------
 
 using Pkg
-# Activate Three.jl
-Pkg.activate(joinpath(@__DIR__, ".."))
+
+const THREE_ROOT = normpath(joinpath(@__DIR__, ".."))
+const PLOTLYSUPPLY_ROOT = normpath(joinpath(@__DIR__, "..", "..", "PlotlySupply.jl"))
+
+# Keep experiment-only plotting dependencies out of the package environment.
+Pkg.activate(; temp=true)
+Pkg.develop(path=THREE_ROOT)
+Pkg.add("ForwardDiff")
+if isdir(PLOTLYSUPPLY_ROOT)
+    Pkg.develop(path=PLOTLYSUPPLY_ROOT)
+else
+    Pkg.add("PlotlySupply")
+end
 Pkg.instantiate()
 
 using Three
@@ -21,12 +32,6 @@ using ForwardDiff
 using Printf
 using Random
 using LinearAlgebra: norm as la_norm
-
-# Also need PlotlySupply for paper figures
-plotly_path = joinpath(@__DIR__, "..", "..", "PlotlySupply.jl")
-if isdir(plotly_path)
-    Pkg.develop(path=plotly_path)
-end
 
 using PlotlySupply
 
