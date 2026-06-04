@@ -95,13 +95,19 @@ Julia help mode is available for every exported public name:
 Julia documentation on GitHub Pages:
 
 ```text
-https://jake-w-liu.github.io/Three.jl/stable/
+https://jake-w-liu.github.io/Three.jl/dev/
 ```
 
 The GitHub Pages documentation is built by
 `.github/workflows/documentation.yml` using Documenter.jl. The URL will return
 404 until that workflow has run on GitHub and GitHub Pages is enabled for the
 repository's `gh-pages` deployment branch.
+
+After a version tag is deployed, Documenter.jl also publishes the stable docs at:
+
+```text
+https://jake-w-liu.github.io/Three.jl/stable/
+```
 
 To build and open the docs locally, use the Documenter.jl scaffold in `docs/`:
 A Documenter.jl scaffold is provided in `docs/`. To build it locally:
