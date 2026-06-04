@@ -66,3 +66,6 @@ instancing scene, particle scene, and runtime playback controls:
 julia --project=. examples/example_gallery.jl
 python examples/browser_webgl_smoke.py examples/output/example_gallery.html
 ```
+
+The published documentation includes the generated gallery on the
+[Example Gallery](@ref) page.

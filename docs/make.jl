@@ -1,6 +1,10 @@
 using Documenter
 using Three
 
+gallery_output = joinpath(@__DIR__, "src", "assets", "gallery", "example_gallery.html")
+include(joinpath(@__DIR__, "..", "examples", "example_gallery.jl"))
+main(output_path=gallery_output)
+
 makedocs(
     sitename = "Three.jl",
     modules = [Three],
@@ -10,6 +14,7 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
+        "Example Gallery" => "gallery.md",
         "API Reference" => "api.md",
         "Publication Audit" => "audit.md",
     ],

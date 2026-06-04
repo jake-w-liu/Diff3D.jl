@@ -7,12 +7,13 @@
 #   examples/output/example_gallery.html
 
 import Pkg
-Pkg.activate(joinpath(@__DIR__, ".."))
+if abspath(PROGRAM_FILE) == @__FILE__
+    Pkg.activate(joinpath(@__DIR__, ".."))
+end
 
 using Three
 
 const OUT = joinpath(@__DIR__, "output")
-isdir(OUT) || mkpath(OUT)
 
 function make_floor(; width=16.0, depth=16.0, color=Color3(0.34, 0.36, 0.40))
     floor = Mesh(
@@ -304,15 +305,19 @@ function build_particles_case()
     )
 end
 
-function main()
+function main(; output_path=joinpath(OUT, "example_gallery.html"))
+    mkpath(dirname(output_path))
     cases = [
         build_robot_case(),
         build_materials_case(),
         build_instancing_case(),
         build_particles_case(),
     ]
-    html = save_webgl_html(joinpath(OUT, "example_gallery.html"), cases; title="Three.jl Example Gallery")
+    html = save_webgl_html(output_path, cases; title="Three.jl Example Gallery")
     println("EXAMPLE_GALLERY_OK $html")
+    return html
 end
 
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
