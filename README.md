@@ -5,6 +5,8 @@ an API shaped after three.js. It includes a CPU rasterizer, soft differentiable
 rasterization, scene graph primitives, geometry generators, materials, lights,
 animation controls, loaders, and self-contained WebGL HTML export.
 
+Repository: https://github.com/jake-w-liu/Three.jl
+
 ## Status
 
 This repository is pre-1.0. The public API is broad and covered by an extensive
@@ -90,6 +92,18 @@ Julia help mode is available for every exported public name:
 ?save_webgl_html
 ```
 
+Julia documentation on GitHub Pages:
+
+```text
+https://jake-w-liu.github.io/Three.jl/stable/
+```
+
+The GitHub Pages documentation is built by
+`.github/workflows/documentation.yml` using Documenter.jl. The URL will return
+404 until that workflow has run on GitHub and GitHub Pages is enabled for the
+repository's `gh-pages` deployment branch.
+
+To build and open the docs locally, use the Documenter.jl scaffold in `docs/`:
 A Documenter.jl scaffold is provided in `docs/`. To build it locally:
 
 ```julia
@@ -98,6 +112,12 @@ Pkg.activate("docs")
 Pkg.develop(path = "..")
 Pkg.instantiate()
 include("docs/make.jl")
+```
+
+After a successful build, open the local documentation at:
+
+```text
+docs/build/index.html
 ```
 
 ## Examples

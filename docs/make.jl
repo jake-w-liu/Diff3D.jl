@@ -15,3 +15,8 @@ makedocs(
     ],
     checkdocs = :exports,
 )
+
+deploydocs(
+    repo = "github.com/jake-w-liu/Three.jl.git",
+    devbranch = "main",
+)
