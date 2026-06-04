@@ -77,7 +77,7 @@ deterministic_bytes(n::Int) =
 
         c_hex = Color3(UInt32(0xFF8000))
         @test c_hex.r ≈ 1.0
-        @test c_hex.g ≈ 128/255 atol=0.01
+        @test c_hex.g ≈ 128/255 atol=1e-12
     end
 
     @testset "Light constructors" begin
@@ -309,7 +309,7 @@ deterministic_bytes(n::Int) =
 
         # Corner pixel should be background (cube is small relative to viewport)
         corner_r = rt.color[1, 1, 1]
-        @test corner_r ≈ 0.1 atol=0.05
+        @test corner_r ≈ 0.1 atol=1e-12
     end
 
     @testset "Edge function" begin
@@ -1386,9 +1386,7 @@ deterministic_bytes(n::Int) =
         for (j, i) in ((4, 4), (4, 8), (3, 6), (5, 10))
             vi = j * (ws + 1) + i + 1
             v = get_vertex(geo, vi); n = get_normal(geo, vi)
-            @test n.x ≈ v.x atol=0.02
-            @test n.y ≈ v.y atol=0.02
-            @test n.z ≈ v.z atol=0.02
+            @test maximum(abs.((n.x - v.x, n.y - v.y, n.z - v.z))) <= 0.015
         end
         # Mesh-wide outward orientation: a sign flip would drive this strongly
         # negative. Degenerate pole/seam vertices are tolerated via the mean.
@@ -1915,8 +1913,8 @@ deterministic_bytes(n::Int) =
         cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0); cam.position = Vec3(0.0,0,3.0)
         rt = RenderTarget(32, 32); render!(rt, scene, cam)
         # Centre over the quad: 0.5·red + 0.5·blue ⇒ (0.5, 0, 0.5).
-        @test rt.color[16,16,1] ≈ 0.5 atol=0.05
-        @test rt.color[16,16,3] ≈ 0.5 atol=0.05
+        @test rt.color[16,16,1] ≈ 0.5 atol=1e-12
+        @test rt.color[16,16,3] ≈ 0.5 atol=1e-12
         @test is_transparent_material(quad.material)
         @test !is_transparent_material(MeshBasicMaterial(color=Color3(1.0,0,0)))
     end
@@ -4896,7 +4894,7 @@ deterministic_bytes(n::Int) =
         vpI = Mat4{Float64}(ntuple(k -> (k in (1,6,11,16)) ? 1.0 : 0.0, 16))
         imgs = soft_render(vtri, [(1,2,3)], [Color3(0.8,0.5,0.2)], vpI, 32, 32,
                            SoftRasterizerConfig(sigma=0.3, gamma=0.01, bg_color=Color3(0.0,0.0,0.0)))
-        @test isapprox(imgs[16,16,1], 0.8; atol=0.02)
+        @test isapprox(imgs[16,16,1], 0.8; atol=1e-8)
         @test imgs[1,1,1] < 0.02
 
         # look_at / view matrix is finite when eye == target.
