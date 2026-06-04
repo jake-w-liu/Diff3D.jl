@@ -5,8 +5,6 @@ an API shaped after three.js. It includes a CPU rasterizer, soft differentiable
 rasterization, scene graph primitives, geometry generators, materials, lights,
 animation controls, loaders, and self-contained WebGL HTML export.
 
-Repository: https://github.com/jake-w-liu/Three.jl
-
 ## Status
 
 This repository is pre-1.0. The public API is broad and covered by an extensive
