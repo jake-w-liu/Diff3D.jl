@@ -7,30 +7,20 @@ animation controls, loaders, and self-contained WebGL HTML export.
 
 ## Status
 
-This repository is pre-1.0. The public API is broad and covered by an extensive
-test suite, but releases should still follow semantic-versioning caution until
-the package is registered and downstream users have validated their workflows.
-
-Current verification performed during the publication audit:
-
-- `Pkg.test()` passes with 2,975 tests.
-- Exported API doc coverage is complete: `Docs.hasdoc(Diff3D, name)` is true for
-  all exported names.
-- `examples/output/live_webgl_showcase.html` passes the headless browser WebGL
-  smoke test with Chromium/SwiftShader.
+Diff3D.jl is pre-1.0. The public API is broad and tested, but may still change
+as the package matures.
 
 ## Installation
 
-From a local checkout:
+After registration, install the package with:
 
 ```julia
 using Pkg
-Pkg.activate("path/to/Diff3D.jl")
-Pkg.instantiate()
+Pkg.add("Diff3D")
 using Diff3D
 ```
 
-For development in another Julia environment:
+During registration, or when working from a checkout, use:
 
 ```julia
 using Pkg
@@ -90,16 +80,11 @@ Julia help mode is available for every exported public name:
 ?save_webgl_html
 ```
 
-Julia documentation on GitHub Pages:
+Full documentation is available on GitHub Pages:
 
 ```text
 https://jake-w-liu.github.io/Diff3D.jl/stable/
 ```
-
-The GitHub Pages documentation is built by
-`.github/workflows/documentation.yml` using Documenter.jl. The URL will return
-404 until that workflow has run on GitHub and GitHub Pages is enabled for the
-repository's `gh-pages` deployment branch.
 
 The example gallery is published inside the docs at:
 
@@ -162,15 +147,3 @@ Run the browser smoke test for a generated HTML export:
 ```powershell
 python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
 ```
-
-## Publication Checklist
-
-Before public release or registry submission:
-
-- Keep the top-level MIT `LICENSE` file present for registry license detection.
-- Decide whether `Manifest.toml` should remain committed. Julia packages often
-  omit it, while applications/reproducible research artifacts often keep it.
-- Add CI for `Pkg.test()`, documentation build, and at least one WebGL smoke
-  artifact if browser dependencies are available.
-- Tag releases only after `Pkg.test()` and the docs build pass from a clean
-  checkout.
