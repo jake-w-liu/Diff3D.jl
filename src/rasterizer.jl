@@ -292,8 +292,7 @@ end
                     eff_mat = material
                 end
                 vd = normalize(cam_pos - wp)
-                col = shade_face(wn, vd, wp, eff_mat, lights; shadow_fn=shadow_fn)
-                col = Color3(col.r * vc.r, col.g * vc.g, col.b * vc.b)
+                col = shade_face(wn, vd, wp, _with_vertex_color(eff_mat, vc), lights; shadow_fn=shadow_fn)
                 if has_albedo
                     tu, tv = _map_uv(albedo_map, u, v, u2, v2)
                     col = col * sample_texture_linear(albedo_map, tu, tv)
@@ -320,8 +319,7 @@ end
                 end
             else
                 vd = normalize(cam_pos - wp)
-                col = shade_face(wn, vd, wp, material, lights; shadow_fn=shadow_fn)
-                col = Color3(col.r * vc.r, col.g * vc.g, col.b * vc.b)
+                col = shade_face(wn, vd, wp, _with_vertex_color(material, vc), lights; shadow_fn=shadow_fn)
             end
             col = clamp_color(col)
             rt.depth[py, px] = z

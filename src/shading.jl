@@ -182,6 +182,38 @@ end
 # Material opt-in for per-vertex color modulation (three.js `vertexColors`).
 @inline _wants_vertex_colors(m) = hasfield(typeof(m), :vertex_colors) && getfield(m, :vertex_colors)
 
+@inline _modulate(c::Color3, v::Color3) = Color3(c.r * v.r, c.g * v.g, c.b * v.b)
+@inline _with_vertex_color(m::AbstractMaterial, vc::Color3) = m
+function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
+    MeshBasicMaterial(color=_modulate(m.color, vc), opacity=m.opacity,
+                      transparent=m.transparent, wireframe=m.wireframe,
+                      side=m.side, map=m.map, vertex_colors=m.vertex_colors,
+                      alpha_test=m.alpha_test, depth_test=m.depth_test,
+                      depth_write=m.depth_write)
+end
+function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
+    MeshLambertMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
+                        opacity=m.opacity, transparent=m.transparent, side=m.side,
+                        map=m.map, ao_map=m.ao_map, emissive_map=m.emissive_map,
+                        vertex_colors=m.vertex_colors, light_map=m.light_map,
+                        depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
+    MeshStandardMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
+                         metalness=m.metalness, roughness=m.roughness,
+                         opacity=m.opacity, transparent=m.transparent, side=m.side,
+                         map=m.map, normal_map=m.normal_map, normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         alpha_map=m.alpha_map, ao_map=m.ao_map,
+                         emissive_map=m.emissive_map, vertex_colors=m.vertex_colors,
+                         alpha_test=m.alpha_test, envmap=m.envmap,
+                         light_map=m.light_map, emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity,
+                         depth_test=m.depth_test, depth_write=m.depth_write)
+end
+
 # Per-face average of the three vertices' RGB colors from the geometry's :color
 # attribute (item_size 3, flat [r,g,b,...]). three.js multiplies the interpolated
 # vertex color into the material color; for flat per-face shading we use the
@@ -471,7 +503,8 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
             end
         end
 
-        color = shade_face(face_n, view_dir, center, eff_mat, lights; shadow_fn=shadow_fn)
+        shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, _face_vertex_color(color_attr, i1, i2, i3)) : eff_mat
+        color = shade_face(face_n, view_dir, center, shade_mat, lights; shadow_fn=shadow_fn)
 
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
@@ -504,19 +537,13 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
             end
         end
 
-        # Per-vertex color: multiply the face's average vertex RGB into the result
-        # (three.js multiplies vertex color into the material color, like albedo).
-        if use_vertex_colors
-            color = color * _face_vertex_color(color_attr, i1, i2, i3)
-        end
-
         # Environment reflection (basic IBL specular) added on top of the lit/
         # textured result. Metals reflect albedo-tinted env; dielectrics a small
         # Fresnel reflection. Uses `eff_mat` so a roughness-map override applies.
         if env_map !== nothing
             color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                               eff_mat.color, eff_mat.metalness, eff_mat.roughness) *
-                            _material_scalar(eff_mat, :env_map_intensity)
+                                               shade_mat.color, shade_mat.metalness, shade_mat.roughness) *
+                            _material_scalar(shade_mat, :env_map_intensity)
         end
 
         colors[fi] = clamp_color(color)

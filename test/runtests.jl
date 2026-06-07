@@ -1336,6 +1336,20 @@ deterministic_bytes(n::Int) =
         @test rt_off.color[16, 16, 1] ≈ 1.0 atol=1e-6
         @test rt_off.color[16, 16, 2] ≈ 1.0 atol=1e-6
         @test rt_off.color[16, 16, 3] ≈ 1.0 atol=1e-6
+
+        spec_geo = PlaneGeometry(width=2.0, height=2.0)
+        set_attribute!(spec_geo, :color, fill(0.0, 3 * spec_geo.n_vertices), 3)
+        spec_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(spec_scene, AmbientLight(color=Color3(1.0, 1.0, 1.0), intensity=0.0))
+        add!(spec_scene, DirectionalLight(color=Color3(1.0, 1.0, 1.0), intensity=8.0,
+                                          position=Vec3(0.0, 0.0, 3.0)))
+        add!(spec_scene, Mesh(spec_geo,
+                              MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                   roughness=0.12, metalness=0.0,
+                                                   vertex_colors=true)))
+        rt_spec = RenderTarget(32, 32)
+        render!(rt_spec, spec_scene, cam; shading=:smooth)
+        @test rt_spec.color[16, 16, 1] > 0.02
     end
 
     @testset "Near-plane clipping — geometry fully behind camera is dropped" begin
@@ -2033,6 +2047,22 @@ deterministic_bytes(n::Int) =
         ls = Scene(background=Color3(0.0,0,0)); add!(ls, LineObject(lg, LineBasicMaterial(color=Color3(1.0,0,0))))
         rtl = RenderTarget(40,40); render!(rtl, ls, cam)
         @test count(>(0.5), rtl.color[:,:,1]) > 10          # line drew a streak of pixels
+        function line_pixel_count(linewidth)
+            og = BufferGeometry()
+            og.positions = [-0.8, 0.0, 0.0, 0.8, 0.0, 0.0]
+            og.n_vertices = 2
+            os = Scene(background=Color3(0.0, 0.0, 0.0))
+            add!(os, LineObject(og, LineBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                      linewidth=linewidth)))
+            ocam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+                                      near=0.1, far=10.0)
+            ocam.position = Vec3(0.0, 0.0, 2.0)
+            ocam.target = Vec3(0.0, 0.0, 0.0)
+            ort = RenderTarget(64, 64)
+            render!(ort, os, ocam)
+            return count(>(0.5), ort.color[:, :, 1])
+        end
+        @test line_pixel_count(7.0) > 3 * line_pixel_count(1.0)
         # Single point at the origin.
         pg = BufferGeometry(); pg.positions = [0.0,0,0]; pg.n_vertices = 1
         ps = Scene(background=Color3(0.0,0,0)); add!(ps, PointsObject(pg, PointsMaterial(color=Color3(0.0,1,0), size=3.0)))

@@ -171,17 +171,35 @@ end
     end
 end
 
+@inline function _put_line_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3,
+                                  radius::Float64,
+                                  xlo::Int=1, xhi::Int=rt.width,
+                                  ylo::Int=1, yhi::Int=rt.height)
+    if radius <= 0.5
+        _put_pixel!(rt, x, y, z, col, xlo, xhi, ylo, yhi)
+        return nothing
+    end
+    r = ceil(Int, radius)
+    r2 = radius * radius
+    @inbounds for oy in -r:r, ox in -r:r
+        ox * ox + oy * oy <= r2 && _put_pixel!(rt, x + ox, y + oy, z, col, xlo, xhi, ylo, yhi)
+    end
+    return nothing
+end
+
 # DDA line with depth interpolation and z-test.
 function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
+                     linewidth::Real=1.0,
                      xlo::Int=1, xhi::Int=rt.width,
                      ylo::Int=1, yhi::Int=rt.height)
     dx = x1 - x0; dy = y1 - y0
     steps = max(abs(dx), abs(dy))
     steps < 1 && (steps = 1.0)
+    radius = max(0.5, Float64(linewidth) / 2)
     @inbounds for s in 0:Int(ceil(steps))
         t = s / steps
-        _put_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
-                    z0 + (z1 - z0)*t, col, xlo, xhi, ylo, yhi)
+        _put_line_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
+                         z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi)
     end
     return nothing
 end
@@ -205,6 +223,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
         if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
             wm = compute_world_matrix(obj); geo = obj.geometry
             col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
+            linewidth = hasfield(typeof(obj.material), :linewidth) ? obj.material.linewidth : 1.0
             stride = obj isa LineSegments ? 2 : 1
             nv = geo.n_vertices
             i = 1
@@ -213,7 +232,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                 b = mat4_transform_point(wm, get_vertex(geo, i+1))
                 (ax, ay, az, oka) = _project(vp, a, W, H)
                 (bx, by, bz, okb) = _project(vp, b, W, H)
-                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, xlo, xhi, ylo, yhi)
+                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
                 i += stride
             end
             if obj isa LineLoop && nv > 2
@@ -221,7 +240,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                 b = mat4_transform_point(wm, get_vertex(geo, 1))
                 (ax, ay, az, oka) = _project(vp, a, W, H)
                 (bx, by, bz, okb) = _project(vp, b, W, H)
-                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, xlo, xhi, ylo, yhi)
+                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
             end
         end
     end)
