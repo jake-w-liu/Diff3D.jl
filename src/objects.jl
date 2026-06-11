@@ -164,11 +164,16 @@ function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera)
     right = Vec3(mat4_get(V,1,1), mat4_get(V,1,2), mat4_get(V,1,3))
     up    = Vec3(mat4_get(V,2,1), mat4_get(V,2,2), mat4_get(V,2,3))
     fwd   = Vec3(mat4_get(V,3,1), mat4_get(V,3,2), mat4_get(V,3,3))
-    p = get_position(sprite); s = get_scale(sprite)
-    Mat4((right.x*s.x, right.y*s.x, right.z*s.x, 0.0,
-          up.x*s.y,    up.y*s.y,    up.z*s.y,    0.0,
-          fwd.x*s.z,   fwd.y*s.z,   fwd.z*s.z,   0.0,
-          p.x,         p.y,         p.z,         1.0))
+    wm = compute_world_matrix(sprite)
+    p = Vec3(mat4_get(wm,1,4), mat4_get(wm,2,4), mat4_get(wm,3,4))
+    # World scale = column norms of the world matrix (as in the WebGL sprite shader).
+    sx = sqrt(mat4_get(wm,1,1)^2 + mat4_get(wm,2,1)^2 + mat4_get(wm,3,1)^2)
+    sy = sqrt(mat4_get(wm,1,2)^2 + mat4_get(wm,2,2)^2 + mat4_get(wm,3,2)^2)
+    sz = sqrt(mat4_get(wm,1,3)^2 + mat4_get(wm,2,3)^2 + mat4_get(wm,3,3)^2)
+    Mat4((right.x*sx, right.y*sx, right.z*sx, 0.0,
+          up.x*sy,    up.y*sy,    up.z*sy,    0.0,
+          fwd.x*sz,   fwd.y*sz,   fwd.z*sz,   0.0,
+          p.x,        p.y,        p.z,        1.0))
 end
 
 # ========================== LOD ==========================

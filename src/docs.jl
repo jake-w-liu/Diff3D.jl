@@ -5,6 +5,14 @@
 # Julia help-mode/Documenter docstrings to the broad exported surface.
 # --------------------------------------------------------------------------
 
+# `Base.Docs.hasdoc` was added in Julia 1.11; on older releases check the
+# module's docstring metadata directly so existing docs are never clobbered.
+@static if isdefined(Base.Docs, :hasdoc)
+    const _hasdoc = Base.Docs.hasdoc
+else
+    _hasdoc(m::Module, s::Symbol) = haskey(Base.Docs.meta(m), Base.Docs.Binding(m, s))
+end
+
 const _API_TYPE_DOCS = Dict{Symbol,String}(
     :Vec2 => """
         Vec2(x, y)
@@ -51,9 +59,10 @@ const _API_TYPE_DOCS = Dict{Symbol,String}(
     common conversions.
     """,
     :Euler => """
-        Euler(x, y, z; order=:XYZ)
+        Euler(x, y, z[, order])
 
-    Euler-angle rotation with explicit axis order. All six standard three.js
+    Euler-angle rotation with explicit axis order. The positional `order`
+    argument defaults to `:XYZ` when omitted. All six standard three.js
     orders are supported by `quat_from_euler`.
     """,
     :Object3D => """
@@ -195,7 +204,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :add! => "Add a child object to a parent scene-graph node, reparenting from any previous parent.",
     :remove! => "Remove a child object from a parent scene-graph node if present.",
     :traverse => "Visit an object and its descendants in depth-first order.",
-    :collect_meshes => "Collect visible mesh-like objects under a scene-graph root.",
+    :collect_meshes => "Collect visible mesh-like objects under a scene-graph root, skipping subtrees whose root has `visible == false`.",
     :compute_local_matrix => "Return an object's local transform matrix from position, rotation, and scale.",
     :compute_world_matrix => "Return an object's world transform matrix by composing ancestor transforms.",
     :compute_world_matrices => "Build a cache of world matrices for a scene-graph subtree.",
@@ -261,7 +270,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :grid_texture => "Create a procedural grid texture.",
     :texture_transform_uv => "Apply a texture transform to UV coordinates.",
     :texture_update_matrix! => "Update cached texture transform matrix fields.",
-    :collect_lights => "Collect visible lights under a scene root.",
+    :collect_lights => "Collect visible lights under a scene root, skipping subtrees whose root has `visible == false`.",
     :compute_shadow_map => "Render a light-space depth map for shadow testing.",
     :shadow_visibility => "Return shadow visibility for a world-space point.",
     :shade_lambert => "Evaluate Lambert diffuse shading.",
@@ -453,7 +462,7 @@ const _GENERIC_DOCS = Dict{Symbol,String}(
 for docs in (_API_TYPE_DOCS, _API_FUNCTION_DOCS, _GENERIC_DOCS)
     for (name, text) in docs
         isdefined(@__MODULE__, name) || continue
-        Base.Docs.hasdoc(@__MODULE__, name) && continue
+        _hasdoc(@__MODULE__, name) && continue
         @eval @doc $text $name
     end
 end

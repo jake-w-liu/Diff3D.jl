@@ -16,13 +16,17 @@ struct BenchResult
     alloc_bytes::Int
 end
 
-"""Total triangles in a scene, including InstancedMesh instances."""
+"""Total renderable triangles in a scene (hierarchically visible drawables
+only), including InstancedMesh instances."""
 function scene_triangle_count(scene::AbstractObject3D)
     n = 0
     for m in collect_meshes(scene)
         n += count_triangles(m.geometry)
     end
     for im in collect_instanced(scene)
+        # collect_instanced traverses without pruning invisible subtrees;
+        # match collect_meshes' hierarchical visibility.
+        _visible_in_tree(im) || continue
         n += instanced_count(im) * count_triangles(im.geometry)
     end
     return n

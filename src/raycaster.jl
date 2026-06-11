@@ -13,13 +13,21 @@ end
 """
 Möller–Trumbore ray/triangle test. Returns the ray parameter `t > 0` at the
 hit, or `nothing` if the ray misses. `dir` need not be normalised; `t` is then
-in units of `dir`.
+in units of `dir`. `side` culls by winding like three.js `Ray.intersectTriangle`:
+`:front` rejects backfaces, `:back` rejects frontfaces, `:double` accepts both.
 """
-function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3; eps=1e-9)
+function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3;
+                                eps=1e-9, side::Symbol=:double)
     e1 = b - a; e2 = c - a
     p = cross(dir, e2)
-    det = dot(e1, p)
-    abs(det) < eps && return nothing             # ray parallel to triangle
+    det = dot(e1, p)                             # det = -dot(dir, cross(e1, e2))
+    if side === :front
+        det <= eps && return nothing             # backfacing or parallel
+    elseif side === :back
+        det >= -eps && return nothing            # frontfacing or parallel
+    else
+        abs(det) < eps && return nothing         # ray parallel to triangle
+    end
     inv_det = 1 / det
     tvec = origin - a
     u = dot(tvec, p) * inv_det
@@ -88,9 +96,18 @@ function _ray_segment_distance(o::Vec3, d::Vec3, a::Vec3, b::Vec3)
         s_seg = C > 0 ? E / C : zero(C)
     end
     s_seg = clamp(s_seg, zero(s_seg), one(s_seg))
-    # Closest ray parameter for the clamped segment point, kept on the forward ray.
+    # Closest ray parameter for the clamped segment point. If it falls behind
+    # the origin, clamp t to 0 and re-solve s on that face: project the ray
+    # ORIGIN onto the segment (three.js `Ray.distanceSqToSegment` region case).
     seg_pt = a + seg * s_seg
-    t_ray = max(dot(seg_pt - o, d), zero(B))
+    raw_t = dot(seg_pt - o, d)
+    if raw_t < 0
+        t_ray = zero(raw_t)
+        s_seg = clamp(C > 0 ? E / C : zero(C), zero(C), one(C))
+        seg_pt = a + seg * s_seg
+    else
+        t_ray = raw_t
+    end
     ray_pt = o + d * t_ray
     return (t_ray, norm(ray_pt - seg_pt), seg_pt)
 end
@@ -122,12 +139,14 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     if obj isa Mesh
         wm = compute_world_matrix(obj)
         geo = obj.geometry
+        # Cull by material side like three.js Mesh.raycast (default :front).
+        side = material_side(obj.material)
         @inbounds for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
             a = mat4_transform_point(wm, get_vertex(geo, i1))
             b = mat4_transform_point(wm, get_vertex(geo, i2))
             c = mat4_transform_point(wm, get_vertex(geo, i3))
-            t = ray_triangle_intersect(o, d, a, b, c)
+            t = ray_triangle_intersect(o, d, a, b, c; side=side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
             end
@@ -182,18 +201,20 @@ Intersect the ray with `root` and (when `recursive`) every descendant, returning
 Meshes are tested with the Möller–Trumbore triangle path; `PointsObject`
 vertices and `LineObject`/`LineSegments` segments use the raycaster's
 `point_threshold`/`line_threshold` pick radii (three.js `params.Points`/`Line`).
-Objects whose layer mask shares no channel with `rc.layers`, and invisible
-objects, are skipped (their children are still traversed when `recursive`).
+Objects whose layer mask shares no channel with `rc.layers` are skipped (their
+children are still traversed when `recursive`). Invisible objects are skipped
+hierarchically, matching the renderer: an object inside a `visible = false`
+ancestor is not pickable.
 """
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     hits = Intersection[]
     if recursive
         traverse(root, obj -> begin
-            (is_visible(obj) && layers_test(object_layers(obj), rc.layers)) &&
+            (_visible_in_tree(obj) && layers_test(object_layers(obj), rc.layers)) &&
                 _raycast_object!(hits, rc, obj)
         end)
     else
-        if is_visible(root) && layers_test(object_layers(root), rc.layers)
+        if _visible_in_tree(root) && layers_test(object_layers(root), rc.layers)
             _raycast_object!(hits, rc, root)
         end
     end

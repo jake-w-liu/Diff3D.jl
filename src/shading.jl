@@ -509,6 +509,16 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
             u2, v2 = uv2_attr === nothing ? (u, v) : _face_centroid_uv_attr(uv2_attr, i1, i2, i3)
+            # three.js keeps emission OUT of the diffuse map chain: remove the
+            # base `emissive · intensity` added by `shade_face` before the
+            # multiplicative maps below, and add the modulated form
+            # `emissive · emissiveMap texel · intensity` back afterwards.
+            em = _material_field(material, :emissive)
+            emi = em === nothing ? 0.0 : _material_scalar(material, :emissive_intensity)
+            if em !== nothing
+                color = Color3(color.r - em.r * emi, color.g - em.g * emi,
+                               color.b - em.b * emi)
+            end
             if albedo_map !== nothing
                 tu, tv = _map_uv(albedo_map, u, v, u2, v2)
                 color = color * sample_texture_linear(albedo_map, tu, tv)
@@ -530,10 +540,14 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                 lmi = _material_scalar(material, :light_map_intensity)
                 color = Color3(color.r*lm.r*lmi, color.g*lm.g*lmi, color.b*lm.b*lmi)
             end
-            if emissive_map !== nothing
-                tu, tv = _map_uv(emissive_map, u, v, u2, v2)
-                color = color + sample_texture_linear(emissive_map, tu, tv) *
-                        _material_scalar(material, :emissive_intensity)
+            if em !== nothing
+                t = Color3(1.0, 1.0, 1.0)
+                if emissive_map !== nothing
+                    tu, tv = _map_uv(emissive_map, u, v, u2, v2)
+                    t = sample_texture_linear(emissive_map, tu, tv)
+                end
+                color = color + Color3(em.r * t.r * emi, em.g * t.g * emi,
+                                       em.b * t.b * emi)
             end
         end
 
@@ -870,8 +884,15 @@ end
 function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
                     material::MeshMatcapMaterial, lights; shadow_fn=nothing)
     if material.matcap isa Texture
-        u = clamp(normal.x * 0.5 + 0.5, 0.0, 1.0)
-        v = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0)
+        # View-dependent matcap basis (matches the web-export shader / three.js):
+        # for an un-rolled camera, mx/my are the camera's right/up axes, so the
+        # sphere image follows the view instead of being glued to world axes.
+        s = Vec3(view_dir.z, 0.0, -view_dir.x)
+        sl = norm(s)
+        mx = sl > 1e-6 ? s / sl : Vec3(1.0, 0.0, 0.0)   # fallback when view_dir ≈ ±Y
+        my = cross(view_dir, mx)
+        u = clamp(dot(mx, normal) * 0.495 + 0.5, 0.0, 1.0)
+        v = clamp(dot(my, normal) * 0.495 + 0.5, 0.0, 1.0)
         return material.color * sample_texture_linear(material.matcap, u, v)
     end
     # Procedural fallback: brighter where the surface faces the viewer.
@@ -922,6 +943,22 @@ function light_contribution(light::PointLight, position::Vec3)
     else
         1.0 / max(dist^light.decay, 1e-10)
     end
+
+    # IES photometric distribution (mirrors the SpotLight branch). A PointLight
+    # has no target, so the vertical angle θ is measured from the luminaire aim
+    # axis per the LM-63 convention (0° = straight down; see IESProfile): -Y,
+    # rotated by the light's `rotation` so an oriented luminaire works.
+    if light.ies_profile !== nothing
+        rot = light.rotation
+        axis = Vec3(0.0, -1.0, 0.0)
+        if rot.x != 0.0 || rot.y != 0.0 || rot.z != 0.0
+            q = quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)
+            axis = mat4_transform_direction(quat_to_mat4(q), axis)
+        end
+        θ = acosd(clamp(dot(-dir, axis), -1.0, 1.0))
+        attenuation *= ies_intensity(light.ies_profile, θ)
+    end
+
     (light.color, light.intensity * attenuation, dir)
 end
 

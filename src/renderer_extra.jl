@@ -73,7 +73,7 @@ fills the supplied `RenderTarget`, so the renderer itself yields an AA frame.
 """
 function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                       samples::Int=4, shading::Symbol=:flat, shadows::Bool=false)
-    ss = max(round(Int, sqrt(samples)), 1)
+    ss = max(ceil(Int, sqrt(samples)), 1)
     big = RenderTarget(rt.width*ss, rt.height*ss)
     render!(big, scene, camera; shading=shading, shadows=shadows)
     rt.color .= downsample(big.color, ss)
@@ -136,24 +136,32 @@ across repeated calls. Transparent meshes, lines and points are skipped here.
 """
 function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                         cache::RenderCache; shading::Symbol=:flat)
+    shading === :flat || throw(ArgumentError("render_pooled! supports only :flat shading"))
     clear!(rt, scene.background)
     proj = projection_matrix(camera); view = view_matrix(camera); near = _camera_near(camera)
+    # Same orthographic back-face-culling direction as `render!`.
+    ortho_dir = camera isa OrthographicCamera ?
+        normalize(camera.position - camera.target) : nothing
+    # `_collect_into!` traverses without pruning invisible subtrees, so apply
+    # the hierarchical visibility test (three.js semantics) per object here.
     _collect_into!(cache.meshes, scene, m -> m isa Mesh)
-    _collect_into!(cache.lights, scene, l -> l isa AbstractLight)
+    _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
     _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
     for mesh in cache.meshes
-        (is_visible(mesh) && !is_transparent_material(mesh.material)) || continue
+        (_visible_in_tree(mesh) && !is_transparent_material(mesh.material)) || continue
         _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                              cache.lights, proj, view, near, camera.position,
-                             cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz; colorbuf=cache.colors)
+                             cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz;
+                             colorbuf=cache.colors, ortho_dir=ortho_dir)
     end
     for im in cache.instanced
-        is_visible(im) || continue
+        _visible_in_tree(im) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
             _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
                                  cache.lights, proj, view, near, camera.position,
-                                 cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz; colorbuf=cache.colors)
+                                 cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz;
+                                 colorbuf=cache.colors, ortho_dir=ortho_dir)
         end
     end
     return rt
@@ -193,11 +201,10 @@ function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      xlo::Int=1, xhi::Int=rt.width,
                      ylo::Int=1, yhi::Int=rt.height)
     dx = x1 - x0; dy = y1 - y0
-    steps = max(abs(dx), abs(dy))
-    steps < 1 && (steps = 1.0)
+    n = max(ceil(Int, max(abs(dx), abs(dy))), 1)
     radius = max(0.5, Float64(linewidth) / 2)
-    @inbounds for s in 0:Int(ceil(steps))
-        t = s / steps
+    @inbounds for s in 0:n
+        t = s / n
         _put_line_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
                          z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi)
     end
@@ -212,14 +219,38 @@ end
     ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, c.z*iw, true)
 end
 
+# Clip a world-space segment against the view-space near plane (z ≤ -near,
+# matching the mesh path's `_clip_near!`), then project and rasterize it.
+# Segments straddling the plane are shortened instead of dropped, and clipped
+# endpoints keep NDC z ≥ -1, bounding the DDA step count.
+function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, near,
+                                     a::Vec3, b::Vec3, col::Color3, linewidth::Real,
+                                     xlo::Int, xhi::Int, ylo::Int, yhi::Int)
+    av = mat4_transform_point(view, a)
+    bv = mat4_transform_point(view, b)
+    a_in = av.z <= -near; b_in = bv.z <= -near
+    (a_in || b_in) || return nothing
+    if a_in != b_in
+        t = (-near - av.z) / (bv.z - av.z)
+        c = Vec3(av.x + t*(bv.x - av.x), av.y + t*(bv.y - av.y), av.z + t*(bv.z - av.z))
+        a_in ? (bv = c) : (av = c)
+    end
+    W, H = rt.width, rt.height
+    (ax, ay, az, oka) = _project(proj, av, W, H)
+    (bx, by, bz, okb) = _project(proj, bv, W, H)
+    (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
+    return nothing
+end
+
 """Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height)
-    vp = projection_matrix(camera) * view_matrix(camera)
-    W, H = rt.width, rt.height
+    proj = projection_matrix(camera)
+    view = view_matrix(camera)
+    near = _camera_near(camera)
     traverse(scene, function(obj)
-        is_visible(obj) || return
+        _visible_in_tree(obj) || return
         if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
             wm = compute_world_matrix(obj); geo = obj.geometry
             col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
@@ -230,17 +261,13 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             while i + 1 <= nv
                 a = mat4_transform_point(wm, get_vertex(geo, i))
                 b = mat4_transform_point(wm, get_vertex(geo, i+1))
-                (ax, ay, az, oka) = _project(vp, a, W, H)
-                (bx, by, bz, okb) = _project(vp, b, W, H)
-                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
+                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth, xlo, xhi, ylo, yhi)
                 i += stride
             end
             if obj isa LineLoop && nv > 2
                 a = mat4_transform_point(wm, get_vertex(geo, nv))
                 b = mat4_transform_point(wm, get_vertex(geo, 1))
-                (ax, ay, az, oka) = _project(vp, a, W, H)
-                (bx, by, bz, okb) = _project(vp, b, W, H)
-                (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
+                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth, xlo, xhi, ylo, yhi)
             end
         end
     end)
@@ -330,7 +357,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
     traverse(scene, function(obj)
-        (is_visible(obj) && obj isa Sprite) || return
+        (obj isa Sprite && _visible_in_tree(obj)) || return
         M = sprite_world_matrix(obj, camera)
         mat = obj.material
         tint = _material_field(mat, :color)
@@ -379,15 +406,19 @@ end
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
                         ylo::Int=1, yhi::Int=rt.height)
-    vp = projection_matrix(camera) * view_matrix(camera)
+    proj = projection_matrix(camera)
+    view = view_matrix(camera)
+    near = _camera_near(camera)
     W, H = rt.width, rt.height
     traverse(scene, function(obj)
-        (is_visible(obj) && obj isa PointsObject) || return
+        (obj isa PointsObject && _visible_in_tree(obj)) || return
         wm = compute_world_matrix(obj); geo = obj.geometry
         col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
         r = max(Int(round(hasfield(typeof(obj.material), :size) ? obj.material.size : 1.0)) ÷ 2, 0)
         for vi in 1:geo.n_vertices
-            (px, py, pz, ok) = _project(vp, mat4_transform_point(wm, get_vertex(geo, vi)), W, H)
+            pv = mat4_transform_point(view, mat4_transform_point(wm, get_vertex(geo, vi)))
+            pv.z <= -near || continue      # near-plane cull, matching the mesh path
+            (px, py, pz, ok) = _project(proj, pv, W, H)
             ok || continue
             cx = round(Int, px); cy = round(Int, py)
             min_px = max(cx - r, xlo)
@@ -580,8 +611,8 @@ as edges. Returns a new H×W×3 image. The returned closure matches the
 [`EffectComposer`] pass convention; the depth buffer is captured here because the
 composer only forwards the colour image.
 
-`depth` defaults to a keyword so the pass can be built standalone, but a depth
-matrix must be supplied for outlines to appear.
+The depth matrix is captured at construction time, so the returned pass can be
+applied to any colour image of the matching size.
 """
 function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=Color3(0.0,0.0,0.0))
     thr = Float64(threshold)
@@ -677,8 +708,11 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
                 Δ = dc - dN                    # >0 when neighbour is nearer (occluder)
                 if Δ > bias
                     # Project the (image-plane offset, depth delta) onto the normal:
-                    # only count occluders sitting above the surface plane.
-                    proj = nx*ox + ny*oy + nz*Δ
+                    # only count occluders sitting above the surface plane. Uses the
+                    # rounded offsets actually sampled so flat tilted surfaces
+                    # (dN = dc + dzx*oxr + dzy*oyr) contribute exactly zero.
+                    oxr = sj - j; oyr = si - i
+                    proj = nz*Δ - (nx*oxr + ny*oyr)
                     if proj > bias
                         # Range check: distant depth gaps shouldn't over-darken.
                         rcheck = rad / (rad + Δ)
@@ -697,6 +731,7 @@ end
 
 """
     bokeh_pass(depth; focus_depth, aperture=0.02)
+    bokeh_pass(; focus_depth, aperture=0.02, depth)
 
 Depth-of-field (bokeh) blur driven by the depth buffer. Each pixel's circle of
 confusion radius is `|depth - focus_depth| * aperture` (in pixels, rounded and
@@ -739,6 +774,9 @@ function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMat
         return out
     end
 end
+# Positional-depth convenience form, matching `outline_pass`/`ssao_pass`.
+bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
+    bokeh_pass(; focus_depth=focus_depth, aperture=aperture, depth=depth)
 
 # ========================== Tiled / parallel rasterization ==========================
 
@@ -756,6 +794,9 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
+    # Same orthographic back-face-culling direction as `render!`.
+    ortho_dir = camera isa OrthographicCamera ?
+        normalize(camera.position - camera.target) : nothing
     H = rt.height
     meshes = collect_meshes(scene)
     lights = collect_lights(scene)
@@ -773,15 +814,16 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             is_transparent_material(mesh.material) && continue
             _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                                  lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 ylo=ylo, yhi=yhi)
+                                 ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
         end
         for im in instanced
-            is_visible(im) || continue
+            # collect_instanced traverses without pruning invisible subtrees.
+            _visible_in_tree(im) || continue
             base = compute_world_matrix(im)
             for M in im.instance_matrices
                 _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                     ylo=ylo, yhi=yhi)
+                                     ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
             end
         end
     end

@@ -3832,7 +3832,9 @@ deterministic_bytes(n::Int) =
             rt = RenderTarget(32, 32)
             render!(rt, scene, cam; shading=:smooth)
             decoded = ((0.5 + 0.055) / 1.055)^2.4
-            expected = decoded * 0.5 * 0.5 + decoded
+            # emissive_map modulates material.emissive (three.js); the default
+            # black emissive means the map adds nothing here.
+            expected = decoded * 0.5 * 0.5
             @test isapprox(rt.color[16, 16, 1], expected; atol=2e-2)
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
@@ -4676,10 +4678,11 @@ deterministic_bytes(n::Int) =
             @test cam.far ≈ 50.0
             @test cam.target.z ≈ 2.0
             @test ortho isa OrthographicCamera
-            @test ortho.left ≈ -2.0
-            @test ortho.right ≈ 2.0
-            @test ortho.bottom ≈ -1.0
-            @test ortho.top ≈ 1.0
+            # glTF spec: xmag/ymag are half-extents (left = -xmag, right = +xmag).
+            @test ortho.left ≈ -4.0
+            @test ortho.right ≈ 4.0
+            @test ortho.bottom ≈ -2.0
+            @test ortho.top ≈ 2.0
             @test sun isa DirectionalLight
             @test sun.color.r ≈ 0.8
             @test sun.intensity ≈ 2.5
@@ -4980,6 +4983,881 @@ deterministic_bytes(n::Int) =
         A = zeros(8,8,3); A[1:4,1:4,:] .= 1.0; B = zeros(8,8,3); B[5:8,5:8,:] .= 1.0
         @test loss_silhouette_iou(A,B) > 0.9
         @test loss_silhouette_iou(A,A) < 0.05
+    end
+
+    @testset "Bug-hunt regression fixes (2026-06-11)" begin
+
+        @testset "math" begin
+            # mat4_perspective / mat4_orthographic: element type must promote across ALL
+            # parameters so AD works w.r.t. aspect/near/far (old code: MethodError
+            # Float64(::ForwardDiff.Dual) because T was derived from fov / left only).
+            d_near = ForwardDiff.derivative(n -> projection_matrix_from_params(pi/4, 1.0, n, 100.0).e[11], 0.1)
+            @test isapprox(d_near, -2 * 100.0 / (100.0 - 0.1)^2; rtol=1e-10)
+            d_aspect = ForwardDiff.derivative(a -> projection_matrix_from_params(pi/4, a, 0.1, 100.0).e[1], 1.5)
+            @test isapprox(d_aspect, -1 / (1.5^2 * tan(pi/8)); rtol=1e-10)
+            d_far = ForwardDiff.derivative(f -> mat4_perspective(pi/4, 1.0, 0.1, f).e[15], 100.0)
+            @test isapprox(d_far, 2 * 0.1^2 / (100.0 - 0.1)^2; rtol=1e-10)
+            d_right = ForwardDiff.derivative(r -> mat4_orthographic(-1.0, r, -1.0, 1.0, 0.1, 100.0).e[1], 1.0)
+            @test isapprox(d_right, -2 / (1.0 - (-1.0))^2; rtol=1e-10)
+            d_ofar = ForwardDiff.derivative(f -> mat4_orthographic(-1.0, 1.0, -1.0, 1.0, 0.1, f).e[11], 100.0)
+            @test isapprox(d_ofar, 2 / (100.0 - 0.1)^2; rtol=1e-10)
+            # plain inputs unchanged
+            @test mat4_perspective(pi/4, 1.0, 0.1, 100.0).e[11] ≈ -(100.0 + 0.1) / (100.0 - 0.1)
+            @test eltype(mat4_orthographic(-1, 1, -1, 1, 1, 10).e) == Float64
+
+            # Base.convert for Vec2/Vec3/Vec4/Euler/Quaternion: integer-component values
+            # assigned to Float64 object fields (old code: MethodError from setproperty!).
+            m = Mesh(BoxGeometry(), MeshBasicMaterial())
+            m.position = Vec3(1, 0, 0)
+            @test m.position === Vec3(1.0, 0.0, 0.0)
+            m.rotation = Euler(0, 0, 1)
+            @test m.rotation === Euler(0.0, 0.0, 1.0)
+            cam = PerspectiveCamera()
+            cam.target = Vec3(0, 1, 2)
+            @test cam.target === Vec3(0.0, 1.0, 2.0)
+            @test convert(Vec2{Float64}, Vec2(1, 2)) === Vec2(1.0, 2.0)
+            @test convert(Vec4{Float64}, Vec4(1, 2, 3, 4)) === Vec4(1.0, 2.0, 3.0, 4.0)
+            @test convert(Quaternion{Float64}, Quaternion(0, 0, 0, 1)) === Quaternion(0.0, 0.0, 0.0, 1.0)
+            e_conv = convert(Euler{Float64}, Euler(0, 0, 1, :ZYX))
+            @test e_conv.z === 1.0 && e_conv.order == :ZYX
+        end
+
+        @testset "scene_graph" begin
+            scene = Scene()
+            g = Group()
+            inner = Group()
+            box = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)))
+            add!(inner, box)
+            add!(g, inner)
+            add!(scene, g)
+            cam = PerspectiveCamera(fov=pi/4, aspect=1.0, near=0.1, far=100.0)
+
+            # Sanity: fully visible hierarchy is collected and rendered
+            @test length(collect_meshes(scene)) == 1
+            rt = RenderTarget(64, 64)
+            render!(rt, scene, cam)
+            @test count(>(0.5), view(rt.color, :, :, 1)) > 0
+
+            # Hiding an ancestor Group prunes the whole subtree (three.js semantics)
+            g.visible = false
+            @test isempty(collect_meshes(scene))
+            rt2 = RenderTarget(64, 64)
+            render!(rt2, scene, cam)
+            @test count(>(0.5), view(rt2.color, :, :, 1)) == 0
+            g.visible = true
+
+            # Hiding only an intermediate ancestor also hides the mesh
+            inner.visible = false
+            @test isempty(collect_meshes(scene))
+            inner.visible = true
+
+            # The object's own flag is filtered at collection too
+            box.visible = false
+            @test isempty(collect_meshes(scene))
+            box.visible = true
+            @test length(collect_meshes(scene)) == 1
+
+            # Hiding the scene root hides everything
+            scene.visible = false
+            @test isempty(collect_meshes(scene))
+            scene.visible = true
+        end
+
+        @testset "geometries" begin
+            # --- CylinderGeometry orientation: v=0 row (radius_top) at +height/2 (three.js parity) ---
+            cyl = CylinderGeometry(radius_top=0.2, radius_bottom=1.0, height=2.0,
+                                   radial_segments=8, height_segments=1)
+            ring_r(g, i) = hypot(get_vertex(g, i).x, get_vertex(g, i).z)
+            nside = 2 * (8 + 1)  # two side rings of radial_segments+1 vertices each
+            top_radii = [ring_r(cyl, i) for i in 1:nside if get_vertex(cyl, i).y == 1.0]
+            bot_radii = [ring_r(cyl, i) for i in 1:nside if get_vertex(cyl, i).y == -1.0]
+            @test !isempty(top_radii) && all(r -> isapprox(r, 0.2; atol=1e-12), top_radii)  # radius_top at +h/2
+            @test !isempty(bot_radii) && all(r -> isapprox(r, 1.0; atol=1e-12), bot_radii)  # radius_bottom at -h/2
+
+            # Geometric winding agrees with authored outward normals on every non-degenerate face
+            function winding_matches_normals(g)
+                for f in 1:g.n_faces
+                    i1, i2, i3 = get_face(g, f)
+                    v1, v2, v3 = get_vertex(g, i1), get_vertex(g, i2), get_vertex(g, i3)
+                    fn = cross(v2 - v1, v3 - v1)
+                    norm(fn) < 1e-12 && continue  # degenerate apex triangles
+                    ns = get_normal(g, i1) + get_normal(g, i2) + get_normal(g, i3)
+                    dot(fn, ns) > 0 || return false
+                end
+                return true
+            end
+            @test winding_matches_normals(cyl)
+
+            # Authored side normal matches the analytic outward normal of the tapered surface
+            slope_cyl = (1.0 - 0.2) / 2.0
+            th = 2pi / 8  # second vertex of the top side ring sits at this angle
+            @test isapprox(dot(get_normal(cyl, 2), normalize(Vec3(sin(th), slope_cyl, cos(th)))), 1.0; atol=1e-9)
+
+            # Side uv.y is 1 at the top row (v=0), matching three.js
+            @test cyl.uvs[2] ≈ 1.0
+
+            # --- ConeGeometry: apex up, closed base down ---
+            cone = ConeGeometry(radius=1.0, height=1.0, radial_segments=8)
+            cone_ys = [get_vertex(cone, i).y for i in 1:cone.n_vertices]
+            @test maximum(cone_ys) ≈ 0.5 && minimum(cone_ys) ≈ -0.5
+            apex_radii = [ring_r(cone, i) for i in 1:cone.n_vertices if get_vertex(cone, i).y == 0.5]
+            base_radii = [ring_r(cone, i) for i in 1:cone.n_vertices if get_vertex(cone, i).y == -0.5]
+            @test all(r -> r < 1e-12, apex_radii)        # no open ring at the top: apex only
+            @test maximum(base_radii) ≈ 1.0              # full-radius closed base at -height/2
+            @test winding_matches_normals(cone)
+
+            # --- RingGeometry: planar three.js UV projection, not polar ---
+            ring = RingGeometry(inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
+            oi = 32 + 2  # first vertex of the outer (j=1) row: position (1, 0, 0)
+            @test isapprox(get_vertex(ring, oi).x, 1.0; atol=1e-12)
+            @test isapprox(get_vertex(ring, oi).y, 0.0; atol=1e-12)
+            @test isapprox(ring.uvs[2oi-1], 1.0; atol=1e-12)   # three.js: (x/outer + 1)/2
+            @test isapprox(ring.uvs[2oi], 0.5; atol=1e-12)     # three.js: (y/outer + 1)/2
+            ii = 9  # inner-rim vertex at theta = pi/2: position (0, 0.5, 0)
+            @test isapprox(ring.uvs[2ii-1], 0.5; atol=1e-12)
+            @test isapprox(ring.uvs[2ii], 0.75; atol=1e-12)
+        end
+
+        @testset "geometries_extra" begin
+            # TubeGeometry: geometric winding agrees with authored outward normals
+            # (old code wound every face inward, opposite the stored normals)
+            for tpath in ([Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 2.0)],
+                          [Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.5, 0.0), Vec3(1.0, 3.0, 0.0)])
+                tub = TubeGeometry(tpath; radius=0.5, radial_segments=12)
+                inward = 0
+                for fi in 1:tub.n_faces
+                    i1, i2, i3 = get_face(tub, fi)
+                    v1 = get_vertex(tub, i1); v2 = get_vertex(tub, i2); v3 = get_vertex(tub, i3)
+                    fn = cross(v2 - v1, v3 - v1)
+                    sn = get_normal(tub, i1) + get_normal(tub, i2) + get_normal(tub, i3)
+                    dot(fn, sn) > 0 || (inward += 1)
+                end
+                @test inward == 0
+            end
+
+            # TubeGeometry: frame is parallel-transported along the path, so it does not
+            # flip ~180° when the tangent crosses the |T.y| = 0.99 reference threshold.
+            # Same-index radial offsets of adjacent rings must stay angularly aligned
+            # (old code: ring 2 -> ring 3 offsets had dot ≈ -1 on this elbow path).
+            elbow = [Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.5, 0.0), Vec3(1.0, 3.0, 0.0)]
+            rs = 12; rs1 = rs + 1
+            tub = TubeGeometry(elbow; radius=0.5, radial_segments=rs)
+            mind = 1.0
+            for i in 1:length(elbow)-1, j in 0:rs
+                o1 = normalize(get_vertex(tub, (i-1)*rs1 + j + 1) - elbow[i])
+                o2 = normalize(get_vertex(tub, i*rs1 + j + 1) - elbow[i+1])
+                mind = min(mind, dot(o1, o2))
+            end
+            @test mind > 0.5
+        end
+
+        @testset "objects" begin
+            cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            cam.position = Vec3(0.0, 0.0, 10.0)
+            g = Group()
+            g.position = Vec3(5.0, 0.0, 0.0)
+            g.scale = Vec3(2.0, 2.0, 2.0)
+            sp = Sprite(SpriteMaterial())
+            add!(g, sp)
+            M = sprite_world_matrix(sp, cam)
+            # Billboard is centered at the sprite's WORLD location (5,0,0), not its local (0,0,0)
+            @test mat4_get(M, 1, 4) ≈ 5.0 atol=1e-12
+            @test mat4_get(M, 2, 4) ≈ 0.0 atol=1e-12
+            @test mat4_get(M, 3, 4) ≈ 0.0 atol=1e-12
+            # Parent scale (2x) is reflected in the billboard's column norms
+            sx = sqrt(mat4_get(M,1,1)^2 + mat4_get(M,2,1)^2 + mat4_get(M,3,1)^2)
+            sy = sqrt(mat4_get(M,1,2)^2 + mat4_get(M,2,2)^2 + mat4_get(M,3,2)^2)
+            @test sx ≈ 2.0 atol=1e-9
+            @test sy ≈ 2.0 atol=1e-9
+            # A parented sprite must produce the same billboard matrix as an unparented
+            # sprite carrying the equivalent world TRS
+            sp2 = Sprite(SpriteMaterial())
+            sp2.position = Vec3(5.0, 0.0, 0.0)
+            sp2.scale = Vec3(2.0, 2.0, 2.0)
+            M2 = sprite_world_matrix(sp2, cam)
+            @test all(isapprox(mat4_get(M, r, c), mat4_get(M2, r, c); atol=1e-9) for r in 1:4, c in 1:4)
+        end
+
+        @testset "rasterizer" begin
+            cam = PerspectiveCamera(aspect=1.0)
+
+            # Fix 1: transparent meshes must honour clipping_planes (blend path skipped them).
+            scene_t = Scene()
+            add!(scene_t, Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.9, 0.9, 0.9),
+                                                                opacity=0.5, transparent=true)))
+            rt_full = RenderTarget(32, 32); render!(rt_full, scene_t, cam)
+            @test sum(rt_full.color) > 0.0
+            cut_all = [Plane(Vec3(0.0, 0.0, 1.0), -100.0)]
+            rt_none = RenderTarget(32, 32); render!(rt_none, scene_t, cam; clipping_planes=cut_all)
+            @test sum(rt_none.color) == 0.0
+            keep_pos = [Plane(Vec3(1.0, 0.0, 0.0), 0.0)]
+            rt_half = RenderTarget(32, 32); render!(rt_half, scene_t, cam; clipping_planes=keep_pos)
+            full_px = count(i -> rt_full.color[i] > 0.0, eachindex(rt_full.color))
+            half_px = count(i -> rt_half.color[i] > 0.0, eachindex(rt_half.color))
+            @test 0 < half_px < full_px
+
+            # Fix 2: shading=:smooth on geometry without vertex normals renders instead of throwing.
+            geo_nn = BufferGeometry()
+            geo_nn.positions = [-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 0.0, 1.0, 0.0]
+            geo_nn.n_vertices = 3
+            geo_nn.indices = [1, 2, 3]
+            geo_nn.n_faces = 1
+            scene_nn = Scene()
+            add!(scene_nn, Mesh(geo_nn, MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0))))
+            rt_nn = RenderTarget(32, 32)
+            render!(rt_nn, scene_nn, cam; shading=:smooth)      # BoundsError before the fix
+            @test sum(rt_nn.color) > 0.0
+
+            # Fix 3: orthographic back-face culling uses the parallel view direction.
+            # Off-axis triangle at x ≈ 15 in the plane with normal (3,0,1)/sqrt(10), wound CCW
+            # w.r.t. that normal: front side faces the ortho view direction (+z), but the
+            # eye-point test dot(fn, cam_pos - wc) = -12.65 wrongly culled it.
+            ocam = OrthographicCamera(left=-20.0, right=20.0, bottom=-20.0, top=20.0, near=0.1, far=100.0)
+            t1x, t1z = -4.0 / sqrt(10.0), 12.0 / sqrt(10.0)
+            pos_o = [15.0 - t1x, -4.0, -t1z,
+                     15.0,        4.0,  0.0,
+                     15.0 + t1x, -4.0,  t1z]
+            geo_front = BufferGeometry()
+            geo_front.positions = copy(pos_o); geo_front.n_vertices = 3
+            geo_front.indices = [1, 2, 3];     geo_front.n_faces = 1
+            scene_o = Scene()
+            add!(scene_o, Mesh(geo_front, MeshBasicMaterial(color=Color3(0.0, 1.0, 0.0))))
+            rt_o = RenderTarget(80, 80); render!(rt_o, scene_o, ocam)
+            @test sum(rt_o.color) > 0.0                         # front-facing: was wrongly culled
+            rt_os = RenderTarget(80, 80); render!(rt_os, scene_o, ocam; shading=:smooth)
+            @test sum(rt_os.color) > 0.0                        # smooth path uses the same cull
+            geo_back = BufferGeometry()
+            geo_back.positions = copy(pos_o); geo_back.n_vertices = 3
+            geo_back.indices = [1, 3, 2];     geo_back.n_faces = 1
+            scene_ob = Scene()
+            add!(scene_ob, Mesh(geo_back, MeshBasicMaterial(color=Color3(0.0, 1.0, 0.0))))
+            rt_ob = RenderTarget(80, 80); render!(rt_ob, scene_ob, ocam)
+            @test sum(rt_ob.color) == 0.0                       # back-facing: was wrongly drawn
+            # render_tiled!/render_pooled! share render!'s orthographic cull direction.
+            rt_ot = RenderTarget(80, 80); render_tiled!(rt_ot, scene_o, ocam; tiles=2)
+            @test sum(rt_ot.color) > 0.0
+            rt_op = RenderTarget(80, 80); render_pooled!(rt_op, scene_o, ocam, RenderCache())
+            @test sum(rt_op.color) > 0.0
+
+            # Fix 4: an invisible Group hides its whole subtree (meshes, instanced, lights),
+            # in both the collect_meshes path and the cached traversal.
+            scene_g = Scene()
+            g = Group(); g.visible = false
+            add!(g, Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0))))
+            add!(scene_g, g)
+            rt_g = RenderTarget(32, 32); render!(rt_g, scene_g, cam)
+            @test sum(rt_g.color) == 0.0
+            rt_gc = RenderTarget(32, 32); render!(rt_gc, scene_g, cam; cache=RenderCache())
+            @test sum(rt_gc.color) == 0.0
+            g.visible = true
+            render!(rt_g, scene_g, cam)
+            @test sum(rt_g.color) > 0.0
+            scene_i = Scene()
+            gi = Group(); gi.visible = false
+            add!(gi, InstancedMesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0)), 1))
+            add!(scene_i, gi)
+            rt_i = RenderTarget(32, 32); render!(rt_i, scene_i, cam)
+            @test sum(rt_i.color) == 0.0
+            scene_l = Scene()
+            add!(scene_l, Mesh(BoxGeometry(), MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0))))
+            gl = Group(); gl.visible = false
+            add!(gl, PointLight(intensity=3.0, position=Vec3(0.0, 0.0, 3.0)))
+            add!(scene_l, gl)
+            rt_l = RenderTarget(32, 32); render!(rt_l, scene_l, cam; cache=RenderCache())
+            @test sum(rt_l.color) == 0.0                        # hidden light contributes nothing
+        end
+
+        @testset "shading" begin
+            # --- emissive_map modulates material.emissive (three.js) instead of adding the raw texel ---
+            plane = PlaneGeometry(width=2.0, height=2.0)
+            etex = Texture(fill(0.25, 2, 2, 3); filter=:nearest, colorspace=:linear)
+            no_lights = AbstractLight[]
+            campos = Vec3(0.0, 0.0, 5.0)
+            # Black emissive (the glTF default): the map must contribute nothing (old code added 0.25).
+            m_black = MeshLambertMaterial(color=Color3(0.0, 0.0, 0.0), emissive=Color3(0.0, 0.0, 0.0),
+                                          emissive_map=etex)
+            c_black = shade_mesh_faces(plane, Mat4(), m_black, no_lights, campos)
+            @test all(c -> abs(c.r) < 1e-9 && abs(c.g) < 1e-9 && abs(c.b) < 1e-9, c_black)
+            # White emissive: emission = emissive * texel = 0.25 (old code clamped 1.0 + 0.25 to 1.0).
+            m_white = MeshLambertMaterial(color=Color3(0.0, 0.0, 0.0), emissive=Color3(1.0, 1.0, 1.0),
+                                          emissive_map=etex)
+            c_white = shade_mesh_faces(plane, Mat4(), m_white, no_lights, campos)
+            @test all(c -> isapprox(c.r, 0.25; atol=1e-6) && isapprox(c.g, 0.25; atol=1e-6), c_white)
+            # Emission stays OUT of the diffuse map chain: an albedo map must not
+            # attenuate it (three.js adds emissive after diffuse * map).
+            atex = Texture(fill(0.25, 2, 2, 3); filter=:nearest, colorspace=:linear)
+            ones_tex = Texture(fill(1.0, 2, 2, 3); filter=:nearest, colorspace=:linear)
+            m_combo = MeshLambertMaterial(color=Color3(0.0, 0.0, 0.0), emissive=Color3(0.5, 0.5, 0.5),
+                                          map=atex, emissive_map=ones_tex)
+            c_combo = shade_mesh_faces(plane, Mat4(), m_combo, no_lights, campos)
+            @test all(c -> isapprox(c.r, 0.5; atol=1e-6), c_combo)
+
+            # --- matcap lookup is view-dependent (follows the camera, not world axes) ---
+            mdata = zeros(Float64, 3, 3, 3); mdata[2, 2, :] .= 1.0   # bright center texel only
+            mtex = Texture(mdata; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp, colorspace=:linear)
+            mc = MeshMatcapMaterial(color=Color3(1.0, 1.0, 1.0), matcap=mtex)
+            # Camera along +X: the point whose normal faces the camera samples the matcap center
+            # (old world-space lookup sampled the texture edge, giving 0).
+            c_face = shade_face(Vec3(1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(), mc, no_lights)
+            @test c_face.r ≈ 1.0
+            # A side-facing point (world normal +Z) is off-center from that view (old code returned 1.0).
+            c_side = shade_face(Vec3(0.0, 0.0, 1.0), Vec3(1.0, 0.0, 0.0), Vec3(), mc, no_lights)
+            @test abs(c_side.r) < 1e-9
+            # View along +Z with a front-facing normal still samples the center (behavior preserved).
+            c_z = shade_face(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(), mc, no_lights)
+            @test c_z.r ≈ 1.0
+            # Degenerate view straight down +Y must stay finite (fallback basis, no NaN).
+            c_y = shade_face(Vec3(0.0, 1.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(), mc, no_lights)
+            @test isfinite(c_y.r) && isfinite(c_y.g) && isfinite(c_y.b)
+
+            # --- PointLight applies its IES profile (was silently isotropic) ---
+            prof = IESProfile([0.0, 5.0, 180.0], [1.0, 0.0, 0.0])   # bright only near the aim axis
+            pl = PointLight(position=Vec3(0.0, 2.0, 0.0), decay=0.0, ies_profile=prof)
+            pl_iso = PointLight(position=Vec3(0.0, 2.0, 0.0), decay=0.0)
+            _, li_iso, _ = light_contribution(pl_iso, Vec3(3.0, 0.0, 0.0))
+            _, li_off, _ = light_contribution(pl, Vec3(3.0, 0.0, 0.0))   # ~56 deg off the -Y aim axis
+            @test li_iso ≈ 1.0
+            @test abs(li_off) < 1e-9                                # profile suppresses off-axis light
+            _, li_below, _ = light_contribution(pl, Vec3(0.0, 0.0, 0.0))
+            @test li_below ≈ 1.0                                    # on-axis: full intensity
+            # Rotated luminaire: flipping the aim to +Y darkens the point directly below.
+            pl_rot = PointLight(position=Vec3(0.0, 2.0, 0.0), decay=0.0, ies_profile=prof)
+            pl_rot.rotation = Euler(pi, 0.0, 0.0)
+            _, li_flipped, _ = light_contribution(pl_rot, Vec3(0.0, 0.0, 0.0))
+            @test abs(li_flipped) < 1e-9
+        end
+
+        @testset "lights" begin
+            # collect_lights respects visibility: own flag and ancestor (group) pruning
+            scene = Scene()
+            pl = PointLight(position=Vec3(0.0, 0.0, 3.0))
+            dl = DirectionalLight()
+            dl.visible = false
+            add!(scene, pl)
+            add!(scene, dl)
+            g = Group()
+            g.visible = false
+            add!(g, PointLight(name="HiddenByGroup"))
+            add!(scene, g)
+            lights = collect_lights(scene)
+            @test length(lights) == 1
+            @test lights[1] === pl
+            # restoring visibility restores collection (including the pruned subtree)
+            dl.visible = true
+            g.visible = true
+            @test length(collect_lights(scene)) == 3
+            # an invisible root prunes everything
+            g.visible = false
+            scene.visible = false
+            @test isempty(collect_lights(scene))
+            scene.visible = true
+
+            # parse_ies accepts comma-delimited LM-63 numeric fields (same result as space-delimited)
+            ies_text = "IESNA:LM-63-2002\nTILT=NONE\n" *
+                       "1,1000,1.0,5,1,1,1,0.0,0.0,0.0\n" *
+                       "1.0,1.0,100.0\n" *
+                       "0,30,60,90,120\n" *
+                       "0.0\n" *
+                       "1000,800,400,100,0\n"
+            prof = parse_ies(ies_text)
+            @test prof.angles == [0.0, 30.0, 60.0, 90.0, 120.0]
+            @test prof.candela == [1000.0, 800.0, 400.0, 100.0, 0.0]
+            @test ies_candela(prof, 45.0) ≈ 600.0
+        end
+
+        @testset "shadows" begin
+            scene = Scene()
+            ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshLambertMaterial();
+                          receive_shadow=true)
+            ground.rotation = Euler(-pi/2, 0.0, 0.0); add!(scene, ground)
+            box = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshLambertMaterial();
+                       cast_shadow=true)
+            box.position = Vec3(0.0, 1.0, 0.0); add!(scene, box)
+            # Shadows must survive at any light distance: nearby light (h=3, inside the
+            # scene's bounding sphere) and distant lights (h up to ~17x scene radius,
+            # which the old fixed near=0.05/far=6r frustum silently lost).
+            for h in (3.0, 10.0, 20.0, 50.0)
+                spot = SpotLight(position=Vec3(0.0, h, 0.0), angle=pi/4, target=Vec3(0.0, 0.0, 0.0))
+                sm = compute_shadow_map(scene, spot; resolution=512)
+                @test shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)) == 0.0   # under the box
+                @test shadow_visibility(sm, Vec3(1.8, 0.0, 0.0)) == 1.0   # open ground
+            end
+            for h in (5.0, 20.0)
+                pl = PointLight(position=Vec3(0.0, h, 0.0))
+                sm = compute_shadow_map(scene, pl; resolution=512)
+                @test shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)) == 0.0
+                @test shadow_visibility(sm, Vec3(1.8, 0.0, 0.0)) == 1.0
+            end
+        end
+
+        @testset "textures" begin
+            # sample_cube orientation: GL t=0 addresses the FIRST stored row, which this
+            # engine stores as the top row (module convention: row 1 = top, v=0 = bottom),
+            # so sample_cube must sample at v = 1 - t for every face.
+            face_data = zeros(4, 4, 3)
+            face_data[1:2, :, 1] .= 1.0   # stored rows 1-2 (top half) red
+            face_data[3:4, :, 3] .= 1.0   # stored rows 3-4 (bottom half) blue
+            face = Texture(face_data; wrap_s=:clamp, wrap_t=:clamp, filter=:nearest)
+            ct = CubeTexture(ntuple(_ -> face, 6))
+            # Directions chosen so the GL cube-map t coordinate is 0.2 (upper part of
+            # the stored face image) for each of the six faces in order +x,-x,+y,-y,+z,-z.
+            upper_dirs = [Vec3(1.0, 0.6, 0.0), Vec3(-1.0, 0.6, 0.0),
+                          Vec3(0.0, 1.0, -0.6), Vec3(0.0, -1.0, 0.6),
+                          Vec3(0.0, 0.6, 1.0), Vec3(0.0, 0.6, -1.0)]
+            for d in upper_dirs
+                c = sample_cube(ct, d)
+                @test (c.r, c.g, c.b) == (1.0, 0.0, 0.0)   # red: top of stored image
+            end
+            # Mirrored directions hit GL t = 0.8 (lower part of the stored image).
+            lower_dirs = [Vec3(1.0, -0.6, 0.0), Vec3(-1.0, -0.6, 0.0),
+                          Vec3(0.0, 1.0, 0.6), Vec3(0.0, -1.0, -0.6),
+                          Vec3(0.0, -0.6, 1.0), Vec3(0.0, -0.6, -1.0)]
+            for d in lower_dirs
+                c = sample_cube(ct, d)
+                @test (c.r, c.g, c.b) == (0.0, 0.0, 1.0)   # blue: bottom of stored image
+            end
+        end
+
+        @testset "raycaster" begin
+            # --- _ray_segment_distance: re-optimize s on the t = 0 face (three.js Ray.distanceSqToSegment) ---
+            # Ray from the origin along +x; segment (-3,1,0)-(1,2,0). The unconstrained closest
+            # approach lies behind the origin: true constrained distance is sqrt(49/17) ≈ 1.6977
+            # at t = 0 with the ORIGIN projected onto the segment (s = 11/17). The old code kept
+            # the stale s = 0 endpoint and reported sqrt(10) ≈ 3.16, missing this pick.
+            posgeo(pts) = begin
+                flat = Float64[]
+                for p in pts; append!(flat, (p[1], p[2], p[3])); end
+                BufferGeometry(flat, Float64[], Float64[], Int[], length(pts), 0)
+            end
+            seg = LineSegments(posgeo([(-3.0, 1.0, 0.0), (1.0, 2.0, 0.0)]), LineBasicMaterial())
+            rcs = Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); line_threshold=2.0)
+            segs_hits = raycast(rcs, seg)
+            @test length(segs_hits) == 1
+            @test segs_hits[1].distance ≈ 0.0 atol=1e-12          # closest approach at the ray origin
+            @test segs_hits[1].point.x ≈ -7/17 atol=1e-9          # origin projected onto the segment
+            @test segs_hits[1].point.y ≈ 28/17 atol=1e-9
+            @test segs_hits[1].point.z ≈ 0.0 atol=1e-12
+            # Tighter threshold (below the true 1.6977 distance) still misses.
+            @test isempty(raycast(Raycaster(Vec3(0.0,0.0,0.0), Vec3(1.0,0.0,0.0); line_threshold=1.5), seg))
+
+            # --- ray_triangle_intersect side keyword (three.js Ray.intersectTriangle winding culling) ---
+            ta = Vec3(0.0, 0.0, 0.0); tb = Vec3(1.0, 0.0, 0.0); tc = Vec3(0.0, 1.0, 0.0)  # CCW normal +z
+            @test ray_triangle_intersect(Vec3(0.25,0.25,1.0), Vec3(0.0,0.0,-1.0), ta, tb, tc) ≈ 1.0  # default :double unchanged
+            @test ray_triangle_intersect(Vec3(0.25,0.25,1.0), Vec3(0.0,0.0,-1.0), ta, tb, tc; side=:front) ≈ 1.0
+            @test ray_triangle_intersect(Vec3(0.25,0.25,1.0), Vec3(0.0,0.0,-1.0), ta, tb, tc; side=:back) === nothing
+            @test ray_triangle_intersect(Vec3(0.25,0.25,-1.0), Vec3(0.0,0.0,1.0), ta, tb, tc; side=:front) === nothing
+            @test ray_triangle_intersect(Vec3(0.25,0.25,-1.0), Vec3(0.0,0.0,1.0), ta, tb, tc; side=:back) ≈ 1.0
+
+            # --- Mesh raycast honors material.side (three.js Mesh.raycast FrontSide culling) ---
+            scn = Scene()
+            box = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshBasicMaterial())  # side=:front
+            add!(scn, box)
+            # x != y keeps the ray off the face triangulation diagonal, where
+            # both triangles of the quad would report the same hit (as in three.js).
+            rcb = Raycaster(Vec3(0.2, 0.1, 5.0), Vec3(0.0, 0.0, -1.0))
+            front_hits = raycast(rcb, scn)
+            @test length(front_hits) == 1                          # old code also reported the exit face at 5.5
+            @test front_hits[1].distance ≈ 4.5 atol=1e-9
+            box.material = MeshBasicMaterial(side=:double)
+            both_hits = raycast(rcb, scn)
+            @test length(both_hits) == 2                           # double-sided picks entry and exit faces
+            @test both_hits[1].distance ≈ 4.5 atol=1e-9
+            @test both_hits[2].distance ≈ 5.5 atol=1e-9
+            # Single-sided plane (+z facing) viewed from behind: invisible to the renderer and now to picking.
+            plane = Mesh(PlaneGeometry(width=2.0, height=2.0), MeshBasicMaterial())
+            @test isempty(raycast(Raycaster(Vec3(0.0,0.0,-5.0), Vec3(0.0,0.0,1.0)), plane; recursive=false))
+            @test !isempty(raycast(Raycaster(Vec3(0.0,0.0,5.0), Vec3(0.0,0.0,-1.0)), plane; recursive=false))
+        end
+
+        @testset "losses" begin
+            # loss_ssim: image smaller than the SSIM window must error, not report a perfect match.
+            @test_throws ArgumentError loss_ssim(zeros(6, 6, 3), ones(6, 6, 3))
+            # Valid sizes are unaffected: identical images -> zero loss, dissimilar -> large loss.
+            img = reshape(collect(range(0.0, 1.0; length=9*9*3)), 9, 9, 3)
+            @test loss_ssim(img, img) ≈ 0.0 atol=1e-12
+            @test loss_ssim(img, 1.0 .- img) > 0.5
+
+            # loss_silhouette_iou: two identical empty (all-black) silhouettes are a perfect match.
+            @test loss_silhouette_iou(zeros(8, 8, 3), zeros(8, 8, 3)) < 0.05
+            # Resolution-independent: still ~0 loss for a larger blank pair.
+            @test loss_silhouette_iou(zeros(64, 64, 3), zeros(64, 64, 3)) < 0.05
+            # Calibration preserved: disjoint silhouettes -> ~1 loss, identical foreground -> ~0.
+            A = zeros(8, 8, 3); A[1:4, 1:4, :] .= 1.0
+            B = zeros(8, 8, 3); B[5:8, 5:8, :] .= 1.0
+            @test loss_silhouette_iou(A, B) > 0.9
+            @test loss_silhouette_iou(A, A) < 0.05
+        end
+
+        @testset "reverse_ad" begin
+            # ^ with an ADVar exponent: both partials recorded, no StackOverflowError
+            g = reverse_gradient(x -> x[1]^x[2], [2.0, 3.0])
+            @test g[1] ≈ 12.0
+            @test g[2] ≈ 8.0 * log(2.0)
+            g = reverse_gradient(x -> 2.0^x[1], [3.0])
+            @test g[1] ≈ 8.0 * log(2.0)
+            g = reverse_gradient(x -> x[1]^2.5, [4.0])      # Float64-exponent fast path unchanged
+            @test g[1] ≈ 20.0
+
+            # elementary functions now differentiate instead of being silently
+            # constant-folded through float(x) = x.val
+            g = reverse_gradient(x -> x[1] * tanh(x[2]) + x[2], [1.5, 0.5])
+            @test g[1] ≈ tanh(0.5)
+            @test g[2] ≈ 1.5 * (1 - tanh(0.5)^2) + 1.0
+
+            g = reverse_gradient(x -> atan(x[1]) + log10(x[2]) + tan(x[3]), [0.7, 4.0, 0.3])
+            @test g[1] ≈ 1 / (1 + 0.7^2)
+            @test g[2] ≈ 1 / (4.0 * log(10.0))
+            @test g[3] ≈ 1 + tan(0.3)^2
+
+            g = reverse_gradient(x -> hypot(x[1], x[2]) + atan(x[1], x[2]), [3.0, 4.0])
+            @test g[1] ≈ 3.0 / 5.0 + 4.0 / 25.0
+            @test g[2] ≈ 4.0 / 5.0 - 3.0 / 25.0
+
+            g = reverse_gradient(x -> asin(x[1]) + acos(x[2]) + sinh(x[3]) + cosh(x[4]),
+                                 [0.3, 0.4, 0.5, 0.6])
+            @test g[1] ≈ 1 / sqrt(1 - 0.3^2)
+            @test g[2] ≈ -1 / sqrt(1 - 0.4^2)
+            @test g[3] ≈ cosh(0.5)
+            @test g[4] ≈ sinh(0.6)
+
+            g = reverse_gradient(x -> exp2(x[1]) + exp10(x[2]) + expm1(x[3]) + log1p(x[4]) +
+                                      log2(x[5]) + cbrt(x[6]),
+                                 [1.5, 0.5, 0.25, 0.75, 3.0, 8.0])
+            @test g[1] ≈ exp2(1.5) * log(2.0)
+            @test g[2] ≈ exp10(0.5) * log(10.0)
+            @test g[3] ≈ exp(0.25)
+            @test g[4] ≈ 1 / 1.75
+            @test g[5] ≈ 1 / (3.0 * log(2.0))
+            @test g[6] ≈ 1 / 12.0
+
+            # float preserves the ADVar; unsupported Base math now fails loudly
+            # (old code: asinh constant-folds to Float64 and reverse_gradient throws
+            # ErrorException("f must return a scalar ADVar") instead)
+            @test float(ADVar(2.0)) isa ADVar
+            @test_throws MethodError reverse_gradient(x -> asinh(x[1]), [1.0])
+        end
+
+        @testset "renderer_extra" begin
+            # render_msaa! honors ceil(sqrt(samples)): samples=2 must actually anti-alias
+            msaa_scene = Scene(background=Color3(0.0, 0, 0))
+            add!(msaa_scene, Mesh(SphereGeometry(radius=1.0), MeshBasicMaterial(color=Color3(1.0, 0, 0))))
+            msaa_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            msaa_cam.position = Vec3(0.0, 0, 4.0)
+            rt_msaa = RenderTarget(32, 32)
+            render_msaa!(rt_msaa, msaa_scene, msaa_cam; samples=2)
+            @test count(v -> 0.05 < v < 0.95, rt_msaa.color[:, :, 1]) > 5   # fractional edge coverage
+
+            # render_pooled! rejects unsupported shading instead of silently ignoring it
+            @test_throws ArgumentError render_pooled!(RenderTarget(16, 16), msaa_scene, msaa_cam,
+                                                      RenderCache(); shading=:smooth)
+            rt_pool = RenderTarget(32, 32)
+            render_pooled!(rt_pool, msaa_scene, msaa_cam, RenderCache())    # :flat still renders
+            @test count(>(0.5), rt_pool.color[:, :, 1]) > 10
+
+            # render_pooled! skips invisible lights (cached predicate filters visibility)
+            lit_scene = Scene(background=Color3(0.0, 0, 0))
+            add!(lit_scene, Mesh(SphereGeometry(radius=1.0), MeshLambertMaterial(color=Color3(1.0, 1, 1))))
+            hidden_pl = PointLight(color=Color3(1.0, 1, 1), intensity=3.0, position=Vec3(0.0, 0, 3.0))
+            hidden_pl.visible = false
+            add!(lit_scene, hidden_pl)
+            rt_lit = RenderTarget(24, 24)
+            render_pooled!(rt_lit, lit_scene, msaa_cam, RenderCache())
+            @test maximum(rt_lit.color) < 1e-9                              # hidden light contributes nothing
+
+            # _draw_line! DDA must not overshoot the segment endpoint
+            ocam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0, near=0.1, far=10.0)
+            ocam.position = Vec3(0.0, 0, 2.0); ocam.target = Vec3(0.0, 0, 0.0)
+            seg_geo = BufferGeometry()
+            seg_geo.positions = [-0.6875, 0.375, 0.0, -0.3609375, 0.375, 0.0]  # screen x 10.0 -> 20.45 on row 20
+            seg_geo.n_vertices = 2
+            seg_scene = Scene(background=Color3(0.0, 0, 0))
+            add!(seg_scene, LineObject(seg_geo, LineBasicMaterial(color=Color3(1.0, 0, 0))))
+            rt_seg = RenderTarget(64, 64); render!(rt_seg, seg_scene, ocam)
+            @test rt_seg.color[20, 20, 1] > 0.5                             # endpoint pixel painted
+            @test rt_seg.color[20, 21, 1] == 0.0                            # no pixel past the endpoint
+
+            # render_lines!: a segment straddling the camera plane is clipped, not dropped
+            pers_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            pers_cam.position = Vec3(0.0, 0, 4.0)
+            straddle_geo = BufferGeometry()
+            straddle_geo.positions = [0.5, 0.0, 0.0, 0.5, 0.0, 10.0]        # second vertex behind the camera
+            straddle_geo.n_vertices = 2
+            straddle_scene = Scene(background=Color3(0.0, 0, 0))
+            add!(straddle_scene, LineObject(straddle_geo, LineBasicMaterial(color=Color3(1.0, 0, 0))))
+            rt_straddle = RenderTarget(40, 40); render!(rt_straddle, straddle_scene, pers_cam)
+            @test count(>(0.5), rt_straddle.color[:, :, 1]) > 5             # visible part still drawn
+
+            # render_points!: a point inside the near volume is culled, not drawn over everything
+            np_geo = BufferGeometry(); np_geo.positions = [0.0, 0.0, 3.95]; np_geo.n_vertices = 1  # view z = -0.05 > -near
+            np_scene = Scene(background=Color3(0.0, 0, 0))
+            add!(np_scene, PointsObject(np_geo, PointsMaterial(color=Color3(0.0, 1, 0), size=3.0)))
+            rt_np = RenderTarget(40, 40); render!(rt_np, np_scene, pers_cam)
+            @test count(>(0.5), rt_np.color[:, :, 2]) == 0
+
+            # ssao_pass: a flat tilted surface receives exactly zero occlusion
+            tilt_depth = [10.0 + 0.5 * (j - 5) for i in 1:10, j in 1:10]
+            flat_img = fill(0.6, 10, 10, 3)
+            @test isapprox(ssao_pass(tilt_depth; radius=2.0, intensity=1.0, samples=8)(flat_img),
+                           flat_img; atol=1e-12)
+
+            # bokeh_pass positional-depth form (as documented) works and is sharp in focus
+            focus_img = zeros(Float64, 8, 8, 3); focus_img[4, 4, 1] = 1.0
+            @test isapprox(bokeh_pass(fill(1.0, 8, 8); focus_depth=1.0)(focus_img), focus_img; atol=1e-12)
+        end
+
+        @testset "controls" begin
+            # Damped OrbitControls: total motion converges to the queued delta (three.js parity).
+            cam = PerspectiveCamera()
+            oc = OrbitControls(cam; enable_damping=true, damping_factor=0.05)
+            s0 = cartesian_to_spherical(cam.position - oc.target)
+            orbit_rotate!(oc, 0.2, 0.0)
+            for _ in 1:1000
+                orbit_update!(oc)
+            end
+            s1 = cartesian_to_spherical(cam.position - oc.target)
+            @test isapprox(s1.theta - s0.theta, 0.2; atol=1e-6)   # old code: ~4.0 rad
+
+            cam2 = PerspectiveCamera()
+            oc2 = OrbitControls(cam2; enable_damping=true, damping_factor=0.05)
+            r0 = norm(cam2.position - oc2.target)
+            orbit_zoom!(oc2, 0.8)
+            for _ in 1:1000
+                orbit_update!(oc2)
+            end
+            @test isapprox(norm(cam2.position - oc2.target) / r0, 0.8; atol=1e-6)  # old: 0.8^20
+
+            cam3 = PerspectiveCamera()
+            oc3 = OrbitControls(cam3; enable_damping=true, damping_factor=0.05)
+            t0 = oc3.target
+            orbit_pan!(oc3, 0.5, 0.0)
+            for _ in 1:1000
+                orbit_update!(oc3)
+            end
+            @test isapprox(norm(oc3.target - t0), 0.5; atol=1e-6)  # old: 10.0
+
+            # orbit_set! accepts mixed Int/Float64 keyword arguments.
+            cam4 = PerspectiveCamera()
+            oc4 = OrbitControls(cam4)
+            orbit_set!(oc4; azimuth=0, polar=pi/2, radius=3)       # old code: MethodError
+            @test isapprox(norm(cam4.position - oc4.target), 3.0; atol=1e-9)
+
+            # Quaternion -> Euler at gimbal lock (y = -pi/2): mixer write round-trips the rotation.
+            g = Group()
+            q = quat_from_euler(0.3, -pi/2, 0.0)
+            tr = QuaternionKeyframeTrack(g, :quaternion, [0.0, 1.0], [q, q])
+            mixer_set_time!(AnimationMixer(AnimationClip("gimbal_lock", [tr])), 0.25)
+            e = g.rotation
+            q2 = quat_from_euler(e.x, e.y, e.z)
+            qdot = abs(q.x*q2.x + q.y*q2.y + q.z*q2.z + q.w*q2.w)
+            @test isapprox(qdot, 1.0; atol=1e-6)                   # old code: ~0.9553
+
+            # SpotLightHelper with position == target falls back to a unit cone along (0,-1,0).
+            sl = SpotLight(position=Vec3(1.0, 2.0, 3.0), target=Vec3(1.0, 2.0, 3.0), angle=pi/6)
+            sh = SpotLightHelper(sl)
+            ps = sh.geometry.positions
+            ys = ps[2:3:end]
+            @test isapprox(maximum(ys), 2.0; atol=1e-9)            # apex at the light position
+            @test isapprox(minimum(ys), 1.0; atol=1e-9)            # base one unit below (old: collapsed point)
+            xs = ps[1:3:end]; zs = ps[3:3:end]
+            rmax = maximum(sqrt.((xs .- 1.0).^2 .+ (zs .- 3.0).^2))
+            @test isapprox(rmax, tan(pi/6); atol=1e-9)             # base ring radius tan(angle)
+        end
+
+        @testset "loaders" begin
+            # Binary STL with trailing junk bytes (e.g. a newline appended by an
+            # exporter or a text-mode transfer) must still be detected and loaded as
+            # binary instead of silently returning an empty mesh.
+            geo = BoxGeometry(width=1.0, height=2.0, depth=3.0)
+            f = tempname() * ".stl"
+            save_stl_binary(f, geo)
+            open(f, "a") do io
+                write(io, UInt8(0x0a))                    # trailing newline
+            end
+            loaded = load_stl(f)
+            @test loaded.n_faces == geo.n_faces           # was 0 before the fix
+            @test loaded.n_vertices == geo.n_faces * 3
+            v_orig = get_vertex(geo, 1); v_load = get_vertex(loaded, 1)
+            @test v_load.x ≈ v_orig.x atol=1e-6
+            @test v_load.y ≈ v_orig.y atol=1e-6
+            @test v_load.z ≈ v_orig.z atol=1e-6
+            rm(f)
+
+            # ASCII STL with a UTF-8 BOM is still classified and parsed as ASCII
+            # (the new "solid" scan tolerates offsets 0-4).
+            ascii_stl = "solid tri\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid tri\n"
+            f2 = tempname() * ".stl"
+            write(f2, "\xef\xbb\xbf" * ascii_stl)
+            geo2 = load_stl(f2)
+            @test geo2.n_faces == 1
+            @test geo2.n_vertices == 3
+            @test get_vertex(geo2, 2).x ≈ 1.0
+            rm(f2)
+        end
+
+        @testset "loaders_extra" begin
+            dir = mktempdir()
+            append_f32!(bin, xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+
+            # --- UTF-8 JSON names + glTF orthographic half-extents (xmag/ymag) ---
+            cam_json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "buffers":[],
+             "nodes":[{"name":"Kölner_Kamera","translation":[0,0,4],"camera":0}],
+             "cameras":[{"type":"orthographic","orthographic":{"xmag":4,"ymag":2,"znear":0.1,"zfar":20}}]}
+            """
+            cam_path = joinpath(dir, "ortho_utf8.gltf")
+            write(cam_path, cam_json)
+            cam_scene = load_gltf(cam_path)            # old JSON parser threw StringIndexError here
+            ortho = get_children(cam_scene)[1]
+            @test ortho isa OrthographicCamera
+            @test ortho.name == "Kölner_Kamera"
+            @test ortho.left ≈ -4.0
+            @test ortho.right ≈ 4.0
+            @test ortho.bottom ≈ -2.0
+            @test ortho.top ≈ 2.0
+
+            # --- glTF top-left UV origin (texture row flip) + alphaMode OPAQUE ---
+            img = zeros(2, 1, 3)
+            img[1, 1, 1] = 1.0                          # top row red
+            img[2, 1, 3] = 1.0                          # bottom row blue
+            save_png(joinpath(dir, "tex.png"), img)
+            bin = UInt8[]
+            append_f32!(bin, [0,0,0, 1,0,0, 0,1,0])
+            write(joinpath(dir, "tex.bin"), bin)
+            tex_json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"tex_node","mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"tex.bin"}],
+             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],
+             "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+             "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,0.5],"baseColorTexture":{"index":0}}}],
+             "textures":[{"source":0,"sampler":0}],
+             "samplers":[{"magFilter":9728}],
+             "images":[{"uri":"tex.png"}]}
+            """
+            tex_path = joinpath(dir, "tex.gltf")
+            write(tex_path, tex_json)
+            tex_mesh = get_children(get_children(load_gltf(tex_path))[1])[1]
+            mat = tex_mesh.material
+            @test mat.transparent == false              # OPAQUE ignores baseColorFactor alpha
+            @test mat.opacity ≈ 1.0
+            c_top = sample_texture(mat.map, 0.5, 0.2)   # glTF v=0.2 is in the TOP (red) half
+            @test isapprox(c_top.r, 1.0; atol=1e-6) && isapprox(c_top.b, 0.0; atol=1e-6)
+            c_bot = sample_texture(mat.map, 0.5, 0.8)   # glTF v=0.8 is in the BOTTOM (blue) half
+            @test isapprox(c_bot.b, 1.0; atol=1e-6) && isapprox(c_bot.r, 0.0; atol=1e-6)
+
+            # --- weights animations with 2 morph targets (LINEAR and CUBICSPLINE) ---
+            bin2 = UInt8[]
+            off_pos = length(bin2); append_f32!(bin2, [0,0,0, 1,0,0, 0,1,0])
+            off_t0 = length(bin2); append_f32!(bin2, [0,0,1, 0,0,1, 0,0,1])
+            off_t1 = length(bin2); append_f32!(bin2, [1,0,0, 1,0,0, 1,0,0])
+            off_times = length(bin2); append_f32!(bin2, [0, 1])
+            off_wlin = length(bin2); append_f32!(bin2, [0,0, 1,0.5])
+            off_wcub = length(bin2); append_f32!(bin2, [0,0, 0,0, 0,0, 0,0, 1,0.5, 0,0])
+            write(joinpath(dir, "morph2.bin"), bin2)
+            morph_json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"morph2_node","mesh":0,"weights":[0,0]}],
+             "buffers":[{"byteLength":$(length(bin2)),"uri":"morph2.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_t0,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_t1,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_wlin,"byteLength":16},
+               {"buffer":0,"byteOffset":$off_wcub,"byteLength":48}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":2,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":3,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":4,"componentType":5126,"count":4,"type":"SCALAR"},
+               {"bufferView":5,"componentType":5126,"count":12,"type":"SCALAR"}],
+             "meshes":[{"weights":[0,0],
+               "primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1},{"POSITION":2}]}]}],
+             "animations":[
+               {"name":"w_lin","samplers":[{"input":3,"output":4,"interpolation":"LINEAR"}],
+                "channels":[{"sampler":0,"target":{"node":0,"path":"weights"}}]},
+               {"name":"w_cub","samplers":[{"input":3,"output":5,"interpolation":"CUBICSPLINE"}],
+                "channels":[{"sampler":0,"target":{"node":0,"path":"weights"}}]}]}
+            """
+            morph_path = joinpath(dir, "morph2.gltf")
+            write(morph_path, morph_json)
+            asset = load_gltf_asset(morph_path)         # old code: "keyframe counts differ" error
+            @test length(asset.animations) == 2
+            morph_mesh = get_children(get_children(asset.scene)[1])[1]
+            lin_mixer = AnimationMixer(asset.animations[1])
+            mixer_set_time!(lin_mixer, 0.5)
+            @test morph_mesh.morph_target_influences ≈ [0.5, 0.25]
+            mixer_set_time!(lin_mixer, 1.0)
+            @test morph_mesh.morph_target_influences ≈ [1.0, 0.5]
+            cub_mixer = AnimationMixer(asset.animations[2])
+            mixer_set_time!(cub_mixer, 1.0)
+            @test morph_mesh.morph_target_influences ≈ [1.0, 0.5]
+
+            # --- interlaced (Adam7) PNG rejected with a clear error ---
+            ihdr_data = UInt8[0,0,0,1, 0,0,0,1, 8, 0, 0, 0, 1]   # 1x1 8-bit gray, interlace=1
+            png_bytes = vcat(UInt8[137,80,78,71,13,10,26,10],
+                             UInt8[0,0,0,13], b"IHDR", ihdr_data, UInt8[0,0,0,0],
+                             UInt8[0,0,0,0], b"IEND", UInt8[0,0,0,0])
+            ipath = joinpath(dir, "interlaced.png")
+            write(ipath, png_bytes)
+            @test_throws "interlaced (Adam7)" load_png(ipath)
+        end
+
+        @testset "web_export" begin
+            texdata = zeros(2, 1, 3)
+            texdata[1, 1, 1] = 1.0   # data row 1 = top of image (red)
+            texdata[2, 1, 3] = 1.0   # data row 2 = bottom of image (blue)
+            tex = Texture(texdata)
+            tex_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(map=tex); name="regress_texture_mesh")
+            sp = Sprite(SpriteMaterial(rotation=0.3); name="regress_sprite")
+            scene = Scene()
+            add!(scene, tex_mesh)
+            add!(scene, sp)
+            clip = AnimationClip("spin", [NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1])])
+            f = tempname() * ".html"
+            save_webgl_html(f, [WebGLExportCase("regress", "Regress", "web export fixes", scene;
+                                                radius=8.0, height=0.5, animations=[clip])])
+            html = read(f, String)
+            rm(f; force=true)
+            # 1. texture rows are serialized bottom-up so v=0 is the bottom row in WebGL
+            @test occursin("\"data\":[0,0,255,255,255,0,0,255]", html)
+            @test !occursin("\"data\":[255,0,0,255,0,0,255,255]", html)
+            # 2. sprite drawables export the sprite's own id, matching the animation track target
+            @test occursin("\"id\":$(sp.id),\"name\":\"regress_sprite\"", html)
+            @test occursin("\"target\":$(sp.id),\"property\":\"spriteRotation\"", html)
+            # 3. runtime defaults no longer clobber legitimate zero values
+            @test occursin("decay:l.decay==null?2:l.decay", html)
+            @test !occursin("decay:l.decay||2", html)
+            @test occursin("near:f.near==null?1:f.near", html)
+            @test occursin("o.emissiveIntensity==null?1:o.emissiveIntensity", html)
+            @test occursin("o.aoIntensity==null?1:o.aoIntensity", html)
+            @test occursin("o.lightMapIntensity==null?1:o.lightMapIntensity", html)
+            @test occursin("o.envMapIntensity==null?1:o.envMapIntensity", html)
+            # 4. initial camera pitch is derived from the exported case height
+            @test occursin("\"height\":0.5", html)
+            @test occursin("active.height==null?3.0:active.height", html)
+        end
+
+        @testset "docs" begin
+            # docs.jl: doc-attachment loop must not call Base.Docs.hasdoc unguarded
+            # (it only exists on Julia >= 1.11; on 1.9/1.10 the old code made
+            # `using Diff3D` fail outright, so reaching this point plus an attached
+            # docstring exercises the guarded path).
+            euler_doc = string(@doc Euler)
+            @test occursin("Euler(x, y, z[, order])", euler_doc)
+            # Old docstring advertised a nonexistent keyword method `Euler(x, y, z; order=:XYZ)`.
+            @test !occursin("order=:XYZ)", euler_doc)
+            # The documented positional form actually works as described.
+            @test Euler(0.1, 0.2, 0.3, :ZYX).order == :ZYX
+            @test Euler(0.1, 0.2, 0.3).order == :XYZ
+            # collect_* docstrings describe the skip-invisible-subtree semantics.
+            @test occursin("visible == false", string(@doc collect_meshes))
+            @test occursin("visible == false", string(@doc collect_lights))
+        end
+
     end
 
 end

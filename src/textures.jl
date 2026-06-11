@@ -327,14 +327,14 @@ end
 function sample_cube(ct::CubeTexture, dir::Vec3)
     ax, ay, az = abs(dir.x), abs(dir.y), abs(dir.z)
     if ax >= ay && ax >= az
-        if dir.x > 0; return sample_texture(ct.faces[1], 0.5 - dir.z/(2dir.x), 0.5 - dir.y/(2ax))
-        else;         return sample_texture(ct.faces[2], 0.5 - dir.z/(2dir.x), 0.5 - dir.y/(2ax)); end
+        if dir.x > 0; return sample_texture(ct.faces[1], 0.5 - dir.z/(2dir.x), 0.5 + dir.y/(2ax))
+        else;         return sample_texture(ct.faces[2], 0.5 - dir.z/(2dir.x), 0.5 + dir.y/(2ax)); end
     elseif ay >= ax && ay >= az
-        if dir.y > 0; return sample_texture(ct.faces[3], 0.5 + dir.x/(2ay), 0.5 + dir.z/(2dir.y))
-        else;         return sample_texture(ct.faces[4], 0.5 + dir.x/(2ay), 0.5 - dir.z/(2ay)); end
+        if dir.y > 0; return sample_texture(ct.faces[3], 0.5 + dir.x/(2ay), 0.5 - dir.z/(2ay))
+        else;         return sample_texture(ct.faces[4], 0.5 + dir.x/(2ay), 0.5 + dir.z/(2ay)); end
     else
-        if dir.z > 0; return sample_texture(ct.faces[5], 0.5 + dir.x/(2dir.z), 0.5 - dir.y/(2az))
-        else;         return sample_texture(ct.faces[6], 0.5 + dir.x/(2dir.z), 0.5 - dir.y/(2az)); end
+        if dir.z > 0; return sample_texture(ct.faces[5], 0.5 + dir.x/(2dir.z), 0.5 + dir.y/(2az))
+        else;         return sample_texture(ct.faces[6], 0.5 + dir.x/(2dir.z), 0.5 + dir.y/(2az)); end
     end
 end
 

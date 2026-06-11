@@ -68,11 +68,18 @@ end
 function _looks_binary_stl(path::String)
     sz = filesize(path)
     sz < 84 && return false
-    ntri = open(path, "r") do io
-        seek(io, 80)
-        read(io, UInt32)
+    head, ntri = open(path, "r") do io
+        h = read(io, 80)
+        (h, read(io, UInt32))
     end
-    return sz == 84 + 50 * Int(ntri)               # exact binary STL size
+    sz == 84 + 50 * Int(ntri) && return true       # exact binary STL size
+    # Size mismatch (e.g. trailing junk bytes appended by an exporter): mirror
+    # three.js STLLoader and classify as ASCII only when the header spells
+    # "solid" near the start (offsets 0-4 tolerate a BOM); otherwise binary.
+    for off in 0:4
+        head[off+1:off+5] == b"solid" && return false
+    end
+    return true
 end
 
 """
@@ -83,7 +90,14 @@ three independent vertices; call [`compute_vertex_normals!`](@ref) afterward
 for smooth shading.
 """
 function load_stl(path::String)
-    return _looks_binary_stl(path) ? _load_stl_binary(path) : _load_stl_ascii(path)
+    _looks_binary_stl(path) && return _load_stl_binary(path)
+    geo = _load_stl_ascii(path)
+    # Defense in depth: a non-empty file yielding zero faces was almost
+    # certainly misdetected as ASCII (or is corrupt) — warn instead of
+    # silently returning an empty mesh.
+    geo.n_faces == 0 && filesize(path) > 0 &&
+        @warn "load_stl: parsed zero faces from non-empty file" path
+    return geo
 end
 
 function _load_stl_binary(path::String)

@@ -51,6 +51,9 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
     R = promote_type(T, S)
     H, W, C = size(image)
     hw = window_size ÷ 2
+    if min(H, W) < 2*hw + 1
+        throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))
+    end
     ssim_sum = zero(R)
     count = 0
 
@@ -96,7 +99,7 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
         end
     end
 
-    mean_ssim = count > 0 ? ssim_sum / count : one(R)
+    mean_ssim = ssim_sum / count
     return one(R) - mean_ssim
 end
 
@@ -114,6 +117,10 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
     intersection = zero(R)
     union_val = zero(R)
 
+    # Residual occupancy of a true-black pixel; subtracted below so exact
+    # background reads occupancy 0 and empty silhouettes give union ~ 0.
+    occ0 = sigmoid_approx(-R(threshold) * 200)
+
     for j in 1:W
         for i in 1:H
             # Brightness as max channel
@@ -124,14 +131,16 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
             # background (brightness 0) reads ~0 occupancy: at slope 200 and
             # threshold 0.05, background -> sigmoid(-10) ~ 5e-5, while any lit
             # object pixel (>~0.08) -> ~1, so disjoint silhouettes give IoU ~ 0.
-            img_occ = sigmoid_approx((img_val - threshold) * 200)
-            tgt_occ = sigmoid_approx((tgt_val - threshold) * 200)
+            img_occ = (sigmoid_approx((img_val - threshold) * 200) - occ0) / (1 - occ0)
+            tgt_occ = (sigmoid_approx((tgt_val - threshold) * 200) - occ0) / (1 - occ0)
 
             intersection += img_occ * tgt_occ
             union_val += img_occ + tgt_occ - img_occ * tgt_occ
         end
     end
 
-    iou = intersection / max(union_val, R(1e-8))
+    # Smoothed IoU: two empty silhouettes give eps/eps = 1, i.e. loss 0.
+    eps = R(1e-8)
+    iou = (intersection + eps) / (union_val + eps)
     return one(R) - iou
 end

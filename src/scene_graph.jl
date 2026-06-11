@@ -267,8 +267,19 @@ function traverse(obj::AbstractObject3D, callback::Function)
     end
 end
 
+# Visibility-aware traversal: invisible nodes are skipped along with their
+# entire subtree, matching three.js hierarchical visibility semantics.
+function _collect_meshes!(meshes::Vector{Mesh}, obj::AbstractObject3D)
+    is_visible(obj) || return nothing
+    obj isa Mesh && push!(meshes, obj)
+    for child in get_children(obj)
+        _collect_meshes!(meshes, child)
+    end
+    return nothing
+end
+
 function collect_meshes(scene::AbstractObject3D)
     meshes = Mesh[]
-    traverse(scene, obj -> obj isa Mesh && push!(meshes, obj))
+    _collect_meshes!(meshes, scene)
     return meshes
 end

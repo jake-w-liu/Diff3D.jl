@@ -33,7 +33,11 @@ Base.convert(::Type{ADVar}, x::ADVar) = x
 Base.promote_rule(::Type{ADVar}, ::Type{<:Real}) = ADVar
 
 Base.Float64(x::ADVar) = x.val
-Base.float(x::ADVar) = x.val
+# `float` must preserve the ADVar (ForwardDiff.Dual convention): Base's generic
+# `f(x::Real) = f(float(x))` fallbacks then fail loudly for any function without
+# an explicit overload instead of silently severing the gradient.
+Base.float(x::ADVar) = x
+Base.float(::Type{ADVar}) = ADVar
 (::Type{T})(x::ADVar) where {T<:Integer} = T(x.val)
 
 # ---- arithmetic ----
@@ -54,6 +58,12 @@ function Base.:^(a::ADVar, p::Real)
     d = a.val == 0 ? 0.0 : p * a.val^(p - 1)
     _ad_record(v, (a,), (d,))
 end
+function Base.:^(a::ADVar, b::ADVar)   # ADVar exponent (also reached by x::Real ^ ADVar via promotion)
+    v = a.val^b.val
+    da = a.val == 0 ? 0.0 : b.val * a.val^(b.val - 1)
+    db = a.val > 0 ? v * log(a.val) : 0.0
+    _ad_record(v, (a, b), (da, db))
+end
 Base.literal_pow(::typeof(^), a::ADVar, ::Val{p}) where {p} = a^p
 
 # ---- elementary functions ----
@@ -63,6 +73,30 @@ Base.sqrt(a::ADVar) = (s = sqrt(a.val); _ad_record(s, (a,), (s == 0 ? 0.0 : 0.5 
 Base.abs(a::ADVar)  = _ad_record(abs(a.val), (a,), (a.val < 0 ? -1.0 : 1.0,))
 Base.sin(a::ADVar)  = _ad_record(sin(a.val), (a,), (cos(a.val),))
 Base.cos(a::ADVar)  = _ad_record(cos(a.val), (a,), (-sin(a.val),))
+Base.tan(a::ADVar)  = (t = tan(a.val); _ad_record(t, (a,), (1.0 + t * t,)))
+Base.sinh(a::ADVar) = _ad_record(sinh(a.val), (a,), (cosh(a.val),))
+Base.cosh(a::ADVar) = _ad_record(cosh(a.val), (a,), (sinh(a.val),))
+Base.tanh(a::ADVar) = (t = tanh(a.val); _ad_record(t, (a,), (1.0 - t * t,)))
+Base.asin(a::ADVar) = _ad_record(asin(a.val), (a,), (1.0 / sqrt(1.0 - a.val * a.val),))
+Base.acos(a::ADVar) = _ad_record(acos(a.val), (a,), (-1.0 / sqrt(1.0 - a.val * a.val),))
+Base.atan(a::ADVar) = _ad_record(atan(a.val), (a,), (1.0 / (1.0 + a.val * a.val),))
+function Base.atan(y::ADVar, x::ADVar)
+    d = x.val * x.val + y.val * y.val
+    _ad_record(atan(y.val, x.val), (y, x), (x.val / d, -y.val / d))
+end
+Base.exp2(a::ADVar)  = (e = exp2(a.val); _ad_record(e, (a,), (e * log(2.0),)))
+Base.exp10(a::ADVar) = (e = exp10(a.val); _ad_record(e, (a,), (e * log(10.0),)))
+Base.expm1(a::ADVar) = _ad_record(expm1(a.val), (a,), (exp(a.val),))
+Base.log2(a::ADVar)  = _ad_record(log2(a.val), (a,), (1.0 / (a.val * log(2.0)),))
+Base.log10(a::ADVar) = _ad_record(log10(a.val), (a,), (1.0 / (a.val * log(10.0)),))
+Base.log1p(a::ADVar) = _ad_record(log1p(a.val), (a,), (1.0 / (1.0 + a.val),))
+Base.cbrt(a::ADVar)  = (c = cbrt(a.val); _ad_record(c, (a,), (c == 0 ? 0.0 : 1.0 / (3.0 * c * c),)))
+function Base.hypot(a::ADVar, b::ADVar)
+    h = hypot(a.val, b.val)
+    _ad_record(h, (a, b), (h == 0 ? 0.0 : a.val / h, h == 0 ? 0.0 : b.val / h))
+end
+Base.hypot(a::ADVar, b::Real) = hypot(a, ADVar(b))
+Base.hypot(a::Real, b::ADVar) = hypot(ADVar(a), b)
 
 # ---- min/max (gradient flows to the selected argument) ----
 Base.max(a::ADVar, b::ADVar) = a.val >= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :

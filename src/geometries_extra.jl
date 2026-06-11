@@ -104,10 +104,18 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     @assert n >= 2 "Tube needs at least two path points"
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
+    # Initial frame from the first tangent, parallel-transported along the path
+    # (as in three.js computeFrenetFrames) so the frame never flips between rings.
+    T1 = tangents[1]
+    refv = abs(T1.y) < 0.99 ? Vec3(0.0,1.0,0.0) : Vec3(1.0,0.0,0.0)
+    N = normalize(cross(refv, T1)); B = cross(T1, N)
     for i in 1:n
         T = tangents[i]
-        refv = abs(T.y) < 0.99 ? Vec3(0.0,1.0,0.0) : Vec3(1.0,0.0,0.0)
-        N = normalize(cross(refv, T)); B = cross(T, N)
+        if i > 1
+            Np = N - T*dot(N, T)               # project previous N off the new tangent
+            N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))
+            B = cross(T, N)
+        end
         for j in 0:radial_segments
             v = j/radial_segments * 2π
             normal = N*cos(v) + B*sin(v)
@@ -121,7 +129,7 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     for i in 0:n-2, j in 0:radial_segments-1
         a = i*rs1 + j + 1; b = (i+1)*rs1 + j + 1
         c = (i+1)*rs1 + j + 2; d = i*rs1 + j + 2
-        push!(indices, a, b, d, b, c, d)
+        push!(indices, a, d, b, b, d, c)
     end
     BufferGeometry(positions, normals, uvs, indices, n*rs1, length(indices) ÷ 3)
 end

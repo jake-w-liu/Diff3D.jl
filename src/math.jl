@@ -29,6 +29,13 @@ end
 Vec4(x::Real, y::Real, z::Real, w::Real) = Vec4(promote(x, y, z, w)...)
 Vec4() = Vec4(0.0, 0.0, 0.0, 1.0)
 
+Base.convert(::Type{Vec2{T}}, v::Vec2) where {T<:Real} =
+    Vec2{T}(convert(T, v.x), convert(T, v.y))
+Base.convert(::Type{Vec3{T}}, v::Vec3) where {T<:Real} =
+    Vec3{T}(convert(T, v.x), convert(T, v.y), convert(T, v.z))
+Base.convert(::Type{Vec4{T}}, v::Vec4) where {T<:Real} =
+    Vec4{T}(convert(T, v.x), convert(T, v.y), convert(T, v.z), convert(T, v.w))
+
 # Vec3 arithmetic
 Base.:+(a::Vec3, b::Vec3) = Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 Base.:-(a::Vec3, b::Vec3) = Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
@@ -215,7 +222,7 @@ end
 
 function mat4_perspective(fov, aspect, near, far)
     t = tan(fov / 2)
-    T = typeof(t)
+    T = promote_type(typeof(t), typeof(aspect), typeof(near), typeof(far))
     Mat4{T}((one(T)/(aspect*t), zero(T), zero(T), zero(T),
              zero(T), one(T)/t, zero(T), zero(T),
              zero(T), zero(T), -(far+near)/(far-near), -one(T),
@@ -223,7 +230,8 @@ function mat4_perspective(fov, aspect, near, far)
 end
 
 function mat4_orthographic(left, right, bottom, top, near, far)
-    T = promote_type(typeof(left), Float64)
+    T = promote_type(typeof(left), typeof(right), typeof(bottom), typeof(top),
+                     typeof(near), typeof(far), Float64)
     rl = T(right - left)
     tb = T(top - bottom)
     fn = T(far - near)
@@ -309,6 +317,8 @@ struct Quaternion{T<:Real}
 end
 Quaternion() = Quaternion(0.0, 0.0, 0.0, 1.0)
 Quaternion(x::Real, y::Real, z::Real, w::Real) = Quaternion(promote(x, y, z, w)...)
+Base.convert(::Type{Quaternion{T}}, q::Quaternion) where {T<:Real} =
+    Quaternion{T}(convert(T, q.x), convert(T, q.y), convert(T, q.z), convert(T, q.w))
 
 quat_multiply(a::Quaternion, b::Quaternion) = Quaternion(
     a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
@@ -390,6 +400,8 @@ struct Euler{T<:Real}
 end
 Euler() = Euler(0.0, 0.0, 0.0, :XYZ)
 Euler(x, y, z) = Euler(promote(x, y, z)..., :XYZ)
+Base.convert(::Type{Euler{T}}, e::Euler) where {T<:Real} =
+    Euler{T}(convert(T, e.x), convert(T, e.y), convert(T, e.z), e.order)
 
 # ========================== Bounding volumes ==========================
 

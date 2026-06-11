@@ -32,7 +32,8 @@ function _scene_bounds(meshes, instanced)
         box = _expand_shadow_bounds!(box, mesh.geometry, compute_world_matrix(mesh))
     end
     for im in instanced
-        is_visible(im) || continue
+        # collect_instanced traverses without pruning invisible subtrees.
+        _visible_in_tree(im) || continue
         (object_casts_shadow(im) || object_receives_shadow(im)) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
@@ -55,16 +56,29 @@ function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
     return lp * lv
 end
 
+# Fit the perspective near/far planes to the slab [d-radius, d+radius] actually
+# containing casters/receivers, so NDC depth precision (and the fixed bias)
+# stays meaningful at any light distance. The floor keeps `near` positive (and
+# the near/far ratio bounded) when the light sits inside the bounding sphere.
+function _perspective_shadow_planes(light_pos::Vec3, center::Vec3, radius)
+    d = norm(light_pos - center)
+    near = max(d - radius, max(radius, d) * 1e-2)
+    far = max(d + radius, near * (1 + 1e-6))
+    return (near, far)
+end
+
 function _light_view_proj(light::SpotLight, center::Vec3, radius)
     lv = mat4_look_at(light.position, light.target, _safe_up(normalize(light.target - light.position)))
-    lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, 0.05, radius * 6.0)
+    near, far = _perspective_shadow_planes(light.position, center, radius)
+    lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
     return lp * lv
 end
 
 function _light_view_proj(light::PointLight, center::Vec3, radius)
     dir = normalize(center - light.position)
     lv = mat4_look_at(light.position, center, _safe_up(dir))
-    lp = mat4_perspective(π/2, 1.0, 0.05, radius * 6.0)
+    near, far = _perspective_shadow_planes(light.position, center, radius)
+    lp = mat4_perspective(π/2, 1.0, near, far)
     return lp * lv
 end
 
@@ -121,7 +135,7 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_ra
     meshes = collect_meshes(scene)
     instanced = collect_instanced(scene)
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
-                 any(im -> is_visible(im) && object_casts_shadow(im), instanced)
+                 any(im -> _visible_in_tree(im) && object_casts_shadow(im), instanced)
     has_caster ||
         return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), bias, pcf_radius)
     center, radius = _scene_bounds(meshes, instanced)
@@ -135,7 +149,7 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_ra
         _raster_shadow_geometry!(depth, W, H, geo, vp * wm)
     end
     for im in instanced
-        is_visible(im) || continue
+        _visible_in_tree(im) || continue
         object_casts_shadow(im) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices

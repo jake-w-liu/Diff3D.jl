@@ -70,7 +70,7 @@ end
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
 function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
-    _orbit_apply!(oc, Spherical(radius, polar, azimuth))
+    _orbit_apply!(oc, Spherical(Float64(radius), Float64(polar), Float64(azimuth)))
 end
 
 """Save the current camera position and target as the reset state."""
@@ -163,25 +163,30 @@ end
     orbit_update!(oc)
 
 Advance the orbit by one frame. With damping disabled this is a no-op (state is
-already current). With damping enabled it applies the residual rotation, dolly,
-and pan velocities, then decays them by `(1 - damping_factor)` so motion eases
-to a stop after the last interaction (three.js `OrbitControls.update`). Velocity
-components below a small threshold are zeroed to avoid endless drift.
+already current). With damping enabled it applies `damping_factor` of the
+residual rotation, dolly, and pan velocities, then decays them by
+`(1 - damping_factor)` so motion eases to a stop after the last interaction and
+the total converges to the queued deltas (three.js `OrbitControls.update`).
+Velocity components below a small threshold are zeroed to avoid endless drift.
 """
 function orbit_update!(oc::OrbitControls)
     oc.enable_damping || return oc
     decay = 1.0 - oc.damping_factor
-    # Apply the accumulated residual velocities for this frame.
+    # Apply `damping_factor` of the residual velocities for this frame, so the
+    # total motion converges to exactly the queued deltas (three.js applies
+    # `sphericalDelta * dampingFactor` per frame before decaying).
     if oc.v_azimuth != 0.0 || oc.v_polar != 0.0
-        _orbit_rotate_now!(oc, oc.v_azimuth, oc.v_polar)
+        _orbit_rotate_now!(oc, oc.v_azimuth * oc.damping_factor,
+                           oc.v_polar * oc.damping_factor)
     end
     if oc.v_zoom != 0.0
-        _orbit_zoom_now!(oc, exp(oc.v_zoom))
+        _orbit_zoom_now!(oc, exp(oc.v_zoom * oc.damping_factor))
     end
     if oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
-        # Pan velocity is already a world-space offset; apply it directly.
-        oc.target = oc.target + oc.v_pan
-        oc.camera.position = oc.camera.position + oc.v_pan
+        # Pan velocity is already a world-space offset; apply its damped share.
+        step = oc.v_pan * oc.damping_factor
+        oc.target = oc.target + step
+        oc.camera.position = oc.camera.position + step
         oc.camera.target = oc.target
     end
     # Decay residual velocities; snap tiny remnants to zero.
@@ -727,9 +732,9 @@ function _quat_to_euler_xyz(q::Quaternion)
         ex = atan(-m23, m33)
         ez = atan(-m12, m11)
     else                                   # gimbal lock
-        m21 = 2*(x*y + w*z)
+        m32 = 2*(y*z + w*x)
         m22 = 1 - 2*(x*x + z*z)
-        ex = atan(m21, m22)
+        ex = atan(m32, m22)
         ez = zero(ey)
     end
     return Euler(ex, ey, ez, :XYZ)
@@ -1088,8 +1093,8 @@ function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
     apex = light.position
     axis = light.target - apex
     len = norm(axis)
-    len = len > 0 ? len : 1.0
     dir = len > 0 ? normalize(axis) : Vec3(0.0, -1.0, 0.0)
+    len = len > 0 ? len : 1.0
     base = apex + dir * len
     r = len * tan(light.angle)              # cone base radius at the target plane
     u, v = _perp_basis(dir)

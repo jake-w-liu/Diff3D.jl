@@ -211,7 +211,7 @@ Implements full INFLATE (stored/fixed/dynamic Huffman) and all five PNG filters.
 """
 function _decode_png(bytes::Vector{UInt8})
     bytes[1:8] == UInt8[137,80,78,71,13,10,26,10] || error("not a PNG file")
-    pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2
+    pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
     idat = UInt8[]
     while pos <= length(bytes)
         len = _rd_be32(bytes, pos); pos += 4
@@ -219,6 +219,7 @@ function _decode_png(bytes::Vector{UInt8})
         if ctype == "IHDR"
             W = _rd_be32(bytes, pos); H = _rd_be32(bytes, pos+4)
             bitdepth = bytes[pos+8]; colortype = bytes[pos+9]
+            interlace = bytes[pos+12]
         elseif ctype == "IDAT"
             append!(idat, @view bytes[pos:pos+len-1])
         elseif ctype == "IEND"
@@ -227,6 +228,7 @@ function _decode_png(bytes::Vector{UInt8})
         pos += len + 4                          # data + CRC
     end
     (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
+    interlace == 0 || error("interlaced (Adam7) PNG decode is not supported")
     channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 6 ? 4 :
                error("unsupported PNG color type $colortype")
     bps = bitdepth ÷ 8                          # bytes per sample
@@ -440,7 +442,7 @@ function _json_string(p)
         else
             print(io, c)
         end
-        p.i += 1
+        p.i = nextind(p.s, p.i)                 # skip full (possibly multibyte) char
     end
     p.i += 1
     return String(take!(io))
@@ -623,6 +625,12 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
         return nothing
     end
     data = _decode_png(bytes)
+    # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
+    # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
+    # raw glTF UVs sample correctly — the flipY=false equivalent of three.js
+    # GLTFLoader. KHR_texture_transform stays correct because
+    # `texture_transform_uv` runs on the untouched glTF-space UVs.
+    data = data[end:-1:1, :, :]
     sampler = haskey(texdef, "sampler") && haskey(gltf, "samplers") ?
               gltf["samplers"][Int(texdef["sampler"]) + 1] : Dict{String,Any}()
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
@@ -646,8 +654,9 @@ function _gltf_material(gltf, buffers, dir::String, mi)
     emissive = get(m, "emissiveFactor", [0.0,0.0,0.0])
     alpha_mode = String(get(m, "alphaMode", "OPAQUE"))
     alpha_test = alpha_mode == "MASK" ? Float64(get(m, "alphaCutoff", 0.5)) : 0.0
-    opacity = Float64(bc[4])
-    transparent = alpha_mode == "BLEND" || (alpha_mode != "MASK" && opacity < 1.0)
+    # OPAQUE ignores the alpha value entirely (spec); only BLEND alpha-blends.
+    opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ? Float64(bc[4]) : 1.0
+    transparent = alpha_mode == "BLEND"
     side = Bool(get(m, "doubleSided", false)) ? :double : :front
     base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
                                        colorspace=:srgb)
@@ -852,8 +861,9 @@ function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
         o = camdef["orthographic"]
         xmag = Float64(o["xmag"])
         ymag = Float64(o["ymag"])
-        OrthographicCamera(left=-xmag/2, right=xmag/2,
-                           bottom=-ymag/2, top=ymag/2,
+        # xmag/ymag are HALF extents (spec: P[0][0] = 1/xmag, P[1][1] = 1/ymag).
+        OrthographicCamera(left=-xmag, right=xmag,
+                           bottom=-ymag, top=ymag,
                            near=Float64(o["znear"]),
                            far=Float64(o["zfar"]),
                            name=name)
@@ -1080,25 +1090,31 @@ function _gltf_track_values(data::Vector{Float64}, ncomp::Int, count::Int, path:
 end
 
 function _gltf_weight_values(data::Vector{Float64}, ncomp::Int, key_count::Int)
-    ncomp >= 1 || error("glTF weights animation accessor must have at least one component")
-    length(data) == key_count * ncomp ||
+    ncomp == 1 || error("glTF weights animation accessor must be SCALAR")
+    # The SCALAR output holds key_count * n_targets values; derive the
+    # per-keyframe target count from the data length.
+    targets = key_count > 0 ? length(data) ÷ key_count : 0
+    (targets >= 1 && length(data) == key_count * targets) ||
         error("glTF weights animation input/output keyframe counts differ")
-    return [collect(@view data[(i - 1) * ncomp + 1:i * ncomp]) for i in 1:key_count]
+    return [collect(@view data[(i - 1) * targets + 1:i * targets]) for i in 1:key_count]
 end
 
 function _gltf_cubic_weight_values(data::Vector{Float64}, ncomp::Int, key_count::Int)
-    ncomp >= 1 || error("glTF CUBICSPLINE weights animation accessor must have at least one component")
-    length(data) == key_count * 3 * ncomp ||
+    ncomp == 1 || error("glTF CUBICSPLINE weights animation accessor must be SCALAR")
+    # Per keyframe the layout is: in-tangents for all targets, then values,
+    # then out-tangents. Derive the target count from the data length.
+    targets = key_count > 0 ? length(data) ÷ (3 * key_count) : 0
+    (targets >= 1 && length(data) == key_count * 3 * targets) ||
         error("glTF CUBICSPLINE weights output count must be 3x input count")
     ins = Vector{Float64}[]
     vals = Vector{Float64}[]
     outs = Vector{Float64}[]
     sizehint!(ins, key_count); sizehint!(vals, key_count); sizehint!(outs, key_count)
     for i in 1:key_count
-        base = (i - 1) * 3 * ncomp
-        push!(ins, collect(@view data[base + 1:base + ncomp]))
-        push!(vals, collect(@view data[base + ncomp + 1:base + 2ncomp]))
-        push!(outs, collect(@view data[base + 2ncomp + 1:base + 3ncomp]))
+        base = (i - 1) * 3 * targets
+        push!(ins, collect(@view data[base + 1:base + targets]))
+        push!(vals, collect(@view data[base + targets + 1:base + 2targets]))
+        push!(outs, collect(@view data[base + 2targets + 1:base + 3targets]))
     end
     return ins, vals, outs
 end

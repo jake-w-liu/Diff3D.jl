@@ -284,7 +284,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     for y_seg in 0:height_segments
         v = y_seg / height_segments
         r = v * (radius_bottom - radius_top) + radius_top
-        y_pos = v * height - half_h
+        y_pos = half_h - v * height
 
         for x_seg in 0:radial_segments
             u = x_seg / radial_segments
@@ -312,7 +312,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
             b = a + 1
             c = a + (radial_segments + 1)
             d = c + 1
-            append!(indices, [a, b, d, a, d, c])
+            append!(indices, [a, d, b, a, c, d])
         end
     end
 
@@ -494,7 +494,7 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
             y = r * sin(θ)
             append!(positions, [x, y, 0.0])
             append!(normals_arr, [0.0, 0.0, 1.0])
-            append!(uvs_arr, [u, v])
+            append!(uvs_arr, [(x / outer_radius + 1) / 2, (y / outer_radius + 1) / 2])
         end
     end
 

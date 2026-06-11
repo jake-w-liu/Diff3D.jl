@@ -110,7 +110,8 @@ function parse_ies(text::AbstractString)
     for li in payload_start:length(lines)
         s = strip(lines[li])
         (isempty(s) || startswith(s, '[')) && continue
-        for tok in split(s)
+        # LM-63 permits commas as field delimiters; normalize them to spaces.
+        for tok in split(replace(s, ',' => ' '))
             v = tryparse(Float64, tok)
             v !== nothing && push!(nums, v)
         end
@@ -385,8 +386,19 @@ set_parent!(o::LightProbe, p) = (o.parent = p)
 
 # ========================== Light collection ==========================
 
+# Visibility-aware traversal: invisible nodes are skipped along with their
+# entire subtree, matching three.js hierarchical visibility semantics.
+function _collect_lights!(lights::Vector{AbstractLight}, obj::AbstractObject3D)
+    is_visible(obj) || return nothing
+    obj isa AbstractLight && push!(lights, obj)
+    for child in get_children(obj)
+        _collect_lights!(lights, child)
+    end
+    return nothing
+end
+
 function collect_lights(scene::AbstractObject3D)
     lights = AbstractLight[]
-    traverse(scene, obj -> obj isa AbstractLight && push!(lights, obj))
+    _collect_lights!(lights, scene)
     return lights
 end

@@ -228,7 +228,7 @@ function _web_texture_json(tex)
     H, W, C = size(tex.data)
     rgba = Int[]
     sizehint!(rgba, 4 * H * W)
-    @inbounds for y in 1:H, x in 1:W
+    @inbounds for y in H:-1:1, x in 1:W
         r = clamp(tex.data[y, x, 1], 0.0, 1.0)
         g = C >= 2 ? clamp(tex.data[y, x, 2], 0.0, 1.0) : r
         b = C >= 3 ? clamp(tex.data[y, x, 3], 0.0, 1.0) : r
@@ -392,8 +392,14 @@ _web_light_json(light::AbstractLight, scene::Scene) = _web_light_json(light)
 
 function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}())
     lights = String[]
-    for light in collect_lights(scene)
-        is_visible(light) || light.id in force_ids || continue
+    # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
+    # visibility is animated (force_ids) must be exported even while invisible.
+    # Statically hidden lights — own flag or any ancestor — are dropped to match
+    # the CPU renderer's hierarchical visibility.
+    all_lights = AbstractLight[]
+    traverse(scene, o -> o isa AbstractLight && push!(all_lights, o))
+    for light in all_lights
+        _visible_in_tree(light) || light.id in force_ids || continue
         item = _web_light_json(light, scene)
         item !== nothing && push!(lights, item)
     end
@@ -598,7 +604,7 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
     visibility_ids = isempty(visibility_target_ids) ? [obj.id] : visibility_target_ids
     visibility = isempty(visibility_values) ? [is_visible(obj)] : visibility_values
     return "{" *
-           "\"id\":" * string(obj.id) *
+           "\"id\":" * string(transform_obj.id) *
            ",\"name\":" * _js_str(getproperty(obj, :name)) *
            ",\"mode\":" * _js_str(mode) *
            ",\"visible\":" * (is_visible(obj) ? "true" : "false") *
@@ -678,7 +684,7 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
            ",\"specularIntensity\":" * _js_num(_web_material_specular_intensity(mat)) *
            ",\"specularColor\":" * _js_color(_web_material_specular_color(mat)) *
            ",\"shininess\":" * _js_num(_web_material_shininess(mat)) *
-           ",\"morphTargetIds\":" * _js_array(unique([morph_target_ids; obj.id])) *
+           ",\"morphTargetIds\":" * _js_array(unique([morph_target_ids; transform_obj.id])) *
            "," * _web_morph_targets_json(obj, geo) *
            "," * _web_skin_json(obj, geo) *
            "," * _web_geo_object(geo, _web_positions(obj, geo)) *
@@ -1244,7 +1250,7 @@ function _webgl_html(data_json::String, title::String)
   for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
   for(const c of DATA.cases) c.objects=c.objects.map(buildObj);
   const shadowTexturesEnabled=maxTextureUnits>=13;
-  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay||2}; }
+  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; }
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
   const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
   const morphById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const id of (o.morphTargetIds||[o.id])){ if(!morphById.has(id)) morphById.set(id,[]); morphById.get(id).push(o); }
@@ -1269,8 +1275,8 @@ function _webgl_html(data_json::String, title::String)
   function padded2(items, limit, fn){ const out=new Array(limit*2).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*2]=v[0]; out[i*2+1]=v[1]; } return out; }
   function padded1(items, limit, fn, fill=0){ const out=new Array(limit).fill(fill); for(let i=0;i<Math.min(limit,items.length);i++) out[i]=fn(items[i]); return out; }
   function clipping(c){ const planes=c.clippingPlanes||[], out=new Array(16).fill(0); for(let i=0;i<Math.min(4,planes.length);i++){ const p=planes[i]; out[i*4]=p[0]; out[i*4+1]=p[1]; out[i*4+2]=p[2]; out[i*4+3]=p[3]; } return {count:Math.min(4,planes.length), planes:out}; }
-  function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near||1,far:f.far||1000,density:f.density||0}; }
-  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay||2}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay||2,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
+  function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near==null?1:f.near,far:f.far||1000,density:f.density||0}; }
+  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
   function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
   function uniform2v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
   function uniform4v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
@@ -1362,10 +1368,10 @@ function _webgl_html(data_json::String, title::String)
       uniform1i(p,"uSheenColorTexCoord",texCoord(o.sheenColorTexture,0));
       uniform1i(p,"uSpecularColorTexCoord",texCoord(o.specularColorTexture,0));
       gl.uniform3fv(gl.getUniformLocation(p,"uEmissive"),new Float32Array(o.emissive||[0,0,0]));
-      gl.uniform1f(gl.getUniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity||1);
-      gl.uniform1f(gl.getUniformLocation(p,"uAoIntensity"),o.aoIntensity||1);
-      gl.uniform1f(gl.getUniformLocation(p,"uLightMapIntensity"),o.lightMapIntensity||1);
-      gl.uniform1f(gl.getUniformLocation(p,"uEnvMapIntensity"),o.envMapIntensity||1);
+      gl.uniform1f(gl.getUniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity==null?1:o.emissiveIntensity);
+      gl.uniform1f(gl.getUniformLocation(p,"uAoIntensity"),o.aoIntensity==null?1:o.aoIntensity);
+      gl.uniform1f(gl.getUniformLocation(p,"uLightMapIntensity"),o.lightMapIntensity==null?1:o.lightMapIntensity);
+      gl.uniform1f(gl.getUniformLocation(p,"uEnvMapIntensity"),o.envMapIntensity==null?1:o.envMapIntensity);
       gl.uniform1f(gl.getUniformLocation(p,"uAlphaTest"),o.alphaTest||0);
       gl.uniform1f(gl.getUniformLocation(p,"uNormalScale"),o.normalScale==null?1:o.normalScale);
       uniform3v(p,"uEnvColor[0]",o.envTexture?o.envTexture.colors.flat():new Array(18).fill(0));
@@ -1436,7 +1442,7 @@ function _webgl_html(data_json::String, title::String)
   window.__diff3dDebug={activeObjectCount:()=>active.objects.length, animationTime:()=>animTime, animationSpeed:()=>animSpeed, animationPaused:()=>animPaused};
   const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
-  function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
+  function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; pitch=Math.max(-1.35,Math.min(1.35,Math.asin(Math.max(-1,Math.min(1,(active.height==null?3.0:active.height)/Math.max(dist,1e-6)))))); targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
   function resize(){ const r=canvas.getBoundingClientRect(), dpr=Math.min(devicePixelRatio||1,2); const w=Math.max(1,Math.round(r.width*dpr)), h=Math.max(1,Math.round(r.height*dpr)); if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; } }
   function objectDepth(o,eye){ const x=o.matrix[12]-eye[0], y=o.matrix[13]-eye[1], z=o.matrix[14]-eye[2]; return x*x+y*y+z*z; }
   function lodChoices(c,eye){ const objects=c.objects, state=c.lodState||(c.lodState=new Map()), groups=new Map(), choices=new Map(); for(const o of objects){ if(!o.lodGroup) continue; if(!groups.has(o.lodGroup)) groups.set(o.lodGroup,[]); groups.get(o.lodGroup).push(o); } for(const [id,levels] of groups){ levels.sort((a,b)=>(a.lodDistance||0)-(b.lodDistance||0)); const d=Math.sqrt(objectDepth(levels[0],eye)); const current=state.get(id); let chosen=levels[0]; for(let i=1;i<levels.length;i++){ const o=levels[i], threshold=(o.lodDistance||0)*(o===current?1-(o.lodHysteresis||0):1); if(d>=threshold) chosen=o; else break; } state.set(id,chosen); choices.set(id,chosen); } return choices; }
