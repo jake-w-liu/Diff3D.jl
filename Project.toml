@@ -1,6 +1,6 @@
 name = "Diff3D"
 uuid = "72681062-5925-4945-963f-74d9429756fe"
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
