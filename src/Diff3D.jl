@@ -127,7 +127,8 @@ export
     collect_instanced,
     LineSegments, LineLoop, Sprite, sprite_world_matrix,
     LOD, add_lod_level!, lod_select, lod_update!,
-    Bone, Skeleton, skeleton_matrices, SkinnedMesh, apply_skinning,
+    Bone, Skeleton, calculate_inverses!, skeleton_matrices, SkinnedMesh,
+    bind_skeleton!, apply_skinning,
     Layers, layers_set!, layers_enable!, layers_disable!, layers_toggle!,
     layers_enable_all!, layers_disable_all!, layers_test,
 

@@ -83,8 +83,8 @@ replacement for three.js `WebGLRenderer`.
   or sRGB browser output encoding. It still lacks shader chunks, render lists,
   render targets, full WebGL renderer tone-output/color-management parity,
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
-  full three.js skinning/bind-mode renderer integration beyond compact uniform
-  and float bone-texture paths,
+  full three.js skeleton lifecycle and renderer integration beyond compact
+  uniform/float bone-texture skinning plus attached/detached bind matrices,
   true cube-map sampling/prefiltered environment lighting, and most material
   shader variants.
 - glTF support parses common mesh and transform animation data and now decodes
@@ -107,7 +107,9 @@ replacement for three.js `WebGLRenderer`.
   skeletons, compact float bone-texture skinning for larger non-morphed
   skeletons on capable WebGL contexts, and CPU-side vertex-buffer fallback for
   morphed or unsupported skinned meshes. Static morph target influences export
-  to browser geometry positions. It does
+  to browser geometry positions. Skinned meshes also carry attached/detached
+  bind-mode metadata plus mesh-level bind matrices through CPU skinning, glTF
+  loading, and browser export/runtime skinning paths. It does
   not yet cover the full glTF feature set such as remaining texture/material
   extensions and browser/runtime material extensions.
 - Sprites render in the CPU path as camera-facing quads and export to the
@@ -314,9 +316,17 @@ Parallel audits split the remaining work into five critical tracks:
   skeletons when the browser exposes vertex float texture support, and CPU
   vertex-buffer skinning as a fallback for morphed or unsupported skinned
   meshes. Vertex normals are skinned in all paths, and authored tangents are
-  serialized, skinned, and used by tangent-space browser normal mapping. Full
-  three.js bind modes, skeleton update lifecycle, and renderer-program
-  integration remain renderer work.
+  serialized, skinned, and used by tangent-space browser normal mapping.
+  Skeleton pose/update lifecycle and renderer-program integration remain
+  renderer work.
+- Done: add mesh-level skinned bind metadata and attached/detached bind-mode
+  semantics. CPU `apply_skinning`, glTF skin loading, browser uniform skinning,
+  browser float bone-texture skinning, and browser CPU fallback now apply
+  `bindMatrixInverse * boneMatrix * bindMatrix`, and glTF skins without
+  `inverseBindMatrices` calculate inverse binds after the node hierarchy is
+  fully parented. Remaining skinning gaps are full three.js skeleton pose/update
+  lifecycle, `skin.skeleton` root semantics, morph normal/tangent skinning, and
+  CPU renderer integration for `SkinnedMesh`.
 - Done: add case-level browser tone mapping metadata and shader application for
   `:none`, `:linear`, `:reinhard`, and `:aces` with exposure. This closes the
   compact runtime's missing tone-map hook while full three.js
@@ -654,7 +664,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
   point-light cube shadows and cascaded shadow maps,
-  full three.js skinning/bind-mode renderer integration, and broader per-object
+  full three.js skeleton lifecycle/renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,
   richer animation/runtime binding, and full three.js skinning parity.

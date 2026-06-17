@@ -282,15 +282,22 @@ mutable struct Skeleton
     bind_inverses::Vector{Mat4{Float64}}   # inverse of each bone's bind-pose world matrix
 end
 
+function calculate_inverses!(s::Skeleton)
+    s.bind_inverses = [mat4_inverse(compute_world_matrix(b)) for b in s.bones]
+    return s
+end
+
 """Build a skeleton, capturing the current bone world matrices as the bind pose."""
 function Skeleton(bones::Vector{Bone})
-    binv = [mat4_inverse(compute_world_matrix(b)) for b in bones]
-    Skeleton(bones, binv)
+    Skeleton(bones, [mat4_inverse(compute_world_matrix(b)) for b in bones])
 end
 
 """Per-bone skinning matrix = current world × inverse bind (identity in bind pose)."""
-skeleton_matrices(s::Skeleton) =
+function skeleton_matrices(s::Skeleton)
+    length(s.bind_inverses) == length(s.bones) ||
+        error("skeleton bind_inverses length must match bones length")
     [compute_world_matrix(s.bones[i]) * s.bind_inverses[i] for i in eachindex(s.bones)]
+end
 
 mutable struct SkinnedMesh <: AbstractObject3D
     position::Vec3{Float64}
@@ -310,18 +317,25 @@ mutable struct SkinnedMesh <: AbstractObject3D
     skin_weights::Vector{NTuple{4,Float64}} # blend weights per vertex
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    bind_mode::Symbol                       # :attached or :detached
+    bind_matrix::Mat4{Float64}
+    bind_matrix_inverse::Mat4{Float64}
 end
 
 function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      skin_indices, skin_weights; name="SkinnedMesh",
                      cast_shadow::Bool=false, receive_shadow::Bool=false,
-                     morph_target_influences=Float64[], morph_target_names=String[])
+                     morph_target_influences=Float64[], morph_target_names=String[],
+                     bind_mode::Symbol=:attached, bind_matrix::Mat4{Float64}=Mat4())
+    bind_mode in (:attached, :detached) ||
+        throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
     SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                 true, name, _next_id(), geometry, material,
                 cast_shadow, receive_shadow, skeleton,
                 skin_indices, skin_weights,
                 collect(Float64, morph_target_influences),
-                collect(String, morph_target_names))
+                collect(String, morph_target_names),
+                bind_mode, bind_matrix, mat4_inverse(bind_matrix))
 end
 
 get_position(o::SkinnedMesh) = o.position
@@ -334,12 +348,33 @@ set_parent!(o::SkinnedMesh, p) = (o.parent = p)
 apply_morph_targets(mesh::SkinnedMesh) =
     apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
 
+function bind_skeleton!(sm::SkinnedMesh, skeleton::Skeleton,
+                        bind_matrix::Union{Nothing,Mat4{Float64}}=nothing;
+                        bind_mode::Symbol=sm.bind_mode,
+                        calculate_inverses::Bool=bind_matrix === nothing)
+    bind_mode in (:attached, :detached) ||
+        throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
+    sm.skeleton = skeleton
+    calculate_inverses && calculate_inverses!(skeleton)
+    matrix = bind_matrix === nothing ? compute_world_matrix(sm) : bind_matrix
+    sm.bind_mode = bind_mode
+    sm.bind_matrix = matrix
+    sm.bind_matrix_inverse = mat4_inverse(matrix)
+    return sm
+end
+
+_skinned_bind_matrix_inverse(sm::SkinnedMesh) =
+    sm.bind_mode === :attached ? mat4_inverse(compute_world_matrix(sm)) :
+    sm.bind_matrix_inverse
+
 """
 Linear blend skinning: deform each geometry vertex by the weighted sum of its
 bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 """
 function apply_skinning(sm::SkinnedMesh)
-    mats = skeleton_matrices(sm.skeleton)
+    bind = sm.bind_matrix
+    bind_inv = _skinned_bind_matrix_inverse(sm)
+    mats = [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
     geo = sm.geometry
     morphed = !isempty(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)

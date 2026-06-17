@@ -1032,6 +1032,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     scene = Scene()
     node_objects = Dict{Int, AbstractObject3D}()
     joint_nodes = _gltf_joint_node_set(gltf)
+    pending_skin_binds = SkinnedMesh[]
+    pending_inverse_calcs = SkinnedMesh[]
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[])
         attrs = prim["attributes"]
@@ -1089,11 +1091,14 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             push!(bones, bone)
         end
         inv = _gltf_inverse_bind_matrices(gltf, buffers, skin, length(bones))
-        skeleton = inv === nothing ? Skeleton(bones) : Skeleton(bones, inv)
+        skeleton = inv === nothing ? Skeleton(bones, fill(Mat4(), length(bones))) : Skeleton(bones, inv)
         skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts; indices=true)
         skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
-        return SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
-                           morph_target_influences=morph_weights)
+        sm = SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
+                         morph_target_influences=morph_weights)
+        push!(pending_skin_binds, sm)
+        inv === nothing && push!(pending_inverse_calcs, sm)
+        return sm
     end
 
     function create_node_object!(node_idx)
@@ -1132,7 +1137,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             mesh_def = gltf["meshes"][Int(node["mesh"]) + 1]
             morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
             for prim in mesh_def["primitives"]
-                add!(obj, build_primitive(prim, get(node, "skin", nothing), morph_weights))
+                mesh_obj = build_primitive(prim, get(node, "skin", nothing), morph_weights)
+                add!(obj, mesh_obj)
             end
         end
         for child in get(node, "children", Any[])
@@ -1143,6 +1149,13 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     scene_def = gltf["scenes"][Int(get(gltf, "scene", 0.0)) + 1]
     for n in scene_def["nodes"]
         add_node!(scene, Int(n))
+    end
+    for sm in pending_inverse_calcs
+        calculate_inverses!(sm.skeleton)
+    end
+    for sm in pending_skin_binds
+        bind_skeleton!(sm, sm.skeleton, compute_world_matrix(sm);
+                       bind_mode=:attached, calculate_inverses=false)
     end
     return return_nodes ? (scene, node_objects) : scene
 end

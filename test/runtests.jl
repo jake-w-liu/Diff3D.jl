@@ -1147,15 +1147,22 @@ deterministic_bytes(n::Int) =
         @test occursin("\"baseScale\":[1,1,1]", html)
         @test occursin("\"baseQuaternion\":[0,0,0,1]", html)
         @test occursin("\"bindInverses\":[[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]]", html)
+        @test occursin("\"bindMode\":\"attached\"", html)
+        @test occursin("\"bindMatrix\":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]", html)
+        @test occursin("\"bindMatrixInverse\":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]", html)
         @test occursin("const nodeById = new Map()", html)
         @test occursin("const MAX_BONES=64", html)
         @test occursin("attribute vec4 aSkinIndex", html)
         @test occursin("attribute vec4 aTangent", html)
         @test occursin("varying vec4 vTangent", html)
         @test occursin("uniform mat4 uBoneMatrices[64]", html)
+        @test occursin("uBindMatrix,uBindMatrixInverse", html)
+        @test occursin("function currentBindMatrixInverse", html)
         @test occursin("mat4 skinMatrix()", html)
-        @test occursin("mat3(skin)*aNormal", html)
-        @test occursin("mat3(skin)*aTangent.xyz", html)
+        @test occursin("vec4 skinPosition(mat4 skin)", html)
+        @test occursin("vec3 skinDirection(mat4 skin, vec3 d)", html)
+        @test occursin("uBindMatrixInverse*(skin*(uBindMatrix*p))", html)
+        @test occursin("mat3(uBindMatrixInverse)*mat3(skin)*mat3(uBindMatrix)*d", html)
         @test occursin("o.shaderSkin", html)
         @test occursin("&&!(o.morphTargets&&o.morphTargets.length)", html)
         @test occursin("o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice()", html)
@@ -1194,6 +1201,8 @@ deterministic_bytes(n::Int) =
         @test occursin("o.textureSkin", html)
         @test occursin("o.boneTex=o.textureSkin?makeBoneTexture(o):null", html)
         @test occursin("o.textureSkin?meshBoneProgram:meshProgram", html)
+        @test occursin("const bindLoc=gl.getUniformLocation(p,\"uBindMatrix\")", html)
+        @test occursin("const bindInvLoc=gl.getUniformLocation(p,\"uBindMatrixInverse\")", html)
         @test occursin("gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.FLOAT,data)", html)
         @test occursin("gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,bt.size,bt.size,gl.RGBA,gl.FLOAT,bt.data)", html)
         @test occursin("gl.activeTexture(gl.TEXTURE13)", html)
@@ -1939,6 +1948,28 @@ deterministic_bytes(n::Int) =
             @test p1[vi].y ≈ v.y - 1.0 atol=1e-10
             @test p1[vi].z ≈ v.z + 2.0 atol=1e-10
         end
+        @test_throws ArgumentError SkinnedMesh(geo, MeshBasicMaterial(), skel, idx, wts;
+                                               bind_mode=:bad)
+
+        detached = SkinnedMesh(geo, MeshBasicMaterial(), skel, idx, wts;
+                               bind_mode=:detached,
+                               bind_matrix=mat4_translation(2.0, 0.0, 0.0))
+        bone.position = Vec3(0.0, 0.0, 0.0)
+        @test apply_skinning(detached)[1].x ≈ get_vertex(geo, 1).x atol=1e-10
+        bone.position = Vec3(1.0, 0.0, 0.0)
+        @test apply_skinning(detached)[1].x ≈ get_vertex(geo, 1).x + 1.0 atol=1e-10
+
+        attached_bone = Bone()
+        attached_bone.position = Vec3(2.0, 0.0, 0.0)
+        attached_skel = Skeleton([attached_bone])
+        attached = SkinnedMesh(geo, MeshBasicMaterial(), attached_skel, idx, wts)
+        attached.position = Vec3(2.0, 0.0, 0.0)
+        bind_skeleton!(attached, attached_skel, compute_world_matrix(attached);
+                       bind_mode=:attached, calculate_inverses=false)
+        @test apply_skinning(attached)[1].x ≈ get_vertex(geo, 1).x atol=1e-10
+        attached.position = Vec3(4.0, 0.0, 0.0)
+        attached_bone.position = Vec3(5.0, 0.0, 0.0)
+        @test apply_skinning(attached)[1].x ≈ get_vertex(geo, 1).x + 1.0 atol=1e-10
     end
 
     @testset "InstancedMesh renders each instance" begin
@@ -5135,6 +5166,49 @@ deterministic_bytes(n::Int) =
             @test sm.morph_target_influences ≈ [0.75]
             @test apply_morph_targets(sm)[1].z ≈ 0.75
             @test apply_skinning(sm)[1].z ≈ 0.75
+        end
+
+        @testset "load_gltf_asset skin binding without inverse matrices" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            append_u16!(xs) = append!(bin, reinterpret(UInt8, UInt16.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_joints = length(bin); append_u16!([0,0,0,0, 0,0,0,0, 0,0,0,0])
+            off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+            write(joinpath(dir, "skin_missing_inverse.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+             "nodes":[{"name":"skinned","translation":[10,0,0],"mesh":0,"skin":0},
+                      {"name":"joint_root","translation":[2,0,0],"children":[2]},
+                      {"name":"joint","translation":[3,0,0]}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"skin_missing_inverse.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_joints,"byteLength":24},
+               {"buffer":0,"byteOffset":$off_weights,"byteLength":48}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},
+               {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+             "skins":[{"joints":[2]}]}
+            """
+            path = joinpath(dir, "skin_missing_inverse.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            root = get_children(asset.scene)[1]
+            joint_root = get_children(asset.scene)[2]
+            joint = get_children(joint_root)[1]
+            sm = get_children(root)[1]
+            @test sm isa SkinnedMesh
+            @test joint isa Bone
+            @test sm.bind_mode === :attached
+            @test sm.bind_matrix.e == compute_world_matrix(sm).e
+            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 0.0
+            @test apply_skinning(sm)[2].x ≈ 1.0
+            joint.position = Vec3(4.0, 0.0, 0.0)
+            @test apply_skinning(sm)[2].x ≈ 2.0
         end
 
         @testset "load_gltf_asset morph targets" begin
