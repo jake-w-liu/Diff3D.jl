@@ -83,7 +83,8 @@ replacement for three.js `WebGLRenderer`.
   or sRGB browser output encoding. It still lacks shader chunks, render lists,
   render targets, full WebGL renderer tone-output/color-management parity,
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
-  full bone-texture shader skinning and skinned-tangent parity,
+  full three.js skinning/bind-mode renderer integration beyond compact uniform
+  and float bone-texture paths,
   true cube-map sampling/prefiltered environment lighting, and most material
   shader variants.
 - glTF support parses common mesh and transform animation data and now decodes
@@ -103,8 +104,10 @@ replacement for three.js `WebGLRenderer`.
   physical extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
   now bind to CPU playback and browser weight serialization. Static skinned poses and
   animated bone tracks export to browser shader-side uniform skinning for small
-  skeletons with CPU-side vertex-buffer fallback for larger skeletons, and
-  static morph target influences export to browser geometry positions. It does
+  skeletons, compact float bone-texture skinning for larger non-morphed
+  skeletons on capable WebGL contexts, and CPU-side vertex-buffer fallback for
+  morphed or unsupported skinned meshes. Static morph target influences export
+  to browser geometry positions. It does
   not yet cover the full glTF feature set such as remaining texture/material
   extensions and browser/runtime material extensions.
 - Sprites render in the CPU path as camera-facing quads and export to the
@@ -307,11 +310,13 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add animated browser-side skinning data paths for exported
   `SkinnedMesh` objects by serializing bone IDs, bind inverses, skin indices,
   and weights. The compact runtime now uses shader-side uniform bone matrices
-  for skeletons up to 64 bones and retains CPU vertex-buffer skinning as a
-  fallback for larger skeletons or morphed skinned meshes. Vertex normals are
-  skinned in both paths, and authored tangents are serialized, skinned, and used
-  by tangent-space browser normal mapping. Full three.js bone-texture skinning
-  and renderer-program integration remain renderer work.
+  for skeletons up to 64 bones, float RGBA bone textures for larger non-morphed
+  skeletons when the browser exposes vertex float texture support, and CPU
+  vertex-buffer skinning as a fallback for morphed or unsupported skinned
+  meshes. Vertex normals are skinned in all paths, and authored tangents are
+  serialized, skinned, and used by tangent-space browser normal mapping. Full
+  three.js bind modes, skeleton update lifecycle, and renderer-program
+  integration remain renderer work.
 - Done: add case-level browser tone mapping metadata and shader application for
   `:none`, `:linear`, `:reinhard`, and `:aces` with exposure. This closes the
   compact runtime's missing tone-map hook while full three.js
@@ -649,7 +654,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
   point-light cube shadows and cascaded shadow maps,
-  bone-texture/skinned-tangent skinning parity, and broader per-object
+  full three.js skinning/bind-mode renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,
   richer animation/runtime binding, and full three.js skinning parity.

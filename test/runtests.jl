@@ -772,6 +772,19 @@ deterministic_bytes(n::Int) =
                               fill((1.0,0.0,0.0,0.0), 3);
                               name="export_skin", morph_target_influences=[0.25])
         add!(scene, skinned)
+        bone_texture_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                          [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
+                                          [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
+        bone_texture_bones = [Bone(name="export_bone_texture_$i") for i in 1:65]
+        bone_texture_skeleton = Skeleton(bone_texture_bones)
+        bone_texture_bones[end].position = Vec3(0.35, 0.0, 0.0)
+        bone_texture_skinned = SkinnedMesh(bone_texture_geo,
+                                           MeshStandardMaterial(color=Color3(0.6,0.4,0.9)),
+                                           bone_texture_skeleton,
+                                           fill((65,1,1,1), 3),
+                                           fill((1.0,0.0,0.0,0.0), 3);
+                                           name="export_bone_texture_skin")
+        add!(scene, bone_texture_skinned)
         hidden_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.9,0.4,0.1));
                            name="export_visibility")
         hidden_mesh.visible = false
@@ -1160,6 +1173,32 @@ deterministic_bytes(n::Int) =
         @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.nrmBuf)", html)
         @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.tanBuf)", html)
         @test occursin("mat3(t,b,n)*map", html)
+        @test occursin("\"name\":\"export_bone_texture_skin\"", html)
+        @test occursin("\"name\":\"export_bone_texture_65\"", html)
+        @test occursin("\"indices\":[64,0,0,0,64,0,0,0,64,0,0,0]", html)
+        @test occursin("const VSH_BONE_TEXTURE", html)
+        @test occursin("MAX_COMBINED_TEXTURE_IMAGE_UNITS", html)
+        @test occursin("MAX_VERTEX_TEXTURE_IMAGE_UNITS", html)
+        @test occursin("OES_texture_float", html)
+        @test occursin("boneTextureUnit=13", html)
+        @test occursin("boneTexturesEnabled", html)
+        @test occursin("meshBoneProgram", html)
+        @test occursin("uUseBoneTexture", html)
+        @test occursin("uBoneTexture", html)
+        @test occursin("uBoneTextureSize", html)
+        @test occursin("texture2D(uBoneTexture", html)
+        @test occursin("function boneTextureSize", html)
+        @test occursin("function writeBoneTextureData", html)
+        @test occursin("function makeBoneTexture", html)
+        @test occursin("function updateBoneTexture", html)
+        @test occursin("o.textureSkin", html)
+        @test occursin("o.boneTex=o.textureSkin?makeBoneTexture(o):null", html)
+        @test occursin("o.textureSkin?meshBoneProgram:meshProgram", html)
+        @test occursin("gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.FLOAT,data)", html)
+        @test occursin("gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,bt.size,bt.size,gl.RGBA,gl.FLOAT,bt.data)", html)
+        @test occursin("gl.activeTexture(gl.TEXTURE13)", html)
+        @test occursin("uniform1i(p,\"uUseSkin\",(o.shaderSkin||o.textureSkin)?1:0)", html)
+        @test occursin("uniform1i(p,\"uBoneTexture\",boneTextureUnit)", html)
         @test occursin("setNodeAnim", html)
         @test occursin("o.animPos=o.basePosition.slice()", html)
         @test occursin("b.animPos=b.basePosition.slice()", html)
