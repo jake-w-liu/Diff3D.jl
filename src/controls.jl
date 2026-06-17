@@ -268,12 +268,24 @@ end
 pointerlock_lock!(pc::PointerLockControls) = (pc.is_locked = true; pc)
 pointerlock_unlock!(pc::PointerLockControls) = (pc.is_locked = false; pc)
 
+function _pointerlock_direction_distance(cam::PerspectiveCamera)
+    delta = cam.target - cam.position
+    dist = norm(delta)
+    if dist > 1e-12
+        return normalize(delta), dist
+    end
+    rot = cam.rotation
+    R = quat_to_mat4(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order))
+    origin = mat4_transform_point(R, Vec3(0.0, 0.0, 0.0))
+    forward = mat4_transform_point(R, Vec3(0.0, 0.0, -1.0)) - origin
+    return normalize(forward), 1.0
+end
+
 function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     pc.is_locked || return pc
     speed = pc.pointer_speed
     cam = pc.camera
-    dist = norm(cam.target - cam.position)
-    dir = normalize(cam.target - cam.position)
+    dir, dist = _pointerlock_direction_distance(cam)
     s = cartesian_to_spherical(dir)
     yaw = -Float64(movement_x) * 0.002 * speed
     pitch = -Float64(movement_y) * 0.002 * speed

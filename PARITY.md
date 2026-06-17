@@ -184,8 +184,8 @@ replacement for three.js `WebGLRenderer`.
   details, TransformControls, DragControls, PointerLockControls,
   TrackballControls, keyboard/mouse/touch event interoperability, and DOM
   integration. CPU `OrbitControls` now includes constraint, damping, save-state,
-  and reset behavior, and CPU `PointerLockControls` includes pointer speed plus
-  polar-angle limits. CPU `TransformControls` now supports mode selection plus
+  and reset behavior, and CPU `PointerLockControls` includes pointer speed,
+  zero-distance look fallback, and polar-angle limits. CPU `TransformControls` now supports mode selection plus
   world/local translation space, but browser DOM/gizmo/event parity is still
   intentionally tracked as incomplete.
 - Complete examples parity with the official three.js examples site.

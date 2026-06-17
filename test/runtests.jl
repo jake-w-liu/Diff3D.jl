@@ -2775,6 +2775,19 @@ deterministic_bytes(n::Int) =
         pointerlock_move!(pc, 100, 0)
         @test cam.target == locked_target
 
+        zero_cam = PerspectiveCamera()
+        zero_cam.position = Vec3(1.0, 2.0, 3.0)
+        zero_cam.target = zero_cam.position
+        zero_pc = PointerLockControls(zero_cam)
+        pointerlock_move!(zero_pc, 100, 0)
+        @test zero_cam.target == zero_cam.position
+        pointerlock_lock!(zero_pc)
+        pointerlock_move!(zero_pc, 100, 0)
+        zero_delta = zero_cam.target - zero_cam.position
+        @test isapprox(norm(zero_delta), 1.0; atol=1e-12)
+        @test abs(zero_delta.x) > 1e-3
+        @test all(isfinite, (zero_delta.x, zero_delta.y, zero_delta.z))
+
         constrained_cam = PerspectiveCamera()
         constrained_cam.position = Vec3(0.0, 0.0, 0.0)
         constrained_cam.target = Vec3(0.0, 0.0, -1.0)
