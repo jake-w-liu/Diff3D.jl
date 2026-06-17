@@ -90,6 +90,7 @@ end
 # allocating per call.
 const _NO_PLANES = Plane{Float64}[]
 const _ZERO_V3 = Vec3(0.0, 0.0, 0.0)
+const _ZERO_V2 = Vec2(0.0, 0.0)
 
 # A fragment lies on the "kept" side of every clipping plane when its signed
 # distance is non-negative for all of them (three.js `clippingPlanes`: a plane
@@ -113,7 +114,12 @@ end
                                  xlo::Int=1, xhi::Int=typemax(Int),
                                  clipping_planes=_NO_PLANES,
                                  wp1::Vec3=_ZERO_V3, wp2::Vec3=_ZERO_V3, wp3::Vec3=_ZERO_V3,
-                                 iw1::Float64=1.0, iw2::Float64=1.0, iw3::Float64=1.0)
+                                 iw1::Float64=1.0, iw2::Float64=1.0, iw3::Float64=1.0,
+                                 depth_test::Bool=true, depth_write::Bool=true,
+                                 alpha_test::Float64=0.0, alpha_base::Float64=1.0,
+                                 albedo_map=nothing, alpha_map=nothing,
+                                 uv1::Vec2=_ZERO_V2, uv2::Vec2=_ZERO_V2, uv3::Vec2=_ZERO_V2,
+                                 uv2_1::Vec2=_ZERO_V2, uv2_2::Vec2=_ZERO_V2, uv2_3::Vec2=_ZERO_V2)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -123,6 +129,7 @@ end
     min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
     max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
     has_clip = !isempty(clipping_planes)
+    has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
             cx = px - 0.5
@@ -132,17 +139,27 @@ end
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
                 z = w0 * z1 + w1 * z2 + w2 * z3
-                if z < rt.depth[py, px]
-                    if has_clip
+                if !depth_test || z < rt.depth[py, px]
+                    if has_clip || has_alpha
                         # Perspective-correct world position (weight by 1/w).
                         iw = w0*iw1 + w1*iw2 + w2*iw3
                         a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
-                        wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
-                                  a0*wp1.y + a1*wp2.y + a2*wp3.y,
-                                  a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                        _clip_keep(clipping_planes, wp) || continue
+                        if has_clip
+                            wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                                      a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                                      a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                            _clip_keep(clipping_planes, wp) || continue
+                        end
+                        if has_alpha
+                            u = a0*uv1.x + a1*uv2.x + a2*uv3.x
+                            v = a0*uv1.y + a1*uv2.y + a2*uv3.y
+                            u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
+                            v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
+                            _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
+                                continue
+                        end
                     end
-                    rt.depth[py, px] = z
+                    depth_write && (rt.depth[py, px] = z)
                     rt.color[py, px, 1] = fc.r
                     rt.color[py, px, 2] = fc.g
                     rt.color[py, px, 3] = fc.b
@@ -222,9 +239,10 @@ end
         s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
         s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
         material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
-        albedo_map, normal_map, roughness_map, metalness_map, physical_pbr_map, ao_map, emissive_map, light_map,
+        albedo_map, alpha_map, normal_map, roughness_map, metalness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
-        xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int))
+        xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
+        depth_test::Bool=true, depth_write::Bool=true)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -234,6 +252,7 @@ end
     min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
     max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
     has_albedo = albedo_map !== nothing
+    has_alpha_map = alpha_map !== nothing
     has_normalmap = normal_map !== nothing
     has_roughness = roughness_map !== nothing
     has_metalness = metalness_map !== nothing
@@ -241,9 +260,11 @@ end
     has_ao = ao_map !== nothing
     has_emissive = emissive_map !== nothing
     has_lightmap = light_map !== nothing
-    has_uv_maps = has_albedo || has_normalmap || has_roughness || has_metalness || has_physical_pbr ||
+    has_uv_maps = has_albedo || has_alpha_map || has_normalmap || has_roughness || has_metalness || has_physical_pbr ||
                   has_ao || has_emissive || has_lightmap
     has_clip = !isempty(clipping_planes)
+    alpha_test = material_alpha_test(material)
+    alpha_base = Float64(material_opacity(material))
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
             cx = px - 0.5
@@ -253,14 +274,15 @@ end
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             z = b0 * z1 + b1 * z2 + b2 * z3
-            z < rt.depth[py, px] || continue
+            (!depth_test || z < rt.depth[py, px]) || continue
             # Perspective-correct interpolation: weight by 1/w.
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
             wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
-                      a0*wp1.y + a1*wp2.y + a2*wp3.y,
-                      a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                        a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                        a0*wp1.z + a1*wp2.z + a2*wp3.z)
             has_clip && (_clip_keep(clipping_planes, wp) || continue)
+            (!has_uv_maps && alpha_base < alpha_test) && continue
             wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
@@ -274,6 +296,8 @@ end
                 v = a0*uv1.y + a1*uv2.y + a2*uv3.y
                 u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
                 v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
+                _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
+                    continue
                 # normalMap perturbs the shading normal before lighting (same
                 # helper as the flat path); the tangent frame uses the UV set
                 # selected by the texture metadata.
@@ -336,7 +360,7 @@ end
                 col = shade_face(wn, vd, wp, _with_vertex_color(material, vc), lights; shadow_fn=shadow_fn)
             end
             col = clamp_color(col)
-            rt.depth[py, px] = z
+            depth_write && (rt.depth[py, px] = z)
             rt.color[py, px, 1] = col.r
             rt.color[py, px, 2] = col.g
             rt.color[py, px, 3] = col.b
@@ -362,6 +386,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         normal_mat = mat4_transpose(mat4_inverse(world_mat))
         geo = mesh.geometry
         mat = mesh.material
+        depth_test = material_depth_test(mat)
+        depth_write = material_depth_write(mat)
         # Back-face culling, matching the flat path (`_rasterize_geo_flat!`): the
         # per-pixel path must agree with the per-face path on which faces survive.
         side = material_side(mat)
@@ -376,6 +402,7 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         roughness_map = has_uvs ? _material_field(mat, :roughness_map) : nothing
         metalness_map = has_uvs ? _material_field(mat, :metalness_map) : nothing
         physical_pbr_map = has_uvs ? _physical_pbr_map(mat) : nothing
+        alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
         ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
         emissive_map = has_uvs ? _material_field(mat, :emissive_map) : nothing
         light_map = has_uvs ? _material_field(mat, :light_map) : nothing
@@ -437,9 +464,10 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                     sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
                     sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
                     sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
-                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, normal_map, roughness_map, metalness_map, physical_pbr_map,
+                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map, normal_map, roughness_map, metalness_map, physical_pbr_map,
                     ao_map, emissive_map, light_map, normal_scale, clipping_planes;
-                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                    depth_test=depth_test, depth_write=depth_write)
             end
         end
     end
@@ -652,10 +680,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                         log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
 
-    # Transparent pass: back-to-front, z-tested against the opaque depth but not
-    # writing depth, alpha-blended over the existing colour. The back-to-front
-    # order is required for correct blending and is kept regardless of
-    # `sort_objects`.
+    # Transparent pass: back-to-front, z-tested against the current depth buffer
+    # and alpha-blended over the existing colour. Depth writes follow the
+    # material's `depth_write` field. The back-to-front order is required for
+    # correct blending and is kept regardless of `sort_objects`.
     if !isempty(transparent)
         _sort_meshes_by_depth!(transparent, view, false)
         stamp = cache === nothing ? zeros(Int, H, W) : _render_cache_stamp!(cache, H, W)
@@ -767,7 +795,28 @@ end
 # Material transparency helpers (some materials lack these fields).
 material_opacity(m::AbstractMaterial) = hasfield(typeof(m), :opacity) ? getfield(m, :opacity) : 1.0
 material_transparent(m::AbstractMaterial) = hasfield(typeof(m), :transparent) ? getfield(m, :transparent) : false
-is_transparent_material(m::AbstractMaterial) = material_transparent(m) && material_opacity(m) < 1.0
+is_transparent_material(m::AbstractMaterial) = material_transparent(m)
+material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
+material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
+material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ? Float64(getfield(m, :alpha_test)) : 0.0
+
+@inline _has_texture_alpha(tex) = tex isa Texture && size(tex.data, 3) >= 4
+@inline _has_alpha_map(tex) = tex isa Texture
+@inline _needs_fragment_alpha(alpha_test::Float64, alpha_base::Float64, albedo_map, alpha_map) =
+    alpha_test > 0.0 || alpha_base < 1.0 || _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
+
+@inline function _fragment_alpha(alpha_base::Float64, albedo_map, alpha_map, u, v, u2, v2)
+    a = alpha_base
+    if _has_texture_alpha(albedo_map)
+        tu, tv = _map_uv(albedo_map, u, v, u2, v2)
+        a *= sample_texture_channel(albedo_map, tu, tv, 4; default=1.0)
+    end
+    if _has_alpha_map(alpha_map)
+        tu, tv = _map_uv(alpha_map, u, v, u2, v2)
+        a *= sample_texture_channel(alpha_map, tu, tv, 2; default=1.0)
+    end
+    return a
+end
 
 # Rasterize one geometry (flat shading) at a given world transform, reusing the
 # caller's scratch buffers. Shared by the mesh loop and the InstancedMesh loop.
@@ -785,10 +834,23 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     face_colors = colorbuf === nothing ?
         shade_mesh_faces(geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
         shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn)
-    blend = alpha < 1.0
+    blend = material_transparent(mat) || alpha < 1.0
+    depth_test = material_depth_test(mat)
+    depth_write = material_depth_write(mat)
     side = material_side(mat)
     normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
     has_normals = length(geo.normals) >= geo.n_vertices * 3
+    has_uvs = length(geo.uvs) >= geo.n_vertices * 2
+    albedo_map = has_uvs ? _material_field(mat, :map) : nothing
+    alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
+    alpha_test = material_alpha_test(mat)
+    alpha_base = Float64(alpha)
+    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
+    uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
+    attr_tri = use_fragment_alpha ? Vector{ShadeVtx}(undef, 3) : ShadeVtx[]
+    attr_clipped = use_fragment_alpha ? ShadeVtx[] : ShadeVtx[]
+    use_fragment_alpha && sizehint!(attr_clipped, 6)
+    siw = use_fragment_alpha ? Vector{Float64}(undef, 8) : Float64[]
     # Per-fragment clipping needs each clipped vertex's world position. The
     # near-clipped polygon is in view space with w=1 (affine), so mapping it back
     # by the inverse view matrix recovers the world position. Computed once per
@@ -815,6 +877,77 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
         tri[2] = mat4_transform_vec4(modelview, Vec4(v2.x, v2.y, v2.z, 1.0))
         tri[3] = mat4_transform_vec4(modelview, Vec4(v3.x, v3.y, v3.z, 1.0))
+
+        if use_fragment_alpha
+            @inbounds for (slot, vi, vtx) in ((1, i1, v1), (2, i2, v2), (3, i3, v3))
+                uv = has_uvs ? Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2]) : _ZERO_V2
+                uv2v = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
+                attr_tri[slot] = ShadeVtx(
+                    tri[slot],
+                    mat4_transform_point(world_mat, vtx),
+                    _ZERO_V3,
+                    uv,
+                    uv2v,
+                    Color3(1.0, 1.0, 1.0),
+                )
+            end
+
+            m = _clip_near_attr!(attr_clipped, attr_tri, 3, near)
+            m < 3 && continue
+
+            @inbounds for k in 1:m
+                cv = mat4_transform_vec4(proj, attr_clipped[k].vp)
+                invw = 1.0 / cv.w
+                ndcx = cv.x * invw; ndcy = cv.y * invw; ndcz = cv.z * invw
+                sx[k] = (ndcx + 1) * 0.5 * W
+                sy[k] = (1 - ndcy) * 0.5 * H
+                sz[k] = log_depth ? _encode_log_depth(cv.w, inv_log_far) : ndcz
+                siw[k] = invw
+            end
+
+            fc = face_colors[fi]
+            @inbounds for k in 2:(m - 1)
+                if blend
+                    _rasterize_tri_blend!(rt, sx[1], sy[1], sz[1],
+                                          sx[k], sy[k], sz[k],
+                                          sx[k+1], sy[k+1], sz[k+1], fc, alpha, stamp, stamp_id;
+                                          xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                          clipping_planes=clipping_planes,
+                                          wp1=attr_clipped[1].wp,
+                                          wp2=attr_clipped[k].wp,
+                                          wp3=attr_clipped[k+1].wp,
+                                          iw1=siw[1], iw2=siw[k], iw3=siw[k+1],
+                                          depth_test=depth_test, depth_write=depth_write,
+                                          alpha_test=alpha_test, albedo_map=albedo_map, alpha_map=alpha_map,
+                                          uv1=attr_clipped[1].uv,
+                                          uv2=attr_clipped[k].uv,
+                                          uv3=attr_clipped[k+1].uv,
+                                          uv2_1=attr_clipped[1].uv2,
+                                          uv2_2=attr_clipped[k].uv2,
+                                          uv2_3=attr_clipped[k+1].uv2)
+                else
+                    _rasterize_tri!(rt, sx[1], sy[1], sz[1],
+                                    sx[k], sy[k], sz[k],
+                                    sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
+                                    xlo=xlo, xhi=xhi,
+                                    clipping_planes=clipping_planes,
+                                    wp1=attr_clipped[1].wp,
+                                    wp2=attr_clipped[k].wp,
+                                    wp3=attr_clipped[k+1].wp,
+                                    iw1=siw[1], iw2=siw[k], iw3=siw[k+1],
+                                    depth_test=depth_test, depth_write=depth_write,
+                                    alpha_test=alpha_test, alpha_base=alpha_base,
+                                    albedo_map=albedo_map, alpha_map=alpha_map,
+                                    uv1=attr_clipped[1].uv,
+                                    uv2=attr_clipped[k].uv,
+                                    uv3=attr_clipped[k+1].uv,
+                                    uv2_1=attr_clipped[1].uv2,
+                                    uv2_2=attr_clipped[k].uv2,
+                                    uv2_3=attr_clipped[k+1].uv2)
+                end
+            end
+            continue
+        end
 
         m = _clip_near!(clipped, tri, 3, near)
         m < 3 && continue
@@ -851,27 +984,30 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                       sx[k+1], sy[k+1], sz[k+1], fc, alpha, stamp, stamp_id;
                                       xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                       clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
-                                      iw1=iw1, iw2=iw2, iw3=iw3)
+                                      iw1=iw1, iw2=iw2, iw3=iw3,
+                                      depth_test=depth_test, depth_write=depth_write)
             elseif has_clip
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
                                 xlo=xlo, xhi=xhi,
                                 clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
-                                iw1=iw1, iw2=iw2, iw3=iw3)
+                                iw1=iw1, iw2=iw2, iw3=iw3,
+                                depth_test=depth_test, depth_write=depth_write)
             else
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
-                                xlo=xlo, xhi=xhi)
+                                xlo=xlo, xhi=xhi,
+                                depth_test=depth_test, depth_write=depth_write)
             end
         end
     end
     return nothing
 end
 
-# Alpha-blend a triangle over the existing colour, z-tested but without writing
-# depth (so transparent fragments don't occlude one another). `xlo`/`xhi`/`ylo`/
+# Alpha-blend a triangle over the existing colour, optionally z-tested and
+# optionally writing depth according to the material flags. `xlo`/`xhi`/`ylo`/
 # `yhi` clamp the covered pixel box so scissor testing restricts the blend.
 # When `clipping_planes` is non-empty, fragments on the negative side of any
 # plane are discarded (same `_clip_keep` test as `_rasterize_tri!`) before the
@@ -882,7 +1018,12 @@ end
                                        ylo::Int=1, yhi::Int=typemax(Int),
                                        clipping_planes=_NO_PLANES,
                                        wp1::Vec3=_ZERO_V3, wp2::Vec3=_ZERO_V3, wp3::Vec3=_ZERO_V3,
-                                       iw1::Float64=1.0, iw2::Float64=1.0, iw3::Float64=1.0)
+                                       iw1::Float64=1.0, iw2::Float64=1.0, iw3::Float64=1.0,
+                                       depth_test::Bool=true, depth_write::Bool=false,
+                                       alpha_test::Float64=0.0,
+                                       albedo_map=nothing, alpha_map=nothing,
+                                       uv1::Vec2=_ZERO_V2, uv2::Vec2=_ZERO_V2, uv3::Vec2=_ZERO_V2,
+                                       uv2_1::Vec2=_ZERO_V2, uv2_2::Vec2=_ZERO_V2, uv2_3::Vec2=_ZERO_V2)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -891,9 +1032,9 @@ end
     max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
     min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
     max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
-    ia = 1.0 - alpha
     use_stamp = stamp !== nothing
     has_clip = !isempty(clipping_planes)
+    has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), albedo_map, alpha_map)
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
             cx = px - 0.5; cy = py - 0.5
@@ -901,22 +1042,35 @@ end
             w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
-                if has_clip
+                frag_alpha = alpha
+                if has_clip || has_alpha
                     # Perspective-correct world position (weight by 1/w).
                     iw = w0*iw1 + w1*iw2 + w2*iw3
                     a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
-                    wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
-                              a0*wp1.y + a1*wp2.y + a2*wp3.y,
-                              a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                    _clip_keep(clipping_planes, wp) || continue
+                    if has_clip
+                        wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                                  a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                                  a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                        _clip_keep(clipping_planes, wp) || continue
+                    end
+                    if has_alpha
+                        u = a0*uv1.x + a1*uv2.x + a2*uv3.x
+                        v = a0*uv1.y + a1*uv2.y + a2*uv3.y
+                        u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
+                        v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
+                        frag_alpha = _fragment_alpha(Float64(alpha), albedo_map, alpha_map, u, v, u2, v2)
+                        frag_alpha >= alpha_test || continue
+                    end
                 end
                 # Skip pixels already blended by this same mesh (shared edges).
                 use_stamp && stamp[py, px] == stamp_id && continue
                 z = w0 * z1 + w1 * z2 + w2 * z3
-                if z < rt.depth[py, px]
-                    rt.color[py, px, 1] = fc.r * alpha + rt.color[py, px, 1] * ia
-                    rt.color[py, px, 2] = fc.g * alpha + rt.color[py, px, 2] * ia
-                    rt.color[py, px, 3] = fc.b * alpha + rt.color[py, px, 3] * ia
+                if !depth_test || z < rt.depth[py, px]
+                    ia_frag = 1.0 - frag_alpha
+                    rt.color[py, px, 1] = fc.r * frag_alpha + rt.color[py, px, 1] * ia_frag
+                    rt.color[py, px, 2] = fc.g * frag_alpha + rt.color[py, px, 2] * ia_frag
+                    rt.color[py, px, 3] = fc.b * frag_alpha + rt.color[py, px, 3] * ia_frag
+                    depth_write && (rt.depth[py, px] = z)
                     use_stamp && (stamp[py, px] = stamp_id)
                 end
             end

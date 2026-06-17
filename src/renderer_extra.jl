@@ -171,10 +171,11 @@ end
 
 @inline function _put_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3,
                              xlo::Int=1, xhi::Int=rt.width,
-                             ylo::Int=1, yhi::Int=rt.height)
+                             ylo::Int=1, yhi::Int=rt.height,
+                             depth_test::Bool=true, depth_write::Bool=true)
     (1 <= x <= rt.width && 1 <= y <= rt.height && xlo <= x <= xhi && ylo <= y <= yhi) || return
-    @inbounds if z < rt.depth[y, x]
-        rt.depth[y, x] = z
+    @inbounds if !depth_test || z < rt.depth[y, x]
+        depth_write && (rt.depth[y, x] = z)
         rt.color[y, x, 1] = col.r; rt.color[y, x, 2] = col.g; rt.color[y, x, 3] = col.b
     end
 end
@@ -182,15 +183,17 @@ end
 @inline function _put_line_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3,
                                   radius::Float64,
                                   xlo::Int=1, xhi::Int=rt.width,
-                                  ylo::Int=1, yhi::Int=rt.height)
+                                  ylo::Int=1, yhi::Int=rt.height,
+                                  depth_test::Bool=true, depth_write::Bool=true)
     if radius <= 0.5
-        _put_pixel!(rt, x, y, z, col, xlo, xhi, ylo, yhi)
+        _put_pixel!(rt, x, y, z, col, xlo, xhi, ylo, yhi, depth_test, depth_write)
         return nothing
     end
     r = ceil(Int, radius)
     r2 = radius * radius
     @inbounds for oy in -r:r, ox in -r:r
-        ox * ox + oy * oy <= r2 && _put_pixel!(rt, x + ox, y + oy, z, col, xlo, xhi, ylo, yhi)
+        ox * ox + oy * oy <= r2 &&
+            _put_pixel!(rt, x + ox, y + oy, z, col, xlo, xhi, ylo, yhi, depth_test, depth_write)
     end
     return nothing
 end
@@ -199,14 +202,16 @@ end
 function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      linewidth::Real=1.0,
                      xlo::Int=1, xhi::Int=rt.width,
-                     ylo::Int=1, yhi::Int=rt.height)
+                     ylo::Int=1, yhi::Int=rt.height,
+                     depth_test::Bool=true, depth_write::Bool=true)
     dx = x1 - x0; dy = y1 - y0
     n = max(ceil(Int, max(abs(dx), abs(dy))), 1)
     radius = max(0.5, Float64(linewidth) / 2)
     @inbounds for s in 0:n
         t = s / n
         _put_line_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
-                         z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi)
+                         z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi,
+                         depth_test, depth_write)
     end
     return nothing
 end
@@ -225,7 +230,8 @@ end
 # endpoints keep NDC z ≥ -1, bounding the DDA step count.
 function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, near,
                                      a::Vec3, b::Vec3, col::Color3, linewidth::Real,
-                                     xlo::Int, xhi::Int, ylo::Int, yhi::Int)
+                                     xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                     depth_test::Bool=true, depth_write::Bool=true)
     av = mat4_transform_point(view, a)
     bv = mat4_transform_point(view, b)
     a_in = av.z <= -near; b_in = bv.z <= -near
@@ -238,7 +244,8 @@ function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, n
     W, H = rt.width, rt.height
     (ax, ay, az, oka) = _project(proj, av, W, H)
     (bx, by, bz, okb) = _project(proj, bv, W, H)
-    (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth, xlo, xhi, ylo, yhi)
+    (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write)
     return nothing
 end
 
@@ -255,19 +262,23 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             wm = compute_world_matrix(obj); geo = obj.geometry
             col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
             linewidth = hasfield(typeof(obj.material), :linewidth) ? obj.material.linewidth : 1.0
+            depth_test = material_depth_test(obj.material)
+            depth_write = material_depth_write(obj.material)
             stride = obj isa LineSegments ? 2 : 1
             nv = geo.n_vertices
             i = 1
             while i + 1 <= nv
                 a = mat4_transform_point(wm, get_vertex(geo, i))
                 b = mat4_transform_point(wm, get_vertex(geo, i+1))
-                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth, xlo, xhi, ylo, yhi)
+                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                            xlo, xhi, ylo, yhi, depth_test, depth_write)
                 i += stride
             end
             if obj isa LineLoop && nv > 2
                 a = mat4_transform_point(wm, get_vertex(geo, nv))
                 b = mat4_transform_point(wm, get_vertex(geo, 1))
-                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth, xlo, xhi, ylo, yhi)
+                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                            xlo, xhi, ylo, yhi, depth_test, depth_write)
             end
         end
     end)
@@ -294,7 +305,8 @@ end
         s2x, s2y, z2, iw2, u2, v2, wp2::Vec3,
         s3x, s3y, z3, iw3, u3, v3, wp3::Vec3,
         tint::Color3, tex, clipping_planes,
-        xlo::Int, xhi::Int, ylo::Int, yhi::Int)
+        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+        depth_test::Bool=true, depth_write::Bool=true)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -314,7 +326,7 @@ end
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             z = b0 * z1 + b1 * z2 + b2 * z3
-            z < rt.depth[py, px] || continue
+            (!depth_test || z < rt.depth[py, px]) || continue
             if has_clip
                 wp = Vec3(b0*wp1.x + b1*wp2.x + b2*wp3.x,
                           b0*wp1.y + b1*wp2.y + b2*wp3.y,
@@ -330,7 +342,7 @@ end
                 col = col * sample_texture(tex, u, v)
             end
             col = clamp_color(col)
-            rt.depth[py, px] = z
+            depth_write && (rt.depth[py, px] = z)
             rt.color[py, px, 1] = col.r; rt.color[py, px, 2] = col.g; rt.color[py, px, 3] = col.b
         end
     end
@@ -365,6 +377,8 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
         tex = _material_field(mat, :map)
         rot = _material_field(mat, :rotation)
         rot === nothing && (rot = 0.0)
+        depth_test = material_depth_test(mat)
+        depth_write = material_depth_write(mat)
         size_attenuation = _material_field(mat, :size_attenuation)
         size_attenuation === nothing && (size_attenuation = true)
         center_world = Vec3(mat4_get(M, 1, 4), mat4_get(M, 2, 4), mat4_get(M, 3, 4))
@@ -391,13 +405,13 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
             s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
-            tint, tex, clipping_planes, xlo, xhi, ylo, yhi)
+            tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write)
         # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
             s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
-            tint, tex, clipping_planes, xlo, xhi, ylo, yhi)
+            tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write)
     end)
     return rt
 end
@@ -414,6 +428,8 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
         (obj isa PointsObject && _visible_in_tree(obj)) || return
         wm = compute_world_matrix(obj); geo = obj.geometry
         col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
+        depth_test = material_depth_test(obj.material)
+        depth_write = material_depth_write(obj.material)
         r = max(Int(round(hasfield(typeof(obj.material), :size) ? obj.material.size : 1.0)) ÷ 2, 0)
         for vi in 1:geo.n_vertices
             pv = mat4_transform_point(view, mat4_transform_point(wm, get_vertex(geo, vi)))
@@ -426,7 +442,7 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
             min_py = max(cy - r, ylo)
             max_py = min(cy + r, yhi)
             for py in min_py:max_py, px in min_px:max_px
-                _put_pixel!(rt, px, py, pz, col, xlo, xhi, ylo, yhi)
+                _put_pixel!(rt, px, py, pz, col, xlo, xhi, ylo, yhi, depth_test, depth_write)
             end
         end
     end)

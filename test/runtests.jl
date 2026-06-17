@@ -1,3 +1,30 @@
+function _diff3d_respawn_lowopt_tests()
+    project = Base.active_project()
+    cmd = String[Base.julia_cmd().exec...]
+    append!(cmd, ["--startup-file=no", "-O0", "--compile=min"])
+    project !== nothing && push!(cmd, "--project=$(dirname(project))")
+    push!(cmd, "--eval")
+    push!(cmd, """
+        empty!(LOAD_PATH)
+        append!(LOAD_PATH, $(repr(String.(LOAD_PATH))))
+        empty!(Base.DEPOT_PATH)
+        append!(Base.DEPOT_PATH, $(repr(String.(Base.DEPOT_PATH))))
+        cd($(repr(pwd())))
+        include($(repr(@__FILE__)))
+    """)
+    withenv("DIFF3D_TEST_LOWOPT" => "1") do
+        exit(success(Cmd(cmd)) ? 0 : 1)
+    end
+end
+
+# Julia/LLVM can spend minutes optimizing this large monolithic test file under
+# the default `Pkg.test()` settings. Run the exact same file in a low-compile
+# child process so `Pkg.test()` reaches the assertions instead of timing out in
+# compiler optimization.
+if get(ENV, "DIFF3D_TEST_LOWOPT", "") != "1" && Base.JLOptions().opt_level > 0
+    _diff3d_respawn_lowopt_tests()
+end
+
 using Test
 using Diff3D
 using ForwardDiff
@@ -1930,7 +1957,23 @@ deterministic_bytes(n::Int) =
         @test rt.color[16,16,1] ≈ 0.5 atol=1e-12
         @test rt.color[16,16,3] ≈ 0.5 atol=1e-12
         @test is_transparent_material(quad.material)
+        @test is_transparent_material(MeshBasicMaterial(color=Color3(1.0,0,0), transparent=true))
         @test !is_transparent_material(MeshBasicMaterial(color=Color3(1.0,0,0)))
+
+        rgba_alpha = ones(Float64, 2, 2, 4)
+        rgba_alpha[:, :, 4] .= 0.25
+        tex_quad = Mesh(PlaneGeometry(width=10.0, height=10.0),
+                        MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                          transparent=true, side=:double,
+                                          depth_write=false,
+                                          map=Texture(rgba_alpha; filter=:nearest,
+                                                      colorspace=:linear)))
+        tex_scene = Scene(background=Color3(0.0, 0.0, 1.0))
+        add!(tex_scene, tex_quad)
+        tex_rt = RenderTarget(32, 32)
+        render!(tex_rt, tex_scene, cam)
+        @test tex_rt.color[16,16,1] ≈ 0.25 atol=1e-12
+        @test tex_rt.color[16,16,3] ≈ 0.75 atol=1e-12
     end
 
     @testset "LightProbe — SH ambient fill" begin
@@ -4964,6 +5007,18 @@ deterministic_bytes(n::Int) =
             o = Object3D()
             add!(o, o)
         end
+        @test let root = Group(), child = Group(), leaf = Object3D()
+            add!(root, child)
+            add!(child, leaf)
+            threw = false
+            try
+                add!(leaf, root)
+            catch err
+                threw = err isa ArgumentError
+            end
+            threw && get_parent(root) === nothing && get_parent(child) === root &&
+                get_parent(leaf) === child
+        end
 
         # normal matrix == transpose(inverse).
         Mn = mat4_scaling(2.0,1.0,1.0)
@@ -5265,6 +5320,131 @@ deterministic_bytes(n::Int) =
             add!(scene_l, gl)
             rt_l = RenderTarget(32, 32); render!(rt_l, scene_l, cam; cache=RenderCache())
             @test sum(rt_l.color) == 0.0                        # hidden light contributes nothing
+
+            # Fix 5: CPU rasterization honors material depth_test/depth_write,
+            # matching the WebGL export fields rather than treating them as metadata.
+            depth_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            depth_cam.position = Vec3(0.0, 0.0, 3.0)
+            red_front = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                             MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double))
+            red_front.position = Vec3(0.0, 0.0, 0.5)
+
+            scene_dt = Scene()
+            blue_far_dt = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                               MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0),
+                                                 side=:double, depth_test=false))
+            add!(scene_dt, red_front)
+            add!(scene_dt, blue_far_dt)
+            rt_dt = RenderTarget(32, 32)
+            render!(rt_dt, scene_dt, depth_cam; sort_objects=false)
+            @test rt_dt.color[16, 16, 3] > 0.9 && rt_dt.color[16, 16, 1] < 0.1
+
+            scene_dw = Scene()
+            red_nowrite = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                               MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                 side=:double, depth_write=false))
+            red_nowrite.position = Vec3(0.0, 0.0, 0.5)
+            blue_far_dw = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                               MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0), side=:double))
+            add!(scene_dw, red_nowrite)
+            add!(scene_dw, blue_far_dw)
+            rt_dw = RenderTarget(32, 32)
+            render!(rt_dw, scene_dw, depth_cam; sort_objects=false)
+            @test rt_dw.color[16, 16, 3] > 0.9 && rt_dw.color[16, 16, 1] < 0.1
+
+            scene_sm = Scene()
+            red_smooth = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                              MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double))
+            red_smooth.position = Vec3(0.0, 0.0, 0.5)
+            blue_smooth = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                               MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0),
+                                                 side=:double, depth_test=false),
+                               flat_shading=false)
+            add!(scene_sm, red_smooth)
+            add!(scene_sm, blue_smooth)
+            rt_sm = RenderTarget(32, 32)
+            render!(rt_sm, scene_sm, depth_cam; shading=:smooth, sort_objects=false)
+            @test rt_sm.color[16, 16, 3] > 0.9 && rt_sm.color[16, 16, 1] < 0.1
+
+            function covered_by_far_primitive(obj)
+                sc = Scene()
+                front = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                             MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double))
+                front.position = Vec3(0.0, 0.0, 0.5)
+                add!(sc, front)
+                add!(sc, obj)
+                rt = RenderTarget(32, 32)
+                render!(rt, sc, depth_cam; sort_objects=false)
+                rt.color[16, 16, 3] > 0.9 && rt.color[16, 16, 1] < 0.1
+            end
+            line_geo = BufferGeometry()
+            line_geo.positions = [-0.5, 0.0, 0.0, 0.5, 0.0, 0.0]
+            line_geo.n_vertices = 2
+            @test covered_by_far_primitive(LineObject(line_geo,
+                LineBasicMaterial(color=Color3(0.0, 0.0, 1.0), depth_test=false)))
+
+            point_geo = BufferGeometry()
+            point_geo.positions = [0.0, 0.0, 0.0]
+            point_geo.n_vertices = 1
+            @test covered_by_far_primitive(PointsObject(point_geo,
+                PointsMaterial(color=Color3(0.0, 0.0, 1.0), size=3.0, depth_test=false)))
+
+            sp = Sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0), depth_test=false))
+            @test covered_by_far_primitive(sp)
+
+            # Fix 6: CPU mesh rasterization honors texture alpha and alpha_map
+            # for alpha_test discard in both flat and smooth paths.
+            rgba_masked = ones(Float64, 2, 2, 4)
+            rgba_masked[:, :, 4] .= 0.25
+            rgba_visible = copy(rgba_masked)
+            rgba_visible[:, :, 4] .= 0.75
+
+            scene_rgba_mask = Scene()
+            add!(scene_rgba_mask, Mesh(PlaneGeometry(width=2.0, height=2.0),
+                MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double,
+                                  alpha_test=0.5,
+                                  map=Texture(rgba_masked; filter=:nearest,
+                                              colorspace=:linear))))
+            rt_rgba_mask = RenderTarget(32, 32)
+            render!(rt_rgba_mask, scene_rgba_mask, depth_cam)
+            @test sum(@view rt_rgba_mask.color[16, 16, :]) == 0.0
+
+            scene_rgba_visible = Scene()
+            add!(scene_rgba_visible, Mesh(PlaneGeometry(width=2.0, height=2.0),
+                MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double,
+                                  alpha_test=0.5,
+                                  map=Texture(rgba_visible; filter=:nearest,
+                                              colorspace=:linear))))
+            rt_rgba_visible = RenderTarget(32, 32)
+            render!(rt_rgba_visible, scene_rgba_visible, depth_cam)
+            @test rt_rgba_visible.color[16, 16, 1] > 0.9
+
+            alpha_zero = ones(Float64, 2, 2, 3)
+            alpha_zero[:, :, 2] .= 0.0
+            alpha_one = ones(Float64, 2, 2, 3)
+
+            function alpha_map_plane(data; smooth=false)
+                sc = Scene()
+                add!(sc, AmbientLight(intensity=1.0))
+                mesh = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                    MeshStandardMaterial(color=Color3(1.0, 0.0, 0.0),
+                                         roughness=1.0, metalness=0.0,
+                                         side=:double, alpha_test=0.5,
+                                         alpha_map=Texture(data; filter=:nearest,
+                                                           colorspace=:linear));
+                    flat_shading=smooth ? false : nothing)
+                add!(sc, mesh)
+                rt = RenderTarget(32, 32)
+                render!(rt, sc, depth_cam; shading=smooth ? :smooth : :flat)
+                return rt
+            end
+
+            rt_alpha_zero = alpha_map_plane(alpha_zero)
+            @test sum(@view rt_alpha_zero.color[16, 16, :]) == 0.0
+            rt_alpha_one = alpha_map_plane(alpha_one)
+            @test rt_alpha_one.color[16, 16, 1] > 0.1
+            rt_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true)
+            @test sum(@view rt_alpha_zero_smooth.color[16, 16, :]) == 0.0
         end
 
         @testset "shading" begin
