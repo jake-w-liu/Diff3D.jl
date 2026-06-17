@@ -3727,6 +3727,86 @@ deterministic_bytes(n::Int) =
             end
         end
 
+        @testset "glTF image MIME routing" begin
+            let dir = mktempdir()
+                texpath = joinpath(dir, "buffer_view.png")
+                save_png(texpath, fill(1.0, 2, 2, 3))
+                png_bytes = read(texpath)
+                gltf = Dict{String,Any}(
+                    "bufferViews"=>Any[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
+                                         "byteLength"=>Float64(length(png_bytes)))],
+                    "images"=>Any[
+                        Dict{String,Any}("bufferView"=>0.0, "mimeType"=>"image/png")],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                mat = Diff3D._gltf_material(gltf, [png_bytes], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (2, 2, 3)
+                @test mat.map.colorspace === :srgb
+                @test all(mat.map.data .≈ 1.0)
+            end
+
+            let dir = mktempdir()
+                png64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAD0lEQVR4AQEEAPv/AEBAQAGEAMG0BFppAAAAAElFTkSuQmCC"
+                uri = "data:image/png;base64," * png64
+                gltf = Dict{String,Any}(
+                    "images"=>Any[Dict{String,Any}("uri"=>uri)],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (1, 1, 3)
+                @test mat.map.data[1, 1, 1] ≈ 0.25 atol=1 / 255
+            end
+
+            let dir = mktempdir()
+                jpg_bytes = UInt8[0xff, 0xd8, 0xff, 0xd9]
+                gltf = Dict{String,Any}(
+                    "bufferViews"=>Any[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
+                                         "byteLength"=>Float64(length(jpg_bytes)))],
+                    "images"=>Any[
+                        Dict{String,Any}("bufferView"=>0.0, "mimeType"=>"image/jpeg")],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                err = try
+                    Diff3D._gltf_material(gltf, [jpg_bytes], dir, 0.0)
+                    nothing
+                catch e
+                    e
+                end
+                msg = sprint(showerror, err)
+                @test occursin("image/jpeg", msg)
+                @test occursin("not supported", msg)
+            end
+
+            let dir = mktempdir()
+                write(joinpath(dir, "texture.ktx2"), UInt8[0xab, 0x4b, 0x54, 0x58, 0x20])
+                gltf = Dict{String,Any}(
+                    "images"=>Any[Dict{String,Any}("uri"=>"texture.ktx2")],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                err = try
+                    Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                    nothing
+                catch e
+                    e
+                end
+                msg = sprint(showerror, err)
+                @test occursin("image/ktx2", msg)
+                @test occursin("not supported", msg)
+            end
+        end
+
         # [E:loaders] #20 load_obj normal guard fails to recompute when only SOME faces had normals, leaving zer
         let dir = mktempdir(); path = joinpath(dir, "partial_normals.obj"); open(path, "w") do io; println(io, "v 0 0 0"); println(io, "v 1 0 0"); println(io, "v 0 1 0"); println(io, "v 1 1 0"); println(io, "vn 0 0 1"); println(io, "f 1//1 2//1 3//1"); println(io, "f 2 4 3") end; geo = load_obj(path); zero_norm = false; b = 1; while b <= length(geo.normals); if geo.normals[b]==0.0 && geo.normals[b+1]==0.0 && geo.normals[b+2]==0.0; zero_norm = true; break end; b += 3 end; @test !zero_norm end
 

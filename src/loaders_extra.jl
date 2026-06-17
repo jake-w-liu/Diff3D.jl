@@ -203,6 +203,10 @@ zlib_inflate(data::Vector{UInt8}) = inflate(data[3:end])   # skip 2-byte zlib he
     return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
 end
 
+const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
+_is_png_bytes(bytes::Vector{UInt8}) =
+    length(bytes) >= length(_PNG_SIGNATURE) && bytes[1:length(_PNG_SIGNATURE)] == _PNG_SIGNATURE
+
 """
     load_png(path) -> Array{Float64,3}
 
@@ -210,7 +214,7 @@ Decode an 8-bit or 16-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [
 Implements full INFLATE (stored/fixed/dynamic Huffman) and all five PNG filters.
 """
 function _decode_png(bytes::Vector{UInt8})
-    bytes[1:8] == UInt8[137,80,78,71,13,10,26,10] || error("not a PNG file")
+    _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
     idat = UInt8[]
     while pos <= length(bytes)
@@ -697,6 +701,75 @@ function _gltf_texture_transform(texinfo)
             tex_coord)
 end
 
+function _gltf_data_uri_parts(uri::String)
+    startswith(uri, "data:") || error("glTF data URI must start with data:")
+    parts = split(uri, ",", limit=2)
+    length(parts) == 2 || error("glTF data URI is missing its comma separator")
+    header = String(parts[1])
+    meta = lastindex(header) >= 6 ? header[6:end] : ""
+    tokens = split(meta, ';')
+    mime = isempty(tokens) || isempty(tokens[1]) ? "" : lowercase(String(tokens[1]))
+    any(t -> lowercase(String(t)) == "base64", tokens) ||
+        error("glTF data URI images must be base64 encoded")
+    return mime, base64_decode(parts[2])
+end
+
+function _gltf_image_mime_from_uri(uri::String)
+    path = split(split(uri, '#', limit=2)[1], '?', limit=2)[1]
+    ext = lowercase(splitext(path)[2])
+    ext == ".png" && return "image/png"
+    (ext == ".jpg" || ext == ".jpeg") && return "image/jpeg"
+    ext == ".ktx2" && return "image/ktx2"
+    return ""
+end
+
+function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::String)
+    bv = gltf["bufferViews"][buffer_view_index + 1]
+    buf = buffers[Int(bv["buffer"]) + 1]
+    offset = Int(get(bv, "byteOffset", 0.0))
+    len = Int(bv["byteLength"])
+    offset >= 0 || error("$label byteOffset must be non-negative")
+    len >= 0 || error("$label byteLength must be non-negative")
+    offset + len <= length(buf) ||
+        error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
+    return len == 0 ? UInt8[] : buf[(offset + 1):(offset + len)]
+end
+
+function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
+    declared_mime = haskey(imgdef, "mimeType") ? lowercase(String(imgdef["mimeType"])) : ""
+    if haskey(imgdef, "uri")
+        uri = String(imgdef["uri"])
+        if startswith(uri, "data:")
+            data_mime, bytes = _gltf_data_uri_parts(uri)
+            return bytes, !isempty(declared_mime) ? declared_mime : data_mime
+        end
+        bytes = read(joinpath(dir, uri))
+        inferred_mime = _gltf_image_mime_from_uri(uri)
+        return bytes, !isempty(declared_mime) ? declared_mime : inferred_mime
+    elseif haskey(imgdef, "bufferView")
+        bytes = _gltf_buffer_view_bytes(gltf, buffers, Int(imgdef["bufferView"]),
+                                        "glTF image bufferView")
+        return bytes, declared_mime
+    end
+    return nothing, ""
+end
+
+function _gltf_decode_image(bytes::Vector{UInt8}, mime::AbstractString)
+    image_mime = lowercase(strip(String(mime)))
+    if image_mime == "" || image_mime == "image/png"
+        _is_png_bytes(bytes) ||
+            error(image_mime == "" ?
+                  "glTF image has unsupported or unknown format; only image/png is currently supported" :
+                  "glTF image MIME image/png does not contain PNG data")
+        return _decode_png(bytes)
+    elseif image_mime == "image/jpeg" || image_mime == "image/jpg"
+        error("glTF image MIME $image_mime is not supported; only image/png is currently supported")
+    elseif image_mime == "image/ktx2"
+        error("glTF image MIME image/ktx2 is not supported; KTX2/Basis texture loading is not implemented")
+    end
+    error("glTF image MIME $image_mime is not supported; only image/png is currently supported")
+end
+
 function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb)
     texinfo === nothing && return nothing
     haskey(gltf, "textures") || return nothing
@@ -704,19 +777,9 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     texdef = gltf["textures"][ti + 1]
     haskey(texdef, "source") || return nothing
     imgdef = gltf["images"][Int(texdef["source"]) + 1]
-    bytes = if haskey(imgdef, "uri")
-        uri = String(imgdef["uri"])
-        startswith(uri, "data:") ? base64_decode(split(uri, ",", limit=2)[2]) : read(joinpath(dir, uri))
-    elseif haskey(imgdef, "bufferView")
-        bv = gltf["bufferViews"][Int(imgdef["bufferView"]) + 1]
-        buf = buffers[Int(bv["buffer"]) + 1]
-        off = Int(get(bv, "byteOffset", 0.0)) + 1
-        len = Int(bv["byteLength"])
-        buf[off:(off + len - 1)]
-    else
-        return nothing
-    end
-    data = _decode_png(bytes)
+    bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
+    bytes === nothing && return nothing
+    data = _gltf_decode_image(bytes, mime)
     # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
     # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
     # raw glTF UVs sample correctly — the flipY=false equivalent of three.js

@@ -43,7 +43,8 @@ replacement for three.js `WebGLRenderer`.
   core geometry attributes (`TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`, `TANGENT`,
   `JOINTS_0`, `WEIGHTS_0`), glTF primitive modes for points, lines, line loops,
   line strips, triangles, triangle strips, and triangle fans, glTF material
-  texture binding for common PBR maps
+  PNG image loading from URI/data/bufferView sources, and glTF material texture
+  binding for common PBR maps
   with per-texture `textureInfo.texCoord` UV-set metadata and
   `KHR_texture_transform` offset/scale/rotation metadata for CPU and compact
   browser paths with per-sampler transform uniforms,
@@ -106,7 +107,9 @@ replacement for three.js `WebGLRenderer`.
   playback and can export to browser vertex-buffer morph playback. Scalar
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
   including texture references for clearcoat, transmission, sheen,
-  iridescence, specular, and inherited PBR maps; renderer shading of every
+  iridescence, specular, and inherited PBR maps. PNG glTF images load from URI,
+  data URI, and bufferView sources with MIME/extension routing; JPEG and KTX2
+  image references fail clearly until those decoders exist. Renderer shading of every
   physical extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
   now bind to CPU playback and browser weight serialization. Static skinned poses and
   animated bone tracks export to browser shader-side uniform skinning for small
@@ -476,6 +479,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add glTF material texture loading and common PBR texture binding
   (`baseColorTexture`, `metallicRoughnessTexture` as roughness and metalness
   maps, `normalTexture`, `occlusionTexture`, and `emissiveTexture`).
+- Done: route glTF image data by declared MIME type, data URI MIME, or URI
+  extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
+  references now fail with explicit loader errors instead of falling through PNG
+  decoding.
 - Done: parse basic glTF material extensions/properties:
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, and
   `occlusionTexture.strength`.
