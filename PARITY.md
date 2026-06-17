@@ -84,9 +84,8 @@ replacement for three.js `WebGLRenderer`.
   render targets, full WebGL renderer tone-output/color-management parity,
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
   full bone-texture shader skinning and skinned-tangent parity,
-  true cube-map sampling/prefiltered environment lighting, and most material shader variants. Browser light arrays
-  currently cap directional, point, spot, and hemisphere lights at four of each
-  type.
+  true cube-map sampling/prefiltered environment lighting, and most material
+  shader variants.
 - glTF support parses common mesh and transform animation data and now decodes
   signed, normalized, sparse, and interleaved accessors. It also evaluates
   `CUBICSPLINE` transform animation with explicit glTF tangents, normalizing
@@ -287,6 +286,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add multi-light arrays for directional, point, spot, and hemisphere
   lights instead of one directional and one point light. Ambient lights are
   accumulated into a single ambient term.
+- Done: generate compact WebGL light-array shader caps from exported cases
+  instead of truncating directional, point, spot, and hemisphere lights to four
+  of each type.
 - Done: export rectangular area lights with position, facing basis, and
   width/height data, then shade browser meshes with finite 3x3 rectangular
   quadrature. Full three.js LTC area-light BRDF parity remains renderer work.

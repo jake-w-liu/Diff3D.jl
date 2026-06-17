@@ -1079,8 +1079,43 @@ function _web_case_json(case::WebGLExportCase)
            "}"
 end
 
-function _webgl_html(data_json::String, title::String)
-    return """
+function _web_light_caps(cases::AbstractVector{WebGLExportCase})
+    max_dir = max_point = max_spot = max_hemi = max_rect = 0
+    for case in cases
+        force_ids = _web_animation_target_ids(case.animations)
+        dir = point = spot = hemi = rect = 0
+        traverse(case.scene, obj -> begin
+            obj isa AbstractLight || return
+            _visible_in_tree(obj) || obj.id in force_ids || return
+            if obj isa DirectionalLight
+                dir += 1
+            elseif obj isa PointLight
+                point += 1
+            elseif obj isa SpotLight
+                spot += 1
+            elseif obj isa HemisphereLight
+                hemi += 1
+            elseif obj isa RectAreaLight
+                rect += 1
+            end
+        end)
+        max_dir = max(max_dir, dir)
+        max_point = max(max_point, point)
+        max_spot = max(max_spot, spot)
+        max_hemi = max(max_hemi, hemi)
+        max_rect = max(max_rect, rect)
+    end
+    return (dir=max(1, max_dir), point=max(1, max_point), spot=max(1, max_spot),
+            hemi=max(1, max_hemi), rect=max(1, max_rect))
+end
+
+function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4))
+    max_dir = max(1, Int(light_caps.dir))
+    max_point = max(1, Int(light_caps.point))
+    max_spot = max(1, Int(light_caps.spot))
+    max_hemi = max(1, Int(light_caps.hemi))
+    max_rect = max(1, Int(light_caps.rect))
+    html = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -1569,6 +1604,13 @@ function _webgl_html(data_json::String, title::String)
 </body>
 </html>
 """
+    return replace(html,
+        "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; const int MAX_RECT=4;" =>
+            "const int MAX_DIR=$max_dir; const int MAX_POINT=$max_point; const int MAX_SPOT=$max_spot; const int MAX_HEMI=$max_hemi; const int MAX_RECT=$max_rect;",
+        "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4;" =>
+            "const int MAX_DIR=$max_dir; const int MAX_POINT=$max_point; const int MAX_SPOT=$max_spot; const int MAX_HEMI=$max_hemi;",
+        "const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;" =>
+            "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;")
 end
 
 """
@@ -1582,8 +1624,9 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase")
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
     data = "{\"cases\":[" * join((_web_case_json(c) for c in cases), ",") * "]}"
+    light_caps = _web_light_caps(cases)
     open(path, "w") do io
-        write(io, _webgl_html(data, title))
+        write(io, _webgl_html(data, title; light_caps))
     end
     return path
 end

@@ -1228,8 +1228,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"direction\"", html)
         @test occursin("\"side\":\"front\"", html)
         @test occursin("\"side\":\"double\"", html)
-        @test occursin("const MAX_DIR=4", html)
-        @test occursin("const int MAX_RECT=4", html)
+        @test occursin("const MAX_DIR=2, MAX_POINT=2, MAX_SPOT=1, MAX_HEMI=1, MAX_RECT=1;", html)
+        @test occursin("const int MAX_DIR=2; const int MAX_POINT=2; const int MAX_SPOT=1; const int MAX_HEMI=1; const int MAX_RECT=1;", html)
         @test occursin("uDirLight[0]", html)
         @test occursin("uSpotCount", html)
         @test occursin("uHemiCount", html)
@@ -1246,6 +1246,34 @@ deterministic_bytes(n::Int) =
         @test occursin("o.lodHysteresis||0", html)
         @test occursin("lodChoices(active,eye)", html)
         @test occursin(".sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye))", html)
+        cap_scene = Scene()
+        add!(cap_scene, Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.4, 0.5, 0.6))))
+        for i in 1:5
+            d = DirectionalLight(intensity=0.1, position=Vec3(Float64(i), 2.0, 3.0))
+            d.target = Vec3(0.0, 0.0, 0.0)
+            add!(cap_scene, d)
+        end
+        for i in 1:6
+            add!(cap_scene, PointLight(intensity=0.1, position=Vec3(Float64(i), 1.0, 2.0)))
+        end
+        for i in 1:5
+            s = SpotLight(intensity=0.1, position=Vec3(Float64(i), 3.0, 2.0),
+                          target=Vec3(0.0, 0.0, 0.0))
+            add!(cap_scene, s)
+        end
+        for _ in 1:5
+            add!(cap_scene, HemisphereLight(intensity=0.1))
+        end
+        cap_file = tempname() * ".html"
+        save_webgl_html(cap_file, [WebGLExportCase("caps", "Caps", "light cap parity", cap_scene)])
+        cap_html = read(cap_file, String)
+        @test occursin("const MAX_DIR=5, MAX_POINT=6, MAX_SPOT=5, MAX_HEMI=5, MAX_RECT=1;", cap_html)
+        @test occursin("const int MAX_DIR=5; const int MAX_POINT=6; const int MAX_SPOT=5; const int MAX_HEMI=5;", cap_html)
+        @test occursin("\"dirCount\":", cap_html) == false
+        @test length(findall("\"type\":\"directional\"", cap_html)) == 5
+        @test length(findall("\"type\":\"point\"", cap_html)) == 6
+        @test length(findall("\"type\":\"spot\"", cap_html)) == 5
+        @test length(findall("\"type\":\"hemisphere\"", cap_html)) == 5
         @test occursin("Uint32Array", html)
         @test occursin("line_loop", html)
         @test occursin("\"uvs\"", html)
