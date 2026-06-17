@@ -747,6 +747,11 @@ Parallel audits split the remaining work into five critical tracks:
   geometry through Diff3D.jl `save_stl_binary` and `load_stl` before exporting
   it with the compact browser mesh path. The exact upstream PR2 STL asset and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_loader_obj` via
+  `examples/webgl_loader_obj.jl`, generating temporary OBJ/MTL assets,
+  loading them through Diff3D.jl `load_obj_groups`/`load_mtl`, and exporting
+  material-split meshes to the compact browser path. Exact upstream OBJ/MTL
+  assets and `WebGLRenderer` internals remain documented deviations.
 
 ## Next implementation targets
 

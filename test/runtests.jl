@@ -55,6 +55,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
             "threejs_webgl_loader_stl",
+            "threejs_webgl_loader_obj",
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
@@ -99,6 +100,13 @@ deterministic_bytes(n::Int) =
                     @test occursin("save_stl_binary(path, source)", source)
                     @test occursin("loaded = load_stl(path)", source)
                     @test "load_stl" in entry["prerequisites"]
+                end
+                if entry["upstream_id"] == "threejs_webgl_loader_obj"
+                    source = read(script, String)
+                    @test occursin("geo, face_materials, materials = load_obj_groups(obj_path)", source)
+                    @test occursin("newmtl body", source)
+                    @test "load_obj_groups" in entry["prerequisites"]
+                    @test "load_mtl" in entry["prerequisites"]
                 end
             end
         end
