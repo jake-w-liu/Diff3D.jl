@@ -3615,6 +3615,50 @@ deterministic_bytes(n::Int) =
             end
 
             let dir = mktempdir()
+                texpath = joinpath(dir, "points.png")
+                save_png(texpath, fill(0.5, 1, 1, 3))
+                buf = UInt8[]
+                append!(buf, reinterpret(UInt8, Float32[0,0,0, 1,0,0]))
+                pos_len = length(buf)
+                append!(buf, reinterpret(UInt8, Float32[0,0, 1,1]))
+                gltf = Dict{String,Any}(
+                    "scenes"=>[Dict{String,Any}("nodes"=>Any[0.0])],
+                    "scene"=>0.0,
+                    "nodes"=>[Dict{String,Any}("mesh"=>0.0)],
+                    "meshes"=>[Dict{String,Any}("primitives"=>Any[
+                        Dict{String,Any}("attributes"=>Dict{String,Any}("POSITION"=>0.0,
+                                                                        "TEXCOORD_0"=>1.0),
+                                         "mode"=>0.0,
+                                         "material"=>0.0)])],
+                    "bufferViews"=>[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(pos_len))],
+                    "accessors"=>[
+                        Dict{String,Any}("bufferView"=>0.0, "componentType"=>5126.0,
+                                         "count"=>2.0, "type"=>"VEC3"),
+                        Dict{String,Any}("bufferView"=>1.0, "componentType"=>5126.0,
+                                         "count"=>2.0, "type"=>"VEC2")],
+                    "samplers"=>[Dict{String,Any}("wrapS"=>33071.0, "magFilter"=>9728.0)],
+                    "images"=>[Dict{String,Any}("uri"=>"points.png")],
+                    "textures"=>[Dict{String,Any}("source"=>0.0, "sampler"=>0.0)],
+                    "materials"=>[Dict{String,Any}(
+                        "alphaMode"=>"BLEND",
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorFactor"=>Any[0.2,0.3,0.4,0.6],
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0, "texCoord"=>0.0)))])
+                obj = only(get_children(only(get_children(Diff3D._gltf_build_scene(gltf, [buf]; dir=dir)))))
+                @test obj isa PointsObject
+                @test obj.material isa PointsMaterial
+                @test obj.material.map isa Texture
+                @test obj.material.map.colorspace === :srgb
+                @test obj.material.map.wrap_s === :clamp
+                @test obj.material.map.filter === :nearest
+                @test obj.material.opacity ≈ 0.6
+                @test obj.material.transparent
+                @test obj.geometry.uvs == [0.0, 0.0, 1.0, 1.0]
+            end
+
+            let dir = mktempdir()
                 texpath = joinpath(dir, "unlit.png")
                 save_png(texpath, fill(0.75, 1, 1, 3))
                 gltf = Dict{String,Any}(

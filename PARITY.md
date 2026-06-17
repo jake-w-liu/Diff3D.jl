@@ -474,6 +474,8 @@ Parallel audits split the remaining work into five critical tracks:
   strips, triangles, triangle strips, and triangle fans. Indexed point/line
   primitives expand into CPU renderer order, and strip/fan modes triangulate
   into ordinary indexed meshes.
+- Done: preserve glTF `baseColorTexture` maps when converting point primitives
+  to native `PointsObject`/`PointsMaterial` objects.
 - Done: load core geometry attributes: `TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`,
   `TANGENT`, `JOINTS_0`, and `WEIGHTS_0`.
 - Done: add glTF material texture loading and common PBR texture binding
