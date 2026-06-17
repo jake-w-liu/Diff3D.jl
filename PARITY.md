@@ -742,6 +742,12 @@ Parallel audits split the remaining work into five critical tracks:
   the compact browser physical-material shader branch. Exact three.js
   PhysicalMaterial BRDF, PMREM environment lighting, and upstream assets remain
   documented deviations.
+- Added a standalone partial port for `webgl_materials_texture_rotation` via
+  `examples/webgl_materials_texture_rotation.jl`, using generated UV-grid
+  textures and Diff3D.jl `Texture.offset`, `Texture.repeat`,
+  `Texture.rotation`, `Texture.center`, `Texture.matrix`, and
+  `Texture.matrix_auto_update` semantics in browser export. Exact upstream GUI,
+  texture assets, and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_stl` via
   `examples/webgl_loader_stl.jl`, round-tripping deterministic binary STL
   geometry through Diff3D.jl `save_stl_binary` and `load_stl` before exporting

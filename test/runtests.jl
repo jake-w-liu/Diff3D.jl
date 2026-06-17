@@ -54,6 +54,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_materials_variations_phong",
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
+            "threejs_webgl_materials_texture_rotation",
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
@@ -115,6 +116,16 @@ deterministic_bytes(n::Int) =
                     @test occursin("binary_geo = load_ply(binary_path)", source)
                     @test occursin("format binary_little_endian 1.0", source)
                     @test "load_ply" in entry["prerequisites"]
+                end
+                if entry["upstream_id"] == "threejs_webgl_materials_texture_rotation"
+                    source = read(script, String)
+                    @test occursin("function uv_grid_texture(; n::Int=128)", source)
+                    @test occursin("rotation=pi / 4", source)
+                    @test occursin("center=Vec2(0.5, 0.5)", source)
+                    @test occursin("matrix_auto_update=false", source)
+                    @test occursin("manual_matrix = Mat3{Float64}", source)
+                    @test "Texture.rotation" in entry["prerequisites"]
+                    @test "Texture.matrix_auto_update" in entry["prerequisites"]
                 end
             end
         end
