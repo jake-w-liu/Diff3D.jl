@@ -748,6 +748,10 @@ Parallel audits split the remaining work into five critical tracks:
   `Texture.rotation`, `Texture.center`, `Texture.matrix`, and
   `Texture.matrix_auto_update` semantics in browser export. Exact upstream GUI,
   texture assets, and `WebGLRenderer` internals remain documented deviations.
+- Tightened the official examples parity registry so every registered example
+  has focused source/prerequisite assertions in `test/runtests.jl`, preventing
+  future parity entries from being tracked only by script existence and smoke
+  command strings.
 - Added a standalone partial port for `webgl_loader_stl` via
   `examples/webgl_loader_stl.jl`, round-tripping deterministic binary STL
   geometry through Diff3D.jl `save_stl_binary` and `load_stl` before exporting

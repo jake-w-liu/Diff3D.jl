@@ -73,6 +73,210 @@ deterministic_bytes(n::Int) =
         @test Set(ids) == expected_ids
         @test length(unique(ids)) == length(ids)
         valid_status = Set(["covered", "partial", "planned"])
+        focused_checks = Dict{String,NamedTuple{(:source, :prerequisites),Tuple{Vector{String},Vector{String}}}}(
+            "threejs_webgl_geometries" => (
+                source=[
+                    "function build_instancing_case()",
+                    "InstancedMesh(IcosahedronGeometry(radius=0.42)",
+                    "PointsObject(positions_geometry(pts)",
+                    "AnimationClip(\"city_loop\", tracks)",
+                ],
+                prerequisites=["primitive geometry generators", "mesh materials"],
+            ),
+            "threejs_webgl_geometry_cube" => (
+                source=[
+                    "BoxGeometry(width=2.0, height=2.0, depth=2.0)",
+                    "map=crate_texture()",
+                    "QuaternionKeyframeTrack(cube, :rotation",
+                ],
+                prerequisites=["BoxGeometry", "quaternion animation playback"],
+            ),
+            "threejs_webgl_materials_normal" => (
+                source=[
+                    "MeshNormalMaterial(side=:double)",
+                    "TorusKnotGeometry(radius=0.7",
+                    "KeyframeTrack(group, :position",
+                ],
+                prerequisites=["MeshNormalMaterial", "browser normal-material shader branch"],
+            ),
+            "threejs_webgl_materials_depth" => (
+                source=[
+                    "MeshDepthMaterial(near=2.5, far=11.0, depth_packing=depth_packing",
+                    "depth_packing=:rgba",
+                    "depth_packing=:rgb",
+                    "depth_packing=:rg",
+                ],
+                prerequisites=["MeshDepthMaterial", "basic/RGBA/RGB/RG browser depth packing"],
+            ),
+            "threejs_webgl_materials_variations_basic" => (
+                source=[
+                    "MeshBasicMaterial(color=color",
+                    "transparent=opacity < 1.0",
+                    "map=tex",
+                ],
+                prerequisites=["MeshBasicMaterial", "texture map export"],
+            ),
+            "threejs_webgl_materials_variations_toon" => (
+                source=[
+                    "MeshToonMaterial(color=color",
+                    "gradient_steps=steps",
+                    "gradient_map=gradient_map",
+                    "toon_gradient([0.18, 0.42, 0.78, 1.0])",
+                ],
+                prerequisites=["MeshToonMaterial", "browser toon gradient-map sampling"],
+            ),
+            "threejs_webgl_materials_variations_lambert" => (
+                source=[
+                    "MeshLambertMaterial(color=color",
+                    "HemisphereLight(color=Color3",
+                    "bands_texture()",
+                    "map=tex",
+                ],
+                prerequisites=["MeshLambertMaterial", "browser lambert-material shader branch"],
+            ),
+            "threejs_webgl_materials_variations_phong" => (
+                source=[
+                    "MeshPhongMaterial(color=color",
+                    "specular=specular",
+                    "shininess=shininess",
+                    "SpotLight(color=Color3",
+                ],
+                prerequisites=["MeshPhongMaterial", "browser phong-material shader branch"],
+            ),
+            "threejs_webgl_materials_matcap" => (
+                source=[
+                    "MeshMatcapMaterial(color=color, matcap=matcap, side=:double)",
+                    "demo_matcap_texture()",
+                    "matcap=matcap",
+                ],
+                prerequisites=["MeshMatcapMaterial", "browser matcap-material shader branch"],
+            ),
+            "threejs_webgl_materials_physical_clearcoat" => (
+                source=[
+                    "MeshPhysicalMaterial(color=Color3(0.9, 0.16, 0.08)",
+                    "clearcoat=1.0",
+                    "clearcoat_map=coat",
+                    "clearcoat_roughness_map=coat",
+                ],
+                prerequisites=["MeshPhysicalMaterial", "clearcoat texture-map export"],
+            ),
+            "threejs_webgl_materials_texture_rotation" => (
+                source=[
+                    "function uv_grid_texture(; n::Int=128)",
+                    "rotation=pi / 4",
+                    "center=Vec2(0.5, 0.5)",
+                    "matrix_auto_update=false",
+                    "manual_matrix = Mat3{Float64}",
+                ],
+                prerequisites=["Texture.rotation", "Texture.matrix_auto_update"],
+            ),
+            "threejs_webgl_loader_stl" => (
+                source=[
+                    "save_stl_binary(path, source)",
+                    "loaded = load_stl(path)",
+                ],
+                prerequisites=["load_stl", "save_stl_binary"],
+            ),
+            "threejs_webgl_loader_obj" => (
+                source=[
+                    "geo, face_materials, materials = load_obj_groups(obj_path)",
+                    "newmtl body",
+                ],
+                prerequisites=["load_obj_groups", "load_mtl"],
+            ),
+            "threejs_webgl_loader_ply" => (
+                source=[
+                    "ascii_geo = load_ply(ascii_path)",
+                    "binary_geo = load_ply(binary_path)",
+                    "format binary_little_endian 1.0",
+                ],
+                prerequisites=["load_ply", "binary_little_endian PLY"],
+            ),
+            "threejs_webgl_buffergeometry" => (
+                source=[
+                    "BufferGeometry(positions, Float64[], Float64[], Int[], 3triangles, 0)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "name=\"buffergeometry_triangle_cloud\"",
+                ],
+                prerequisites=["BufferGeometry", "custom vertex buffers"],
+            ),
+            "threejs_webgl_buffergeometry_indexed" => (
+                source=[
+                    "append!(indices, (a, c, b, b, c, d))",
+                    "BufferGeometry(positions, normals, uvs, indices, (cols + 1) * (rows + 1)",
+                    "name=\"indexed_wave_surface\"",
+                ],
+                prerequisites=["indexed BufferGeometry", "Uint16/Uint32 element buffers"],
+            ),
+            "threejs_webgl_buffergeometry_uint" => (
+                source=[
+                    "n = 65_537",
+                    "Int[1, 65_536, 65_537]",
+                    "name=\"uint32_index_triangle\"",
+                ],
+                prerequisites=["indexed BufferGeometry", "Uint32 element buffers"],
+            ),
+            "threejs_webgl_buffergeometry_lines" => (
+                source=[
+                    "LineSegments(line_segments_geometry()",
+                    "LineBasicMaterial(color=Color3(1.0, 1.0, 1.0))",
+                    "2n, 0",
+                ],
+                prerequisites=["LineSegments", "browser line modes"],
+            ),
+            "threejs_webgl_buffergeometry_points" => (
+                source=[
+                    "PointsObject(points_geometry()",
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=5.0)",
+                    "n = 2600",
+                ],
+                prerequisites=["PointsObject", "browser point sprites"],
+            ),
+            "threejs_webgl_points_sprites" => (
+                source=[
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,\n                                            transparent=true, map=sprite_map)",
+                    "SpriteMaterial(color=colors[mod1(i, length(colors))]",
+                    "map=sprite_map",
+                ],
+                prerequisites=["PointsMaterial.map", "SpriteMaterial"],
+            ),
+            "threejs_webgl_instancing_dynamic" => (
+                source=[
+                    "InstancedMesh(BoxGeometry(width=0.34, height=0.34, depth=0.34)",
+                    "set_instance_matrix!(inst, k,",
+                    "QuaternionKeyframeTrack(inst, :rotation",
+                    "KeyframeTrack(inst, :scale",
+                ],
+                prerequisites=["InstancedMesh", "quaternion animation playback"],
+            ),
+            "threejs_webgl_lines_colors" => (
+                source=[
+                    "LineObject(colored_line_geometry(pts, cols)",
+                    "LineLoop(colored_line_geometry(ring_pts, ring_cols)",
+                    "set_attribute!(geo, :color, color_data, 3)",
+                ],
+                prerequisites=["BufferGeometry color attributes", "LineLoop"],
+            ),
+            "threejs_webgl_helpers" => (
+                source=[
+                    "DirectionalLightHelper(dir",
+                    "PointLightHelper(point, 0.38",
+                    "SpotLightHelper(spot",
+                    "CameraHelper(cam",
+                ],
+                prerequisites=["CameraHelper", "light helpers"],
+            ),
+            "threejs_webgl_animation_keyframes" => (
+                source=[
+                    "AnimationClip(\"robot-keyframes\", tracks)",
+                    "QuaternionKeyframeTrack(left_arm, :rotation",
+                    "KeyframeTrack(left_arm, :scale",
+                    "interpolation=:cubic",
+                ],
+                prerequisites=["quaternion keyframe tracks", "scale keyframe tracks"],
+            ),
+        )
+        @test Set(keys(focused_checks)) == expected_ids
         for entry in examples
             @test startswith(entry["upstream_id"], "threejs_")
             @test startswith(entry["upstream_url"], "https://threejs.org/examples/#")
@@ -92,40 +296,13 @@ deterministic_bytes(n::Int) =
                     @test !occursin("representative", deviations)
                     @test !occursin("rather than exact", deviations)
                 end
-                if entry["upstream_id"] == "threejs_webgl_points_sprites"
-                    source = read(script, String)
-                    @test occursin("PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,\n                                            transparent=true, map=sprite_map)", source)
-                    @test "PointsMaterial.map" in entry["prerequisites"]
+                source = read(script, String)
+                check = focused_checks[entry["upstream_id"]]
+                for needle in check.source
+                    @test occursin(needle, source)
                 end
-                if entry["upstream_id"] == "threejs_webgl_loader_stl"
-                    source = read(script, String)
-                    @test occursin("save_stl_binary(path, source)", source)
-                    @test occursin("loaded = load_stl(path)", source)
-                    @test "load_stl" in entry["prerequisites"]
-                end
-                if entry["upstream_id"] == "threejs_webgl_loader_obj"
-                    source = read(script, String)
-                    @test occursin("geo, face_materials, materials = load_obj_groups(obj_path)", source)
-                    @test occursin("newmtl body", source)
-                    @test "load_obj_groups" in entry["prerequisites"]
-                    @test "load_mtl" in entry["prerequisites"]
-                end
-                if entry["upstream_id"] == "threejs_webgl_loader_ply"
-                    source = read(script, String)
-                    @test occursin("ascii_geo = load_ply(ascii_path)", source)
-                    @test occursin("binary_geo = load_ply(binary_path)", source)
-                    @test occursin("format binary_little_endian 1.0", source)
-                    @test "load_ply" in entry["prerequisites"]
-                end
-                if entry["upstream_id"] == "threejs_webgl_materials_texture_rotation"
-                    source = read(script, String)
-                    @test occursin("function uv_grid_texture(; n::Int=128)", source)
-                    @test occursin("rotation=pi / 4", source)
-                    @test occursin("center=Vec2(0.5, 0.5)", source)
-                    @test occursin("matrix_auto_update=false", source)
-                    @test occursin("manual_matrix = Mat3{Float64}", source)
-                    @test "Texture.rotation" in entry["prerequisites"]
-                    @test "Texture.matrix_auto_update" in entry["prerequisites"]
+                for prerequisite in check.prerequisites
+                    @test prerequisite in entry["prerequisites"]
                 end
             end
         end
