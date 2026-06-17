@@ -270,6 +270,8 @@ function _web_texture_json(tex)
            ",\"wrapS\":" * _js_str(String(tex.wrap_s)) *
            ",\"wrapT\":" * _js_str(String(tex.wrap_t)) *
            ",\"filter\":" * _js_str(String(tex.filter)) *
+           ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
+           ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
            ",\"offset\":[" * _js_num(tex.offset.x) * "," * _js_num(tex.offset.y) * "]" *
            ",\"repeat\":[" * _js_num(tex.repeat.x) * "," * _js_num(tex.repeat.y) * "]" *
            ",\"rotation\":" * _js_num(tex.rotation) *
@@ -299,6 +301,8 @@ function _web_cube_face_json(tex)
            "\"width\":" * string(W) *
            ",\"height\":" * string(H) *
            ",\"filter\":" * _js_str(String(tex.filter)) *
+           ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
+           ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
            ",\"data\":[" * join(rgba, ",") * "]" *
            "}"
 end
@@ -1408,6 +1412,17 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
   function isPow2(v){ return (v & (v - 1)) === 0; }
   function wrapMode(v){ return v==="mirror"?gl.MIRRORED_REPEAT:(v==="clamp"?gl.CLAMP_TO_EDGE:gl.REPEAT); }
+  function magFilterMode(v){ return v==="nearest"?gl.NEAREST:gl.LINEAR; }
+  function minFilterMode(v,pot){
+    if(v==="nearest") return gl.NEAREST;
+    if(v==="linear"||v==="bilinear") return gl.LINEAR;
+    if(!pot) return v&&v.indexOf("nearest")===0?gl.NEAREST:gl.LINEAR;
+    if(v==="nearest_mipmap_nearest") return gl.NEAREST_MIPMAP_NEAREST;
+    if(v==="nearest_mipmap_linear") return gl.NEAREST_MIPMAP_LINEAR;
+    if(v==="linear_mipmap_nearest") return gl.LINEAR_MIPMAP_NEAREST;
+    return gl.LINEAR_MIPMAP_LINEAR;
+  }
+  function usesMipmaps(v){ return !!v&&v.indexOf("mipmap")>=0; }
   function makeTexture(t){
     if(!t) return null;
     const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
@@ -1416,9 +1431,10 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     const pot=isPow2(t.width)&&isPow2(t.height);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,pot?wrapMode(t.wrapS):gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,pot?wrapMode(t.wrapT):gl.CLAMP_TO_EDGE);
-    const filter=t.filter==="nearest"?gl.NEAREST:gl.LINEAR;
-    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,filter);
-    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,filter);
+    const minFilter=t.minFilter||t.filter, magFilter=t.magFilter||t.filter;
+    if(pot&&usesMipmaps(minFilter)) gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
     return tex;
   }
   const cubeTargets=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
@@ -1442,11 +1458,12 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       if(!f||f.width!==first.width||f.height!==first.height||f.width!==f.height||!f.data||f.data.length!==f.width*f.height*4){ gl.deleteTexture(tex); return null; }
       gl.texImage2D(cubeTargets[i],0,gl.RGBA,f.width,f.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(f.data));
     }
-    const filter=first.filter==="nearest"?gl.NEAREST:gl.LINEAR;
+    const pot=isPow2(first.width)&&isPow2(first.height), minFilter=first.minFilter||first.filter, magFilter=first.magFilter||first.filter;
+    if(pot&&usesMipmaps(minFilter)) gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,filter);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,filter);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
     return tex;
   }
   const defaultEnvCubeTex=cubeTexturesEnabled?makeSolidCubeTexture():null;

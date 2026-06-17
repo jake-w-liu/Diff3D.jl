@@ -211,12 +211,60 @@ end
 mutable struct TrackballControls
     camera::PerspectiveCamera
     target::Vec3{Float64}
+    enabled::Bool
+    position0::Vec3{Float64}
+    target0::Vec3{Float64}
+    up0::Vec3{Float64}
 end
-TrackballControls(cam::PerspectiveCamera) = TrackballControls(cam, cam.target)
+
+function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=cam.target;
+                           enabled::Bool=true)
+    TrackballControls(cam, target, enabled, cam.position, target, cam.up)
+end
+
+"""Save the current camera position, up vector, and target as the reset state."""
+function trackball_save_state!(tc::TrackballControls)
+    tc.position0 = tc.camera.position
+    tc.target0 = tc.target
+    tc.up0 = tc.camera.up
+    return tc
+end
+
+"""Restore the saved trackball state."""
+function trackball_reset!(tc::TrackballControls)
+    tc.camera.position = tc.position0
+    tc.camera.up = tc.up0
+    tc.target = tc.target0
+    tc.camera.target = tc.target0
+    return tc
+end
 
 function trackball_rotate!(tc::TrackballControls, dx, dy)
+    tc.enabled || return tc
     oc = OrbitControls(tc.camera, tc.target)
     orbit_rotate!(oc, dx, dy)
+    tc.target = oc.target
+    tc.camera.target = tc.target
+    return tc
+end
+
+"""Scale the camera distance from the trackball target. `factor < 1` zooms in."""
+function trackball_zoom!(tc::TrackballControls, factor)
+    tc.enabled || return tc
+    oc = OrbitControls(tc.camera, tc.target)
+    orbit_zoom!(oc, factor)
+    tc.target = oc.target
+    tc.camera.target = tc.target
+    return tc
+end
+
+"""Pan the trackball target and camera in the view plane."""
+function trackball_pan!(tc::TrackballControls, dx, dy)
+    tc.enabled || return tc
+    oc = OrbitControls(tc.camera, tc.target)
+    orbit_pan!(oc, dx, dy)
+    tc.target = oc.target
+    tc.camera.target = tc.target
     tc.camera = oc.camera
     return tc
 end
@@ -301,13 +349,59 @@ mutable struct DragControls
     objects::Vector{AbstractObject3D}
     camera::PerspectiveCamera
     selected::Union{Nothing, AbstractObject3D}
+    recursive::Bool
+    transform_group::Bool
+    raycaster::Raycaster
 end
-DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::PerspectiveCamera) =
-    DragControls(collect(AbstractObject3D, objects), camera, nothing)
+
+function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::PerspectiveCamera;
+                      recursive::Bool=true, transform_group::Bool=false,
+                      raycaster::Union{Nothing,Raycaster}=nothing)
+    rc = raycaster === nothing ?
+        Raycaster(camera.position, Vec3(0.0, 0.0, -1.0)) : raycaster
+    DragControls(collect(AbstractObject3D, objects), camera, nothing,
+                 recursive, transform_group, rc)
+end
+
+function _drag_contains(root::AbstractObject3D, obj::AbstractObject3D)
+    found = false
+    traverse(root, child -> begin
+        child === obj && (found = true)
+    end)
+    return found
+end
+
+function _drag_select_target(dc::DragControls, obj::AbstractObject3D)
+    if obj in dc.objects
+        return dc.transform_group && length(dc.objects) == 1 ? dc.objects[1] : obj
+    end
+    if dc.recursive
+        for root in dc.objects
+            if _drag_contains(root, obj)
+                return dc.transform_group && length(dc.objects) == 1 ? root : obj
+            end
+        end
+    end
+    throw(ArgumentError("object is not managed by DragControls"))
+end
 
 function drag_start!(dc::DragControls, obj::AbstractObject3D)
-    obj in dc.objects || throw(ArgumentError("object is not managed by DragControls"))
-    dc.selected = obj
+    dc.selected = _drag_select_target(dc, obj)
+    return dc
+end
+
+function drag_pick_start!(dc::DragControls, ndc_x, ndc_y)
+    set_from_camera!(dc.raycaster, dc.camera, Float64(ndc_x), Float64(ndc_y))
+    hits = Intersection[]
+    for obj in dc.objects
+        append!(hits, raycast(dc.raycaster, obj; recursive=dc.recursive))
+    end
+    sort!(hits, by=h -> h.distance)
+    if isempty(hits)
+        dc.selected = nothing
+    else
+        dc.selected = _drag_select_target(dc, first(hits).object)
+    end
     return dc
 end
 

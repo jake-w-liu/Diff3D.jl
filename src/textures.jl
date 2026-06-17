@@ -10,6 +10,8 @@ mutable struct Texture
     wrap_s::Symbol                     # :repeat | :clamp | :mirror  (u)
     wrap_t::Symbol                     # :repeat | :clamp | :mirror  (v)
     filter::Symbol                     # :nearest | :bilinear
+    min_filter::Symbol                 # WebGL/glTF minification filter metadata
+    mag_filter::Symbol                 # WebGL/glTF magnification filter metadata
     mipmaps::Vector{Array{Float64, 3}} # optional pyramid (level 1 = base/2)
     colorspace::Symbol                 # :srgb | :linear  (three.js Texture.colorSpace)
     offset::Vec2{Float64}              # UV offset (three.js Texture.offset)
@@ -21,13 +23,33 @@ mutable struct Texture
     tex_coord::Int                     # glTF textureInfo.texCoord / UV set index (0 => uv, 1 => uv2)
 end
 
+function _texture_mag_filter_symbol(v)::Symbol
+    s = Symbol(v)
+    s === :nearest && return :nearest
+    return :linear
+end
+
+function _texture_min_filter_symbol(v)::Symbol
+    s = Symbol(v)
+    s === :nearest && return :nearest
+    (s === :linear || s === :bilinear) && return :linear
+    s in (:nearest_mipmap_nearest, :nearest_mipmap_linear,
+          :linear_mipmap_nearest, :linear_mipmap_linear) && return s
+    throw(ArgumentError("unsupported texture min_filter: $s"))
+end
+
 function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=:bilinear,
+                 min_filter=nothing, mag_filter=nothing,
                  mipmaps::Vector{Array{Float64,3}}=Array{Float64,3}[], colorspace::Symbol=:srgb,
                  offset=Vec2(0.0, 0.0), repeat=Vec2(1.0, 1.0),
                  rotation::Real=0.0, center=Vec2(0.0, 0.0),
                  matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0)
     tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
-    tex = Texture(data, wrap_s, wrap_t, filter, mipmaps, colorspace,
+    minf = min_filter === nothing ? _texture_min_filter_symbol(filter) :
+           _texture_min_filter_symbol(min_filter)
+    magf = mag_filter === nothing ? _texture_mag_filter_symbol(filter) :
+           _texture_mag_filter_symbol(mag_filter)
+    tex = Texture(data, wrap_s, wrap_t, filter, minf, magf, mipmaps, colorspace,
                   Vec2(Float64(offset.x), Float64(offset.y)),
                   Vec2(Float64(repeat.x), Float64(repeat.y)),
                   Float64(rotation),
@@ -188,6 +210,7 @@ function sample_texture_lod(tex::Texture, u, v, lod::Int)
     isempty(tex.mipmaps) && return sample_texture(tex, u, v)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
     tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=tex.filter,
+                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
                   colorspace=tex.colorspace, offset=tex.offset, repeat=tex.repeat,
                   rotation=tex.rotation, center=tex.center, matrix=tex.matrix,
                   matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord)

@@ -946,6 +946,12 @@ deterministic_bytes(n::Int) =
         html = read(f, String)
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
         @test occursin("\"data\":[0,0,0,128]", Diff3D._web_texture_json(malformed_tex))
+        sampler_tex = Texture(ones(Float64, 2, 2, 3);
+                              min_filter=:linear_mipmap_linear,
+                              mag_filter=:nearest)
+        sampler_json = Diff3D._web_texture_json(sampler_tex)
+        @test occursin("\"minFilter\":\"linear_mipmap_linear\"", sampler_json)
+        @test occursin("\"magFilter\":\"nearest\"", sampler_json)
         @test Diff3D._web_texture_json(Texture(zeros(Float64, 0, 1, 3))) == "null"
         @test Diff3D._web_texture_average_color(Texture(reshape([NaN, Inf, -Inf], 1, 1, 3))) == Color3(0.0, 0.0, 0.0)
         cube_face = zeros(Float64, 2, 2, 3)
@@ -957,6 +963,8 @@ deterministic_bytes(n::Int) =
                        Diff3D._web_cube_face_json(Texture(cube_face; filter=:nearest)))
         @test occursin("<title>A &amp; &lt;B&gt;</title>", html)
         @test occursin("preserveDrawingBuffer:true", html)
+        @test occursin("function minFilterMode", html)
+        @test occursin("gl.generateMipmap(gl.TEXTURE_2D)", html)
         @test occursin("\"name\":\"export_box\"", html)
         @test occursin("\"name\":\"export_drawable_parent_child\"", html)
         @test occursin("\"parentId\":$(mesh.id)", html)
@@ -2609,6 +2617,14 @@ deterministic_bytes(n::Int) =
         data[1,1,1] = 0.1; data[1,2,1] = 0.2
         data[2,1,1] = 0.3; data[2,2,1] = 0.4
         base = Texture(data; filter=:nearest, wrap_s=:repeat, wrap_t=:repeat)
+        @test base.min_filter === :nearest
+        @test base.mag_filter === :nearest
+        sampler_meta = Texture(copy(data); filter=:bilinear,
+                               min_filter=:nearest_mipmap_linear,
+                               mag_filter=:nearest)
+        @test sampler_meta.filter === :bilinear
+        @test sampler_meta.min_filter === :nearest_mipmap_linear
+        @test sampler_meta.mag_filter === :nearest
         shifted = Texture(copy(data); filter=:nearest, offset=Vec2(0.5, 0.0))
         @test sample_texture(shifted, 0.25, 0.75).r == sample_texture(base, 0.75, 0.75).r
         repeated = Texture(copy(data); repeat=Vec2(2.0, 1.0))
@@ -2820,6 +2836,45 @@ deterministic_bytes(n::Int) =
                                                        max_polar_angle=0.5)
     end
 
+    @testset "TrackballControls" begin
+        cam = PerspectiveCamera()
+        cam.position = Vec3(0.0, 0.0, 5.0)
+        cam.target = Vec3(0.0, 0.0, 0.0)
+        tc = TrackballControls(cam)
+        r0 = norm(cam.position - tc.target)
+        trackball_rotate!(tc, π / 2, 0.0)
+        @test norm(cam.position - tc.target) ≈ r0 atol=1e-9
+        @test abs(cam.position.x) > 1.0
+        trackball_zoom!(tc, 0.5)
+        @test norm(cam.position - tc.target) ≈ r0 * 0.5 atol=1e-9
+        offset = cam.position - tc.target
+        trackball_pan!(tc, 0.25, -0.5)
+        @test norm((cam.position - tc.target) - offset) < 1e-12
+        @test tc.target != Vec3(0.0, 0.0, 0.0)
+
+        trackball_save_state!(tc)
+        saved_position = cam.position
+        saved_target = tc.target
+        saved_up = cam.up
+        trackball_pan!(tc, 1.0, 0.0)
+        trackball_zoom!(tc, 2.0)
+        cam.up = Vec3(0.0, 0.0, 1.0)
+        trackball_reset!(tc)
+        @test cam.position == saved_position
+        @test tc.target == saved_target
+        @test cam.target == saved_target
+        @test cam.up == saved_up
+
+        tc.enabled = false
+        disabled_position = cam.position
+        disabled_target = tc.target
+        trackball_rotate!(tc, 0.5, 0.25)
+        trackball_zoom!(tc, 0.25)
+        trackball_pan!(tc, 1.0, 1.0)
+        @test cam.position == disabled_position
+        @test tc.target == disabled_target
+    end
+
     @testset "DragControls" begin
         cam = PerspectiveCamera()
         mesh = Mesh(BoxGeometry(), MeshBasicMaterial())
@@ -2833,6 +2888,37 @@ deterministic_bytes(n::Int) =
         drag_move!(dc, Vec3(1.0,0,0))
         @test mesh.position == Vec3(1.0,2.0,3.0)
         @test_throws ArgumentError drag_start!(dc, Group())
+
+        group = Group()
+        child = Mesh(BoxGeometry(), MeshBasicMaterial())
+        add!(group, child)
+        non_recursive = DragControls([group], cam; recursive=false)
+        @test_throws ArgumentError drag_start!(non_recursive, child)
+        recursive = DragControls([group], cam; recursive=true)
+        drag_start!(recursive, child)
+        @test recursive.selected === child
+        drag_move!(recursive, Vec3(0.5, 0.0, 0.0))
+        @test child.position == Vec3(0.5, 0.0, 0.0)
+
+        grouped = Group()
+        grouped_child = Mesh(BoxGeometry(), MeshBasicMaterial())
+        add!(grouped, grouped_child)
+        grouped_dc = DragControls([grouped], cam; transform_group=true)
+        drag_start!(grouped_dc, grouped_child)
+        @test grouped_dc.selected === grouped
+        drag_move!(grouped_dc, Vec3(0.0, 1.0, 0.0))
+        @test grouped.position == Vec3(0.0, 1.0, 0.0)
+        @test grouped_child.position == Vec3(0.0, 0.0, 0.0)
+
+        pick_cam = PerspectiveCamera()
+        pick_cam.position = Vec3(0.0, 0.0, 5.0)
+        pick_cam.target = Vec3(0.0, 0.0, 0.0)
+        pick_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(side=:double))
+        pick_dc = DragControls([pick_mesh], pick_cam)
+        drag_pick_start!(pick_dc, 0.0, 0.0)
+        @test pick_dc.selected === pick_mesh
+        drag_pick_start!(pick_dc, 2.0, 2.0)
+        @test pick_dc.selected === nothing
     end
 
     @testset "TransformControls" begin
@@ -3627,7 +3713,8 @@ deterministic_bytes(n::Int) =
                         Dict{String,Any}("bufferView"=>1.0, "componentType"=>5126.0,
                                          "count"=>3.0, "type"=>"VEC2")],
                     "samplers"=>[Dict{String,Any}("wrapS"=>33071.0, "wrapT"=>33648.0,
-                                                 "magFilter"=>9728.0)],
+                                                 "magFilter"=>9728.0,
+                                                 "minFilter"=>9986.0)],
                     "images"=>[Dict{String,Any}("uri"=>"base.png")],
                     "textures"=>[Dict{String,Any}("source"=>0.0, "sampler"=>0.0)],
                     "materials"=>[Dict{String,Any}(
@@ -3672,6 +3759,9 @@ deterministic_bytes(n::Int) =
                 @test Diff3D.texture_transform_uv(mat.map, 0.0, 0.0) == (expected_matrix.e[3], expected_matrix.e[6])
                 @test mat.map.wrap_s === :clamp && mat.map.wrap_t === :mirror
                 @test mat.map.filter === :nearest
+                @test mat.map.mag_filter === :nearest
+                @test mat.map.min_filter === :nearest_mipmap_linear
+                @test length(mat.map.mipmaps) == 1
                 @test mat.normal_map isa Texture && mat.normal_map.colorspace === :linear && mat.normal_map.tex_coord == 1
                 @test mat.normal_scale ≈ 0.25
                 @test mat.roughness_map isa Texture && mat.roughness_map.colorspace === :linear && mat.roughness_map.tex_coord == 1
@@ -3881,6 +3971,10 @@ deterministic_bytes(n::Int) =
                 @test mat.map isa Texture
                 @test size(mat.map.data) == (1, 1, 3)
                 @test mat.map.data[1, 1, 1] ≈ 0.25 atol=1 / 255
+
+                bad = deepcopy(gltf)
+                bad["images"][1]["uri"] = "data:image/png;base64,iVBO!"
+                @test_throws "base64" Diff3D._gltf_material(bad, [UInt8[]], dir, 0.0)
             end
 
             let dir = mktempdir()
@@ -6884,6 +6978,84 @@ deterministic_bytes(n::Int) =
             write(escaped_uri_path, escaped_uri_gltf)
             @test load_gltf(escaped_uri_path) isa Scene
 
+            valid_data_uri_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"data:application/octet-stream;base64,Q Q=="}]}
+            """
+            valid_data_uri_path = joinpath(dir, "valid_data_uri.gltf")
+            write(valid_data_uri_path, valid_data_uri_gltf)
+            @test load_gltf(valid_data_uri_path) isa Scene
+
+            bad_data_char_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"data:application/octet-stream;base64,Q!Q="}]}
+            """
+            bad_data_char_path = joinpath(dir, "bad_data_char.gltf")
+            write(bad_data_char_path, bad_data_char_gltf)
+            @test_throws "base64" load_gltf(bad_data_char_path)
+
+            bad_data_padding_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"data:application/octet-stream;base64,QQ="}]}
+            """
+            bad_data_padding_path = joinpath(dir, "bad_data_padding.gltf")
+            write(bad_data_padding_path, bad_data_padding_gltf)
+            @test_throws "base64" load_gltf(bad_data_padding_path)
+
+            missing_data_comma_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"data:application/octet-stream;base64QQ=="}]}
+            """
+            missing_data_comma_path = joinpath(dir, "missing_data_comma.gltf")
+            write(missing_data_comma_path, missing_data_comma_gltf)
+            @test_throws "comma separator" load_gltf(missing_data_comma_path)
+
+            missing_data_base64_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"data:application/octet-stream,QQ=="}]}
+            """
+            missing_data_base64_path = joinpath(dir, "missing_data_base64.gltf")
+            write(missing_data_base64_path, missing_data_base64_gltf)
+            @test_throws "base64 encoded" load_gltf(missing_data_base64_path)
+
+            write(joinpath(dir, "space buffer.bin"), UInt8[0x42])
+            percent_uri_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"space%20buffer.bin?rev=1#payload"}]}
+            """
+            percent_uri_path = joinpath(dir, "percent_uri.gltf")
+            write(percent_uri_path, percent_uri_gltf)
+            @test load_gltf(percent_uri_path) isa Scene
+
+            if !Sys.iswindows()
+                abs_buffer = joinpath(dir, "absolute file buffer.bin")
+                write(abs_buffer, UInt8[0x24])
+                file_uri = "file://" * replace(abs_buffer, " "=>"%20")
+                file_uri_gltf = """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+                 "buffers":[{"byteLength":1,"uri":"$file_uri"}]}
+                """
+                file_uri_path = joinpath(dir, "file_uri.gltf")
+                write(file_uri_path, file_uri_gltf)
+                @test load_gltf(file_uri_path) isa Scene
+            end
+
+            bad_scheme_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"https://example.com/buffer.bin"}]}
+            """
+            bad_scheme_path = joinpath(dir, "bad_scheme.gltf")
+            write(bad_scheme_path, bad_scheme_gltf)
+            @test_throws "scheme https is not supported" load_gltf(bad_scheme_path)
+
+            bad_percent_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"bad%2.bin"}]}
+            """
+            bad_percent_path = joinpath(dir, "bad_percent.gltf")
+            write(bad_percent_path, bad_percent_gltf)
+            @test_throws "percent escape" load_gltf(bad_percent_path)
+
             bad_unicode_gltf = """
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
              "nodes":[{"name":"bad\\u12"}]}
@@ -6940,6 +7112,26 @@ deterministic_bytes(n::Int) =
             @test isapprox(c_top.r, 1.0; atol=1e-6) && isapprox(c_top.b, 0.0; atol=1e-6)
             c_bot = sample_texture(mat.map, 0.5, 0.8)   # glTF v=0.8 is in the BOTTOM (blue) half
             @test isapprox(c_bot.b, 1.0; atol=1e-6) && isapprox(c_bot.r, 0.0; atol=1e-6)
+
+            save_png(joinpath(dir, "tex space.png"), fill(1.0, 1, 1, 3))
+            tex_space_json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"tex_space_node","mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"tex.bin"}],
+             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],
+             "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+             "textures":[{"source":0}],
+             "images":[{"uri":"tex%20space%2Epng?rev=1#image"}]}
+            """
+            tex_space_path = joinpath(dir, "tex_space.gltf")
+            write(tex_space_path, tex_space_json)
+            tex_space_mesh = get_children(get_children(load_gltf(tex_space_path))[1])[1]
+            tex_space_sample = sample_texture(tex_space_mesh.material.map, 0.5, 0.5)
+            @test isapprox(tex_space_sample.r, 1.0; atol=1e-6)
+            @test isapprox(tex_space_sample.g, 1.0; atol=1e-6)
+            @test isapprox(tex_space_sample.b, 1.0; atol=1e-6)
 
             # --- weights animations with 2 morph targets (LINEAR and CUBICSPLINE) ---
             bin2 = UInt8[]

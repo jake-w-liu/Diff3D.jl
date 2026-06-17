@@ -108,9 +108,12 @@ replacement for three.js `WebGLRenderer`.
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
   including texture references for clearcoat, transmission, sheen,
   iridescence, specular, and inherited PBR maps. PNG glTF images load from URI,
-  data URI, and bufferView sources with MIME/extension routing; JPEG and KTX2
-  image references fail clearly until those decoders exist. Renderer shading of every
-  physical extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
+  data URI, and bufferView sources with MIME/extension routing, and external
+  buffer/image URI paths are resolved with percent-decoding and clear
+  unsupported-scheme errors. glTF data URI resources are validated with strict
+  base64 and clear malformed-data errors; JPEG and KTX2 image references fail
+  clearly until those decoders exist. Renderer shading of every physical
+  extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
   now bind to CPU playback and browser weight serialization. Static skinned poses and
   animated bone tracks export to browser shader-side uniform skinning for small
   skeletons, compact float bone-texture skinning for larger non-morphed
@@ -185,9 +188,12 @@ replacement for three.js `WebGLRenderer`.
   TrackballControls, keyboard/mouse/touch event interoperability, and DOM
   integration. CPU `OrbitControls` now includes constraint, damping, save-state,
   and reset behavior, and CPU `PointerLockControls` includes pointer speed,
-  zero-distance look fallback, and polar-angle limits. CPU `TransformControls` now supports mode selection plus
-  world/local translation space, but browser DOM/gizmo/event parity is still
-  intentionally tracked as incomplete.
+  zero-distance look fallback, and polar-angle limits. CPU `TransformControls`
+  now supports mode selection plus world/local translation space, CPU
+  `TrackballControls` covers programmatic rotate/pan/zoom/save/reset, and CPU
+  `DragControls` covers direct, recursive, transform-group, and raycast
+  selection. Browser DOM/gizmo/event parity is still intentionally tracked as
+  incomplete.
 - Complete examples parity with the official three.js examples site.
   Individual examples should be ported only after the underlying features have
   tests and browser verification.
@@ -434,6 +440,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: preserve glTF `textureInfo.texCoord` metadata on loaded textures and
   choose the requested primary or secondary UV set for common material maps in
   flat CPU shading, smooth CPU rasterization, and compact browser WebGL export.
+- Done: preserve glTF sampler `minFilter`/`magFilter` metadata on loaded
+  textures, generate CPU mipmaps when glTF minification filters request them,
+  and serialize those sampler choices into the compact browser texture setup
+  with WebGL mipmap generation for power-of-two textures.
 - Done: parse glTF `KHR_texture_transform` offset, scale, rotation, and
   extension-level `texCoord` overrides into `Texture` transform metadata so
   loaded material maps share the same CPU sampling and per-sampler compact
@@ -490,6 +500,12 @@ Parallel audits split the remaining work into five critical tracks:
   extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
   references now fail with explicit loader errors instead of falling through PNG
   decoding.
+- Done: resolve local external glTF buffer and image URI paths with
+  percent-decoding, query/fragment stripping, `file:` URI support, and clear
+  errors for unsupported external schemes.
+- Done: validate glTF data URI resources with strict base64 decoding for both
+  embedded buffers and images, while keeping the exported general-purpose
+  `base64_decode` helper backward-compatible.
 - Done: parse basic glTF material extensions/properties:
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, and
   `occlusionTexture.strength`.
@@ -584,8 +600,12 @@ Parallel audits split the remaining work into five critical tracks:
   supports arrow-key target panning plus `+`/`-` zoom. Higher-level DOM
   integration details remain separate exporter/runtime work.
 - Done: add focused programmatic equivalents for `TransformControls`,
-  `DragControls`, `PointerLockControls`, and `TrackballControls` where feasible
-  in a Julia workflow. Browser DOM/touch event semantics remain open.
+  `PointerLockControls`, `TrackballControls`, and `DragControls` where feasible
+  in a Julia workflow. Trackball controls now support rotate, pan, zoom,
+  save-state, reset, and enabled/no-op behavior; drag controls now support
+  direct managed-object selection, recursive child selection, single-group
+  transform selection, and NDC raycast picking through the existing CPU
+  raycaster. Browser DOM/touch/gizmo event semantics remain open.
 - Done: add `examples/browser_webgl_smoke.py`, a reusable Playwright browser
   smoke that opens generated HTML, switches cases, simulates pointer drag and
   wheel zoom, exercises keyboard pan/zoom, forces an underside orbit view,

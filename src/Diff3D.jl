@@ -196,9 +196,11 @@ export
     # Controls / Animation / Helpers
     OrbitControls, orbit_set!, orbit_save_state!, orbit_reset!,
     orbit_rotate!, orbit_zoom!, orbit_pan!,
-    TrackballControls, trackball_rotate!, FlyControls, fly_translate!, fly_rotate!,
+    TrackballControls, trackball_save_state!, trackball_reset!,
+    trackball_rotate!, trackball_zoom!, trackball_pan!,
+    FlyControls, fly_translate!, fly_rotate!,
     PointerLockControls, pointerlock_lock!, pointerlock_unlock!, pointerlock_move!,
-    DragControls, drag_start!, drag_move!, drag_end!,
+    DragControls, drag_start!, drag_pick_start!, drag_move!, drag_end!,
     TransformControls, transform_attach!, transform_detach!, transform_set_mode!,
     transform_set_space!, transform_apply!,
     Clock, clock_elapsed, clock_delta!,

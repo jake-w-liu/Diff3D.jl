@@ -536,6 +536,49 @@ function base64_decode(s::AbstractString)
     return out
 end
 
+function _gltf_base64_decode_strict(s::AbstractString)
+    out = UInt8[]
+    quartet = Int[]
+    done = false
+    for ch in s
+        ch in (' ', '\n', '\r', '\t') && continue
+        done && error("glTF data URI base64 has data after padding")
+        if ch == '='
+            push!(quartet, -1)
+        else
+            Int(ch) <= 255 || error("glTF data URI base64 contains invalid character")
+            v = _B64_LUT[Int(ch) + 1]
+            v >= 0 || error("glTF data URI base64 contains invalid character")
+            any(<(0), quartet) && error("glTF data URI base64 has data after padding")
+            push!(quartet, v)
+        end
+        if length(quartet) == 4
+            quartet[1] >= 0 && quartet[2] >= 0 ||
+                error("glTF data URI base64 has invalid padding")
+            if quartet[3] < 0
+                quartet[4] < 0 || error("glTF data URI base64 has invalid padding")
+                (quartet[2] & 0x0f) == 0 ||
+                    error("glTF data URI base64 has non-zero padding bits")
+                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
+                done = true
+            elseif quartet[4] < 0
+                (quartet[3] & 0x03) == 0 ||
+                    error("glTF data URI base64 has non-zero padding bits")
+                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
+                push!(out, UInt8(((quartet[2] & 0x0f) << 4) | (quartet[3] >> 2)))
+                done = true
+            else
+                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
+                push!(out, UInt8(((quartet[2] & 0x0f) << 4) | (quartet[3] >> 2)))
+                push!(out, UInt8(((quartet[3] & 0x03) << 6) | quartet[4]))
+            end
+            empty!(quartet)
+        end
+    end
+    isempty(quartet) || error("glTF data URI base64 length is not a multiple of 4")
+    return out
+end
+
 # ========================== glTF 2.0 ==========================
 
 const _GLTF_COMP_SIZE = Dict("SCALAR"=>1, "VEC2"=>2, "VEC3"=>3, "VEC4"=>4, "MAT4"=>16)
@@ -545,13 +588,80 @@ struct GLTFAsset
     animations::Vector{AnimationClip}
 end
 
+function _gltf_uri_without_query_fragment(uri::AbstractString)
+    return String(split(split(uri, '#', limit=2)[1], '?', limit=2)[1])
+end
+
+function _gltf_uri_hex_value(c::Char)
+    '0' <= c <= '9' && return Int(c) - Int('0')
+    'a' <= c <= 'f' && return Int(c) - Int('a') + 10
+    'A' <= c <= 'F' && return Int(c) - Int('A') + 10
+    error("glTF URI has invalid percent escape")
+end
+
+function _gltf_percent_decode_uri_path(path::AbstractString)
+    bytes = UInt8[]
+    i = firstindex(path)
+    while i <= lastindex(path)
+        c = path[i]
+        if c == '%'
+            j1 = nextind(path, i)
+            j1 <= lastindex(path) || error("glTF URI has incomplete percent escape")
+            j2 = nextind(path, j1)
+            j2 <= lastindex(path) || error("glTF URI has incomplete percent escape")
+            push!(bytes, UInt8((_gltf_uri_hex_value(path[j1]) << 4) |
+                               _gltf_uri_hex_value(path[j2])))
+            i = nextind(path, j2)
+        else
+            append!(bytes, codeunits(string(c)))
+            i = nextind(path, i)
+        end
+    end
+    try
+        return String(bytes)
+    catch
+        error("glTF URI percent-decoded path is not valid UTF-8")
+    end
+end
+
+function _gltf_external_resource_path(dir::String, uri::String)
+    raw_path = _gltf_uri_without_query_fragment(uri)
+    isempty(raw_path) && error("glTF external URI path is empty")
+    m = match(r"^([A-Za-z][A-Za-z0-9+.-]*):", raw_path)
+    if m !== nothing
+        scheme = lowercase(String(m.captures[1]))
+        scheme == "file" || error("glTF external URI scheme $scheme is not supported")
+        path_uri = if startswith(raw_path, "file://")
+            rest = lastindex(raw_path) >= 8 ? raw_path[8:end] : ""
+            if startswith(rest, "localhost/")
+                rest[10:end]
+            elseif startswith(rest, "/")
+                rest
+            elseif isempty(rest)
+                ""
+            else
+                error("glTF file URI authorities are not supported")
+            end
+        else
+            lastindex(raw_path) >= 6 ? raw_path[6:end] : ""
+        end
+        path = _gltf_percent_decode_uri_path(path_uri)
+        isempty(path) && error("glTF external URI path is empty")
+        return isabspath(path) ? path : joinpath(dir, path)
+    end
+    path = _gltf_percent_decode_uri_path(raw_path)
+    isempty(path) && error("glTF external URI path is empty")
+    return isabspath(path) ? path : joinpath(dir, path)
+end
+
 function _gltf_read_buffer(buf::Dict, dir::String)
     uri = get(buf, "uri", nothing)
     uri === nothing && error("glTF buffer without uri; use load_glb for binary .glb containers")
+    uri = String(uri)
     data = if startswith(uri, "data:")
-        base64_decode(split(uri, ",", limit=2)[2])
+        _gltf_data_uri_parts(uri)[2]
     else
-        read(joinpath(dir, uri))
+        read(_gltf_external_resource_path(dir, uri))
     end
     return _gltf_trim_declared_buffer(buf, data, "glTF buffer")
 end
@@ -664,6 +774,20 @@ end
 
 _gltf_wrap_mode(v) = Int(v) == 33071 ? :clamp : Int(v) == 33648 ? :mirror : :repeat
 _gltf_filter_mode(v) = Int(v) in (9728, 9984, 9986) ? :nearest : :bilinear
+_gltf_mag_filter_mode(v) = Int(v) == 9728 ? :nearest : :linear
+function _gltf_min_filter_mode(v)
+    iv = Int(v)
+    iv == 9728 && return :nearest
+    iv == 9729 && return :linear
+    iv == 9984 && return :nearest_mipmap_nearest
+    iv == 9985 && return :linear_mipmap_nearest
+    iv == 9986 && return :nearest_mipmap_linear
+    iv == 9987 && return :linear_mipmap_linear
+    return :linear
+end
+_gltf_uses_mipmaps(filter::Symbol) =
+    filter in (:nearest_mipmap_nearest, :nearest_mipmap_linear,
+               :linear_mipmap_nearest, :linear_mipmap_linear)
 
 const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_lights_punctual",
@@ -710,12 +834,12 @@ function _gltf_data_uri_parts(uri::String)
     tokens = split(meta, ';')
     mime = isempty(tokens) || isempty(tokens[1]) ? "" : lowercase(String(tokens[1]))
     any(t -> lowercase(String(t)) == "base64", tokens) ||
-        error("glTF data URI images must be base64 encoded")
-    return mime, base64_decode(parts[2])
+        error("glTF data URI resources must be base64 encoded")
+    return mime, _gltf_base64_decode_strict(parts[2])
 end
 
 function _gltf_image_mime_from_uri(uri::String)
-    path = split(split(uri, '#', limit=2)[1], '?', limit=2)[1]
+    path = _gltf_percent_decode_uri_path(_gltf_uri_without_query_fragment(uri))
     ext = lowercase(splitext(path)[2])
     ext == ".png" && return "image/png"
     (ext == ".jpg" || ext == ".jpeg") && return "image/jpeg"
@@ -743,7 +867,7 @@ function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
             data_mime, bytes = _gltf_data_uri_parts(uri)
             return bytes, !isempty(declared_mime) ? declared_mime : data_mime
         end
-        bytes = read(joinpath(dir, uri))
+        bytes = read(_gltf_external_resource_path(dir, uri))
         inferred_mime = _gltf_image_mime_from_uri(uri)
         return bytes, !isempty(declared_mime) ? declared_mime : inferred_mime
     elseif haskey(imgdef, "bufferView")
@@ -789,15 +913,23 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     sampler = haskey(texdef, "sampler") && haskey(gltf, "samplers") ?
               gltf["samplers"][Int(texdef["sampler"]) + 1] : Dict{String,Any}()
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
-    Texture(data;
-            wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0)),
-            wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0)),
-            filter=_gltf_filter_mode(get(sampler, "magFilter", get(sampler, "minFilter", 9729.0))),
-            colorspace=colorspace,
-            offset=offset,
-            repeat=scale,
-            rotation=rotation,
-            tex_coord=tex_coord)
+    min_filter = _gltf_min_filter_mode(get(sampler, "minFilter",
+                                           get(sampler, "magFilter", 9729.0)))
+    mag_filter = _gltf_mag_filter_mode(get(sampler, "magFilter", 9729.0))
+    tex = Texture(data;
+                  wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0)),
+                  wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0)),
+                  filter=_gltf_filter_mode(get(sampler, "magFilter",
+                                               get(sampler, "minFilter", 9729.0))),
+                  min_filter=min_filter,
+                  mag_filter=mag_filter,
+                  colorspace=colorspace,
+                  offset=offset,
+                  repeat=scale,
+                  rotation=rotation,
+                  tex_coord=tex_coord)
+    _gltf_uses_mipmaps(min_filter) && generate_mipmaps!(tex)
+    return tex
 end
 
 function _gltf_material(gltf, buffers, dir::String, mi)
@@ -1537,12 +1669,13 @@ end
 # exactly like `_gltf_read_buffer`.
 function _glb_read_buffer(buf::Dict, dir::String, bin::Vector{UInt8})
     uri = get(buf, "uri", nothing)
+    uri !== nothing && (uri = String(uri))
     data = if uri === nothing
         bin
     elseif startswith(uri, "data:")
-        base64_decode(split(uri, ",", limit=2)[2])
+        _gltf_data_uri_parts(uri)[2]
     else
-        read(joinpath(dir, uri))
+        read(_gltf_external_resource_path(dir, uri))
     end
     label = uri === nothing ? "GLB BIN chunk" : "glTF buffer"
     return _gltf_trim_declared_buffer(buf, data, label)
