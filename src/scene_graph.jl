@@ -205,6 +205,10 @@ is_visible(o::Mesh) = o.visible
 set_parent!(o::Mesh, p) = (o.parent = p)
 apply_morph_targets(mesh::Mesh) =
     apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
+apply_morph_normals(mesh::Mesh) =
+    apply_morph_normals(mesh.geometry, mesh.morph_target_influences)
+apply_morph_tangents(mesh::Mesh) =
+    apply_morph_tangents(mesh.geometry, mesh.morph_target_influences)
 
 object_casts_shadow(obj) =
     hasproperty(obj, :cast_shadow) ? Bool(getproperty(obj, :cast_shadow)) : false

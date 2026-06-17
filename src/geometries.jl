@@ -91,6 +91,76 @@ function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Rea
     return out
 end
 
+function _normalize_attribute3!(data::Vector{Float64}, n_vertices::Int, item_size::Int)
+    @inbounds for vi in 1:n_vertices
+        base = (vi - 1) * item_size + 1
+        n = normalize(Vec3(data[base], data[base + 1], data[base + 2]))
+        data[base] = n.x
+        data[base + 1] = n.y
+        data[base + 2] = n.z
+    end
+    return data
+end
+
+"""
+    apply_morph_normals(geo, influences)
+
+Apply `morphNormal*` target deltas to `geo.normals` and normalize each resulting
+normal. Returns a flat normal buffer.
+"""
+function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Real})
+    length(g.normals) >= g.n_vertices * 3 || return copy(g.normals)
+    out = copy(g.normals)
+    for (ti, weight) in enumerate(influences)
+        weight == 0 && continue
+        name = Symbol("morphNormal$(ti - 1)")
+        has_attribute(g, name) || continue
+        attr = get_attribute(g, name)
+        attr.item_size >= 3 || error("$name attribute must have at least 3 components")
+        length(attr.data) >= g.n_vertices * attr.item_size || error("$name count does not match geometry")
+        @inbounds for vi in 1:g.n_vertices
+            dst = 3vi - 2
+            src = (vi - 1) * attr.item_size + 1
+            out[dst] += Float64(attr.data[src]) * Float64(weight)
+            out[dst + 1] += Float64(attr.data[src + 1]) * Float64(weight)
+            out[dst + 2] += Float64(attr.data[src + 2]) * Float64(weight)
+        end
+    end
+    return _normalize_attribute3!(out, g.n_vertices, 3)
+end
+
+"""
+    apply_morph_tangents(geo, influences)
+
+Apply `morphTangent*` target deltas to the `:tangent` attribute when present,
+normalizing tangent XYZ while preserving the tangent handedness component.
+Returns a flat tangent attribute buffer, or an empty vector if no tangent
+attribute exists.
+"""
+function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Real})
+    has_attribute(g, :tangent) || return Float64[]
+    base_attr = get_attribute(g, :tangent)
+    base_attr.item_size >= 3 && length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
+        return copy(Float64.(base_attr.data))
+    out = Float64.(copy(base_attr.data))
+    for (ti, weight) in enumerate(influences)
+        weight == 0 && continue
+        name = Symbol("morphTangent$(ti - 1)")
+        has_attribute(g, name) || continue
+        attr = get_attribute(g, name)
+        attr.item_size >= 3 || error("$name attribute must have at least 3 components")
+        length(attr.data) >= g.n_vertices * attr.item_size || error("$name count does not match geometry")
+        @inbounds for vi in 1:g.n_vertices
+            dst = (vi - 1) * base_attr.item_size + 1
+            src = (vi - 1) * attr.item_size + 1
+            out[dst] += Float64(attr.data[src]) * Float64(weight)
+            out[dst + 1] += Float64(attr.data[src + 1]) * Float64(weight)
+            out[dst + 2] += Float64(attr.data[src + 2]) * Float64(weight)
+        end
+    end
+    return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)
+end
+
 """Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
 function compute_bounding_box(g::BufferGeometry)
     g.n_vertices == 0 && return Box3()

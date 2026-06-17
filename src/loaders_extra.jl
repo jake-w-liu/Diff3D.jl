@@ -661,6 +661,29 @@ end
 _gltf_wrap_mode(v) = Int(v) == 33071 ? :clamp : Int(v) == 33648 ? :mirror : :repeat
 _gltf_filter_mode(v) = Int(v) in (9728, 9984, 9986) ? :nearest : :bilinear
 
+const _GLTF_SUPPORTED_EXTENSIONS = Set([
+    "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_unlit",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_clearcoat",
+    "KHR_materials_transmission",
+    "KHR_materials_ior",
+    "KHR_materials_volume",
+    "KHR_materials_sheen",
+    "KHR_materials_iridescence",
+    "KHR_materials_specular",
+])
+
+function _gltf_check_required_extensions(gltf)
+    for ext in get(gltf, "extensionsRequired", Any[])
+        name = String(ext)
+        name in _GLTF_SUPPORTED_EXTENSIONS ||
+            error("glTF requires unsupported extension $name")
+    end
+    return nothing
+end
+
 function _gltf_texture_transform(texinfo)
     ext = get(get(texinfo, "extensions", Dict{String,Any}()),
               "KHR_texture_transform", Dict{String,Any}())
@@ -1029,13 +1052,21 @@ end
 # the BIN chunk is supplied as buffer 0). `buffers` must already contain the raw
 # bytes for every buffer referenced by the document.
 function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String="")
+    _gltf_check_required_extensions(gltf)
     scene = Scene()
     node_objects = Dict{Int, AbstractObject3D}()
     joint_nodes = _gltf_joint_node_set(gltf)
     pending_skin_binds = SkinnedMesh[]
     pending_inverse_calcs = SkinnedMesh[]
 
-    function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[])
+    function _gltf_target_names(mesh_def)
+        extras = get(mesh_def, "extras", Dict{String,Any}())
+        names = get(extras, "targetNames", String[])
+        return [String(name) for name in names]
+    end
+
+    function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
+                             morph_names=String[])
         attrs = prim["attributes"]
         pos, _, nverts = _gltf_accessor(gltf, buffers, Int(attrs["POSITION"]))
         normals = Float64[]
@@ -1081,7 +1112,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         isempty(normals) && compute_vertex_normals!(geo)
         mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
         if skin_idx === nothing
-            return Mesh(geo, mat; morph_target_influences=morph_weights)
+            return Mesh(geo, mat; morph_target_influences=morph_weights,
+                        morph_target_names=morph_names)
         end
         skin = gltf["skins"][Int(skin_idx) + 1]
         bones = Bone[]
@@ -1095,7 +1127,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts; indices=true)
         skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
         sm = SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
-                         morph_target_influences=morph_weights)
+                         morph_target_influences=morph_weights,
+                         morph_target_names=morph_names)
         push!(pending_skin_binds, sm)
         inv === nothing && push!(pending_inverse_calcs, sm)
         return sm
@@ -1136,8 +1169,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         if haskey(node, "mesh")
             mesh_def = gltf["meshes"][Int(node["mesh"]) + 1]
             morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
+            morph_names = _gltf_target_names(mesh_def)
             for prim in mesh_def["primitives"]
-                mesh_obj = build_primitive(prim, get(node, "skin", nothing), morph_weights)
+                mesh_obj = build_primitive(prim, get(node, "skin", nothing),
+                                           morph_weights, morph_names)
                 add!(obj, mesh_obj)
             end
         end
@@ -1309,6 +1344,7 @@ in the GLB BIN chunk.
 """
 function load_gltf(path::String)
     gltf = _json_parse(read(path, String))
+    _gltf_check_required_extensions(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_scene(gltf, buffers; dir=dir)
@@ -1325,6 +1361,7 @@ nodes, and `weights` channels drive morph-target influences. Use
 """
 function load_gltf_asset(path::String)
     gltf = _json_parse(read(path, String))
+    _gltf_check_required_extensions(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_asset(gltf, buffers; dir=dir)
@@ -1387,6 +1424,7 @@ function _parse_glb(path::String)
     have_json || error("GLB has no JSON chunk")
 
     gltf = _json_parse(String(json_bytes))
+    _gltf_check_required_extensions(gltf)
     dir = dirname(path)
     buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in _gltf_document_buffers(gltf)]
     return gltf, buffers, dir

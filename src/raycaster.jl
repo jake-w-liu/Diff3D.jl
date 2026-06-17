@@ -55,12 +55,24 @@ Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
               Float64(near), Float64(far), layers,
               Float64(point_threshold), Float64(line_threshold))
 
+const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
+const _OBJECT_LAYER_LOCK = ReentrantLock()
+
 """
 Layers mask attached to `obj`. Scene-graph objects need not carry a `layers`
-field; absent one, three.js semantics put every object on channel 0 (mask = 1).
+field; absent one, `object_layers` initializes persistent channel-0 state.
 """
-object_layers(obj::AbstractObject3D) =
-    hasproperty(obj, :layers) ? getfield(obj, :layers) : Layers()
+function object_layers(obj::AbstractObject3D)
+    hasproperty(obj, :layers) && return getfield(obj, :layers)
+    lock(_OBJECT_LAYER_LOCK)
+    try
+        return get!(_OBJECT_LAYER_STORE, obj) do
+            Layers()
+        end
+    finally
+        unlock(_OBJECT_LAYER_LOCK)
+    end
+end
 
 # Distance from point `p` to the ray, and the ray parameter `t` (in units of the
 # ray direction `d`, which `Raycaster` keeps normalised) at the closest approach.

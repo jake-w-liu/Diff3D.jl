@@ -755,11 +755,29 @@ deterministic_bytes(n::Int) =
         morph_mesh = Mesh(morph_geo, MeshBasicMaterial(color=Color3(0.7,0.2,0.9));
                           name="export_morph", morph_target_influences=[0.5])
         add!(scene, morph_mesh)
+        morph_dir_only_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                            [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
+                                            Float64[], Int[1,2,3], 3, 1)
+        set_attribute!(morph_dir_only_geo, :tangent,
+                       [1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0], 4)
+        set_attribute!(morph_dir_only_geo, :morphNormal0,
+                       [0.0,0.5,0.0, 0.0,0.5,0.0, 0.0,0.5,0.0], 3)
+        set_attribute!(morph_dir_only_geo, :morphTangent0,
+                       [0.0,0.25,0.0, 0.0,0.25,0.0, 0.0,0.25,0.0], 3)
+        morph_dir_only = Mesh(morph_dir_only_geo,
+                              MeshStandardMaterial(color=Color3(0.3,0.7,0.9));
+                              name="export_morph_dirs_only",
+                              morph_target_influences=[0.3])
+        add!(scene, morph_dir_only)
         skin_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                   [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
                                   [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
         set_attribute!(skin_geo, :morphPosition0,
                        [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0], 3)
+        set_attribute!(skin_geo, :morphNormal0,
+                       [0.0,1.0,0.0, 0.0,1.0,0.0, 0.0,1.0,0.0], 3)
+        set_attribute!(skin_geo, :morphTangent0,
+                       [0.0,1.0,0.0, 0.0,1.0,0.0, 0.0,1.0,0.0], 3)
         set_attribute!(skin_geo, :tangent,
                        [1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0], 4)
         skin_normaldata = fill(0.5, 2, 2, 3)
@@ -1146,13 +1164,22 @@ deterministic_bytes(n::Int) =
         @test occursin("\"positions\":[0,0,0.5,1,0,0.5,0,1,0.5]", html)
         @test occursin("\"basePositions\":[0,0,0,1,0,0,0,1,0]", html)
         @test occursin("\"morphTargets\":[[0,0,1,0,0,1,0,0,1]]", html)
+        @test occursin("\"morphNormals\":[[0,1,0,0,1,0,0,1,0]]", html)
+        @test occursin("\"morphTangents\":[[0,1,0,0,1,0,0,1,0]]", html)
         @test occursin("\"morphWeights\":[0.5]", html)
         @test occursin("\"kind\":\"weights\"", html)
         @test occursin("\"property\":\"morph_target_influences\"", html)
         @test occursin("\"inTangents\":[0,0]", html)
         @test occursin("function updateMorph", html)
+        @test occursin("function normalizeTriples", html)
         @test occursin("o.morphedPositions=null", html)
+        @test occursin("o.morphedNormals=null", html)
+        @test occursin("o.morphedTangents=null", html)
         @test occursin("o.morphedPositions=p", html)
+        @test occursin("o.morphedNormals=n", html)
+        @test occursin("o.morphedTangents=tan", html)
+        @test occursin("\"name\":\"export_morph_dirs_only\"", html)
+        @test occursin("\"morphTargets\":[],\"morphNormals\":[[0,0.5,0,0,0.5,0,0,0.5,0]],\"morphTangents\":[[0,0.25,0,0,0.25,0,0,0.25,0]],\"morphWeights\":[0.29999999999999999]", html)
         @test occursin("morphById", html)
         @test occursin("\"name\":\"export_skin\"", html)
         @test occursin("\"positions\":[0,0,0,1,0,0,0,1,0]", html)
@@ -1183,9 +1210,14 @@ deterministic_bytes(n::Int) =
         @test occursin("uBindMatrixInverse*(skin*(uBindMatrix*p))", html)
         @test occursin("mat3(uBindMatrixInverse)*mat3(skin)*mat3(uBindMatrix)*d", html)
         @test occursin("o.shaderSkin", html)
-        @test occursin("&&!(o.morphTargets&&o.morphTargets.length)", html)
+        @test occursin("o.hasMorphTargets=!!((o.morphTargets&&o.morphTargets.length)", html)
+        @test occursin("!o.hasMorphTargets", html)
         @test occursin("o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice()", html)
         @test occursin("o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice()", html)
+        @test occursin("o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map", html)
+        @test occursin("o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map", html)
+        @test occursin("baseN=o.morphedNormals||o.baseNormals", html)
+        @test occursin("baseT=o.morphedTangents||o.baseTangents", html)
         @test occursin("o.skinIndexBuf=buf", html)
         @test occursin("o.tanBuf=buf", html)
         @test occursin("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)
@@ -2013,6 +2045,28 @@ deterministic_bytes(n::Int) =
         proxy = Diff3D._skinned_render_mesh(render_sm)
         @test get_vertex(proxy.geometry, 1).x ≈ get_vertex(render_geo, 1).x + 0.35 atol=1e-10
         @test get_normal(proxy.geometry, 1).z ≈ 1.0 atol=1e-10
+
+        morph_dir_geo = PlaneGeometry(width=1.0, height=1.0)
+        set_attribute!(morph_dir_geo, :tangent,
+                       [1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0], 4)
+        set_attribute!(morph_dir_geo, :morphNormal0,
+                       repeat([0.0,1.0,0.0], morph_dir_geo.n_vertices), 3)
+        set_attribute!(morph_dir_geo, :morphTangent0,
+                       repeat([0.0,1.0,0.0], morph_dir_geo.n_vertices), 3)
+        morph_dir_sm = SkinnedMesh(morph_dir_geo, MeshBasicMaterial(), Skeleton([Bone()]),
+                                   fill((1,1,1,1), morph_dir_geo.n_vertices),
+                                   fill((1.0,0.0,0.0,0.0), morph_dir_geo.n_vertices);
+                                   morph_target_influences=[0.5])
+        morphed_normals = apply_morph_normals(morph_dir_sm)
+        morphed_tangents = apply_morph_tangents(morph_dir_sm)
+        @test morphed_normals[2] ≈ 0.5 / sqrt(1.25) atol=1e-10
+        @test morphed_normals[3] ≈ 1.0 / sqrt(1.25) atol=1e-10
+        @test morphed_tangents[1] ≈ 1.0 / sqrt(1.25) atol=1e-10
+        @test morphed_tangents[2] ≈ 0.5 / sqrt(1.25) atol=1e-10
+        @test morphed_tangents[4] ≈ 1.0 atol=1e-10
+        morph_proxy = Diff3D._skinned_render_mesh(morph_dir_sm)
+        @test morph_proxy.geometry.normals[2] ≈ morphed_normals[2] atol=1e-10
+        @test get_attribute(morph_proxy.geometry, :tangent).data[2] ≈ morphed_tangents[2] atol=1e-10
 
         skinned_scene = Scene(background=Color3(0.0, 0.0, 0.0))
         add!(skinned_scene, render_sm)
@@ -3972,6 +4026,13 @@ deterministic_bytes(n::Int) =
             @test isempty(raycast(rcL, box))                 # mesh on channel 0 -> skipped
             layers_enable!(rcL.layers, 0)                    # re-enable channel 0
             @test !isempty(raycast(rcL, box))                # picked up again
+            obj_layers = object_layers(box)
+            @test object_layers(box) === obj_layers          # per-object layer state persists
+            layers_set!(obj_layers, 2)
+            layers_set!(rcL.layers, 0)
+            @test isempty(raycast(rcL, box))                 # object moved off channel 0
+            layers_set!(rcL.layers, 2)
+            @test !isempty(raycast(rcL, box))                # object channel 2 is now pickable
 
             # --- recursive flag ---
             grp = Group()
@@ -5180,6 +5241,45 @@ deterministic_bytes(n::Int) =
             @test lamp.target.z ≈ 3.0
         end
 
+        @testset "load_gltf required extensions" begin
+            dir = mktempdir()
+            unsupported = joinpath(dir, "unsupported_required.gltf")
+            write(unsupported, """
+            {"asset":{"version":"2.0"},"scene":0,
+             "extensionsRequired":["KHR_draco_mesh_compression"],
+             "scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":1,"uri":"missing.bin"}]}
+            """)
+            err = try
+                load_gltf(unsupported)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("glTF requires unsupported extension KHR_draco_mesh_compression",
+                           sprint(showerror, err))
+            err_asset = try
+                load_gltf_asset(unsupported)
+                nothing
+            catch e
+                e
+            end
+            @test err_asset isa ErrorException
+            @test occursin("glTF requires unsupported extension KHR_draco_mesh_compression",
+                           sprint(showerror, err_asset))
+
+            supported = joinpath(dir, "supported_required.gltf")
+            write(supported, """
+            {"asset":{"version":"2.0"},"scene":0,
+             "extensionsRequired":["KHR_lights_punctual"],
+             "extensions":{"KHR_lights_punctual":{"lights":[]}},
+             "scenes":[{"nodes":[]}]}
+            """)
+            @test load_gltf(supported) isa Scene
+            @test load_gltf_asset(supported) isa GLTFAsset
+        end
+
         @testset "load_gltf_asset skin binding" begin
             dir = mktempdir()
             bin = UInt8[]
@@ -5213,7 +5313,8 @@ deterministic_bytes(n::Int) =
                {"bufferView":4,"componentType":5126,"count":1,"type":"MAT4"},
                {"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},
                {"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"}],
-             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},
+             "meshes":[{"extras":{"targetNames":["raise"]},
+               "primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},
                                         "targets":[{"POSITION":3}]}]}],
              "skins":[{"joints":[1],"inverseBindMatrices":4}],
              "animations":[{"name":"skin_morph_weights","samplers":[
@@ -5232,6 +5333,7 @@ deterministic_bytes(n::Int) =
             @test sm.skeleton.bones[1] === joint
             @test sm.skin_indices == fill((1,1,1,1), 3)
             @test sm.morph_target_influences ≈ [0.5]
+            @test sm.morph_target_names == ["raise"]
             @test has_attribute(sm.geometry, :morphPosition0)
             @test apply_morph_targets(sm)[1].z ≈ 0.5
             p0 = apply_skinning(sm)
@@ -5315,7 +5417,7 @@ deterministic_bytes(n::Int) =
              "accessors":[
                {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
                {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],
-             "meshes":[{"weights":[0.75],
+             "meshes":[{"weights":[0.75],"extras":{"targetNames":["lift"]},
                "primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1}]}]}]}
             """
             path = joinpath(dir, "morph.gltf")
@@ -5324,6 +5426,7 @@ deterministic_bytes(n::Int) =
             mesh = get_children(get_children(asset.scene)[1])[1]
             @test mesh isa Mesh
             @test mesh.morph_target_influences == [0.25]
+            @test mesh.morph_target_names == ["lift"]
             @test has_attribute(mesh.geometry, :morphPosition0)
             morphed = apply_morph_targets(mesh)
             @test morphed[1].z ≈ 0.25

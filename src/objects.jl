@@ -347,6 +347,10 @@ is_visible(o::SkinnedMesh) = o.visible
 set_parent!(o::SkinnedMesh, p) = (o.parent = p)
 apply_morph_targets(mesh::SkinnedMesh) =
     apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
+apply_morph_normals(mesh::SkinnedMesh) =
+    apply_morph_normals(mesh.geometry, mesh.morph_target_influences)
+apply_morph_tangents(mesh::SkinnedMesh) =
+    apply_morph_tangents(mesh.geometry, mesh.morph_target_influences)
 
 function bind_skeleton!(sm::SkinnedMesh, skeleton::Skeleton,
                         bind_matrix::Union{Nothing,Mat4{Float64}}=nothing;
@@ -408,11 +412,12 @@ end
 
 function _skin_normal_buffer(sm::SkinnedMesh, mats)
     geo = sm.geometry
-    length(geo.normals) >= geo.n_vertices * 3 || return copy(geo.normals)
+    normals = isempty(sm.morph_target_influences) ? geo.normals : apply_morph_normals(sm)
+    length(normals) >= geo.n_vertices * 3 || return copy(normals)
     out = Vector{Float64}(undef, geo.n_vertices * 3)
     @inbounds for vi in 1:geo.n_vertices
         base = 3vi - 2
-        n = Vec3(geo.normals[base], geo.normals[base + 1], geo.normals[base + 2])
+        n = Vec3(normals[base], normals[base + 1], normals[base + 2])
         sn = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], n)
         out[base] = sn.x
         out[base + 1] = sn.y
@@ -421,14 +426,15 @@ function _skin_normal_buffer(sm::SkinnedMesh, mats)
     return out
 end
 
-function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats)
+function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats,
+                                 tangent_data=attr.data)
     geo = sm.geometry
-    attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size ||
-        return copy(attr.data)
-    out = copy(attr.data)
+    attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
+        return copy(tangent_data)
+    out = Float64.(copy(tangent_data))
     @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * attr.item_size + 1
-        t = Vec3(Float64(attr.data[base]), Float64(attr.data[base + 1]), Float64(attr.data[base + 2]))
+        t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))
         st = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], t)
         out[base] = st.x
         out[base + 1] = st.y
@@ -440,7 +446,12 @@ end
 function _copy_skinned_attributes(sm::SkinnedMesh, mats)
     attrs = Dict{Symbol, BufferAttribute}()
     for (name, attr) in sm.geometry.attributes
-        data = name === :tangent ? _skin_tangent_attribute(sm, attr, mats) : copy(attr.data)
+        data = if name === :tangent
+            tangent_data = isempty(sm.morph_target_influences) ? attr.data : apply_morph_tangents(sm)
+            _skin_tangent_attribute(sm, attr, mats, tangent_data)
+        else
+            copy(attr.data)
+        end
         attrs[name] = BufferAttribute(data, attr.item_size)
     end
     return attrs

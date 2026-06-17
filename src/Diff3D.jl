@@ -236,6 +236,7 @@ export
     object_layers,
     sample_texture_linear, sample_texture_auto,
     add_group!, get_groups, clear_groups!, apply_morph_targets,
+    apply_morph_normals, apply_morph_tangents,
     render_sprites!,
 
     # Audit round-2 SCOPED feature completions (2026-05-29)

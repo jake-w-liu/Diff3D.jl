@@ -14,7 +14,7 @@ replacement for three.js `WebGLRenderer`.
 - Core math: vectors, matrices, colors, Euler angles, quaternions, boxes,
   spheres, planes, rays, and common transforms.
 - Scene graph: `Object3D`, `Scene`, `Group`, parent/child traversal,
-  visibility, layer masks, world matrix computation, and reparenting.
+  visibility, persistent layer masks, world matrix computation, and reparenting.
 - Cameras: perspective and orthographic camera projection/view basics.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
@@ -49,12 +49,13 @@ replacement for three.js `WebGLRenderer`.
   scalar `KHR_materials_clearcoat`, `KHR_materials_transmission`,
   `KHR_materials_ior`, `KHR_materials_sheen`, and
   `KHR_materials_iridescence` fields and texture references plus
-  `KHR_materials_specular` mapped into `MeshPhysicalMaterial`,
+  `KHR_materials_specular` mapped into `MeshPhysicalMaterial`, required glTF
+  extension validation for supported loader extensions,
   and translation/rotation/scale animation tracks including `CUBICSPLINE`,
   linear/step/`CUBICSPLINE` morph-weight animation tracks, cameras, `KHR_lights_punctual`
   directional/point/spot lights, and basic skinned-mesh binding to Diff3D.jl
-  `Bone`/`Skeleton`/`SkinnedMesh` objects, and CPU-side morph target position
-  evaluation.
+  `Bone`/`Skeleton`/`SkinnedMesh` objects, CPU-side morph target
+  position/normal/tangent evaluation, and glTF morph target names.
 - Export/demo: standalone WebGL HTML export for meshes, instancing, points,
   lines, line loops, camera-facing textured sprite quads, material color, albedo, alpha, emissive,
   AO/light maps using exported secondary `uv2` coordinates when present,
@@ -93,9 +94,10 @@ replacement for three.js `WebGLRenderer`.
   quaternion results after Hermite interpolation. It also instantiates glTF
   perspective/orthographic cameras and `KHR_lights_punctual`
   directional/point/spot lights. Basic skins are bound to `SkinnedMesh` with
-  inverse bind matrices for CPU `apply_skinning`. Morph target position deltas
-  are parsed and evaluable on CPU via `apply_morph_targets`, with normal/tangent
-  target data preserved as geometry attributes. glTF morph-weight animation
+  inverse bind matrices for CPU `apply_skinning`. Morph target position, normal,
+  and tangent deltas are parsed and evaluable on CPU via `apply_morph_targets`,
+  `apply_morph_normals`, and `apply_morph_tangents`, with glTF target names
+  preserved when present in `mesh.extras.targetNames`. glTF morph-weight animation
   channels using linear/step interpolation bind to CPU `MorphWeightsKeyframeTrack`
   playback and can export to browser vertex-buffer morph playback. Scalar
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
@@ -326,12 +328,15 @@ Parallel audits split the remaining work into five critical tracks:
   `bindMatrixInverse * boneMatrix * bindMatrix`, and glTF skins without
   `inverseBindMatrices` calculate inverse binds after the node hierarchy is
   fully parented. Remaining skinning gaps are full three.js skeleton pose/update
-  lifecycle, `skin.skeleton` root semantics, and morph normal/tangent skinning.
+  lifecycle and `skin.skeleton` root semantics.
 - Done: route visible `SkinnedMesh` objects through CPU flat, smooth,
   transparent, wireframe, cached, tiled, and shadow-depth rendering by building
   deformed render proxies from the current skeleton pose. CPU render proxies
   skin positions and authored normals/tangents while preserving material,
   shadow, UV, color, and draw-group data.
+- Done: evaluate morph normal/tangent deltas for meshes and skinned meshes,
+  normalize the resulting direction buffers, and feed them into CPU skinned
+  render proxies plus compact browser morph and CPU-skinning fallback paths.
 - Done: add case-level browser tone mapping metadata and shader application for
   `:none`, `:linear`, `:reinhard`, and `:aces` with exposure. This closes the
   compact runtime's missing tone-map hook while full three.js
@@ -482,8 +487,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse and instantiate glTF cameras and `KHR_lights_punctual`
   directional/point/spot lights.
 - Done: bind glTF skins to `Bone`/`Skeleton`/`SkinnedMesh` for CPU skinning.
-- Done: parse glTF morph target `POSITION`/`NORMAL`/`TANGENT` data and evaluate
-  position morphs on CPU from mesh influences.
+- Done: parse glTF morph target `POSITION`/`NORMAL`/`TANGENT` data, preserve
+  `mesh.extras.targetNames`, and evaluate position, normal, and tangent morphs
+  on CPU from mesh influences.
+- Done: reject unsupported `extensionsRequired` entries before reading external
+  buffers, while allowing required extensions covered by the current loader.
 - Done: parse glTF `weights` animation channels into CPU morph-weight tracks for
   linear, step, and `CUBICSPLINE` interpolation.
 - Done: export morph-weight tracks to browser vertex-buffer morph playback.
