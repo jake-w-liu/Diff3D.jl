@@ -873,6 +873,87 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                          ao_map_intensity=ao_strength)
 end
 
+_gltf_material_color(mat) =
+    hasproperty(mat, :color) ? getproperty(mat, :color) : Color3(1.0, 1.0, 1.0)
+_gltf_material_opacity(mat) =
+    hasproperty(mat, :opacity) ? Float64(getproperty(mat, :opacity)) : 1.0
+_gltf_material_transparent(mat) =
+    hasproperty(mat, :transparent) ? Bool(getproperty(mat, :transparent)) :
+    _gltf_material_opacity(mat) < 1.0
+_gltf_material_depth_test(mat) =
+    hasproperty(mat, :depth_test) ? Bool(getproperty(mat, :depth_test)) : true
+_gltf_material_depth_write(mat) =
+    hasproperty(mat, :depth_write) ? Bool(getproperty(mat, :depth_write)) : true
+
+function _gltf_line_material(mat)
+    LineBasicMaterial(color=_gltf_material_color(mat),
+                      opacity=_gltf_material_opacity(mat),
+                      depth_test=_gltf_material_depth_test(mat),
+                      depth_write=_gltf_material_depth_write(mat))
+end
+
+function _gltf_points_material(mat)
+    PointsMaterial(color=_gltf_material_color(mat),
+                   opacity=_gltf_material_opacity(mat),
+                   transparent=_gltf_material_transparent(mat),
+                   depth_test=_gltf_material_depth_test(mat),
+                   depth_write=_gltf_material_depth_write(mat))
+end
+
+function _gltf_triangulate_indices(order::Vector{Int}, mode::Int)
+    out = Int[]
+    length(order) < 3 && return out
+    if mode == 5
+        sizehint!(out, 3 * (length(order) - 2))
+        for i in 1:(length(order) - 2)
+            a, b, c = order[i], order[i + 1], order[i + 2]
+            isodd(i) ? append!(out, (a, b, c)) : append!(out, (c, b, a))
+        end
+    elseif mode == 6
+        sizehint!(out, 3 * (length(order) - 2))
+        first_index = order[1]
+        for i in 2:(length(order) - 1)
+            append!(out, (first_index, order[i], order[i + 1]))
+        end
+    else
+        error("glTF primitive mode $mode is not a triangle strip or fan")
+    end
+    return out
+end
+
+function _gltf_expand_attribute(data::AbstractVector, item_size::Int,
+                                order::Vector{Int}, nverts::Int, label::String)
+    item_size > 0 || error("$label item_size must be positive")
+    length(data) >= nverts * item_size ||
+        error("$label count does not match POSITION")
+    out = Vector{eltype(data)}(undef, length(order) * item_size)
+    @inbounds for (oi, vi) in enumerate(order)
+        1 <= vi <= nverts || error("glTF primitive index $(vi - 1) out of bounds")
+        dst = (oi - 1) * item_size + 1
+        src = (vi - 1) * item_size + 1
+        for j in 0:(item_size - 1)
+            out[dst + j] = data[src + j]
+        end
+    end
+    return out
+end
+
+function _gltf_expand_nontriangle_geometry(geo::BufferGeometry, order::Vector{Int})
+    nverts = geo.n_vertices
+    positions = _gltf_expand_attribute(geo.positions, 3, order, nverts, "glTF POSITION")
+    normals = isempty(geo.normals) ? Float64[] :
+              _gltf_expand_attribute(geo.normals, 3, order, nverts, "glTF NORMAL")
+    uvs = isempty(geo.uvs) ? Float64[] :
+          _gltf_expand_attribute(geo.uvs, 2, order, nverts, "glTF TEXCOORD_0")
+    attrs = Dict{Symbol, BufferAttribute}()
+    for (name, attr) in geo.attributes
+        attrs[name] = BufferAttribute(
+            _gltf_expand_attribute(attr.data, attr.item_size, order, nverts, String(name)),
+            attr.item_size)
+    end
+    return BufferGeometry(positions, normals, uvs, Int[], length(order), 0, attrs)
+end
+
 function _gltf_node_matrix(node)
     if haskey(node, "matrix")
         m = node["matrix"]
@@ -1067,6 +1148,13 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
                              morph_names=String[])
+        mode = Int(get(prim, "mode", 4))
+        0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
+        skin_idx === nothing || mode in (4, 5, 6) ||
+            error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
+        (mode in (0, 1, 2, 3) &&
+         (!isempty(get(prim, "targets", Any[])) || !isempty(morph_weights))) &&
+            error("glTF primitive mode $mode morph targets are not supported")
         attrs = prim["attributes"]
         pos, _, nverts = _gltf_accessor(gltf, buffers, Int(attrs["POSITION"]))
         normals = Float64[]
@@ -1084,7 +1172,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         else
             indices = collect(1:nverts)
         end
-        geo = BufferGeometry(pos, normals, uvs, indices, nverts, length(indices) ÷ 3)
+        tri_indices = mode == 5 || mode == 6 ? _gltf_triangulate_indices(indices, mode) : indices
+        geo_indices = mode in (0, 1, 2, 3) ? Int[] : tri_indices
+        geo = BufferGeometry(pos, normals, uvs, geo_indices, nverts,
+                             mode in (0, 1, 2, 3) ? 0 : length(geo_indices) ÷ 3)
         for (gltf_name, local_name) in (
             ("TEXCOORD_1", :uv2),
             ("COLOR_0", :color),
@@ -1109,8 +1200,16 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 set_attribute!(geo, Symbol(local_prefix * string(ti - 1)), data, item_size)
             end
         end
-        isempty(normals) && compute_vertex_normals!(geo)
+        if mode in (0, 1, 2, 3)
+            geo = _gltf_expand_nontriangle_geometry(geo, indices)
+        elseif isempty(normals)
+            compute_vertex_normals!(geo)
+        end
         mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
+        mode == 0 && return PointsObject(geo, _gltf_points_material(mat))
+        mode == 1 && return LineSegments(geo, _gltf_line_material(mat))
+        mode == 2 && return LineLoop(geo, _gltf_line_material(mat))
+        mode == 3 && return LineObject(geo, _gltf_line_material(mat))
         if skin_idx === nothing
             return Mesh(geo, mat; morph_target_influences=morph_weights,
                         morph_target_names=morph_names)

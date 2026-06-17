@@ -41,7 +41,9 @@ replacement for three.js `WebGLRenderer`.
 - Loaders: OBJ, STL, PLY, PNG texture loading, and partial glTF/GLB asset
   parsing including meshes, signed/normalized/sparse accessors, and
   core geometry attributes (`TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`, `TANGENT`,
-  `JOINTS_0`, `WEIGHTS_0`), glTF material texture binding for common PBR maps
+  `JOINTS_0`, `WEIGHTS_0`), glTF primitive modes for points, lines, line loops,
+  line strips, triangles, triangle strips, and triangle fans, glTF material
+  texture binding for common PBR maps
   with per-texture `textureInfo.texCoord` UV-set metadata and
   `KHR_texture_transform` offset/scale/rotation metadata for CPU and compact
   browser paths with per-sampler transform uniforms,
@@ -88,7 +90,9 @@ replacement for three.js `WebGLRenderer`.
   uniform/float bone-texture skinning plus attached/detached bind matrices,
   PMREM/prefiltered environment lighting, and most material
   shader variants.
-- glTF support parses common mesh and transform animation data and now decodes
+- glTF support parses common mesh and transform animation data, maps point,
+  line, loop, strip, triangle, triangle-strip, and triangle-fan primitive modes
+  to native objects or indexed triangle meshes, and now decodes
   signed, normalized, sparse, and interleaved accessors. It also evaluates
   `CUBICSPLINE` transform animation with explicit glTF tangents, normalizing
   quaternion results after Hermite interpolation. It also instantiates glTF
@@ -463,6 +467,10 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Done: implement normalized, signed, sparse, and interleaved accessors before
   adding new loader surface area.
+- Done: honor glTF primitive `mode` for points, line segments, line loops, line
+  strips, triangles, triangle strips, and triangle fans. Indexed point/line
+  primitives expand into CPU renderer order, and strip/fan modes triangulate
+  into ordinary indexed meshes.
 - Done: load core geometry attributes: `TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`,
   `TANGENT`, `JOINTS_0`, and `WEIGHTS_0`.
 - Done: add glTF material texture loading and common PBR texture binding

@@ -5280,6 +5280,79 @@ deterministic_bytes(n::Int) =
             @test load_gltf_asset(supported) isa GLTFAsset
         end
 
+        @testset "load_gltf primitive modes" begin
+            function primitive_mode_path(mode::Int, order::Vector{Int}; name="mode_$mode")
+                dir = mktempdir()
+                bin = UInt8[]
+                append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+                append_u16!(xs) = append!(bin, reinterpret(UInt8, UInt16.(xs)))
+                off_pos = length(bin)
+                append_f32!([0,0,0, 1,0,0, 0,1,0, 1,1,0])
+                off_idx = length(bin)
+                append_u16!(order)
+                write(joinpath(dir, "primitive_mode.bin"), bin)
+                json = """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                 "nodes":[{"name":"$name","mesh":0}],
+                 "buffers":[{"byteLength":$(length(bin)),"uri":"primitive_mode.bin"}],
+                 "bufferViews":[
+                   {"buffer":0,"byteOffset":$off_pos,"byteLength":48},
+                   {"buffer":0,"byteOffset":$off_idx,"byteLength":$(2 * length(order))}],
+                 "accessors":[
+                   {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},
+                   {"bufferView":1,"componentType":5123,"count":$(length(order)),"type":"SCALAR"}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":0},
+                                            "indices":1,"mode":$mode}]}]}
+                """
+                path = joinpath(dir, "primitive_mode.gltf")
+                write(path, json)
+                return path
+            end
+            mode_object(mode, order) =
+                get_children(get_children(load_gltf_asset(primitive_mode_path(mode, order)).scene)[1])[1]
+
+            pts_obj = mode_object(0, [2, 0])
+            @test pts_obj isa PointsObject
+            @test pts_obj.material isa PointsMaterial
+            @test pts_obj.geometry.n_vertices == 2
+            @test isempty(pts_obj.geometry.indices)
+            @test get_vertex(pts_obj.geometry, 1) == Vec3(0.0, 1.0, 0.0)
+            @test get_vertex(pts_obj.geometry, 2) == Vec3(0.0, 0.0, 0.0)
+
+            line_segments_obj = mode_object(1, [0, 1, 2, 3])
+            @test line_segments_obj isa LineSegments
+            @test line_segments_obj.material isa LineBasicMaterial
+            @test line_segments_obj.geometry.n_vertices == 4
+            @test isempty(line_segments_obj.geometry.indices)
+
+            line_loop_obj = mode_object(2, [0, 1, 3])
+            @test line_loop_obj isa LineLoop
+            @test line_loop_obj.geometry.n_vertices == 3
+            @test get_vertex(line_loop_obj.geometry, 3) == Vec3(1.0, 1.0, 0.0)
+
+            line_strip_obj = mode_object(3, [0, 1, 3])
+            @test line_strip_obj isa LineObject
+            @test line_strip_obj.geometry.n_vertices == 3
+            @test get_vertex(line_strip_obj.geometry, 3) == Vec3(1.0, 1.0, 0.0)
+
+            tri_obj = mode_object(4, [0, 1, 2])
+            @test tri_obj isa Mesh
+            @test tri_obj.geometry.indices == [1, 2, 3]
+            @test tri_obj.geometry.n_faces == 1
+
+            strip_obj = mode_object(5, [0, 1, 2, 3])
+            @test strip_obj isa Mesh
+            @test strip_obj.geometry.indices == [1, 2, 3, 4, 3, 2]
+            @test strip_obj.geometry.n_faces == 2
+
+            fan_obj = mode_object(6, [0, 1, 2, 3])
+            @test fan_obj isa Mesh
+            @test fan_obj.geometry.indices == [1, 2, 3, 1, 3, 4]
+            @test fan_obj.geometry.n_faces == 2
+
+            @test_throws ErrorException load_gltf_asset(primitive_mode_path(7, [0, 1, 2]))
+        end
+
         @testset "load_gltf_asset skin binding" begin
             dir = mktempdir()
             bin = UInt8[]
