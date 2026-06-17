@@ -59,6 +59,12 @@ The repository also includes a browser smoke test for generated WebGL output:
 python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
 ```
 
+To verify every non-planned entry in `examples/examples_registry.toml`, run:
+
+```powershell
+python examples/verify_examples_registry.py
+```
+
 The gallery-style example includes an animated robot, material turntable,
 instancing scene, particle scene, and runtime playback controls:
 

@@ -42,6 +42,13 @@ deterministic_bytes(n::Int) =
         registry_path = joinpath(@__DIR__, "..", "examples", "examples_registry.toml")
         registry = TOML.parsefile(registry_path)
         @test registry["schema_version"] == 1
+        verifier_path = joinpath(@__DIR__, "..", "examples", "verify_examples_registry.py")
+        @test isfile(verifier_path)
+        verifier_source = read(verifier_path, String)
+        @test occursin("tomllib.load", verifier_source)
+        @test occursin("examples_registry.toml", verifier_source)
+        @test occursin("examples/browser_webgl_smoke.py", verifier_source)
+        @test occursin("REGISTRY_VERIFICATION_OK", verifier_source)
         examples = registry["examples"]
         expected_ids = Set([
             "threejs_webgl_geometries",

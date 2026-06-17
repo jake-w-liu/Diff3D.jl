@@ -128,6 +128,12 @@ The example parity registry is maintained in
 `examples/examples_registry.toml`. Generated HTML outputs live under
 `examples/output/` and are ignored by git.
 
+Run the full registered example generation and browser-smoke sweep:
+
+```powershell
+python examples/verify_examples_registry.py
+```
+
 ## Verification
 
 Run the Julia test suite:
@@ -146,4 +152,10 @@ Run the browser smoke test for a generated HTML export:
 
 ```powershell
 python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
+```
+
+Run browser verification for every non-planned parity registry entry:
+
+```powershell
+python examples/verify_examples_registry.py
 ```

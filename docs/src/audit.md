@@ -21,6 +21,12 @@ release.
   python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
   ```
 
+- Regenerate and smoke-test every non-planned parity registry entry:
+
+  ```powershell
+  python examples/verify_examples_registry.py
+  ```
+
 ## Industrial Readiness Notes
 
 - Runtime dependencies should stay limited to packages needed by `src/`.
