@@ -14,6 +14,7 @@ struct MeshBasicMaterial <: AbstractMaterial
     wireframe::Bool
     side::Symbol  # :front, :back, :double
     map::Any      # optional albedo Texture
+    alpha_map::Any
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     alpha_test::Float64
     depth_test::Bool
@@ -22,9 +23,9 @@ end
 
 function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                            transparent=false, wireframe=false, side=:front, map=nothing,
-                           vertex_colors=false, alpha_test=0.0,
+                           alpha_map=nothing, vertex_colors=false, alpha_test=0.0,
                            depth_test=true, depth_write=true)
-    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, vertex_colors,
+    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map, vertex_colors,
                       Float64(alpha_test), depth_test, depth_write)
 end
 

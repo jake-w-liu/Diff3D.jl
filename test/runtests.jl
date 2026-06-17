@@ -636,6 +636,14 @@ deterministic_bytes(n::Int) =
                             name="export_alpha_map")
         alpha_mapped.position = Vec3(-1.5, 0.0, 0.0)
         add!(scene, alpha_mapped)
+        basic_alpha_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                  MeshBasicMaterial(color=Color3(0.9, 0.2, 0.2),
+                                                    alpha_map=Texture(alphadata; filter=:nearest),
+                                                    alpha_test=0.4,
+                                                    side=:double);
+                                  name="export_basic_alpha_map")
+        basic_alpha_mapped.position = Vec3(-1.5, -0.8, 0.0)
+        add!(scene, basic_alpha_mapped)
         wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
                               MeshBasicMaterial(color=Color3(1.0, 0.3, 0.1),
                                                 wireframe=true);
@@ -1024,6 +1032,9 @@ deterministic_bytes(n::Int) =
         @test occursin("uShininess", html)
         @test occursin("o.materialType===\"phong\"?7", html)
         @test occursin("\"name\":\"export_alpha_map\"", html)
+        @test occursin("\"name\":\"export_basic_alpha_map\"", html)
+        @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"materialType\":\"basic\".*\"alphaTest\":0\.40000000000000002", html)
+        @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_emissive_map\"", html)
@@ -2357,6 +2368,8 @@ deterministic_bytes(n::Int) =
         @test material_depth_test(MeshBasicMaterial(depth_test=false)) == false
         @test material_depth_write(MeshBasicMaterial(depth_write=false)) == false
         @test material_alpha_test(MeshBasicMaterial(alpha_test=0.35)) ≈ 0.35
+        alpha_tex = Texture(ones(Float64, 1, 1, 3); filter=:nearest)
+        @test MeshBasicMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
         @test material_depth_write(SpriteMaterial(depth_write=false)) == false
@@ -6288,16 +6301,21 @@ deterministic_bytes(n::Int) =
             alpha_zero[:, :, 2] .= 0.0
             alpha_one = ones(Float64, 2, 2, 3)
 
-            function alpha_map_plane(data; smooth=false)
+            function alpha_map_plane(data; smooth=false, basic=false)
                 sc = Scene()
                 add!(sc, AmbientLight(intensity=1.0))
-                mesh = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                mat = basic ?
+                    MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                      side=:double, alpha_test=0.5,
+                                      alpha_map=Texture(data; filter=:nearest,
+                                                        colorspace=:linear)) :
                     MeshStandardMaterial(color=Color3(1.0, 0.0, 0.0),
                                          roughness=1.0, metalness=0.0,
                                          side=:double, alpha_test=0.5,
                                          alpha_map=Texture(data; filter=:nearest,
-                                                           colorspace=:linear));
-                    flat_shading=smooth ? false : nothing)
+                                                           colorspace=:linear))
+                mesh = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                            mat; flat_shading=smooth ? false : nothing)
                 add!(sc, mesh)
                 rt = RenderTarget(32, 32)
                 render!(rt, sc, depth_cam; shading=smooth ? :smooth : :flat)
@@ -6310,6 +6328,12 @@ deterministic_bytes(n::Int) =
             @test rt_alpha_one.color[16, 16, 1] > 0.1
             rt_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true)
             @test sum(@view rt_alpha_zero_smooth.color[16, 16, :]) == 0.0
+            rt_basic_alpha_zero = alpha_map_plane(alpha_zero; basic=true)
+            @test sum(@view rt_basic_alpha_zero.color[16, 16, :]) == 0.0
+            rt_basic_alpha_one = alpha_map_plane(alpha_one; basic=true)
+            @test rt_basic_alpha_one.color[16, 16, 1] > 0.9
+            rt_basic_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true, basic=true)
+            @test sum(@view rt_basic_alpha_zero_smooth.color[16, 16, :]) == 0.0
         end
 
         @testset "shading" begin

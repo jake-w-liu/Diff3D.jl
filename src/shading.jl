@@ -239,7 +239,8 @@ end
 function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
     MeshBasicMaterial(color=_modulate(m.color, vc), opacity=m.opacity,
                       transparent=m.transparent, wireframe=m.wireframe,
-                      side=m.side, map=m.map, vertex_colors=m.vertex_colors,
+                      side=m.side, map=m.map, alpha_map=m.alpha_map,
+                      vertex_colors=m.vertex_colors,
                       alpha_test=m.alpha_test, depth_test=m.depth_test,
                       depth_write=m.depth_write)
 end
