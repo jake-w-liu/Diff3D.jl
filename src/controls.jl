@@ -370,6 +370,33 @@ end
 
 abstract type AbstractKeyframeTrack end
 
+function _validate_keyframe_times(kind::AbstractString, times::Vector{Float64})
+    isempty(times) && throw(ArgumentError("$kind requires at least one keyframe"))
+    for i in 2:length(times)
+        times[i] > times[i - 1] ||
+            throw(ArgumentError("$kind times must be strictly increasing"))
+    end
+    return nothing
+end
+
+function _validate_keyframe_values(kind::AbstractString, times::Vector{Float64}, values::AbstractVector)
+    length(times) == length(values) ||
+        throw(ArgumentError("$kind times and values must have the same length"))
+    _validate_keyframe_times(kind, times)
+    return nothing
+end
+
+function _validate_morph_value_widths(kind::AbstractString, values::Vector{Vector{Float64}})
+    isempty(values) && return nothing
+    width = length(values[1])
+    width > 0 || throw(ArgumentError("$kind morph-weight keyframes must not be empty"))
+    for v in values
+        length(v) == width ||
+            throw(ArgumentError("$kind morph-weight keyframes must have matching lengths"))
+    end
+    return nothing
+end
+
 # Scalar/Vec3 property track. `interpolation` selects the sampling mode:
 #   :linear (default) — piecewise linear, byte-identical to the original path.
 #   :step             — hold the previous keyframe value until the next key.
@@ -380,6 +407,15 @@ struct KeyframeTrack <: AbstractKeyframeTrack
     times::Vector{Float64}
     values::Vector{Vec3{Float64}}
     interpolation::Symbol            # :linear | :step | :cubic
+
+    function KeyframeTrack(target::AbstractObject3D, property::Symbol,
+                           times::Vector{Float64}, values::Vector{Vec3{Float64}},
+                           interpolation::Symbol)
+        interpolation in (:linear, :step, :cubic) ||
+            throw(ArgumentError("unsupported keyframe interpolation: $interpolation"))
+        _validate_keyframe_values("KeyframeTrack", times, values)
+        new(target, property, times, values, interpolation)
+    end
 end
 
 struct NumberKeyframeTrack <: AbstractKeyframeTrack
@@ -389,6 +425,16 @@ struct NumberKeyframeTrack <: AbstractKeyframeTrack
     times::Vector{Float64}
     values::Vector{Float64}
     interpolation::Symbol             # :linear | :step | :cubic
+
+    function NumberKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                 component::Int, times::Vector{Float64},
+                                 values::Vector{Float64}, interpolation::Symbol)
+        interpolation in (:linear, :step, :cubic) ||
+            throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
+        component >= 0 || throw(ArgumentError("animation component index must be non-negative"))
+        _validate_keyframe_values("NumberKeyframeTrack", times, values)
+        new(target, property, component, times, values, interpolation)
+    end
 end
 
 function _animation_component_index(s::AbstractString)
@@ -467,14 +513,31 @@ function NumberKeyframeTrack(target::AbstractObject3D, property_path::AbstractSt
 end
 
 # Dedicated rotation track: quaternion keyframes interpolated with slerp between
-# adjacent frames (three.js `QuaternionKeyframeTrack`), rather than componentwise
-# linear blending which would not stay on the unit sphere.
+# adjacent frames by default (three.js `QuaternionKeyframeTrack`). `:step`
+# holds the previous keyframe for glTF STEP interpolation.
 struct QuaternionKeyframeTrack <: AbstractKeyframeTrack
     target::AbstractObject3D
     property::Symbol                          # e.g. :quaternion
     times::Vector{Float64}
     values::Vector{Quaternion{Float64}}
+    interpolation::Symbol                     # :slerp | :step
+
+    function QuaternionKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                     times::Vector{Float64},
+                                     values::Vector{Quaternion{Float64}},
+                                     interpolation::Symbol)
+        interpolation in (:slerp, :step) ||
+            throw(ArgumentError("unsupported quaternion keyframe interpolation: $interpolation"))
+        _validate_keyframe_values("QuaternionKeyframeTrack", times, values)
+        new(target, property, times, values, interpolation)
+    end
 end
+
+QuaternionKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                        times::Vector{Float64},
+                        values::Vector{Quaternion{Float64}};
+                        interpolation::Symbol=:slerp) =
+    QuaternionKeyframeTrack(target, property, times, values, interpolation)
 
 struct MorphWeightsKeyframeTrack <: AbstractKeyframeTrack
     target::AbstractObject3D
@@ -482,6 +545,17 @@ struct MorphWeightsKeyframeTrack <: AbstractKeyframeTrack
     times::Vector{Float64}
     values::Vector{Vector{Float64}}
     interpolation::Symbol
+
+    function MorphWeightsKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                       times::Vector{Float64},
+                                       values::Vector{Vector{Float64}},
+                                       interpolation::Symbol)
+        interpolation in (:linear, :step) ||
+            throw(ArgumentError("unsupported morph-weight interpolation: $interpolation"))
+        _validate_keyframe_values("MorphWeightsKeyframeTrack", times, values)
+        _validate_morph_value_widths("MorphWeightsKeyframeTrack", values)
+        new(target, property, times, values, interpolation)
+    end
 end
 
 function MorphWeightsKeyframeTrack(target::AbstractObject3D, property::Symbol,
@@ -502,6 +576,18 @@ struct CubicSplineKeyframeTrack <: AbstractKeyframeTrack
     values::Vector{Vec3{Float64}}
     in_tangents::Vector{Vec3{Float64}}
     out_tangents::Vector{Vec3{Float64}}
+
+    function CubicSplineKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                      times::Vector{Float64}, values::Vector{Vec3{Float64}},
+                                      in_tangents::Vector{Vec3{Float64}},
+                                      out_tangents::Vector{Vec3{Float64}})
+        _validate_keyframe_values("CubicSplineKeyframeTrack", times, values)
+        length(in_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineKeyframeTrack in_tangents length must match times"))
+        length(out_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineKeyframeTrack out_tangents length must match times"))
+        new(target, property, times, values, in_tangents, out_tangents)
+    end
 end
 
 struct CubicSplineQuaternionKeyframeTrack <: AbstractKeyframeTrack
@@ -511,6 +597,19 @@ struct CubicSplineQuaternionKeyframeTrack <: AbstractKeyframeTrack
     values::Vector{Quaternion{Float64}}
     in_tangents::Vector{Quaternion{Float64}}
     out_tangents::Vector{Quaternion{Float64}}
+
+    function CubicSplineQuaternionKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                                times::Vector{Float64},
+                                                values::Vector{Quaternion{Float64}},
+                                                in_tangents::Vector{Quaternion{Float64}},
+                                                out_tangents::Vector{Quaternion{Float64}})
+        _validate_keyframe_values("CubicSplineQuaternionKeyframeTrack", times, values)
+        length(in_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineQuaternionKeyframeTrack in_tangents length must match times"))
+        length(out_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineQuaternionKeyframeTrack out_tangents length must match times"))
+        new(target, property, times, values, in_tangents, out_tangents)
+    end
 end
 
 struct CubicSplineMorphWeightsKeyframeTrack <: AbstractKeyframeTrack
@@ -520,6 +619,22 @@ struct CubicSplineMorphWeightsKeyframeTrack <: AbstractKeyframeTrack
     values::Vector{Vector{Float64}}
     in_tangents::Vector{Vector{Float64}}
     out_tangents::Vector{Vector{Float64}}
+
+    function CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D, property::Symbol,
+                                                  times::Vector{Float64},
+                                                  values::Vector{Vector{Float64}},
+                                                  in_tangents::Vector{Vector{Float64}},
+                                                  out_tangents::Vector{Vector{Float64}})
+        _validate_keyframe_values("CubicSplineMorphWeightsKeyframeTrack", times, values)
+        length(in_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineMorphWeightsKeyframeTrack in_tangents length must match times"))
+        length(out_tangents) == length(times) ||
+            throw(ArgumentError("CubicSplineMorphWeightsKeyframeTrack out_tangents length must match times"))
+        _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", values)
+        _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", in_tangents)
+        _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", out_tangents)
+        new(target, property, times, values, in_tangents, out_tangents)
+    end
 end
 
 # Catmull-Rom spline tangent: derivative estimated from the neighbouring
@@ -658,10 +773,12 @@ end
 function _track_value(tr::QuaternionKeyframeTrack, t)
     times = tr.times; values = tr.values
     n = length(times)
+    n == 0 && error("cannot sample an empty QuaternionKeyframeTrack")
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
     hi = searchsortedfirst(times, t)
     lo = hi - 1
+    tr.interpolation === :step && return values[lo]
     α = (t - times[lo]) / (times[hi] - times[lo])
     return quat_slerp(values[lo], values[hi], α)
 end

@@ -308,15 +308,20 @@ mutable struct SkinnedMesh <: AbstractObject3D
     skeleton::Skeleton
     skin_indices::Vector{NTuple{4,Int}}     # bone indices per vertex (1-based)
     skin_weights::Vector{NTuple{4,Float64}} # blend weights per vertex
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
 function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      skin_indices, skin_weights; name="SkinnedMesh",
-                     cast_shadow::Bool=false, receive_shadow::Bool=false)
+                     cast_shadow::Bool=false, receive_shadow::Bool=false,
+                     morph_target_influences=Float64[], morph_target_names=String[])
     SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                 true, name, _next_id(), geometry, material,
                 cast_shadow, receive_shadow, skeleton,
-                skin_indices, skin_weights)
+                skin_indices, skin_weights,
+                collect(Float64, morph_target_influences),
+                collect(String, morph_target_names))
 end
 
 get_position(o::SkinnedMesh) = o.position
@@ -326,6 +331,8 @@ get_children(o::SkinnedMesh) = o.children
 get_parent(o::SkinnedMesh) = o.parent
 is_visible(o::SkinnedMesh) = o.visible
 set_parent!(o::SkinnedMesh, p) = (o.parent = p)
+apply_morph_targets(mesh::SkinnedMesh) =
+    apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
 
 """
 Linear blend skinning: deform each geometry vertex by the weighted sum of its
@@ -334,9 +341,10 @@ bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 function apply_skinning(sm::SkinnedMesh)
     mats = skeleton_matrices(sm.skeleton)
     geo = sm.geometry
+    morphed = !isempty(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     @inbounds for vi in 1:geo.n_vertices
-        p = get_vertex(geo, vi)
+        p = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
         idx = sm.skin_indices[vi]; w = sm.skin_weights[vi]
         acc = Vec3(0.0, 0.0, 0.0)
         for k in 1:4

@@ -161,6 +161,7 @@ export
     SpriteMaterial,
     LineBasicMaterial, PointsMaterial, ShaderMaterial,
     material_opacity, material_transparent, is_transparent_material,
+    material_depth_test, material_depth_write, material_alpha_test, material_wireframe,
 
     # Lights
     AbstractLight, AmbientLight, DirectionalLight, PointLight,

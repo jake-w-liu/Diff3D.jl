@@ -206,7 +206,7 @@ end
 """
     load_png(path) -> Array{Float64,3}
 
-Decode an 8-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [0,1].
+Decode an 8-bit or 16-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [0,1].
 Implements full INFLATE (stored/fixed/dynamic Huffman) and all five PNG filters.
 """
 function _decode_png(bytes::Vector{UInt8})
@@ -432,18 +432,75 @@ function _json_array(p)
     return a
 end
 
+function _json_hex_value(c)
+    '0' <= c <= '9' && return Int(c - '0')
+    'a' <= c <= 'f' && return Int(c - 'a') + 10
+    'A' <= c <= 'F' && return Int(c - 'A') + 10
+    error("invalid JSON unicode escape")
+end
+
+function _json_hex4!(p)
+    n = ncodeunits(p.s)
+    p.i + 3 <= n || error("incomplete JSON unicode escape")
+    v = 0
+    for _ in 1:4
+        v = (v << 4) | _json_hex_value(p.s[p.i])
+        p.i += 1
+    end
+    return v
+end
+
 function _json_string(p)
     p.i += 1; io = IOBuffer()
-    while p.s[p.i] != '"'
+    n = ncodeunits(p.s)
+    while p.i <= n && p.s[p.i] != '"'
         c = p.s[p.i]
         if c == '\\'
-            p.i += 1; e = p.s[p.i]
-            print(io, e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e)
+            p.i += 1
+            p.i <= n || error("unterminated JSON escape")
+            e = p.s[p.i]
+            if e == 'u'
+                p.i += 1
+                cp = _json_hex4!(p)
+                if 0xD800 <= cp <= 0xDBFF
+                    (p.i + 1 <= n && p.s[p.i] == '\\' && p.s[p.i + 1] == 'u') ||
+                        error("JSON unicode high surrogate without low surrogate")
+                    p.i += 2
+                    lo = _json_hex4!(p)
+                    0xDC00 <= lo <= 0xDFFF ||
+                        error("JSON unicode high surrogate without low surrogate")
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                elseif 0xDC00 <= cp <= 0xDFFF
+                    error("JSON unicode low surrogate without high surrogate")
+                end
+                print(io, Char(cp))
+                continue
+            elseif e == '"'
+                print(io, '"')
+            elseif e == '\\'
+                print(io, '\\')
+            elseif e == '/'
+                print(io, '/')
+            elseif e == 'b'
+                print(io, '\b')
+            elseif e == 'f'
+                print(io, '\f')
+            elseif e == 'n'
+                print(io, '\n')
+            elseif e == 'r'
+                print(io, '\r')
+            elseif e == 't'
+                print(io, '\t')
+            else
+                error("unsupported JSON escape: \\$e")
+            end
+            p.i += 1
         else
             print(io, c)
+            p.i = nextind(p.s, p.i)             # skip full (possibly multibyte) char
         end
-        p.i = nextind(p.s, p.i)                 # skip full (possibly multibyte) char
     end
+    p.i <= n || error("unterminated JSON string")
     p.i += 1
     return String(take!(io))
 end
@@ -486,13 +543,25 @@ end
 
 function _gltf_read_buffer(buf::Dict, dir::String)
     uri = get(buf, "uri", nothing)
-    uri === nothing && error("glTF buffer without uri (GLB not supported)")
-    if startswith(uri, "data:")
-        return base64_decode(split(uri, ",", limit=2)[2])
+    uri === nothing && error("glTF buffer without uri; use load_glb for binary .glb containers")
+    data = if startswith(uri, "data:")
+        base64_decode(split(uri, ",", limit=2)[2])
     else
-        return read(joinpath(dir, uri))
+        read(joinpath(dir, uri))
     end
+    return _gltf_trim_declared_buffer(buf, data, "glTF buffer")
 end
+
+function _gltf_trim_declared_buffer(buf::Dict, data::Vector{UInt8}, label::String)
+    declared = get(buf, "byteLength", length(data))
+    expected = Int(declared)
+    expected >= 0 || error("$label byteLength must be non-negative")
+    length(data) >= expected ||
+        error("$label byteLength $expected exceeds available bytes $(length(data))")
+    return data[1:expected]
+end
+
+_gltf_document_buffers(gltf) = get(gltf, "buffers", Any[])
 
 # Read accessor `ai` (0-based) as a vector of Float64 tuples / scalars.
 function _gltf_accessor(gltf, buffers, ai::Int)
@@ -1023,7 +1092,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         skeleton = inv === nothing ? Skeleton(bones) : Skeleton(bones, inv)
         skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts; indices=true)
         skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
-        return SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights)
+        return SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
+                           morph_target_influences=morph_weights)
     end
 
     function create_node_object!(node_idx)
@@ -1194,7 +1264,9 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             vals === nothing && continue
             length(times) == length(vals) || error("glTF animation input/output keyframe counts differ")
             if path == "rotation"
-                push!(tracks, QuaternionKeyframeTrack(obj, :rotation, times, vals))
+                qinterp = interpolation === :step ? :step : :slerp
+                push!(tracks, QuaternionKeyframeTrack(obj, :rotation, times, vals;
+                                                      interpolation=qinterp))
             else
                 prop = path == "translation" ? :position : :scale
                 push!(tracks, KeyframeTrack(obj, prop, times, vals; interpolation=interpolation))
@@ -1214,14 +1286,18 @@ end
 """
     load_gltf(path) -> Scene
 
-Load a glTF 2.0 file (embedded base64 or external buffers) into a `Scene`.
-Supports node transforms, mesh primitives (POSITION, NORMAL, indices) and
-basic PBR metallic-roughness materials. Skinning/morph targets are ignored.
+Load a text glTF 2.0 file into a `Scene`.
+
+Supports data-URI and external buffers, node transforms, cameras, punctual
+lights, mesh primitives, basic PBR metallic-roughness materials, skin binding,
+morph targets, and texture references supported by Diff3D's built-in loaders.
+Use [`load_glb`](@ref) for binary `.glb` containers whose first buffer is stored
+in the GLB BIN chunk.
 """
 function load_gltf(path::String)
     gltf = _json_parse(read(path, String))
     dir = dirname(path)
-    buffers = [_gltf_read_buffer(b, dir) for b in gltf["buffers"]]
+    buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_scene(gltf, buffers; dir=dir)
 end
 
@@ -1231,12 +1307,13 @@ end
 Load a glTF 2.0 file and return both the scene and parsed animation clips.
 Node `translation`, `rotation`, and `scale` channels are mapped to Diff3D.jl
 `KeyframeTrack` / `QuaternionKeyframeTrack` objects targeting the loaded scene
-nodes, so an `AnimationMixer(asset.animations[1])` can play them back.
+nodes, and `weights` channels drive morph-target influences. Use
+[`load_glb_asset`](@ref) for binary `.glb` containers.
 """
 function load_gltf_asset(path::String)
     gltf = _json_parse(read(path, String))
     dir = dirname(path)
-    buffers = [_gltf_read_buffer(b, dir) for b in gltf["buffers"]]
+    buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_asset(gltf, buffers; dir=dir)
 end
 
@@ -1245,16 +1322,62 @@ end
 # exactly like `_gltf_read_buffer`.
 function _glb_read_buffer(buf::Dict, dir::String, bin::Vector{UInt8})
     uri = get(buf, "uri", nothing)
-    if uri === nothing
-        return bin
+    data = if uri === nothing
+        bin
     elseif startswith(uri, "data:")
-        return base64_decode(split(uri, ",", limit=2)[2])
+        base64_decode(split(uri, ",", limit=2)[2])
     else
-        return read(joinpath(dir, uri))
+        read(joinpath(dir, uri))
     end
+    label = uri === nothing ? "GLB BIN chunk" : "glTF buffer"
+    return _gltf_trim_declared_buffer(buf, data, label)
 end
 
 @inline _rd_le32(b, i) = Int(b[i]) | (Int(b[i+1]) << 8) | (Int(b[i+2]) << 16) | (Int(b[i+3]) << 24)
+
+function _parse_glb(path::String)
+    bytes = read(path)
+    length(bytes) >= 12 || error("GLB file too short")
+    # 12-byte header: magic, version, total length (all little-endian uint32).
+    magic = _rd_le32(bytes, 1)
+    magic == 0x46546C67 || error("not a GLB file (bad magic)")   # 'glTF' little-endian
+    version = _rd_le32(bytes, 5)
+    version == 2 || error("unsupported GLB version $version")
+    total = _rd_le32(bytes, 9)
+    total == length(bytes) ||
+        error("GLB declared length $total does not match file length $(length(bytes))")
+
+    json_bytes = UInt8[]
+    bin_bytes = UInt8[]
+    have_json = false
+    have_bin = false
+    pos = 13                                                     # first chunk header
+    while pos <= total
+        pos + 7 <= total || error("GLB chunk header exceeds file bounds")
+        clen = _rd_le32(bytes, pos)
+        clen % 4 == 0 || error("GLB chunk length $clen is not 4-byte aligned")
+        ctype = _rd_le32(bytes, pos + 4)
+        dstart = pos + 8
+        dend = dstart + clen - 1
+        dend <= total || error("GLB chunk exceeds file bounds")
+        if ctype == 0x4E4F534A          # 'JSON'
+            !have_json || error("GLB has multiple JSON chunks")
+            json_bytes = bytes[dstart:dend]
+            have_json = true
+        elseif ctype == 0x004E4942      # 'BIN\0'
+            !have_bin || error("GLB has multiple BIN chunks")
+            bin_bytes = bytes[dstart:dend]
+            have_bin = true
+        end
+        pos = dend + 1
+    end
+    have_json || error("GLB has no JSON chunk")
+
+    gltf = _json_parse(String(json_bytes))
+    dir = dirname(path)
+    buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in _gltf_document_buffers(gltf)]
+    return gltf, buffers, dir
+end
 
 """
     load_glb(path) -> Scene
@@ -1266,76 +1389,12 @@ then reuses the glTF document logic. A buffer view without a `uri` reads from
 the embedded binary chunk (buffer 0). Mirrors [`load_gltf`](@ref) output.
 """
 function load_glb(path::String)
-    bytes = read(path)
-    length(bytes) >= 12 || error("GLB file too short")
-    # 12-byte header: magic, version, total length (all little-endian uint32).
-    magic = _rd_le32(bytes, 1)
-    magic == 0x46546C67 || error("not a GLB file (bad magic)")   # 'glTF' little-endian
-    version = _rd_le32(bytes, 5)
-    version == 2 || error("unsupported GLB version $version")
-    total = _rd_le32(bytes, 9)
-    total = min(total, length(bytes))                            # tolerate over-long declared size
-
-    json_bytes = UInt8[]
-    bin_bytes = UInt8[]
-    have_json = false
-    pos = 13                                                     # first chunk header
-    while pos + 8 <= total + 1
-        clen = _rd_le32(bytes, pos)
-        ctype = _rd_le32(bytes, pos + 4)
-        dstart = pos + 8
-        dend = dstart + clen - 1
-        dend <= length(bytes) || error("GLB chunk exceeds file bounds")
-        if ctype == 0x4E4F534A          # 'JSON'
-            json_bytes = bytes[dstart:dend]
-            have_json = true
-        elseif ctype == 0x004E4942      # 'BIN\0'
-            bin_bytes = bytes[dstart:dend]
-        end
-        # Chunks are 4-byte aligned; advance over any padding to the next header.
-        pad = (4 - (clen % 4)) % 4
-        pos = dend + 1 + pad
-    end
-    have_json || error("GLB has no JSON chunk")
-
-    gltf = _json_parse(String(json_bytes))
-    dir = dirname(path)
-    buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in gltf["buffers"]]
+    gltf, buffers, dir = _parse_glb(path)
     return _gltf_build_scene(gltf, buffers; dir=dir)
 end
 
 """Load a binary glTF (`.glb`) and return both scene and animation clips."""
 function load_glb_asset(path::String)
-    bytes = read(path)
-    length(bytes) >= 12 || error("GLB file too short")
-    magic = _rd_le32(bytes, 1)
-    magic == 0x46546C67 || error("not a GLB file (bad magic)")
-    version = _rd_le32(bytes, 5)
-    version == 2 || error("unsupported GLB version $version")
-    total = min(_rd_le32(bytes, 9), length(bytes))
-
-    json_bytes = UInt8[]
-    bin_bytes = UInt8[]
-    have_json = false
-    pos = 13
-    while pos + 8 <= total + 1
-        clen = _rd_le32(bytes, pos)
-        ctype = _rd_le32(bytes, pos + 4)
-        dstart = pos + 8
-        dend = dstart + clen - 1
-        dend <= length(bytes) || error("GLB chunk exceeds file bounds")
-        if ctype == 0x4E4F534A
-            json_bytes = bytes[dstart:dend]
-            have_json = true
-        elseif ctype == 0x004E4942
-            bin_bytes = bytes[dstart:dend]
-        end
-        pos = dend + 1 + (4 - (clen % 4)) % 4
-    end
-    have_json || error("GLB has no JSON chunk")
-
-    gltf = _json_parse(String(json_bytes))
-    dir = dirname(path)
-    buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in gltf["buffers"]]
+    gltf, buffers, dir = _parse_glb(path)
     return _gltf_build_asset(gltf, buffers; dir=dir)
 end

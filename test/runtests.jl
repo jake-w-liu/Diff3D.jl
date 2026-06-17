@@ -43,10 +43,31 @@ deterministic_bytes(n::Int) =
         registry = TOML.parsefile(registry_path)
         @test registry["schema_version"] == 1
         examples = registry["examples"]
-        @test length(examples) >= 8
+        expected_ids = Set([
+            "threejs_webgl_geometries",
+            "threejs_webgl_geometry_cube",
+            "threejs_webgl_materials_normal",
+            "threejs_webgl_materials_depth",
+            "threejs_webgl_materials_variations_basic",
+            "threejs_webgl_materials_variations_toon",
+            "threejs_webgl_materials_variations_lambert",
+            "threejs_webgl_materials_variations_phong",
+            "threejs_webgl_materials_matcap",
+            "threejs_webgl_materials_physical_clearcoat",
+            "threejs_webgl_buffergeometry",
+            "threejs_webgl_buffergeometry_indexed",
+            "threejs_webgl_buffergeometry_uint",
+            "threejs_webgl_buffergeometry_lines",
+            "threejs_webgl_buffergeometry_points",
+            "threejs_webgl_points_sprites",
+            "threejs_webgl_instancing_dynamic",
+            "threejs_webgl_lines_colors",
+            "threejs_webgl_helpers",
+            "threejs_webgl_animation_keyframes",
+        ])
         ids = String[e["upstream_id"] for e in examples]
+        @test Set(ids) == expected_ids
         @test length(unique(ids)) == length(ids)
-        @test "threejs_webgl_animation_keyframes" in ids
         valid_status = Set(["covered", "partial", "planned"])
         for entry in examples
             @test startswith(entry["upstream_id"], "threejs_")
@@ -58,6 +79,15 @@ deterministic_bytes(n::Int) =
             if entry["status"] != "planned"
                 script = joinpath(@__DIR__, "..", entry["local_script"])
                 @test isfile(script)
+                output_stem = splitext(basename(entry["local_script"]))[1]
+                smoke = "python examples/browser_webgl_smoke.py examples/output/$output_stem.html"
+                @test smoke in entry["verification"]
+                @test all(!occursin("<generated html>", cmd) for cmd in entry["verification"])
+                if entry["status"] == "covered"
+                    deviations = lowercase(join(entry["known_deviations"], " "))
+                    @test !occursin("representative", deviations)
+                    @test !occursin("rather than exact", deviations)
+                end
             end
         end
     end
@@ -597,6 +627,12 @@ deterministic_bytes(n::Int) =
                             name="export_alpha_map")
         alpha_mapped.position = Vec3(-1.5, 0.0, 0.0)
         add!(scene, alpha_mapped)
+        wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                              MeshBasicMaterial(color=Color3(1.0, 0.3, 0.1),
+                                                wireframe=true);
+                              name="export_wireframe")
+        wireframe_mesh.position = Vec3(-2.3, 0.0, 0.0)
+        add!(scene, wireframe_mesh)
         emissive_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                MeshStandardMaterial(color=Color3(0.1, 0.1, 0.1),
                                                     emissive=Color3(0.2, 0.4, 1.0),
@@ -708,12 +744,15 @@ deterministic_bytes(n::Int) =
         add!(scene, morph_mesh)
         skin_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                   Float64[], Float64[], Int[1,2,3], 3, 1)
+        set_attribute!(skin_geo, :morphPosition0,
+                       [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0], 3)
         bone = Bone(name="export_bone")
         skeleton = Skeleton([bone])
         bone.position = Vec3(2.0, 0.0, 0.0)
         skinned = SkinnedMesh(skin_geo, MeshBasicMaterial(color=Color3(0.2,0.9,0.6)),
                               skeleton, fill((1,1,1,1), 3),
-                              fill((1.0,0.0,0.0,0.0), 3); name="export_skin")
+                              fill((1.0,0.0,0.0,0.0), 3);
+                              name="export_skin", morph_target_influences=[0.25])
         add!(scene, skinned)
         hidden_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.9,0.4,0.1));
                            name="export_visibility")
@@ -736,6 +775,10 @@ deterministic_bytes(n::Int) =
                                     name="export_euler_component_rotation")
         euler_component_mesh.position = Vec3(4.9, 0.0, 0.0)
         add!(scene, euler_component_mesh)
+        step_quat_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.7,0.4,1.0));
+                              name="export_step_quaternion")
+        step_quat_mesh.position = Vec3(5.6, -0.8, 0.0)
+        add!(scene, step_quat_mesh)
         animated_group = Group(name="export_animated_group")
         animated_group.position = Vec3(0.5, 0.0, 0.0)
         grouped_motion_child = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.2,1.0,0.5));
@@ -763,6 +806,9 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(mesh, "position.y", [0.0, 1.0], [0.0, 0.35]),
             QuaternionKeyframeTrack(mesh, :quaternion, [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 4, 0.0)]),
+            QuaternionKeyframeTrack(step_quat_mesh, :quaternion, [0.0, 1.0],
+                                    [Quaternion(), quat_from_euler(0.0, pi / 2, 0.0)];
+                                    interpolation=:step),
             NumberKeyframeTrack(mesh, "opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "color.r", [0.0, 1.0], [0.2, 1.0]),
@@ -805,6 +851,12 @@ deterministic_bytes(n::Int) =
         @test occursin("\"spriteSizeAttenuation\":false", sprite_drawable)
         @test occursin("\"texture\":", sprite_drawable)
         @test occursin("\"transparent\":true", sprite_drawable)
+        skin_drawable = only(filter(d -> occursin("\"name\":\"export_skin\"", d),
+                                    Diff3D._web_collect_drawables(scene)))
+        @test occursin("\"skin\":{", skin_drawable)
+        @test occursin("\"morphTargets\":[[0,0,1,0,0,1,0,0,1]]", skin_drawable)
+        @test occursin("\"morphWeights\":[0.25]", skin_drawable)
+        @test length(findall("\"basePositions\"", skin_drawable)) == 1
         lod = LOD(name="export_lod")
         lod_near = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_near")
         lod_far = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_far")
@@ -887,6 +939,8 @@ deterministic_bytes(n::Int) =
         @test occursin("uShininess", html)
         @test occursin("o.materialType===\"phong\"?7", html)
         @test occursin("\"name\":\"export_alpha_map\"", html)
+        @test occursin("\"name\":\"export_wireframe\"", html)
+        @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_emissive_map\"", html)
         @test occursin("\"name\":\"export_ao_light_map\"", html)
         @test occursin("\"name\":\"export_rough_metal_map\"", html)
@@ -1026,6 +1080,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"morph_target_influences\"", html)
         @test occursin("\"inTangents\":[0,0]", html)
         @test occursin("function updateMorph", html)
+        @test occursin("o.morphedPositions=null", html)
+        @test occursin("o.morphedPositions=p", html)
         @test occursin("morphById", html)
         @test occursin("\"name\":\"export_skin\"", html)
         @test occursin("\"positions\":[0,0,0,1,0,0,0,1,0]", html)
@@ -1044,11 +1100,13 @@ deterministic_bytes(n::Int) =
         @test occursin("mat4 skinMatrix()", html)
         @test occursin("mat3(skin)*aNormal", html)
         @test occursin("o.shaderSkin", html)
+        @test occursin("&&!(o.morphTargets&&o.morphTargets.length)", html)
         @test occursin("o.skinIndexBuf=buf", html)
         @test occursin("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)
         @test occursin("function skinMatrices", html)
         @test occursin("uUseSkin", html)
         @test occursin("function updateSkin", html)
+        @test occursin("const base=o.morphedPositions||o.basePositions", html)
         @test occursin("setNodeAnim", html)
         @test occursin("o.animPos=o.basePosition.slice()", html)
         @test occursin("b.animPos=b.basePosition.slice()", html)
@@ -1075,6 +1133,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"animations\"", html)
         @test occursin("\"interpolation\":\"cubic\"", html)
         @test occursin("\"interpolation\":\"cubicspline\"", html)
+        @test occursin("\"interpolation\":\"slerp\"", html)
+        @test occursin("\"interpolation\":\"step\"", html)
         @test occursin("\"property\":\"quaternion\"", html)
         @test occursin("prop===\"quaternion\"", html)
         @test occursin("function eulerToQuat", html)
@@ -1184,6 +1244,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"texture\":{\"width\":2,\"height\":2", html)
         @test occursin("\"alphaTexture\":{\"width\":2,\"height\":2", html)
         @test occursin("\"alphaTest\":0.40000000000000002", html)
+        @test occursin(r"\"name\":\"export_alpha_map\".*\"alphaTest\":0\.40000000000000002.*\"transparent\":false", html)
         @test occursin("uUseAlphaMap", html)
         @test occursin("uAlphaMap", html)
         @test occursin("uAlphaTest", html)
@@ -1959,6 +2020,14 @@ deterministic_bytes(n::Int) =
         @test is_transparent_material(quad.material)
         @test is_transparent_material(MeshBasicMaterial(color=Color3(1.0,0,0), transparent=true))
         @test !is_transparent_material(MeshBasicMaterial(color=Color3(1.0,0,0)))
+        @test material_depth_test(MeshBasicMaterial(depth_test=false)) == false
+        @test material_depth_write(MeshBasicMaterial(depth_write=false)) == false
+        @test material_alpha_test(MeshBasicMaterial(alpha_test=0.35)) ≈ 0.35
+        @test material_alpha_test(SpriteMaterial()) ≈ 0.0
+        @test material_depth_test(SpriteMaterial(depth_test=false)) == false
+        @test material_depth_write(SpriteMaterial(depth_write=false)) == false
+        @test material_wireframe(MeshBasicMaterial(wireframe=true)) == true
+        @test material_wireframe(MeshStandardMaterial()) == false
 
         rgba_alpha = ones(Float64, 2, 2, 4)
         rgba_alpha[:, :, 4] .= 0.25
@@ -2469,10 +2538,19 @@ deterministic_bytes(n::Int) =
         @test sample_track(step, 1.5).x ≈ 10.0
         @test_throws ArgumentError KeyframeTrack(mesh, :position, [0.0], [Vec3(0.0,0,0)];
                                                  interpolation=:bogus)
+        @test_throws ArgumentError KeyframeTrack(mesh, :position, Float64[], Vec3{Float64}[])
+        @test_throws ArgumentError KeyframeTrack(mesh, :position, [0.0, 1.0], [Vec3(0.0,0,0)])
+        @test_throws ArgumentError KeyframeTrack(mesh, :position, [0.0, 0.0],
+                                                 [Vec3(0.0,0,0), Vec3(1.0,0,0)])
+        @test_throws ArgumentError NumberKeyframeTrack(mesh, :opacity, [0.0, 1.0], [1.0])
         cubic = CubicSplineKeyframeTrack(mesh, :position, [0.0, 1.0],
                                          [Vec3(0.0,0,0), Vec3(1.0,0,0)],
                                          [Vec3(0.0,0,0), Vec3(0.0,0,0)],
                                          [Vec3(0.0,0,0), Vec3(0.0,0,0)])
+        @test_throws ArgumentError CubicSplineKeyframeTrack(mesh, :position, [0.0, 1.0],
+                                                            [Vec3(0.0,0,0), Vec3(1.0,0,0)],
+                                                            [Vec3(0.0,0,0)],
+                                                            [Vec3(0.0,0,0), Vec3(0.0,0,0)])
         @test sample_track(cubic, 0.0).x ≈ 0.0
         @test sample_track(cubic, 0.5).x ≈ 0.5
         @test sample_track(cubic, 1.0).x ≈ 1.0
@@ -3435,11 +3513,24 @@ deterministic_bytes(n::Int) =
             @test isapprox(m.x, 0.0; atol=1e-12)
             @test isapprox(m.z, 0.0; atol=1e-12)
             @test isapprox(sqrt(m.x^2+m.y^2+m.z^2+m.w^2), 1.0; atol=1e-12)  # on unit sphere (slerp, not lerp)
+            qstep = QuaternionKeyframeTrack(obj, :rotation, [0.0, 1.0], [q0, q1];
+                                            interpolation=:step)
+            @test sample_track(qstep, 0.5).w ≈ q0.w
+            @test sample_track(qstep, 0.5).y ≈ q0.y
+            @test sample_track(qstep, 1.0).y ≈ q1.y
+            @test_throws ArgumentError QuaternionKeyframeTrack(obj, :rotation, Float64[],
+                                                               Quaternion{Float64}[])
+            @test_throws ArgumentError QuaternionKeyframeTrack(obj, :rotation, [0.0, 1.0], [q0])
+            @test_throws ArgumentError QuaternionKeyframeTrack(obj, :rotation, [0.0, 1.0],
+                                                               [q0, q1]; interpolation=:linear)
             # Mixer writes a valid Euler rotation onto the target.
             mixer = AnimationMixer(AnimationClip("rot", QuaternionKeyframeTrack[qt]))
             mixer_set_time!(mixer, 0.5)
             @test obj.rotation isa Euler
             @test isapprox(obj.rotation.y, pi/4; atol=1e-9)
+            mixer_set_time!(AnimationMixer(AnimationClip("rot_step",
+                                                        AbstractKeyframeTrack[qstep])), 0.5)
+            @test isapprox(obj.rotation.y, 0.0; atol=1e-9)
 
             qalias_obj = Group()
             qalias = QuaternionKeyframeTrack(qalias_obj, :quaternion, [0.0, 1.0], [q0, q1])
@@ -4581,7 +4672,43 @@ deterministic_bytes(n::Int) =
             @test scene isa Diff3D.Scene
             # The triangle mesh must be reachable under the scene graph.
             @test !isempty(Diff3D.collect_meshes(scene))
+
+            asset = Diff3D.load_glb_asset(path)
+            @test asset isa Diff3D.GLTFAsset
+            @test !isempty(Diff3D.collect_meshes(asset.scene))
+
+            bad_total = copy(glb)
+            bad_total[9:12] = le32(length(glb) + 4)
+            bad_total_path = tempname() * ".glb"
+            write(bad_total_path, bad_total)
+            @test_throws "declared length" Diff3D.load_glb(bad_total_path)
+
+            bad_json = UInt8[UInt8('{'), UInt8('}')]
+            bad_body = vcat(le32(length(bad_json)), le32(0x4E4F534A), bad_json)
+            bad_align = vcat(le32(0x46546C67), le32(2), le32(12 + length(bad_body)), bad_body)
+            bad_align_path = tempname() * ".glb"
+            write(bad_align_path, bad_align)
+            @test_throws "4-byte aligned" Diff3D.load_glb(bad_align_path)
+
+            empty_json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[]}]}"
+            ejb = Vector{UInt8}(codeunits(empty_json))
+            while length(ejb) % 4 != 0; push!(ejb, UInt8(' ')); end
+            empty_body = vcat(le32(length(ejb)), le32(0x4E4F534A), ejb)
+            empty_glb = vcat(le32(0x46546C67), le32(2), le32(12 + length(empty_body)), empty_body)
+            empty_path = tempname() * ".glb"
+            write(empty_path, empty_glb)
+            empty_scene = Diff3D.load_glb(empty_path)
+            @test empty_scene isa Diff3D.Scene
+            @test isempty(get_children(empty_scene))
+            empty_asset = Diff3D.load_glb_asset(empty_path)
+            @test empty_asset isa Diff3D.GLTFAsset
+            @test isempty(get_children(empty_asset.scene))
+            @test isempty(empty_asset.animations)
+
             rm(path; force=true)
+            rm(bad_total_path; force=true)
+            rm(bad_align_path; force=true)
+            rm(empty_path; force=true)
         end
 
         @testset "load_gltf_asset animations" begin
@@ -4636,6 +4763,41 @@ deterministic_bytes(n::Int) =
             p = mat4_transform_point(compute_world_matrix(target), Vec3(1.0,0.0,0.0))
             @test p.x ≈ target.position.x - sqrt(2.0) atol=1e-9
             @test p.z ≈ -sqrt(2.0) atol=1e-9
+        end
+
+        @testset "load_gltf_asset STEP rotation animation" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_times = length(bin); append_f32!([0, 1])
+            off_rot = length(bin); append_f32!([0,0,0,1, 0,sin(pi/4),0,cos(pi/4)])
+            write(joinpath(dir, "step_rot.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"step_rot"}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"step_rot.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_rot,"byteLength":32}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":1,"componentType":5126,"count":2,"type":"VEC4"}],
+             "animations":[{"name":"step_rotate","samplers":[
+               {"input":0,"output":1,"interpolation":"STEP"}],
+               "channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}}]}]}
+            """
+            path = joinpath(dir, "step_rot.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            tr = only(asset.animations[1].tracks)
+            @test tr isa QuaternionKeyframeTrack
+            @test tr.interpolation === :step
+            target = get_children(asset.scene)[1]
+            mixer = AnimationMixer(asset.animations[1])
+            mixer_set_time!(mixer, 0.5)
+            @test isapprox(target.rotation.y, 0.0; atol=1e-9)
+            mixer_set_time!(mixer, 1.0)
+            @test isapprox(target.rotation.y, pi/2; atol=1e-9)
         end
 
         @testset "load_gltf_asset CUBICSPLINE animation" begin
@@ -4746,24 +4908,37 @@ deterministic_bytes(n::Int) =
             off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
             off_joints = length(bin); append_u16!([0,0,0,0, 0,0,0,0, 0,0,0,0])
             off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+            off_morph = length(bin); append_f32!([0,0,1, 0,0,1, 0,0,1])
             off_inv = length(bin); append_f32!([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])
+            off_times = length(bin); append_f32!([0, 1])
+            off_mweights = length(bin); append_f32!([0.5, 1.0])
             write(joinpath(dir, "skin.bin"), bin)
             json = """
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
-             "nodes":[{"name":"skinned","mesh":0,"skin":0},{"name":"joint"}],
+             "nodes":[{"name":"skinned","mesh":0,"skin":0,"weights":[0.5]},{"name":"joint"}],
              "buffers":[{"byteLength":$(length(bin)),"uri":"skin.bin"}],
              "bufferViews":[
                {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
                {"buffer":0,"byteOffset":$off_joints,"byteLength":24},
                {"buffer":0,"byteOffset":$off_weights,"byteLength":48},
-               {"buffer":0,"byteOffset":$off_inv,"byteLength":64}],
+               {"buffer":0,"byteOffset":$off_morph,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_inv,"byteLength":64},
+               {"buffer":0,"byteOffset":$off_times,"byteLength":8},
+               {"buffer":0,"byteOffset":$off_mweights,"byteLength":8}],
              "accessors":[
                {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
                {"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},
                {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
-               {"bufferView":3,"componentType":5126,"count":1,"type":"MAT4"}],
-             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
-             "skins":[{"joints":[1],"inverseBindMatrices":3}]}
+               {"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":4,"componentType":5126,"count":1,"type":"MAT4"},
+               {"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},
+               {"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},
+                                        "targets":[{"POSITION":3}]}]}],
+             "skins":[{"joints":[1],"inverseBindMatrices":4}],
+             "animations":[{"name":"skin_morph_weights","samplers":[
+               {"input":5,"output":6,"interpolation":"LINEAR"}],
+               "channels":[{"sampler":0,"target":{"node":0,"path":"weights"}}]}]}
             """
             path = joinpath(dir, "skin.gltf")
             write(path, json)
@@ -4776,12 +4951,28 @@ deterministic_bytes(n::Int) =
             @test length(sm.skeleton.bones) == 1
             @test sm.skeleton.bones[1] === joint
             @test sm.skin_indices == fill((1,1,1,1), 3)
+            @test sm.morph_target_influences ≈ [0.5]
+            @test has_attribute(sm.geometry, :morphPosition0)
+            @test apply_morph_targets(sm)[1].z ≈ 0.5
             p0 = apply_skinning(sm)
+            @test p0[1].z ≈ 0.5
             @test p0[2].x ≈ 1.0
+            @test p0[2].z ≈ 0.5
+            skin_drawables = join(Diff3D._web_collect_drawables(asset.scene), ",")
+            @test occursin("\"skin\":{", skin_drawables)
+            @test occursin("\"morphTargets\":[[0,0,1,0,0,1,0,0,1]]", skin_drawables)
+            @test occursin("\"morphWeights\":[0.5]", skin_drawables)
             joint.position = Vec3(2.0, 0.0, 0.0)
             p1 = apply_skinning(sm)
             @test p1[1].x ≈ 2.0
+            @test p1[1].z ≈ 0.5
             @test p1[2].x ≈ 3.0
+            @test length(asset.animations) == 1
+            @test asset.animations[1].tracks[1] isa MorphWeightsKeyframeTrack
+            mixer_set_time!(AnimationMixer(asset.animations[1]), 0.5)
+            @test sm.morph_target_influences ≈ [0.75]
+            @test apply_morph_targets(sm)[1].z ≈ 0.75
+            @test apply_skinning(sm)[1].z ≈ 0.75
         end
 
         @testset "load_gltf_asset morph targets" begin
@@ -5392,6 +5583,57 @@ deterministic_bytes(n::Int) =
             sp = Sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0), depth_test=false))
             @test covered_by_far_primitive(sp)
 
+            function primitive_alpha_center(obj)
+                sc = Scene(background=Color3(0.0, 0.0, 1.0))
+                add!(sc, obj)
+                rt = RenderTarget(32, 32)
+                render!(rt, sc, depth_cam; sort_objects=false)
+                return Vec3(rt.color[16, 16, 1], rt.color[16, 16, 2], rt.color[16, 16, 3])
+            end
+            alpha_line_geo = BufferGeometry()
+            alpha_line_geo.positions = [-0.75, 0.0, 0.0, 0.75, 0.0, 0.0]
+            alpha_line_geo.n_vertices = 2
+            alpha_line = primitive_alpha_center(LineObject(alpha_line_geo,
+                LineBasicMaterial(color=Color3(1.0, 0.0, 0.0), opacity=0.25,
+                                  linewidth=3.0, depth_write=false)))
+            @test alpha_line.x ≈ 0.25 atol=1e-12
+            @test alpha_line.y ≈ 0.0 atol=1e-12
+            @test alpha_line.z ≈ 0.75 atol=1e-12
+
+            alpha_point_geo = BufferGeometry()
+            alpha_point_geo.positions = [0.0, 0.0, 0.0]
+            alpha_point_geo.n_vertices = 1
+            alpha_point = primitive_alpha_center(PointsObject(alpha_point_geo,
+                PointsMaterial(color=Color3(1.0, 0.0, 0.0), opacity=0.25,
+                               size=5.0, depth_write=false)))
+            @test alpha_point.x ≈ 0.25 atol=1e-12
+            @test alpha_point.y ≈ 0.0 atol=1e-12
+            @test alpha_point.z ≈ 0.75 atol=1e-12
+
+            alpha_sprite = primitive_alpha_center(Sprite(
+                SpriteMaterial(color=Color3(1.0, 0.0, 0.0), opacity=0.25,
+                               transparent=true, depth_write=false)))
+            @test alpha_sprite.x ≈ 0.25 atol=1e-12
+            @test alpha_sprite.y ≈ 0.0 atol=1e-12
+            @test alpha_sprite.z ≈ 0.75 atol=1e-12
+
+            wf_geo = BufferGeometry()
+            wf_geo.positions = [-1.0, -1.0, 0.0,
+                                 1.0, -1.0, 0.0,
+                                 0.0,  1.0, 0.0]
+            wf_geo.indices = [1, 2, 3]
+            wf_geo.n_vertices = 3
+            wf_geo.n_faces = 1
+            wf_scene = Scene(background=Color3(0.0, 0.0, 1.0))
+            add!(wf_scene, Mesh(wf_geo,
+                                MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                  wireframe=true, side=:double)))
+            wf_rt = RenderTarget(64, 64)
+            render!(wf_rt, wf_scene, depth_cam)
+            @test wf_rt.color[32, 32, 1] ≈ 0.0 atol=1e-12
+            @test wf_rt.color[32, 32, 3] ≈ 1.0 atol=1e-12
+            @test maximum(@view wf_rt.color[:, :, 1]) > 0.9
+
             # Fix 6: CPU mesh rasterization honors texture alpha and alpha_map
             # for alpha_test discard in both flat and smooth paths.
             rgba_masked = ones(Float64, 2, 2, 4)
@@ -5878,6 +6120,54 @@ deterministic_bytes(n::Int) =
             dir = mktempdir()
             append_f32!(bin, xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
 
+            # --- valid scene-only glTF without a buffers array ---
+            empty_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}]}
+            """
+            empty_gltf_path = joinpath(dir, "scene_only.gltf")
+            write(empty_gltf_path, empty_gltf)
+            empty_gltf_scene = load_gltf(empty_gltf_path)
+            @test empty_gltf_scene isa Scene
+            @test isempty(get_children(empty_gltf_scene))
+            empty_gltf_asset = load_gltf_asset(empty_gltf_path)
+            @test empty_gltf_asset isa GLTFAsset
+            @test isempty(get_children(empty_gltf_asset.scene))
+            @test isempty(empty_gltf_asset.animations)
+
+            bad_buffer_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":0}]}
+            """
+            bad_buffer_path = joinpath(dir, "missing_buffer_uri.gltf")
+            write(bad_buffer_path, bad_buffer_gltf)
+            @test_throws "use load_glb" load_gltf(bad_buffer_path)
+
+            escaped_name_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"A\\u0042_\\uD83D\\uDE00"}]}
+            """
+            escaped_name_path = joinpath(dir, "escaped_name.gltf")
+            write(escaped_name_path, escaped_name_gltf)
+            escaped_scene = load_gltf(escaped_name_path)
+            @test get_children(escaped_scene)[1].name == "AB_😀"
+
+            write(joinpath(dir, "teB.bin"), UInt8[])
+            escaped_uri_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":0,"uri":"te\\u0042.bin"}]}
+            """
+            escaped_uri_path = joinpath(dir, "escaped_uri.gltf")
+            write(escaped_uri_path, escaped_uri_gltf)
+            @test load_gltf(escaped_uri_path) isa Scene
+
+            bad_unicode_gltf = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"bad\\u12"}]}
+            """
+            bad_unicode_path = joinpath(dir, "bad_unicode.gltf")
+            write(bad_unicode_path, bad_unicode_gltf)
+            @test_throws "invalid JSON unicode escape" load_gltf(bad_unicode_path)
+
             # --- UTF-8 JSON names + glTF orthographic half-extents (xmag/ymag) ---
             cam_json = """
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
@@ -6033,9 +6323,12 @@ deterministic_bytes(n::Int) =
             # The documented positional form actually works as described.
             @test Euler(0.1, 0.2, 0.3, :ZYX).order == :ZYX
             @test Euler(0.1, 0.2, 0.3).order == :XYZ
+            @test fieldnames(GLTFAsset) == (:scene, :animations)
             # collect_* docstrings describe the skip-invisible-subtree semantics.
             @test occursin("visible == false", string(@doc collect_meshes))
             @test occursin("visible == false", string(@doc collect_lights))
+            @test occursin("flat", lowercase(string(@doc render_tiled!)))
+            @test occursin("flat opaque", lowercase(string(@doc render_pooled!)))
         end
 
     end

@@ -626,11 +626,14 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         empty!(opaque_flat)
         empty!(smooth_meshes)
     end
+    wireframe_meshes = Mesh[]
     for mesh in meshes
         !_visible_in_tree(mesh) && continue
         wm = compute_world_matrix(mesh)
         (frustum === nothing || _mesh_in_frustum(frustum, mesh.geometry, wm)) || continue
-        if is_transparent_material(mesh.material)
+        if material_wireframe(mesh.material)
+            push!(wireframe_meshes, mesh)
+        elseif is_transparent_material(mesh.material)
             push!(transparent, mesh)
         elseif _mesh_is_flat(mesh, shading)
             push!(opaque_flat, mesh)
@@ -661,15 +664,21 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
     for im in instanced
         !_visible_in_tree(im) && continue
-        mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         base = compute_world_matrix(im)
         for M in im.instance_matrices
-            _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
-                                 lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
-                                 colorbuf=colorbuf,
-                                 xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                 log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+            world = base * M
+            if material_wireframe(im.material)
+                _render_wireframe_mesh!(rt, im.geometry, im.material, world, proj, view, near;
+                                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+            else
+                mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
+                _rasterize_geo_flat!(rt, im.geometry, world, im.material,
+                                     lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
+                                     shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
+                                     colorbuf=colorbuf,
+                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                     log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+            end
         end
     end
 
@@ -706,6 +715,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # Camera-facing sprites (billboards), depth-tested against the mesh passes.
     render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+
+    for mesh in wireframe_meshes
+        _render_wireframe_mesh!(rt, mesh.geometry, mesh.material, compute_world_matrix(mesh),
+                                proj, view, near; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    end
 
     # Line and point primitives (depth-tested against the mesh passes).
     render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
@@ -799,6 +813,7 @@ is_transparent_material(m::AbstractMaterial) = material_transparent(m)
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
 material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ? Float64(getfield(m, :alpha_test)) : 0.0
+material_wireframe(m::AbstractMaterial) = hasfield(typeof(m), :wireframe) ? getfield(m, :wireframe) : false
 
 @inline _has_texture_alpha(tex) = tex isa Texture && size(tex.data, 3) >= 4
 @inline _has_alpha_map(tex) = tex isa Texture

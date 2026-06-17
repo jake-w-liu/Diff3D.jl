@@ -542,14 +542,9 @@ Parallel audits split the remaining work into five critical tracks:
 - For each port, add a Julia scene-generation script, a browser smoke
   verification command, and a note in this document naming unsupported deviations from the original
   three.js example.
-- Continue porting official examples one by one beyond the current starter set.
-  `webgl_geometries`, `webgl_geometry_cube`, `webgl_buffergeometry`,
-  `webgl_buffergeometry_indexed`, `webgl_buffergeometry_uint`,
-  `webgl_buffergeometry_lines`, `webgl_buffergeometry_points`,
-  `webgl_points_sprites`, `webgl_instancing_dynamic`,
-  `webgl_materials_normal`, `webgl_materials_depth`,
-  `webgl_materials_variations_basic`, `webgl_materials_variations_toon`,
-  `webgl_materials_matcap`,
+- Continue porting official examples one by one beyond the current registry in
+  `examples/examples_registry.toml`; keep that registry as the authoritative
+  list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `webgl_lines_colors`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.

@@ -204,8 +204,7 @@ function _web_fog_json(fog)
 end
 _web_material_transparent(mat) =
     (hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))) ||
-    _web_material_opacity(mat) < 1.0 ||
-    _web_material_alpha_texture(mat) isa Texture
+    _web_material_opacity(mat) < 1.0
 _web_material_side(mat) = hasproperty(mat, :side) ? String(getproperty(mat, :side)) : "front"
 _web_material_depth_test(mat) =
     hasproperty(mat, :depth_test) ? Bool(getproperty(mat, :depth_test)) : true
@@ -425,7 +424,7 @@ function _web_positions(obj, geo::BufferGeometry)
 end
 
 function _web_morph_targets_json(obj, geo::BufferGeometry)
-    obj isa Mesh || return "\"morphTargets\":[],\"morphWeights\":[]"
+    (obj isa Mesh || obj isa SkinnedMesh) || return "\"morphTargets\":[],\"morphWeights\":[]"
     targets = String[]
     i = 0
     while true
@@ -437,9 +436,10 @@ function _web_morph_targets_json(obj, geo::BufferGeometry)
         i += 1
     end
     weights = isempty(targets) ? Float64[] : Float64.(obj.morph_target_influences)
-    return "\"basePositions\":" * _js_array(geo.positions) *
-           ",\"morphTargets\":[" * join(targets, ",") * "]" *
-           ",\"morphWeights\":" * _js_array(weights)
+    morph_json = "\"morphTargets\":[" * join(targets, ",") * "]" *
+                 ",\"morphWeights\":" * _js_array(weights)
+    return obj isa SkinnedMesh ? morph_json :
+           "\"basePositions\":" * _js_array(geo.positions) * "," * morph_json
 end
 
 function _web_skin_json(obj, geo::BufferGeometry)
@@ -699,6 +699,15 @@ function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
     return ids
 end
 
+function _web_wireframe_proxy(obj)
+    mat = obj.material
+    proxy_mat = LineBasicMaterial(color=_web_material_color(mat),
+                                  opacity=_web_material_opacity(mat),
+                                  depth_test=_web_material_depth_test(mat),
+                                  depth_write=_web_material_depth_write(mat))
+    return LineSegments(wireframe_geometry(obj.geometry), proxy_mat; name=obj.name)
+end
+
 function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
                                 camera_distance::Real=0.0)
     out = String[]
@@ -725,24 +734,49 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
         visibility_values = [is_visible(a) for a in ancestors]
         push!(visibility_values, is_visible(obj))
         if obj isa Mesh || obj isa SkinnedMesh
-            push!(out, _web_drawable_json(obj, world; mode="triangles",
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=visibility_ids,
-                                          visibility_values=visibility_values,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis))
-        elseif obj isa InstancedMesh
-            parent = compute_world_matrix(obj)
-            for im in obj.instance_matrices
-                push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
-                                              instance_matrix=im,
+            if material_wireframe(obj.material)
+                proxy = _web_wireframe_proxy(obj)
+                push!(out, _web_drawable_json(proxy, world; mode="lines",
+                                              transform_obj=obj,
                                               morph_target_ids=ancestor_ids,
                                               visibility_target_ids=visibility_ids,
                                               visibility_values=visibility_values,
                                               lod_group_id=lod_group_id,
                                               lod_distance=lod_distance,
                                               lod_hysteresis=lod_hysteresis))
+            else
+                push!(out, _web_drawable_json(obj, world; mode="triangles",
+                                              morph_target_ids=ancestor_ids,
+                                              visibility_target_ids=visibility_ids,
+                                              visibility_values=visibility_values,
+                                              lod_group_id=lod_group_id,
+                                              lod_distance=lod_distance,
+                                              lod_hysteresis=lod_hysteresis))
+            end
+        elseif obj isa InstancedMesh
+            parent = compute_world_matrix(obj)
+            for im in obj.instance_matrices
+                if material_wireframe(obj.material)
+                    proxy = _web_wireframe_proxy(obj)
+                    push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
+                                                  transform_obj=obj,
+                                                  instance_matrix=im,
+                                                  morph_target_ids=ancestor_ids,
+                                                  visibility_target_ids=visibility_ids,
+                                                  visibility_values=visibility_values,
+                                                  lod_group_id=lod_group_id,
+                                                  lod_distance=lod_distance,
+                                                  lod_hysteresis=lod_hysteresis))
+                else
+                    push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
+                                                  instance_matrix=im,
+                                                  morph_target_ids=ancestor_ids,
+                                                  visibility_target_ids=visibility_ids,
+                                                  visibility_values=visibility_values,
+                                                  lod_group_id=lod_group_id,
+                                                  lod_distance=lod_distance,
+                                                  lod_hysteresis=lod_hysteresis))
+                end
             end
         elseif obj isa PointsObject
             push!(out, _web_drawable_json(obj, world; mode="points",
@@ -878,7 +912,7 @@ function _web_track_json(tr::QuaternionKeyframeTrack)
            ",\"kind\":\"quat\"" *
            ",\"times\":" * _js_array(tr.times) *
            ",\"values\":" * _js_array(values) *
-           ",\"interpolation\":\"slerp\"" *
+           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
            "}"
 end
 
@@ -1236,8 +1270,8 @@ function _webgl_html(data_json::String, title::String)
     o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceSource=!!o.instanceMatrix; o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
     o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),shininess:o.shininess,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
     o.visibilityStates=(o.visibilityStates&&o.visibilityStates.length)?o.visibilityStates:[{id:o.id,visible:o.visible!==false}]; for(const s of o.visibilityStates) s.baseVisible=s.visible!==false;
-    o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=!!(o.morphTargets&&o.morphTargets.length);
-    o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES);
+    o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.morphedPositions=null; o.morphDirty=!!(o.morphTargets&&o.morphTargets.length);
+    o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES&&!(o.morphTargets&&o.morphTargets.length));
     o.skinDirty=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&!o.shaderSkin); if(o.skin){ for(const b of o.skin.bones){ b.parentMatrix=(b.parentMatrix||M4.ident()).slice(); b.basePosition=(b.basePosition||[0,0,0]).slice(); b.baseEuler=(b.baseEuler||[0,0,0]).slice(); b.baseEulerOrder=b.baseEulerOrder||"XYZ"; b.baseScale=(b.baseScale||[1,1,1]).slice(); b.baseQuaternion=(b.baseQuaternion||eulerToQuat(b.baseEuler,b.baseEulerOrder)).slice(); b.baseMatrix=b.matrix.slice(); b.matrix=b.baseMatrix.slice(); b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); } }
     const vertexCount=o.positions.length/3, defaultSkinIndex=new Array(vertexCount*4).fill(0), defaultSkinWeight=new Array(vertexCount*4).fill(0); for(let i=0;i<vertexCount;i++) defaultSkinWeight[4*i]=1;
     o.posBuf=buf(o.positions,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.nrmBuf=buf(o.normals); o.uvBuf=buf(o.uvs); o.uv2Buf=buf(o.uv2s||o.uvs); o.colorBuf=buf(o.colors); o.skinIndexBuf=buf(o.skin?o.skin.indices:defaultSkinIndex); o.skinWeightBuf=buf(o.skin?o.skin.weights:defaultSkinWeight); o.tex=makeTexture(o.texture); o.alphaTex=makeTexture(o.alphaTexture); o.emissiveTex=makeTexture(o.emissiveTexture); o.aoTex=makeTexture(o.aoTexture); o.lightTex=makeTexture(o.lightTexture); o.roughnessTex=makeTexture(o.roughnessTexture); o.metalnessTex=makeTexture(o.metalnessTexture); o.normalTex=makeTexture(o.normalTexture); o.matcapTex=makeTexture(o.matcapTexture); o.physicalScalarTex=physicalTexturesEnabled?makeTexture(packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3])):null; o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])):null; o.sheenColorTex=physicalTexturesEnabled?makeTexture(o.sheenColorTexture):null; o.specularColorTex=physicalTexturesEnabled?makeTexture(o.specularColorTexture):null;
@@ -1259,9 +1293,9 @@ function _webgl_html(data_json::String, title::String)
   function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
   function sampleTrack(tr,t){ const times=tr.times; if(times.length===0) return null; const stride=tr.kind==="quat"?4:(tr.kind==="weights"?tr.stride:(tr.kind==="number"?1:3)); if(t<=times[0]) return tr.values.slice(0,stride); if(t>=times[times.length-1]){ const j=times.length-1; return tr.values.slice(j*stride,j*stride+stride); } let i=0; while(i+1<times.length && times[i+1]<t)i++; if(tr.interpolation==="step") return tr.values.slice(i*stride,i*stride+stride); const hi=Math.min(i+1,times.length-1); const a=times[i], b=times[hi]; const u=b===a?0:(t-a)/(b-a); if(tr.interpolation==="cubic" && tr.kind==="vec3") return catmull3(times,tr.values,i,u,stride); if(tr.interpolation==="cubic" && tr.kind==="number") return catmullN(times,tr.values,i,u,stride); const p=tr.values.slice(i*stride,i*stride+stride), q=tr.values.slice(hi*stride,hi*stride+stride); if(tr.interpolation==="cubicspline"){ const h=b-a; const m1=scaleN(tr.outTangents.slice(i*stride,i*stride+stride),h), m2=scaleN(tr.inTangents.slice(hi*stride,hi*stride+stride),h); const r=hermiteN(p,q,m1,m2,u); return tr.kind==="quat"?norm4(r):r; } return tr.kind==="quat"?slerp(p,q,u):(tr.kind==="weights"?mixN(p,q,u):(tr.kind==="number"?[mix(p[0],q[0],u)]:mix3(p,q,u))); }
   function clipTime(clip,t){ const d=clip.duration||0; if(d<=0) return 0; const x=t*(clip.timeScale==null?1:clip.timeScale), loop=clip.loop||"repeat", reps=clip.repetitions==null?-1:clip.repetitions, clamp=!!clip.clampWhenFinished; if(loop==="once"){ if(x<=0) return 0; if(x>=d) return clamp?d:0; return x; } const finite=reps>=0; const r=finite?Math.max(0,reps):Infinity; if(r===0) return 0; if(finite && x>=d*r){ if(!clamp) return 0; return loop==="pingpong" && r%2===0 ? 0 : d; } if(loop==="pingpong"){ const y=((x%(2*d))+(2*d))%(2*d); return y<=d?y:2*d-y; } const y=((x%d)+d)%d; return x>0 && Math.abs(y)<1e-9?d:y; }
-  function updateMorph(o){ if(!(o.morphTargets&&o.morphTargets.length&&o.morphDirty)) return; const p=o.basePositions.slice(); for(let ti=0;ti<o.morphTargets.length;ti++){ const w=o.morphWeights[ti]||0, d=o.morphTargets[ti]; if(!w) continue; for(let i=0;i<p.length;i++) p[i]+=d[i]*w; } o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.morphDirty=false; }
+  function updateMorph(o){ if(!(o.morphTargets&&o.morphTargets.length&&o.morphDirty)) return; const p=o.basePositions.slice(); for(let ti=0;ti<o.morphTargets.length;ti++){ const w=o.morphWeights[ti]||0, d=o.morphTargets[ti]; if(!w) continue; for(let i=0;i<p.length;i++) p[i]+=d[i]*w; } o.morphedPositions=p; o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.morphDirty=false; }
   function skinMatrices(o){ const out=new Array(MAX_BONES*16).fill(0); for(let i=0;i<MAX_BONES;i++){ out[i*16]=1; out[i*16+5]=1; out[i*16+10]=1; out[i*16+15]=1; } if(o.shaderSkin){ for(let i=0;i<o.skin.bones.length;i++){ const m=M4.mul(o.skin.bones[i].matrix,o.skin.bindInverses[i]); for(let j=0;j<16;j++) out[i*16+j]=m[j]; } } return out; }
-  function updateSkin(o){ if(!(o.skin&&o.skinDirty)) return; if(o.shaderSkin){ o.skinDirty=false; return; } const skin=o.skin, p=new Array(o.basePositions.length).fill(0), mats=skin.bones.map((b,i)=>M4.mul(b.matrix,skin.bindInverses[i])); for(let vi=0;vi<o.basePositions.length/3;vi++){ const base=[o.basePositions[3*vi],o.basePositions[3*vi+1],o.basePositions[3*vi+2]]; for(let k=0;k<4;k++){ const w=skin.weights[4*vi+k]||0, bi=skin.indices[4*vi+k]||0; if(!w) continue; const q=transformPoint(mats[bi],base); p[3*vi]+=q[0]*w; p[3*vi+1]+=q[1]*w; p[3*vi+2]+=q[2]*w; } } o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.skinDirty=false; }
+  function updateSkin(o){ if(!(o.skin&&o.skinDirty)) return; if(o.shaderSkin){ o.skinDirty=false; return; } const base=o.morphedPositions||o.basePositions, skin=o.skin, p=new Array(base.length).fill(0), mats=skin.bones.map((b,i)=>M4.mul(b.matrix,skin.bindInverses[i])); for(let vi=0;vi<base.length/3;vi++){ const v=[base[3*vi],base[3*vi+1],base[3*vi+2]]; for(let k=0;k<4;k++){ const w=skin.weights[4*vi+k]||0, bi=skin.indices[4*vi+k]||0; if(!w) continue; const q=transformPoint(mats[bi],v); p[3*vi]+=q[0]*w; p[3*vi+1]+=q[1]*w; p[3*vi+2]+=q[2]*w; } } o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.skinDirty=false; }
   function assignComponent(dst,component,v){ if(component>0) dst[component-1]=v[0]; else for(let i=0;i<Math.min(dst.length,v.length);i++) dst[i]=v[i]; return dst; }
   function setRenderableAnim(o,prop,v,component=0){ if(!(prop in o)) return false; if(prop==="visible"||prop==="spriteSizeAttenuation"){ o[prop]=v[0]>=.5; return true; } if(Array.isArray(o[prop])) assignComponent(o[prop],component,v); else o[prop]=component>0?v[0]:v[0]; if(prop==="opacity") o.animTransparent=(o.baseTransparent||false)||o.opacity<1; return true; }
   function resetRenderableAnim(o){ const b=o.baseRenderable; if(!b)return; for(const k in b) o[k]=Array.isArray(b[k])?b[k].slice():b[k]; o.animTransparent=o.baseTransparent; for(const s of (o.visibilityStates||[])) s.visible=s.baseVisible; }
