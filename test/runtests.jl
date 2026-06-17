@@ -1451,6 +1451,20 @@ deterministic_bytes(n::Int) =
         @test occursin("uColor*vColor", html)
         @test occursin("o.colorBuf=buf(o.colors)", html)
         @test occursin("attrib(p,\"aColor\",o.colorBuf)", html)
+        color_gate_geo = BufferGeometry([0.0,0,0, 1.0,0,0],
+                                        Float64[], Float64[], Int[], 2, 0)
+        set_attribute!(color_gate_geo, :color,
+                       [1.0,0.0,0.0,0.25, 0.0,1.0,0.0,0.5], 4)
+        color_json_on = Diff3D._web_geo_object(color_gate_geo; use_vertex_colors=true)
+        color_json_off = Diff3D._web_geo_object(color_gate_geo; use_vertex_colors=false)
+        @test occursin("\"colors\":[1,0,0,0,1,0]", color_json_on)
+        @test occursin("\"colors\":[1,1,1,1,1,1]", color_json_off)
+        color_mesh_on = Mesh(color_gate_geo, MeshBasicMaterial(vertex_colors=true))
+        color_mesh_off = Mesh(color_gate_geo, MeshBasicMaterial())
+        @test occursin("\"colors\":[1,0,0,0,1,0]",
+                       Diff3D._web_drawable_json(color_mesh_on, Mat4()))
+        @test occursin("\"colors\":[1,1,1,1,1,1]",
+                       Diff3D._web_drawable_json(color_mesh_off, Mat4()))
         @test occursin("\"texture\":{\"width\":2,\"height\":2", html)
         @test occursin("\"alphaTexture\":{\"width\":2,\"height\":2", html)
         @test occursin("\"alphaTest\":0.40000000000000002", html)

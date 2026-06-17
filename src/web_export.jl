@@ -567,7 +567,21 @@ function _web_skin_json(obj, geo::BufferGeometry)
            ",\"bindInverses\":[" * join(bind_inverses, ",") * "]}"
 end
 
-function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions)
+_web_material_vertex_colors(mat) =
+    hasproperty(mat, :vertex_colors) && Bool(getproperty(mat, :vertex_colors))
+
+function _web_color_data(geo::BufferGeometry, use_vertex_colors::Bool)
+    if use_vertex_colors && has_attribute(geo, :color)
+        attr = get_attribute(geo, :color)
+        if attr.item_size >= 3 && length(attr.data) >= attr.item_size * geo.n_vertices
+            return [attr.data[(i - 1) * attr.item_size + j] for i in 1:geo.n_vertices for j in 1:3]
+        end
+    end
+    return ones(Float64, 3 * geo.n_vertices)
+end
+
+function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
+                         use_vertex_colors::Bool=true)
     normals = length(geo.normals) == length(geo.positions) ? geo.normals : zeros(Float64, length(geo.positions))
     has_tangents, tangents = _web_tangent_data(geo)
     uvs = length(geo.uvs) == 2 * geo.n_vertices ? geo.uvs : zeros(Float64, 2 * geo.n_vertices)
@@ -578,12 +592,7 @@ function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=
     else
         uvs
     end
-    colors = if has_attribute(geo, :color)
-        attr = get_attribute(geo, :color)
-        attr.item_size == 3 && length(attr.data) == 3 * geo.n_vertices ? attr.data : ones(Float64, 3 * geo.n_vertices)
-    else
-        ones(Float64, 3 * geo.n_vertices)
-    end
+    colors = _web_color_data(geo, use_vertex_colors)
     indices = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
     return "\"positions\":" * _js_array(positions) *
            ",\"normals\":" * _js_array(normals) *
@@ -782,7 +791,9 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
            ",\"morphTargetIds\":" * _js_array(unique([morph_target_ids; transform_obj.id])) *
            "," * _web_morph_targets_json(obj, geo) *
            "," * _web_skin_json(obj, geo) *
-           "," * _web_geo_object(geo, _web_positions(obj, geo)) *
+           "," * _web_geo_object(geo, _web_positions(obj, geo);
+                                  use_vertex_colors=(mode != "triangles" ||
+                                                     _web_material_vertex_colors(mat))) *
            "}"
 end
 

@@ -449,6 +449,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add CPU smooth-path vertex-color interpolation for RGB/RGBA geometry
   `:color` attributes when materials opt in with `vertex_colors=true`; clipping
   and rasterization now preserve the interpolated color factor per pixel.
+  Browser mesh export now follows the same material opt-in and copies RGB from
+  RGB or RGBA color attributes, while line and point colors remain per-vertex.
 - Done: add standard material fields for `metalness_map`, `alpha_map`,
   `emissive_intensity`, `ao_map_intensity`, `light_map_intensity`, and
   `env_map_intensity`; CPU flat and smooth shading now apply metalness maps and
