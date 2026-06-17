@@ -755,6 +755,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Added `examples/verify_examples_registry.py`, a registry-driven CRC runner
   that validates each non-planned entry's generation/smoke commands,
   regenerates its HTML, and runs browser smoke against every output.
+- Added GitHub Actions CI for package tests, documentation build, and the full
+  registered-example browser smoke sweep.
 - Added a standalone partial port for `webgl_loader_stl` via
   `examples/webgl_loader_stl.jl`, round-tripping deterministic binary STL
   geometry through Diff3D.jl `save_stl_binary` and `load_stl` before exporting

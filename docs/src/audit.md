@@ -45,4 +45,9 @@ release.
 - Decide whether this repository is a package-only artifact or a reproducible
   research artifact; that determines whether committing `Manifest.toml` is
   appropriate.
-- Add CI for package tests, docs, and at least one browser smoke path.
+
+## CI Coverage
+
+- `.github/workflows/ci.yml` runs package tests, documentation build, and the
+  full registered-example browser smoke sweep through
+  `examples/verify_examples_registry.py`.
