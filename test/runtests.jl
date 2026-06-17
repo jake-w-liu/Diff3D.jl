@@ -752,13 +752,22 @@ deterministic_bytes(n::Int) =
                           name="export_morph", morph_target_influences=[0.5])
         add!(scene, morph_mesh)
         skin_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
-                                  Float64[], Float64[], Int[1,2,3], 3, 1)
+                                  [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
+                                  [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
         set_attribute!(skin_geo, :morphPosition0,
                        [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0], 3)
+        set_attribute!(skin_geo, :tangent,
+                       [1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0], 4)
+        skin_normaldata = fill(0.5, 2, 2, 3)
+        skin_normaldata[:, :, 3] .= 1.0
         bone = Bone(name="export_bone")
         skeleton = Skeleton([bone])
         bone.position = Vec3(2.0, 0.0, 0.0)
-        skinned = SkinnedMesh(skin_geo, MeshBasicMaterial(color=Color3(0.2,0.9,0.6)),
+        skinned = SkinnedMesh(skin_geo,
+                              MeshStandardMaterial(color=Color3(0.2,0.9,0.6),
+                                                   normal_map=Texture(skin_normaldata;
+                                                                      filter=:nearest),
+                                                   normal_scale=1.0),
                               skeleton, fill((1,1,1,1), 3),
                               fill((1.0,0.0,0.0,0.0), 3);
                               name="export_skin", morph_target_influences=[0.25])
@@ -1115,6 +1124,8 @@ deterministic_bytes(n::Int) =
         @test occursin("morphById", html)
         @test occursin("\"name\":\"export_skin\"", html)
         @test occursin("\"positions\":[0,0,0,1,0,0,0,1,0]", html)
+        @test occursin("\"tangents\":[1,0,0,1,1,0,0,1,1,0,0,1]", html)
+        @test occursin("\"hasTangents\":true", html)
         @test occursin("\"skin\":{\"indices\":[0,0,0,0,0,0,0,0,0,0,0,0]", html)
         @test occursin("\"weights\":[1,0,0,0,1,0,0,0,1,0,0,0]", html)
         @test occursin("\"bones\":[{\"id\":", html)
@@ -1126,17 +1137,29 @@ deterministic_bytes(n::Int) =
         @test occursin("const nodeById = new Map()", html)
         @test occursin("const MAX_BONES=64", html)
         @test occursin("attribute vec4 aSkinIndex", html)
+        @test occursin("attribute vec4 aTangent", html)
+        @test occursin("varying vec4 vTangent", html)
         @test occursin("uniform mat4 uBoneMatrices[64]", html)
         @test occursin("mat4 skinMatrix()", html)
         @test occursin("mat3(skin)*aNormal", html)
+        @test occursin("mat3(skin)*aTangent.xyz", html)
         @test occursin("o.shaderSkin", html)
         @test occursin("&&!(o.morphTargets&&o.morphTargets.length)", html)
+        @test occursin("o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice()", html)
+        @test occursin("o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice()", html)
         @test occursin("o.skinIndexBuf=buf", html)
+        @test occursin("o.tanBuf=buf", html)
         @test occursin("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)
+        @test occursin("attrib(p,\"aTangent\",o.tanBuf,4)", html)
         @test occursin("function skinMatrices", html)
         @test occursin("uUseSkin", html)
+        @test occursin("uUseTangents", html)
         @test occursin("function updateSkin", html)
         @test occursin("const base=o.morphedPositions||o.basePositions", html)
+        @test occursin("function transformDir", html)
+        @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.nrmBuf)", html)
+        @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.tanBuf)", html)
+        @test occursin("mat3(t,b,n)*map", html)
         @test occursin("setNodeAnim", html)
         @test occursin("o.animPos=o.basePosition.slice()", html)
         @test occursin("b.animPos=b.basePosition.slice()", html)

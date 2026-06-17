@@ -308,9 +308,10 @@ Parallel audits split the remaining work into five critical tracks:
   `SkinnedMesh` objects by serializing bone IDs, bind inverses, skin indices,
   and weights. The compact runtime now uses shader-side uniform bone matrices
   for skeletons up to 64 bones and retains CPU vertex-buffer skinning as a
-  fallback for larger skeletons. Vertex normals are skinned in the compact
-  shader path; full three.js bone-texture skinning, tangent skinning, and
-  renderer-program integration remain renderer work.
+  fallback for larger skeletons or morphed skinned meshes. Vertex normals are
+  skinned in both paths, and authored tangents are serialized, skinned, and used
+  by tangent-space browser normal mapping. Full three.js bone-texture skinning
+  and renderer-program integration remain renderer work.
 - Done: add case-level browser tone mapping metadata and shader application for
   `:none`, `:linear`, `:reinhard`, and `:aces` with exposure. This closes the
   compact runtime's missing tone-map hook while full three.js
