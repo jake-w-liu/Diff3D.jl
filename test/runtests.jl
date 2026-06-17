@@ -2725,6 +2725,15 @@ deterministic_bytes(n::Int) =
         @test cam.position == saved_position
         @test oc.target == saved_target
         @test cam.target == saved_target
+        pole_cam = PerspectiveCamera()
+        pole_cam.position = Vec3(0.0, 5.0, 0.0)
+        pole_cam.target = Vec3(0.0, 0.0, 0.0)
+        pole_oc = OrbitControls(pole_cam)
+        pole_offset = pole_cam.position - pole_oc.target
+        orbit_pan!(pole_oc, 0.5, 0.25)
+        @test pole_oc.target == Vec3(0.5, 0.0, -0.25)
+        @test pole_cam.position - pole_oc.target == pole_offset
+        @test all(isfinite, (pole_cam.position.x, pole_cam.position.y, pole_cam.position.z))
 
         constrained_cam = PerspectiveCamera()
         constrained_cam.position = Vec3(0.0, 0.0, 5.0)
@@ -6729,6 +6738,21 @@ deterministic_bytes(n::Int) =
                 orbit_update!(oc3)
             end
             @test isapprox(norm(oc3.target - t0), 0.5; atol=1e-6)  # old: 10.0
+
+            pole_cam = PerspectiveCamera()
+            pole_cam.position = Vec3(0.0, 5.0, 0.0)
+            pole_cam.target = Vec3(0.0, 0.0, 0.0)
+            pole_oc = OrbitControls(pole_cam; enable_damping=true, damping_factor=0.05)
+            pole_offset = pole_cam.position - pole_oc.target
+            orbit_pan!(pole_oc, 0.5, 0.0)
+            @test pole_oc.v_pan == Vec3(0.5, 0.0, 0.0)
+            for _ in 1:1000
+                orbit_update!(pole_oc)
+            end
+            @test isapprox(pole_oc.target.x, 0.5; atol=1e-6)
+            @test isapprox(pole_oc.target.y, 0.0; atol=1e-12)
+            @test isapprox(pole_oc.target.z, 0.0; atol=1e-12)
+            @test norm((pole_cam.position - pole_oc.target) - pole_offset) < 1e-9
 
             # orbit_set! accepts mixed Int/Float64 keyword arguments.
             cam4 = PerspectiveCamera()

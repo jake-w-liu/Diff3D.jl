@@ -101,10 +101,19 @@ function _orbit_zoom_now!(oc::OrbitControls, factor)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
-function _orbit_pan_now!(oc::OrbitControls, dx, dy)
+function _orbit_pan_basis(oc::OrbitControls)
     fwd = normalize(oc.target - oc.camera.position)
-    right = normalize(cross(fwd, oc.camera.up))
-    up = cross(right, fwd)
+    raw_right = cross(fwd, oc.camera.up)
+    if norm(raw_right) <= 1e-12
+        candidate = abs(fwd.x) < 0.9 ? Vec3(1.0, 0.0, 0.0) : Vec3(0.0, 1.0, 0.0)
+        raw_right = candidate - fwd * dot(candidate, fwd)
+    end
+    right = normalize(raw_right)
+    up = normalize(cross(right, fwd))
+    return right, up
+end
+function _orbit_pan_now!(oc::OrbitControls, dx, dy)
+    right, up = _orbit_pan_basis(oc)
     shift = right * dx + up * dy
     oc.target = oc.target + shift
     oc.camera.position = oc.camera.position + shift
@@ -150,9 +159,7 @@ velocity consumed by `orbit_update!`; non-damped behaviour is unchanged.
 """
 function orbit_pan!(oc::OrbitControls, dx, dy)
     if oc.enable_damping
-        fwd = normalize(oc.target - oc.camera.position)
-        right = normalize(cross(fwd, oc.camera.up))
-        up = cross(right, fwd)
+        right, up = _orbit_pan_basis(oc)
         oc.v_pan = oc.v_pan + right * dx + up * dy
         return oc
     end
