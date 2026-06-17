@@ -498,6 +498,11 @@ Parallel audits split the remaining work into five critical tracks:
   parents update child drawable matrices in browser export.
 - Done: preserve `InstancedMesh` per-instance local matrices while object or
   parent transform animations rebuild browser world matrices.
+- Done: export opaque browser `InstancedMesh` drawables as a single GPU
+  instanced draw path using `ANGLE_instanced_arrays`, with a per-instance draw
+  fallback when the extension is unavailable. Transparent instanced meshes keep
+  the per-instance export path so object-level transparent sorting remains
+  deterministic.
 - Done: propagate generated WebGL transforms through drawable-to-drawable
   parent hierarchies, not only non-renderable transform nodes.
 - Done: reclassify generated WebGL drawables into the transparent pass when
@@ -588,9 +593,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_instancing_dynamic` via
   `examples/webgl_instancing_dynamic.jl`, using Diff3D.jl `InstancedMesh`,
   generated instance matrices, shadows, fog, tone mapping, and quaternion/scale
-  animation. The compact exporter currently serializes instances as generated
-  drawables instead of GPU instanced draw calls, so exact upstream renderer
-  instancing remains a documented deviation.
+  animation. The compact exporter now emits the opaque instance grid through a
+  GPU instanced WebGL draw path; remaining deviations are the procedural scene
+  and the compact exporter rather than three.js `WebGLRenderer`.
 - Added a standalone partial port for `webgl_materials_normal` via
   `examples/webgl_materials_normal.jl`, using Diff3D.jl `MeshNormalMaterial`,
   primitive geometry generators, orbit interaction, and the browser

@@ -857,6 +857,12 @@ deterministic_bytes(n::Int) =
         @test occursin("\"morphTargets\":[[0,0,1,0,0,1,0,0,1]]", skin_drawable)
         @test occursin("\"morphWeights\":[0.25]", skin_drawable)
         @test length(findall("\"basePositions\"", skin_drawable)) == 1
+        instanced_drawables = filter(d -> occursin("\"name\":\"export_instanced_motion\"", d),
+                                     Diff3D._web_collect_drawables(scene))
+        @test length(instanced_drawables) == 1
+        @test occursin("\"instanceMatrix\":null", only(instanced_drawables))
+        @test occursin("\"instanceMatrices\":[[1,0,0,0,0,1,0,0,0,0,1,0,-0.59999999999999998,0,0,1],[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]]",
+                       only(instanced_drawables))
         lod = LOD(name="export_lod")
         lod_near = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_near")
         lod_far = Mesh(BoxGeometry(), MeshBasicMaterial(); name="export_lod_far")
@@ -1119,7 +1125,14 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_animated_group\"", html)
         @test occursin("\"name\":\"export_group_motion_child\"", html)
         @test occursin("\"name\":\"export_instanced_motion\"", html)
-        @test occursin("\"instanceMatrix\":[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]", html)
+        @test occursin("\"instanceMatrices\":[[1,0,0,0,0,1,0,0,0,0,1,0,-0.59999999999999998,0,0,1],[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]]", html)
+        @test occursin("ANGLE_instanced_arrays", html)
+        @test occursin("function instanceAttribs", html)
+        @test occursin("vertexAttribDivisorANGLE", html)
+        @test occursin("drawElementsInstancedANGLE", html)
+        @test occursin("uUseInstancing", html)
+        @test occursin("const model=M4.mul(base,im)", html)
+        @test occursin("M4.normal3(model)", html)
         @test occursin("\"nodes\":[", html)
         @test occursin("\"parentId\":$(animated_group.id)", html)
         @test occursin("\"visible\":false", html)
@@ -1144,6 +1157,7 @@ deterministic_bytes(n::Int) =
         @test occursin("function updateTransformGraph", html)
         @test occursin("nodeMap.set(n.id,n)", html)
         @test occursin("nodeMap.set(o.id,o)", html)
+        @test occursin("o.instanceMatrices=(o.instanceMatrices&&o.instanceMatrices.length)?o.instanceMatrices.map(m=>m.slice()):null", html)
         @test occursin("o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident()", html)
         @test occursin("M4.mul(world,o.instanceMatrix||M4.ident())", html)
         @test occursin("o.baseTransparent=!!o.transparent", html)

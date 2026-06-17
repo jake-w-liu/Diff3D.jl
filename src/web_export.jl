@@ -68,6 +68,7 @@ _js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
                           _js_num(q.z) * "," * _js_num(q.w) * "]"
 _js_color(c::Color3) = "[" * _js_num(c.r) * "," * _js_num(c.g) * "," * _js_num(c.b) * "]"
 _js_mat(m::Mat4) = _js_array(m.e)
+_js_mat_array(ms::AbstractVector{<:Mat4}) = "[" * join((_js_mat(m) for m in ms), ",") * "]"
 _js_plane(p::Plane) = "[" * _js_num(p.normal.x) * "," * _js_num(p.normal.y) * "," *
                       _js_num(p.normal.z) * "," * _js_num(p.constant) * "]"
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
@@ -581,6 +582,7 @@ end
 function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles",
                             transform_obj::AbstractObject3D=obj,
                             instance_matrix=nothing,
+                            instance_matrices::AbstractVector{<:Mat4}=Mat4{Float64}[],
                             morph_target_ids::AbstractVector{Int}=Int[],
                             visibility_target_ids::AbstractVector{Int}=Int[],
                             visibility_values::AbstractVector{Bool}=Bool[],
@@ -618,6 +620,7 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
            ",\"matrix\":" * _js_mat(m) *
            ",\"parentMatrix\":" * _js_mat(parent_matrix) *
            ",\"instanceMatrix\":" * (instance_matrix === nothing ? "null" : _js_mat(instance_matrix)) *
+           ",\"instanceMatrices\":" * (isempty(instance_matrices) ? "null" : _js_mat_array(instance_matrices)) *
            ",\"basePosition\":" * _js_vec(get_position(transform_obj)) *
            ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
            ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
@@ -755,12 +758,12 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
             end
         elseif obj isa InstancedMesh
             parent = compute_world_matrix(obj)
-            for im in obj.instance_matrices
+            if !_web_material_transparent(obj.material)
                 if material_wireframe(obj.material)
                     proxy = _web_wireframe_proxy(obj)
-                    push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
+                    push!(out, _web_drawable_json(proxy, parent; mode="lines",
                                                   transform_obj=obj,
-                                                  instance_matrix=im,
+                                                  instance_matrices=obj.instance_matrices,
                                                   morph_target_ids=ancestor_ids,
                                                   visibility_target_ids=visibility_ids,
                                                   visibility_values=visibility_values,
@@ -768,14 +771,38 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                   lod_distance=lod_distance,
                                                   lod_hysteresis=lod_hysteresis))
                 else
-                    push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
-                                                  instance_matrix=im,
+                    push!(out, _web_drawable_json(obj, parent; mode="triangles",
+                                                  instance_matrices=obj.instance_matrices,
                                                   morph_target_ids=ancestor_ids,
                                                   visibility_target_ids=visibility_ids,
                                                   visibility_values=visibility_values,
                                                   lod_group_id=lod_group_id,
                                                   lod_distance=lod_distance,
                                                   lod_hysteresis=lod_hysteresis))
+                end
+            else
+                for im in obj.instance_matrices
+                    if material_wireframe(obj.material)
+                        proxy = _web_wireframe_proxy(obj)
+                        push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
+                                                      transform_obj=obj,
+                                                      instance_matrix=im,
+                                                      morph_target_ids=ancestor_ids,
+                                                      visibility_target_ids=visibility_ids,
+                                                      visibility_values=visibility_values,
+                                                      lod_group_id=lod_group_id,
+                                                      lod_distance=lod_distance,
+                                                      lod_hysteresis=lod_hysteresis))
+                    else
+                        push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
+                                                      instance_matrix=im,
+                                                      morph_target_ids=ancestor_ids,
+                                                      visibility_target_ids=visibility_ids,
+                                                      visibility_values=visibility_values,
+                                                      lod_group_id=lod_group_id,
+                                                      lod_distance=lod_distance,
+                                                      lod_hysteresis=lod_hysteresis))
+                    end
                 end
             end
         elseif obj isa PointsObject
@@ -1119,6 +1146,7 @@ function _webgl_html(data_json::String, title::String)
   const gl = canvas.getContext("webgl", {antialias:true, preserveDrawingBuffer:true});
   if (!gl) throw new Error("WebGL is not available");
   gl.getExtension("OES_standard_derivatives");
+  const instancingExt=gl.getExtension("ANGLE_instanced_arrays");
 
   const M4 = {
     ident(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; },
@@ -1153,7 +1181,7 @@ function _webgl_html(data_json::String, title::String)
   function slerp(a,b,t){ let cos=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3]; if(cos<0){ b=[-b[0],-b[1],-b[2],-b[3]]; cos=-cos; } if(cos>.9995){ const q=[mix(a[0],b[0],t),mix(a[1],b[1],t),mix(a[2],b[2],t),mix(a[3],b[3],t)]; const l=Math.hypot(...q)||1; return q.map(v=>v/l); } const th=Math.acos(cos), s=Math.sin(th); return [Math.sin((1-t)*th)/s*a[0]+Math.sin(t*th)/s*b[0], Math.sin((1-t)*th)/s*a[1]+Math.sin(t*th)/s*b[1], Math.sin((1-t)*th)/s*a[2]+Math.sin(t*th)/s*b[2], Math.sin((1-t)*th)/s*a[3]+Math.sin(t*th)/s*b[3]]; }
 
   const MAX_BONES=64;
-  const VSH=`attribute vec3 aPosition; attribute vec3 aNormal; attribute vec3 aColor; attribute vec2 aUv; attribute vec2 aUv2; attribute vec4 aSkinIndex; attribute vec4 aSkinWeight; uniform mat4 uModel,uView,uProj; uniform mat3 uNormalMat; uniform int uUseSkin; uniform mat4 uBoneMatrices[64]; varying vec3 vNormal,vWorld,vColor; varying vec2 vUv,vUv2; mat4 boneMat(float idx){ for(int i=0;i<64;i++){ if(float(i)==idx) return uBoneMatrices[i]; } return mat4(1.0); } mat4 skinMatrix(){ if(uUseSkin==0) return mat4(1.0); return aSkinWeight.x*boneMat(aSkinIndex.x)+aSkinWeight.y*boneMat(aSkinIndex.y)+aSkinWeight.z*boneMat(aSkinIndex.z)+aSkinWeight.w*boneMat(aSkinIndex.w); } void main(){ mat4 skin=skinMatrix(); vec4 w=uModel*(skin*vec4(aPosition,1.0)); vWorld=w.xyz; vUv=aUv; vUv2=aUv2; vColor=aColor; vNormal=normalize(uNormalMat*(mat3(skin)*aNormal)); gl_Position=uProj*uView*w; }`;
+  const VSH=`attribute vec3 aPosition; attribute vec3 aNormal; attribute vec3 aColor; attribute vec2 aUv; attribute vec2 aUv2; attribute vec4 aSkinIndex; attribute vec4 aSkinWeight; attribute vec4 aInstanceMatrix0; attribute vec4 aInstanceMatrix1; attribute vec4 aInstanceMatrix2; attribute vec4 aInstanceMatrix3; uniform mat4 uModel,uView,uProj; uniform mat3 uNormalMat; uniform int uUseSkin,uUseInstancing; uniform mat4 uBoneMatrices[64]; varying vec3 vNormal,vWorld,vColor; varying vec2 vUv,vUv2; mat4 boneMat(float idx){ for(int i=0;i<64;i++){ if(float(i)==idx) return uBoneMatrices[i]; } return mat4(1.0); } mat4 skinMatrix(){ if(uUseSkin==0) return mat4(1.0); return aSkinWeight.x*boneMat(aSkinIndex.x)+aSkinWeight.y*boneMat(aSkinIndex.y)+aSkinWeight.z*boneMat(aSkinIndex.z)+aSkinWeight.w*boneMat(aSkinIndex.w); } mat4 instMatrix(){ return uUseInstancing==1?mat4(aInstanceMatrix0,aInstanceMatrix1,aInstanceMatrix2,aInstanceMatrix3):mat4(1.0); } void main(){ mat4 skin=skinMatrix(); mat4 inst=instMatrix(); vec4 w=uModel*(inst*(skin*vec4(aPosition,1.0))); vWorld=w.xyz; vUv=aUv; vUv2=aUv2; vColor=aColor; vNormal=normalize(uNormalMat*(mat3(inst)*mat3(skin)*aNormal)); gl_Position=uProj*uView*w; }`;
   const FSH=`precision mediump float; const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; varying vec3 vNormal,vWorld; varying vec2 vUv; uniform vec3 uColor,uCamera,uAmbientColor; uniform vec3 uDirColor[MAX_DIR],uDirLight[MAX_DIR]; uniform vec3 uPointColor[MAX_POINT],uPointPos[MAX_POINT]; uniform vec3 uSpotColor[MAX_SPOT],uSpotPos[MAX_SPOT],uSpotDir[MAX_SPOT]; uniform vec3 uHemiSky[MAX_HEMI],uHemiGround[MAX_HEMI]; uniform vec2 uMapOffset,uMapRepeat,uMapCenter; uniform float uGlow,uOpacity,uUseMap,uUseAlphaMap,uMapRotation,uToneExposure,uShininess; uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uToneMapping,uOutputColorSpace; uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT]; uniform sampler2D uMap,uAlphaMap; vec2 txUv(vec2 uv){ uv-=uMapCenter; float c=cos(uMapRotation), s=sin(uMapRotation); uv=vec2(c*uv.x+s*uv.y,-s*uv.x+c*uv.y); return uv*uMapRepeat+uMapCenter+uMapOffset; } float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; } float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; vec3 v=normalize(uCamera-vWorld); vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0); for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); } for(int i=0;i<MAX_DIR;i++){ if(i>=uDirCount) break; vec3 l=normalize(uDirLight[i]); vec3 h=normalize(l+v); float d=max(dot(n,l),0.0); diffuse+=uDirColor[i]*d; specular+=uDirColor[i]*pow(max(dot(n,h),0.0),uShininess); } for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float a=attenuation(dist,uPointDistance[i],uPointDecay[i]); diffuse+=uPointColor[i]*max(dot(n,l),0.0)*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*max(dot(n,l),0.0)*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } vec2 uv=txUv(vUv); vec4 tex=mix(vec4(1.0),texture2D(uMap,uv),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,uv).g,uUseAlphaMap); vec3 base=uColor*tex.rgb; vec3 c=base*diffuse+specular+uGlow*base*.28; gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a*alphaTex); }`;
   const FSH_EMISSIVE=`#extension GL_OES_standard_derivatives : enable
   precision mediump float;
@@ -1207,7 +1235,7 @@ function _webgl_html(data_json::String, title::String)
     .replace(",uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap","")
     .replace("vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),texture2D(uSheenColorMap,sheenColorUv).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),texture2D(uSpecularColorMap,specularColorUv).rgb,uUseSpecularColorMap);",
              "float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor; float sheenRough=clamp(uSheenRoughness,0.0,1.0); float iridescence=clamp(uIridescence,0.0,1.0); float iridThickness=uIridescenceThickness; float specIntensity=clamp(uSpecularIntensity,0.0,1.0); vec3 specColor=uSpecularColor;");
-  const CVSH=`attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uModel,uView,uProj; varying vec3 vWorld,vColor; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; }`;
+  const CVSH=`attribute vec3 aPosition; attribute vec3 aColor; attribute vec4 aInstanceMatrix0; attribute vec4 aInstanceMatrix1; attribute vec4 aInstanceMatrix2; attribute vec4 aInstanceMatrix3; uniform mat4 uModel,uView,uProj; uniform int uUseInstancing; varying vec3 vWorld,vColor; mat4 instMatrix(){ return uUseInstancing==1?mat4(aInstanceMatrix0,aInstanceMatrix1,aInstanceMatrix2,aInstanceMatrix3):mat4(1.0); } void main(){ vec4 w=uModel*(instMatrix()*vec4(aPosition,1.0)); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; }`;
   const CFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec3 c=uColor*vColor*(.75+.65*uGlow); c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity); }`;
   const PVSH=`attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uModel,uView,uProj; uniform float uPointSize; varying vec3 vWorld,vColor; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; gl_PointSize=uPointSize; }`;
   const PFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUsePointMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uPointMap; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 d=gl_PointCoord-vec2(.5); float r=dot(d,d); if(r>.25) discard; float a=smoothstep(.25,0.0,r); vec4 tex=mix(vec4(1.0),texture2D(uPointMap,gl_PointCoord),uUsePointMap); vec3 c=mix(uColor*vColor*tex.rgb*(.65+uGlow*.85)*a,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*a*tex.a); }`;
@@ -1267,7 +1295,7 @@ function _webgl_html(data_json::String, title::String)
   function eulerToQuat(e,order="XYZ"){ const x=e[0],y=e[1],z=e[2], c1=Math.cos(x/2), c2=Math.cos(y/2), c3=Math.cos(z/2), s1=Math.sin(x/2), s2=Math.sin(y/2), s3=Math.sin(z/2); if(order==="YXZ") return [s1*c2*c3+c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3+s1*s2*s3]; if(order==="ZXY") return [s1*c2*c3-c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3-s1*s2*s3]; if(order==="ZYX") return [s1*c2*c3-c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3+s1*s2*s3]; if(order==="YZX") return [s1*c2*c3+c1*s2*s3,c1*s2*c3+s1*c2*s3,c1*c2*s3-s1*s2*c3,c1*c2*c3-s1*s2*s3]; if(order==="XZY") return [s1*c2*c3-c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3+s1*s2*s3]; return [s1*c2*c3+c1*s2*s3,c1*s2*c3-s1*c2*s3,c1*c2*s3+s1*s2*c3,c1*c2*c3-s1*s2*s3]; }
   function buildNode(n){ n.parentMatrix=(n.parentMatrix||M4.ident()).slice(); n.basePosition=(n.basePosition||[0,0,0]).slice(); n.baseEuler=(n.baseEuler||[0,0,0]).slice(); n.baseEulerOrder=n.baseEulerOrder||"XYZ"; n.baseScale=(n.baseScale||[1,1,1]).slice(); n.baseQuaternion=(n.baseQuaternion||eulerToQuat(n.baseEuler,n.baseEulerOrder)).slice(); n.baseMatrix=n.matrix.slice(); n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); return n; }
   function buildObj(o){
-    o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceSource=!!o.instanceMatrix; o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
+    o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceMatrices=(o.instanceMatrices&&o.instanceMatrices.length)?o.instanceMatrices.map(m=>m.slice()):null; o.instanceSource=!!(o.instanceMatrix||o.instanceMatrices); o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
     o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),shininess:o.shininess,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
     o.visibilityStates=(o.visibilityStates&&o.visibilityStates.length)?o.visibilityStates:[{id:o.id,visible:o.visible!==false}]; for(const s of o.visibilityStates) s.baseVisible=s.visible!==false;
     o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.morphedPositions=null; o.morphDirty=!!(o.morphTargets&&o.morphTargets.length);
@@ -1279,6 +1307,7 @@ function _webgl_html(data_json::String, title::String)
     o.indexType=maxIndex>65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     if(o.indexType===gl.UNSIGNED_INT && !gl.getExtension("OES_element_index_uint")) throw new Error("OES_element_index_uint is required for this exported geometry");
     o.idxBuf=buf(o.indices,gl.ELEMENT_ARRAY_BUFFER,o.indexType===gl.UNSIGNED_INT ? Uint32Array : Uint16Array);
+    o.instanceBuf=o.instanceMatrices?buf(o.instanceMatrices.flat()):null; o.instanceCount=o.instanceMatrices?o.instanceMatrices.length:1;
     o.count=o.indices.length; return o;
   }
   for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
@@ -1291,6 +1320,29 @@ function _webgl_html(data_json::String, title::String)
   const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); }
   const nodeById = new Map(); for(const c of DATA.cases) for(const n of c.nodes||[]){ if(!nodeById.has(n.id)) nodeById.set(n.id,[]); nodeById.get(n.id).push(n); } for(const c of DATA.cases) for(const o of c.objects) if(o.skin) for(const b of o.skin.bones){ if(!nodeById.has(b.id)) nodeById.set(b.id,[]); nodeById.get(b.id).push(b); }
   function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
+  function instanceAttribs(p,o){
+    if(!(instancingExt&&o.instanceBuf&&o.instanceCount>0)) return false;
+    const names=["aInstanceMatrix0","aInstanceMatrix1","aInstanceMatrix2","aInstanceMatrix3"], stride=64;
+    gl.bindBuffer(gl.ARRAY_BUFFER,o.instanceBuf);
+    for(let i=0;i<4;i++){
+      const loc=gl.getAttribLocation(p,names[i]);
+      if(loc<0) continue;
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc,4,gl.FLOAT,false,stride,i*16);
+      instancingExt.vertexAttribDivisorANGLE(loc,1);
+    }
+    return true;
+  }
+  function clearInstanceAttribs(p){
+    if(!instancingExt) return;
+    const names=["aInstanceMatrix0","aInstanceMatrix1","aInstanceMatrix2","aInstanceMatrix3"];
+    for(let i=0;i<4;i++){
+      const loc=gl.getAttribLocation(p,names[i]);
+      if(loc<0) continue;
+      instancingExt.vertexAttribDivisorANGLE(loc,0);
+      gl.disableVertexAttribArray(loc);
+    }
+  }
   function sampleTrack(tr,t){ const times=tr.times; if(times.length===0) return null; const stride=tr.kind==="quat"?4:(tr.kind==="weights"?tr.stride:(tr.kind==="number"?1:3)); if(t<=times[0]) return tr.values.slice(0,stride); if(t>=times[times.length-1]){ const j=times.length-1; return tr.values.slice(j*stride,j*stride+stride); } let i=0; while(i+1<times.length && times[i+1]<t)i++; if(tr.interpolation==="step") return tr.values.slice(i*stride,i*stride+stride); const hi=Math.min(i+1,times.length-1); const a=times[i], b=times[hi]; const u=b===a?0:(t-a)/(b-a); if(tr.interpolation==="cubic" && tr.kind==="vec3") return catmull3(times,tr.values,i,u,stride); if(tr.interpolation==="cubic" && tr.kind==="number") return catmullN(times,tr.values,i,u,stride); const p=tr.values.slice(i*stride,i*stride+stride), q=tr.values.slice(hi*stride,hi*stride+stride); if(tr.interpolation==="cubicspline"){ const h=b-a; const m1=scaleN(tr.outTangents.slice(i*stride,i*stride+stride),h), m2=scaleN(tr.inTangents.slice(hi*stride,hi*stride+stride),h); const r=hermiteN(p,q,m1,m2,u); return tr.kind==="quat"?norm4(r):r; } return tr.kind==="quat"?slerp(p,q,u):(tr.kind==="weights"?mixN(p,q,u):(tr.kind==="number"?[mix(p[0],q[0],u)]:mix3(p,q,u))); }
   function clipTime(clip,t){ const d=clip.duration||0; if(d<=0) return 0; const x=t*(clip.timeScale==null?1:clip.timeScale), loop=clip.loop||"repeat", reps=clip.repetitions==null?-1:clip.repetitions, clamp=!!clip.clampWhenFinished; if(loop==="once"){ if(x<=0) return 0; if(x>=d) return clamp?d:0; return x; } const finite=reps>=0; const r=finite?Math.max(0,reps):Infinity; if(r===0) return 0; if(finite && x>=d*r){ if(!clamp) return 0; return loop==="pingpong" && r%2===0 ? 0 : d; } if(loop==="pingpong"){ const y=((x%(2*d))+(2*d))%(2*d); return y<=d?y:2*d-y; } const y=((x%d)+d)%d; return x>0 && Math.abs(y)<1e-9?d:y; }
   function updateMorph(o){ if(!(o.morphTargets&&o.morphTargets.length&&o.morphDirty)) return; const p=o.basePositions.slice(); for(let ti=0;ti<o.morphTargets.length;ti++){ const w=o.morphWeights[ti]||0, d=o.morphTargets[ti]; if(!w) continue; for(let i=0;i<p.length;i++) p[i]+=d[i]*w; } o.morphedPositions=p; o.positions=p; gl.bindBuffer(gl.ARRAY_BUFFER,o.posBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(p)); o.morphDirty=false; }
@@ -1332,6 +1384,7 @@ function _webgl_html(data_json::String, title::String)
     attrib(p,"aColor",o.colorBuf);
     if(o.mode==="triangles"){ attrib(p,"aNormal",o.nrmBuf); attrib(p,"aUv",o.uvBuf,2); attrib(p,"aUv2",o.uv2Buf,2); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); }
     if(o.mode==="sprite"){ attrib(p,"aUv",o.uvBuf,2); }
+    const gpuInstanced=instanceAttribs(p,o);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf);
     gl.uniformMatrix4fv(gl.getUniformLocation(p,"uModel"),false,new Float32Array(o.matrix));
     gl.uniformMatrix4fv(gl.getUniformLocation(p,"uView"),false,new Float32Array(view));
@@ -1344,6 +1397,7 @@ function _webgl_html(data_json::String, title::String)
     uniform1i(p,"uToneMapping",tm.mode);
     uniform1f(p,"uToneExposure",tm.exposure);
     uniform1i(p,"uOutputColorSpace",tm.output);
+    uniform1i(p,"uUseInstancing",gpuInstanced?1:0);
     gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye));
     gl.uniform3fv(gl.getUniformLocation(p,"uFogColor"),new Float32Array(fg.color));
     uniform1i(p,"uFogType",fg.type);
@@ -1469,7 +1523,22 @@ function _webgl_html(data_json::String, title::String)
       if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uSpriteMap"),0); }
     }
     const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
-    gl.drawElements(mode,o.count,o.indexType,0);
+    if(gpuInstanced){
+      instancingExt.drawElementsInstancedANGLE(mode,o.count,o.indexType,0,o.instanceCount);
+      clearInstanceAttribs(p);
+    } else if(o.instanceMatrices&&o.instanceMatrices.length){
+      const base=o.matrix.slice(), modelLoc=gl.getUniformLocation(p,"uModel"), normalLoc=o.mode==="triangles"?gl.getUniformLocation(p,"uNormalMat"):null;
+      for(const im of o.instanceMatrices){
+        const model=M4.mul(base,im);
+        gl.uniformMatrix4fv(modelLoc,false,new Float32Array(model));
+        if(normalLoc!==null) gl.uniformMatrix3fv(normalLoc,false,new Float32Array(M4.normal3(model)));
+        gl.drawElements(mode,o.count,o.indexType,0);
+      }
+      gl.uniformMatrix4fv(modelLoc,false,new Float32Array(base));
+      if(normalLoc!==null) gl.uniformMatrix3fv(normalLoc,false,new Float32Array(M4.normal3(base)));
+    } else {
+      gl.drawElements(mode,o.count,o.indexType,0);
+    }
   }
   const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats"), speedEl=document.getElementById("speed"), speedValue=document.getElementById("speedValue"), playToggle=document.getElementById("playToggle");
   let active=DATA.cases[0], yaw=.65, pitch=.53, dist=active.radius, targetOffset=[0,0,0], dragging=false, panMode=false, pinchMode=false, lx=0, ly=0, pinchDist=0, pinchCenter=[0,0], animTime=0, lastFrameTime=performance.now()*.001, animSpeed=1, animPaused=false;
