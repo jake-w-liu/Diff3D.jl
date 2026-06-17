@@ -752,6 +752,11 @@ Parallel audits split the remaining work into five critical tracks:
   loading them through Diff3D.jl `load_obj_groups`/`load_mtl`, and exporting
   material-split meshes to the compact browser path. Exact upstream OBJ/MTL
   assets and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_loader_ply` via
+  `examples/webgl_loader_ply.jl`, generating temporary ASCII and
+  `binary_little_endian` PLY assets, loading both through Diff3D.jl `load_ply`,
+  and exporting vertex-color meshes to the compact browser path. Exact upstream
+  PLY assets and `WebGLRenderer` internals remain documented deviations.
 
 ## Next implementation targets
 
