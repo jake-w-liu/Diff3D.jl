@@ -20,6 +20,7 @@ struct WebGLExportCase
     output_color_space::Symbol
     animations::Vector{AnimationClip}
     clipping_planes::Vector{Plane{Float64}}
+    camera::Union{Nothing, AbstractCamera}
 end
 
 function WebGLExportCase(id::String, title::String, subtitle::String, scene::Scene;
@@ -29,9 +30,12 @@ function WebGLExportCase(id::String, title::String, subtitle::String, scene::Sce
                          tone_exposure::Real=1.0,
                          output_color_space::Symbol=:srgb,
                          animations::AbstractVector{AnimationClip}=AnimationClip[],
-                         clipping_planes::AbstractVector{<:Plane}=Plane{Float64}[])
+                         clipping_planes::AbstractVector{<:Plane}=Plane{Float64}[],
+                         camera=nothing)
     _web_tone_mapping_id(tone_mapping)
     _web_output_color_space_id(output_color_space)
+    camera === nothing || camera isa AbstractCamera ||
+        throw(ArgumentError("WebGLExportCase camera must be nothing, PerspectiveCamera, or OrthographicCamera"))
     exposure = Float64(tone_exposure)
     (isfinite(exposure) && exposure >= 0.0) ||
         throw(ArgumentError("tone_exposure must be finite and non-negative"))
@@ -40,7 +44,8 @@ function WebGLExportCase(id::String, title::String, subtitle::String, scene::Sce
                     output_color_space,
                     collect(AnimationClip, animations),
                     [Plane(Vec3(Float64(p.normal.x), Float64(p.normal.y), Float64(p.normal.z)),
-                           Float64(p.constant)) for p in clipping_planes])
+                           Float64(p.constant)) for p in clipping_planes],
+                    camera)
 end
 
 function _web_tone_mapping_id(tone_mapping::Symbol)
@@ -215,6 +220,40 @@ function _web_fog_json(fog)
     end
     return "null"
 end
+
+function _web_camera_json(camera)
+    camera === nothing && return "null"
+    if camera isa PerspectiveCamera
+        return "{" *
+               "\"type\":\"perspective\"" *
+               ",\"id\":" * string(camera.id) *
+               ",\"name\":" * _js_str(camera.name) *
+               ",\"position\":" * _js_vec(camera.position) *
+               ",\"target\":" * _js_vec(camera.target) *
+               ",\"up\":" * _js_vec(camera.up) *
+               ",\"fov\":" * _js_num(camera.fov) *
+               ",\"near\":" * _js_num(camera.near) *
+               ",\"far\":" * _js_num(camera.far) *
+               "}"
+    elseif camera isa OrthographicCamera
+        return "{" *
+               "\"type\":\"orthographic\"" *
+               ",\"id\":" * string(camera.id) *
+               ",\"name\":" * _js_str(camera.name) *
+               ",\"position\":" * _js_vec(camera.position) *
+               ",\"target\":" * _js_vec(camera.target) *
+               ",\"up\":" * _js_vec(camera.up) *
+               ",\"left\":" * _js_num(camera.left) *
+               ",\"right\":" * _js_num(camera.right) *
+               ",\"bottom\":" * _js_num(camera.bottom) *
+               ",\"top\":" * _js_num(camera.top) *
+               ",\"near\":" * _js_num(camera.near) *
+               ",\"far\":" * _js_num(camera.far) *
+               "}"
+    end
+    throw(ArgumentError("unsupported WebGL export camera type: $(typeof(camera))"))
+end
+
 _web_material_transparent(mat) =
     (hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))) ||
     _web_material_opacity(mat) < 1.0
@@ -272,6 +311,7 @@ function _web_texture_json(tex)
            ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
            ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
+           ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
            ",\"offset\":[" * _js_num(tex.offset.x) * "," * _js_num(tex.offset.y) * "]" *
            ",\"repeat\":[" * _js_num(tex.repeat.x) * "," * _js_num(tex.repeat.y) * "]" *
            ",\"rotation\":" * _js_num(tex.rotation) *
@@ -303,6 +343,7 @@ function _web_cube_face_json(tex)
            ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
            ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
+           ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
            ",\"data\":[" * join(rgba, ",") * "]" *
            "}"
 end
@@ -339,7 +380,38 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
            "}"
 end
 
-function _web_light_json(light::AmbientLight)
+function _web_visibility_chain(obj::AbstractObject3D)
+    chain = AbstractObject3D[]
+    current = obj
+    while current !== nothing
+        push!(chain, current)
+        current = get_parent(current)
+    end
+    ids = Int[]
+    values = Bool[]
+    for item in reverse(chain)
+        push!(ids, item.id)
+        push!(values, is_visible(item))
+    end
+    return ids, values
+end
+
+function _web_visible_or_forced(obj::AbstractObject3D, force_ids::Set{Int})
+    ids, values = _web_visibility_chain(obj)
+    return all(values) || any(id -> id in force_ids, ids)
+end
+
+function _web_light_visibility_json(light::AbstractLight,
+                                    visibility_target_ids::AbstractVector{Int},
+                                    visibility_values::AbstractVector{Bool})
+    ids = isempty(visibility_target_ids) ? [light.id] : visibility_target_ids
+    values = isempty(visibility_values) ? [is_visible(light)] : visibility_values
+    return ",\"visibilityStates\":" * _web_visibility_states_json(ids, values)
+end
+
+function _web_light_json(light::AmbientLight;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     return "{" *
            "\"type\":\"ambient\"" *
            ",\"id\":" * string(light.id) *
@@ -347,10 +419,13 @@ function _web_light_json(light::AmbientLight)
            ",\"visible\":" * (is_visible(light) ? "true" : "false") *
            ",\"color\":" * _js_color(light.color) *
            ",\"intensity\":" * _js_num(light.intensity) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-function _web_light_json(light::DirectionalLight, scene::Scene)
+function _web_light_json(light::DirectionalLight, scene::Scene;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     pos = get_position(light)
     target = light.target
     dir = normalize(pos - target)
@@ -364,10 +439,13 @@ function _web_light_json(light::DirectionalLight, scene::Scene)
            ",\"direction\":" * _js_vec(dir) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-function _web_light_json(light::PointLight, scene::Scene)
+function _web_light_json(light::PointLight, scene::Scene;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     return "{" *
            "\"type\":\"point\"" *
            ",\"id\":" * string(light.id) *
@@ -380,10 +458,13 @@ function _web_light_json(light::PointLight, scene::Scene)
            ",\"decay\":" * _js_num(light.decay) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-function _web_light_json(light::SpotLight, scene::Scene)
+function _web_light_json(light::SpotLight, scene::Scene;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     pos = get_position(light)
     target = light.target
     dir = normalize(target - pos)
@@ -405,10 +486,13 @@ function _web_light_json(light::SpotLight, scene::Scene)
            ",\"penumbraCos\":" * _js_num(cos(inner)) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-function _web_light_json(light::HemisphereLight)
+function _web_light_json(light::HemisphereLight;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     return "{" *
            "\"type\":\"hemisphere\"" *
            ",\"id\":" * string(light.id) *
@@ -417,10 +501,13 @@ function _web_light_json(light::HemisphereLight)
            ",\"color\":" * _js_color(light.color) *
            ",\"groundColor\":" * _js_color(light.ground_color) *
            ",\"intensity\":" * _js_num(light.intensity) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-function _web_light_json(light::RectAreaLight)
+function _web_light_json(light::RectAreaLight;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[])
     pos = get_position(light)
     forward = normalize(light.target - pos)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -439,23 +526,27 @@ function _web_light_json(light::RectAreaLight)
            ",\"v\":" * _js_vec(v) *
            ",\"width\":" * _js_num(light.width) *
            ",\"height\":" * _js_num(light.height) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
-_web_light_json(light::AbstractLight) = nothing
-_web_light_json(light::AbstractLight, scene::Scene) = _web_light_json(light)
+_web_light_json(light::AbstractLight; kwargs...) = nothing
+_web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json(light; kwargs...)
 
 function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}())
     lights = String[]
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
-    # visibility is animated (force_ids) must be exported even while invisible.
-    # Statically hidden lights — own flag or any ancestor — are dropped to match
-    # the CPU renderer's hierarchical visibility.
+    # own visibility or ancestor visibility is animated (force_ids) must be
+    # exported even while currently hidden. Statically hidden lights are dropped
+    # to match the CPU renderer's hierarchical visibility.
     all_lights = AbstractLight[]
     traverse(scene, o -> o isa AbstractLight && push!(all_lights, o))
     for light in all_lights
-        _visible_in_tree(light) || light.id in force_ids || continue
-        item = _web_light_json(light, scene)
+        _web_visible_or_forced(light, force_ids) || continue
+        visibility_ids, visibility_values = _web_visibility_chain(light)
+        item = _web_light_json(light, scene;
+                               visibility_target_ids=visibility_ids,
+                               visibility_values=visibility_values)
         item !== nothing && push!(lights, item)
     end
     return "[" * join(lights, ",") * "]"
@@ -696,6 +787,8 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
                             sprite_size_attenuation::Bool=true)
     geo = obj.geometry
     mat = obj.material
+    mat isa ShaderMaterial &&
+        throw(ArgumentError("WebGL export does not support ShaderMaterial; render it with the CPU path or use a built-in browser-exported material"))
     m = matrix === nothing ? world : matrix
     rot = get_rotation(transform_obj)
     parent = get_parent(transform_obj)
@@ -1172,6 +1265,7 @@ function _web_case_json(case::WebGLExportCase)
            ",\"radius\":" * _js_num(case.radius) *
            ",\"height\":" * _js_num(case.height) *
            ",\"fov\":" * _js_num(case.fov) *
+           ",\"camera\":" * _web_camera_json(case.camera) *
            ",\"toneMapping\":" * _js_str(String(case.tone_mapping)) *
            ",\"toneMappingMode\":" * string(_web_tone_mapping_id(case.tone_mapping)) *
            ",\"toneExposure\":" * _js_num(case.tone_exposure) *
@@ -1193,7 +1287,7 @@ function _web_light_caps(cases::AbstractVector{WebGLExportCase})
         dir = point = spot = hemi = rect = 0
         traverse(case.scene, obj -> begin
             obj isa AbstractLight || return
-            _visible_in_tree(obj) || obj.id in force_ids || return
+            _web_visible_or_forced(obj, force_ids) || return
             if obj isa DirectionalLight
                 dir += 1
             elseif obj isa PointLight
@@ -1298,6 +1392,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     quat(q){ const x=q[0],y=q[1],z=q[2],w=q[3], x2=x+x,y2=y+y,z2=z+z, xx=x*x2,xy=x*y2,xz=x*z2, yy=y*y2,yz=y*z2,zz=z*z2, wx=w*x2,wy=w*y2,wz=w*z2; return [1-(yy+zz),xy+wz,xz-wy,0, xy-wz,1-(xx+zz),yz+wx,0, xz+wy,yz-wx,1-(xx+yy),0, 0,0,0,1]; },
     trs(p,q,s){ return M4.mul(M4.translate(p[0],p[1],p[2]), M4.mul(M4.quat(q), M4.scale(s[0],s[1],s[2]))); },
     perspective(fov, aspect, near, far){ const t=Math.tan(fov/2); return [1/(aspect*t),0,0,0, 0,1/t,0,0, 0,0,-(far+near)/(far-near),-1, 0,0,-2*far*near/(far-near),0]; },
+    orthographic(left,right,bottom,top,near,far){ const w=right-left,h=top-bottom,p=far-near,x=(right+left)/w,y=(top+bottom)/h,z=(far+near)/p; return [2/w,0,0,0, 0,2/h,0,0, 0,0,-2/p,0, -x,-y,-z,1]; },
     lookAt(eye,target,up){ const z=norm(sub(eye,target)), x=norm(cross(up,z)), y=cross(z,x); return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,eye),-dot(y,eye),-dot(z,eye),1]; },
     normal3(m){ const a=m[0],b=m[1],c=m[2],d=m[4],e=m[5],f=m[6],g=m[8],h=m[9],i=m[10]; const A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,D=-(b*i-c*h),E=a*i-c*g,F=-(a*h-b*g),G=b*f-c*e,H=-(a*f-c*d),I=a*e-b*d; const det=a*A+b*B+c*C; if(Math.abs(det)<1e-10) return [1,0,0,0,1,0,0,0,1]; const inv=1/det; return [A*inv,B*inv,C*inv,D*inv,E*inv,F*inv,G*inv,H*inv,I*inv]; },
     inv(m){ const a00=m[0],a10=m[1],a20=m[2],a30=m[3],a01=m[4],a11=m[5],a21=m[6],a31=m[7],a02=m[8],a12=m[9],a22=m[10],a32=m[11],a03=m[12],a13=m[13],a23=m[14],a33=m[15]; const b00=a00*a11-a01*a10,b01=a00*a12-a02*a10,b02=a00*a13-a03*a10,b03=a01*a12-a02*a11,b04=a01*a13-a03*a11,b05=a02*a13-a03*a12,b06=a20*a31-a21*a30,b07=a20*a32-a22*a30,b08=a20*a33-a23*a30,b09=a21*a32-a22*a31,b10=a21*a33-a23*a31,b11=a22*a33-a23*a32; const det=b00*b11-b01*b10+b02*b09+b03*b08-b04*b07+b05*b06; if(!det) return new Array(16).fill(0); const id=1/det; return [(a11*b11-a12*b10+a13*b09)*id,(-a10*b11+a12*b08-a13*b07)*id,(a10*b10-a11*b08+a13*b06)*id,(-a10*b09+a11*b07-a12*b06)*id,(-a01*b11+a02*b10-a03*b09)*id,(a00*b11-a02*b08+a03*b07)*id,(-a00*b10+a01*b08-a03*b06)*id,(a00*b09-a01*b07+a02*b06)*id,(a31*b05-a32*b04+a33*b03)*id,(-a30*b05+a32*b02-a33*b01)*id,(a30*b04-a31*b02+a33*b00)*id,(-a30*b03+a31*b01-a32*b00)*id,(-a21*b05+a22*b04-a23*b03)*id,(a20*b05-a22*b02+a23*b01)*id,(-a20*b04+a21*b02-a23*b00)*id,(a20*b03-a21*b01+a22*b00)*id]; }
@@ -1345,13 +1440,15 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   uniform mat4 uDirShadowMatrix;
   uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseMatcapMap,uUseGradientMap,uUseEnvMap,uUseEnvCubeMap,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uShininess,uFogNear,uFogFar,uFogDensity,uShadowBias,uShadowTexel,uDepthNear,uDepthFar,uToonSteps;
   uniform vec3 uSheenColor,uSpecularColor,uAttenuationColor;
-  uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowDirIndex,uShadowKind,uMaterialMode,uDepthPacking,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uPhysicalScalarTexCoord,uPhysicalScalar2TexCoord,uSheenColorTexCoord,uSpecularColorTexCoord,uUseTangents;
+  uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowDirIndex,uShadowKind,uMaterialMode,uDepthPacking,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uPhysicalScalarTexCoord,uPhysicalScalar2TexCoord,uSheenColorTexCoord,uSpecularColorTexCoord,uMapColorSpace,uEmissiveColorSpace,uMatcapColorSpace,uSheenColorSpace,uSpecularColorSpace,uUseTangents;
   uniform vec4 uClipPlane[MAX_CLIP];
   uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT];
   uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uMatcapMap,uGradientMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uDirShadowMap;
   uniform samplerCube uEnvCubeMap;
   vec2 txUv(mat3 m, vec2 uv){ vec3 q=m*vec3(uv,1.0); return q.xy; }
   vec2 uvFor(mat3 m, int set){ return set==1?txUv(m,vUv2):txUv(m,vUv); }
+  vec3 srgbToLinear(vec3 c){ return mix(c/12.92,pow((c+vec3(0.055))/1.055,vec3(2.4)),step(vec3(0.04045),c)); }
+  vec4 colorTex(sampler2D tex, vec2 uv, int colorSpace){ vec4 c=texture2D(tex,uv); if(colorSpace==1) c.rgb=srgbToLinear(c.rgb); return c; }
   float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; }
   float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); }
   bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; }
@@ -1370,13 +1467,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   float rectNode(int i){ return i==0?-0.7745967:(i==1?0.0:0.7745967); }
   float rectWeight(int i){ return i==1?0.8888889:0.5555556; }
   float shadowFactor(vec3 p){ if(uShadowDirIndex<0) return 1.0; vec4 q=uDirShadowMatrix*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias; float sum=0.0; for(int yy=-1;yy<=1;yy++) for(int xx=-1;xx<=1;xx++){ vec2 off=vec2(float(xx),float(yy))*uShadowTexel; float stored=texture2D(uDirShadowMap,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; } return sum/9.0; }
-  void main(){ if(clipped(vWorld)) discard; vec2 uv=uvFor(uMapMatrix,uMapTexCoord); vec2 alphaUv=uvFor(uAlphaMatrix,uAlphaTexCoord); vec2 emissiveUv=uvFor(uEmissiveMatrix,uEmissiveTexCoord); vec2 aoUv=uvFor(uAoMatrix,uAoTexCoord); vec2 lightUv=uvFor(uLightMatrix,uLightTexCoord); vec2 roughnessUv=uvFor(uRoughnessMatrix,uRoughnessTexCoord); vec2 metalnessUv=uvFor(uMetalnessMatrix,uMetalnessTexCoord); vec2 normalUv=uvFor(uNormalMatrix,uNormalTexCoord); vec2 phys1Uv=uvFor(uPhysicalScalarMatrix,uPhysicalScalarTexCoord); vec2 phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalarTexCoord); vec2 sheenColorUv=uvFor(uSheenColorMatrix,uSheenColorTexCoord); vec2 specularColorUv=uvFor(uSpecularColorMatrix,uSpecularColorTexCoord); vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; n=mappedNormal(n,normalUv); float viewDistance=length(uCamera-vWorld); if(uMaterialMode==1){ vec3 nc=clamp(n*.5+.5,0.0,1.0); nc=mix(nc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(nc),uOpacity); return; } if(uMaterialMode==2){ gl_FragColor=depthColor(vViewZ); return; } vec3 v=normalize(uCamera-vWorld); if(uMaterialMode==4){ float f=max(dot(n,v),0.0); vec3 viewN=normalize(uViewNormalMat*n); vec3 viewDir=normalize(uViewNormalMat*v); vec3 matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x)); vec3 matcapY=cross(viewDir,matcapX); vec2 muv=clamp(vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5),0.0,1.0); vec3 fallback=vec3(0.35+0.65*f); vec3 mc=uColor*mix(fallback,texture2D(uMatcapMap,muv).rgb,uUseMatcapMap); mc=mix(mc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(mc)),uOpacity); return; } vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0);
+  void main(){ if(clipped(vWorld)) discard; vec2 uv=uvFor(uMapMatrix,uMapTexCoord); vec2 alphaUv=uvFor(uAlphaMatrix,uAlphaTexCoord); vec2 emissiveUv=uvFor(uEmissiveMatrix,uEmissiveTexCoord); vec2 aoUv=uvFor(uAoMatrix,uAoTexCoord); vec2 lightUv=uvFor(uLightMatrix,uLightTexCoord); vec2 roughnessUv=uvFor(uRoughnessMatrix,uRoughnessTexCoord); vec2 metalnessUv=uvFor(uMetalnessMatrix,uMetalnessTexCoord); vec2 normalUv=uvFor(uNormalMatrix,uNormalTexCoord); vec2 phys1Uv=uvFor(uPhysicalScalarMatrix,uPhysicalScalarTexCoord); vec2 phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalarTexCoord); vec2 sheenColorUv=uvFor(uSheenColorMatrix,uSheenColorTexCoord); vec2 specularColorUv=uvFor(uSpecularColorMatrix,uSpecularColorTexCoord); vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; n=mappedNormal(n,normalUv); float viewDistance=length(uCamera-vWorld); if(uMaterialMode==1){ vec3 nc=clamp(n*.5+.5,0.0,1.0); nc=mix(nc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(nc),uOpacity); return; } if(uMaterialMode==2){ gl_FragColor=depthColor(vViewZ); return; } vec3 v=normalize(uCamera-vWorld); if(uMaterialMode==4){ float f=max(dot(n,v),0.0); vec3 viewN=normalize(uViewNormalMat*n); vec3 viewDir=normalize(uViewNormalMat*v); vec3 matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x)); vec3 matcapY=cross(viewDir,matcapX); vec2 muv=clamp(vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5),0.0,1.0); vec3 fallback=vec3(0.35+0.65*f); vec3 mc=uColor*mix(fallback,colorTex(uMatcapMap,muv,uMatcapColorSpace).rgb,uUseMatcapMap); mc=mix(mc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(mc)),uOpacity); return; } vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0);
     for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); }
     for(int i=0;i<MAX_DIR;i++){ if(i>=uDirCount) break; vec3 l=normalize(uDirLight[i]); vec3 h=normalize(l+v); float d=toonBand(dot(n,l)); float sh=(uShadowKind==1&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; diffuse+=uDirColor[i]*d*sh; specular+=uDirColor[i]*pow(max(dot(n,h),0.0),uShininess)*sh; }
     for(int i=0;i<MAX_RECT;i++){ if(i>=uRectCount) break; float hx=max(uRectSize[i].x,0.0)*0.5; float hy=max(uRectSize[i].y,0.0)*0.5; float area=hx*hy; vec3 f=normalize(uRectForward[i]); for(int ix=0;ix<3;ix++){ for(int iy=0;iy<3;iy++){ float x=rectNode(ix), y=rectNode(iy); vec3 sp=uRectPos[i]+uRectU[i]*(hx*x)+uRectV[i]*(hy*y); vec3 lv=sp-vWorld; float dist2=max(dot(lv,lv),0.0001); vec3 l=lv*inversesqrt(dist2); float emit=max(dot(-l,f),0.0); float a=area*rectWeight(ix)*rectWeight(iy)*emit/dist2; vec3 h=normalize(l+v); diffuse+=uRectColor[i]*toonBand(dot(n,l))*a; specular+=uRectColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } } }
     for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float sh=(uShadowKind==3&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; float a=attenuation(dist,uPointDistance[i],uPointDecay[i])*sh; diffuse+=uPointColor[i]*toonBand(dot(n,l))*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
     for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float sh=(uShadowKind==2&&i==uShadowDirIndex)?shadowFactor(vWorld):1.0; float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone*sh; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*toonBand(dot(n,l))*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
-    vec4 tex=mix(vec4(1.0),texture2D(uMap,uv),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,alphaUv).g,uUseAlphaMap); float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; if(uMaterialMode==5){ vec3 bc=mix(base,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(bc)),outAlpha); return; } vec3 ao=mix(vec3(1.0),texture2D(uAoMap,aoUv).rgb,uUseAoMap); vec3 lm=mix(vec3(1.0),texture2D(uLightMap,lightUv).rgb,uUseLightMap); vec3 emissiveTex=mix(vec3(1.0),texture2D(uEmissiveMap,emissiveUv).rgb,uUseEmissiveMap); float rough=clamp(uRoughness*mix(1.0,texture2D(uRoughnessMap,roughnessUv).g,uUseRoughnessMap),0.02,1.0); float metal=clamp(uMetalness*mix(1.0,texture2D(uMetalnessMap,metalnessUv).b,uUseMetalnessMap),0.0,1.0); vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),texture2D(uSheenColorMap,sheenColorUv).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),texture2D(uSpecularColorMap,specularColorUv).rgb,uUseSpecularColorMap); if(uMaterialMode==6){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } if(uMaterialMode==7){ metal=0.0; rough=0.02; clearcoat=0.0; transmission=0.0; specIntensity=1.0; } if(uMaterialMode==3){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } vec3 aoMix=mix(vec3(1.0),ao,uAoIntensity); vec3 lightMix=mix(vec3(1.0),lm,uLightMapIntensity); vec3 env=envColor(reflect(-v,n))*uUseEnvMap*uEnvMapIntensity; float ndv=max(dot(n,v),0.0); float iorF0=pow((uIor-1.0)/(uIor+1.0),2.0); float fresnel=iorF0+(1.0-iorF0)*pow(1.0-ndv,5.0); vec3 specTint=mix(specColor,specColor*(.5+.5*cos(vec3(iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+2.094,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+4.188))),iridescence); float specScale=mix(1.0,2.0,metal)*(1.0-rough*.7)*specIntensity; float coatPower=mix(96.0,18.0,clearcoatRough); vec3 coat=specular*pow(max(ndv,0.0),coatPower)*clearcoat; vec3 sheen=diffuse*sheenColor*uSheen*(0.15+0.35*sheenRough)*pow(1.0-ndv,2.0); vec3 transmitted=env*base*transmission*(1.0-fresnel); vec3 lit=base*diffuse*(1.0-metal*.55)*(1.0-transmission*.7)+specular*specScale*mix(specTint,base*specTint,metal); vec3 c=lit*aoMix*lightMix+coat+sheen+transmitted+env*(0.12+metal*.88)*(1.0-rough*.45)+uGlow*base*.28+uEmissive*emissiveTex*uEmissiveIntensity; c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
+    vec4 tex=mix(vec4(1.0),colorTex(uMap,uv,uMapColorSpace),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,alphaUv).g,uUseAlphaMap); float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; if(uMaterialMode==5){ vec3 bc=mix(base,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(bc)),outAlpha); return; } vec3 ao=mix(vec3(1.0),texture2D(uAoMap,aoUv).rgb,uUseAoMap); vec3 lm=mix(vec3(1.0),texture2D(uLightMap,lightUv).rgb,uUseLightMap); vec3 emissiveTex=mix(vec3(1.0),colorTex(uEmissiveMap,emissiveUv,uEmissiveColorSpace).rgb,uUseEmissiveMap); float rough=clamp(uRoughness*mix(1.0,texture2D(uRoughnessMap,roughnessUv).g,uUseRoughnessMap),0.02,1.0); float metal=clamp(uMetalness*mix(1.0,texture2D(uMetalnessMap,metalnessUv).b,uUseMetalnessMap),0.0,1.0); vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),colorTex(uSheenColorMap,sheenColorUv,uSheenColorSpace).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),colorTex(uSpecularColorMap,specularColorUv,uSpecularColorSpace).rgb,uUseSpecularColorMap); if(uMaterialMode==6){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } if(uMaterialMode==7){ metal=0.0; rough=0.02; clearcoat=0.0; transmission=0.0; specIntensity=1.0; } if(uMaterialMode==3){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } vec3 aoMix=mix(vec3(1.0),ao,uAoIntensity); vec3 lightMix=mix(vec3(1.0),lm,uLightMapIntensity); vec3 env=envColor(reflect(-v,n))*uUseEnvMap*uEnvMapIntensity; float ndv=max(dot(n,v),0.0); float iorF0=pow((uIor-1.0)/(uIor+1.0),2.0); float fresnel=iorF0+(1.0-iorF0)*pow(1.0-ndv,5.0); vec3 specTint=mix(specColor,specColor*(.5+.5*cos(vec3(iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+2.094,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+4.188))),iridescence); float specScale=mix(1.0,2.0,metal)*(1.0-rough*.7)*specIntensity; float coatPower=mix(96.0,18.0,clearcoatRough); vec3 coat=specular*pow(max(ndv,0.0),coatPower)*clearcoat; vec3 sheen=diffuse*sheenColor*uSheen*(0.15+0.35*sheenRough)*pow(1.0-ndv,2.0); vec3 transmitted=env*base*transmission*(1.0-fresnel); vec3 lit=base*diffuse*(1.0-metal*.55)*(1.0-transmission*.7)+specular*specScale*mix(specTint,base*specTint,metal); vec3 c=lit*aoMix*lightMix+coat+sheen+transmitted+env*(0.12+metal*.88)*(1.0-rough*.45)+uGlow*base*.28+uEmissive*emissiveTex*uEmissiveIntensity; c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
   const FSH_EMISSIVE_VOLUME=FSH_EMISSIVE
     .replace("float transmission=clamp(uTransmission*phys1.b,0.0,1.0);",
              "float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0);")
@@ -1387,14 +1484,14 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const FSH_EMISSIVE_CORE=FSH_EMISSIVE_VOLUME
     .replace(",uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap","")
     .replace(",uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap","")
-    .replace("vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),texture2D(uSheenColorMap,sheenColorUv).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),texture2D(uSpecularColorMap,specularColorUv).rgb,uUseSpecularColorMap);",
+    .replace("vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*phys2.a,0.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),colorTex(uSheenColorMap,sheenColorUv,uSheenColorSpace).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),colorTex(uSpecularColorMap,specularColorUv,uSpecularColorSpace).rgb,uUseSpecularColorMap);",
              "float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor; float sheenRough=clamp(uSheenRoughness,0.0,1.0); float iridescence=clamp(uIridescence,0.0,1.0); float iridThickness=uIridescenceThickness; float specIntensity=clamp(uSpecularIntensity,0.0,1.0); vec3 specColor=uSpecularColor;");
   const CVSH=`attribute vec3 aPosition; attribute vec3 aColor; attribute vec4 aInstanceMatrix0; attribute vec4 aInstanceMatrix1; attribute vec4 aInstanceMatrix2; attribute vec4 aInstanceMatrix3; uniform mat4 uModel,uView,uProj; uniform int uUseInstancing; varying vec3 vWorld,vColor; mat4 instMatrix(){ return uUseInstancing==1?mat4(aInstanceMatrix0,aInstanceMatrix1,aInstanceMatrix2,aInstanceMatrix3):mat4(1.0); } void main(){ vec4 w=uModel*(instMatrix()*vec4(aPosition,1.0)); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; }`;
   const CFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec3 c=uColor*vColor*(.75+.65*uGlow); c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity); }`;
   const PVSH=`attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uModel,uView,uProj; uniform float uPointSize; varying vec3 vWorld,vColor; void main(){ vec4 w=uModel*vec4(aPosition,1.0); vWorld=w.xyz; vColor=aColor; gl_Position=uProj*uView*w; gl_PointSize=uPointSize; }`;
-  const PFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUsePointMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uPointMap; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 d=gl_PointCoord-vec2(.5); float r=dot(d,d); if(r>.25) discard; float a=smoothstep(.25,0.0,r); vec4 tex=mix(vec4(1.0),texture2D(uPointMap,gl_PointCoord),uUsePointMap); vec3 c=mix(uColor*vColor*tex.rgb*(.65+uGlow*.85)*a,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*a*tex.a); }`;
+  const PFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUsePointMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace,uPointColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uPointMap; uniform mat3 uPointMatrix; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 srgbToLinear(vec3 c){ return mix(c/12.92,pow((c+vec3(0.055))/1.055,vec3(2.4)),step(vec3(0.04045),c)); } vec4 colorTex(sampler2D tex, vec2 uv, int colorSpace){ vec4 c=texture2D(tex,uv); if(colorSpace==1) c.rgb=srgbToLinear(c.rgb); return c; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 d=gl_PointCoord-vec2(.5); float r=dot(d,d); if(r>.25) discard; float a=smoothstep(.25,0.0,r); vec2 pointUv=(uPointMatrix*vec3(gl_PointCoord,1.0)).xy; vec4 tex=mix(vec4(1.0),colorTex(uPointMap,pointUv,uPointColorSpace),uUsePointMap); vec3 c=mix(uColor*vColor*tex.rgb*(.65+uGlow*.85)*a,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*a*tex.a); }`;
   const SVSH=`attribute vec3 aPosition; attribute vec3 aColor; attribute vec2 aUv; uniform mat4 uModel,uView,uProj; uniform vec3 uCameraRight,uCameraUp; uniform vec2 uSpriteCenter; uniform float uSpriteRotation,uSpriteSizeAttenuation; varying vec3 vWorld,vColor; varying vec2 vUv; void main(){ vec2 p=aPosition.xy-uSpriteCenter; float c=cos(uSpriteRotation), s=sin(uSpriteRotation); p=vec2(c*p.x-s*p.y,s*p.x+c*p.y); vec3 center=uModel[3].xyz; float sx=length(uModel[0].xyz); float sy=length(uModel[1].xyz); vec4 cv=uView*vec4(center,1.0); float atten=mix(max(0.0001,-cv.z),1.0,uSpriteSizeAttenuation); vec3 w=center+uCameraRight*p.x*sx*atten+uCameraUp*p.y*sy*atten; vWorld=w; vColor=aColor; vUv=aUv; gl_Position=uProj*uView*vec4(w,1.0); }`;
-  const SFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; varying vec2 vUv; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUseSpriteMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uSpriteMap; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec4 tex=mix(vec4(1.0),texture2D(uSpriteMap,vUv),uUseSpriteMap); vec3 base=uColor*vColor*tex.rgb*(.75+.55*uGlow); vec3 c=mix(base,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a); }`;
+  const SFSH=`precision mediump float; const int MAX_CLIP=4; varying vec3 vWorld,vColor; varying vec2 vUv; uniform vec3 uColor,uCamera,uFogColor; uniform float uGlow,uOpacity,uUseSpriteMap,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace,uSpriteColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uSpriteMap; uniform mat3 uSpriteMatrix; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ float f=1.0-exp(-uFogDensity*uFogDensity*d*d); return clamp(f,0.0,1.0); } return 0.0; } vec3 srgbToLinear(vec3 c){ return mix(c/12.92,pow((c+vec3(0.055))/1.055,vec3(2.4)),step(vec3(0.04045),c)); } vec4 colorTex(sampler2D tex, vec2 uv, int colorSpace){ vec4 c=texture2D(tex,uv); if(colorSpace==1) c.rgb=srgbToLinear(c.rgb); return c; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 spriteUv=(uSpriteMatrix*vec3(vUv,1.0)).xy; vec4 tex=mix(vec4(1.0),colorTex(uSpriteMap,spriteUv,uSpriteColorSpace),uUseSpriteMap); vec3 base=uColor*vColor*tex.rgb*(.75+.55*uGlow); vec3 c=mix(base,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a); }`;
   function shader(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
   function program(vs,fs){ const p=gl.createProgram(); gl.attachShader(p,shader(gl.VERTEX_SHADER,vs)); gl.attachShader(p,shader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
   const maxTextureUnits=gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) || 8;
@@ -1525,11 +1622,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
   for(const c of DATA.cases) c.objects=c.objects.map(buildObj);
   const shadowTexturesEnabled=maxTextureUnits>=13;
-  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; }
+  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; }
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
   const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
   const morphById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const id of (o.morphTargetIds||[o.id])){ if(!morphById.has(id)) morphById.set(id,[]); morphById.get(id).push(o); }
-  const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); }
+  const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); } for(const c of DATA.cases) for(const l of c.lights||[]) for(const s of (l.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); }
   const nodeById = new Map(); for(const c of DATA.cases) for(const n of c.nodes||[]){ if(!nodeById.has(n.id)) nodeById.set(n.id,[]); nodeById.get(n.id).push(n); } for(const c of DATA.cases) for(const o of c.objects) if(o.skin) for(const b of o.skin.bones){ if(!nodeById.has(b.id)) nodeById.set(b.id,[]); nodeById.get(b.id).push(b); }
   function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
   function instanceAttribs(p,o){
@@ -1565,7 +1662,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function setRenderableAnim(o,prop,v,component=0){ if(!(prop in o)) return false; if(prop==="visible"||prop==="spriteSizeAttenuation"){ o[prop]=v[0]>=.5; return true; } if(Array.isArray(o[prop])) assignComponent(o[prop],component,v); else o[prop]=component>0?v[0]:v[0]; if(prop==="opacity") o.animTransparent=(o.baseTransparent||false)||o.opacity<1; return true; }
   function resetRenderableAnim(o){ const b=o.baseRenderable; if(!b)return; for(const k in b) o[k]=Array.isArray(b[k])?b[k].slice():b[k]; o.animTransparent=o.baseTransparent; for(const s of (o.visibilityStates||[])) s.visible=s.baseVisible; }
   function setLightAnim(l,prop,v,component=0){ if(!(prop in l)) return false; if(prop==="visible"){ l.visible=v[0]>=.5; return true; } if(Array.isArray(l[prop])) assignComponent(l[prop],component,v); else l[prop]=component>0?v[0]:v[0]; return true; }
-  function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=Array.isArray(b[k])?b[k].slice():b[k]; }
+  function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=Array.isArray(b[k])?b[k].slice():b[k]; for(const s of (l.visibilityStates||[])) s.visible=s.baseVisible; }
   function setNodeAnim(n,prop,v,component=0){ if(prop==="position") assignComponent(n.animPos,component,v); else if(prop==="scale") assignComponent(n.animScale,component,v); else if(prop==="quaternion") assignComponent(n.animQuat,component,v); else if(prop==="rotation"){ assignComponent(n.animEuler,component,v); n.animQuat=eulerToQuat(n.animEuler,n.baseEulerOrder||"XYZ"); } n.matrix=M4.mul(n.parentMatrix||M4.ident(),M4.trs(n.animPos,n.animQuat,n.animScale)); }
   function updateTransformGraph(c){ const nodeMap=new Map(); for(const n of c.nodes||[]){ const p=n.parentId?nodeMap.get(n.parentId):null; n.parentMatrix=p?p.matrix:M4.ident(); n.matrix=M4.mul(n.parentMatrix,M4.trs(n.animPos,n.animQuat,n.animScale)); nodeMap.set(n.id,n); } c.nodeMap=nodeMap; for(const o of c.objects){ const p=o.parentId?nodeMap.get(o.parentId):null; if(p) o.parentMatrix=p.matrix; const local=M4.trs(o.animPos,o.animQuat,o.animScale), world=M4.mul(o.parentMatrix||M4.ident(),local); o.transformMatrix=world; o.matrix=M4.mul(world,o.instanceMatrix||M4.ident()); if(!o.instanceSource) nodeMap.set(o.id,o); } }
   function applyAnimations(c,t){ for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; resetRenderableAnim(o); if(o.hasMorphTargets){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t); for(const tr of clip.tracks){ const v=sampleTrack(tr,ct); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ if((tr.component||0)>0) o.morphWeights[tr.component-1]=v[0]; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
@@ -1575,7 +1672,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function padded1(items, limit, fn, fill=0){ const out=new Array(limit).fill(fill); for(let i=0;i<Math.min(limit,items.length);i++) out[i]=fn(items[i]); return out; }
   function clipping(c){ const planes=c.clippingPlanes||[], out=new Array(16).fill(0); for(let i=0;i<Math.min(4,planes.length);i++){ const p=planes[i]; out[i*4]=p[0]; out[i*4+1]=p[1]; out[i*4+2]=p[2]; out[i*4+3]=p[3]; } return {count:Math.min(4,planes.length), planes:out}; }
   function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near==null?1:f.near,far:f.far||1000,density:f.density||0}; }
-  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
+  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
   function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
   function uniform2v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
   function uniform4v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
@@ -1585,6 +1682,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ gl.disable(gl.CULL_FACE); return; } gl.enable(gl.CULL_FACE); gl.cullFace(o.side==="back"?gl.FRONT:gl.BACK); }
   function tone(c){ return {mode:c.toneMappingMode||0, exposure:c.toneExposure==null?1:c.toneExposure, output:c.outputColorSpaceMode||0}; }
   function texCoord(t,def=0){ return t&&t.texCoord!=null?t.texCoord:def; }
+  function textureColorSpace(t){ return t&&t.colorspace==="srgb"?1:0; }
   function texMatrix(t){ const tm=(t&&t.matrix)||[1,0,0,0,1,0,0,0,1]; return [tm[0],tm[3],tm[6],tm[1],tm[4],tm[7],tm[2],tm[5],tm[8]]; }
   function uniformTexMatrix(p,name,t){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
   function draw(o,view,proj,eye,basis,light,clip,fg,tm){
@@ -1676,6 +1774,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       uniform1i(p,"uPhysicalScalar2TexCoord",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture,0));
       uniform1i(p,"uSheenColorTexCoord",texCoord(o.sheenColorTexture,0));
       uniform1i(p,"uSpecularColorTexCoord",texCoord(o.specularColorTexture,0));
+      uniform1i(p,"uMapColorSpace",textureColorSpace(o.texture));
+      uniform1i(p,"uEmissiveColorSpace",textureColorSpace(o.emissiveTexture));
+      uniform1i(p,"uMatcapColorSpace",textureColorSpace(o.matcapTexture));
+      uniform1i(p,"uSheenColorSpace",textureColorSpace(o.sheenColorTexture));
+      uniform1i(p,"uSpecularColorSpace",textureColorSpace(o.specularColorTexture));
       gl.uniform3fv(gl.getUniformLocation(p,"uEmissive"),new Float32Array(o.emissive||[0,0,0]));
       gl.uniform1f(gl.getUniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity==null?1:o.emissiveIntensity);
       gl.uniform1f(gl.getUniformLocation(p,"uAoIntensity"),o.aoIntensity==null?1:o.aoIntensity);
@@ -1734,6 +1837,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     if(o.mode==="points"){
       gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),Math.max(2,o.pointSize*1.5));
       gl.uniform1f(gl.getUniformLocation(p,"uUsePointMap"),o.tex?1:0);
+      uniform1i(p,"uPointColorSpace",textureColorSpace(o.texture));
+      uniformTexMatrix(p,"uPointMatrix",o.texture);
       if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uPointMap"),0); }
     }
     if(o.mode==="sprite"){
@@ -1743,6 +1848,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       gl.uniform1f(gl.getUniformLocation(p,"uSpriteRotation"),o.spriteRotation||0);
       gl.uniform1f(gl.getUniformLocation(p,"uSpriteSizeAttenuation"),o.spriteSizeAttenuation===false?0:1);
       gl.uniform1f(gl.getUniformLocation(p,"uUseSpriteMap"),o.tex?1:0);
+      uniform1i(p,"uSpriteColorSpace",textureColorSpace(o.texture));
+      uniformTexMatrix(p,"uSpriteMatrix",o.texture);
       if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uSpriteMap"),0); }
     }
     const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
@@ -1768,18 +1875,19 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   window.__diff3dDebug={activeObjectCount:()=>active.objects.length, animationTime:()=>animTime, animationSpeed:()=>animSpeed, animationPaused:()=>animPaused};
   const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
-  function setCase(id){ active=DATA.cases.find(c=>c.id===id); dist=active.radius; pitch=Math.max(-1.35,Math.min(1.35,Math.asin(Math.max(-1,Math.min(1,(active.height==null?3.0:active.height)/Math.max(dist,1e-6)))))); targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
+  function setOrbitFromVector(v){ dist=Math.max(1e-6,Math.hypot(v[0],v[1],v[2])); yaw=Math.atan2(v[2],v[0]); pitch=Math.max(-1.35,Math.min(1.35,Math.asin(Math.max(-1,Math.min(1,v[1]/dist))))); }
+  function setCase(id){ active=DATA.cases.find(c=>c.id===id); const cam=active.camera; if(cam) setOrbitFromVector(sub(cam.position,cam.target)); else { dist=active.radius; pitch=Math.max(-1.35,Math.min(1.35,Math.asin(Math.max(-1,Math.min(1,(active.height==null?3.0:active.height)/Math.max(dist,1e-6)))))); } active.baseDistance=dist; targetOffset=[0,0,0]; titleEl.textContent=active.title; subEl.textContent=active.subtitle; document.querySelectorAll("button[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===id)); }
   function resize(){ const r=canvas.getBoundingClientRect(), dpr=Math.min(devicePixelRatio||1,2); const w=Math.max(1,Math.round(r.width*dpr)), h=Math.max(1,Math.round(r.height*dpr)); if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; } }
   function objectDepth(o,eye){ const x=o.matrix[12]-eye[0], y=o.matrix[13]-eye[1], z=o.matrix[14]-eye[2]; return x*x+y*y+z*z; }
   function lodChoices(c,eye){ const objects=c.objects, state=c.lodState||(c.lodState=new Map()), groups=new Map(), choices=new Map(); for(const o of objects){ if(!o.lodGroup) continue; if(!groups.has(o.lodGroup)) groups.set(o.lodGroup,[]); groups.get(o.lodGroup).push(o); } for(const [id,levels] of groups){ levels.sort((a,b)=>(a.lodDistance||0)-(b.lodDistance||0)); const d=Math.sqrt(objectDepth(levels[0],eye)); const current=state.get(id); let chosen=levels[0]; for(let i=1;i<levels.length;i++){ const o=levels[i], threshold=(o.lodDistance||0)*(o===current?1-(o.lodHysteresis||0):1); if(d>=threshold) chosen=o; else break; } state.set(id,chosen); choices.set(id,chosen); } return choices; }
   function pointerList(){ return Array.from(pointers.values()); }
   function pointerCenter(ps){ return [(ps[0].x+ps[1].x)*.5,(ps[0].y+ps[1].y)*.5]; }
   function pointerDistance(ps){ return Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)||1; }
-  function panBy(dx,dy){ const forward=norm([-Math.cos(pitch)*Math.cos(yaw),-Math.sin(pitch),-Math.cos(pitch)*Math.sin(yaw)]); let right=norm(cross(forward,[0,1,0])); if(!isFinite(right[0])) right=[1,0,0]; const up=cross(right,forward), s=dist*.0015; targetOffset=add(targetOffset,add(scale(right,-dx*s),scale(up,dy*s))); }
+  function panBy(dx,dy){ const cameraUp=active.camera&&active.camera.up?active.camera.up:[0,1,0], forward=norm([-Math.cos(pitch)*Math.cos(yaw),-Math.sin(pitch),-Math.cos(pitch)*Math.sin(yaw)]); let right=norm(cross(forward,cameraUp)); if(!isFinite(right[0])) right=[1,0,0]; const up=cross(right,forward), s=dist*.0015; targetOffset=add(targetOffset,add(scale(right,-dx*s),scale(up,dy*s))); }
   function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); }
   speedEl.addEventListener("input",()=>{ animSpeed=Number(speedEl.value); speedValue.textContent=animSpeed.toFixed(2)+"x"; });
   playToggle.addEventListener("click",()=>{ animPaused=!animPaused; playToggle.textContent=animPaused?">":"||"; playToggle.title=animPaused?"Play animation":"Pause animation"; playToggle.setAttribute("aria-label",playToggle.title); });
-  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const target=add(active.target,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const view=M4.lookAt(eye,target,[0,1,0]); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,[0,1,0])); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const proj=M4.perspective(active.fov,canvas.width/canvas.height,.1,180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera, baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const aspect=canvas.width/canvas.height; let proj; if(cam&&cam.type==="orthographic"){ const s=dist/Math.max(active.baseDistance||dist,1e-6), cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else proj=M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; panMode=e.button===2||e.shiftKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); } });

@@ -824,6 +824,9 @@ deterministic_bytes(n::Int) =
         grouped_visible = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.1,0.7,0.9));
                                name="export_group_visibility_child")
         add!(hidden_group, grouped_visible)
+        grouped_hidden_light = PointLight(color=Color3(0.5,0.8,1.0), intensity=1.5;
+                                          name="export_group_visibility_light")
+        add!(hidden_group, grouped_hidden_light)
         add!(scene, hidden_group)
         hidden_light = PointLight(color=Color3(1.0,0.6,0.2), intensity=2.0; name="export_visibility_light")
         hidden_light.visible = false
@@ -952,6 +955,10 @@ deterministic_bytes(n::Int) =
         sampler_json = Diff3D._web_texture_json(sampler_tex)
         @test occursin("\"minFilter\":\"linear_mipmap_linear\"", sampler_json)
         @test occursin("\"magFilter\":\"nearest\"", sampler_json)
+        @test occursin("\"colorspace\":\"srgb\"", sampler_json)
+        linear_sampler_json = Diff3D._web_texture_json(Texture(ones(Float64, 1, 1, 3);
+                                                               colorspace=:linear))
+        @test occursin("\"colorspace\":\"linear\"", linear_sampler_json)
         @test Diff3D._web_texture_json(Texture(zeros(Float64, 0, 1, 3))) == "null"
         @test Diff3D._web_texture_average_color(Texture(reshape([NaN, Inf, -Inf], 1, 1, 3))) == Color3(0.0, 0.0, 0.0)
         cube_face = zeros(Float64, 2, 2, 3)
@@ -961,6 +968,8 @@ deterministic_bytes(n::Int) =
         cube_face[2, 2, :] .= (1.0, 1.0, 1.0)
         @test occursin("\"data\":[255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255]",
                        Diff3D._web_cube_face_json(Texture(cube_face; filter=:nearest)))
+        @test occursin("\"colorspace\":\"linear\"",
+                       Diff3D._web_cube_face_json(Texture(cube_face; colorspace=:linear)))
         @test occursin("<title>A &amp; &lt;B&gt;</title>", html)
         @test occursin("preserveDrawingBuffer:true", html)
         @test occursin("function minFilterMode", html)
@@ -1019,7 +1028,7 @@ deterministic_bytes(n::Int) =
         @test occursin("viewN=normalize(uViewNormalMat*n)", html)
         @test occursin("matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x))", html)
         @test occursin("vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5)", html)
-        @test occursin("texture2D(uMatcapMap,muv)", html)
+        @test occursin("colorTex(uMatcapMap,muv,uMatcapColorSpace)", html)
         @test occursin("0.35+0.65*f", html)
         @test occursin("\"name\":\"export_basic_material\"", html)
         @test occursin("\"materialType\":\"basic\"", html)
@@ -1058,7 +1067,18 @@ deterministic_bytes(n::Int) =
         @test occursin("uSpriteRotation", html)
         @test occursin("uSpriteSizeAttenuation", html)
         @test occursin("uUseSpriteMap", html)
-        @test occursin("texture2D(uSpriteMap,vUv)", html)
+        @test occursin("uPointMatrix", html)
+        @test occursin("pointUv=(uPointMatrix*vec3(gl_PointCoord,1.0)).xy", html)
+        @test occursin("uniformTexMatrix(p,\"uPointMatrix\",o.texture)", html)
+        @test occursin("uPointColorSpace", html)
+        @test occursin("uniform1i(p,\"uPointColorSpace\",textureColorSpace(o.texture))", html)
+        @test occursin("colorTex(uPointMap,pointUv,uPointColorSpace)", html)
+        @test occursin("uSpriteMatrix", html)
+        @test occursin("spriteUv=(uSpriteMatrix*vec3(vUv,1.0)).xy", html)
+        @test occursin("uSpriteColorSpace", html)
+        @test occursin("uniform1i(p,\"uSpriteColorSpace\",textureColorSpace(o.texture))", html)
+        @test occursin("colorTex(uSpriteMap,spriteUv,uSpriteColorSpace)", html)
+        @test occursin("uniformTexMatrix(p,\"uSpriteMatrix\",o.texture)", html)
         @test occursin("\"emissiveTexture\":", html)
         @test occursin("\"emissive\":[0.20000000000000001,0.40000000000000002,1]", html)
         @test occursin("\"emissiveIntensity\":1.5", html)
@@ -1160,6 +1180,17 @@ deterministic_bytes(n::Int) =
         @test occursin("uSpecularColor", html)
         @test occursin("uUseSpecularColorMap", html)
         @test occursin("uSpecularColorMap", html)
+        @test occursin("function textureColorSpace(t)", html)
+        @test occursin("srgbToLinear", html)
+        @test occursin("colorTex(uMap,uv,uMapColorSpace)", html)
+        @test occursin("colorTex(uEmissiveMap,emissiveUv,uEmissiveColorSpace)", html)
+        @test occursin("colorTex(uSheenColorMap,sheenColorUv,uSheenColorSpace)", html)
+        @test occursin("colorTex(uSpecularColorMap,specularColorUv,uSpecularColorSpace)", html)
+        @test occursin("uniform1i(p,\"uMapColorSpace\",textureColorSpace(o.texture))", html)
+        @test occursin("uniform1i(p,\"uEmissiveColorSpace\",textureColorSpace(o.emissiveTexture))", html)
+        @test occursin("uniform1i(p,\"uMatcapColorSpace\",textureColorSpace(o.matcapTexture))", html)
+        @test occursin("uniform1i(p,\"uSheenColorSpace\",textureColorSpace(o.sheenColorTexture))", html)
+        @test occursin("uniform1i(p,\"uSpecularColorSpace\",textureColorSpace(o.specularColorTexture))", html)
         @test occursin("o.physicalScalarTex=physicalTexturesEnabled?makeTexture", html)
         @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture]", html)
         @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])", html)
@@ -1296,6 +1327,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_visibility\"", html)
         @test occursin("\"name\":\"export_group_visibility_child\"", html)
         @test occursin("\"name\":\"export_visibility_light\"", html)
+        @test occursin("\"name\":\"export_group_visibility_light\"", html)
+        @test occursin("\"visibilityStates\":[{\"id\":$(scene.id),\"visible\":true},{\"id\":$(hidden_group.id),\"visible\":false},{\"id\":$(grouped_hidden_light.id),\"visible\":true}]", html)
         @test occursin("\"name\":\"export_euler_rotation\"", html)
         @test occursin("\"name\":\"export_euler_component_rotation\"", html)
         @test occursin("\"name\":\"export_animated_group\"", html)
@@ -1317,7 +1350,9 @@ deterministic_bytes(n::Int) =
         @test occursin("visibilityById", html)
         @test occursin("baseVisible", html)
         @test occursin("visible:l.visible!==false", html)
-        @test occursin("if(l.visible===false) continue", html)
+        @test occursin("l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates", html)
+        @test occursin("for(const c of DATA.cases) for(const l of c.lights||[]) for(const s of (l.visibilityStates||[]))", html)
+        @test occursin("if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue", html)
         @test occursin("if(prop===\"visible\")", html)
         @test occursin("\"animations\"", html)
         @test occursin("\"interpolation\":\"cubic\"", html)
@@ -1404,8 +1439,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"direction\"", html)
         @test occursin("\"side\":\"front\"", html)
         @test occursin("\"side\":\"double\"", html)
-        @test occursin("const MAX_DIR=2, MAX_POINT=2, MAX_SPOT=1, MAX_HEMI=1, MAX_RECT=1;", html)
-        @test occursin("const int MAX_DIR=2; const int MAX_POINT=2; const int MAX_SPOT=1; const int MAX_HEMI=1; const int MAX_RECT=1;", html)
+        @test occursin("const MAX_DIR=2, MAX_POINT=3, MAX_SPOT=1, MAX_HEMI=1, MAX_RECT=1;", html)
+        @test occursin("const int MAX_DIR=2; const int MAX_POINT=3; const int MAX_SPOT=1; const int MAX_HEMI=1; const int MAX_RECT=1;", html)
         @test occursin("uDirLight[0]", html)
         @test occursin("uSpotCount", html)
         @test occursin("uHemiCount", html)
@@ -1510,6 +1545,39 @@ deterministic_bytes(n::Int) =
         @test occursin("pinchMode=true", html)
         @test occursin("pinchDist/nd", html)
         @test occursin("try{ canvas.setPointerCapture", html)
+        pcamera = PerspectiveCamera(fov=0.7, near=0.3, far=77.0)
+        pcamera.position = Vec3(1.0, 2.0, 9.0)
+        pcamera.target = Vec3(0.25, 0.5, 0.75)
+        ocamera = OrthographicCamera(left=-2.0, right=3.0, bottom=-1.5, top=1.25,
+                                     near=0.2, far=55.0)
+        ocamera.position = Vec3(-1.0, 4.0, 8.0)
+        ocamera.target = Vec3(0.0, 0.25, 0.0)
+        camera_file = tempname() * ".html"
+        save_webgl_html(camera_file,
+                        [WebGLExportCase("pcam", "Perspective Camera", "camera", scene;
+                                         camera=pcamera),
+                         WebGLExportCase("ocam", "Orthographic Camera", "camera", scene;
+                                         camera=ocamera)])
+        camera_html = read(camera_file, String)
+        rm(camera_file; force=true)
+        @test occursin("\"camera\":{\"type\":\"perspective\"", camera_html)
+        @test occursin("\"position\":[1,2,9]", camera_html)
+        @test occursin("\"target\":[0.25,0.5,0.75]", camera_html)
+        @test occursin("\"fov\":0.69999999999999996", camera_html)
+        @test occursin("\"near\":0.29999999999999999", camera_html)
+        @test occursin("\"far\":77", camera_html)
+        @test occursin("\"camera\":{\"type\":\"orthographic\"", camera_html)
+        @test occursin("\"left\":-2", camera_html)
+        @test occursin("\"right\":3", camera_html)
+        @test occursin("\"bottom\":-1.5", camera_html)
+        @test occursin("\"top\":1.25", camera_html)
+        @test occursin("\"near\":0.20000000000000001", camera_html)
+        @test occursin("\"far\":55", camera_html)
+        @test occursin("orthographic(left,right,bottom,top,near,far)", camera_html)
+        @test occursin("if(cam&&cam.type===\"orthographic\")", camera_html)
+        @test occursin("proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far)", camera_html)
+        @test occursin("M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
+        @test_throws ArgumentError WebGLExportCase("badcam", "Bad", "Bad", scene; camera=Scene())
         @test occursin("\"loop\":\"repeat\"", html)
         @test occursin("\"repetitions\":-1", html)
         @test occursin("\"clampWhenFinished\":false", html)
@@ -7225,6 +7293,14 @@ deterministic_bytes(n::Int) =
             # 4. initial camera pitch is derived from the exported case height
             @test occursin("\"height\":0.5", html)
             @test occursin("active.height==null?3.0:active.height", html)
+
+            shader_scene = Scene()
+            add!(shader_scene, Mesh(BoxGeometry(), ShaderMaterial(); name="regress_shader_material"))
+            shader_file = tempname() * ".html"
+            @test_throws "WebGL export does not support ShaderMaterial" save_webgl_html(
+                shader_file,
+                [WebGLExportCase("shader", "Shader", "unsupported shader material", shader_scene)])
+            rm(shader_file; force=true)
         end
 
         @testset "docs" begin

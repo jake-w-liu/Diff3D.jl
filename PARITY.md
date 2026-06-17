@@ -47,7 +47,8 @@ replacement for three.js `WebGLRenderer`.
   binding for common PBR maps
   with per-texture `textureInfo.texCoord` UV-set metadata and
   `KHR_texture_transform` offset/scale/rotation metadata for CPU and compact
-  browser paths with per-sampler transform uniforms,
+  browser paths with per-sampler transform uniforms, including mesh, point,
+  and sprite texture sampling,
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, occlusion strength,
   scalar `KHR_materials_clearcoat`, `KHR_materials_transmission`,
   `KHR_materials_ior`, `KHR_materials_sheen`, and
@@ -72,6 +73,7 @@ replacement for three.js `WebGLRenderer`.
   static mesh morph target influences, animated browser morph-weight playback,
   static skinned-mesh poses, CPU-side animated browser skinned-mesh vertex playback,
   textured browser sprite billboards,
+  explicit perspective/orthographic camera metadata for export cases,
   runtime drawable and light visibility toggles,
   dynamic camera-distance LOD selection for exported browser drawables,
   orbit/zoom interaction, case switching, and exported linear, step,
@@ -83,8 +85,9 @@ replacement for three.js `WebGLRenderer`.
   not three.js `WebGLRenderer`. It supports simple albedo textures, texture
   transforms, alpha maps, material side flags, transparent sorting, and
   ambient/directional/point/spot/hemisphere lights, compact
-  none/linear/Reinhard/ACES tone mapping with case-level exposure, and linear
-  or sRGB browser output encoding. It still lacks shader chunks, render lists,
+  none/linear/Reinhard/ACES tone mapping with case-level exposure, linear
+  or sRGB browser output encoding, and sRGB-to-linear decode for exported color
+  texture samplers. It still lacks shader chunks, render lists,
   render targets, full WebGL renderer tone-output/color-management parity,
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
   full three.js skeleton lifecycle and renderer-program parity beyond compact
@@ -172,7 +175,9 @@ replacement for three.js `WebGLRenderer`.
   render/export paths. Browser export now carries color, opacity, simple `map`
   textures, texture transforms, material-side flags, selected PBR maps, and
   compact normal/depth/toon/matcap material shader branches, but materials are
-  not shader-compatible with three.js materials.
+  not shader-compatible with three.js materials. CPU `ShaderMaterial` programs
+  are supported by CPU shading; browser export rejects `ShaderMaterial` with a
+  clear unsupported-material error instead of silently approximating it.
 
 ## Known missing areas
 
@@ -356,8 +361,13 @@ Parallel audits split the remaining work into five critical tracks:
   `WebGLRenderer` color-management and output-transform parity remain open.
 - Done: add case-level browser output color-space metadata and shader-side
   linear/sRGB output encoding. This makes generated examples closer to modern
-  three.js defaults without claiming display/P3, texture color-space, or full
-  renderer output-transform parity.
+  three.js defaults without claiming display/P3 or full renderer
+  output-transform parity.
+- Done: serialize explicit `PerspectiveCamera` and `OrthographicCamera`
+  metadata for `WebGLExportCase` and use it in the compact browser runtime,
+  including camera position, target, up vector, near/far planes, perspective
+  FOV, and orthographic extents. The old radius/height orbit fallback remains
+  available for cases without an explicit camera.
 - Done: export drawable `visible` state and bind browser `NumberKeyframeTrack`
   playback for `visible`, while preserving initially invisible animated
   drawables in generated scene data.
@@ -366,7 +376,9 @@ Parallel audits split the remaining work into five critical tracks:
   without flattening away each child's own visibility state.
 - Done: export light `visible` state and bind browser light visibility
   animation, including initially hidden lights targeted by
-  `NumberKeyframeTrack`.
+  `NumberKeyframeTrack`. Browser-exported lights now also carry ancestor
+  visibility states, so parent/group `visible` animation gates light
+  contribution the same way it gates drawable objects.
 - Done: make browser export honor `LOD` level selection dynamically by
   serializing each level with group/distance/hysteresis metadata and selecting
   the active level from the current browser camera distance each frame.
@@ -454,6 +466,13 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse glTF `alphaMode: "MASK"` / `alphaCutoff` into material
   `alpha_test` state and apply it in compact browser WebGL mesh shading while
   keeping masked materials in the opaque render pass.
+- Done: apply exported texture transform matrices to compact browser point and
+  sprite texture sampling, instead of only mesh texture samplers.
+- Done: serialize `Texture.colorspace` into browser texture records and decode
+  sRGB color samplers to linear in compact mesh, point, and sprite shaders for
+  albedo, emissive, matcap, sheen-color, and specular-color texture paths while
+  leaving alpha, normal, roughness, metalness, AO, light, packed scalar, shadow,
+  and bone textures raw.
   Broader texture parity still remains open for less-common extension-specific
   sampling semantics and exact three.js renderer integration.
 - Done: add CPU smooth-path vertex-color interpolation for RGB/RGBA geometry
