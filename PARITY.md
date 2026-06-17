@@ -58,8 +58,8 @@ replacement for three.js `WebGLRenderer`.
 - Export/demo: standalone WebGL HTML export for meshes, instancing, points,
   lines, line loops, camera-facing textured sprite quads, material color, albedo, alpha, emissive,
   AO/light maps using exported secondary `uv2` coordinates when present,
-  roughness, metalness, normal texture maps, and exported
-  environment-map face-color sampling,
+  roughness, metalness, normal texture maps, and exported cube-texture
+  environment maps with face-color fallback,
   per-vertex `:color` attributes for meshes, lines, and points,
   texture offset/repeat/rotation/center transforms, opacity/alpha blending,
   material side flags, transparent-object sorting, scene-level linear/exp2 fog,
@@ -85,7 +85,7 @@ replacement for three.js `WebGLRenderer`.
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
   full three.js skeleton lifecycle and renderer integration beyond compact
   uniform/float bone-texture skinning plus attached/detached bind matrices,
-  true cube-map sampling/prefiltered environment lighting, and most material
+  PMREM/prefiltered environment lighting, and most material
   shader variants.
 - glTF support parses common mesh and transform animation data and now decodes
   signed, normalized, sparse, and interleaved accessors. It also evaluates
@@ -227,8 +227,9 @@ Parallel audits split the remaining work into five critical tracks:
   `emissive_intensity`, `ao_map_intensity`, `light_map_intensity`, and
   `env_map_intensity`). Browser export now handles alpha, emissive, AO, light,
   roughness, metalness, normal maps, and a compact environment-map path that
-  samples each exported `CubeTexture` face by average color instead of using a
-  GPU cube sampler or prefiltered reflection mip chain.
+  uploads exported `CubeTexture` faces as a WebGL cube map when fragment
+  texture units allow it, retaining average face colors as a fallback. A
+  prefiltered reflection mip chain remains open.
   Browser export now recognizes `MeshBasicMaterial` as an explicit unlit
   material mode that applies color, vertex color, texture, opacity, alpha map,
   tone mapping, output color space, and fog while bypassing scene lights.
@@ -398,8 +399,9 @@ Parallel audits split the remaining work into five critical tracks:
   serialization.
 - Done: add browser export for environment maps where matching Julia material
   fields already exist. The compact browser runtime serializes the six
-  `CubeTexture` faces as average colors and chooses a face by reflection
-  direction; full three.js cubemap filtering/prefilter parity remains open.
+  `CubeTexture` faces, samples them through a WebGL `samplerCube` when
+  available, and falls back to average face colors; full three.js PMREM and
+  roughness-aware cubemap filtering parity remains open.
 - Done: add `Texture.matrix` and `matrix_auto_update` semantics for CPU
   sampling and per-texture browser texture uniforms while retaining
   offset/repeat/rotation/center export for inspectability.

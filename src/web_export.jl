@@ -180,17 +180,27 @@ _web_material_shininess(mat) =
 
 function _web_texture_average_color(tex::Texture)
     H, W, C = size(tex.data)
-    n = H * W
-    r = sum(@view tex.data[:, :, 1]) / n
-    g = C >= 2 ? sum(@view tex.data[:, :, 2]) / n : r
-    b = C >= 3 ? sum(@view tex.data[:, :, 3]) / n : r
+    (H > 0 && W > 0 && C > 0) || return Color3(0.0, 0.0, 0.0)
+    n = Float64(H * W)
+    channel_average(ch) = begin
+        s = 0.0
+        @inbounds for y in 1:H, x in 1:W
+            v = tex.data[y, x, ch]
+            s += isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0
+        end
+        s / n
+    end
+    r = channel_average(1)
+    g = C >= 2 ? channel_average(2) : r
+    b = C >= 3 ? channel_average(3) : r
     return Color3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0))
 end
 
 function _web_env_json(env)
     env isa CubeTexture || return "null"
     colors = join((_js_color(_web_texture_average_color(face)) for face in env.faces), ",")
-    return "{\"colors\":[" * colors * "]}"
+    faces = join((_web_cube_face_json(face) for face in env.faces), ",")
+    return "{\"colors\":[" * colors * "],\"faces\":[" * faces * "]}"
 end
 
 function _web_fog_json(fog)
@@ -243,14 +253,16 @@ function _web_texture_json(tex)
     tex isa Texture || return "null"
     tex.matrix_auto_update && texture_update_matrix!(tex)
     H, W, C = size(tex.data)
+    (H > 0 && W > 0 && C > 0) || return "null"
+    unit_byte(v) = round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
     rgba = Int[]
     sizehint!(rgba, 4 * H * W)
     @inbounds for y in H:-1:1, x in 1:W
-        r = clamp(tex.data[y, x, 1], 0.0, 1.0)
-        g = C >= 2 ? clamp(tex.data[y, x, 2], 0.0, 1.0) : r
-        b = C >= 3 ? clamp(tex.data[y, x, 3], 0.0, 1.0) : r
-        a = C >= 4 ? clamp(tex.data[y, x, 4], 0.0, 1.0) : 1.0
-        append!(rgba, (round(Int, 255r), round(Int, 255g), round(Int, 255b), round(Int, 255a)))
+        r = tex.data[y, x, 1]
+        g = C >= 2 ? tex.data[y, x, 2] : r
+        b = C >= 3 ? tex.data[y, x, 3] : r
+        a = C >= 4 ? tex.data[y, x, 4] : 1.0
+        append!(rgba, (unit_byte(r), unit_byte(g), unit_byte(b), unit_byte(a)))
     end
     return "{" *
            "\"width\":" * string(W) *
@@ -265,6 +277,28 @@ function _web_texture_json(tex)
            ",\"matrix\":[" * join((_js_num(x) for x in tex.matrix.e), ",") * "]" *
            ",\"matrixAutoUpdate\":" * (tex.matrix_auto_update ? "true" : "false") *
            ",\"texCoord\":" * string(tex.tex_coord) *
+           ",\"data\":[" * join(rgba, ",") * "]" *
+           "}"
+end
+
+function _web_cube_face_json(tex)
+    tex isa Texture || return "null"
+    H, W, C = size(tex.data)
+    (H > 0 && W > 0 && C > 0) || return "null"
+    unit_byte(v) = round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
+    rgba = Int[]
+    sizehint!(rgba, 4 * H * W)
+    @inbounds for y in 1:H, x in 1:W
+        r = tex.data[y, x, 1]
+        g = C >= 2 ? tex.data[y, x, 2] : r
+        b = C >= 3 ? tex.data[y, x, 3] : r
+        a = C >= 4 ? tex.data[y, x, 4] : 1.0
+        append!(rgba, (unit_byte(r), unit_byte(g), unit_byte(b), unit_byte(a)))
+    end
+    return "{" *
+           "\"width\":" * string(W) *
+           ",\"height\":" * string(H) *
+           ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"data\":[" * join(rgba, ",") * "]" *
            "}"
 end
@@ -1273,12 +1307,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   uniform vec2 uRectSize[MAX_RECT];
   uniform mat3 uMapMatrix,uAlphaMatrix,uEmissiveMatrix,uAoMatrix,uLightMatrix,uRoughnessMatrix,uMetalnessMatrix,uNormalMatrix,uPhysicalScalarMatrix,uPhysicalScalar2Matrix,uSheenColorMatrix,uSpecularColorMatrix;
   uniform mat4 uDirShadowMatrix;
-  uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseMatcapMap,uUseGradientMap,uUseEnvMap,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uShininess,uFogNear,uFogFar,uFogDensity,uShadowBias,uShadowTexel,uDepthNear,uDepthFar,uToonSteps;
+  uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseMatcapMap,uUseGradientMap,uUseEnvMap,uUseEnvCubeMap,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uShininess,uFogNear,uFogFar,uFogDensity,uShadowBias,uShadowTexel,uDepthNear,uDepthFar,uToonSteps;
   uniform vec3 uSheenColor,uSpecularColor,uAttenuationColor;
   uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowDirIndex,uShadowKind,uMaterialMode,uDepthPacking,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uPhysicalScalarTexCoord,uPhysicalScalar2TexCoord,uSheenColorTexCoord,uSpecularColorTexCoord,uUseTangents;
   uniform vec4 uClipPlane[MAX_CLIP];
   uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT];
   uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uMatcapMap,uGradientMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uDirShadowMap;
+  uniform samplerCube uEnvCubeMap;
   vec2 txUv(mat3 m, vec2 uv){ vec3 q=m*vec3(uv,1.0); return q.xy; }
   vec2 uvFor(mat3 m, int set){ return set==1?txUv(m,vUv2):txUv(m,vUv); }
   float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; }
@@ -1294,7 +1329,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   vec4 depthColor(float viewZ){ float d=viewZToPerspectiveDepth(viewZ); if(uDepthPacking==1) return packDepthToRGBA(d); if(uDepthPacking==2) return vec4(packDepthToRGB(d),1.0); if(uDepthPacking==3) return vec4(packDepthToRG(d),0.0,1.0); return vec4(vec3(1.0-d),uOpacity); }
   float toonBand(float d){ if(uMaterialMode!=3) return max(d,0.0); if(uUseGradientMap>0.5) return texture2D(uGradientMap,vec2(clamp(d*.5+.5,0.0,1.0),0.0)).r; return ceil(clamp(max(d,0.0),0.0,1.0)*uToonSteps)/uToonSteps; }
   vec3 mappedNormal(vec3 n, vec2 uv){ if(uUseNormalMap<0.5) return n; vec3 map=texture2D(uNormalMap,uv).xyz*2.0-1.0; map.xy*=uNormalScale; if(uUseTangents==1){ vec3 tr=vTangent.xyz-n*dot(n,vTangent.xyz); if(dot(tr,tr)>1e-8){ vec3 t=normalize(tr); vec3 b=normalize(cross(n,t)*vTangent.w); return normalize(mat3(t,b,n)*map); } } vec3 q1=dFdx(vWorld), q2=dFdy(vWorld); vec2 st1=dFdx(uv), st2=dFdy(uv); vec3 s=normalize(q1*st2.t-q2*st1.t); vec3 t=normalize(-q1*st2.s+q2*st1.s); return normalize(mat3(s,t,n)*map); }
-  vec3 envColor(vec3 dir){ vec3 a=abs(dir); if(a.x>=a.y && a.x>=a.z) return dir.x>0.0?uEnvColor[0]:uEnvColor[1]; if(a.y>=a.x && a.y>=a.z) return dir.y>0.0?uEnvColor[2]:uEnvColor[3]; return dir.z>0.0?uEnvColor[4]:uEnvColor[5]; }
+  vec3 envColor(vec3 dir){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; vec3 a=abs(dir); if(a.x>=a.y && a.x>=a.z) return dir.x>0.0?uEnvColor[0]:uEnvColor[1]; if(a.y>=a.x && a.y>=a.z) return dir.y>0.0?uEnvColor[2]:uEnvColor[3]; return dir.z>0.0?uEnvColor[4]:uEnvColor[5]; }
   vec3 iridescenceTint(float ndv){ float phase=uIridescenceThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159; return .5+.5*cos(vec3(phase,phase+2.094,phase+4.188)); }
   float rectNode(int i){ return i==0?-0.7745967:(i==1?0.0:0.7745967); }
   float rectWeight(int i){ return i==1?0.8888889:0.5555556; }
@@ -1331,9 +1366,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const vertexTextureUnits=gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) || 0;
   const floatTextureExt=gl.getExtension("OES_texture_float");
   const boneTextureUnit=13;
+  const envCubeTextureUnit=14;
   const physicalTexturesEnabled=maxTextureUnits>=12;
   const boneTexturesEnabled=!!floatTextureExt&&vertexTextureUnits>0&&maxCombinedTextureUnits>boneTextureUnit;
-  const meshProgram=program(VSH,physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH);
+  const cubeTexturesEnabled=maxTextureUnits>envCubeTextureUnit&&maxCombinedTextureUnits>envCubeTextureUnit;
+  const meshFragmentShader=physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE;
+  const meshFragmentShaderRuntime=cubeTexturesEnabled?meshFragmentShader:meshFragmentShader.replace(/\\n  uniform samplerCube uEnvCubeMap;/,"").replace("vec3 envColor(vec3 dir){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; ","vec3 envColor(vec3 dir){ ");
+  const meshProgram=program(VSH,meshFragmentShaderRuntime), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,meshFragmentShaderRuntime):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH);
   function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
   function isPow2(v){ return (v & (v - 1)) === 0; }
   function wrapMode(v){ return v==="mirror"?gl.MIRRORED_REPEAT:(v==="clamp"?gl.CLAMP_TO_EDGE:gl.REPEAT); }
@@ -1350,6 +1389,35 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,filter);
     return tex;
   }
+  const cubeTargets=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  function makeSolidCubeTexture(){
+    const tex=gl.createTexture(), data=new Uint8Array([0,0,0,255]); gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    for(const target of cubeTargets) gl.texImage2D(target,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,data);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    return tex;
+  }
+  function makeCubeTexture(env){
+    if(!env||!env.faces||env.faces.length!==6) return null;
+    const first=env.faces[0];
+    if(!first||first.width!==first.height) return null;
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    for(let i=0;i<6;i++){
+      const f=env.faces[i];
+      if(!f||f.width!==first.width||f.height!==first.height||f.width!==f.height||!f.data||f.data.length!==f.width*f.height*4){ gl.deleteTexture(tex); return null; }
+      gl.texImage2D(cubeTargets[i],0,gl.RGBA,f.width,f.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(f.data));
+    }
+    const filter=first.filter==="nearest"?gl.NEAREST:gl.LINEAR;
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,filter);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,filter);
+    return tex;
+  }
+  const defaultEnvCubeTex=cubeTexturesEnabled?makeSolidCubeTexture():null;
   function makeShadowTexture(s){
     if(!s) return null;
     const rgba=new Uint8Array(s.size*s.size*4);
@@ -1397,7 +1465,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     o.textureSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length>MAX_BONES&&boneTexturesEnabled&&!(o.morphTargets&&o.morphTargets.length));
     o.skinDirty=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&!(o.shaderSkin||o.textureSkin)); if(o.skin){ for(const b of o.skin.bones){ b.parentMatrix=(b.parentMatrix||M4.ident()).slice(); b.basePosition=(b.basePosition||[0,0,0]).slice(); b.baseEuler=(b.baseEuler||[0,0,0]).slice(); b.baseEulerOrder=b.baseEulerOrder||"XYZ"; b.baseScale=(b.baseScale||[1,1,1]).slice(); b.baseQuaternion=(b.baseQuaternion||eulerToQuat(b.baseEuler,b.baseEulerOrder)).slice(); b.baseMatrix=b.matrix.slice(); b.matrix=b.baseMatrix.slice(); b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); } }
     const vertexCount=o.positions.length/3, defaultSkinIndex=new Array(vertexCount*4).fill(0), defaultSkinWeight=new Array(vertexCount*4).fill(0); for(let i=0;i<vertexCount;i++) defaultSkinWeight[4*i]=1;
-    o.posBuf=buf(o.positions,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.nrmBuf=buf(o.normals,gl.ARRAY_BUFFER,Float32Array,o.skinDirty?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.tanBuf=buf(o.tangents,gl.ARRAY_BUFFER,Float32Array,o.skinDirty?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.uvBuf=buf(o.uvs); o.uv2Buf=buf(o.uv2s||o.uvs); o.colorBuf=buf(o.colors); o.skinIndexBuf=buf(o.skin?o.skin.indices:defaultSkinIndex); o.skinWeightBuf=buf(o.skin?o.skin.weights:defaultSkinWeight); o.tex=makeTexture(o.texture); o.alphaTex=makeTexture(o.alphaTexture); o.emissiveTex=makeTexture(o.emissiveTexture); o.aoTex=makeTexture(o.aoTexture); o.lightTex=makeTexture(o.lightTexture); o.roughnessTex=makeTexture(o.roughnessTexture); o.metalnessTex=makeTexture(o.metalnessTexture); o.normalTex=makeTexture(o.normalTexture); o.matcapTex=makeTexture(o.matcapTexture); o.gradientTex=makeTexture(o.gradientTexture); o.physicalScalarTex=physicalTexturesEnabled?makeTexture(packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3])):null; o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])):null; o.sheenColorTex=physicalTexturesEnabled?makeTexture(o.sheenColorTexture):null; o.specularColorTex=physicalTexturesEnabled?makeTexture(o.specularColorTexture):null; o.boneTex=o.textureSkin?makeBoneTexture(o):null;
+    o.posBuf=buf(o.positions,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.nrmBuf=buf(o.normals,gl.ARRAY_BUFFER,Float32Array,o.skinDirty?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.tanBuf=buf(o.tangents,gl.ARRAY_BUFFER,Float32Array,o.skinDirty?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.uvBuf=buf(o.uvs); o.uv2Buf=buf(o.uv2s||o.uvs); o.colorBuf=buf(o.colors); o.skinIndexBuf=buf(o.skin?o.skin.indices:defaultSkinIndex); o.skinWeightBuf=buf(o.skin?o.skin.weights:defaultSkinWeight); o.tex=makeTexture(o.texture); o.alphaTex=makeTexture(o.alphaTexture); o.emissiveTex=makeTexture(o.emissiveTexture); o.aoTex=makeTexture(o.aoTexture); o.lightTex=makeTexture(o.lightTexture); o.roughnessTex=makeTexture(o.roughnessTexture); o.metalnessTex=makeTexture(o.metalnessTexture); o.normalTex=makeTexture(o.normalTexture); o.matcapTex=makeTexture(o.matcapTexture); o.gradientTex=makeTexture(o.gradientTexture); o.physicalScalarTex=physicalTexturesEnabled?makeTexture(packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3])):null; o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])):null; o.sheenColorTex=physicalTexturesEnabled?makeTexture(o.sheenColorTexture):null; o.specularColorTex=physicalTexturesEnabled?makeTexture(o.specularColorTexture):null; o.boneTex=o.textureSkin?makeBoneTexture(o):null; o.envCubeTex=cubeTexturesEnabled?makeCubeTexture(o.envTexture):null;
     const maxIndex=o.indices.reduce((m,v)=>Math.max(m,v),0);
     o.indexType=maxIndex>65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     if(o.indexType===gl.UNSIGNED_INT && !gl.getExtension("OES_element_index_uint")) throw new Error("OES_element_index_uint is required for this exported geometry");
@@ -1545,6 +1613,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       gl.uniform1f(gl.getUniformLocation(p,"uUsePhysicalScalar2Map"),o.physicalScalar2Tex?1:0);
       gl.uniform1f(gl.getUniformLocation(p,"uUseSpecularColorMap"),o.specularColorTex?1:0);
       gl.uniform1f(gl.getUniformLocation(p,"uUseEnvMap"),o.envTexture?1:0);
+      gl.uniform1f(gl.getUniformLocation(p,"uUseEnvCubeMap"),o.envCubeTex?1:0);
       uniform1i(p,"uMapTexCoord",texCoord(o.texture,0));
       uniform1i(p,"uAlphaTexCoord",texCoord(o.alphaTexture,0));
       uniform1i(p,"uEmissiveTexCoord",texCoord(o.emissiveTexture,0));
@@ -1610,6 +1679,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSheenColorMap"),10); }
       if(o.specularColorTex){ gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D,o.specularColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSpecularColorMap"),11); }
       if(objShadow&&light.shadow.tex){ gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D,light.shadow.tex); gl.uniform1i(gl.getUniformLocation(p,"uDirShadowMap"),12); }
+      if(cubeTexturesEnabled){ gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_CUBE_MAP,o.envCubeTex||defaultEnvCubeTex); uniform1i(p,"uEnvCubeMap",envCubeTextureUnit); }
     }
     if(o.mode==="points"){
       gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),Math.max(2,o.pointSize*1.5));
