@@ -742,6 +742,11 @@ Parallel audits split the remaining work into five critical tracks:
   the compact browser physical-material shader branch. Exact three.js
   PhysicalMaterial BRDF, PMREM environment lighting, and upstream assets remain
   documented deviations.
+- Added a standalone partial port for `webgl_loader_stl` via
+  `examples/webgl_loader_stl.jl`, round-tripping deterministic binary STL
+  geometry through Diff3D.jl `save_stl_binary` and `load_stl` before exporting
+  it with the compact browser mesh path. The exact upstream PR2 STL asset and
+  `WebGLRenderer` internals remain documented deviations.
 
 ## Next implementation targets
 

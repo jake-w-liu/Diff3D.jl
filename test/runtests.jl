@@ -54,6 +54,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_materials_variations_phong",
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
+            "threejs_webgl_loader_stl",
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
@@ -92,6 +93,12 @@ deterministic_bytes(n::Int) =
                     source = read(script, String)
                     @test occursin("PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,\n                                            transparent=true, map=sprite_map)", source)
                     @test "PointsMaterial.map" in entry["prerequisites"]
+                end
+                if entry["upstream_id"] == "threejs_webgl_loader_stl"
+                    source = read(script, String)
+                    @test occursin("save_stl_binary(path, source)", source)
+                    @test occursin("loaded = load_stl(path)", source)
+                    @test "load_stl" in entry["prerequisites"]
                 end
             end
         end
