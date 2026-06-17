@@ -557,7 +557,8 @@ deterministic_bytes(n::Int) =
         normal_material_mesh.position = Vec3(0.0, 1.25, 0.0)
         add!(scene, normal_material_mesh)
         depth_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
-                                   MeshDepthMaterial(near=1.0, far=8.0);
+                                   MeshDepthMaterial(near=1.0, far=8.0,
+                                                     depth_packing=:rgba);
                                    name="export_depth_material")
         depth_material_mesh.position = Vec3(0.9, 1.25, 0.0)
         add!(scene, depth_material_mesh)
@@ -903,10 +904,19 @@ deterministic_bytes(n::Int) =
         @test occursin("\"materialType\":\"depth\"", html)
         @test occursin("\"depthNear\":1", html)
         @test occursin("\"depthFar\":8", html)
+        @test occursin("\"depthPacking\":\"rgba\"", html)
+        @test occursin("\"depthPackingMode\":1", html)
         @test occursin("uMaterialMode==2", html)
         @test occursin("uDepthNear", html)
         @test occursin("uDepthFar", html)
-        @test occursin("viewDistance-uDepthNear", html)
+        @test occursin("uDepthPacking", html)
+        @test occursin("packDepthToRGBA", html)
+        @test occursin("packDepthToRGB", html)
+        @test occursin("packDepthToRG", html)
+        @test occursin("viewZToPerspectiveDepth", html)
+        @test occursin("varying float vViewZ", html)
+        @test occursin("depthColor(vViewZ)", html)
+        @test !occursin("viewDistance-uDepthNear", html)
         @test occursin("\"name\":\"export_toon_material\"", html)
         @test occursin("\"materialType\":\"toon\"", html)
         @test occursin("\"toonSteps\":4", html)
@@ -2037,6 +2047,21 @@ deterministic_bytes(n::Int) =
     end
 
     @testset "MeshDepthMaterial — near brighter than far" begin
+        @test MeshDepthMaterial().depth_packing === :basic
+        @test MeshDepthMaterial(depth_packing="rgba").depth_packing === :rgba
+        @test MeshDepthMaterial(depth_packing=:rgb).depth_packing === :rgb
+        @test MeshDepthMaterial(depth_packing=:rg).depth_packing === :rg
+        @test_throws ArgumentError MeshDepthMaterial(depth_packing=:depth)
+        @test_throws ArgumentError MeshDepthMaterial(depth_packing=1)
+        @test Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:basic), 0.0) ==
+              Color3(1.0, 1.0, 1.0)
+        @test Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:basic), 1.0) ==
+              Color3(0.0, 0.0, 0.0)
+        @test Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:rg), 0.5).b == 0.0
+        rgba_rgb = Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:rgba), 0.5)
+        @test rgba_rgb.r ≈ 128 / 255
+        @test rgba_rgb.g == 0.0
+        @test rgba_rgb.b == 0.0
         scene = Scene(background=Color3(0.0,0,0))
         nearbox = Mesh(BoxGeometry(), MeshDepthMaterial(near=1.0, far=10.0)); nearbox.position = Vec3(-1.5,0,2.0)
         farbox  = Mesh(BoxGeometry(), MeshDepthMaterial(near=1.0, far=10.0)); farbox.position  = Vec3( 1.5,0,-3.0)

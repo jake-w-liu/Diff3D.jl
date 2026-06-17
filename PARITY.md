@@ -27,7 +27,7 @@ replacement for three.js `WebGLRenderer`.
   simple color/size export behavior, compact browser unlit output for
   `MeshBasicMaterial`, compact browser normal-color output for
   `MeshNormalMaterial`, and compact browser grayscale output for
-  `MeshDepthMaterial`, plus compact browser quantized diffuse output for
+  `MeshDepthMaterial` with basic/RGBA/RGB/RG depth packing, plus compact browser quantized diffuse output for
   `MeshToonMaterial`, compact browser diffuse-only/specular-shininess output
   for `MeshLambertMaterial`/`MeshPhongMaterial`, and procedural or
   texture-backed compact output for `MeshMatcapMaterial`.
@@ -230,9 +230,9 @@ Parallel audits split the remaining work into five critical tracks:
   Browser export now also recognizes `MeshNormalMaterial` and emits unlit
   normal-to-RGB color from the mesh shader instead of treating it as a fallback
   solid color.
-  Browser export now recognizes `MeshDepthMaterial` and emits a compact
-  camera-distance grayscale approximation using the material's near/far range;
-  exact three.js depth packing variants remain open.
+  Browser export now recognizes `MeshDepthMaterial` and emits compact
+  view-space depth output using the material's near/far range, with basic,
+  RGBA, RGB, and RG packing branches.
   Browser export now recognizes `MeshToonMaterial` and applies compact
   quantized diffuse light bands from `gradient_steps`; exact three.js
   gradient-map toon ShaderLib behavior remains open.
@@ -367,7 +367,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add compact browser `MeshNormalMaterial` support with a material-mode
   uniform and normal-to-RGB shader branch.
 - Done: add compact browser `MeshDepthMaterial` support with near/far material
-  serialization and a camera-distance grayscale shader branch.
+  serialization plus basic/RGBA/RGB/RG depth-packing shader branches.
 - Done: add compact browser `MeshToonMaterial` support with `gradient_steps`
   serialization and quantized diffuse light bands.
 - Done: add compact browser `MeshMatcapMaterial` support with procedural
@@ -605,9 +605,9 @@ Parallel audits split the remaining work into five critical tracks:
   upstream object layout remain documented deviations.
 - Added a standalone partial port for `webgl_materials_depth` via
   `examples/webgl_materials_depth.jl`, using Diff3D.jl `MeshDepthMaterial`,
-  primitive geometry generators, orbit interaction, and the browser
-  depth-material shader branch. Exact three.js depth-packing variants and the
-  upstream object layout remain documented deviations.
+  primitive geometry generators, orbit interaction, and browser depth-material
+  branches for basic/RGBA/RGB/RG packing. The exact upstream object layout and
+  full three.js ShaderLib integration remain documented deviations.
 - Added a standalone partial port for `webgl_materials_variations_basic` via
   `examples/webgl_materials_variations_basic.jl`, using Diff3D.jl
   `MeshBasicMaterial`, primitive geometry generators, orbit interaction,

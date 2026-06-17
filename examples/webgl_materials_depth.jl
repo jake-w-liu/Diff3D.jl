@@ -9,8 +9,9 @@ using Diff3D
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
 
-function add_depth_mesh!(group::Group, geometry, name::String, position::Vec3)
-    mesh = Mesh(geometry, MeshDepthMaterial(near=2.5, far=11.0, side=:double); name=name)
+function add_depth_mesh!(group::Group, geometry, name::String, position::Vec3; depth_packing=:basic)
+    mesh = Mesh(geometry, MeshDepthMaterial(near=2.5, far=11.0, depth_packing=depth_packing,
+                                            side=:double); name=name)
     mesh.position = position
     add!(group, mesh)
     return mesh
@@ -29,13 +30,13 @@ function build_case()
                     "depth_torus_knot_near", Vec3(-1.7, 0.7, 1.2))
     add_depth_mesh!(group,
                     SphereGeometry(radius=0.75, width_segments=40, height_segments=20),
-                    "depth_sphere_mid", Vec3(0.0, -0.35, -0.4))
+                    "depth_sphere_mid_rgba", Vec3(0.0, -0.35, -0.4); depth_packing=:rgba)
     add_depth_mesh!(group,
                     BoxGeometry(width=1.2, height=1.2, depth=1.2),
-                    "depth_box_far", Vec3(1.7, 0.65, -1.8))
+                    "depth_box_far_rgb", Vec3(1.7, 0.65, -1.8); depth_packing=:rgb)
     add_depth_mesh!(group,
                     IcosahedronGeometry(radius=0.72, detail=2),
-                    "depth_icosahedron", Vec3(0.0, 1.25, -3.0))
+                    "depth_icosahedron_rg", Vec3(0.0, 1.25, -3.0); depth_packing=:rg)
 
     clip = AnimationClip("depth_material_motion", AbstractKeyframeTrack[
         QuaternionKeyframeTrack(group, :rotation, [0.0, 3.0, 6.0],
@@ -45,7 +46,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-depth", "Materials Depth",
-                    "MeshDepthMaterial maps camera distance to grayscale in the Diff3D.jl WebGL exporter.",
+                    "MeshDepthMaterial supports basic, RGBA, RGB, and RG depth packing in the Diff3D.jl WebGL exporter.",
                     scene; target=Vec3(0.0, 0.25, -0.8), radius=7.0, height=1.8,
                     fov=pi / 4, animations=[clip],
                     tone_mapping=:none, output_color_space=:srgb)

@@ -335,11 +335,26 @@ function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
 end
 
 # ========================== MeshDepthMaterial ==========================
-# Renders normalized camera-space depth as grayscale (near → bright).
+# Renders normalized camera-space depth. `:basic` displays near → bright;
+# packed modes encode depth into color channels for depth-texture style output.
+
+function _depth_packing_symbol(depth_packing)
+    s = if depth_packing isa Symbol
+        depth_packing
+    elseif depth_packing isa AbstractString
+        Symbol(depth_packing)
+    else
+        throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
+    end
+    (s === :basic || s === :rgba || s === :rgb || s === :rg) ||
+        throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
+    return s
+end
 
 struct MeshDepthMaterial <: AbstractMaterial
     near::Float64
     far::Float64
+    depth_packing::Symbol
     opacity::Float64
     transparent::Bool
     side::Symbol
@@ -347,9 +362,17 @@ struct MeshDepthMaterial <: AbstractMaterial
     depth_write::Bool
 end
 
-function MeshDepthMaterial(; near=0.1, far=100.0, opacity=1.0, transparent=false, side=:front,
+function MeshDepthMaterial(near::Real, far::Real, opacity::Real, transparent::Bool,
+                           side::Symbol, depth_test::Bool, depth_write::Bool)
+    MeshDepthMaterial(Float64(near), Float64(far), :basic, Float64(opacity),
+                      transparent, side, depth_test, depth_write)
+end
+
+function MeshDepthMaterial(; near=0.1, far=100.0, depth_packing=:basic,
+                           opacity=1.0, transparent=false, side=:front,
                            depth_test=true, depth_write=true)
-    MeshDepthMaterial(near, far, opacity, transparent, side, depth_test, depth_write)
+    MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
+                      Float64(opacity), transparent, side, depth_test, depth_write)
 end
 
 # ========================== ShaderMaterial ==========================

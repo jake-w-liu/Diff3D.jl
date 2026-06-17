@@ -179,6 +179,58 @@ end
 @inline _map_uv(tex, u, v, u2, v2; default_uv2::Bool=false) =
     (_texture_uv_set(tex) == 1 || (default_uv2 && _texture_uv_set(tex) == 0)) ? (u2, v2) : (u, v)
 
+@inline function _pack_depth_rgba(depth::Float64)
+    v = clamp(depth, 0.0, 1.0)
+    v <= 0.0 && return (0.0, 0.0, 0.0, 0.0)
+    v >= 1.0 && return (1.0, 1.0, 1.0, 1.0)
+    vuf = floor(v * 16777216.0)
+    af = v * 16777216.0 - vuf
+    next = vuf / 256.0
+    vuf = floor(next)
+    bf = next - vuf
+    next = vuf / 256.0
+    vuf = floor(next)
+    gf = next - vuf
+    return (vuf / 255.0, gf * (256.0 / 255.0), bf * (256.0 / 255.0), af)
+end
+
+@inline function _pack_depth_rgb(depth::Float64)
+    v = clamp(depth, 0.0, 1.0)
+    v <= 0.0 && return (0.0, 0.0, 0.0)
+    v >= 1.0 && return (1.0, 1.0, 1.0)
+    vuf = floor(v * 65536.0)
+    bf = v * 65536.0 - vuf
+    next = vuf / 256.0
+    vuf = floor(next)
+    gf = next - vuf
+    return (vuf / 255.0, gf * (256.0 / 255.0), bf)
+end
+
+@inline function _pack_depth_rg(depth::Float64)
+    v = clamp(depth, 0.0, 1.0)
+    v <= 0.0 && return (0.0, 0.0)
+    v >= 1.0 && return (1.0, 1.0)
+    vuf = floor(v * 256.0)
+    gf = v * 256.0 - vuf
+    return (vuf / 255.0, gf)
+end
+
+@inline function _depth_material_color(material::MeshDepthMaterial, depth::Float64)
+    d = clamp(depth, 0.0, 1.0)
+    if material.depth_packing === :rgba
+        r, g, b, _ = _pack_depth_rgba(d)
+        return Color3(r, g, b)
+    elseif material.depth_packing === :rgb
+        r, g, b = _pack_depth_rgb(d)
+        return Color3(r, g, b)
+    elseif material.depth_packing === :rg
+        r, g = _pack_depth_rg(d)
+        return Color3(r, g, 0.0)
+    end
+    g = 1.0 - d
+    return Color3(g, g, g)
+end
+
 # Material opt-in for per-vertex color modulation (three.js `vertexColors`).
 @inline _wants_vertex_colors(m) = hasfield(typeof(m), :vertex_colors) && getfield(m, :vertex_colors)
 
@@ -474,8 +526,8 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
 
         if material isa MeshDepthMaterial
             d = norm(cam_pos - center)
-            g = clamp((material.far - d) / (material.far - material.near), 0.0, 1.0)
-            colors[fi] = Color3(g, g, g)                  # near → bright
+            depth = clamp((d - material.near) / max(material.far - material.near, 1e-9), 0.0, 1.0)
+            colors[fi] = _depth_material_color(material, depth)
             continue
         end
 
