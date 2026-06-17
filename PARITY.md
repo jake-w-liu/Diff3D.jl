@@ -83,7 +83,7 @@ replacement for three.js `WebGLRenderer`.
   or sRGB browser output encoding. It still lacks shader chunks, render lists,
   render targets, full WebGL renderer tone-output/color-management parity,
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
-  full three.js skeleton lifecycle and renderer integration beyond compact
+  full three.js skeleton lifecycle and renderer-program parity beyond compact
   uniform/float bone-texture skinning plus attached/detached bind matrices,
   PMREM/prefiltered environment lighting, and most material
   shader variants.
@@ -326,8 +326,12 @@ Parallel audits split the remaining work into five critical tracks:
   `bindMatrixInverse * boneMatrix * bindMatrix`, and glTF skins without
   `inverseBindMatrices` calculate inverse binds after the node hierarchy is
   fully parented. Remaining skinning gaps are full three.js skeleton pose/update
-  lifecycle, `skin.skeleton` root semantics, morph normal/tangent skinning, and
-  CPU renderer integration for `SkinnedMesh`.
+  lifecycle, `skin.skeleton` root semantics, and morph normal/tangent skinning.
+- Done: route visible `SkinnedMesh` objects through CPU flat, smooth,
+  transparent, wireframe, cached, tiled, and shadow-depth rendering by building
+  deformed render proxies from the current skeleton pose. CPU render proxies
+  skin positions and authored normals/tangents while preserving material,
+  shadow, UV, color, and draw-group data.
 - Done: add case-level browser tone mapping metadata and shader application for
   `:none`, `:linear`, `:reinhard`, and `:aces` with exposure. This closes the
   compact runtime's missing tone-map hook while full three.js
@@ -361,7 +365,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
-  shadow-casting mesh/instanced geometry, CPU shading only applies shadow
+  shadow-casting mesh/skinned/instanced geometry, CPU shading only applies shadow
   visibility to receiving objects, and browser export serializes
   `castShadow`/`receiveShadow` so generated WebGL pages do not shadow every
   mesh implicitly. Static browser shadows still remain baked at export time,

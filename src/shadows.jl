@@ -133,6 +133,7 @@ default `pcf_radius=0` reproduces the original single-sample hard shadow exactly
 function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_radius::Int=0)
     pcf_radius >= 0 || throw(ArgumentError("pcf_radius must be >= 0, got $pcf_radius"))
     meshes = collect_meshes(scene)
+    _append_skinned_render_meshes!(meshes, scene)
     instanced = collect_instanced(scene)
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
                  any(im -> _visible_in_tree(im) && object_casts_shadow(im), instanced)

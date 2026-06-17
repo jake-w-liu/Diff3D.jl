@@ -145,6 +145,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # `_collect_into!` traverses without pruning invisible subtrees, so apply
     # the hierarchical visibility test (three.js semantics) per object here.
     _collect_into!(cache.meshes, scene, m -> m isa Mesh)
+    _append_skinned_render_meshes!(cache.meshes, scene)
     _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
     _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
     for mesh in cache.meshes
@@ -898,6 +899,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         normalize(camera.position - camera.target) : nothing
     H = rt.height
     meshes = collect_meshes(scene)
+    _append_skinned_render_meshes!(meshes, scene)
     lights = collect_lights(scene)
     instanced = collect_instanced(scene)
     band = cld(H, tiles)

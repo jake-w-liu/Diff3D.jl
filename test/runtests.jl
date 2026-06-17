@@ -2000,6 +2000,63 @@ deterministic_bytes(n::Int) =
         attached.position = Vec3(4.0, 0.0, 0.0)
         attached_bone.position = Vec3(5.0, 0.0, 0.0)
         @test apply_skinning(attached)[1].x ≈ get_vertex(geo, 1).x + 1.0 atol=1e-10
+
+        render_bone = Bone()
+        render_skel = Skeleton([render_bone])
+        render_geo = PlaneGeometry(width=1.4, height=1.4)
+        render_idx = fill((1,1,1,1), render_geo.n_vertices)
+        render_wts = fill((1.0,0.0,0.0,0.0), render_geo.n_vertices)
+        render_sm = SkinnedMesh(render_geo,
+                                MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), side=:double),
+                                render_skel, render_idx, render_wts; cast_shadow=true)
+        render_bone.position = Vec3(0.35, 0.0, 0.0)
+        proxy = Diff3D._skinned_render_mesh(render_sm)
+        @test get_vertex(proxy.geometry, 1).x ≈ get_vertex(render_geo, 1).x + 0.35 atol=1e-10
+        @test get_normal(proxy.geometry, 1).z ≈ 1.0 atol=1e-10
+
+        skinned_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(skinned_scene, render_sm)
+        skin_cam = PerspectiveCamera(fov=pi/4, aspect=1.0, near=0.1, far=20.0)
+        skin_cam.position = Vec3(0.0, 0.0, 4.0)
+        red_pixels(rt) = count(>(0.2), view(rt.color, :, :, 1))
+        rt_flat = RenderTarget(48, 48); render!(rt_flat, skinned_scene, skin_cam; shading=:flat)
+        rt_smooth = RenderTarget(48, 48); render!(rt_smooth, skinned_scene, skin_cam; shading=:smooth)
+        rt_cached = RenderTarget(48, 48); render!(rt_cached, skinned_scene, skin_cam; cache=RenderCache())
+        rt_tiled = RenderTarget(48, 48); render_tiled!(rt_tiled, skinned_scene, skin_cam; tiles=2)
+        @test red_pixels(rt_flat) > 50
+        @test red_pixels(rt_smooth) > 50
+        @test red_pixels(rt_cached) > 50
+        @test red_pixels(rt_tiled) > 50
+
+        transparent_sm = SkinnedMesh(render_geo,
+                                     MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                       opacity=0.5, transparent=true, side=:double),
+                                     render_skel, render_idx, render_wts)
+        transparent_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(transparent_scene, transparent_sm)
+        rt_transparent = RenderTarget(48, 48); render!(rt_transparent, transparent_scene, skin_cam)
+        @test red_pixels(rt_transparent) > 50
+
+        wire_sm = SkinnedMesh(render_geo,
+                              MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                wireframe=true, side=:double),
+                              render_skel, render_idx, render_wts)
+        wire_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(wire_scene, wire_sm)
+        rt_wire = RenderTarget(48, 48); render!(rt_wire, wire_scene, skin_cam)
+        @test red_pixels(rt_wire) > 0
+
+        shadow_scene = Scene()
+        shadow_box_geo = BoxGeometry(width=1.0, height=1.0, depth=1.0)
+        shadow_idx = fill((1,1,1,1), shadow_box_geo.n_vertices)
+        shadow_wts = fill((1.0,0.0,0.0,0.0), shadow_box_geo.n_vertices)
+        shadow_sm = SkinnedMesh(shadow_box_geo, MeshBasicMaterial(), Skeleton([Bone()]),
+                                shadow_idx, shadow_wts; cast_shadow=true)
+        add!(shadow_scene, shadow_sm)
+        shadow_light = DirectionalLight(position=Vec3(0.0, 4.0, 3.0))
+        shadow_light.target = Vec3(0.0, 0.0, 0.0)
+        smap = compute_shadow_map(shadow_scene, shadow_light; resolution=128)
+        @test any(isfinite, smap.depth)
     end
 
     @testset "InstancedMesh renders each instance" begin

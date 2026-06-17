@@ -586,6 +586,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         meshes = _collect_into!(cache.meshes, scene, m -> m isa Mesh)
         lights = _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
     end
+    _append_skinned_render_meshes!(meshes, scene)
     shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution) : nothing
 
     # View-projection frustum for culling whole meshes that fall offscreen.

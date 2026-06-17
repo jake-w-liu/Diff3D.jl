@@ -367,14 +367,18 @@ _skinned_bind_matrix_inverse(sm::SkinnedMesh) =
     sm.bind_mode === :attached ? mat4_inverse(compute_world_matrix(sm)) :
     sm.bind_matrix_inverse
 
+function _skinning_matrices(sm::SkinnedMesh)
+    bind = sm.bind_matrix
+    bind_inv = _skinned_bind_matrix_inverse(sm)
+    [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
+end
+
 """
 Linear blend skinning: deform each geometry vertex by the weighted sum of its
 bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 """
 function apply_skinning(sm::SkinnedMesh)
-    bind = sm.bind_matrix
-    bind_inv = _skinned_bind_matrix_inverse(sm)
-    mats = [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
+    mats = _skinning_matrices(sm)
     geo = sm.geometry
     morphed = !isempty(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
@@ -390,6 +394,97 @@ function apply_skinning(sm::SkinnedMesh)
         out[vi] = acc
     end
     return out
+end
+
+function _skin_direction(mats, idx::NTuple{4,Int}, w::NTuple{4,Float64}, d::Vec3)
+    acc = Vec3(0.0, 0.0, 0.0)
+    @inbounds for k in 1:4
+        wk = w[k]
+        wk == 0 && continue
+        acc = acc + mat4_transform_direction(mats[idx[k]], d) * wk
+    end
+    return normalize(acc)
+end
+
+function _skin_normal_buffer(sm::SkinnedMesh, mats)
+    geo = sm.geometry
+    length(geo.normals) >= geo.n_vertices * 3 || return copy(geo.normals)
+    out = Vector{Float64}(undef, geo.n_vertices * 3)
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        n = Vec3(geo.normals[base], geo.normals[base + 1], geo.normals[base + 2])
+        sn = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], n)
+        out[base] = sn.x
+        out[base + 1] = sn.y
+        out[base + 2] = sn.z
+    end
+    return out
+end
+
+function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats)
+    geo = sm.geometry
+    attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size ||
+        return copy(attr.data)
+    out = copy(attr.data)
+    @inbounds for vi in 1:geo.n_vertices
+        base = (vi - 1) * attr.item_size + 1
+        t = Vec3(Float64(attr.data[base]), Float64(attr.data[base + 1]), Float64(attr.data[base + 2]))
+        st = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], t)
+        out[base] = st.x
+        out[base + 1] = st.y
+        out[base + 2] = st.z
+    end
+    return out
+end
+
+function _copy_skinned_attributes(sm::SkinnedMesh, mats)
+    attrs = Dict{Symbol, BufferAttribute}()
+    for (name, attr) in sm.geometry.attributes
+        data = name === :tangent ? _skin_tangent_attribute(sm, attr, mats) : copy(attr.data)
+        attrs[name] = BufferAttribute(data, attr.item_size)
+    end
+    return attrs
+end
+
+function _skinned_render_geometry(sm::SkinnedMesh)
+    geo = sm.geometry
+    mats = _skinning_matrices(sm)
+    positions = Vector{Float64}(undef, geo.n_vertices * 3)
+    skinned = apply_skinning(sm)
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        p = skinned[vi]
+        positions[base] = p.x
+        positions[base + 1] = p.y
+        positions[base + 2] = p.z
+    end
+    BufferGeometry(positions, _skin_normal_buffer(sm, mats), copy(geo.uvs),
+                   copy(geo.indices), geo.n_vertices, geo.n_faces,
+                   _copy_skinned_attributes(sm, mats), copy(geo.groups))
+end
+
+function _skinned_render_mesh(sm::SkinnedMesh)
+    Mesh(sm.position, sm.rotation, sm.scale, sm.parent, AbstractObject3D[],
+         sm.visible, sm.name, sm.id, _skinned_render_geometry(sm), sm.material,
+         nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
+end
+
+function _collect_skinned_meshes!(out::Vector{SkinnedMesh}, obj::AbstractObject3D)
+    is_visible(obj) || return nothing
+    obj isa SkinnedMesh && push!(out, obj)
+    for child in get_children(obj)
+        _collect_skinned_meshes!(out, child)
+    end
+    return nothing
+end
+
+function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D)
+    skinned = SkinnedMesh[]
+    _collect_skinned_meshes!(skinned, scene)
+    for sm in skinned
+        push!(meshes, _skinned_render_mesh(sm))
+    end
+    return meshes
 end
 
 # ========================== World-matrix cache ==========================
