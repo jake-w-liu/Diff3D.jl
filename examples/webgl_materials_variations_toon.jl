@@ -10,15 +10,24 @@ const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
 
 function add_toon_mesh!(group::Group, geometry, name::String, position::Vec3,
-                        color::Color3, steps::Int)
+                        color::Color3, steps::Int; gradient_map=nothing)
     mesh = Mesh(geometry, MeshToonMaterial(color=color,
                                            emissive=color * 0.04,
                                            gradient_steps=steps,
+                                           gradient_map=gradient_map,
                                            side=:double);
                 name=name, cast_shadow=true, receive_shadow=true)
     mesh.position = position
     add!(group, mesh)
     return mesh
+end
+
+function toon_gradient(values)
+    data = zeros(Float64, 1, length(values), 3)
+    for (i, v) in enumerate(values)
+        data[1, i, :] .= v
+    end
+    Texture(data; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp, colorspace=:linear)
 end
 
 function build_case()
@@ -32,16 +41,18 @@ function build_case()
 
     group = Group(name="toon_material_group")
     add!(scene, group)
+    warm_gradient = toon_gradient([0.18, 0.42, 0.78, 1.0])
+    cool_gradient = toon_gradient([0.12, 0.35, 0.68, 1.0])
 
     add_toon_mesh!(group,
                    TorusKnotGeometry(radius=0.7, tube=0.18,
                                      tubular_segments=96, radial_segments=12),
                    "toon_torus_knot", Vec3(-1.75, 0.75, 0.0),
-                   Color3(0.95, 0.42, 0.22), 3)
+                   Color3(0.95, 0.42, 0.22), 3; gradient_map=warm_gradient)
     add_toon_mesh!(group,
                    SphereGeometry(radius=0.85, width_segments=40, height_segments=20),
                    "toon_sphere", Vec3(0.0, -0.45, 0.0),
-                   Color3(0.25, 0.75, 0.95), 4)
+                   Color3(0.25, 0.75, 0.95), 4; gradient_map=cool_gradient)
     add_toon_mesh!(group,
                    BoxGeometry(width=1.25, height=1.25, depth=1.25),
                    "toon_box", Vec3(1.8, 0.65, 0.0),
@@ -59,7 +70,7 @@ function build_case()
     ]; loop=:repeat)
 
     WebGLExportCase("materials-variations-toon", "Materials Variations Toon",
-                    "MeshToonMaterial uses quantized diffuse bands in the Diff3D.jl WebGL exporter.",
+                    "MeshToonMaterial uses gradient-map and step-count toon bands in the Diff3D.jl WebGL exporter.",
                     scene; target=Vec3(0.0, 0.35, 0.0), radius=7.0, height=2.0,
                     fov=pi / 4, animations=[clip],
                     tone_mapping=:aces, tone_exposure=1.05,

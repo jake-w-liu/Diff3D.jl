@@ -845,9 +845,15 @@ function _direct_response(m::MeshPhysicalMaterial, n, v, lc, li, ldir)
     return result
 end
 function _direct_response(m::MeshToonMaterial, n, v, lc, li, ldir)
-    ndotl = max(dot(n, ldir), 0.0)
-    banded = ceil(ndotl * m.gradient_steps) / m.gradient_steps
-    m.color * lc * (banded * li)
+    dotnl = dot(n, ldir)
+    irradiance = if m.gradient_map isa Texture
+        coord = clamp(dotnl * 0.5 + 0.5, 0.0, 1.0)
+        sample_texture(m.gradient_map, coord, 0.0).r
+    else
+        ndotl = max(dotnl, 0.0)
+        ceil(ndotl * m.gradient_steps) / m.gradient_steps
+    end
+    m.color * lc * (irradiance * li)
 end
 
 # Per-light accumulation, factored into a function barrier so that once a light

@@ -293,23 +293,52 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
 end
 
 # ========================== MeshToonMaterial ==========================
-# Quantized (cel-shaded) diffuse.
+# Quantized (cel-shaded) diffuse, optionally sampled from a toon gradient map.
+
+function _toon_gradient_steps(gradient_steps)
+    steps = Int(gradient_steps)
+    steps > 0 || throw(ArgumentError("gradient_steps must be positive"))
+    return steps
+end
+
+function _toon_gradient_map(gradient_map)
+    gradient_map === nothing && return nothing
+    gradient_map isa Texture && return gradient_map
+    throw(ArgumentError("gradient_map must be a Texture or nothing"))
+end
 
 struct MeshToonMaterial <: AbstractMaterial
     color::Color3{Float64}
     emissive::Color3{Float64}
     gradient_steps::Int
+    gradient_map::Any
     opacity::Float64
     transparent::Bool
     side::Symbol
     depth_test::Bool
     depth_write::Bool
+
+    function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                              gradient_map, opacity, transparent::Bool,
+                              side::Symbol, depth_test::Bool, depth_write::Bool)
+        new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
+            _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
+            Float64(opacity), transparent, side, depth_test, depth_write)
+    end
 end
 
 function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
-                           gradient_steps=3, opacity=1.0, transparent=false, side=:front,
+                           gradient_steps=3, gradient_map=nothing, opacity=1.0,
+                           transparent=false, side=:front,
                            depth_test=true, depth_write=true)
-    MeshToonMaterial(color, emissive, gradient_steps, opacity, transparent, side,
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, opacity, transparent, side,
+                     depth_test, depth_write)
+end
+
+function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                          opacity, transparent::Bool, side::Symbol,
+                          depth_test::Bool, depth_write::Bool)
+    MeshToonMaterial(color, emissive, gradient_steps, nothing, opacity, transparent, side,
                      depth_test, depth_write)
 end
 

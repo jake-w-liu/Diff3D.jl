@@ -234,8 +234,9 @@ Parallel audits split the remaining work into five critical tracks:
   view-space depth output using the material's near/far range, with basic,
   RGBA, RGB, and RG packing branches.
   Browser export now recognizes `MeshToonMaterial` and applies compact
-  quantized diffuse light bands from `gradient_steps`; exact three.js
-  gradient-map toon ShaderLib behavior remains open.
+  quantized diffuse light bands from `gradient_steps`, or samples serialized
+  `gradient_map` textures using the three.js toon irradiance coordinate. Full
+  three.js ShaderLib toon integration remains open.
   Browser export now recognizes `MeshMatcapMaterial` and applies the same
   procedural fallback used by the CPU shading path, or samples a serialized
   `matcap` texture with view-space normal-derived matcap UVs when one is
@@ -369,7 +370,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add compact browser `MeshDepthMaterial` support with near/far material
   serialization plus basic/RGBA/RGB/RG depth-packing shader branches.
 - Done: add compact browser `MeshToonMaterial` support with `gradient_steps`
-  serialization and quantized diffuse light bands.
+  serialization, quantized diffuse light bands, and optional `gradient_map`
+  sampling.
 - Done: add compact browser `MeshMatcapMaterial` support with procedural
   fallback and view-space texture-backed matcap sampling.
 - Done: add `KHR_materials_volume` fields to `MeshPhysicalMaterial`, glTF
@@ -617,8 +619,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_materials_variations_toon` via
   `examples/webgl_materials_variations_toon.jl`, using Diff3D.jl
   `MeshToonMaterial`, primitive geometry generators, orbit interaction, and the
-  browser toon-material shader branch. Exact three.js gradient-map behavior and
-  the upstream object layout remain documented deviations.
+  browser toon-material shader branch with optional serialized gradient maps.
+  Full three.js ShaderLib toon internals and the upstream object layout remain
+  documented deviations.
 - Added a standalone partial port for `webgl_materials_matcap` via
   `examples/webgl_materials_matcap.jl`, using Diff3D.jl `MeshMatcapMaterial`,
   primitive geometry generators, orbit interaction, and the browser matcap

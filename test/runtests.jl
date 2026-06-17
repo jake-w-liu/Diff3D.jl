@@ -562,10 +562,18 @@ deterministic_bytes(n::Int) =
                                    name="export_depth_material")
         depth_material_mesh.position = Vec3(0.9, 1.25, 0.0)
         add!(scene, depth_material_mesh)
+        toon_gradient = zeros(Float64, 1, 4, 3)
+        toon_gradient[1, 1, :] .= 0.15
+        toon_gradient[1, 2, :] .= 0.35
+        toon_gradient[1, 3, :] .= 0.7
+        toon_gradient[1, 4, :] .= 1.0
         toon_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
                                   MeshToonMaterial(color=Color3(1.0, 0.75, 0.25),
                                                    emissive=Color3(0.05, 0.02, 0.0),
-                                                   gradient_steps=4);
+                                                   gradient_steps=4,
+                                                   gradient_map=Texture(toon_gradient; filter=:nearest,
+                                                                        wrap_s=:clamp, wrap_t=:clamp,
+                                                                        colorspace=:linear));
                                   name="export_toon_material")
         toon_material_mesh.position = Vec3(1.8, 1.25, 0.0)
         add!(scene, toon_material_mesh)
@@ -923,7 +931,13 @@ deterministic_bytes(n::Int) =
         @test occursin("uMaterialMode==3", html)
         @test occursin("uToonSteps", html)
         @test occursin("toonBand", html)
-        @test occursin("ceil(clamp(d,0.0,1.0)*uToonSteps)/uToonSteps", html)
+        @test occursin("\"gradientTexture\":{\"width\":4,\"height\":1", html)
+        @test occursin("uUseGradientMap", html)
+        @test occursin("uGradientMap", html)
+        @test occursin("texture2D(uGradientMap,vec2(clamp(d*.5+.5,0.0,1.0),0.0)).r", html)
+        @test occursin("ceil(clamp(max(d,0.0),0.0,1.0)*uToonSteps)/uToonSteps", html)
+        @test occursin("toonBand(dot(n,l))", html)
+        @test occursin("uRectColor[i]*toonBand(dot(n,l))*a", html)
         @test occursin("\"name\":\"export_matcap_material\"", html)
         @test occursin("\"materialType\":\"matcap\"", html)
         @test occursin("\"matcapTexture\":", html)
@@ -2014,6 +2028,25 @@ deterministic_bytes(n::Int) =
         @test c1.r ≈ c2.r                                  # banding ⇒ identical
         # Head-on lighting gives the top band (full intensity).
         @test shade_face(n, v, Vec3(), m, lights).r ≈ 1.0
+
+        gdata = zeros(Float64, 1, 3, 3)
+        gdata[1, 1, :] .= 0.2
+        gdata[1, 2, :] .= 0.5
+        gdata[1, 3, :] .= 0.9
+        gradient_map = Texture(gdata; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp,
+                               colorspace=:linear)
+        mapped = MeshToonMaterial(color=Color3(1.0,1.0,1.0), gradient_steps=2,
+                                  gradient_map=gradient_map)
+        front = shade_face(n, v, Vec3(), mapped, lights)
+        back = shade_face(n, v, Vec3(), mapped,
+                          AbstractLight[DirectionalLight(intensity=1.0,
+                                                         position=Vec3(0.0,0,-1.0))])
+        @test front.r ≈ 0.9
+        @test back.r ≈ 0.2
+        @test MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3, 1.0, false,
+                               :front, true, true).gradient_map === nothing
+        @test_throws ArgumentError MeshToonMaterial(gradient_steps=0)
+        @test_throws ArgumentError MeshToonMaterial(gradient_map=:not_a_texture)
     end
 
     @testset "MeshMatcapMaterial — view-facing falloff" begin
