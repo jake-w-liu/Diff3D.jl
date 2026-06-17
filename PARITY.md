@@ -516,7 +516,7 @@ Parallel audits split the remaining work into five critical tracks:
   linear, step, and `CUBICSPLINE` interpolation.
 - Done: export morph-weight tracks to browser vertex-buffer morph playback.
 - Done: add CPU/browser scalar `NumberKeyframeTrack` support for component
-  property paths (`position.x`, `.scale[y]`, and
+  property paths (`position.x`, `.scale[y]`, `quaternion.y`, and
   `morphTargetInfluences[0]`) so simple three.js-style animation binding no
   longer requires full-vector keyframes.
 - Done: parse three.js-style `material.*` number track names such as

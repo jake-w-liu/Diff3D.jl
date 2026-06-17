@@ -965,6 +965,14 @@ function _with_component(v::Quaternion, component::Int, x::Real)
     component == 4 && return Quaternion(v.x, v.y, v.z, Float64(x))
     throw(ArgumentError("Quaternion animation component must be x/y/z/w"))
 end
+function _target_rotation_quaternion(target)
+    rot = hasproperty(target, :rotation) ? getproperty(target, :rotation) : Euler()
+    return quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)
+end
+function _write_quaternion_component!(target, component::Int, v::Real)
+    q = _with_component(_target_rotation_quaternion(target), component, v)
+    return _write_track_value!(target, :quaternion, quat_normalize(q))
+end
 function _with_component(v::Color3, component::Int, x::Real)
     component == 1 && return Color3(Float64(x), v.g, v.b)
     component == 2 && return Color3(v.r, Float64(x), v.b)
@@ -1027,6 +1035,8 @@ function _write_morph_component!(target, property::Symbol, component::Int, v::Re
 end
 function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     component == 0 && return _write_track_value!(target, property, Float64(v))
+    property === :quaternion &&
+        return _write_quaternion_component!(target, component, v)
     property === :morph_target_influences &&
         return _write_morph_component!(target, property, component, v)
     if !hasproperty(target, property) &&

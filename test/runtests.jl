@@ -2915,6 +2915,32 @@ deterministic_bytes(n::Int) =
         @test mesh.scale.y ≈ 1.0
         mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy])), 1.0)
         @test mesh.scale.y ≈ 5.0
+        quat_component = Group()
+        qy = NumberKeyframeTrack(quat_component, "quaternion.y",
+                                 [0.0, 1.0], [0.0, sin(pi / 4)])
+        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_y", [qy])), 1.0)
+        qy_actual = quat_from_euler(quat_component.rotation.x,
+                                    quat_component.rotation.y,
+                                    quat_component.rotation.z;
+                                    order=quat_component.rotation.order)
+        qy_expected = quat_normalize(Quaternion(0.0, sin(pi / 4), 0.0, 1.0))
+        @test abs(quat_dot(qy_actual, qy_expected)) ≈ 1.0 atol=1e-9
+        @test abs(quat_dot(qy_actual, qy_actual)) ≈ 1.0 atol=1e-9
+        quat_w_component = Group()
+        quat_w_component.rotation = Euler(0.0, pi / 2, 0.0)
+        qbase = quat_from_euler(quat_w_component.rotation.x,
+                                quat_w_component.rotation.y,
+                                quat_w_component.rotation.z;
+                                order=quat_w_component.rotation.order)
+        qw = NumberKeyframeTrack(quat_w_component, "quaternion.w",
+                                 [0.0, 1.0], [qbase.w, 0.5])
+        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_w", [qw])), 1.0)
+        qw_actual = quat_from_euler(quat_w_component.rotation.x,
+                                    quat_w_component.rotation.y,
+                                    quat_w_component.rotation.z;
+                                    order=quat_w_component.rotation.order)
+        qw_expected = quat_normalize(Quaternion(qbase.x, qbase.y, qbase.z, 0.5))
+        @test abs(quat_dot(qw_actual, qw_expected)) ≈ 1.0 atol=1e-9
         vis = NumberKeyframeTrack(mesh, "visible", [0.0, 1.0], [1.0, 0.0])
         mixer_set_time!(AnimationMixer(AnimationClip("visible", [vis])), 0.25)
         @test mesh.visible === true
