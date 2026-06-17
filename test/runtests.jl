@@ -88,6 +88,11 @@ deterministic_bytes(n::Int) =
                     @test !occursin("representative", deviations)
                     @test !occursin("rather than exact", deviations)
                 end
+                if entry["upstream_id"] == "threejs_webgl_points_sprites"
+                    source = read(script, String)
+                    @test occursin("PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,\n                                            transparent=true, map=sprite_map)", source)
+                    @test "PointsMaterial.map" in entry["prerequisites"]
+                end
             end
         end
     end
@@ -756,6 +761,22 @@ deterministic_bytes(n::Int) =
         parent.position = Vec3(2.0, 0.0, 0.0)
         add!(parent, sp)
         add!(scene, parent)
+        points_tex = Texture(texdata; filter=:nearest, colorspace=:srgb,
+                             offset=Vec2(0.125, 0.25),
+                             repeat=Vec2(0.5, 0.75),
+                             rotation=0.1,
+                             center=Vec2(0.5, 0.5))
+        points_map_geo = BufferGeometry([0.0, 0.0, 0.0,
+                                         0.4, 0.0, 0.0],
+                                        Float64[], [0.25, 0.25, 0.75, 0.75],
+                                        Int[], 2, 0)
+        points_mapped = PointsObject(points_map_geo,
+                                     PointsMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                    size=9.0,
+                                                    transparent=true,
+                                                    map=points_tex);
+                                     name="export_points_map")
+        add!(scene, points_mapped)
         morph_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                    Float64[], Float64[], Int[1,2,3], 3, 1)
         set_attribute!(morph_geo, :morphPosition0,
@@ -915,6 +936,20 @@ deterministic_bytes(n::Int) =
         @test occursin("\"spriteSizeAttenuation\":false", sprite_drawable)
         @test occursin("\"texture\":", sprite_drawable)
         @test occursin("\"transparent\":true", sprite_drawable)
+        points_drawable = only(filter(d -> occursin("\"name\":\"export_points_map\"", d),
+                                      Diff3D._web_collect_drawables(scene)))
+        @test occursin("\"mode\":\"points\"", points_drawable)
+        @test occursin("\"pointSize\":9", points_drawable)
+        @test occursin("\"transparent\":true", points_drawable)
+        @test occursin("\"texture\":{\"width\":2,\"height\":2", points_drawable)
+        @test occursin("\"filter\":\"nearest\"", points_drawable)
+        @test occursin("\"minFilter\":\"nearest\"", points_drawable)
+        @test occursin("\"magFilter\":\"nearest\"", points_drawable)
+        @test occursin("\"colorspace\":\"srgb\"", points_drawable)
+        @test occursin("\"offset\":[0.125,0.25]", points_drawable)
+        @test occursin("\"repeat\":[0.5,0.75]", points_drawable)
+        @test occursin("\"rotation\":0.10000000000000001", points_drawable)
+        @test occursin("\"matrix\":[", points_drawable)
         skin_drawable = only(filter(d -> occursin("\"name\":\"export_skin\"", d),
                                     Diff3D._web_collect_drawables(scene)))
         @test occursin("\"skin\":{", skin_drawable)
@@ -1061,6 +1096,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_env_map\"", html)
         @test occursin("\"name\":\"export_physical_extensions\"", html)
         @test occursin("\"name\":\"export_sprite\"", html)
+        @test occursin("\"name\":\"export_points_map\"", html)
         @test occursin("spriteProgram", html)
         @test occursin("uCameraRight", html)
         @test occursin("uSpriteCenter", html)

@@ -224,8 +224,12 @@ Each milestone should land in small verified slices.
 Parallel audits split the remaining work into five critical tracks:
 
 - Renderer/WebGL: move from a showcase shader toward an explicit renderer
-  contract. Highest-impact short-term gaps are multiple lights per type,
-  transparent sorting, material-side flags, and more material maps.
+  contract. Previously high-impact compact-runtime gaps such as multiple
+  lights per type, transparent sorting, material-side/depth flags, common
+  material maps, explicit case cameras, texture color-space metadata, and
+  parented visibility for drawables/lights are now covered by tests. Remaining
+  renderer work is architectural `WebGLRenderer` parity rather than another
+  small showcase-shader patch.
 - Materials/lights/color: color texture maps now decode sRGB to linear in flat
   and smooth CPU shading while data maps stay raw. Smooth CPU shading now covers
   the same albedo, normal, roughness, metalness, AO, emissive, and light-map
@@ -648,6 +652,10 @@ Parallel audits split the remaining work into five critical tracks:
   `webgl_lines_colors`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
+- Added partial `webgl_geometries` coverage through
+  `examples/live_webgl_showcase.jl`, using the compact WebGL showcase cases for
+  primitive geometry/material/orbit coverage. Exact upstream scene layout and
+  `WebGLRenderer` internals remain documented deviations in the registry.
 - Added a standalone partial port for `webgl_geometry_cube` via
   `examples/webgl_geometry_cube.jl`, using Diff3D.jl `BoxGeometry`, a generated
   texture map, and quaternion keyframe playback for the rotating cube. Exact
@@ -682,9 +690,10 @@ Parallel audits split the remaining work into five critical tracks:
   attributes and browser point rendering. Exact upstream point data remains a
   documented deviation.
 - Added a standalone partial port for `webgl_points_sprites` via
-  `examples/webgl_points_sprites.jl`, using browser billboard Sprite proxies
-  with sampled material maps plus sprite center/rotation/size-attenuation
-  support.
+  `examples/webgl_points_sprites.jl`, using textured browser `PointsMaterial`
+  point sprites plus billboard `Sprite` proxies with sampled material maps and
+  sprite center/rotation/size-attenuation support. Compact browser billboarding
+  and `WebGLRenderer` internals remain documented deviations in the registry.
 - Added a standalone partial port for `webgl_instancing_dynamic` via
   `examples/webgl_instancing_dynamic.jl`, using Diff3D.jl `InstancedMesh`,
   generated instance matrices, shadows, fog, tone mapping, and quaternion/scale

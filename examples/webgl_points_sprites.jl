@@ -46,11 +46,12 @@ function build_case()
     add!(scene, AmbientLight(color=Color3(0.22, 0.24, 0.32), intensity=0.75))
     add!(scene, GridHelper(8.0, 16; color=Color3(0.10, 0.12, 0.17)))
 
+    sprite_map = sprite_texture()
     add!(scene, PointsObject(star_points_geometry(),
-                             PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0);
+                             PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,
+                                            transparent=true, map=sprite_map);
                              name="sprite_like_points"))
 
-    sprite_map = sprite_texture()
     colors = (Color3(1.0, 0.32, 0.18), Color3(0.2, 0.8, 1.0), Color3(1.0, 0.86, 0.2))
     for i in 1:18
         a = 2pi * i / 18
@@ -66,7 +67,7 @@ function build_case()
     end
 
     WebGLExportCase("points_sprites", "Points Sprites",
-                    "Textured billboard sprite quads exported from Diff3D.jl Sprite proxies.",
+                    "Textured point sprites and billboard sprite quads exported from Diff3D.jl.",
                     scene; target=Vec3(0.0, 0.0, 0.0), radius=8.0, height=2.6,
                     fov=pi/4.0)
 end
