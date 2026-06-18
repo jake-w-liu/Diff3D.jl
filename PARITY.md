@@ -284,11 +284,12 @@ Parallel audits split the remaining work into five critical tracks:
   the represented physical extension maps for clearcoat, clearcoat roughness,
   transmission, thickness, sheen color/roughness, iridescence,
   iridescence thickness, specular intensity, specular color, and anisotropy
-  strength. Clearcoat, transmission, sheen,
+  strength. Clearcoat, clearcoat normal, transmission, sheen,
   iridescence, specular, and anisotropy physical-extension texture variants are serialized
   and bound by the compact browser runtime through packed physical map textures
-  when the WebGL context exposes enough fragment texture units; lower-capability
-  contexts keep scalar physical terms instead of failing shader compilation.
+  and a gated clearcoat-normal sampler when the WebGL context exposes enough
+  fragment texture units; lower-capability contexts keep scalar physical terms
+  instead of failing shader compilation.
   `KHR_materials_volume` scalar thickness, green-channel thickness textures, and
   attenuation distance/color now feed the CPU transmission approximation and
   compact browser shader. The compact browser shader also applies the
@@ -553,10 +554,11 @@ Parallel audits split the remaining work into five critical tracks:
   maps, `normalTexture`, `occlusionTexture`, and `emissiveTexture`).
 - Done: preserve `KHR_materials_clearcoat.clearcoatNormalTexture` with its
   normal scale and preserve the ratified `KHR_materials_dispersion.dispersion`
-  scalar on `MeshPhysicalMaterial`. Browser export now serializes dispersion,
-  animates it as a render property, and uses it in the compact transmission
-  Fresnel approximation. Exact clearcoat-layer normal shading and full
-  chromatic refraction remain part of the broader physical-renderer parity work.
+  scalar on `MeshPhysicalMaterial`. Browser export now serializes clearcoat
+  normal textures/scales and dispersion, animates the scalar render properties,
+  and uses them in the compact clearcoat lobe and transmission Fresnel
+  approximations. Exact clearcoat-layer BRDF parity and full chromatic
+  refraction remain part of the broader physical-renderer parity work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
   extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
   references now fail with explicit loader errors instead of falling through PNG

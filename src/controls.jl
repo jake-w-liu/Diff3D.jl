@@ -574,6 +574,7 @@ function _animation_property_symbol(s::AbstractString)
     s == "depthNear" && return :near
     s == "depthFar" && return :far
     s == "clearcoatRoughness" && return :clearcoat_roughness
+    s == "clearcoatNormalScale" && return :clearcoat_normal_scale
     s == "sheenColor" && return :sheen_color
     s == "sheenRoughness" && return :sheen_roughness
     s == "iridescenceIor" && return :iridescence_ior

@@ -1097,6 +1097,14 @@ deterministic_bytes(n::Int) =
                                                     dispersion=0.5,
                                                     clearcoat_map=Texture(pbrdata; filter=:nearest),
                                                     clearcoat_roughness_map=Texture(pbrdata; filter=:nearest),
+                                                    clearcoat_normal_map=Texture(normaldata; filter=:nearest,
+                                                                                 colorspace=:linear,
+                                                                                 offset=Vec2(0.125, 0.25),
+                                                                                 repeat=Vec2(0.5, 0.75),
+                                                                                 rotation=0.1,
+                                                                                 center=Vec2(0.5, 0.5),
+                                                                                 tex_coord=1),
+                                                    clearcoat_normal_scale=0.4,
                                                     transmission_map=Texture(pbrdata; filter=:nearest),
                                                     thickness_map=Texture(pbrdata; filter=:nearest),
                                                     sheen_color_map=Texture(texdata; filter=:nearest),
@@ -1288,6 +1296,7 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(physical_mapped, "material.emissiveIntensity", [0.0, 1.0], [1.5, 0.25]),
             NumberKeyframeTrack(physical_mapped, "material.envMapIntensity", [0.0, 1.0], [0.4, 0.9]),
             NumberKeyframeTrack(physical_mapped, "material.clearcoatRoughness", [0.0, 1.0], [0.15, 0.65]),
+            NumberKeyframeTrack(physical_mapped, "material.clearcoatNormalScale", [0.0, 1.0], [0.4, 0.8]),
             NumberKeyframeTrack(physical_mapped, "material.attenuationDistance", [0.0, 1.0], [2.0, 4.0]),
             NumberKeyframeTrack(physical_mapped, "material.attenuationColor.g", [0.0, 1.0], [0.7, 0.3]),
             NumberKeyframeTrack(physical_mapped, "material.sheenColor.r", [0.0, 1.0], [0.8, 0.2]),
@@ -1598,6 +1607,9 @@ deterministic_bytes(n::Int) =
         @test occursin("\"dispersion\":0.5", html)
         @test occursin("\"clearcoatTexture\":", html)
         @test occursin("\"clearcoatRoughnessTexture\":", html)
+        @test occursin("\"clearcoatNormalTexture\":{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"clearcoatNormalTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
+        @test occursin("\"clearcoatNormalScale\":0.40000000000000002", html)
         @test occursin("\"transmissionTexture\":", html)
         @test occursin("\"thicknessTexture\":", html)
         @test occursin("\"sheenColorTexture\":", html)
@@ -1608,6 +1620,11 @@ deterministic_bytes(n::Int) =
         @test occursin("\"specularColorTexture\":", html)
         @test occursin("\"anisotropyTexture\":", html)
         @test occursin("uClearcoat", html)
+        @test occursin("uUseClearcoatNormalMap", html)
+        @test occursin("uClearcoatNormalMap", html)
+        @test occursin("uClearcoatNormalScale", html)
+        @test occursin("uClearcoatNormalMatrix", html)
+        @test occursin("uClearcoatNormalTexCoord", html)
         @test occursin("physicalTexturesEnabled", html)
         @test occursin("packedTexture", html)
         @test occursin("uUsePhysicalScalarMap", html)
@@ -1645,7 +1662,12 @@ deterministic_bytes(n::Int) =
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropy\"),o.anisotropy||0)", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropyRotation\"),o.anisotropyRotation||0)", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uDispersion\"),o.dispersion||0)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uClearcoatNormalScale\"),o.clearcoatNormalScale==null?1:o.clearcoatNormalScale)", html)
         @test occursin("o.physicalScalarTex=physicalTexturesEnabled?makeTexture", html)
+        @test occursin("o.clearcoatNormalTex=clearcoatNormalTexturesEnabled?makeTexture(o.clearcoatNormalTexture):null", html)
+        @test occursin("const clearcoatNormalTextureUnit=15", html)
+        @test occursin("const usesClearcoatNormal=(DATA.cases||[]).some", html)
+        @test occursin("const clearcoatNormalTexturesEnabled=usesClearcoatNormal&&maxTextureUnits>clearcoatNormalTextureUnit&&maxCombinedTextureUnits>clearcoatNormalTextureUnit", html)
         @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture]", html)
         @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])", html)
         @test occursin("texture2D(uPhysicalScalarMap,phys1Uv)", html)
@@ -1656,12 +1678,16 @@ deterministic_bytes(n::Int) =
         @test !occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture)", html)
         @test occursin("float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0)", html)
         @test occursin("float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
+        @test occursin("vec3 mappedClearcoatNormal(vec3 n, vec2 uv)", html)
+        @test occursin("vec3 clearcoatN=mappedClearcoatNormal(n,clearcoatNormalUv)", html)
+        @test occursin("float coatNdv=max(dot(clearcoatN,v),0.0); vec3 coat=specular*pow(coatNdv,coatPower)*clearcoat", html)
         @test occursin("float dispersion=max(uDispersion,0.0); float halfSpread=max(uIor-1.0,0.0)*0.025*dispersion; vec3 dispersionIor=max(vec3(uIor-halfSpread,uIor,uIor+halfSpread),vec3(1.0));", html)
         @test occursin("vec3 transmitted=env*base*transmission*(vec3(1.0)-dispersionFresnel)", html)
         @test occursin("vec3 transmitted=env*base*volAtt*transmission*(vec3(1.0)-dispersionFresnel)", html)
         @test occursin("float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor;", html)
         @test occursin("float anisotropy=clamp(uAnisotropy,0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("gl.activeTexture(gl.TEXTURE11)", html)
+        @test occursin("if(o.clearcoatNormalTex){ gl.activeTexture(gl.TEXTURE0+clearcoatNormalTextureUnit)", html)
         @test !occursin("gl.activeTexture(gl.TEXTURE16)", html)
         @test occursin("iridescenceTint", html)
         @test occursin("\"clippingPlanes\":[[1,0,0,0]]", html)
@@ -1856,6 +1882,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"emissiveIntensity\"", html)
         @test occursin("\"property\":\"envMapIntensity\"", html)
         @test occursin("\"property\":\"clearcoatRoughness\"", html)
+        @test occursin("\"property\":\"clearcoatNormalScale\"", html)
         @test occursin("\"property\":\"attenuationDistance\"", html)
         @test occursin("\"property\":\"attenuationColor\",\"component\":2", html)
         @test occursin("\"property\":\"sheenColor\",\"component\":1", html)
@@ -1870,6 +1897,7 @@ deterministic_bytes(n::Int) =
         @test occursin("assignComponent", html)
         @test occursin("baseRenderable", html)
         @test occursin("transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps", html)
+        @test occursin("clearcoatNormalScale:o.clearcoatNormalScale", html)
         @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
         @test occursin("dispersion:o.dispersion", html)
         @test occursin("typeof o[prop]===\"boolean\"", html)
@@ -1896,7 +1924,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"pcfRadius\":1", html)
         @test occursin("makeShadowTexture", html)
         @test occursin("shadowTexturesEnabled", html)
-        @test occursin("shadowTextureUnits=[12,15]", html)
+        @test occursin("const shadowTextureUnits=usesClearcoatNormal&&clearcoatNormalTexturesEnabled?[12]:[12,15]", html)
         @test occursin("shadowTextureSlots=shadowTextureUnits.filter", html)
         @test occursin("uShadowMap0", html)
         @test occursin("uShadowMap1", html)
