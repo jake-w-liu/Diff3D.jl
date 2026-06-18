@@ -57,6 +57,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
+            "threejs_webgl_morphtargets",
             "threejs_webgl_materials_normal",
             "threejs_webgl_materials_depth",
             "threejs_webgl_materials_variations_basic",
@@ -147,6 +148,19 @@ deterministic_bytes(n::Int) =
                     "WebGLExportCase(\"clipping-cap\"",
                 ],
                 prerequisites=["case-level clipping planes", "Plane", "browser clipping"],
+            ),
+            "threejs_webgl_morphtargets" => (
+                source=[
+                    "function morph_cube_geometry(; segments::Int=24)",
+                    "sphere_target(p)",
+                    "twist_target(p)",
+                    "set_attribute!(geo, :morphPosition0, sphere_deltas, 3)",
+                    "set_attribute!(geo, :morphPosition1, twist_deltas, 3)",
+                    "morph_target_influences=[0.0, 0.0]",
+                    "MorphWeightsKeyframeTrack(mesh, :morph_target_influences",
+                    "WebGLExportCase(\"morph-targets\"",
+                ],
+                prerequisites=["BufferGeometry morph attributes", "MorphWeightsKeyframeTrack", "browser morph-target updates"],
             ),
             "threejs_webgl_materials_normal" => (
                 source=[

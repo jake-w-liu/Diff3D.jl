@@ -692,6 +692,11 @@ Parallel audits split the remaining work into five critical tracks:
   clipping shader coverage. Upstream GUI mutation, material-local
   `clippingPlanes`, `localClippingEnabled`, `clipShadows`, `alphaToCoverage`,
   `Stats`, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_morphtargets` via
+  `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
+  attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and
+  browser runtime morph-target updates. Upstream segmented `BoxGeometry`
+  construction and GUI sliders remain documented deviations.
 - Added a standalone partial port for `webgl_animation_keyframes` via
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset

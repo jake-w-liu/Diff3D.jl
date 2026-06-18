@@ -74,6 +74,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_clipping.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_morphtargets"
+upstream_url = "https://threejs.org/examples/#webgl_morphtargets"
+local_script = "examples/webgl_morphtargets.jl"
+status = "partial"
+prerequisites = ["BufferGeometry morph attributes", "Mesh.morph_target_influences", "MorphWeightsKeyframeTrack", "browser morph-target updates"]
+known_deviations = [
+  "Uses a procedural subdivided BufferGeometry cube because Diff3D.jl BoxGeometry does not yet expose width/height/depth segment counts",
+  "Animates morph weights with Diff3D.jl keyframe tracks instead of upstream lil-gui controls",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer"
+]
+verification = ["julia --project=. examples/webgl_morphtargets.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_morphtargets.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_materials_normal"
 upstream_url = "https://threejs.org/examples/#webgl_materials_normal"
 local_script = "examples/webgl_materials_normal.jl"
