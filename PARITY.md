@@ -435,18 +435,28 @@ Parallel audits split the remaining work into five critical tracks:
   dynamic shadow target used by directional shadows, compute a perspective
   light matrix from the live spot position/target/angle and scene shadow
   bounds, and feed the updated texture/matrix through the existing two-slot
-  spot-light shadow sampler. Dynamic point-light cube shadows, cascades, and
-  full three.js shadow-camera helper and renderer-state parity remain open.
+  spot-light shadow sampler. Cascades and full three.js shadow-camera helper
+  and renderer-state parity remain open.
 - Done: make compact browser dynamic directional/spot shadow maps respect
   browser-side bone deformation for exported skinned meshes. Bone transform
   tracks on shadow-casting or shadow-receiving `SkinnedMesh` skeletons now mark
   static directional/spot shadow maps dynamic and point-light maps stale, the
   generated depth pass mirrors the main mesh skinning path for uniform and
   bone-texture skinning, and dynamic shadow camera bounds include the same
-  deformed vertex positions before rendering casters. Dynamic point-light cube
-  shadows, cascaded shadow maps, alpha-tested/clipped shadow-caster material
-  parity, and full three.js shadow helper/renderer-state integration remain
-  open.
+  deformed vertex positions before rendering casters. Cascaded shadow maps,
+  alpha-tested/clipped shadow-caster material parity, and full three.js shadow
+  helper/renderer-state integration remain open.
+- Done: add compact browser dynamic point-light cube-shadow rendering. Animated
+  cast-shadow `PointLight` positions/distances and animated shadow
+  caster/receiver scenes now serialize point lights as `pointDynamic`;
+  generated WebGL pages allocate a
+  4x2 six-face 2D atlas, render radial-depth point-light faces each frame using
+  the same skinned/instanced caster path as other dynamic shadows, and sample
+  the atlas through the existing two-slot shadow list for point-light
+  contribution. This is a compact atlas implementation rather than three.js's
+  full `WebGLCubeRenderTarget`/shadow-camera helper stack; cascades,
+  alpha-tested/clipped shadow-caster material parity, and full renderer-state
+  integration remain open.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
@@ -940,8 +950,7 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
-  point-light cube shadows, cascaded shadow maps, alpha-tested/clipped
-  shadow-caster material parity,
+  cascaded shadow maps, alpha-tested/clipped shadow-caster material parity,
   full three.js skeleton lifecycle/renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,
