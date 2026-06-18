@@ -426,11 +426,18 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: make browser shadow export invalidate stale baked maps when
   shadow-casting or shadow-receiving drawables animate. Object/group transform,
   visibility, and morph-weight tracks now make static cast-shadow
-  `DirectionalLight`s use the dynamic directional pass, while point and spot
+  `DirectionalLight`s use the dynamic directional pass, while point-light
   shadow maps are serialized as `null` instead of stale baked textures until
-  their dynamic shadow-camera paths exist. Dynamic point-light cube shadows,
-  spot-light shadow cameras, cascades, and bone-deformed shadow-map rendering
-  remain open.
+  their dynamic cube-shadow path exists.
+- Done: add compact browser dynamic spot-light shadow cameras. Generated WebGL
+  pages now serialize transform-, target-, angle-, or caster-animated
+  cast-shadow `SpotLight`s as `spotDynamic`, allocate the same color-depth
+  dynamic shadow target used by directional shadows, compute a perspective
+  light matrix from the live spot position/target/angle and scene shadow
+  bounds, and feed the updated texture/matrix through the existing two-slot
+  spot-light shadow sampler. Dynamic point-light cube shadows, cascades,
+  bone-deformed shadow-map rendering, and full three.js shadow-camera helper
+  and renderer-state parity remain open.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
@@ -924,8 +931,8 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
-  spot-light shadow cameras, point-light cube shadows, cascaded shadow maps,
-  and bone-deformed shadow-map rendering,
+  point-light cube shadows, cascaded shadow maps, and bone-deformed shadow-map
+  rendering,
   full three.js skeleton lifecycle/renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,

@@ -392,10 +392,16 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
                           shadow_mode::Symbol=:static)
     (hasproperty(light, :cast_shadow) && getproperty(light, :cast_shadow)) || return "null"
     shadow_mode === :none && return "null"
-    if shadow_mode === :directional_dynamic
-        light isa DirectionalLight || return "null"
+    if shadow_mode === :directional_dynamic || shadow_mode === :spot_dynamic
+        if shadow_mode === :directional_dynamic
+            light isa DirectionalLight || return "null"
+            typ = "directionalDynamic"
+        else
+            light isa SpotLight || return "null"
+            typ = "spotDynamic"
+        end
         return "{" *
-               "\"type\":\"directionalDynamic\"" *
+               "\"type\":" * _js_str(typ) *
                ",\"size\":" * string(WEB_SHADOW_RESOLUTION) *
                ",\"bias\":" * _js_num(1.5e-3) *
                ",\"pcfRadius\":1" *
@@ -590,7 +596,8 @@ _web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json
 
 function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
                           stale_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_shadow_ids::Set{Int}=Set{Int}())
+                          dynamic_shadow_ids::Set{Int}=Set{Int}(),
+                          dynamic_spot_shadow_ids::Set{Int}=Set{Int}())
     lights = String[]
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
     # own visibility or ancestor visibility is animated (force_ids) must be
@@ -603,6 +610,8 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
         visibility_ids, visibility_values = _web_visibility_chain(light)
         shadow_mode = if light.id in dynamic_shadow_ids
             :directional_dynamic
+        elseif light.id in dynamic_spot_shadow_ids
+            :spot_dynamic
         elseif light.id in stale_shadow_ids
             :none
         else
@@ -979,6 +988,7 @@ end
 
 const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set(("position", "target", "angle"))
 const WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES = Set(("position", "target"))
+const WEB_DYNAMIC_SPOT_SHADOW_TRACK_PROPERTIES = Set(("position", "target", "angle"))
 const WEB_SHADOW_DRAWABLE_TRACK_PROPERTIES = Set((
     "position", "scale", "quaternion", "rotation", "visible",
     "morph_target_influences", "morphTargetInfluences",
@@ -1009,6 +1019,18 @@ function _web_dynamic_directional_shadow_light_ids(animations::AbstractVector{An
         target isa DirectionalLight || continue
         target.cast_shadow || continue
         _web_shadow_track_root_name(track) in WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES || continue
+        push!(ids, target.id)
+    end
+    return ids
+end
+
+function _web_dynamic_spot_shadow_light_ids(animations::AbstractVector{AnimationClip})
+    ids = Set{Int}()
+    for clip in animations, track in clip.tracks
+        target = track.target
+        target isa SpotLight || continue
+        target.cast_shadow || continue
+        _web_shadow_track_root_name(track) in WEB_DYNAMIC_SPOT_SHADOW_TRACK_PROPERTIES || continue
         push!(ids, target.id)
     end
     return ids
@@ -1065,6 +1087,18 @@ function _web_dynamic_directional_shadow_light_ids(scene::Scene,
     _web_has_animated_shadow_drawable(scene, animations) || return ids
     traverse(scene, obj -> begin
         obj isa DirectionalLight || return
+        obj.cast_shadow || return
+        push!(ids, obj.id)
+    end)
+    return ids
+end
+
+function _web_dynamic_spot_shadow_light_ids(scene::Scene,
+                                            animations::AbstractVector{AnimationClip})
+    ids = _web_dynamic_spot_shadow_light_ids(animations)
+    _web_has_animated_shadow_drawable(scene, animations) || return ids
+    traverse(scene, obj -> begin
+        obj isa SpotLight || return
         obj.cast_shadow || return
         push!(ids, obj.id)
     end)
@@ -1447,6 +1481,7 @@ function _web_case_json(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
     stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
     dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
+    dynamic_spot_shadow_ids = _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
     return "{" *
            "\"id\":" * _js_str(case.id) *
            ",\"title\":" * _js_str(case.title) *
@@ -1465,7 +1500,8 @@ function _web_case_json(case::WebGLExportCase)
            ",\"outputColorSpaceMode\":" * string(_web_output_color_space_id(case.output_color_space)) *
            ",\"clippingPlanes\":[" * join((_js_plane(p) for p in case.clipping_planes), ",") * "]" *
            ",\"lights\":" * _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
-                                             dynamic_shadow_ids) *
+                                             dynamic_shadow_ids,
+                                             dynamic_spot_shadow_ids) *
            ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, animation_target_ids), ",") * "]" *
            ",\"objects\":[" * join(_web_collect_drawables(case.scene, animation_target_ids,
                                                           case.radius), ",") * "]" *
@@ -1883,7 +1919,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function cloneAnimValue(v){ return Array.isArray(v)?v.slice():v; }
   function captureLightBase(l){ const b={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; for(const k of ["position","target","direction","angle","penumbra","coneCos","penumbraCos","forward","u","v","width","height"]) if(l[k]!==undefined) b[k]=cloneAnimValue(l[k]); return b; }
   function refreshLightDerived(l){ if(l.type==="directional"&&l.position&&l.target) l.direction=norm(sub(l.position,l.target)); else if(l.type==="spot"){ if(l.position&&l.target) l.direction=norm(sub(l.target,l.position)); const fallback=l.coneCos==null?Math.cos(Math.PI/3):Math.max(-1,Math.min(1,l.coneCos)); const angle=Math.max(0,Math.min(Math.PI,l.angle==null?Math.acos(fallback):l.angle)); const pen=Math.max(0,Math.min(1,l.penumbra==null?0:l.penumbra)); l.coneCos=Math.cos(angle); l.penumbraCos=Math.cos(angle*(1-pen)); } else if(l.type==="rectArea"&&l.position&&l.target){ const f=norm(sub(l.target,l.position)), ref=Math.abs(f[1])<.95?[0,1,0]:[1,0,0]; l.forward=f; l.u=norm(cross(ref,f)); l.v=cross(f,l.u); } }
-  function buildLight(l){ if(l.shadow) l.shadowTexture=(shadowTexturesEnabled&&l.shadow.type!=="directionalDynamic")?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
+  function isDynamicShadow(s){ return !!s&&(s.type==="directionalDynamic"||s.type==="spotDynamic"); }
+  function buildLight(l){ if(l.shadow) l.shadowTexture=(shadowTexturesEnabled&&!isDynamicShadow(l.shadow))?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
   for(const c of DATA.cases) c.lights=(c.lights||[]).map(buildLight);
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
   const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
@@ -1952,11 +1989,15 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function includeShadowPoint(bounds,p){ for(let k=0;k<3;k++){ bounds.min[k]=Math.min(bounds.min[k],p[k]); bounds.max[k]=Math.max(bounds.max[k],p[k]); } }
   function includeShadowObject(bounds,o,model){ const p=o.positions||[]; for(let i=0;i<p.length;i+=3) includeShadowPoint(bounds,transformPoint(model,[p[i],p[i+1],p[i+2]])); }
   function shadowBounds(visible){ const bounds={min:[Infinity,Infinity,Infinity],max:[-Infinity,-Infinity,-Infinity]}; for(const o of visible){ if(o.mode!=="triangles"||!(o.castShadow||o.receiveShadow)) continue; if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices) includeShadowObject(bounds,o,M4.mul(o.matrix,im)); } else includeShadowObject(bounds,o,o.matrix); } if(!isFinite(bounds.min[0])) return {center:[0,0,0],radius:1}; const center=[(bounds.min[0]+bounds.max[0])*.5,(bounds.min[1]+bounds.max[1])*.5,(bounds.min[2]+bounds.max[2])*.5], half=[(bounds.max[0]-bounds.min[0])*.5,(bounds.max[1]-bounds.min[1])*.5,(bounds.max[2]-bounds.min[2])*.5]; return {center:center,radius:Math.max(Math.hypot(half[0],half[1],half[2]),1e-3)}; }
-  function directionalShadowMatrix(l,center,radius){ const pos=l.position||scale(l.direction||[0,1,0],1), tgt=l.target||[0,0,0], dir=norm(sub(pos,tgt)), eye=add(center,scale(dir,radius*2)), up=Math.abs(dir[1])>.99?[1,0,0]:[0,1,0], view=M4.lookAt(eye,center,up), s=Math.max(radius*1.1,1e-3); return M4.mul(M4.orthographic(-s,s,-s,s,0.01,Math.max(radius*4,0.02)),view); }
+  function shadowSafeUp(dir){ return Math.abs(dir[1])>.99?[1,0,0]:[0,1,0]; }
+  function perspectiveShadowPlanes(pos,center,radius){ const d=Math.hypot(pos[0]-center[0],pos[1]-center[1],pos[2]-center[2]), near=Math.max(d-radius,Math.max(radius,d)*1e-2,1e-4), far=Math.max(d+radius,near*(1+1e-6)); return {near:near,far:far}; }
+  function directionalShadowMatrix(l,center,radius){ const pos=l.position||scale(l.direction||[0,1,0],1), tgt=l.target||[0,0,0], dir=norm(sub(pos,tgt)), eye=add(center,scale(dir,radius*2)), view=M4.lookAt(eye,center,shadowSafeUp(dir)), s=Math.max(radius*1.1,1e-3); return M4.mul(M4.orthographic(-s,s,-s,s,0.01,Math.max(radius*4,0.02)),view); }
+  function spotShadowMatrix(l,center,radius){ const pos=l.position||[0,0,0]; let tgt=l.target||add(pos,l.direction||[0,-1,0]); if(Math.hypot(tgt[0]-pos[0],tgt[1]-pos[1],tgt[2]-pos[2])<1e-6) tgt=add(pos,[0,-1,0]); const dir=norm(sub(tgt,pos)), planes=perspectiveShadowPlanes(pos,center,radius), fov=Math.min(Math.max((l.angle||Math.PI/3)*2,1e-3),Math.PI*.9), view=M4.lookAt(pos,tgt,shadowSafeUp(dir)); return M4.mul(M4.perspective(fov,1,planes.near,planes.far),view); }
   function ensureDynamicShadowTarget(l){ if(!l.dynamicShadowTarget){ const size=Math.max(1,l.shadow&&l.shadow.size?l.shadow.size:64); l.dynamicShadowTarget=makeDynamicShadowTarget(size); } l.shadowTexture=l.dynamicShadowTarget.texture; return l.dynamicShadowTarget; }
   function drawShadowCaster(o,viewProj){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); gl.useProgram(depthProgram); attrib(depthProgram,"aPosition",o.posBuf); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(depthProgram,o), modelLoc=gl.getUniformLocation(depthProgram,"uModel"), vpLoc=gl.getUniformLocation(depthProgram,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(depthProgram,"uUseInstancing"),gpuInstanced?1:0); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,0,o.instanceCount); clearInstanceAttribs(depthProgram); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } }
   function renderDynamicDirectionalShadow(l,visible){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=directionalShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
-  function updateDynamicDirectionalShadows(c,visible){ if(!shadowTexturesEnabled) return; for(const l of c.lights||[]){ if(!(l.shadow&&l.shadow.type==="directionalDynamic")) continue; if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; renderDynamicDirectionalShadow(l,visible); } }
+  function renderDynamicSpotShadow(l,visible){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=spotShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
+  function updateDynamicShadows(c,visible){ if(!shadowTexturesEnabled) return; for(const l of c.lights||[]){ if(!(l.shadow&&isDynamicShadow(l.shadow))) continue; if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; if(l.shadow.type==="directionalDynamic") renderDynamicDirectionalShadow(l,visible); else if(l.shadow.type==="spotDynamic") renderDynamicSpotShadow(l,visible); } }
   function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ gl.disable(gl.CULL_FACE); return; } gl.enable(gl.CULL_FACE); gl.cullFace(o.side==="back"?gl.FRONT:gl.BACK); }
   function webLineWidth(w){ const lo=Math.max(lineWidthRange[0]||1,0.000001), hi=Math.max(lineWidthRange[1]||lo,lo), x=Number.isFinite(w)?w:1; return Math.min(Math.max(x,lo),hi); }
   function tone(c){ return {mode:c.toneMappingMode||0, exposure:c.toneExposure==null?1:c.toneExposure, output:c.outputColorSpaceMode||0}; }
@@ -2184,7 +2225,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); rememberCameraOrbitOffsets(); }
   speedEl.addEventListener("input",()=>{ animSpeed=Number(speedEl.value); speedValue.textContent=animSpeed.toFixed(2)+"x"; });
   playToggle.addEventListener("click",()=>{ animPaused=!animPaused; playToggle.textContent=animPaused?">":"||"; playToggle.title=animPaused?"Play animation":"Pause animation"; playToggle.setAttribute("aria-label",playToggle.title); });
-  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const aspect=canvas.width/canvas.height; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else proj=M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); const clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); updateDynamicDirectionalShadows(active,visible); const light=lighting(active); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const aspect=canvas.width/canvas.height; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else proj=M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); const clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); updateDynamicShadows(active,visible); const light=lighting(active); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; panMode=e.button===2||e.shiftKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); rememberCameraOrbitOffsets(); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); rememberCameraOrbitOffsets(); } });

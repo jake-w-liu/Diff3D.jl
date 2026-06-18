@@ -1009,7 +1009,8 @@ end
         add!(scene, rect)
         animated_spot = SpotLight(color=Color3(0.35, 0.8, 1.0), intensity=1.6,
                                   distance=6.0, angle=pi / 4, penumbra=0.1,
-                                  decay=2.0, position=Vec3(-1.5, 2.5, 2.5))
+                                  decay=2.0, position=Vec3(-1.5, 2.5, 2.5),
+                                  cast_shadow=true, name="export_animated_shadow_spot")
         animated_spot.target = Vec3(0.0, 0.2, 0.0)
         add!(scene, animated_spot)
         mesh = Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.2, 0.7, 1.0));
@@ -1492,9 +1493,11 @@ end
         ])
         light_stale_shadow_ids = Diff3D._web_stale_shadow_light_ids([clip])
         light_dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids([clip])
+        light_dynamic_spot_shadow_ids = Diff3D._web_dynamic_spot_shadow_light_ids([clip])
         @test moving_shadow_dir.id in light_stale_shadow_ids
         @test moving_shadow_dir.id in light_dynamic_shadow_ids
         @test animated_spot.id in light_stale_shadow_ids
+        @test animated_spot.id in light_dynamic_spot_shadow_ids
         @test !(shadow_dir.id in light_stale_shadow_ids)
         component_shadow_clip = AnimationClip("component_shadow", AbstractKeyframeTrack[
             NumberKeyframeTrack(moving_shadow_dir, "position.x", [0.0, 1.0], [0.0, 0.8])
@@ -1505,21 +1508,28 @@ end
               Diff3D._web_dynamic_directional_shadow_light_ids([component_shadow_clip])
         stale_shadow_ids = Diff3D._web_stale_shadow_light_ids(scene, [clip])
         dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids(scene, [clip])
+        dynamic_spot_shadow_ids = Diff3D._web_dynamic_spot_shadow_light_ids(scene, [clip])
         @test moving_shadow_dir.id in dynamic_shadow_ids
         @test shadow_dir.id in dynamic_shadow_ids
+        @test spot.id in dynamic_spot_shadow_ids
+        @test animated_spot.id in dynamic_spot_shadow_ids
         @test shadow_point.id in stale_shadow_ids
         @test spot.id in stale_shadow_ids
         @test animated_spot.id in stale_shadow_ids
         lights_json = Diff3D._web_lights_json(scene, Diff3D._web_animation_target_ids([clip]),
-                                              stale_shadow_ids, dynamic_shadow_ids)
+                                              stale_shadow_ids, dynamic_shadow_ids,
+                                              dynamic_spot_shadow_ids)
         @test occursin("\"id\":$(moving_shadow_dir.id),\"name\":\"export_moving_shadow_dir\"",
                        lights_json)
         @test occursin("\"castShadow\":true,\"shadow\":{\"type\":\"directionalDynamic\"",
                        lights_json)
         @test occursin("\"id\":$(shadow_dir.id),\"name\":\"DirectionalLight\"", lights_json)
         @test length(findall("\"type\":\"directionalDynamic\"", lights_json)) >= 2
+        @test length(findall("\"type\":\"spotDynamic\"", lights_json)) >= 2
         @test occursin(Regex("\"id\":$(shadow_point.id).*?\"shadow\":null"), lights_json)
-        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":null"), lights_json)
+        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":\\{\"type\":\"spotDynamic\""), lights_json)
+        @test occursin(Regex("\"id\":$(animated_spot.id).*?\"shadow\":\\{\"type\":\"spotDynamic\""),
+                       lights_json)
         static_shadow_scene = Scene()
         add!(static_shadow_scene,
              Mesh(BoxGeometry(), MeshStandardMaterial(); cast_shadow=true,
@@ -2167,16 +2177,22 @@ end
         @test occursin("\"receiveShadow\":true", html)
         @test occursin("\"receiveShadow\":false", html)
         @test occursin("\"shadow\":{\"type\":\"directionalDynamic\",\"size\":64", html)
+        @test occursin("\"shadow\":{\"type\":\"spotDynamic\",\"size\":64", html)
         @test occursin(Regex("\"id\":$(shadow_point.id).*?\"shadow\":null"), html)
-        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":null"), html)
+        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":\\{\"type\":\"spotDynamic\""), html)
+        @test occursin(Regex("\"id\":$(animated_spot.id).*?\"shadow\":\\{\"type\":\"spotDynamic\""),
+                       html)
         @test occursin("\"pcfRadius\":1", html)
         @test occursin("makeShadowTexture", html)
         @test occursin("makeDynamicShadowTarget", html)
         @test occursin("depthProgram=program(DVSH,DFSH)", html)
+        @test occursin("function isDynamicShadow", html)
         @test occursin("function shadowBounds", html)
         @test occursin("function directionalShadowMatrix", html)
-        @test occursin("function updateDynamicDirectionalShadows", html)
-        @test occursin("updateDynamicDirectionalShadows(active,visible); const light=lighting(active)", html)
+        @test occursin("function spotShadowMatrix", html)
+        @test occursin("function renderDynamicSpotShadow", html)
+        @test occursin("function updateDynamicShadows", html)
+        @test occursin("updateDynamicShadows(active,visible); const light=lighting(active)", html)
         @test occursin("shadowTexturesEnabled", html)
         @test occursin("const shadowTextureUnits=usesClearcoatNormal&&clearcoatNormalTexturesEnabled?[12]:[12,15]", html)
         @test occursin("shadowTextureSlots=shadowTextureUnits.filter", html)
