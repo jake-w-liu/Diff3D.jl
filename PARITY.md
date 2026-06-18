@@ -400,6 +400,10 @@ Parallel audits split the remaining work into five critical tracks:
   by the CPU path, not three.js cube shadow maps. Full three.js shadow parity
   remains open for dynamic shadow rendering, cube/cascaded shadows,
   shadow-camera helpers, and renderer-state integration.
+- Done: extend compact browser static shadows from a single selected shadow
+  light to a bounded two-slot runtime. Generated pages now select up to two
+  visible static shadow maps per case, upload fixed WebGL1 shadow samplers, and
+  apply each map to its matching directional, point, or spot light contribution.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
