@@ -202,6 +202,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_loader_gltf.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_loader_gltf.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_loader_xyz"
+upstream_url = "https://threejs.org/examples/#webgl_loader_xyz"
+local_script = "examples/webgl_loader_xyz.jl"
+status = "partial"
+prerequisites = ["load_xyz", "XYZRGB point colors", "PointsObject", "browser point export", "quaternion animation playback"]
+known_deviations = [
+  "Uses deterministic generated XYZRGB helix data instead of the upstream helix_201.xyz asset",
+  "Validates finite coordinates, RGB byte ranges, malformed records, and mixed XYZ/XYZRGB layouts instead of silently ignoring or accepting those cases like the current three.js XYZLoader parser",
+  "Uses Diff3D.jl point rendering and exported orbit controls rather than three.js WebGLRenderer/Timer internals"
+]
+verification = ["julia --project=. examples/webgl_loader_xyz.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_loader_xyz.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_buffergeometry"
 upstream_url = "https://threejs.org/examples/#webgl_buffergeometry"
 local_script = "examples/webgl_buffergeometry.jl"

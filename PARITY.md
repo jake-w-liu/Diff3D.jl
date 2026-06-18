@@ -38,7 +38,7 @@ replacement for three.js `WebGLRenderer`.
 - Animation: vector, quaternion, and morph-weight keyframe tracks, linear,
   smooth/cubic, glTF-style cubic spline, discrete/step interpolation, clips,
   actions, and mixer update.
-- Loaders: OBJ, STL, PLY, PNG texture loading, and partial glTF/GLB asset
+- Loaders: OBJ, STL, PLY, XYZ, PNG texture loading, and partial glTF/GLB asset
   parsing including meshes, signed/normalized/sparse accessors, and
   core geometry attributes (`TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`, `TANGENT`,
   `JOINTS_0`, `WEIGHTS_0`), glTF primitive modes for points, lines, line loops,
@@ -785,6 +785,14 @@ Parallel audits split the remaining work into five critical tracks:
   export. Exact upstream sample-asset catalogue, DamagedHelmet asset,
   UltraHDR environment, and `WebGLRenderer` internals remain documented
   deviations.
+- Added a standalone partial port for `webgl_loader_xyz` via
+  `examples/webgl_loader_xyz.jl`, generating deterministic XYZRGB helix
+  point-cloud data, loading it through Diff3D.jl `load_xyz`, and exporting
+  colored `PointsObject` browser output with animation. Diff3D.jl validates
+  finite coordinates, RGB byte ranges, malformed records, and mixed
+  XYZ/XYZRGB layouts instead of silently ignoring or accepting those cases like
+  the current three.js parser. The exact upstream `helix_201.xyz` asset,
+  `Timer` loop, and WebGLRenderer internals remain documented deviations.
 
 ## Next implementation targets
 

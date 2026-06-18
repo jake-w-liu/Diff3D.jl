@@ -19,7 +19,7 @@ documented and checked by Documenter.
   post-processing, tone mapping, color-space conversion, and WebGL export.
 - Differentiable rendering: soft rasterization, losses, finite-difference
   checks, reverse-mode scalar AD helpers, and inverse rendering optimizers.
-- I/O and loaders: image export, PNG decoding, OBJ/MTL/STL/PLY loading,
+- I/O and loaders: image export, PNG decoding, OBJ/MTL/STL/PLY/XYZ loading,
   glTF/GLB loading, and compression helpers.
 
 ## Complete Exported API

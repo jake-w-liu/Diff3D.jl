@@ -67,6 +67,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
             "threejs_webgl_loader_gltf",
+            "threejs_webgl_loader_xyz",
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
@@ -221,6 +222,15 @@ deterministic_bytes(n::Int) =
                     "\"gltf_loader_turntable\"",
                 ],
                 prerequisites=["load_gltf_asset", "glTF animation clips"],
+            ),
+            "threejs_webgl_loader_xyz" => (
+                source=[
+                    "write(path, xyz_text())",
+                    "return load_xyz(path)",
+                    "PointsObject(geo, PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=5.5)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                ],
+                prerequisites=["load_xyz", "XYZRGB point colors"],
             ),
             "threejs_webgl_buffergeometry" => (
                 source=[
@@ -2137,6 +2147,50 @@ deterministic_bytes(n::Int) =
         # Computed normals point +z for a planar quad in the z=0 plane.
         @test get_normal(geo, 1).z ≈ 1.0 atol=1e-10
         rm(f)
+    end
+
+    @testset "XYZ parse + colors + strict validation" begin
+        xyz = """
+        # comment
+        0 0 0 255 0 0
+        1.5 -2 3 0 255 0
+        -1 0.25 2 0 0 255
+        2 0 0 128 64 32
+        """
+        geo = parse_xyz(xyz)
+        @test geo.n_vertices == 4
+        @test geo.n_faces == 0
+        @test geo.positions == [0.0, 0.0, 0.0,
+                                1.5, -2.0, 3.0,
+                                -1.0, 0.25, 2.0,
+                                2.0, 0.0, 0.0]
+        @test has_attribute(geo, :color)
+        colors = get_attribute(geo, :color).data
+        @test colors[1:9] == [1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0]
+        @test colors[10] ≈ srgb_to_linear(128 / 255)
+        @test colors[11] ≈ srgb_to_linear(64 / 255)
+        @test colors[12] ≈ srgb_to_linear(32 / 255)
+
+        plain = parse_xyz("0 0 0\n1 2 3\n")
+        @test plain.n_vertices == 2
+        @test !has_attribute(plain, :color)
+
+        path = tempname() * ".xyz"
+        try
+            write(path, xyz)
+            loaded = load_xyz(path)
+            @test loaded.positions == geo.positions
+            @test get_attribute(loaded, :color).data == colors
+        finally
+            rm(path; force=true)
+        end
+
+        @test_throws ArgumentError parse_xyz("0 0 0\n1 2 3 255 255 255\n")
+        @test_throws ArgumentError parse_xyz("0 0 nope\n")
+        @test_throws ArgumentError parse_xyz("0 0 0 256 0 0\n")
+        @test_throws ArgumentError parse_xyz("0 0 0 NaN 0 0\n")
     end
 
     @testset "OBJ ↔ STL cross round-trip preserves triangle count" begin

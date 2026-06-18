@@ -212,6 +212,84 @@ function load_obj(path::String)
     return geo
 end
 
+# ========================== XYZ ==========================
+
+function _xyz_parse_float(tok::AbstractString, line_no::Int, field::String)
+    value = try
+        parse(Float64, tok)
+    catch err
+        throw(ArgumentError("XYZ line $line_no has invalid $field value $(repr(tok))"))
+    end
+    isfinite(value) || throw(ArgumentError("XYZ line $line_no has non-finite $field value"))
+    return value
+end
+
+function _xyz_parse_color(tok::AbstractString, line_no::Int, field::String)
+    value = _xyz_parse_float(tok, line_no, field)
+    0.0 <= value <= 255.0 ||
+        throw(ArgumentError("XYZ line $line_no has $field outside 0-255"))
+    return srgb_to_linear(value / 255.0)
+end
+
+"""
+    parse_xyz(text; source="<string>") -> BufferGeometry
+
+Parse XYZ point-cloud text using the same two record layouts as three.js
+`XYZLoader`: `x y z` and `x y z r g b`. RGB channels are interpreted as sRGB
+bytes in `[0,255]` and stored as a linear `:color` vertex attribute. Empty lines
+and full-line `#` comments are ignored. Unlike the current three.js parser,
+malformed field counts, mixed XYZ/XYZRGB records, non-finite values, and
+out-of-range RGB bytes throw `ArgumentError` with line context instead of being
+silently ignored or propagated into geometry buffers.
+"""
+function parse_xyz(text::AbstractString; source::AbstractString="<string>")
+    positions = Float64[]
+    colors = Float64[]
+    layout = nothing
+    line_no = 0
+    for raw in split(text, '\n'; keepempty=true)
+        line_no += 1
+        line = strip(raw)
+        (isempty(line) || startswith(line, "#")) && continue
+        toks = split(line)
+        record_layout = if length(toks) == 3
+            :xyz
+        elseif length(toks) == 6
+            :xyzrgb
+        else
+            throw(ArgumentError("XYZ line $line_no in $source has $(length(toks)) fields; expected 3 or 6"))
+        end
+        if layout === nothing
+            layout = record_layout
+        elseif layout !== record_layout
+            throw(ArgumentError("XYZ line $line_no in $source mixes XYZ and XYZRGB records"))
+        end
+        push!(positions,
+              _xyz_parse_float(toks[1], line_no, "x"),
+              _xyz_parse_float(toks[2], line_no, "y"),
+              _xyz_parse_float(toks[3], line_no, "z"))
+        if record_layout === :xyzrgb
+            push!(colors,
+                  _xyz_parse_color(toks[4], line_no, "red"),
+                  _xyz_parse_color(toks[5], line_no, "green"),
+                  _xyz_parse_color(toks[6], line_no, "blue"))
+        end
+    end
+    nverts = length(positions) ÷ 3
+    geo = BufferGeometry(positions, Float64[], Float64[], Int[], nverts, 0)
+    layout === :xyzrgb && set_attribute!(geo, :color, colors, 3)
+    return geo
+end
+
+"""
+    load_xyz(path) -> BufferGeometry
+
+Load an `.xyz` point cloud from disk. Supports plain XYZ records and XYZRGB
+records with sRGB byte colors, returning a [`BufferGeometry`](@ref) suitable for
+[`PointsObject`](@ref).
+"""
+load_xyz(path::String) = parse_xyz(read(path, String); source=path)
+
 # ========================== PLY ==========================
 
 # Size in bytes and an LE reader for each Stanford-PLY scalar type. Type aliases

@@ -43,8 +43,8 @@ save_png("cube.png", target.color)
 - Differentiable workflows: soft rasterization, image losses, finite-difference
   checks, ForwardDiff gradients, reverse-mode scalar AD helpers, and inverse
   rendering optimizers.
-- I/O: PNG/PPM/PDF output, PNG decoding, OBJ/MTL/STL/PLY loading, and glTF/GLB
-  loading.
+- I/O: PNG/PPM/PDF output, PNG decoding, OBJ/MTL/STL/PLY/XYZ loading, and
+  glTF/GLB loading.
 
 ## Verification
 

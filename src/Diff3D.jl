@@ -229,7 +229,7 @@ export
     compute_vertex_normals!, save_stl_binary, load_stl, load_obj,
     inflate, zlib_inflate, load_png, TextureLoader,
     load_mtl, load_obj_groups, base64_decode, load_gltf,
-    GLTFAsset, load_gltf_asset,
+    GLTFAsset, load_gltf_asset, parse_xyz, load_xyz,
 
     # Audit round-2 feature additions (2026-05-29)
     orbit_update!, AbstractKeyframeTrack, QuaternionKeyframeTrack, sample_track,

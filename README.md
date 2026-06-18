@@ -67,7 +67,7 @@ save_png("cube.png", target.color)
   self-contained WebGL HTML export.
 - Differentiable workflows: ForwardDiff-compatible soft rendering, image loss
   functions, numerical/reverse gradients, and inverse-rendering optimizers.
-- I/O and loaders: PPM/PNG/PDF output, OBJ/MTL/STL/PLY loading, PNG decoding,
+- I/O and loaders: PPM/PNG/PDF output, OBJ/MTL/STL/PLY/XYZ loading, PNG decoding,
   glTF/GLB loading, and base64/DEFLATE helpers.
 
 ## Documentation
