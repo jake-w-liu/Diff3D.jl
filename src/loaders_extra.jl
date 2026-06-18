@@ -801,6 +801,7 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_sheen",
     "KHR_materials_iridescence",
     "KHR_materials_specular",
+    "KHR_materials_dispersion",
 ])
 
 function _gltf_check_required_extensions(gltf)
@@ -970,7 +971,8 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                "KHR_materials_volume",
                                "KHR_materials_sheen",
                                "KHR_materials_iridescence",
-                               "KHR_materials_specular")
+                               "KHR_materials_specular",
+                               "KHR_materials_dispersion")
     if any(k -> haskey(extensions, k), physical_extension_keys)
         clearcoat_ext = get(extensions, "KHR_materials_clearcoat", Dict{String,Any}())
         transmission_ext = get(extensions, "KHR_materials_transmission", Dict{String,Any}())
@@ -979,6 +981,10 @@ function _gltf_material(gltf, buffers, dir::String, mi)
         sheen_ext = get(extensions, "KHR_materials_sheen", Dict{String,Any}())
         iridescence_ext = get(extensions, "KHR_materials_iridescence", Dict{String,Any}())
         specular_ext = get(extensions, "KHR_materials_specular", Dict{String,Any}())
+        dispersion_ext = get(extensions, "KHR_materials_dispersion", Dict{String,Any}())
+        clearcoat_normal_info = get(clearcoat_ext, "clearcoatNormalTexture", nothing)
+        clearcoat_normal_scale = clearcoat_normal_info isa AbstractDict ?
+                                 Float64(get(clearcoat_normal_info, "scale", 1.0)) : 1.0
         sheen_color_factor = get(sheen_ext, "sheenColorFactor", [0.0, 0.0, 0.0])
         attenuation_color = get(volume_ext, "attenuationColor", [1.0, 1.0, 1.0])
         specular_color_factor = get(specular_ext, "specularColorFactor", [1.0, 1.0, 1.0])
@@ -1010,6 +1016,9 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                                                 colorspace=:linear),
                                     clearcoat_roughness_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatRoughnessTexture", nothing);
                                                                           colorspace=:linear),
+                                    clearcoat_normal_map=_gltf_texture(gltf, buffers, dir, clearcoat_normal_info;
+                                                                       colorspace=:linear),
+                                    clearcoat_normal_scale=clearcoat_normal_scale,
                                     transmission=Float64(get(transmission_ext, "transmissionFactor", 0.0)),
                                     transmission_map=_gltf_texture(gltf, buffers, dir, get(transmission_ext, "transmissionTexture", nothing);
                                                                    colorspace=:linear),
@@ -1044,7 +1053,8 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                     specular_intensity_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularTexture", nothing);
                                                                          colorspace=:linear),
                                     specular_color_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularColorTexture", nothing);
-                                                                     colorspace=:srgb))
+                                                                     colorspace=:srgb),
+                                    dispersion=Float64(get(dispersion_ext, "dispersion", 0.0)))
     end
     MeshStandardMaterial(color=Color3(bc[1], bc[2], bc[3]),
                          emissive=Color3(emissive[1], emissive[2], emissive[3]),
@@ -1096,6 +1106,66 @@ function _gltf_points_material(mat)
                    map=_gltf_material_map(mat),
                    depth_test=_gltf_material_depth_test(mat),
                    depth_write=_gltf_material_depth_write(mat))
+end
+
+_gltf_enable_vertex_colors(mat::AbstractMaterial) = mat
+function _gltf_enable_vertex_colors(m::MeshBasicMaterial)
+    MeshBasicMaterial(color=m.color, opacity=m.opacity, transparent=m.transparent,
+                      wireframe=m.wireframe, side=m.side, map=m.map, alpha_map=m.alpha_map,
+                      vertex_colors=true, alpha_test=m.alpha_test,
+                      depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _gltf_enable_vertex_colors(m::MeshStandardMaterial)
+    MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=m.metalness,
+                         roughness=m.roughness, opacity=m.opacity,
+                         transparent=m.transparent, side=m.side, map=m.map,
+                         normal_map=m.normal_map, normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         alpha_map=m.alpha_map, ao_map=m.ao_map,
+                         emissive_map=m.emissive_map, vertex_colors=true,
+                         alpha_test=m.alpha_test, envmap=m.envmap, light_map=m.light_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity,
+                         depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _gltf_enable_vertex_colors(m::MeshPhysicalMaterial)
+    MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=m.metalness,
+                         roughness=m.roughness, clearcoat=m.clearcoat,
+                         clearcoat_roughness=m.clearcoat_roughness,
+                         transmission=m.transmission, ior=m.ior, opacity=m.opacity,
+                         transparent=m.transparent, side=m.side, envmap=m.envmap,
+                         map=m.map, normal_map=m.normal_map, normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         ao_map=m.ao_map, emissive_map=m.emissive_map, alpha_map=m.alpha_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=m.env_map_intensity,
+                         alpha_test=m.alpha_test, sheen=m.sheen,
+                         sheen_color=m.sheen_color, sheen_roughness=m.sheen_roughness,
+                         iridescence=m.iridescence, iridescence_ior=m.iridescence_ior,
+                         iridescence_thickness=m.iridescence_thickness,
+                         light_map=m.light_map, clearcoat_map=m.clearcoat_map,
+                         clearcoat_roughness_map=m.clearcoat_roughness_map,
+                         transmission_map=m.transmission_map, thickness=m.thickness,
+                         thickness_map=m.thickness_map,
+                         attenuation_distance=m.attenuation_distance,
+                         attenuation_color=m.attenuation_color,
+                         sheen_color_map=m.sheen_color_map,
+                         sheen_roughness_map=m.sheen_roughness_map,
+                         iridescence_map=m.iridescence_map,
+                         iridescence_thickness_map=m.iridescence_thickness_map,
+                         specular_intensity=m.specular_intensity,
+                         specular_color=m.specular_color,
+                         specular_intensity_map=m.specular_intensity_map,
+                         specular_color_map=m.specular_color_map,
+                         vertex_colors=true,
+                         clearcoat_normal_map=m.clearcoat_normal_map,
+                         clearcoat_normal_scale=m.clearcoat_normal_scale,
+                         dispersion=m.dispersion,
+                         depth_test=m.depth_test, depth_write=m.depth_write)
 end
 
 function _gltf_triangulate_indices(order::Vector{Int}, mode::Int)
@@ -1404,6 +1474,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             compute_vertex_normals!(geo)
         end
         mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
+        has_attribute(geo, :color) && (mat = _gltf_enable_vertex_colors(mat))
         mode == 0 && return PointsObject(geo, _gltf_points_material(mat))
         mode == 1 && return LineSegments(geo, _gltf_line_material(mat))
         mode == 2 && return LineLoop(geo, _gltf_line_material(mat))

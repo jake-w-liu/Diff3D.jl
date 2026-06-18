@@ -55,6 +55,7 @@ struct MeshLambertMaterial <: AbstractMaterial
     emissive::Color3{Float64}
     opacity::Float64
     transparent::Bool
+    wireframe::Bool
     side::Symbol
     map::Any
     ao_map::Any
@@ -67,12 +68,12 @@ end
 
 function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               emissive=Color3(0.0, 0.0, 0.0),
-                              opacity=1.0, transparent=false, side=:front,
+                              opacity=1.0, transparent=false, wireframe=false, side=:front,
                               map=nothing, ao_map=nothing, emissive_map=nothing,
                               vertex_colors=false, light_map=nothing,
                               depth_test=true, depth_write=true)
-    MeshLambertMaterial(color, emissive, opacity, transparent, side, map, ao_map, emissive_map,
-                        vertex_colors, light_map, depth_test, depth_write)
+    MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map, ao_map,
+                        emissive_map, vertex_colors, light_map, depth_test, depth_write)
 end
 
 # ========================== MeshPhongMaterial ==========================
@@ -252,6 +253,10 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     specular_color::Color3{Float64}
     specular_intensity_map::Any
     specular_color_map::Any
+    vertex_colors::Bool
+    clearcoat_normal_map::Any
+    clearcoat_normal_scale::Float64
+    dispersion::Float64
     depth_test::Bool
     depth_write::Bool
 end
@@ -277,6 +282,8 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                iridescence_thickness_map=nothing,
                                specular_intensity=1.0, specular_color=Color3(1.0,1.0,1.0),
                                specular_intensity_map=nothing, specular_color_map=nothing,
+                               vertex_colors=false, clearcoat_normal_map=nothing,
+                               clearcoat_normal_scale=1.0, dispersion=0.0,
                                depth_test=true, depth_write=true)
     MeshPhysicalMaterial(color, emissive, metalness, roughness, clearcoat,
                          clearcoat_roughness, transmission, ior, opacity, transparent, side,
@@ -290,7 +297,9 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          attenuation_color,
                          sheen_color_map, sheen_roughness_map, iridescence_map,
                          iridescence_thickness_map, specular_intensity, specular_color,
-                         specular_intensity_map, specular_color_map, depth_test, depth_write)
+                         specular_intensity_map, specular_color_map, vertex_colors,
+                         clearcoat_normal_map, Float64(clearcoat_normal_scale),
+                         Float64(dispersion), depth_test, depth_write)
 end
 
 # ========================== MeshToonMaterial ==========================

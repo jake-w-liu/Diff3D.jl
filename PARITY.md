@@ -109,8 +109,9 @@ replacement for three.js `WebGLRenderer`.
   channels using linear/step interpolation bind to CPU `MorphWeightsKeyframeTrack`
   playback and can export to browser vertex-buffer morph playback. Scalar
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
-  including texture references for clearcoat, transmission, sheen,
-  iridescence, specular, and inherited PBR maps. PNG glTF images load from URI,
+  including texture references for clearcoat, clearcoat normals, transmission,
+  sheen, iridescence, specular, and inherited PBR maps, plus the scalar
+  `KHR_materials_dispersion` field. PNG glTF images load from URI,
   data URI, and bufferView sources with MIME/extension routing, and external
   buffer/image URI paths are resolved with percent-decoding and clear
   unsupported-scheme errors. glTF data URI resources are validated with strict
@@ -515,10 +516,16 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: preserve glTF `baseColorTexture` maps when converting point primitives
   to native `PointsObject`/`PointsMaterial` objects.
 - Done: load core geometry attributes: `TEXCOORD_0`, `TEXCOORD_1`, `COLOR_0`,
-  `TANGENT`, `JOINTS_0`, and `WEIGHTS_0`.
+  `TANGENT`, `JOINTS_0`, and `WEIGHTS_0`; mesh primitives with `COLOR_0` now
+  enable material vertex-color modulation on compatible native materials.
 - Done: add glTF material texture loading and common PBR texture binding
   (`baseColorTexture`, `metallicRoughnessTexture` as roughness and metalness
   maps, `normalTexture`, `occlusionTexture`, and `emissiveTexture`).
+- Done: preserve `KHR_materials_clearcoat.clearcoatNormalTexture` with its
+  normal scale and preserve the ratified `KHR_materials_dispersion.dispersion`
+  scalar on `MeshPhysicalMaterial`. Exact clearcoat-layer normal shading and
+  chromatic transmission remain part of the broader physical-renderer parity
+  work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
   extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
   references now fail with explicit loader errors instead of falling through PNG
@@ -666,6 +673,18 @@ Parallel audits split the remaining work into five critical tracks:
   attributes, deterministic icosahedron color gradients, soft shadow planes,
   and wireframe overlays. Exact upstream mouse-following camera behavior,
   `MeshPhongMaterial` flat-shading/shininess behavior, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_camera` via
+  `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
+  `OrthographicCamera`, `CameraHelper`, point-cloud background data, and
+  browser-exported camera metadata across separate perspective/orthographic
+  cases. Upstream scissor-split rendering, O/P keyboard switching, live
+  projection mutation, `Stats`, and `WebGLRenderer` internals remain documented
+  deviations.
+- Added a standalone partial port for `webgl_lod` via
+  `examples/webgl_lod.jl`, using Diff3D.jl `LOD`, `add_lod_level!`,
+  `IcosahedronGeometry`, Lambert wireframe rendering, fog, and browser-side LOD
+  selection. Upstream `FlyControls`, random 1000-object placement, and
   `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_animation_keyframes` via
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry

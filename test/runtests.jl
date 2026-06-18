@@ -54,6 +54,8 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_geometries",
             "threejs_webgl_geometry_cube",
             "threejs_webgl_geometry_colors",
+            "threejs_webgl_camera",
+            "threejs_webgl_lod",
             "threejs_webgl_materials_normal",
             "threejs_webgl_materials_depth",
             "threejs_webgl_materials_variations_basic",
@@ -110,6 +112,29 @@ deterministic_bytes(n::Int) =
                     "wireframe=true",
                 ],
                 prerequisites=["BufferGeometry color attributes", "browser vertex-color export"],
+            ),
+            "threejs_webgl_camera" => (
+                source=[
+                    "PerspectiveCamera(fov=50pi / 180",
+                    "OrthographicCamera(left=-ortho_extent",
+                    "CameraHelper(perspective_cam",
+                    "CameraHelper(ortho_cam",
+                    "PointsObject(deterministic_points_geometry()",
+                    "QuaternionKeyframeTrack(camera_rig, :rotation",
+                    "WebGLExportCase(\"camera-perspective\"",
+                    "WebGLExportCase(\"camera-orthographic\"",
+                ],
+                prerequisites=["PerspectiveCamera", "OrthographicCamera", "CameraHelper", "explicit camera export"],
+            ),
+            "threejs_webgl_lod" => (
+                source=[
+                    "LOD(name=\"lod_cluster_",
+                    "add_lod_level!(lod, distance, mesh; hysteresis=0.08)",
+                    "IcosahedronGeometry(radius=0.42, detail=3)",
+                    "MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0),\n                                   wireframe=true",
+                    "WebGLExportCase(\"lod-field\"",
+                ],
+                prerequisites=["LOD", "add_lod_level!", "browser LOD selection"],
             ),
             "threejs_webgl_materials_normal" => (
                 source=[
@@ -1742,6 +1767,8 @@ deterministic_bytes(n::Int) =
         @test occursin("rectNode", html)
         @test occursin("objectDepth", html)
         @test occursin("function lodChoices", html)
+        @test occursin("function activeVisibleCount()", html)
+        @test occursin("activeObjectCount:()=>activeVisibleCount()", html)
         @test occursin("lod.get(o.lodGroup)===o", html)
         @test occursin("\"lodGroup\":$(lod.id)", html)
         @test occursin("\"lodDistance\":10", html)
@@ -2801,6 +2828,7 @@ deterministic_bytes(n::Int) =
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
         @test material_depth_write(SpriteMaterial(depth_write=false)) == false
         @test material_wireframe(MeshBasicMaterial(wireframe=true)) == true
+        @test material_wireframe(MeshLambertMaterial(wireframe=true)) == true
         @test material_wireframe(MeshStandardMaterial()) == false
 
         rgba_alpha = ones(Float64, 2, 2, 4)
@@ -4081,6 +4109,8 @@ deterministic_bytes(n::Int) =
                 grp = only(get_children(scene))
                 mesh = only(get_children(grp))
                 geo = mesh.geometry
+                @test mesh.material isa MeshStandardMaterial
+                @test mesh.material.vertex_colors
                 @test geo.uvs == [0.0,0.0, 1.0,0.0, 0.0,1.0]
                 @test has_attribute(geo, :uv2)
                 @test isapprox(get_attribute(geo, :uv2).data,
@@ -4275,7 +4305,9 @@ deterministic_bytes(n::Int) =
                                 "clearcoatFactor"=>0.7,
                                 "clearcoatRoughnessFactor"=>0.25,
                                 "clearcoatTexture"=>Dict{String,Any}("index"=>0.0),
-                                "clearcoatRoughnessTexture"=>Dict{String,Any}("index"=>0.0)),
+                                "clearcoatRoughnessTexture"=>Dict{String,Any}("index"=>0.0),
+                                "clearcoatNormalTexture"=>Dict{String,Any}(
+                                    "index"=>0.0, "scale"=>0.4)),
                             "KHR_materials_transmission"=>Dict{String,Any}(
                                 "transmissionFactor"=>0.45,
                                 "transmissionTexture"=>Dict{String,Any}("index"=>0.0)),
@@ -4301,7 +4333,9 @@ deterministic_bytes(n::Int) =
                                 "specularFactor"=>0.65,
                                 "specularColorFactor"=>Any[0.9,0.8,0.7],
                                 "specularTexture"=>Dict{String,Any}("index"=>0.0),
-                                "specularColorTexture"=>Dict{String,Any}("index"=>0.0))))])
+                                "specularColorTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_dispersion"=>Dict{String,Any}(
+                                "dispersion"=>0.25)))])
                 mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
                 @test mat isa MeshPhysicalMaterial
                 @test mat.color == Color3(0.2, 0.3, 0.4)
@@ -4317,9 +4351,13 @@ deterministic_bytes(n::Int) =
                 @test mat.clearcoat_roughness ≈ 0.25
                 @test mat.clearcoat_map isa Texture
                 @test mat.clearcoat_roughness_map isa Texture
+                @test mat.clearcoat_normal_map isa Texture
+                @test mat.clearcoat_normal_map.colorspace === :linear
+                @test mat.clearcoat_normal_scale ≈ 0.4
                 @test mat.transmission ≈ 0.45
                 @test mat.transmission_map isa Texture
                 @test mat.ior ≈ 1.33
+                @test mat.dispersion ≈ 0.25
                 @test mat.thickness ≈ 0.9
                 @test mat.thickness_map isa Texture
                 @test mat.attenuation_distance ≈ 3.0
@@ -5970,7 +6008,7 @@ deterministic_bytes(n::Int) =
             supported = joinpath(dir, "supported_required.gltf")
             write(supported, """
             {"asset":{"version":"2.0"},"scene":0,
-             "extensionsRequired":["KHR_lights_punctual"],
+             "extensionsRequired":["KHR_lights_punctual","KHR_materials_dispersion"],
              "extensions":{"KHR_lights_punctual":{"lights":[]}},
              "scenes":[{"nodes":[]}]}
             """)

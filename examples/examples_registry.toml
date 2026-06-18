@@ -38,6 +38,30 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_colors.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_colors.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_camera"
+upstream_url = "https://threejs.org/examples/#webgl_camera"
+local_script = "examples/webgl_camera.jl"
+status = "partial"
+prerequisites = ["PerspectiveCamera", "OrthographicCamera", "CameraHelper", "PointsObject", "explicit camera export", "browser animation playback"]
+known_deviations = [
+  "Uses two exported cases for perspective and orthographic views instead of the upstream scissor-split renderer and O/P keyboard camera switch",
+  "Uses deterministic point data and keyframe motion instead of upstream random points, live camera projection mutation, Stats, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_camera.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_camera.html"]
+
+[[examples]]
+upstream_id = "threejs_webgl_lod"
+upstream_url = "https://threejs.org/examples/#webgl_lod"
+local_script = "examples/webgl_lod.jl"
+status = "partial"
+prerequisites = ["LOD", "add_lod_level!", "IcosahedronGeometry", "MeshLambertMaterial wireframe", "browser LOD selection"]
+known_deviations = [
+  "Uses a deterministic scaled LOD field instead of the upstream 1000 randomly placed objects",
+  "Uses Diff3D.jl exported orbit controls instead of upstream FlyControls and three.js WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_lod.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lod.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_materials_normal"
 upstream_url = "https://threejs.org/examples/#webgl_materials_normal"
 local_script = "examples/webgl_materials_normal.jl"
