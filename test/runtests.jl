@@ -1136,8 +1136,11 @@ deterministic_bytes(n::Int) =
                                         Float64[], Float64[], Int[], 3, 0)
         set_attribute!(line_color_geo, :color,
                        [1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0], 3)
-        add!(scene, LineLoop(line_color_geo,
-                              LineBasicMaterial(color=Color3(1.0, 0.2, 0.1)); name="export_loop"))
+        line_loop = LineLoop(line_color_geo,
+                             LineBasicMaterial(color=Color3(1.0, 0.2, 0.1),
+                                               linewidth=2.5);
+                             name="export_loop")
+        add!(scene, line_loop)
         sp = Sprite(SpriteMaterial(color=Color3(1.0, 0.8, 0.2),
                                    map=Texture(texdata; filter=:nearest),
                                    rotation=0.3,
@@ -1305,6 +1308,7 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(physical_mapped, "material.dispersion", [0.0, 1.0], [0.5, 0.1]),
             NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1]),
             NumberKeyframeTrack(sp, "material.sizeAttenuation", [0.0, 1.0], [1.0, 0.0]),
+            NumberKeyframeTrack(line_loop, "material.lineWidth", [0.0, 1.0], [2.5, 1.0]),
             NumberKeyframeTrack(phong_material_mesh, "shininess", [0.0, 1.0], [72.0, 12.0]),
             NumberKeyframeTrack(phong_material_mesh, "specular.g", [0.0, 1.0], [0.92, 0.2]),
             NumberKeyframeTrack(ambient, "intensity", [0.0, 1.0], [0.1, 0.9]),
@@ -1502,6 +1506,10 @@ deterministic_bytes(n::Int) =
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
+        @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
+        @test occursin("const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1]", html)
+        @test occursin("function webLineWidth(w)", html)
+        @test occursin("if(o.mode===\"lines\"||o.mode===\"line_loop\"||o.mode===\"line_strip\") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);", html)
         @test occursin("\"name\":\"export_emissive_map\"", html)
         @test occursin("\"name\":\"export_ao_light_map\"", html)
         @test occursin("\"name\":\"export_rough_metal_map\"", html)
@@ -1891,6 +1899,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"dispersion\"", html)
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
+        @test occursin("\"property\":\"linewidth\"", html)
         @test occursin("prop===\"visible\"||prop===\"spriteSizeAttenuation\"", html)
         @test occursin("\"component\":1", html)
         @test occursin("\"component\":2", html)
@@ -1898,6 +1907,7 @@ deterministic_bytes(n::Int) =
         @test occursin("baseRenderable", html)
         @test occursin("transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps", html)
         @test occursin("clearcoatNormalScale:o.clearcoatNormalScale", html)
+        @test occursin("linewidth:o.linewidth", html)
         @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
         @test occursin("dispersion:o.dispersion", html)
         @test occursin("typeof o[prop]===\"boolean\"", html)

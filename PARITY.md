@@ -444,6 +444,11 @@ Parallel audits split the remaining work into five critical tracks:
   same CPU flat/smooth vertex-color modulation and compact browser vertex-color
   export path as other color-aware mesh materials; the
   `webgl_geometry_colors` port now uses flat Phong with `shininess=0.0`.
+- Done: serialize `LineBasicMaterial.linewidth` into browser export, restore it
+  through renderable animation reset state, animate it with number tracks, and
+  apply it with a WebGL `ALIASED_LINE_WIDTH_RANGE` clamp for line, line-loop, and
+  line-strip draw modes. Platforms whose WebGL line-width range is `[1, 1]`
+  still render one-pixel native lines, matching the browser limitation.
 - Done: add `MeshPhongMaterial.clipping_planes` as a material-local clipping
   slice. CPU flat/smooth mesh rasterization and compact browser export now
   combine Phong local planes with renderer/case-level world clipping planes, and

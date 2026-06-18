@@ -89,6 +89,10 @@ function _web_material_color(mat)
 end
 
 _web_material_size(mat) = hasproperty(mat, :size) ? Float64(getproperty(mat, :size)) : 4.0
+function _web_material_linewidth(mat)
+    w = hasproperty(mat, :linewidth) ? Float64(getproperty(mat, :linewidth)) : 1.0
+    return isfinite(w) && w > 0.0 ? w : 1.0
+end
 _web_material_glow(mat) = mat isa MeshBasicMaterial ? 0.35 : mat isa PointsMaterial ? 1.0 : 0.08
 _web_material_opacity(mat) = hasproperty(mat, :opacity) ? clamp(Float64(getproperty(mat, :opacity)), 0.0, 1.0) : 1.0
 _web_material_alpha_test(mat) =
@@ -853,6 +857,7 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
                join((_js_plane(p) for p in _web_material_clipping_planes(mat)), ",") *
            "]" *
            ",\"pointSize\":" * _js_num(_web_material_size(mat)) *
+           ",\"linewidth\":" * _js_num(_web_material_linewidth(mat)) *
            ",\"spriteCenter\":" * _js_vec(sprite_center) *
            ",\"spriteRotation\":" * _js_num(sprite_rotation) *
            ",\"spriteSizeAttenuation\":" * (sprite_size_attenuation ? "true" : "false") *
@@ -1110,6 +1115,7 @@ function _web_track_property_name(prop::Symbol)
     prop === :depth_test && return "depthTest"
     prop === :depth_write && return "depthWrite"
     prop === :normal_scale && return "normalScale"
+    (prop === :line_width || prop === :lineWidth) && return "linewidth"
     prop === :gradient_steps && return "toonSteps"
     prop === :near && return "depthNear"
     prop === :far && return "depthFar"
@@ -1538,6 +1544,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const maxTextureUnits=gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) || 8;
   const maxCombinedTextureUnits=gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) || maxTextureUnits;
   const vertexTextureUnits=gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) || 0;
+  const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1];
   const floatTextureExt=gl.getExtension("OES_texture_float");
   const boneTextureUnit=13;
   const envCubeTextureUnit=14;
@@ -1649,7 +1656,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function buildNode(n){ n.parentMatrix=(n.parentMatrix||M4.ident()).slice(); n.basePosition=(n.basePosition||[0,0,0]).slice(); n.baseEuler=(n.baseEuler||[0,0,0]).slice(); n.baseEulerOrder=n.baseEulerOrder||"XYZ"; n.baseScale=(n.baseScale||[1,1,1]).slice(); n.baseQuaternion=(n.baseQuaternion||eulerToQuat(n.baseEuler,n.baseEulerOrder)).slice(); n.baseMatrix=n.matrix.slice(); n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); return n; }
   function buildObj(o){
     o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceMatrices=(o.instanceMatrices&&o.instanceMatrices.length)?o.instanceMatrices.map(m=>m.slice()):null; o.instanceSource=!!(o.instanceMatrix||o.instanceMatrices); o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.bindMode=o.bindMode||"attached"; o.bindMatrix=(o.bindMatrix||M4.ident()).slice(); o.bindMatrixInverse=(o.bindMatrixInverse||M4.ident()).slice(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
-    o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,clearcoatNormalScale:o.clearcoatNormalScale,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation,dispersion:o.dispersion,shininess:o.shininess,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
+    o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,clearcoatNormalScale:o.clearcoatNormalScale,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation,dispersion:o.dispersion,shininess:o.shininess,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,linewidth:o.linewidth,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
     o.visibilityStates=(o.visibilityStates&&o.visibilityStates.length)?o.visibilityStates:[{id:o.id,visible:o.visible!==false}]; for(const s of o.visibilityStates) s.baseVisible=s.visible!==false;
     o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice():new Array(o.positions.length).fill(0); o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice():[]; o.hasTangents=!!o.hasTangents; o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map(m=>m.slice()):[]; o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map(m=>m.slice()):[]; o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.hasMorphTargets=!!((o.morphTargets&&o.morphTargets.length)||(o.baseMorphNormals&&o.baseMorphNormals.length)||(o.baseMorphTangents&&o.baseMorphTangents.length)); o.morphedPositions=null; o.morphedNormals=null; o.morphedTangents=null; o.morphDirty=o.hasMorphTargets;
     o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES&&!o.hasMorphTargets);
@@ -1731,6 +1738,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function shadowValues(shadows,key,fill){ const out=[]; for(let i=0;i<2;i++) out.push(shadows[i]&&shadows[i][key]!=null?shadows[i][key]:fill); return out; }
   function bindShadowMaps(p,shadows){ const n=Math.min(shadows.length,shadowTextureSlots.length,2); for(let i=0;i<n;i++){ const s=shadows[i]; if(!s||!s.tex) continue; const unit=shadowTextureSlots[i]; gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,s.tex); gl.uniform1i(gl.getUniformLocation(p,i===0?"uShadowMap0":"uShadowMap1"),unit); } }
   function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ gl.disable(gl.CULL_FACE); return; } gl.enable(gl.CULL_FACE); gl.cullFace(o.side==="back"?gl.FRONT:gl.BACK); }
+  function webLineWidth(w){ const lo=Math.max(lineWidthRange[0]||1,0.000001), hi=Math.max(lineWidthRange[1]||lo,lo), x=Number.isFinite(w)?w:1; return Math.min(Math.max(x,lo),hi); }
   function tone(c){ return {mode:c.toneMappingMode||0, exposure:c.toneExposure==null?1:c.toneExposure, output:c.outputColorSpaceMode||0}; }
   function texCoord(t,def=0){ return t&&t.texCoord!=null?t.texCoord:def; }
   function textureColorSpace(t){ return t&&t.colorspace==="srgb"?1:0; }
@@ -1738,6 +1746,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function uniformTexMatrix(p,name,t){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
   function draw(o,view,proj,eye,basis,light,clip,fg,tm){
     applySide(o);
+    if(o.mode==="lines"||o.mode==="line_loop"||o.mode==="line_strip") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);
     if(o.depthTest===false) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
     gl.depthMask(o.depthWrite!==false);
     const p=o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?(o.textureSkin?meshBoneProgram:meshProgram):colorProgram));
