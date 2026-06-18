@@ -1094,6 +1094,7 @@ deterministic_bytes(n::Int) =
                                                     specular_color=Color3(0.9, 0.8, 0.7),
                                                     anisotropy=0.6,
                                                     anisotropy_rotation=0.25,
+                                                    dispersion=0.5,
                                                     clearcoat_map=Texture(pbrdata; filter=:nearest),
                                                     clearcoat_roughness_map=Texture(pbrdata; filter=:nearest),
                                                     transmission_map=Texture(pbrdata; filter=:nearest),
@@ -1277,12 +1278,22 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "color.r", [0.0, 1.0], [0.2, 1.0]),
             NumberKeyframeTrack(mesh, "material.color.g", [0.0, 1.0], [0.3, 0.9]),
+            NumberKeyframeTrack(textured, "material.depthTest", [0.0, 1.0], [0.0, 1.0]),
+            NumberKeyframeTrack(textured, "material.depthWrite", [0.0, 1.0], [0.0, 1.0]),
+            NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
+            NumberKeyframeTrack(normal_mapped, "material.normalScale", [0.0, 1.0], [0.35, 0.7]),
+            NumberKeyframeTrack(depth_material_mesh, "material.near", [0.0, 1.0], [1.0, 2.0]),
+            NumberKeyframeTrack(depth_material_mesh, "material.far", [0.0, 1.0], [8.0, 12.0]),
+            NumberKeyframeTrack(toon_material_mesh, "material.gradientSteps", [0.0, 1.0], [4.0, 6.0]),
             NumberKeyframeTrack(physical_mapped, "material.emissiveIntensity", [0.0, 1.0], [1.5, 0.25]),
             NumberKeyframeTrack(physical_mapped, "material.envMapIntensity", [0.0, 1.0], [0.4, 0.9]),
             NumberKeyframeTrack(physical_mapped, "material.clearcoatRoughness", [0.0, 1.0], [0.15, 0.65]),
+            NumberKeyframeTrack(physical_mapped, "material.attenuationDistance", [0.0, 1.0], [2.0, 4.0]),
+            NumberKeyframeTrack(physical_mapped, "material.attenuationColor.g", [0.0, 1.0], [0.7, 0.3]),
             NumberKeyframeTrack(physical_mapped, "material.sheenColor.r", [0.0, 1.0], [0.8, 0.2]),
             NumberKeyframeTrack(physical_mapped, "material.anisotropy", [0.0, 1.0], [0.6, 0.2]),
             NumberKeyframeTrack(physical_mapped, "material.anisotropyRotation", [0.0, 1.0], [0.25, 0.85]),
+            NumberKeyframeTrack(physical_mapped, "material.dispersion", [0.0, 1.0], [0.5, 0.1]),
             NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1]),
             NumberKeyframeTrack(sp, "material.sizeAttenuation", [0.0, 1.0], [1.0, 0.0]),
             NumberKeyframeTrack(phong_material_mesh, "shininess", [0.0, 1.0], [72.0, 12.0]),
@@ -1584,6 +1595,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"specularColor\":[0.90000000000000002,0.80000000000000004,0.69999999999999996]", html)
         @test occursin("\"anisotropy\":0.59999999999999998", html)
         @test occursin("\"anisotropyRotation\":0.25", html)
+        @test occursin("\"dispersion\":0.5", html)
         @test occursin("\"clearcoatTexture\":", html)
         @test occursin("\"clearcoatRoughnessTexture\":", html)
         @test occursin("\"transmissionTexture\":", html)
@@ -1616,6 +1628,7 @@ deterministic_bytes(n::Int) =
         @test occursin("uSpecularColorMap", html)
         @test occursin("uAnisotropy", html)
         @test occursin("uAnisotropyRotation", html)
+        @test occursin("uDispersion", html)
         @test occursin("uUseAnisotropyMap", html)
         @test occursin("uUseThicknessMap", html)
         @test occursin("function textureColorSpace(t)", html)
@@ -1631,6 +1644,7 @@ deterministic_bytes(n::Int) =
         @test occursin("uniform1i(p,\"uSpecularColorSpace\",textureColorSpace(o.specularColorTexture))", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropy\"),o.anisotropy||0)", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropyRotation\"),o.anisotropyRotation||0)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uDispersion\"),o.dispersion||0)", html)
         @test occursin("o.physicalScalarTex=physicalTexturesEnabled?makeTexture", html)
         @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture]", html)
         @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])", html)
@@ -1642,6 +1656,9 @@ deterministic_bytes(n::Int) =
         @test !occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture)", html)
         @test occursin("float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0)", html)
         @test occursin("float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
+        @test occursin("float dispersion=max(uDispersion,0.0); float halfSpread=max(uIor-1.0,0.0)*0.025*dispersion; vec3 dispersionIor=max(vec3(uIor-halfSpread,uIor,uIor+halfSpread),vec3(1.0));", html)
+        @test occursin("vec3 transmitted=env*base*transmission*(vec3(1.0)-dispersionFresnel)", html)
+        @test occursin("vec3 transmitted=env*base*volAtt*transmission*(vec3(1.0)-dispersionFresnel)", html)
         @test occursin("float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor;", html)
         @test occursin("float anisotropy=clamp(uAnisotropy,0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("gl.activeTexture(gl.TEXTURE11)", html)
@@ -1829,12 +1846,22 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"opacity\"", html)
         @test occursin("\"property\":\"color\"", html)
         @test occursin("\"property\":\"color\",\"component\":2", html)
+        @test occursin("\"property\":\"depthTest\"", html)
+        @test occursin("\"property\":\"depthWrite\"", html)
+        @test occursin("\"property\":\"alphaTest\"", html)
+        @test occursin("\"property\":\"normalScale\"", html)
+        @test occursin("\"property\":\"depthNear\"", html)
+        @test occursin("\"property\":\"depthFar\"", html)
+        @test occursin("\"property\":\"toonSteps\"", html)
         @test occursin("\"property\":\"emissiveIntensity\"", html)
         @test occursin("\"property\":\"envMapIntensity\"", html)
         @test occursin("\"property\":\"clearcoatRoughness\"", html)
+        @test occursin("\"property\":\"attenuationDistance\"", html)
+        @test occursin("\"property\":\"attenuationColor\",\"component\":2", html)
         @test occursin("\"property\":\"sheenColor\",\"component\":1", html)
         @test occursin("\"property\":\"anisotropy\"", html)
         @test occursin("\"property\":\"anisotropyRotation\"", html)
+        @test occursin("\"property\":\"dispersion\"", html)
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
         @test occursin("prop===\"visible\"||prop===\"spriteSizeAttenuation\"", html)
@@ -1842,7 +1869,11 @@ deterministic_bytes(n::Int) =
         @test occursin("\"component\":2", html)
         @test occursin("assignComponent", html)
         @test occursin("baseRenderable", html)
+        @test occursin("transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps", html)
         @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
+        @test occursin("dispersion:o.dispersion", html)
+        @test occursin("typeof o[prop]===\"boolean\"", html)
+        @test occursin("if(prop===\"transparent\") o.animTransparent=o.transparent||o.opacity<1", html)
         @test occursin("setRenderableAnim", html)
         @test occursin("resetRenderableAnim", html)
         @test occursin("baseLight", html)
@@ -3704,7 +3735,11 @@ deterministic_bytes(n::Int) =
 
         material_mesh = Mesh(BoxGeometry(),
                              MeshStandardMaterial(color=Color3(0.1, 0.2, 0.3),
-                                                  opacity=0.25, roughness=0.9))
+                                                  opacity=0.25, roughness=0.9,
+                                                  alpha_test=0.1,
+                                                  normal_scale=0.3,
+                                                  depth_test=false,
+                                                  depth_write=false))
         opacity = NumberKeyframeTrack(material_mesh, "opacity",
                                       [0.0, 1.0], [0.25, 0.75])
         red = NumberKeyframeTrack(material_mesh, "color.r",
@@ -3724,6 +3759,18 @@ deterministic_bytes(n::Int) =
         material_env_intensity =
             NumberKeyframeTrack(material_mesh, "material.envMapIntensity",
                                 [0.0, 1.0], [1.0, 2.0])
+        material_alpha_test =
+            NumberKeyframeTrack(material_mesh, "material.alphaTest",
+                                [0.0, 1.0], [0.1, 0.5])
+        material_normal_scale =
+            NumberKeyframeTrack(material_mesh, "material.normalScale",
+                                [0.0, 1.0], [0.3, 0.9])
+        material_depth_test =
+            NumberKeyframeTrack(material_mesh, "material.depthTest",
+                                [0.0, 1.0], [0.0, 1.0])
+        material_depth_write =
+            NumberKeyframeTrack(material_mesh, "material.depthWrite",
+                                [0.0, 1.0], [0.0, 1.0])
         sprite_material = Sprite(SpriteMaterial(rotation=0.1, size_attenuation=true))
         sprite_material_rotation =
             NumberKeyframeTrack(sprite_material, "material.rotation",
@@ -3737,6 +3784,10 @@ deterministic_bytes(n::Int) =
         @test material_emissive_intensity.property === :emissive_intensity
         @test material_ao_intensity.property === :ao_map_intensity
         @test material_env_intensity.property === :env_map_intensity
+        @test material_alpha_test.property === :alpha_test
+        @test material_normal_scale.property === :normal_scale
+        @test material_depth_test.property === :depth_test
+        @test material_depth_write.property === :depth_write
         @test sprite_material_rotation.property === :material_rotation
         @test sprite_size_attenuation.property === :size_attenuation
         mixer_set_time!(AnimationMixer(AnimationClip("material_numbers",
@@ -3746,6 +3797,10 @@ deterministic_bytes(n::Int) =
                                                      material_emissive_intensity,
                                                      material_ao_intensity,
                                                      material_env_intensity,
+                                                     material_alpha_test,
+                                                     material_normal_scale,
+                                                     material_depth_test,
+                                                     material_depth_write,
                                                      sprite_material_rotation,
                                                      sprite_size_attenuation])), 0.5)
         @test material_mesh.material.opacity ≈ 0.55
@@ -3756,40 +3811,86 @@ deterministic_bytes(n::Int) =
         @test material_mesh.material.emissive_intensity ≈ 2.0
         @test material_mesh.material.ao_map_intensity ≈ 0.75
         @test material_mesh.material.env_map_intensity ≈ 1.5
+        @test material_mesh.material.alpha_test ≈ 0.3
+        @test material_mesh.material.normal_scale ≈ 0.6
+        @test material_mesh.material.depth_test === true
+        @test material_mesh.material.depth_write === true
         @test sprite_material.material.rotation ≈ 0.5
         @test sprite_material.material.size_attenuation === false
+
+        depth_anim_mesh = Mesh(BoxGeometry(), MeshDepthMaterial(near=1.0, far=8.0))
+        depth_near = NumberKeyframeTrack(depth_anim_mesh, "material.near",
+                                         [0.0, 1.0], [1.0, 3.0])
+        depth_far = NumberKeyframeTrack(depth_anim_mesh, "material.far",
+                                        [0.0, 1.0], [8.0, 12.0])
+        toon_anim_mesh = Mesh(BoxGeometry(), MeshToonMaterial(gradient_steps=4))
+        toon_steps = NumberKeyframeTrack(toon_anim_mesh, "material.gradientSteps",
+                                         [0.0, 1.0], [4.0, 6.0])
+        @test depth_near.property === :near
+        @test depth_far.property === :far
+        @test toon_steps.property === :gradient_steps
+        mixer_set_time!(AnimationMixer(AnimationClip("material_mode_numbers",
+                                                     [depth_near, depth_far,
+                                                      toon_steps])), 0.5)
+        @test depth_anim_mesh.material.near ≈ 2.0
+        @test depth_anim_mesh.material.far ≈ 10.0
+        @test toon_anim_mesh.material.gradient_steps == 5
 
         physical_mesh = Mesh(BoxGeometry(),
                              MeshPhysicalMaterial(clearcoat_roughness=0.0,
                                                   sheen_color=Color3(1.0, 1.0, 1.0),
+                                                  attenuation_distance=1.0,
+                                                  attenuation_color=Color3(0.2, 0.4, 0.6),
                                                   anisotropy=0.1,
-                                                  anisotropy_rotation=0.25))
+                                                  anisotropy_rotation=0.25,
+                                                  dispersion=0.2))
         physical_clearcoat_roughness =
             NumberKeyframeTrack(physical_mesh, "material.clearcoatRoughness",
                                 [0.0, 1.0], [0.0, 0.8])
         physical_sheen_red =
             NumberKeyframeTrack(physical_mesh, "material.sheenColor.r",
                                 [0.0, 1.0], [1.0, 0.2])
+        physical_attenuation_distance =
+            NumberKeyframeTrack(physical_mesh, "material.attenuationDistance",
+                                [0.0, 1.0], [1.0, 3.0])
+        physical_attenuation_green =
+            NumberKeyframeTrack(physical_mesh, "material.attenuationColor.g",
+                                [0.0, 1.0], [0.4, 0.8])
         physical_anisotropy =
             NumberKeyframeTrack(physical_mesh, "material.anisotropy",
                                 [0.0, 1.0], [0.1, 0.9])
         physical_anisotropy_rotation =
             NumberKeyframeTrack(physical_mesh, "material.anisotropyRotation",
                                 [0.0, 1.0], [0.25, 0.75])
+        physical_dispersion =
+            NumberKeyframeTrack(physical_mesh, "material.dispersion",
+                                [0.0, 1.0], [0.2, 0.6])
         @test physical_clearcoat_roughness.property === :clearcoat_roughness
         @test physical_sheen_red.property === :sheen_color
         @test physical_sheen_red.component == 1
+        @test physical_attenuation_distance.property === :attenuation_distance
+        @test physical_attenuation_green.property === :attenuation_color
+        @test physical_attenuation_green.component == 2
         @test physical_anisotropy.property === :anisotropy
         @test physical_anisotropy_rotation.property === :anisotropy_rotation
+        @test physical_dispersion.property === :dispersion
         mixer_set_time!(AnimationMixer(AnimationClip("physical_material_numbers",
                                                      [physical_clearcoat_roughness,
                                                       physical_sheen_red,
+                                                      physical_attenuation_distance,
+                                                      physical_attenuation_green,
                                                       physical_anisotropy,
-                                                      physical_anisotropy_rotation])), 0.5)
+                                                      physical_anisotropy_rotation,
+                                                      physical_dispersion])), 0.5)
         @test physical_mesh.material.clearcoat_roughness ≈ 0.4
         @test physical_mesh.material.sheen_color.r ≈ 0.6
+        @test physical_mesh.material.attenuation_distance ≈ 2.0
+        @test physical_mesh.material.attenuation_color.r ≈ 0.2
+        @test physical_mesh.material.attenuation_color.g ≈ 0.6
+        @test physical_mesh.material.attenuation_color.b ≈ 0.6
         @test physical_mesh.material.anisotropy ≈ 0.5
         @test physical_mesh.material.anisotropy_rotation ≈ 0.5
+        @test physical_mesh.material.dispersion ≈ 0.4
 
         phong_material_mesh = Mesh(BoxGeometry(),
                                    MeshPhongMaterial(color=Color3(0.2, 0.4, 0.8),

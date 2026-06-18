@@ -561,10 +561,18 @@ end
 
 function _animation_property_symbol(s::AbstractString)
     s = replace(s, "." => "_")
+    s == "alphaTest" && return :alpha_test
+    s == "depthTest" && return :depth_test
+    s == "depthWrite" && return :depth_write
+    s == "normalScale" && return :normal_scale
     s == "emissiveIntensity" && return :emissive_intensity
     s == "aoMapIntensity" && return :ao_map_intensity
     s == "lightMapIntensity" && return :light_map_intensity
     s == "envMapIntensity" && return :env_map_intensity
+    s == "gradientSteps" && return :gradient_steps
+    s == "toonSteps" && return :gradient_steps
+    s == "depthNear" && return :near
+    s == "depthFar" && return :far
     s == "clearcoatRoughness" && return :clearcoat_roughness
     s == "sheenColor" && return :sheen_color
     s == "sheenRoughness" && return :sheen_roughness
@@ -573,6 +581,8 @@ function _animation_property_symbol(s::AbstractString)
     s == "iridescenceThickness" && return :iridescence_thickness
     s == "specularIntensity" && return :specular_intensity
     s == "specularColor" && return :specular_color
+    s == "attenuationDistance" && return :attenuation_distance
+    s == "attenuationColor" && return :attenuation_color
     s == "anisotropyRotation" && return :anisotropy_rotation
     s == "sizeAttenuation" && return :size_attenuation
     s == "morphTargetInfluences" && return :morph_target_influences

@@ -279,7 +279,7 @@ Parallel audits split the remaining work into five critical tracks:
   three.js ShaderLib Lambert/Phong shader chunks remain open.
   Browser export now carries per-vertex color attributes and scalar plus mapped
   `MeshPhysicalMaterial` clearcoat,
-  transmission, IOR, sheen, iridescence, specular, and anisotropy controls into
+  transmission, IOR, dispersion, sheen, iridescence, specular, and anisotropy controls into
   the compact shader as approximated lobes/terms. CPU flat and smooth shading also sample
   the represented physical extension maps for clearcoat, clearcoat roughness,
   transmission, thickness, sheen color/roughness, iridescence,
@@ -291,7 +291,10 @@ Parallel audits split the remaining work into five critical tracks:
   contexts keep scalar physical terms instead of failing shader compilation.
   `KHR_materials_volume` scalar thickness, green-channel thickness textures, and
   attenuation distance/color now feed the CPU transmission approximation and
-  compact browser shader.
+  compact browser shader. The compact browser shader also applies the
+  `KHR_materials_dispersion` per-channel IOR spread formula to its transmission
+  Fresnel term; exact chromatic refraction remains part of broader physical
+  renderer parity.
   Remaining work is broader browser material parity for exact three.js BRDFs and
   shadow/filter controls before larger PBR work.
 - glTF: accessor correctness is now covered for normalized, sparse, signed,
@@ -550,9 +553,10 @@ Parallel audits split the remaining work into five critical tracks:
   maps, `normalTexture`, `occlusionTexture`, and `emissiveTexture`).
 - Done: preserve `KHR_materials_clearcoat.clearcoatNormalTexture` with its
   normal scale and preserve the ratified `KHR_materials_dispersion.dispersion`
-  scalar on `MeshPhysicalMaterial`. Exact clearcoat-layer normal shading and
-  chromatic transmission remain part of the broader physical-renderer parity
-  work.
+  scalar on `MeshPhysicalMaterial`. Browser export now serializes dispersion,
+  animates it as a render property, and uses it in the compact transmission
+  Fresnel approximation. Exact clearcoat-layer normal shading and full
+  chromatic refraction remain part of the broader physical-renderer parity work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
   extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
   references now fail with explicit loader errors instead of falling through PNG
@@ -604,9 +608,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: extend animation binding for object material fields. CPU animation
   playback now updates immutable material structs by replacing the target
   object's material, and browser export resets/applies render-property tracks
-  for material color components, opacity, roughness, metalness, emissive,
-  point size, Phong shininess/specular color, and compact physical-material
-  scalar fields, including physical anisotropy strength and rotation. Sprite
+  for material color components, opacity, alpha test, depth test/write, normal
+  scale, toon step count, depth near/far, roughness, metalness, emissive, point
+  size, Phong shininess/specular color, and compact physical-material
+  scalar/color fields, including volume attenuation distance/color, dispersion,
+  and physical anisotropy strength and rotation. Sprite
   material rotation and size attenuation now bind through the same CPU/browser
   animation path.
 - Done: export light IDs and bind browser animation tracks to light color,
