@@ -802,6 +802,7 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_iridescence",
     "KHR_materials_specular",
     "KHR_materials_dispersion",
+    "KHR_materials_anisotropy",
 ])
 
 function _gltf_check_required_extensions(gltf)
@@ -972,7 +973,8 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                "KHR_materials_sheen",
                                "KHR_materials_iridescence",
                                "KHR_materials_specular",
-                               "KHR_materials_dispersion")
+                               "KHR_materials_dispersion",
+                               "KHR_materials_anisotropy")
     if any(k -> haskey(extensions, k), physical_extension_keys)
         clearcoat_ext = get(extensions, "KHR_materials_clearcoat", Dict{String,Any}())
         transmission_ext = get(extensions, "KHR_materials_transmission", Dict{String,Any}())
@@ -982,6 +984,7 @@ function _gltf_material(gltf, buffers, dir::String, mi)
         iridescence_ext = get(extensions, "KHR_materials_iridescence", Dict{String,Any}())
         specular_ext = get(extensions, "KHR_materials_specular", Dict{String,Any}())
         dispersion_ext = get(extensions, "KHR_materials_dispersion", Dict{String,Any}())
+        anisotropy_ext = get(extensions, "KHR_materials_anisotropy", Dict{String,Any}())
         clearcoat_normal_info = get(clearcoat_ext, "clearcoatNormalTexture", nothing)
         clearcoat_normal_scale = clearcoat_normal_info isa AbstractDict ?
                                  Float64(get(clearcoat_normal_info, "scale", 1.0)) : 1.0
@@ -1054,7 +1057,11 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                                                          colorspace=:linear),
                                     specular_color_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularColorTexture", nothing);
                                                                      colorspace=:srgb),
-                                    dispersion=Float64(get(dispersion_ext, "dispersion", 0.0)))
+                                    dispersion=Float64(get(dispersion_ext, "dispersion", 0.0)),
+                                    anisotropy=Float64(get(anisotropy_ext, "anisotropyStrength", 0.0)),
+                                    anisotropy_rotation=Float64(get(anisotropy_ext, "anisotropyRotation", 0.0)),
+                                    anisotropy_map=_gltf_texture(gltf, buffers, dir, get(anisotropy_ext, "anisotropyTexture", nothing);
+                                                                 colorspace=:linear))
     end
     MeshStandardMaterial(color=Color3(bc[1], bc[2], bc[3]),
                          emissive=Color3(emissive[1], emissive[2], emissive[3]),
@@ -1165,6 +1172,9 @@ function _gltf_enable_vertex_colors(m::MeshPhysicalMaterial)
                          clearcoat_normal_map=m.clearcoat_normal_map,
                          clearcoat_normal_scale=m.clearcoat_normal_scale,
                          dispersion=m.dispersion,
+                         anisotropy=m.anisotropy,
+                         anisotropy_rotation=m.anisotropy_rotation,
+                         anisotropy_map=m.anisotropy_map,
                          depth_test=m.depth_test, depth_write=m.depth_write)
 end
 

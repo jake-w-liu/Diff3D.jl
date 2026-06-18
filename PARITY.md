@@ -53,8 +53,9 @@ replacement for three.js `WebGLRenderer`.
   scalar `KHR_materials_clearcoat`, `KHR_materials_transmission`,
   `KHR_materials_ior`, `KHR_materials_sheen`, and
   `KHR_materials_iridescence` fields and texture references plus
-  `KHR_materials_specular` mapped into `MeshPhysicalMaterial`, required glTF
-  extension validation for supported loader extensions,
+  `KHR_materials_specular` and `KHR_materials_anisotropy` mapped into
+  `MeshPhysicalMaterial`, required glTF extension validation for supported
+  loader extensions,
   and translation/rotation/scale animation tracks including `CUBICSPLINE`,
   linear/step/`CUBICSPLINE` morph-weight animation tracks, cameras, `KHR_lights_punctual`
   directional/point/spot lights, and basic skinned-mesh binding to Diff3D.jl
@@ -278,12 +279,13 @@ Parallel audits split the remaining work into five critical tracks:
   three.js ShaderLib Lambert/Phong shader chunks remain open.
   Browser export now carries per-vertex color attributes and scalar plus mapped
   `MeshPhysicalMaterial` clearcoat,
-  transmission, IOR, sheen, iridescence, and specular controls into the compact
-  shader as approximated lobes/terms. CPU flat and smooth shading also sample
+  transmission, IOR, sheen, iridescence, specular, and anisotropy controls into
+  the compact shader as approximated lobes/terms. CPU flat and smooth shading also sample
   the represented physical extension maps for clearcoat, clearcoat roughness,
   transmission, thickness, sheen color/roughness, iridescence,
-  iridescence thickness, specular intensity, and specular color. Clearcoat, transmission, sheen,
-  iridescence, and specular physical-extension texture variants are serialized
+  iridescence thickness, specular intensity, specular color, and anisotropy
+  strength. Clearcoat, transmission, sheen,
+  iridescence, specular, and anisotropy physical-extension texture variants are serialized
   and bound by the compact browser runtime through packed physical map textures
   when the WebGL context exposes enough fragment texture units; lower-capability
   contexts keep scalar physical terms instead of failing shader compilation.
@@ -515,14 +517,17 @@ Parallel audits split the remaining work into five critical tracks:
   deterministic image or pixel-signal expectations.
 - Done: export scalar `MeshPhysicalMaterial` physical-extension controls to the
   browser runtime and apply compact approximations for clearcoat, transmission,
-  sheen, iridescence, and specular tint/intensity.
+  sheen, iridescence, specular tint/intensity, and anisotropy.
 - Done: export and bind browser runtime texture maps for the common
   `MeshPhysicalMaterial` physical-extension set: clearcoat,
   clearcoat-roughness, transmission, sheen-color, sheen-roughness,
-  iridescence, iridescence-thickness, specular-intensity, and specular-color.
+  iridescence, iridescence-thickness, specular-intensity, specular-color, and
+  anisotropy strength when the packed alpha slot is not already occupied by
+  thickness.
   The compact browser runtime packs these into four extra physical map samplers
   and falls back to scalar physical terms on contexts with fewer than 12
-  fragment texture units. Full three.js BRDF parity remains renderer work.
+  fragment texture units. Full tangent-space anisotropic GGX and three.js BRDF
+  parity remain renderer work.
 - Done: export geometry `:color` attributes to browser vertex buffers and
   multiply them into mesh, line, and point shaders. This closes a visible gap for
   helper objects and `webgl_lines_colors`-style examples.
@@ -564,10 +569,12 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse scalar physical glTF material extensions into existing
   `MeshPhysicalMaterial` fields: `KHR_materials_clearcoat`,
   `KHR_materials_transmission`, `KHR_materials_ior`, `KHR_materials_sheen`,
-  `KHR_materials_iridescence`, and `KHR_materials_specular`.
+  `KHR_materials_iridescence`, `KHR_materials_specular`, and
+  `KHR_materials_anisotropy`.
 - Done: add `MeshPhysicalMaterial` texture slots for inherited PBR maps and
   common physical glTF extension texture variants, and bind glTF texture
-  references for clearcoat, transmission, sheen, iridescence, and specular.
+  references for clearcoat, transmission, sheen, iridescence, specular, and
+  anisotropy.
   Browser export now serializes and samples those common physical texture maps
   in its compact shader approximation, and CPU flat/smooth shading samples the
   same represented maps in its compact physical-material approximation. Full

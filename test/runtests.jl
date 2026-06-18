@@ -629,6 +629,9 @@ deterministic_bytes(n::Int) =
         @test m5.thickness ≈ 0.0
         @test m5.attenuation_distance ≈ 0.0
         @test m5.attenuation_color === Color3(1.0, 1.0, 1.0)
+        @test m5.anisotropy ≈ 0.0
+        @test m5.anisotropy_rotation ≈ 0.0
+        @test m5.anisotropy_map === nothing
     end
 
     @testset "Shading — Lambert" begin
@@ -1089,6 +1092,8 @@ deterministic_bytes(n::Int) =
                                                     iridescence_thickness=450.0,
                                                     specular_intensity=0.65,
                                                     specular_color=Color3(0.9, 0.8, 0.7),
+                                                    anisotropy=0.6,
+                                                    anisotropy_rotation=0.25,
                                                     clearcoat_map=Texture(pbrdata; filter=:nearest),
                                                     clearcoat_roughness_map=Texture(pbrdata; filter=:nearest),
                                                     transmission_map=Texture(pbrdata; filter=:nearest),
@@ -1104,6 +1109,15 @@ deterministic_bytes(n::Int) =
                                name="export_physical_extensions")
         physical_mapped.position = Vec3(-5.7, 0.0, 0.0)
         add!(scene, physical_mapped)
+        anisotropy_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                 MeshPhysicalMaterial(color=Color3(0.52, 0.62, 0.82),
+                                                      roughness=0.18,
+                                                      anisotropy=0.9,
+                                                      anisotropy_rotation=0.5,
+                                                      anisotropy_map=Texture(pbrdata; filter=:nearest, colorspace=:linear));
+                                 name="export_physical_anisotropy_map")
+        anisotropy_mapped.position = Vec3(-6.4, 0.0, 0.0)
+        add!(scene, anisotropy_mapped)
         line_color_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                         Float64[], Float64[], Int[], 3, 0)
         set_attribute!(line_color_geo, :color,
@@ -1467,6 +1481,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_normal_map\"", html)
         @test occursin("\"name\":\"export_env_map\"", html)
         @test occursin("\"name\":\"export_physical_extensions\"", html)
+        @test occursin("\"name\":\"export_physical_anisotropy_map\"", html)
         @test occursin("\"name\":\"export_sprite\"", html)
         @test occursin("\"name\":\"export_points_map\"", html)
         @test occursin("spriteProgram", html)
@@ -1559,6 +1574,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"iridescenceThickness\":450", html)
         @test occursin("\"specularIntensity\":0.65000000000000002", html)
         @test occursin("\"specularColor\":[0.90000000000000002,0.80000000000000004,0.69999999999999996]", html)
+        @test occursin("\"anisotropy\":0.59999999999999998", html)
+        @test occursin("\"anisotropyRotation\":0.25", html)
         @test occursin("\"clearcoatTexture\":", html)
         @test occursin("\"clearcoatRoughnessTexture\":", html)
         @test occursin("\"transmissionTexture\":", html)
@@ -1569,6 +1586,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"iridescenceThicknessTexture\":", html)
         @test occursin("\"specularIntensityTexture\":", html)
         @test occursin("\"specularColorTexture\":", html)
+        @test occursin("\"anisotropyTexture\":", html)
         @test occursin("uClearcoat", html)
         @test occursin("physicalTexturesEnabled", html)
         @test occursin("packedTexture", html)
@@ -1588,6 +1606,10 @@ deterministic_bytes(n::Int) =
         @test occursin("uSpecularColor", html)
         @test occursin("uUseSpecularColorMap", html)
         @test occursin("uSpecularColorMap", html)
+        @test occursin("uAnisotropy", html)
+        @test occursin("uAnisotropyRotation", html)
+        @test occursin("uUseAnisotropyMap", html)
+        @test occursin("uUseThicknessMap", html)
         @test occursin("function textureColorSpace(t)", html)
         @test occursin("srgbToLinear", html)
         @test occursin("colorTex(uMap,uv,uMapColorSpace)", html)
@@ -1599,12 +1621,17 @@ deterministic_bytes(n::Int) =
         @test occursin("uniform1i(p,\"uMatcapColorSpace\",textureColorSpace(o.matcapTexture))", html)
         @test occursin("uniform1i(p,\"uSheenColorSpace\",textureColorSpace(o.sheenColorTexture))", html)
         @test occursin("uniform1i(p,\"uSpecularColorSpace\",textureColorSpace(o.specularColorTexture))", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropy\"),o.anisotropy||0)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uAnisotropyRotation\"),o.anisotropyRotation||0)", html)
         @test occursin("o.physicalScalarTex=physicalTexturesEnabled?makeTexture", html)
-        @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture]", html)
-        @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture],[0,1,3,1])", html)
+        @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture]", html)
+        @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])", html)
         @test occursin("texture2D(uPhysicalScalarMap,phys1Uv)", html)
-        @test occursin("float thickness=max(uThickness*phys2.a,0.0)", html)
+        @test occursin("phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalar2TexCoord)", html)
+        @test occursin("float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0)", html)
+        @test occursin("float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor;", html)
+        @test occursin("float anisotropy=clamp(uAnisotropy,0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("gl.activeTexture(gl.TEXTURE11)", html)
         @test !occursin("gl.activeTexture(gl.TEXTURE16)", html)
         @test occursin("iridescenceTint", html)
@@ -4487,6 +4514,10 @@ deterministic_bytes(n::Int) =
                                 "specularColorFactor"=>Any[0.9,0.8,0.7],
                                 "specularTexture"=>Dict{String,Any}("index"=>0.0),
                                 "specularColorTexture"=>Dict{String,Any}("index"=>0.0)),
+                            "KHR_materials_anisotropy"=>Dict{String,Any}(
+                                "anisotropyStrength"=>0.75,
+                                "anisotropyRotation"=>0.3,
+                                "anisotropyTexture"=>Dict{String,Any}("index"=>0.0)),
                             "KHR_materials_dispersion"=>Dict{String,Any}(
                                 "dispersion"=>0.25)))])
                 mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
@@ -4529,6 +4560,14 @@ deterministic_bytes(n::Int) =
                 @test mat.specular_color == Color3(0.9, 0.8, 0.7)
                 @test mat.specular_intensity_map isa Texture
                 @test mat.specular_color_map isa Texture && mat.specular_color_map.colorspace === :srgb
+                @test mat.anisotropy ≈ 0.75
+                @test mat.anisotropy_rotation ≈ 0.3
+                @test mat.anisotropy_map isa Texture && mat.anisotropy_map.colorspace === :linear
+                vc = Diff3D._gltf_enable_vertex_colors(mat)
+                @test vc.vertex_colors
+                @test vc.anisotropy ≈ mat.anisotropy
+                @test vc.anisotropy_rotation ≈ mat.anisotropy_rotation
+                @test vc.anisotropy_map === mat.anisotropy_map
             end
         end
 
@@ -5423,6 +5462,27 @@ deterministic_bytes(n::Int) =
             @test cred.r > cred.b
         end
 
+        # [A:material-light-lobes] KHR_materials_anisotropy compact response
+        @testset "physical anisotropy" begin
+            n = Diff3D.Vec3(0.0,0.0,1.0)
+            vd = Diff3D.Vec3(0.0,0.0,1.0)
+            ld = Diff3D.Vec3(0.0,0.0,1.0)
+            lc = Diff3D.Color3(1.0,1.0,1.0); li = 1.0
+            glossy = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.0,0.0,0.0),
+                                                roughness=0.1, metalness=0.0,
+                                                anisotropy=0.0)
+            broad = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(0.0,0.0,0.0),
+                                               roughness=0.1, metalness=0.0,
+                                               anisotropy=1.0,
+                                               anisotropy_rotation=0.5)
+            cglossy = Diff3D._direct_response(glossy, n, vd, lc, li, ld)
+            cbroad = Diff3D._direct_response(broad, n, vd, lc, li, ld)
+            @test all(isfinite, (cbroad.r, cbroad.g, cbroad.b))
+            @test cglossy.r > cbroad.r
+            @test broad.anisotropy_rotation ≈ 0.5
+            @test Diff3D._physical_roughness(broad) ≈ 1.0
+        end
+
         # [A:material-light-lobes] Iridescence (MeshPhysicalMaterial)
         @testset "iridescence" begin
             n = Diff3D.Vec3(0.0,0.0,1.0); vd = Diff3D.Vec3(0.0,0.0,1.0)
@@ -5496,7 +5556,9 @@ deterministic_bytes(n::Int) =
                                             iridescence_thickness_map=scalar_tex,
                                             specular_intensity=0.8,
                                             specular_intensity_map=scalar_tex,
-                                            specular_color_map=color_tex)
+                                            specular_color_map=color_tex,
+                                            anisotropy=0.8,
+                                            anisotropy_map=scalar_tex)
             ep = Diff3D._apply_pbr_maps(mp, nothing, nothing, 0.5, 0.5)
             @test ep.clearcoat ≈ 0.2
             @test ep.clearcoat_roughness ≈ 0.3
@@ -5511,6 +5573,7 @@ deterministic_bytes(n::Int) =
             @test ep.specular_color.r ≈ 0.2
             @test ep.specular_color.g ≈ 0.4
             @test ep.specular_color.b ≈ 0.6
+            @test ep.anisotropy ≈ 0.6
             split_data = ones(Float64, 1, 2, 4)
             split_data[1,1,2] = 0.3
             split_data[1,2,2] = 0.9
@@ -6217,7 +6280,7 @@ deterministic_bytes(n::Int) =
             supported = joinpath(dir, "supported_required.gltf")
             write(supported, """
             {"asset":{"version":"2.0"},"scene":0,
-             "extensionsRequired":["KHR_lights_punctual","KHR_materials_dispersion"],
+             "extensionsRequired":["KHR_lights_punctual","KHR_materials_dispersion","KHR_materials_anisotropy"],
              "extensions":{"KHR_lights_punctual":{"lights":[]}},
              "scenes":[{"nodes":[]}]}
             """)

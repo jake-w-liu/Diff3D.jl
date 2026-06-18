@@ -315,6 +315,9 @@ function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
                          clearcoat_normal_map=m.clearcoat_normal_map,
                          clearcoat_normal_scale=m.clearcoat_normal_scale,
                          dispersion=m.dispersion,
+                         anisotropy=m.anisotropy,
+                         anisotropy_rotation=m.anisotropy_rotation,
+                         anisotropy_map=m.anisotropy_map,
                          depth_test=m.depth_test, depth_write=m.depth_write)
 end
 
@@ -371,6 +374,7 @@ function _physical_pbr_map(m::MeshPhysicalMaterial)
     m.iridescence_thickness_map !== nothing && return m.iridescence_thickness_map
     m.specular_intensity_map !== nothing && return m.specular_intensity_map
     m.specular_color_map !== nothing && return m.specular_color_map
+    m.anisotropy_map !== nothing && return m.anisotropy_map
     return nothing
 end
 
@@ -427,6 +431,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
         c = sample_texture_linear(m.specular_color_map, u, v)
         Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
     end
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, u, v, 3)
     MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                           roughness=roughness, clearcoat=clearcoat, clearcoat_roughness=clearcoat_roughness,
                           transmission=transmission, ior=m.ior, opacity=m.opacity,
@@ -457,6 +462,9 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                           specular_color=specular_color,
                           specular_intensity_map=m.specular_intensity_map,
                           specular_color_map=m.specular_color_map,
+                          anisotropy=anisotropy,
+                          anisotropy_rotation=m.anisotropy_rotation,
+                          anisotropy_map=m.anisotropy_map,
                           thickness=thickness,
                           thickness_map=m.thickness_map,
                           attenuation_distance=m.attenuation_distance,
@@ -477,6 +485,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
     itu, itv = uv_for(m.iridescence_thickness_map)
     siu, siv = uv_for(m.specular_intensity_map)
     spcu, spcv = uv_for(m.specular_color_map)
+    au, av = uv_for(m.anisotropy_map)
     roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
     metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
     clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, cu, cv, 1)
@@ -495,6 +504,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
         c = sample_texture_linear(m.specular_color_map, spcu, spcv)
         Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
     end
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, au, av, 3)
     MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                          roughness=roughness, clearcoat=clearcoat,
                          clearcoat_roughness=clearcoat_roughness,
@@ -526,6 +536,9 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                          specular_color=specular_color,
                          specular_intensity_map=m.specular_intensity_map,
                          specular_color_map=m.specular_color_map,
+                         anisotropy=anisotropy,
+                         anisotropy_rotation=m.anisotropy_rotation,
+                         anisotropy_map=m.anisotropy_map,
                          thickness=thickness,
                          thickness_map=m.thickness_map,
                          attenuation_distance=m.attenuation_distance,
@@ -830,7 +843,8 @@ end
     Fb = Color3(base_f0.r + (1 - base_f0.r) * fres,
                 base_f0.g + (1 - base_f0.g) * fres,
                 base_f0.b + (1 - base_f0.b) * fres)
-    α = m.roughness * m.roughness
+    roughness = _physical_roughness(m)
+    α = roughness * roughness
     α2 = α * α
     denom_d = ndoth * ndoth * (α2 - 1) + 1
     D = α2 / (π * denom_d * denom_d + 1e-7)
@@ -879,8 +893,17 @@ _fill_response(m::MeshLambertMaterial,  n, fc) = m.color * fc
 _fill_response(m::MeshPhongMaterial,    n, fc) = m.color * fc
 _fill_response(m::MeshToonMaterial,     n, fc) = m.color * fc
 _fill_response(m::MeshStandardMaterial, n, fc) = _pbr_ambient(n, m.color, m.metalness, m.roughness, fc)
+@inline function _anisotropic_effective_roughness(roughness, anisotropy)
+    strength = clamp(anisotropy, 0.0, 1.0)
+    alpha = clamp(roughness * roughness, 0.0, 1.0)
+    return sqrt(alpha + (1.0 - alpha) * strength * strength)
+end
+
+@inline _physical_roughness(m::MeshPhysicalMaterial) =
+    _anisotropic_effective_roughness(m.roughness, m.anisotropy)
+
 function _fill_response(m::MeshPhysicalMaterial, n, fc)
-    _pbr_ambient(n, m.color, m.metalness, m.roughness, fc)
+    _pbr_ambient(n, m.color, m.metalness, _physical_roughness(m), fc)
 end
 
 _direct_response(m::MeshLambertMaterial, n, v, lc, li, ldir) =
@@ -890,7 +913,8 @@ _direct_response(m::MeshPhongMaterial, n, v, lc, li, ldir) =
 _direct_response(m::MeshStandardMaterial, n, v, lc, li, ldir) =
     shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness)
 function _direct_response(m::MeshPhysicalMaterial, n, v, lc, li, ldir)
-    base = shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness,
+    roughness = _physical_roughness(m)
+    base = shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, roughness,
                      m.specular_intensity, m.specular_color)
     cc = m.clearcoat * _clearcoat_spec(n, ldir, v, m.clearcoat_roughness) * max(dot(n, ldir), 0.0)
     result = base + lc * (cc * li)

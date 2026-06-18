@@ -307,6 +307,9 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     clearcoat_normal_map::Any
     clearcoat_normal_scale::Float64
     dispersion::Float64
+    anisotropy::Float64
+    anisotropy_rotation::Float64
+    anisotropy_map::Any
     depth_test::Bool
     depth_write::Bool
 end
@@ -334,6 +337,8 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                specular_intensity_map=nothing, specular_color_map=nothing,
                                vertex_colors=false, clearcoat_normal_map=nothing,
                                clearcoat_normal_scale=1.0, dispersion=0.0,
+                               anisotropy=0.0, anisotropy_rotation=0.0,
+                               anisotropy_map=nothing,
                                depth_test=true, depth_write=true)
     MeshPhysicalMaterial(color, emissive, metalness, roughness, clearcoat,
                          clearcoat_roughness, transmission, ior, opacity, transparent, side,
@@ -349,7 +354,9 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          iridescence_thickness_map, specular_intensity, specular_color,
                          specular_intensity_map, specular_color_map, vertex_colors,
                          clearcoat_normal_map, Float64(clearcoat_normal_scale),
-                         Float64(dispersion), depth_test, depth_write)
+                         Float64(dispersion), Float64(anisotropy),
+                         Float64(anisotropy_rotation), anisotropy_map,
+                         depth_test, depth_write)
 end
 
 # ========================== MeshToonMaterial ==========================
