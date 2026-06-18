@@ -214,14 +214,17 @@ deterministic_bytes(n::Int) =
             ),
             "threejs_webgl_loader_gltf" => (
                 source=[
-                    "asset = load_gltf_asset(gltf_path)",
+                    "return load_gltf_asset(gltf_path), load_glb_asset(glb_path)",
+                    "write_glb!(joinpath(dir, \"diff3d_loader_glb.glb\"), glb, glb_bytes)",
+                    "image_json=\"{ \\\"bufferView\\\": 8, \\\"mimeType\\\": \\\"image/png\\\" }\"",
                     "\"KHR_lights_punctual\"",
                     "\"baseColorTexture\": { \"index\": 0 }",
                     "\"type\": \"SCALAR\", \"min\": [",
                     "append_little_endian_f32!",
                     "\"gltf_loader_turntable\"",
+                    "\"loader-glb\"",
                 ],
-                prerequisites=["load_gltf_asset", "glTF animation clips"],
+                prerequisites=["load_gltf_asset", "load_glb_asset", "GLB BIN chunk", "glTF animation clips"],
             ),
             "threejs_webgl_loader_xyz" => (
                 source=[
@@ -299,12 +302,15 @@ deterministic_bytes(n::Int) =
             ),
             "threejs_webgl_helpers" => (
                 source=[
+                    "PolarGridHelper(3.8, 16, 6",
                     "DirectionalLightHelper(dir",
                     "PointLightHelper(point, 0.38",
                     "SpotLightHelper(spot",
+                    "HemisphereLightHelper(hemi, 0.55)",
+                    "PlaneHelper(Plane(Vec3(0.0, 1.0, 0.0), 0.0), 1.6",
                     "CameraHelper(cam",
                 ],
-                prerequisites=["CameraHelper", "light helpers"],
+                prerequisites=["CameraHelper", "PolarGridHelper", "HemisphereLightHelper", "PlaneHelper", "light helpers"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[

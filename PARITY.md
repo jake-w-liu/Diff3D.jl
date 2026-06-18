@@ -780,11 +780,12 @@ Parallel audits split the remaining work into five critical tracks:
   PLY assets and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_gltf` via
   `examples/webgl_loader_gltf.jl`, generating a deterministic external-buffer
-  glTF asset with texture image, `KHR_lights_punctual` light, and transform
-  animation, then loading it through Diff3D.jl `load_gltf_asset` before browser
-  export. Exact upstream sample-asset catalogue, DamagedHelmet asset,
-  UltraHDR environment, and `WebGLRenderer` internals remain documented
-  deviations.
+  glTF asset plus a deterministic binary GLB companion with embedded BIN
+  geometry and a PNG image `bufferView`, `KHR_lights_punctual` light, and
+  transform animation, then loading them through Diff3D.jl `load_gltf_asset`
+  and `load_glb_asset` before browser export. Exact upstream sample-asset
+  catalogue, DamagedHelmet asset, UltraHDR environment, and `WebGLRenderer`
+  internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_xyz` via
   `examples/webgl_loader_xyz.jl`, generating deterministic XYZRGB helix
   point-cloud data, loading it through Diff3D.jl `load_xyz`, and exporting

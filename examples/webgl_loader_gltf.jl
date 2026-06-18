@@ -39,6 +39,43 @@ function append_little_endian_u16!(bytes::Vector{UInt8}, values)
     return offset, length(values) * 2
 end
 
+function append_aligned_bytes!(bytes::Vector{UInt8}, payload::Vector{UInt8})
+    while length(bytes) % 4 != 0
+        push!(bytes, 0x00)
+    end
+    offset = length(bytes)
+    append!(bytes, payload)
+    payload_length = length(payload)
+    while length(bytes) % 4 != 0
+        push!(bytes, 0x00)
+    end
+    return offset, payload_length
+end
+
+function le32(x::Integer)
+    ux = UInt32(x)
+    return UInt8[ux & 0x000000ff,
+                 (ux >> 8) & 0x000000ff,
+                 (ux >> 16) & 0x000000ff,
+                 (ux >> 24) & 0x000000ff]
+end
+
+function write_glb!(path::String, gltf_json::String, bin::Vector{UInt8})
+    json_bytes = Vector{UInt8}(codeunits(gltf_json))
+    while length(json_bytes) % 4 != 0
+        push!(json_bytes, UInt8(' '))
+    end
+    bin_bytes = copy(bin)
+    while length(bin_bytes) % 4 != 0
+        push!(bin_bytes, 0x00)
+    end
+    body = vcat(le32(length(json_bytes)), le32(0x4E4F534A), json_bytes,
+                le32(length(bin_bytes)), le32(0x004E4942), bin_bytes)
+    glb = vcat(le32(0x46546C67), le32(2), le32(12 + length(body)), body)
+    write(path, glb)
+    return path
+end
+
 function texture_data(; n::Int=32)
     data = ones(Float64, n, n, 4)
     for y in 1:n, x in 1:n
@@ -81,10 +118,7 @@ function generated_mesh_buffers()
     return positions, normals, uvs, indices
 end
 
-function write_gltf_assets!(dir::String)
-    texture_path = joinpath(dir, "diff3d_loader_gltf_base.png")
-    save_png(texture_path, texture_data())
-
+function generated_gltf_buffer()
     positions, normals, uvs, indices = generated_mesh_buffers()
     times = Float32[0.0, 1.5, 3.0]
     rotations = Float32[0, 0, 0, 1,
@@ -107,10 +141,15 @@ function write_gltf_assets!(dir::String)
     trans_off, trans_len = append_little_endian_f32!(bytes, translations)
     scale_off, scale_len = append_little_endian_f32!(bytes, scales)
 
-    bin_path = joinpath(dir, "diff3d_loader_gltf.bin")
-    write(bin_path, bytes)
+    return (; bytes, positions, normals, uvs, indices, times,
+            pos_off, pos_len, nrm_off, nrm_len, uv_off, uv_len, idx_off, idx_len,
+            time_off, time_len, rot_off, rot_len, trans_off, trans_len,
+            scale_off, scale_len)
+end
 
-    gltf = """
+function gltf_document_json(buf; buffer_json::String, image_json::String,
+                            extra_buffer_views::String="")
+    """
 {
   "asset": { "version": "2.0", "generator": "Diff3D.jl webgl_loader_gltf parity example" },
   "scene": 0,
@@ -149,26 +188,26 @@ function write_gltf_assets!(dir::String)
       "baseColorTexture": { "index": 0 }
     }
   }],
-  "images": [{ "uri": "diff3d_loader_gltf_base.png" }],
+  "images": [$image_json],
   "textures": [{ "source": 0, "sampler": 0 }],
   "samplers": [{ "wrapS": 10497, "wrapT": 10497, "magFilter": 9729, "minFilter": 9729 }],
-  "buffers": [{ "byteLength": $(length(bytes)), "uri": "diff3d_loader_gltf.bin" }],
+  "buffers": [$buffer_json],
   "bufferViews": [
-    { "buffer": 0, "byteOffset": $pos_off, "byteLength": $pos_len },
-    { "buffer": 0, "byteOffset": $nrm_off, "byteLength": $nrm_len },
-    { "buffer": 0, "byteOffset": $uv_off, "byteLength": $uv_len },
-    { "buffer": 0, "byteOffset": $idx_off, "byteLength": $idx_len },
-    { "buffer": 0, "byteOffset": $time_off, "byteLength": $time_len },
-    { "buffer": 0, "byteOffset": $rot_off, "byteLength": $rot_len },
-    { "buffer": 0, "byteOffset": $trans_off, "byteLength": $trans_len },
-    { "buffer": 0, "byteOffset": $scale_off, "byteLength": $scale_len }
+    { "buffer": 0, "byteOffset": $(buf.pos_off), "byteLength": $(buf.pos_len) },
+    { "buffer": 0, "byteOffset": $(buf.nrm_off), "byteLength": $(buf.nrm_len) },
+    { "buffer": 0, "byteOffset": $(buf.uv_off), "byteLength": $(buf.uv_len) },
+    { "buffer": 0, "byteOffset": $(buf.idx_off), "byteLength": $(buf.idx_len) },
+    { "buffer": 0, "byteOffset": $(buf.time_off), "byteLength": $(buf.time_len) },
+    { "buffer": 0, "byteOffset": $(buf.rot_off), "byteLength": $(buf.rot_len) },
+    { "buffer": 0, "byteOffset": $(buf.trans_off), "byteLength": $(buf.trans_len) },
+    { "buffer": 0, "byteOffset": $(buf.scale_off), "byteLength": $(buf.scale_len) }$extra_buffer_views
   ],
   "accessors": [
-    { "bufferView": 0, "componentType": 5126, "count": $(length(positions) ÷ 3), "type": "VEC3", "min": [-0.78, -0.52, -0.72], "max": [0.78, 0.52, 0.72] },
-    { "bufferView": 1, "componentType": 5126, "count": $(length(normals) ÷ 3), "type": "VEC3" },
-    { "bufferView": 2, "componentType": 5126, "count": $(length(uvs) ÷ 2), "type": "VEC2" },
-    { "bufferView": 3, "componentType": 5123, "count": $(length(indices)), "type": "SCALAR" },
-    { "bufferView": 4, "componentType": 5126, "count": $(length(times)), "type": "SCALAR", "min": [$(minimum(times))], "max": [$(maximum(times))] },
+    { "bufferView": 0, "componentType": 5126, "count": $(length(buf.positions) ÷ 3), "type": "VEC3", "min": [-0.78, -0.52, -0.72], "max": [0.78, 0.52, 0.72] },
+    { "bufferView": 1, "componentType": 5126, "count": $(length(buf.normals) ÷ 3), "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": $(length(buf.uvs) ÷ 2), "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": $(length(buf.indices)), "type": "SCALAR" },
+    { "bufferView": 4, "componentType": 5126, "count": $(length(buf.times)), "type": "SCALAR", "min": [$(minimum(buf.times))], "max": [$(maximum(buf.times))] },
     { "bufferView": 5, "componentType": 5126, "count": 3, "type": "VEC4" },
     { "bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC3" },
     { "bufferView": 7, "componentType": 5126, "count": 3, "type": "VEC3" }
@@ -188,21 +227,45 @@ function write_gltf_assets!(dir::String)
   }]
 }
 """
-    gltf_path = joinpath(dir, "diff3d_loader_gltf.gltf")
-    write(gltf_path, gltf)
-    return gltf_path
 end
 
-function loaded_gltf_asset()
+function write_gltf_assets!(dir::String)
+    texture_path = joinpath(dir, "diff3d_loader_gltf_base.png")
+    save_png(texture_path, texture_data())
+    texture_bytes = read(texture_path)
+
+    buf = generated_gltf_buffer()
+    bin_path = joinpath(dir, "diff3d_loader_gltf.bin")
+    write(bin_path, buf.bytes)
+
+    gltf = gltf_document_json(
+        buf;
+        buffer_json="{ \"byteLength\": $(length(buf.bytes)), \"uri\": \"diff3d_loader_gltf.bin\" }",
+        image_json="{ \"uri\": \"diff3d_loader_gltf_base.png\" }",
+    )
+    gltf_path = joinpath(dir, "diff3d_loader_gltf.gltf")
+    write(gltf_path, gltf)
+
+    glb_bytes = copy(buf.bytes)
+    image_off, image_len = append_aligned_bytes!(glb_bytes, texture_bytes)
+    glb = gltf_document_json(
+        buf;
+        buffer_json="{ \"byteLength\": $(length(glb_bytes)) }",
+        image_json="{ \"bufferView\": 8, \"mimeType\": \"image/png\" }",
+        extra_buffer_views=",\n    { \"buffer\": 0, \"byteOffset\": $image_off, \"byteLength\": $image_len }",
+    )
+    glb_path = write_glb!(joinpath(dir, "diff3d_loader_glb.glb"), glb, glb_bytes)
+    return gltf_path, glb_path
+end
+
+function loaded_loader_assets()
     mktempdir() do dir
-        gltf_path = write_gltf_assets!(dir)
-        asset = load_gltf_asset(gltf_path)
-        return asset
+        gltf_path, glb_path = write_gltf_assets!(dir)
+        return load_gltf_asset(gltf_path), load_glb_asset(glb_path)
     end
 end
 
-function build_case()
-    asset = loaded_gltf_asset()
+function build_case(asset::GLTFAsset, case_id::String, title::String, description::String)
     scene = asset.scene
     scene.background = Color3(0.014, 0.018, 0.026)
     scene.fog = FogExp2(color=Color3(0.014, 0.018, 0.026), density=0.035)
@@ -221,8 +284,7 @@ function build_case()
     add!(scene, floor)
     add!(scene, GridHelper(6.5, 13; color=Color3(0.11, 0.14, 0.19)))
 
-    WebGLExportCase("loader-gltf", "GLTF Loader",
-                    "Generated glTF asset loaded through Diff3D.jl load_gltf_asset, including texture, punctual light, and animation clips.",
+    WebGLExportCase(case_id, title, description,
                     scene; target=Vec3(0.0, 0.25, 0.0), radius=5.8, height=2.0,
                     fov=pi / 4.2, animations=asset.animations,
                     tone_mapping=:aces, tone_exposure=1.05,
@@ -230,7 +292,14 @@ function build_case()
 end
 
 function main()
-    html = save_webgl_html(joinpath(OUT, "webgl_loader_gltf.html"), [build_case()])
+    gltf_asset, glb_asset = loaded_loader_assets()
+    cases = [
+        build_case(gltf_asset, "loader-gltf", "GLTF Loader",
+                   "Generated glTF asset loaded through Diff3D.jl load_gltf_asset, including texture, punctual light, and animation clips."),
+        build_case(glb_asset, "loader-glb", "GLB Loader",
+                   "Generated binary GLB asset loaded through Diff3D.jl load_glb_asset, including embedded BIN geometry, PNG bufferView texture, punctual light, and animation clips."),
+    ]
+    html = save_webgl_html(joinpath(OUT, "webgl_loader_gltf.html"), cases)
     println("WEBGL_LOADER_GLTF_OK $html")
 end
 
