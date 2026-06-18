@@ -738,15 +738,23 @@ end
 # Environment-map (basic IBL) specular reflection. Reflect the view direction
 # about the shading normal, sample the cube map along that mirror direction, and
 # weight by a Schlick-Fresnel F0 (≈albedo for metals, ≈0.04 for dielectrics).
-# Roughness attenuates the contribution: rough surfaces reflect little sharp
-# environment radiance (matching the `_pbr_ambient` `1 - 0.7·roughness` lobe).
+# When cube faces carry mipmaps, roughness also selects a coarser cube-face LOD
+# before the scalar lobe attenuation below. This is not PMREM convolution, but
+# it makes authored prefiltered/mipped cubemaps participate in roughness-aware
+# CPU shading instead of always sampling the sharp base face.
 # `view_dir` points from the surface toward the camera, so the incident ray is
 # `-view_dir`; its reflection about `normal` is `2(N·V)N - V`.
 function _envmap_reflection(env::CubeTexture, normal::Vec3, view_dir::Vec3,
                             albedo::Color3, metalness, roughness)
     ndotv = dot(normal, view_dir)
     refl = normal * (2 * ndotv) - view_dir            # mirror reflection direction
-    env_c = sample_cube(env, refl)
+    max_lod = maximum(length(face.mipmaps) for face in env.faces)
+    env_c = if max_lod > 0
+        lod = clamp(Float64(roughness), 0.0, 1.0) * max_lod
+        sample_cube_lod(env, refl, lod)
+    else
+        sample_cube(env, refl)
+    end
     # Grazing-angle Fresnel boost from the view/normal angle (vdotn analog).
     fres = (one(ndotv) - max(ndotv, zero(ndotv)))^5
     F0r = lerp_scalar(0.04, albedo.r, metalness)

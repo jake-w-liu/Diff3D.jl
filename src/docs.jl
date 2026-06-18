@@ -269,6 +269,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :sample_texture_lod => "Sample a texture at an explicit mip level.",
     :sample_texture_aniso => "Approximate anisotropic texture sampling over UV derivatives.",
     :sample_cube => "Sample a cubemap by direction.",
+    :sample_cube_lod => "Sample a cubemap by direction at an explicit mip level.",
     :generate_mipmaps! => "Generate texture mip levels in-place.",
     :checker_texture => "Create a procedural checker texture.",
     :grid_texture => "Create a procedural grid texture.",

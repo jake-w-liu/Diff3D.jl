@@ -3479,6 +3479,15 @@ deterministic_bytes(n::Int) =
         @test sample_cube(ct, Vec3(1.0,0,0)).r ≈ 1/6        # +x face
         @test sample_cube(ct, Vec3(-1.0,0,0)).r ≈ 2/6       # -x face
         @test sample_cube(ct, Vec3(0.0,0,-1.0)).r ≈ 6/6     # -z face
+        lod_data = zeros(Float64, 4, 4, 3)
+        lod_data[3, 3, :] .= 1.0
+        lod_face = Texture(lod_data; filter=:nearest, colorspace=:linear)
+        generate_mipmaps!(lod_face)
+        lod_cube = CubeTexture(ntuple(_ -> lod_face, 6))
+        @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 0).r ≈ 1.0
+        @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 2).r ≈ 1 / 16
+        @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5).r ≈ 1 / 32
+        @test_throws ArgumentError sample_cube_lod(lod_cube, Vec3(1.0,0,0), NaN)
         dt = DepthTexture(fill(0.7, 4, 4))
         @test sample_texture(dt, 0.5, 0.5).r ≈ 0.7          # single channel → gray
     end
@@ -5446,6 +5455,29 @@ deterministic_bytes(n::Int) =
             mp = MeshPhysicalMaterial(color=Color3(1.0,1.0,1.0), metalness=0.0, roughness=0.2, envmap=env)
             cols_p = shade_mesh_faces(geo, world, mp, lights, campos)
             @test all(c -> isfinite(c.r) && isfinite(c.g) && isfinite(c.b), cols_p)
+            lod_data = zeros(Float64, 4, 4, 3)
+            lod_data[3, 3, :] .= 1.0
+            lod_faces = ntuple(_ -> Texture(copy(lod_data); filter=:nearest, colorspace=:linear), 6)
+            mipped_faces = ntuple(i -> begin
+                tex = Texture(copy(lod_data); filter=:nearest, colorspace=:linear)
+                generate_mipmaps!(tex)
+                tex
+            end, 6)
+            lod_env = CubeTexture(lod_faces)
+            mipped_env = CubeTexture(mipped_faces)
+            normal = Vec3(0.0, 0.0, 1.0)
+            view = Vec3(0.0, 0.0, 1.0)
+            smooth_nomip = Diff3D._envmap_reflection(lod_env, normal, view,
+                                                      Color3(1.0,1.0,1.0), 1.0, 0.0)
+            smooth_mip = Diff3D._envmap_reflection(mipped_env, normal, view,
+                                                    Color3(1.0,1.0,1.0), 1.0, 0.0)
+            rough_nomip = Diff3D._envmap_reflection(lod_env, normal, view,
+                                                     Color3(1.0,1.0,1.0), 1.0, 1.0)
+            rough_mip = Diff3D._envmap_reflection(mipped_env, normal, view,
+                                                   Color3(1.0,1.0,1.0), 1.0, 1.0)
+            @test smooth_mip.r ≈ smooth_nomip.r
+            @test rough_mip.r < rough_nomip.r
+            @test rough_mip.r ≈ rough_nomip.r / 16
         end
 
         # [RAS:rasterizer+renderer] Sprite rendering in render!
