@@ -1094,9 +1094,11 @@ deterministic_bytes(n::Int) =
         normal_mapped.position = Vec3(-4.3, 0.0, 0.0)
         add!(scene, normal_mapped)
         envfaces = ntuple(i -> begin
-            face = fill(Float64(i) / 6, 2, 2, 3)
+            face = fill(Float64(i) / 6, 4, 4, 3)
             face[1, 1, 1] = min(1.0, face[1, 1, 1] + 0.125)
-            Texture(face; filter=:nearest)
+            tex = Texture(face; filter=:nearest, min_filter=:linear_mipmap_linear)
+            generate_mipmaps!(tex)
+            tex
         end, 6)
         env_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                           MeshStandardMaterial(color=Color3(0.05, 0.05, 0.05),
@@ -1649,14 +1651,25 @@ deterministic_bytes(n::Int) =
         @test occursin("uNormalMap", html)
         @test occursin("mappedNormal", html)
         @test occursin("\"envTexture\":{\"colors\":[", html)
-        @test occursin("\"faces\":[{\"width\":2,\"height\":2", html)
+        @test occursin("\"faces\":[{\"width\":4,\"height\":4", html)
         @test occursin("\"envMapIntensity\":0.59999999999999998", html)
         @test occursin("uUseEnvMap", html)
         @test occursin("uUseEnvCubeMap", html)
+        @test occursin("uEnvMaxLod", html)
         @test occursin("uEnvMapIntensity", html)
         @test occursin("uEnvColor[0]", html)
         @test occursin("samplerCube uEnvCubeMap", html)
         @test occursin("textureCube(uEnvCubeMap,dir).rgb", html)
+        @test occursin("EXT_shader_texture_lod", html)
+        @test occursin("meshFragmentShaderCubeLod", html)
+        @test occursin("textureCubeLodEXT(uEnvCubeMap,dir,clamp(rough,0.0,1.0)*uEnvMaxLod).rgb", html)
+        @test occursin("envColor(reflect(-v,n),rough)", html)
+        @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", html)
+        @test occursin("{\"width\":1,\"height\":1", html)
+        @test occursin("uploadedMipmaps", html)
+        @test occursin("return {texture:tex,maxLod:maxLod}", html)
+        @test occursin("uniform1f(p,\"uEnvMaxLod\",envTex.maxLod||0)", html)
+        @test occursin("gl.bindTexture(gl.TEXTURE_CUBE_MAP,envTex.texture)", html)
         @test occursin("envColor", html)
         @test occursin("\"clearcoat\":0.80000000000000004", html)
         @test occursin("\"clearcoatRoughness\":0.14999999999999999", html)
@@ -1880,7 +1893,7 @@ deterministic_bytes(n::Int) =
         @test occursin("gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,bt.size,bt.size,gl.RGBA,gl.FLOAT,bt.data)", html)
         @test occursin("gl.activeTexture(gl.TEXTURE13)", html)
         @test occursin("gl.activeTexture(gl.TEXTURE14)", html)
-        @test occursin("gl.bindTexture(gl.TEXTURE_CUBE_MAP,o.envCubeTex||defaultEnvCubeTex)", html)
+        @test occursin("gl.bindTexture(gl.TEXTURE_CUBE_MAP,envTex.texture)", html)
         @test occursin("uniform1i(p,\"uEnvCubeMap\",envCubeTextureUnit)", html)
         @test occursin("uniform1i(p,\"uUseSkin\",(o.shaderSkin||o.textureSkin)?1:0)", html)
         @test occursin("uniform1i(p,\"uBoneTexture\",boneTextureUnit)", html)
@@ -3488,6 +3501,9 @@ deterministic_bytes(n::Int) =
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 2).r ≈ 1 / 16
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5).r ≈ 1 / 32
         @test_throws ArgumentError sample_cube_lod(lod_cube, Vec3(1.0,0,0), NaN)
+        lod_env_json = Diff3D._web_env_json(lod_cube)
+        @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", lod_env_json)
+        @test occursin("{\"width\":1,\"height\":1", lod_env_json)
         dt = DepthTexture(fill(0.7, 4, 4))
         @test sample_texture(dt, 0.5, 0.5).r ≈ 0.7          # single channel → gray
     end

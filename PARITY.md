@@ -481,11 +481,17 @@ Parallel audits split the remaining work into five critical tracks:
   fields already exist. The compact browser runtime serializes the six
   `CubeTexture` faces, samples them through a WebGL `samplerCube` when
   available, and falls back to average face colors; full three.js PMREM and
-  browser roughness-aware cubemap filtering parity remain open.
+  prefiltered environment BRDF parity remain open.
 - Done: add CPU `sample_cube_lod` and make CPU environment-map reflection use
   authored cube-face mipmaps as a roughness-driven LOD when they are present.
   This makes mipped/pre-authored cubemaps affect rough CPU materials without
   claiming PMREM convolution or browser roughness-aware cube filtering.
+- Done: serialize authored cube-face mipmaps to the compact browser exporter and
+  use `EXT_shader_texture_lod` to select cube-map LOD from material roughness
+  when the browser exposes that WebGL extension. Power-of-two cube faces also
+  get generated mipmaps for this path. The fallback remains the existing base
+  `textureCube`/face-average behavior, and this still does not claim PMREM or
+  three.js environment BRDF LUT parity.
 - Done: add `Texture.matrix` and `matrix_auto_update` semantics for CPU
   sampling and per-texture browser texture uniforms while retaining
   offset/repeat/rotation/center export for inspectability.

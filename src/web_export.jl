@@ -341,28 +341,40 @@ function _web_texture_json(tex)
            "}"
 end
 
-function _web_cube_face_json(tex)
-    tex isa Texture || return "null"
-    H, W, C = size(tex.data)
+function _web_cube_level_json(data::Array{Float64,3})
+    H, W, C = size(data)
     (H > 0 && W > 0 && C > 0) || return "null"
     unit_byte(v) = round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
     rgba = Int[]
     sizehint!(rgba, 4 * H * W)
     @inbounds for y in 1:H, x in 1:W
-        r = tex.data[y, x, 1]
-        g = C >= 2 ? tex.data[y, x, 2] : r
-        b = C >= 3 ? tex.data[y, x, 3] : r
-        a = C >= 4 ? tex.data[y, x, 4] : 1.0
+        r = data[y, x, 1]
+        g = C >= 2 ? data[y, x, 2] : r
+        b = C >= 3 ? data[y, x, 3] : r
+        a = C >= 4 ? data[y, x, 4] : 1.0
         append!(rgba, (unit_byte(r), unit_byte(g), unit_byte(b), unit_byte(a)))
     end
     return "{" *
            "\"width\":" * string(W) *
            ",\"height\":" * string(H) *
+           ",\"data\":[" * join(rgba, ",") * "]" *
+           "}"
+end
+
+function _web_cube_face_json(tex)
+    tex isa Texture || return "null"
+    H, W, C = size(tex.data)
+    (H > 0 && W > 0 && C > 0) || return "null"
+    base = _web_cube_level_json(tex.data)
+    base == "null" && return "null"
+    mipmaps = join((_web_cube_level_json(mip) for mip in tex.mipmaps
+                    if ndims(mip) == 3 && all(size(mip) .> 0)), ",")
+    return base[1:end-1] *
            ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
            ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
            ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
-           ",\"data\":[" * join(rgba, ",") * "]" *
+           ",\"mipmaps\":[" * mipmaps * "]" *
            "}"
 end
 
@@ -1516,7 +1528,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   uniform vec2 uRectSize[MAX_RECT];
   uniform mat3 uMapMatrix,uAlphaMatrix,uEmissiveMatrix,uAoMatrix,uLightMatrix,uRoughnessMatrix,uMetalnessMatrix,uNormalMatrix,uClearcoatNormalMatrix,uPhysicalScalarMatrix,uPhysicalScalar2Matrix,uSheenColorMatrix,uSpecularColorMatrix;
   uniform mat4 uShadowMatrix[MAX_SHADOW];
-  uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseClearcoatNormalMap,uUseMatcapMap,uUseGradientMap,uUseEnvMap,uUseEnvCubeMap,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uUseThicknessMap,uUseAnisotropyMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uClearcoatNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uDispersion,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uAnisotropy,uAnisotropyRotation,uShininess,uFogNear,uFogFar,uFogDensity,uDepthNear,uDepthFar,uToonSteps;
+  uniform float uGlow,uOpacity,uAlphaTest,uUseMap,uUseAlphaMap,uUseEmissiveMap,uUseAoMap,uUseLightMap,uUseRoughnessMap,uUseMetalnessMap,uUseNormalMap,uUseClearcoatNormalMap,uUseMatcapMap,uUseGradientMap,uUseEnvMap,uUseEnvCubeMap,uEnvMaxLod,uUsePhysicalScalarMap,uUsePhysicalScalar2Map,uUseSheenColorMap,uUseSpecularColorMap,uUseThicknessMap,uUseAnisotropyMap,uEmissiveIntensity,uAoIntensity,uLightMapIntensity,uEnvMapIntensity,uNormalScale,uClearcoatNormalScale,uRoughness,uMetalness,uClearcoat,uClearcoatRoughness,uTransmission,uThickness,uAttenuationDistance,uIor,uDispersion,uSheen,uSheenRoughness,uIridescence,uIridescenceIor,uIridescenceThickness,uSpecularIntensity,uAnisotropy,uAnisotropyRotation,uShininess,uFogNear,uFogFar,uFogDensity,uDepthNear,uDepthFar,uToonSteps;
   uniform float uShadowBias[MAX_SHADOW],uShadowTexel[MAX_SHADOW];
   uniform vec3 uSheenColor,uSpecularColor,uAttenuationColor;
   uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowCount,uMaterialMode,uDepthPacking,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uClearcoatNormalTexCoord,uPhysicalScalarTexCoord,uPhysicalScalar2TexCoord,uSheenColorTexCoord,uSpecularColorTexCoord,uMapColorSpace,uEmissiveColorSpace,uMatcapColorSpace,uSheenColorSpace,uSpecularColorSpace,uUseTangents;
@@ -1543,7 +1555,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   float toonBand(float d){ if(uMaterialMode!=3) return max(d,0.0); if(uUseGradientMap>0.5) return texture2D(uGradientMap,vec2(clamp(d*.5+.5,0.0,1.0),0.0)).r; return ceil(clamp(max(d,0.0),0.0,1.0)*uToonSteps)/uToonSteps; }
   vec3 mappedNormal(vec3 n, vec2 uv){ if(uUseNormalMap<0.5) return n; vec3 map=texture2D(uNormalMap,uv).xyz*2.0-1.0; map.xy*=uNormalScale; if(uUseTangents==1){ vec3 tr=vTangent.xyz-n*dot(n,vTangent.xyz); if(dot(tr,tr)>1e-8){ vec3 t=normalize(tr); vec3 b=normalize(cross(n,t)*vTangent.w); return normalize(mat3(t,b,n)*map); } } vec3 q1=dFdx(vWorld), q2=dFdy(vWorld); vec2 st1=dFdx(uv), st2=dFdy(uv); vec3 s=normalize(q1*st2.t-q2*st1.t); vec3 t=normalize(-q1*st2.s+q2*st1.s); return normalize(mat3(s,t,n)*map); }
   vec3 mappedClearcoatNormal(vec3 n, vec2 uv){ if(uUseClearcoatNormalMap<0.5) return n; vec3 map=texture2D(uClearcoatNormalMap,uv).xyz*2.0-1.0; map.xy*=uClearcoatNormalScale; if(uUseTangents==1){ vec3 tr=vTangent.xyz-n*dot(n,vTangent.xyz); if(dot(tr,tr)>1e-8){ vec3 t=normalize(tr); vec3 b=normalize(cross(n,t)*vTangent.w); return normalize(mat3(t,b,n)*map); } } vec3 q1=dFdx(vWorld), q2=dFdy(vWorld); vec2 st1=dFdx(uv), st2=dFdy(uv); vec3 s=normalize(q1*st2.t-q2*st1.t); vec3 t=normalize(-q1*st2.s+q2*st1.s); return normalize(mat3(s,t,n)*map); }
-  vec3 envColor(vec3 dir){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; vec3 a=abs(dir); if(a.x>=a.y && a.x>=a.z) return dir.x>0.0?uEnvColor[0]:uEnvColor[1]; if(a.y>=a.x && a.y>=a.z) return dir.y>0.0?uEnvColor[2]:uEnvColor[3]; return dir.z>0.0?uEnvColor[4]:uEnvColor[5]; }
+  vec3 envColor(vec3 dir,float rough){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; vec3 a=abs(dir); if(a.x>=a.y && a.x>=a.z) return dir.x>0.0?uEnvColor[0]:uEnvColor[1]; if(a.y>=a.x && a.y>=a.z) return dir.y>0.0?uEnvColor[2]:uEnvColor[3]; return dir.z>0.0?uEnvColor[4]:uEnvColor[5]; }
   vec3 iridescenceTint(float ndv){ float phase=uIridescenceThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159; return .5+.5*cos(vec3(phase,phase+2.094,phase+4.188)); }
   float rectNode(int i){ return i==0?-0.7745967:(i==1?0.0:0.7745967); }
   float rectWeight(int i){ return i==1?0.8888889:0.5555556; }
@@ -1556,7 +1568,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     for(int i=0;i<MAX_RECT;i++){ if(i>=uRectCount) break; float hx=max(uRectSize[i].x,0.0)*0.5; float hy=max(uRectSize[i].y,0.0)*0.5; float area=hx*hy; vec3 f=normalize(uRectForward[i]); for(int ix=0;ix<3;ix++){ for(int iy=0;iy<3;iy++){ float x=rectNode(ix), y=rectNode(iy); vec3 sp=uRectPos[i]+uRectU[i]*(hx*x)+uRectV[i]*(hy*y); vec3 lv=sp-vWorld; float dist2=max(dot(lv,lv),0.0001); vec3 l=lv*inversesqrt(dist2); float emit=max(dot(-l,f),0.0); float a=area*rectWeight(ix)*rectWeight(iy)*emit/dist2; vec3 h=normalize(l+v); diffuse+=uRectColor[i]*toonBand(dot(n,l))*a; specular+=uRectColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } } }
     for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float sh=shadowFor(3,i,vWorld); float a=attenuation(dist,uPointDistance[i],uPointDecay[i])*sh; diffuse+=uPointColor[i]*toonBand(dot(n,l))*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
     for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float sh=shadowFor(2,i,vWorld); float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone*sh; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*toonBand(dot(n,l))*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; }
-    vec4 tex=mix(vec4(1.0),colorTex(uMap,uv,uMapColorSpace),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,alphaUv).g,uUseAlphaMap); float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; if(uMaterialMode==5){ vec3 bc=mix(base,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(bc)),outAlpha); return; } vec3 ao=mix(vec3(1.0),texture2D(uAoMap,aoUv).rgb,uUseAoMap); vec3 lm=mix(vec3(1.0),texture2D(uLightMap,lightUv).rgb,uUseLightMap); vec3 emissiveTex=mix(vec3(1.0),colorTex(uEmissiveMap,emissiveUv,uEmissiveColorSpace).rgb,uUseEmissiveMap); float rough=clamp(uRoughness*mix(1.0,texture2D(uRoughnessMap,roughnessUv).g,uUseRoughnessMap),0.02,1.0); float metal=clamp(uMetalness*mix(1.0,texture2D(uMetalnessMap,metalnessUv).b,uUseMetalnessMap),0.0,1.0); vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),colorTex(uSheenColorMap,sheenColorUv,uSheenColorSpace).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),colorTex(uSpecularColorMap,specularColorUv,uSpecularColorSpace).rgb,uUseSpecularColorMap); float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy)); if(uMaterialMode==6){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } if(uMaterialMode==7){ metal=0.0; rough=0.02; clearcoat=0.0; transmission=0.0; specIntensity=1.0; anisotropy=0.0; } if(uMaterialMode==3){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } vec3 aoMix=mix(vec3(1.0),ao,uAoIntensity); vec3 lightMix=mix(vec3(1.0),lm,uLightMapIntensity); vec3 env=envColor(reflect(-v,n))*uUseEnvMap*uEnvMapIntensity; float ndv=max(dot(n,v),0.0); float iorF0=pow((uIor-1.0)/(uIor+1.0),2.0); float fresnel=iorF0+(1.0-iorF0)*pow(1.0-ndv,5.0); float dispersion=max(uDispersion,0.0); float halfSpread=max(uIor-1.0,0.0)*0.025*dispersion; vec3 dispersionIor=max(vec3(uIor-halfSpread,uIor,uIor+halfSpread),vec3(1.0)); vec3 dispersionF0=pow((dispersionIor-1.0)/(dispersionIor+1.0),vec3(2.0)); vec3 dispersionFresnel=dispersionF0+(vec3(1.0)-dispersionF0)*pow(1.0-ndv,5.0); vec3 specTint=mix(specColor,specColor*(.5+.5*cos(vec3(iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+2.094,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+4.188))),iridescence); float specScale=mix(1.0,2.0,metal)*(1.0-rough*.7)*specIntensity; float coatPower=mix(96.0,18.0,clearcoatRough); float coatNdv=max(dot(clearcoatN,v),0.0); vec3 coat=specular*pow(coatNdv,coatPower)*clearcoat; vec3 sheen=diffuse*sheenColor*uSheen*(0.15+0.35*sheenRough)*pow(1.0-ndv,2.0); vec3 transmitted=env*base*transmission*(vec3(1.0)-dispersionFresnel); vec3 lit=base*diffuse*(1.0-metal*.55)*(1.0-transmission*.7)+specular*specScale*mix(specTint,base*specTint,metal); vec3 c=lit*aoMix*lightMix+coat+sheen+transmitted+env*(0.12+metal*.88)*(1.0-rough*.45)+uGlow*base*.28+uEmissive*emissiveTex*uEmissiveIntensity; c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
+    vec4 tex=mix(vec4(1.0),colorTex(uMap,uv,uMapColorSpace),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,alphaUv).g,uUseAlphaMap); float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; if(uMaterialMode==5){ vec3 bc=mix(base,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(bc)),outAlpha); return; } vec3 ao=mix(vec3(1.0),texture2D(uAoMap,aoUv).rgb,uUseAoMap); vec3 lm=mix(vec3(1.0),texture2D(uLightMap,lightUv).rgb,uUseLightMap); vec3 emissiveTex=mix(vec3(1.0),colorTex(uEmissiveMap,emissiveUv,uEmissiveColorSpace).rgb,uUseEmissiveMap); float rough=clamp(uRoughness*mix(1.0,texture2D(uRoughnessMap,roughnessUv).g,uUseRoughnessMap),0.02,1.0); float metal=clamp(uMetalness*mix(1.0,texture2D(uMetalnessMap,metalnessUv).b,uUseMetalnessMap),0.0,1.0); vec4 phys1=mix(vec4(1.0),texture2D(uPhysicalScalarMap,phys1Uv),uUsePhysicalScalarMap); vec4 phys2=mix(vec4(1.0),texture2D(uPhysicalScalar2Map,phys2Uv),uUsePhysicalScalar2Map); float clearcoat=clamp(uClearcoat*phys1.r,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness*phys1.g,0.0,1.0); float transmission=clamp(uTransmission*phys1.b,0.0,1.0); vec3 sheenColor=uSheenColor*mix(vec3(1.0),colorTex(uSheenColorMap,sheenColorUv,uSheenColorSpace).rgb,uUseSheenColorMap); float sheenRough=clamp(uSheenRoughness*phys1.a,0.0,1.0); float iridescence=clamp(uIridescence*phys2.r,0.0,1.0); float iridThickness=uIridescenceThickness*phys2.g; float specIntensity=clamp(uSpecularIntensity*phys2.b,0.0,1.0); vec3 specColor=uSpecularColor*mix(vec3(1.0),colorTex(uSpecularColorMap,specularColorUv,uSpecularColorSpace).rgb,uUseSpecularColorMap); float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy)); if(uMaterialMode==6){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } if(uMaterialMode==7){ metal=0.0; rough=0.02; clearcoat=0.0; transmission=0.0; specIntensity=1.0; anisotropy=0.0; } if(uMaterialMode==3){ specular=vec3(0.0); metal=0.0; clearcoat=0.0; transmission=0.0; } vec3 aoMix=mix(vec3(1.0),ao,uAoIntensity); vec3 lightMix=mix(vec3(1.0),lm,uLightMapIntensity); vec3 env=envColor(reflect(-v,n),rough)*uUseEnvMap*uEnvMapIntensity; float ndv=max(dot(n,v),0.0); float iorF0=pow((uIor-1.0)/(uIor+1.0),2.0); float fresnel=iorF0+(1.0-iorF0)*pow(1.0-ndv,5.0); float dispersion=max(uDispersion,0.0); float halfSpread=max(uIor-1.0,0.0)*0.025*dispersion; vec3 dispersionIor=max(vec3(uIor-halfSpread,uIor,uIor+halfSpread),vec3(1.0)); vec3 dispersionF0=pow((dispersionIor-1.0)/(dispersionIor+1.0),vec3(2.0)); vec3 dispersionFresnel=dispersionF0+(vec3(1.0)-dispersionF0)*pow(1.0-ndv,5.0); vec3 specTint=mix(specColor,specColor*(.5+.5*cos(vec3(iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+2.094,iridThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159+4.188))),iridescence); float specScale=mix(1.0,2.0,metal)*(1.0-rough*.7)*specIntensity; float coatPower=mix(96.0,18.0,clearcoatRough); float coatNdv=max(dot(clearcoatN,v),0.0); vec3 coat=specular*pow(coatNdv,coatPower)*clearcoat; vec3 sheen=diffuse*sheenColor*uSheen*(0.15+0.35*sheenRough)*pow(1.0-ndv,2.0); vec3 transmitted=env*base*transmission*(vec3(1.0)-dispersionFresnel); vec3 lit=base*diffuse*(1.0-metal*.55)*(1.0-transmission*.7)+specular*specScale*mix(specTint,base*specTint,metal); vec3 c=lit*aoMix*lightMix+coat+sheen+transmitted+env*(0.12+metal*.88)*(1.0-rough*.45)+uGlow*base*.28+uEmissive*emissiveTex*uEmissiveIntensity; c=mix(c,uFogColor,fogFactor(length(uCamera-vWorld))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
   const FSH_EMISSIVE_VOLUME=FSH_EMISSIVE
     .replace("float transmission=clamp(uTransmission*phys1.b,0.0,1.0);",
              "float transmission=clamp(uTransmission*phys1.b,0.0,1.0); float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0);")
@@ -1584,6 +1596,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const vertexTextureUnits=gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) || 0;
   const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1];
   const floatTextureExt=gl.getExtension("OES_texture_float");
+  const textureLodExt=gl.getExtension("EXT_shader_texture_lod");
   const boneTextureUnit=13;
   const envCubeTextureUnit=14;
   const clearcoatNormalTextureUnit=15;
@@ -1594,7 +1607,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const boneTexturesEnabled=!!floatTextureExt&&vertexTextureUnits>0&&maxCombinedTextureUnits>boneTextureUnit;
   const cubeTexturesEnabled=maxTextureUnits>envCubeTextureUnit&&maxCombinedTextureUnits>envCubeTextureUnit;
   const meshFragmentShader=physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE;
-  const meshFragmentShaderRuntime=cubeTexturesEnabled?meshFragmentShader:meshFragmentShader.replace(/\\n  uniform samplerCube uEnvCubeMap;/,"").replace("vec3 envColor(vec3 dir){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; ","vec3 envColor(vec3 dir){ ");
+  const meshFragmentShaderCubeLod=(cubeTexturesEnabled&&textureLodExt)?meshFragmentShader
+    .replace("#extension GL_OES_standard_derivatives : enable\\n  precision",
+             "#extension GL_OES_standard_derivatives : enable\\n#extension GL_EXT_shader_texture_lod : enable\\n  precision")
+    .replace("return textureCube(uEnvCubeMap,dir).rgb;",
+             "return textureCubeLodEXT(uEnvCubeMap,dir,clamp(rough,0.0,1.0)*uEnvMaxLod).rgb;")
+    :meshFragmentShader;
+  const meshFragmentShaderRuntime=cubeTexturesEnabled?meshFragmentShaderCubeLod:meshFragmentShaderCubeLod.replace(/\\n  uniform samplerCube uEnvCubeMap;/,"").replace("vec3 envColor(vec3 dir,float rough){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; ","vec3 envColor(vec3 dir,float rough){ ");
   const meshProgram=program(VSH,meshFragmentShaderRuntime), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,meshFragmentShaderRuntime):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH);
   function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
   function isPow2(v){ return (v & (v - 1)) === 0; }
@@ -1632,7 +1651,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
-    return tex;
+    return {texture:tex,maxLod:0};
   }
   function makeCubeTexture(env){
     if(!env||!env.faces||env.faces.length!==6) return null;
@@ -1645,13 +1664,36 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       if(!f||f.width!==first.width||f.height!==first.height||f.width!==f.height||!f.data||f.data.length!==f.width*f.height*4){ gl.deleteTexture(tex); return null; }
       gl.texImage2D(cubeTargets[i],0,gl.RGBA,f.width,f.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(f.data));
     }
+    let uploadedMipmaps=false, mipCount=0;
+    if(env.faces.every(f=>Array.isArray(f.mipmaps))){
+      const count=env.faces[0].mipmaps.length;
+      let complete=count>0;
+      for(let level=1;complete&&level<=count;level++){
+        const w=Math.max(1, first.width>>level), h=Math.max(1, first.height>>level);
+        for(let i=0;i<6;i++){
+          const m=env.faces[i].mipmaps[level-1];
+          if(!m||m.width!==w||m.height!==h||!m.data||m.data.length!==w*h*4){ complete=false; break; }
+        }
+      }
+      if(complete){
+        mipCount=count;
+        for(let level=1;level<=mipCount;level++){
+          for(let i=0;i<6;i++){
+            const m=env.faces[i].mipmaps[level-1];
+            gl.texImage2D(cubeTargets[i],level,gl.RGBA,m.width,m.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(m.data));
+          }
+        }
+        uploadedMipmaps=true;
+      }
+    }
     const pot=isPow2(first.width)&&isPow2(first.height), minFilter=first.minFilter||first.filter, magFilter=first.magFilter||first.filter;
-    if(pot&&usesMipmaps(minFilter)) gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+    if(pot&&!uploadedMipmaps) gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+    const maxLod=uploadedMipmaps?mipCount:(pot?Math.floor(Math.log2(first.width)):0);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
-    return tex;
+    return {texture:tex,maxLod:maxLod};
   }
   const defaultEnvCubeTex=cubeTexturesEnabled?makeSolidCubeTexture():null;
   function makeShadowTexture(s){
@@ -1951,7 +1993,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSheenColorMap"),10); }
       if(o.specularColorTex){ gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D,o.specularColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSpecularColorMap"),11); }
       bindShadowMaps(p,objShadows);
-      if(cubeTexturesEnabled){ gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_CUBE_MAP,o.envCubeTex||defaultEnvCubeTex); uniform1i(p,"uEnvCubeMap",envCubeTextureUnit); }
+      if(cubeTexturesEnabled){ const envTex=o.envCubeTex||defaultEnvCubeTex; gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_CUBE_MAP,envTex.texture); uniform1i(p,"uEnvCubeMap",envCubeTextureUnit); uniform1f(p,"uEnvMaxLod",envTex.maxLod||0); }
     }
     if(o.mode==="points"){
       gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),Math.max(2,o.pointSize*1.5));
