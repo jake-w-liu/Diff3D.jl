@@ -254,6 +254,15 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
                         alpha_test=m.alpha_test, depth_test=m.depth_test,
                         depth_write=m.depth_write)
 end
+function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
+    MeshPhongMaterial(color=_modulate(m.color, vc), specular=m.specular,
+                      emissive=m.emissive, shininess=m.shininess,
+                      opacity=m.opacity, transparent=m.transparent,
+                      side=m.side, map=m.map, alpha_map=m.alpha_map,
+                      light_map=m.light_map, vertex_colors=m.vertex_colors,
+                      alpha_test=m.alpha_test, depth_test=m.depth_test,
+                      depth_write=m.depth_write)
+end
 function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
     MeshStandardMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
                          metalness=m.metalness, roughness=m.roughness,

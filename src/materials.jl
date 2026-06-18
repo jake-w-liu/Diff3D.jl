@@ -103,6 +103,7 @@ struct MeshPhongMaterial <: AbstractMaterial
     map::Any
     alpha_map::Any
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
+    vertex_colors::Bool   # modulate by geometry :color attribute when true
     alpha_test::Float64
     depth_test::Bool
     depth_write::Bool
@@ -113,17 +114,26 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             emissive=Color3(0.0, 0.0, 0.0),
                             shininess=30.0, opacity=1.0,
                             transparent=false, side=:front, map=nothing, alpha_map=nothing,
-                            light_map=nothing, alpha_test=0.0, depth_test=true,
-                            depth_write=true)
+                            light_map=nothing, vertex_colors=false, alpha_test=0.0,
+                            depth_test=true, depth_write=true)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent, side, map,
-                      alpha_map, light_map, Float64(alpha_test), depth_test, depth_write)
+                      alpha_map, light_map, vertex_colors, Float64(alpha_test), depth_test,
+                      depth_write)
+end
+
+function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
+                           opacity, transparent::Bool, side::Symbol, map, alpha_map,
+                           light_map, alpha_test, depth_test::Bool, depth_write::Bool)
+    MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
+                      side, map, alpha_map, light_map, false, alpha_test,
+                      depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
                            opacity, transparent::Bool, side::Symbol, map, light_map,
                            depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      side, map, nothing, light_map, 0.0, depth_test, depth_write)
+                      side, map, nothing, light_map, false, 0.0, depth_test, depth_write)
 end
 
 # ========================== MeshStandardMaterial ==========================

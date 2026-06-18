@@ -110,11 +110,12 @@ deterministic_bytes(n::Int) =
                 source=[
                     "vertex_colored_icosahedron(mode::Symbol",
                     "set_attribute!(geo, :color, colors, 3)",
-                    "MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "shininess=0.0",
                     "vertex_colors=true",
                     "wireframe=true",
                 ],
-                prerequisites=["BufferGeometry color attributes", "browser vertex-color export"],
+                prerequisites=["BufferGeometry color attributes", "MeshPhongMaterial.vertex_colors", "browser vertex-color export"],
             ),
             "threejs_webgl_camera" => (
                 source=[
@@ -2121,6 +2122,17 @@ deterministic_bytes(n::Int) =
         @test rt_off.color[16, 16, 2] ≈ 1.0 atol=1e-6
         @test rt_off.color[16, 16, 3] ≈ 1.0 atol=1e-6
 
+        scene_phong = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene_phong, AmbientLight(color=Color3(1.0, 1.0, 1.0), intensity=1.0))
+        add!(scene_phong, Mesh(geo, MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                      specular=Color3(0.0, 0.0, 0.0),
+                                                      shininess=0.0,
+                                                      vertex_colors=true)))
+        rt_phong = RenderTarget(32, 32); render!(rt_phong, scene_phong, cam; shading=:smooth)
+        @test rt_phong.color[16, 16, 1] ≈ 0.0 atol=1e-6
+        @test rt_phong.color[16, 16, 2] ≈ 0.35 atol=1e-6
+        @test rt_phong.color[16, 16, 3] ≈ 0.0 atol=1e-6
+
         spec_geo = PlaneGeometry(width=2.0, height=2.0)
         set_attribute!(spec_geo, :color, fill(0.0, 3 * spec_geo.n_vertices), 3)
         spec_scene = Scene(background=Color3(0.0, 0.0, 0.0))
@@ -2920,6 +2932,16 @@ deterministic_bytes(n::Int) =
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshPhongMaterial(vertex_colors=true).vertex_colors == true
+        legacy_phong = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
+                                         Color3(0,0,0), 30.0, 1.0, false,
+                                         :front, nothing, nothing, true, true)
+        @test legacy_phong.vertex_colors == false
+        legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
+                                               Color3(0,0,0), 30.0, 1.0, false,
+                                               :front, nothing, alpha_tex, nothing,
+                                               0.27, true, true)
+        @test legacy_phong_alpha.vertex_colors == false
         @test material_alpha_test(MeshToonMaterial(alpha_test=0.31)) ≈ 0.31
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
@@ -5019,10 +5041,22 @@ deterministic_bytes(n::Int) =
             m_on  = MeshBasicMaterial(color=Color3(1.0,1.0,1.0), vertex_colors=true)
             cols_on  = shade_mesh_faces(geo, world, m_on,  lights, campos)
             @test all(c -> isapprox(c.r, 0.0; atol=1e-12) && isapprox(c.g, 0.5; atol=1e-12) && isapprox(c.b, 0.0; atol=1e-12), cols_on)
+            # Phong participates in the same opt-in vertex-color modulation.
+            phong_on = MeshPhongMaterial(color=Color3(1.0,1.0,1.0),
+                                         specular=Color3(0.0,0.0,0.0),
+                                         shininess=0.0,
+                                         vertex_colors=true)
+            phong_cols_on = shade_mesh_faces(geo, world, phong_on, lights, campos)
+            @test all(c -> isapprox(c.r, 0.0; atol=1e-12) && isapprox(c.g, 0.5; atol=1e-12) && isapprox(c.b, 0.0; atol=1e-12), phong_cols_on)
             # vertex colors OFF (default) -> material color unchanged (white)
             m_off = MeshBasicMaterial(color=Color3(1.0,1.0,1.0))
             cols_off = shade_mesh_faces(geo, world, m_off, lights, campos)
             @test all(c -> isapprox(c.r,1.0;atol=1e-12) && isapprox(c.g,1.0;atol=1e-12) && isapprox(c.b,1.0;atol=1e-12), cols_off)
+            phong_cols_off = shade_mesh_faces(geo, world, MeshPhongMaterial(color=Color3(1.0,1.0,1.0),
+                                                                             specular=Color3(0.0,0.0,0.0),
+                                                                             shininess=0.0),
+                                               lights, campos)
+            @test all(c -> isapprox(c.r,1.0;atol=1e-12) && isapprox(c.g,1.0;atol=1e-12) && isapprox(c.b,1.0;atol=1e-12), phong_cols_off)
             # missing :color attribute -> opt-in is a no-op (no error, material color kept)
             geo2 = BoxGeometry()
             cols_noattr = shade_mesh_faces(geo2, world, MeshBasicMaterial(color=Color3(0.25,0.5,0.75), vertex_colors=true), lights, campos)

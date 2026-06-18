@@ -430,6 +430,10 @@ Parallel audits split the remaining work into five critical tracks:
   `MeshToonMaterial`, with legacy positional constructor compatibility plus CPU
   flat/smooth raster discard and compact browser texture/alpha serialization
   covered by tests.
+- Done: add `MeshPhongMaterial.vertex_colors` so Phong participates in the
+  same CPU flat/smooth vertex-color modulation and compact browser vertex-color
+  export path as other color-aware mesh materials; the
+  `webgl_geometry_colors` port now uses flat Phong with `shininess=0.0`.
 - Done: add browser export for emissive, AO, light, roughness, metalness, and
   normal maps where matching Julia material fields already exist.
 - Done: add compact browser `MeshBasicMaterial` support with an explicit unlit

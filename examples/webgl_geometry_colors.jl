@@ -82,12 +82,13 @@ end
 
 function add_color_sphere!(parent, name::String, mode::Symbol, x::Float64; rotate_x=0.0)
     geo = vertex_colored_icosahedron(mode; radius=0.78)
-    material = MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0),
-                                    roughness=0.82,
-                                    metalness=0.0,
-                                    vertex_colors=true,
-                                    side=:double)
-    mesh = Mesh(geo, material; name=name, cast_shadow=true, receive_shadow=true)
+    material = MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0),
+                                 specular=Color3(0.0, 0.0, 0.0),
+                                 shininess=0.0,
+                                 vertex_colors=true,
+                                 side=:double)
+    mesh = Mesh(geo, material; name=name, flat_shading=true,
+                cast_shadow=true, receive_shadow=true)
     mesh.position = Vec3(x, 0.0, 0.0)
     mesh.rotation = Euler(rotate_x, 0.0, 0.0)
     add!(parent, mesh)
