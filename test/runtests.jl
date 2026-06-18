@@ -2107,12 +2107,24 @@ deterministic_bytes(n::Int) =
                                      near=0.2, far=55.0)
         ocamera.position = Vec3(-1.0, 4.0, 8.0)
         ocamera.target = Vec3(0.0, 0.25, 0.0)
+        camera_clip = AnimationClip("camera-move", AbstractKeyframeTrack[
+            KeyframeTrack(pcamera, :position, [0.0, 1.0],
+                          [Vec3(1.0, 2.0, 9.0), Vec3(1.5, 2.3, 8.4)]),
+            KeyframeTrack(pcamera, :target, [0.0, 1.0],
+                          [Vec3(0.25, 0.5, 0.75), Vec3(0.0, 0.7, 0.4)]),
+            NumberKeyframeTrack(pcamera, :fov, [0.0, 1.0], [0.7, 0.6]),
+            NumberKeyframeTrack(pcamera, :near, [0.0, 1.0], [0.3, 0.45]),
+            NumberKeyframeTrack(pcamera, :far, [0.0, 1.0], [77.0, 90.0]),
+        ])
+        ortho_camera_clip = AnimationClip("ortho-camera", AbstractKeyframeTrack[
+            NumberKeyframeTrack(ocamera, :left, [0.0, 1.0], [-2.0, -1.4]),
+        ])
         camera_file = tempname() * ".html"
         save_webgl_html(camera_file,
                         [WebGLExportCase("pcam", "Perspective Camera", "camera", scene;
-                                         camera=pcamera),
+                                         camera=pcamera, animations=[camera_clip]),
                          WebGLExportCase("ocam", "Orthographic Camera", "camera", scene;
-                                         camera=ocamera)])
+                                         camera=ocamera, animations=[ortho_camera_clip])])
         camera_html = read(camera_file, String)
         rm(camera_file; force=true)
         @test occursin("\"camera\":{\"type\":\"perspective\"", camera_html)
@@ -2121,6 +2133,12 @@ deterministic_bytes(n::Int) =
         @test occursin("\"fov\":0.69999999999999996", camera_html)
         @test occursin("\"near\":0.29999999999999999", camera_html)
         @test occursin("\"far\":77", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"position\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"target\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"fov\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"near\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"far\"", camera_html)
+        @test !occursin("\"target\":$(pcamera.id),\"property\":\"depthNear\"", camera_html)
         @test occursin("\"camera\":{\"type\":\"orthographic\"", camera_html)
         @test occursin("\"left\":-2", camera_html)
         @test occursin("\"right\":3", camera_html)
@@ -2128,8 +2146,19 @@ deterministic_bytes(n::Int) =
         @test occursin("\"top\":1.25", camera_html)
         @test occursin("\"near\":0.20000000000000001", camera_html)
         @test occursin("\"far\":55", camera_html)
+        @test occursin("\"target\":$(ocamera.id),\"property\":\"left\"", camera_html)
+        @test occursin("function buildCamera(cam)", camera_html)
+        @test occursin("const cameraById = new Map()", camera_html)
+        @test occursin("function setCameraAnim(cam,prop,v,component=0)", camera_html)
+        @test occursin("function resetCameraAnim(cam)", camera_html)
+        @test occursin("if(c.camera) resetCameraAnim(c.camera)", camera_html)
+        @test occursin("for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0)", camera_html)
+        @test occursin("function applyCameraOrbit(cam)", camera_html)
+        @test occursin("orbitYawOffset=0", camera_html)
+        @test occursin("rememberCameraOrbitOffsets()", camera_html)
         @test occursin("orthographic(left,right,bottom,top,near,far)", camera_html)
         @test occursin("if(cam&&cam.type===\"orthographic\")", camera_html)
+        @test occursin("const s=orbitDistScale", camera_html)
         @test occursin("proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far)", camera_html)
         @test occursin("M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
         @test_throws ArgumentError WebGLExportCase("badcam", "Bad", "Bad", scene; camera=Scene())
