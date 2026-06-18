@@ -76,6 +76,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
             "threejs_webgl_buffergeometry_lines",
+            "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
             "threejs_webgl_points_sprites",
             "threejs_webgl_instancing_dynamic",
@@ -317,6 +318,19 @@ deterministic_bytes(n::Int) =
                     "2n, 0",
                 ],
                 prerequisites=["LineSegments", "browser line modes"],
+            ),
+            "threejs_webgl_buffergeometry_lines_indexed" => (
+                source=[
+                    "function indexed_snowflake_geometry(; iteration_count::Int=4",
+                    "snowflake_iteration(points[p_index], points[p_index + 1], iteration)",
+                    "append!(indices, (i, i + 1))",
+                    "BufferGeometry(positions, Float64[], Float64[], indices",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "LineSegments(indexed_snowflake_geometry()",
+                    "QuaternionKeyframeTrack(parent, :rotation",
+                    "WebGLExportCase(\"buffergeometry-lines-indexed\"",
+                ],
+                prerequisites=["indexed BufferGeometry", "LineSegments", "browser line index buffers"],
             ),
             "threejs_webgl_buffergeometry_points" => (
                 source=[

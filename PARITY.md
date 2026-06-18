@@ -721,6 +721,12 @@ Parallel audits split the remaining work into five critical tracks:
   `examples/webgl_buffergeometry_lines.jl`, using raw `BufferGeometry`
   attributes and browser `LineSegments` export. Exact upstream randomized line
   field remains a documented deviation.
+- Added a standalone partial port for `webgl_buffergeometry_lines_indexed` via
+  `examples/webgl_buffergeometry_lines_indexed.jl`, using explicit
+  `BufferGeometry` line indices, per-vertex color attributes, `LineSegments`,
+  and keyframed parent rotation. Exact upstream random colors, viewport-scale
+  coordinates, `Stats`, and `WebGLRenderer` internals remain documented
+  deviations.
 - Added a standalone partial port for `webgl_buffergeometry_points` via
   `examples/webgl_buffergeometry_points.jl`, using raw `BufferGeometry`
   attributes and browser point rendering. Exact upstream point data remains a
