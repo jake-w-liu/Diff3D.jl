@@ -1418,6 +1418,10 @@ function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SkeletonHelper")
 end
 
+"""Build a `SkeletonHelper` from the skeleton owned by a `SkinnedMesh`."""
+SkeletonHelper(mesh::SkinnedMesh; color=Color3(0.0, 0.0, 1.0)) =
+    SkeletonHelper(mesh.skeleton; color=color)
+
 """
 Square outline lying in `plane` with side length `size`, plus a segment along the
 plane normal from the plane's nearest point to the origin (three.js

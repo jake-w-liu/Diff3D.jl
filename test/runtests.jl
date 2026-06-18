@@ -4736,6 +4736,14 @@ deterministic_bytes(n::Int) =
             px = sk.geometry.positions
             @test isapprox(px[4]-px[1], 0.0; atol=1e-9) # parent->child spans +y by 1
             @test isapprox(px[5]-px[2], 1.0; atol=1e-9)
+            helper_geo = PlaneGeometry(width=1.0, height=1.0)
+            helper_idx = fill((1, 1, 1, 1), helper_geo.n_vertices)
+            helper_wts = fill((1.0, 0.0, 0.0, 0.0), helper_geo.n_vertices)
+            helper_mesh = SkinnedMesh(helper_geo, MeshBasicMaterial(), skel,
+                                      helper_idx, helper_wts)
+            sk_from_mesh = SkeletonHelper(helper_mesh)
+            @test sk_from_mesh isa LineSegments
+            @test sk_from_mesh.geometry.positions == sk.geometry.positions
 
             # PlaneHelper: 4 square edges + 1 normal = 5 segs = 10 verts.
             pl = Plane(Vec3(0.0,1.0,0.0), 0.0)

@@ -357,6 +357,9 @@ Parallel audits split the remaining work into five critical tracks:
   deformed render proxies from the current skeleton pose. CPU render proxies
   skin positions and authored normals/tangents while preserving material,
   shadow, UV, color, and draw-group data.
+- Done: add `SkeletonHelper(::SkinnedMesh)` parity by delegating to the mesh's
+  owned `Skeleton`, while broader three.js skeleton pose/update lifecycle
+  parity remains tracked separately.
 - Done: evaluate morph normal/tangent deltas for meshes and skinned meshes,
   normalize the resulting direction buffers, and feed them into CPU skinned
   render proxies plus compact browser morph and CPU-skinning fallback paths.
