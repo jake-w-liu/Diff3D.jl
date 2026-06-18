@@ -65,6 +65,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
+            "threejs_webgl_loader_gltf",
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
@@ -198,6 +199,17 @@ deterministic_bytes(n::Int) =
                     "format binary_little_endian 1.0",
                 ],
                 prerequisites=["load_ply", "binary_little_endian PLY"],
+            ),
+            "threejs_webgl_loader_gltf" => (
+                source=[
+                    "asset = load_gltf_asset(gltf_path)",
+                    "\"KHR_lights_punctual\"",
+                    "\"baseColorTexture\": { \"index\": 0 }",
+                    "\"type\": \"SCALAR\", \"min\": [",
+                    "append_little_endian_f32!",
+                    "\"gltf_loader_turntable\"",
+                ],
+                prerequisites=["load_gltf_asset", "glTF animation clips"],
             ),
             "threejs_webgl_buffergeometry" => (
                 source=[

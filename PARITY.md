@@ -772,6 +772,13 @@ Parallel audits split the remaining work into five critical tracks:
   `binary_little_endian` PLY assets, loading both through Diff3D.jl `load_ply`,
   and exporting vertex-color meshes to the compact browser path. Exact upstream
   PLY assets and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_loader_gltf` via
+  `examples/webgl_loader_gltf.jl`, generating a deterministic external-buffer
+  glTF asset with texture image, `KHR_lights_punctual` light, and transform
+  animation, then loading it through Diff3D.jl `load_gltf_asset` before browser
+  export. Exact upstream sample-asset catalogue, DamagedHelmet asset,
+  UltraHDR environment, and `WebGLRenderer` internals remain documented
+  deviations.
 
 ## Next implementation targets
 
