@@ -54,6 +54,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_geometries",
             "threejs_webgl_geometry_cube",
             "threejs_webgl_geometry_colors",
+            "threejs_webgl_geometry_colors_lookuptable",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -116,6 +117,25 @@ deterministic_bytes(n::Int) =
                     "wireframe=true",
                 ],
                 prerequisites=["BufferGeometry color attributes", "MeshPhongMaterial.vertex_colors", "browser vertex-color export"],
+            ),
+            "threejs_webgl_geometry_colors_lookuptable" => (
+                source=[
+                    "const LUT_MAPS = Dict",
+                    "\"rainbow\" => [(0.0, 0x0000ff)",
+                    "function lut_map_color(map, alpha::Real)",
+                    "function lut_color(map_name::String, value::Real",
+                    "count::Int=32",
+                    "round(Int, alpha * n) / n",
+                    "function pressure_surface_geometry(; rows::Int=34, cols::Int=50",
+                    "set_attribute!(geo, :pressure, pressures, 1)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "MeshLambertMaterial(color=Color3(0.96, 0.96, 0.96)",
+                    "vertex_colors=true",
+                    "SpriteMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "map=lut_legend_texture(\"rainbow\")",
+                    "WebGLExportCase(\"geometry-colors-lookuptable\"",
+                ],
+                prerequisites=["BufferGeometry custom attributes", "MeshLambertMaterial.vertex_colors", "SpriteMaterial.map"],
             ),
             "threejs_webgl_camera" => (
                 source=[

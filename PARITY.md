@@ -717,6 +717,13 @@ Parallel audits split the remaining work into five critical tracks:
   and wireframe overlays. Exact upstream mouse-following camera behavior,
   `MeshPhongMaterial` flat-shading/shininess behavior, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_colors_lookuptable` via
+  `examples/webgl_geometry_colors_lookuptable.jl`, using deterministic
+  pressure-surface data, a stored `:pressure` attribute, a Julia-side LUT baked
+  into exported vertex colors, Lambert vertex-color shading, and a sprite-based
+  legend texture. Upstream `pressure.json`, live `Lut` GUI palette switching,
+  the second orthographic UI scene, `renderer.autoClear=false`, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and
