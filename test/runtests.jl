@@ -1114,7 +1114,12 @@ deterministic_bytes(n::Int) =
                                                       roughness=0.18,
                                                       anisotropy=0.9,
                                                       anisotropy_rotation=0.5,
-                                                      anisotropy_map=Texture(pbrdata; filter=:nearest, colorspace=:linear));
+                                                      anisotropy_map=Texture(pbrdata; filter=:nearest, colorspace=:linear,
+                                                                             offset=Vec2(0.125, 0.25),
+                                                                             repeat=Vec2(0.5, 0.75),
+                                                                             rotation=0.1,
+                                                                             center=Vec2(0.5, 0.5),
+                                                                             tex_coord=1));
                                  name="export_physical_anisotropy_map")
         anisotropy_mapped.position = Vec3(-6.4, 0.0, 0.0)
         add!(scene, anisotropy_mapped)
@@ -1482,6 +1487,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_env_map\"", html)
         @test occursin("\"name\":\"export_physical_extensions\"", html)
         @test occursin("\"name\":\"export_physical_anisotropy_map\"", html)
+        @test occursin(r"\"name\":\"export_physical_anisotropy_map\".*\"anisotropyTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
         @test occursin("\"name\":\"export_sprite\"", html)
         @test occursin("\"name\":\"export_points_map\"", html)
         @test occursin("spriteProgram", html)
@@ -1628,6 +1634,10 @@ deterministic_bytes(n::Int) =
         @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])", html)
         @test occursin("texture2D(uPhysicalScalarMap,phys1Uv)", html)
         @test occursin("phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalar2TexCoord)", html)
+        @test occursin("uniform1i(p,\"uPhysicalScalar2TexCoord\",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture,0))", html)
+        @test occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture)", html)
+        @test !occursin("uniform1i(p,\"uPhysicalScalar2TexCoord\",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture,0))", html)
+        @test !occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture)", html)
         @test occursin("float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0)", html)
         @test occursin("float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("float clearcoat=clamp(uClearcoat,0.0,1.0); float clearcoatRough=clamp(uClearcoatRoughness,0.0,1.0); float transmission=clamp(uTransmission,0.0,1.0); float thickness=max(uThickness,0.0); vec3 sheenColor=uSheenColor;", html)

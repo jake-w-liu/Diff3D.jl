@@ -1800,7 +1800,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       uniform1i(p,"uMetalnessTexCoord",texCoord(o.metalnessTexture,0));
       uniform1i(p,"uNormalTexCoord",texCoord(o.normalTexture,0));
       uniform1i(p,"uPhysicalScalarTexCoord",texCoord(o.clearcoatTexture||o.clearcoatRoughnessTexture||o.transmissionTexture||o.sheenRoughnessTexture,0));
-      uniform1i(p,"uPhysicalScalar2TexCoord",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture,0));
+      uniform1i(p,"uPhysicalScalar2TexCoord",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture,0));
       uniform1i(p,"uSheenColorTexCoord",texCoord(o.sheenColorTexture,0));
       uniform1i(p,"uSpecularColorTexCoord",texCoord(o.specularColorTexture,0));
       uniform1i(p,"uMapColorSpace",textureColorSpace(o.texture));
@@ -1845,7 +1845,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       uniformTexMatrix(p,"uMetalnessMatrix",o.metalnessTexture);
       uniformTexMatrix(p,"uNormalMatrix",o.normalTexture);
       uniformTexMatrix(p,"uPhysicalScalarMatrix",o.clearcoatTexture||o.clearcoatRoughnessTexture||o.transmissionTexture||o.sheenRoughnessTexture);
-      uniformTexMatrix(p,"uPhysicalScalar2Matrix",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture);
+      uniformTexMatrix(p,"uPhysicalScalar2Matrix",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture);
       uniformTexMatrix(p,"uSheenColorMatrix",o.sheenColorTexture);
       uniformTexMatrix(p,"uSpecularColorMatrix",o.specularColorTexture);
       if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uMap"),0); }
