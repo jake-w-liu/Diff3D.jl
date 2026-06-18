@@ -606,8 +606,9 @@ Parallel audits split the remaining work into five critical tracks:
   object's material, and browser export resets/applies render-property tracks
   for material color components, opacity, roughness, metalness, emissive,
   point size, Phong shininess/specular color, and compact physical-material
-  scalar fields. Sprite material rotation and size attenuation now bind through
-  the same CPU/browser animation path.
+  scalar fields, including physical anisotropy strength and rotation. Sprite
+  material rotation and size attenuation now bind through the same CPU/browser
+  animation path.
 - Done: export light IDs and bind browser animation tracks to light color,
   ground color, intensity, distance, and decay fields. CPU light color/intensity
   `NumberKeyframeTrack` playback is also covered, so animated lighting changes

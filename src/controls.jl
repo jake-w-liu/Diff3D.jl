@@ -573,6 +573,7 @@ function _animation_property_symbol(s::AbstractString)
     s == "iridescenceThickness" && return :iridescence_thickness
     s == "specularIntensity" && return :specular_intensity
     s == "specularColor" && return :specular_color
+    s == "anisotropyRotation" && return :anisotropy_rotation
     s == "sizeAttenuation" && return :size_attenuation
     s == "morphTargetInfluences" && return :morph_target_influences
     s == "morph_target_influences" && return :morph_target_influences

@@ -1281,6 +1281,8 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(physical_mapped, "material.envMapIntensity", [0.0, 1.0], [0.4, 0.9]),
             NumberKeyframeTrack(physical_mapped, "material.clearcoatRoughness", [0.0, 1.0], [0.15, 0.65]),
             NumberKeyframeTrack(physical_mapped, "material.sheenColor.r", [0.0, 1.0], [0.8, 0.2]),
+            NumberKeyframeTrack(physical_mapped, "material.anisotropy", [0.0, 1.0], [0.6, 0.2]),
+            NumberKeyframeTrack(physical_mapped, "material.anisotropyRotation", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1]),
             NumberKeyframeTrack(sp, "material.sizeAttenuation", [0.0, 1.0], [1.0, 0.0]),
             NumberKeyframeTrack(phong_material_mesh, "shininess", [0.0, 1.0], [72.0, 12.0]),
@@ -1831,6 +1833,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"envMapIntensity\"", html)
         @test occursin("\"property\":\"clearcoatRoughness\"", html)
         @test occursin("\"property\":\"sheenColor\",\"component\":1", html)
+        @test occursin("\"property\":\"anisotropy\"", html)
+        @test occursin("\"property\":\"anisotropyRotation\"", html)
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
         @test occursin("prop===\"visible\"||prop===\"spriteSizeAttenuation\"", html)
@@ -1838,6 +1842,7 @@ deterministic_bytes(n::Int) =
         @test occursin("\"component\":2", html)
         @test occursin("assignComponent", html)
         @test occursin("baseRenderable", html)
+        @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
         @test occursin("setRenderableAnim", html)
         @test occursin("resetRenderableAnim", html)
         @test occursin("baseLight", html)
@@ -3756,21 +3761,35 @@ deterministic_bytes(n::Int) =
 
         physical_mesh = Mesh(BoxGeometry(),
                              MeshPhysicalMaterial(clearcoat_roughness=0.0,
-                                                  sheen_color=Color3(1.0, 1.0, 1.0)))
+                                                  sheen_color=Color3(1.0, 1.0, 1.0),
+                                                  anisotropy=0.1,
+                                                  anisotropy_rotation=0.25))
         physical_clearcoat_roughness =
             NumberKeyframeTrack(physical_mesh, "material.clearcoatRoughness",
                                 [0.0, 1.0], [0.0, 0.8])
         physical_sheen_red =
             NumberKeyframeTrack(physical_mesh, "material.sheenColor.r",
                                 [0.0, 1.0], [1.0, 0.2])
+        physical_anisotropy =
+            NumberKeyframeTrack(physical_mesh, "material.anisotropy",
+                                [0.0, 1.0], [0.1, 0.9])
+        physical_anisotropy_rotation =
+            NumberKeyframeTrack(physical_mesh, "material.anisotropyRotation",
+                                [0.0, 1.0], [0.25, 0.75])
         @test physical_clearcoat_roughness.property === :clearcoat_roughness
         @test physical_sheen_red.property === :sheen_color
         @test physical_sheen_red.component == 1
+        @test physical_anisotropy.property === :anisotropy
+        @test physical_anisotropy_rotation.property === :anisotropy_rotation
         mixer_set_time!(AnimationMixer(AnimationClip("physical_material_numbers",
                                                      [physical_clearcoat_roughness,
-                                                      physical_sheen_red])), 0.5)
+                                                      physical_sheen_red,
+                                                      physical_anisotropy,
+                                                      physical_anisotropy_rotation])), 0.5)
         @test physical_mesh.material.clearcoat_roughness ≈ 0.4
         @test physical_mesh.material.sheen_color.r ≈ 0.6
+        @test physical_mesh.material.anisotropy ≈ 0.5
+        @test physical_mesh.material.anisotropy_rotation ≈ 0.5
 
         phong_material_mesh = Mesh(BoxGeometry(),
                                    MeshPhongMaterial(color=Color3(0.2, 0.4, 0.8),
