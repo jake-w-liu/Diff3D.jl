@@ -1352,8 +1352,23 @@ end
                                                    normal_scale=1.0),
                               skeleton, fill((1,1,1,1), 3),
                               fill((1.0,0.0,0.0,0.0), 3);
-                              name="export_skin", morph_target_influences=[0.25])
+                              name="export_skin", morph_target_influences=[0.25],
+                              cast_shadow=true, receive_shadow=true)
         add!(scene, skinned)
+        shader_shadow_geo = BufferGeometry([0.0,0,0, 0.4,0,0, 0.0,0.4,0],
+                                           [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
+                                           [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
+        shader_shadow_bone = Bone(name="export_shader_shadow_bone")
+        shader_shadow_skeleton = Skeleton([shader_shadow_bone])
+        shader_shadow_bone.position = Vec3(0.2, 0.0, 0.0)
+        shader_shadow_skinned = SkinnedMesh(shader_shadow_geo,
+                                            MeshStandardMaterial(color=Color3(0.9,0.6,0.25)),
+                                            shader_shadow_skeleton,
+                                            fill((1,1,1,1), 3),
+                                            fill((1.0,0.0,0.0,0.0), 3);
+                                            name="export_shader_skin_shadow",
+                                            cast_shadow=true, receive_shadow=true)
+        add!(scene, shader_shadow_skinned)
         bone_texture_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                           [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
                                           [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
@@ -1419,6 +1434,8 @@ end
                                      [Vec3(0.0,0.0,0.0), Vec3(0.0,0.0,0.0)]),
             KeyframeTrack(bone, :position, [0.0, 1.0],
                           [Vec3(2.0,0.0,0.0), Vec3(3.0,0.0,0.0)]),
+            KeyframeTrack(shader_shadow_bone, :position, [0.0, 1.0],
+                          [Vec3(0.2,0.0,0.0), Vec3(0.8,0.0,0.0)]),
             NumberKeyframeTrack(mesh, "position.y", [0.0, 1.0], [0.0, 0.35]),
             QuaternionKeyframeTrack(mesh, :quaternion, [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 4, 0.0)]),
@@ -1506,6 +1523,16 @@ end
               Diff3D._web_stale_shadow_light_ids([component_shadow_clip])
         @test moving_shadow_dir.id in
               Diff3D._web_dynamic_directional_shadow_light_ids([component_shadow_clip])
+        bone_shadow_clip = AnimationClip("bone_shadow", AbstractKeyframeTrack[
+            KeyframeTrack(shader_shadow_bone, :position, [0.0, 1.0],
+                          [Vec3(0.2,0.0,0.0), Vec3(0.8,0.0,0.0)])
+        ])
+        @test Diff3D._web_has_animated_shadow_drawable(scene, [bone_shadow_clip])
+        @test shadow_dir.id in
+              Diff3D._web_dynamic_directional_shadow_light_ids(scene, [bone_shadow_clip])
+        @test spot.id in
+              Diff3D._web_dynamic_spot_shadow_light_ids(scene, [bone_shadow_clip])
+        @test shadow_point.id in Diff3D._web_stale_shadow_light_ids(scene, [bone_shadow_clip])
         stale_shadow_ids = Diff3D._web_stale_shadow_light_ids(scene, [clip])
         dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids(scene, [clip])
         dynamic_spot_shadow_ids = Diff3D._web_dynamic_spot_shadow_light_ids(scene, [clip])
@@ -2006,10 +2033,13 @@ end
         @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.nrmBuf)", html)
         @test occursin("gl.bindBuffer(gl.ARRAY_BUFFER,o.tanBuf)", html)
         @test occursin("mat3(t,b,n)*map", html)
+        @test occursin("\"name\":\"export_shader_skin_shadow\"", html)
+        @test occursin("\"name\":\"export_shader_shadow_bone\"", html)
         @test occursin("\"name\":\"export_bone_texture_skin\"", html)
         @test occursin("\"name\":\"export_bone_texture_65\"", html)
         @test occursin("\"indices\":[64,0,0,0,64,0,0,0,64,0,0,0]", html)
         @test occursin("const VSH_BONE_TEXTURE", html)
+        @test occursin("const DVSH_BONE_TEXTURE=DVSH", html)
         @test occursin("MAX_COMBINED_TEXTURE_IMAGE_UNITS", html)
         @test occursin("MAX_VERTEX_TEXTURE_IMAGE_UNITS", html)
         @test occursin("OES_texture_float", html)
@@ -2018,7 +2048,13 @@ end
         @test occursin("boneTexturesEnabled", html)
         @test occursin("cubeTexturesEnabled", html)
         @test occursin("meshBoneProgram", html)
+        @test occursin("depthBoneProgram", html)
         @test occursin("uUseBoneTexture", html)
+        @test occursin("function bindSkinState", html)
+        @test occursin("function currentSkinMatrices", html)
+        @test occursin("function skinnedShadowPosition", html)
+        @test length(findall("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)) >= 2
+        @test occursin("const p=o.textureSkin?depthBoneProgram:depthProgram; gl.useProgram(p); attrib(p,\"aPosition\",o.posBuf); attrib(p,\"aSkinIndex\",o.skinIndexBuf,4); attrib(p,\"aSkinWeight\",o.skinWeightBuf,4)", html)
         @test occursin("uBoneTexture", html)
         @test occursin("uBoneTextureSize", html)
         @test occursin("texture2D(uBoneTexture", html)
@@ -2185,7 +2221,7 @@ end
         @test occursin("\"pcfRadius\":1", html)
         @test occursin("makeShadowTexture", html)
         @test occursin("makeDynamicShadowTarget", html)
-        @test occursin("depthProgram=program(DVSH,DFSH)", html)
+        @test occursin("depthProgram=program(DVSH,DFSH), depthBoneProgram=boneTexturesEnabled?program(DVSH_BONE_TEXTURE,DFSH):depthProgram", html)
         @test occursin("function isDynamicShadow", html)
         @test occursin("function shadowBounds", html)
         @test occursin("function directionalShadowMatrix", html)
