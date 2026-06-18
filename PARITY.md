@@ -661,6 +661,12 @@ Parallel audits split the remaining work into five critical tracks:
   texture map, and quaternion keyframe playback for the rotating cube. Exact
   upstream texture asset and `WebGLRenderer` internals remain documented
   deviations.
+- Added a standalone partial port for `webgl_geometry_colors` via
+  `examples/webgl_geometry_colors.jl`, using vertex-color `BufferGeometry`
+  attributes, deterministic icosahedron color gradients, soft shadow planes,
+  and wireframe overlays. Exact upstream mouse-following camera behavior,
+  `MeshPhongMaterial` flat-shading/shininess behavior, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_animation_keyframes` via
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset

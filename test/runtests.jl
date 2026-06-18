@@ -53,6 +53,7 @@ deterministic_bytes(n::Int) =
         expected_ids = Set([
             "threejs_webgl_geometries",
             "threejs_webgl_geometry_cube",
+            "threejs_webgl_geometry_colors",
             "threejs_webgl_materials_normal",
             "threejs_webgl_materials_depth",
             "threejs_webgl_materials_variations_basic",
@@ -98,6 +99,16 @@ deterministic_bytes(n::Int) =
                     "QuaternionKeyframeTrack(cube, :rotation",
                 ],
                 prerequisites=["BoxGeometry", "quaternion animation playback"],
+            ),
+            "threejs_webgl_geometry_colors" => (
+                source=[
+                    "vertex_colored_icosahedron(mode::Symbol",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "vertex_colors=true",
+                    "wireframe=true",
+                ],
+                prerequisites=["BufferGeometry color attributes", "browser vertex-color export"],
             ),
             "threejs_webgl_materials_normal" => (
                 source=[
