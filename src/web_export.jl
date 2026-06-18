@@ -389,9 +389,20 @@ end
 const WEB_SHADOW_RESOLUTION = 64
 
 function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight};
-                          static_shadow::Bool=true)
-    static_shadow || return "null"
+                          shadow_mode::Symbol=:static)
     (hasproperty(light, :cast_shadow) && getproperty(light, :cast_shadow)) || return "null"
+    shadow_mode === :none && return "null"
+    if shadow_mode === :directional_dynamic
+        light isa DirectionalLight || return "null"
+        return "{" *
+               "\"type\":\"directionalDynamic\"" *
+               ",\"size\":" * string(WEB_SHADOW_RESOLUTION) *
+               ",\"bias\":" * _js_num(1.5e-3) *
+               ",\"pcfRadius\":1" *
+               ",\"matrix\":" * _js_mat(Mat4()) *
+               "}"
+    end
+    shadow_mode === :static || return "null"
     sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION, pcf_radius=1)
     H, W = size(sm.depth)
     data = Int[]
@@ -444,7 +455,7 @@ end
 function _web_light_json(light::AmbientLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     return "{" *
            "\"type\":\"ambient\"" *
            ",\"id\":" * string(light.id) *
@@ -459,7 +470,7 @@ end
 function _web_light_json(light::DirectionalLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     pos = get_position(light)
     target = light.target
     dir = normalize(pos - target)
@@ -474,7 +485,7 @@ function _web_light_json(light::DirectionalLight, scene::Scene;
            ",\"target\":" * _js_vec(target) *
            ",\"direction\":" * _js_vec(dir) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
@@ -482,7 +493,7 @@ end
 function _web_light_json(light::PointLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     return "{" *
            "\"type\":\"point\"" *
            ",\"id\":" * string(light.id) *
@@ -494,7 +505,7 @@ function _web_light_json(light::PointLight, scene::Scene;
            ",\"distance\":" * _js_num(light.distance) *
            ",\"decay\":" * _js_num(light.decay) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
@@ -502,7 +513,7 @@ end
 function _web_light_json(light::SpotLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     pos = get_position(light)
     target = light.target
     dir = normalize(target - pos)
@@ -526,7 +537,7 @@ function _web_light_json(light::SpotLight, scene::Scene;
            ",\"coneCos\":" * _js_num(cos(cone)) *
            ",\"penumbraCos\":" * _js_num(cos(inner)) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
@@ -534,7 +545,7 @@ end
 function _web_light_json(light::HemisphereLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     return "{" *
            "\"type\":\"hemisphere\"" *
            ",\"id\":" * string(light.id) *
@@ -550,7 +561,7 @@ end
 function _web_light_json(light::RectAreaLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
-                         static_shadow::Bool=true)
+                         shadow_mode::Symbol=:static)
     pos = get_position(light)
     forward = normalize(light.target - pos)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -578,7 +589,8 @@ _web_light_json(light::AbstractLight; kwargs...) = nothing
 _web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json(light; kwargs...)
 
 function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
-                          stale_shadow_ids::Set{Int}=Set{Int}())
+                          stale_shadow_ids::Set{Int}=Set{Int}(),
+                          dynamic_shadow_ids::Set{Int}=Set{Int}())
     lights = String[]
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
     # own visibility or ancestor visibility is animated (force_ids) must be
@@ -589,11 +601,17 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
     for light in all_lights
         _web_visible_or_forced(light, force_ids) || continue
         visibility_ids, visibility_values = _web_visibility_chain(light)
-        static_shadow = !(light.id in stale_shadow_ids)
+        shadow_mode = if light.id in dynamic_shadow_ids
+            :directional_dynamic
+        elseif light.id in stale_shadow_ids
+            :none
+        else
+            :static
+        end
         item = _web_light_json(light, scene;
                                visibility_target_ids=visibility_ids,
                                visibility_values=visibility_values,
-                               static_shadow=static_shadow)
+                               shadow_mode=shadow_mode)
         item !== nothing && push!(lights, item)
     end
     return "[" * join(lights, ",") * "]"
@@ -959,14 +977,34 @@ function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
     return ids
 end
 
-const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set{Symbol}((:position, :target, :angle))
+const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set(("position", "target", "angle"))
+const WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES = Set(("position", "target"))
+
+function _web_shadow_track_root_name(track::AbstractKeyframeTrack)
+    name = _web_track_property_name(track)
+    dot = findfirst(==('.'), name)
+    dot === nothing && return name
+    return name[firstindex(name):prevind(name, dot)]
+end
 
 function _web_stale_shadow_light_ids(animations::AbstractVector{AnimationClip})
     ids = Set{Int}()
     for clip in animations, track in clip.tracks
         target = track.target
         target isa Union{DirectionalLight,PointLight,SpotLight} || continue
-        track.property in WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES || continue
+        _web_shadow_track_root_name(track) in WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES || continue
+        push!(ids, target.id)
+    end
+    return ids
+end
+
+function _web_dynamic_directional_shadow_light_ids(animations::AbstractVector{AnimationClip})
+    ids = Set{Int}()
+    for clip in animations, track in clip.tracks
+        target = track.target
+        target isa DirectionalLight || continue
+        target.cast_shadow || continue
+        _web_shadow_track_root_name(track) in WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES || continue
         push!(ids, target.id)
     end
     return ids
@@ -1184,6 +1222,8 @@ function _web_track_property_name(prop::Symbol)
     return String(prop)
 end
 
+_web_track_property_name(prop::AbstractString) = String(prop)
+
 function _web_track_property_name(tr::AbstractKeyframeTrack)
     tr.target isa AbstractCamera && tr.property in (:near, :far) && return String(tr.property)
     return _web_track_property_name(tr.property)
@@ -1345,6 +1385,7 @@ end
 function _web_case_json(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
     stale_shadow_ids = _web_stale_shadow_light_ids(case.animations)
+    dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.animations)
     return "{" *
            "\"id\":" * _js_str(case.id) *
            ",\"title\":" * _js_str(case.title) *
@@ -1362,7 +1403,8 @@ function _web_case_json(case::WebGLExportCase)
            ",\"outputColorSpace\":" * _js_str(String(case.output_color_space)) *
            ",\"outputColorSpaceMode\":" * string(_web_output_color_space_id(case.output_color_space)) *
            ",\"clippingPlanes\":[" * join((_js_plane(p) for p in case.clipping_planes), ",") * "]" *
-           ",\"lights\":" * _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids) *
+           ",\"lights\":" * _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
+                                             dynamic_shadow_ids) *
            ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, animation_target_ids), ",") * "]" *
            ",\"objects\":[" * join(_web_collect_drawables(case.scene, animation_target_ids,
                                                           case.radius), ",") * "]" *
@@ -1515,6 +1557,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
              "uniform int uUseSkin,uUseInstancing,uUseBoneTexture; uniform mat4 uBoneMatrices[64]; uniform sampler2D uBoneTexture; uniform vec2 uBoneTextureSize;")
     .replace("mat4 boneMat(float idx){ for(int i=0;i<64;i++){ if(float(i)==idx) return uBoneMatrices[i]; } return mat4(1.0); }",
              "mat4 boneMat(float idx){ if(uUseBoneTexture==1){ float j=idx*4.0; float x=mod(j,uBoneTextureSize.x); float y=floor(j/uBoneTextureSize.x); float dx=1.0/uBoneTextureSize.x; float dy=(y+0.5)/uBoneTextureSize.y; return mat4(texture2D(uBoneTexture,vec2((x+0.5)*dx,dy)),texture2D(uBoneTexture,vec2((x+1.5)*dx,dy)),texture2D(uBoneTexture,vec2((x+2.5)*dx,dy)),texture2D(uBoneTexture,vec2((x+3.5)*dx,dy))); } for(int i=0;i<64;i++){ if(float(i)==idx) return uBoneMatrices[i]; } return mat4(1.0); }");
+  const DVSH=`attribute vec3 aPosition; attribute vec4 aInstanceMatrix0; attribute vec4 aInstanceMatrix1; attribute vec4 aInstanceMatrix2; attribute vec4 aInstanceMatrix3; uniform mat4 uModel,uViewProj; uniform int uUseInstancing; varying float vShadowDepth; mat4 instMatrix(){ return uUseInstancing==1?mat4(aInstanceMatrix0,aInstanceMatrix1,aInstanceMatrix2,aInstanceMatrix3):mat4(1.0); } void main(){ vec4 clip=uViewProj*uModel*(instMatrix()*vec4(aPosition,1.0)); vShadowDepth=clip.z/clip.w*.5+.5; gl_Position=clip; }`;
+  const DFSH=`precision mediump float; varying float vShadowDepth; void main(){ gl_FragColor=vec4(vec3(clamp(vShadowDepth,0.0,1.0)),1.0); }`;
   const FSH=`precision mediump float; const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; varying vec3 vNormal,vWorld; varying vec2 vUv; uniform vec3 uColor,uCamera,uAmbientColor; uniform vec3 uDirColor[MAX_DIR],uDirLight[MAX_DIR]; uniform vec3 uPointColor[MAX_POINT],uPointPos[MAX_POINT]; uniform vec3 uSpotColor[MAX_SPOT],uSpotPos[MAX_SPOT],uSpotDir[MAX_SPOT]; uniform vec3 uHemiSky[MAX_HEMI],uHemiGround[MAX_HEMI]; uniform vec2 uMapOffset,uMapRepeat,uMapCenter; uniform float uGlow,uOpacity,uUseMap,uUseAlphaMap,uMapRotation,uToneExposure,uShininess; uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uToneMapping,uOutputColorSpace; uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT]; uniform sampler2D uMap,uAlphaMap; vec2 txUv(vec2 uv){ uv-=uMapCenter; float c=cos(uMapRotation), s=sin(uMapRotation); uv=vec2(c*uv.x+s*uv.y,-s*uv.x+c*uv.y); return uv*uMapRepeat+uMapCenter+uMapOffset; } float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; } float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; vec3 v=normalize(uCamera-vWorld); vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0); for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); } for(int i=0;i<MAX_DIR;i++){ if(i>=uDirCount) break; vec3 l=normalize(uDirLight[i]); vec3 h=normalize(l+v); float d=max(dot(n,l),0.0); diffuse+=uDirColor[i]*d; specular+=uDirColor[i]*pow(max(dot(n,h),0.0),uShininess); } for(int i=0;i<MAX_POINT;i++){ if(i>=uPointCount) break; vec3 lv=uPointPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); vec3 h=normalize(l+v); float a=attenuation(dist,uPointDistance[i],uPointDecay[i]); diffuse+=uPointColor[i]*max(dot(n,l),0.0)*a; specular+=uPointColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } for(int i=0;i<MAX_SPOT;i++){ if(i>=uSpotCount) break; vec3 lv=uSpotPos[i]-vWorld; float dist=length(lv); vec3 l=normalize(lv); float theta=dot(normalize(vWorld-uSpotPos[i]),normalize(uSpotDir[i])); float cone=spotCone(theta,uSpotConeCos[i],uSpotPenumbraCos[i]); float a=attenuation(dist,uSpotDistance[i],uSpotDecay[i])*cone; vec3 h=normalize(l+v); diffuse+=uSpotColor[i]*max(dot(n,l),0.0)*a; specular+=uSpotColor[i]*pow(max(dot(n,h),0.0),uShininess)*a; } vec2 uv=txUv(vUv); vec4 tex=mix(vec4(1.0),texture2D(uMap,uv),uUseMap); float alphaTex=mix(1.0,texture2D(uAlphaMap,uv).g,uUseAlphaMap); vec3 base=uColor*tex.rgb; vec3 c=base*diffuse+specular+uGlow*base*.28; gl_FragColor=vec4(outputColor(toneMap(c)),uOpacity*tex.a*alphaTex); }`;
   const FSH_EMISSIVE=`#extension GL_OES_standard_derivatives : enable
   precision mediump float;
@@ -1614,7 +1658,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
              "return textureCubeLodEXT(uEnvCubeMap,dir,clamp(rough,0.0,1.0)*uEnvMaxLod).rgb;")
     :meshFragmentShader;
   const meshFragmentShaderRuntime=cubeTexturesEnabled?meshFragmentShaderCubeLod:meshFragmentShaderCubeLod.replace(/\\n  uniform samplerCube uEnvCubeMap;/,"").replace("vec3 envColor(vec3 dir,float rough){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; ","vec3 envColor(vec3 dir,float rough){ ");
-  const meshProgram=program(VSH,meshFragmentShaderRuntime), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,meshFragmentShaderRuntime):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH);
+  const meshProgram=program(VSH,meshFragmentShaderRuntime), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,meshFragmentShaderRuntime):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH), depthProgram=program(DVSH,DFSH);
   function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
   function isPow2(v){ return (v & (v - 1)) === 0; }
   function wrapMode(v){ return v==="mirror"?gl.MIRRORED_REPEAT:(v==="clamp"?gl.CLAMP_TO_EDGE:gl.REPEAT); }
@@ -1709,6 +1753,24 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
     return tex;
   }
+  function makeDynamicShadowTarget(size){
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    const fb=gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+    const depth=gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER,depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER,gl.DEPTH_COMPONENT16,size,size);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,depth);
+    const status=gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.bindRenderbuffer(gl.RENDERBUFFER,null);
+    if(status!==gl.FRAMEBUFFER_COMPLETE) throw new Error("Dynamic shadow framebuffer is incomplete");
+    return {texture:tex,framebuffer:fb,depth:depth,size:size};
+  }
   function packedTexture(items, channels){
     const base=items.find(t=>t);
     if(!base) return null;
@@ -1760,7 +1822,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function cloneAnimValue(v){ return Array.isArray(v)?v.slice():v; }
   function captureLightBase(l){ const b={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; for(const k of ["position","target","direction","angle","penumbra","coneCos","penumbraCos","forward","u","v","width","height"]) if(l[k]!==undefined) b[k]=cloneAnimValue(l[k]); return b; }
   function refreshLightDerived(l){ if(l.type==="directional"&&l.position&&l.target) l.direction=norm(sub(l.position,l.target)); else if(l.type==="spot"){ if(l.position&&l.target) l.direction=norm(sub(l.target,l.position)); const fallback=l.coneCos==null?Math.cos(Math.PI/3):Math.max(-1,Math.min(1,l.coneCos)); const angle=Math.max(0,Math.min(Math.PI,l.angle==null?Math.acos(fallback):l.angle)); const pen=Math.max(0,Math.min(1,l.penumbra==null?0:l.penumbra)); l.coneCos=Math.cos(angle); l.penumbraCos=Math.cos(angle*(1-pen)); } else if(l.type==="rectArea"&&l.position&&l.target){ const f=norm(sub(l.target,l.position)), ref=Math.abs(f[1])<.95?[0,1,0]:[1,0,0]; l.forward=f; l.u=norm(cross(ref,f)); l.v=cross(f,l.u); } }
-  function buildLight(l){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
+  function buildLight(l){ if(l.shadow) l.shadowTexture=(shadowTexturesEnabled&&l.shadow.type!=="directionalDynamic")?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
   for(const c of DATA.cases) c.lights=(c.lights||[]).map(buildLight);
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
   const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
@@ -1826,6 +1888,14 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function shadowMatrices(shadows){ const out=[]; for(let i=0;i<2;i++) out.push(...((shadows[i]&&shadows[i].matrix)||M4.ident())); return out; }
   function shadowValues(shadows,key,fill){ const out=[]; for(let i=0;i<2;i++) out.push(shadows[i]&&shadows[i][key]!=null?shadows[i][key]:fill); return out; }
   function bindShadowMaps(p,shadows){ const n=Math.min(shadows.length,shadowTextureSlots.length,2); for(let i=0;i<n;i++){ const s=shadows[i]; if(!s||!s.tex) continue; const unit=shadowTextureSlots[i]; gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,s.tex); gl.uniform1i(gl.getUniformLocation(p,i===0?"uShadowMap0":"uShadowMap1"),unit); } }
+  function includeShadowPoint(bounds,p){ for(let k=0;k<3;k++){ bounds.min[k]=Math.min(bounds.min[k],p[k]); bounds.max[k]=Math.max(bounds.max[k],p[k]); } }
+  function includeShadowObject(bounds,o,model){ const p=o.positions||[]; for(let i=0;i<p.length;i+=3) includeShadowPoint(bounds,transformPoint(model,[p[i],p[i+1],p[i+2]])); }
+  function shadowBounds(visible){ const bounds={min:[Infinity,Infinity,Infinity],max:[-Infinity,-Infinity,-Infinity]}; for(const o of visible){ if(o.mode!=="triangles"||!(o.castShadow||o.receiveShadow)) continue; if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices) includeShadowObject(bounds,o,M4.mul(o.matrix,im)); } else includeShadowObject(bounds,o,o.matrix); } if(!isFinite(bounds.min[0])) return {center:[0,0,0],radius:1}; const center=[(bounds.min[0]+bounds.max[0])*.5,(bounds.min[1]+bounds.max[1])*.5,(bounds.min[2]+bounds.max[2])*.5], half=[(bounds.max[0]-bounds.min[0])*.5,(bounds.max[1]-bounds.min[1])*.5,(bounds.max[2]-bounds.min[2])*.5]; return {center:center,radius:Math.max(Math.hypot(half[0],half[1],half[2]),1e-3)}; }
+  function directionalShadowMatrix(l,center,radius){ const pos=l.position||scale(l.direction||[0,1,0],1), tgt=l.target||[0,0,0], dir=norm(sub(pos,tgt)), eye=add(center,scale(dir,radius*2)), up=Math.abs(dir[1])>.99?[1,0,0]:[0,1,0], view=M4.lookAt(eye,center,up), s=Math.max(radius*1.1,1e-3); return M4.mul(M4.orthographic(-s,s,-s,s,0.01,Math.max(radius*4,0.02)),view); }
+  function ensureDynamicShadowTarget(l){ if(!l.dynamicShadowTarget){ const size=Math.max(1,l.shadow&&l.shadow.size?l.shadow.size:64); l.dynamicShadowTarget=makeDynamicShadowTarget(size); } l.shadowTexture=l.dynamicShadowTarget.texture; return l.dynamicShadowTarget; }
+  function drawShadowCaster(o,viewProj){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); gl.useProgram(depthProgram); attrib(depthProgram,"aPosition",o.posBuf); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(depthProgram,o), modelLoc=gl.getUniformLocation(depthProgram,"uModel"), vpLoc=gl.getUniformLocation(depthProgram,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(depthProgram,"uUseInstancing"),gpuInstanced?1:0); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,0,o.instanceCount); clearInstanceAttribs(depthProgram); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } }
+  function renderDynamicDirectionalShadow(l,visible){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=directionalShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
+  function updateDynamicDirectionalShadows(c,visible){ if(!shadowTexturesEnabled) return; for(const l of c.lights||[]){ if(!(l.shadow&&l.shadow.type==="directionalDynamic")) continue; if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; renderDynamicDirectionalShadow(l,visible); } }
   function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ gl.disable(gl.CULL_FACE); return; } gl.enable(gl.CULL_FACE); gl.cullFace(o.side==="back"?gl.FRONT:gl.BACK); }
   function webLineWidth(w){ const lo=Math.max(lineWidthRange[0]||1,0.000001), hi=Math.max(lineWidthRange[1]||lo,lo), x=Number.isFinite(w)?w:1; return Math.min(Math.max(x,lo),hi); }
   function tone(c){ return {mode:c.toneMappingMode||0, exposure:c.toneExposure==null?1:c.toneExposure, output:c.outputColorSpaceMode||0}; }
@@ -2053,7 +2123,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); rememberCameraOrbitOffsets(); }
   speedEl.addEventListener("input",()=>{ animSpeed=Number(speedEl.value); speedValue.textContent=animSpeed.toFixed(2)+"x"; });
   playToggle.addEventListener("click",()=>{ animPaused=!animPaused; playToggle.textContent=animPaused?">":"||"; playToggle.title=animPaused?"Play animation":"Pause animation"; playToggle.setAttribute("aria-label",playToggle.title); });
-  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const aspect=canvas.width/canvas.height; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else proj=M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); const light=lighting(active), clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const aspect=canvas.width/canvas.height; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else proj=M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); const clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); updateDynamicDirectionalShadows(active,visible); const light=lighting(active); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; panMode=e.button===2||e.shiftKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); rememberCameraOrbitOffsets(); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); rememberCameraOrbitOffsets(); } });

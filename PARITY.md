@@ -415,14 +415,24 @@ Parallel audits split the remaining work into five critical tracks:
   light to a bounded two-slot runtime. Generated pages now select up to two
   visible static shadow maps per case, upload fixed WebGL1 shadow samplers, and
   apply each map to its matching directional, point, or spot light contribution.
+- Done: add a compact browser dynamic-shadow pass for animated
+  `DirectionalLight` shadow transforms. Generated WebGL pages now serialize
+  animated shadow-casting directional lights as `directionalDynamic`, allocate a
+  color-depth framebuffer, recompute directional light orthographic bounds from
+  the visible shadow caster/receiver set, render cast-shadow triangle drawables
+  into the map each frame, and feed the updated matrix/texture through the same
+  two-slot shadow sampler used by static shadows. Dynamic point-light cube
+  shadows, spot-light shadow cameras, cascades, and static lights whose
+  shadow-casting objects animate remain open.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
   shadow-casting mesh/skinned/instanced geometry, CPU shading only applies shadow
   visibility to receiving objects, and browser export serializes
   `castShadow`/`receiveShadow` so generated WebGL pages do not shadow every
-  mesh implicitly. Static browser shadows still remain baked at export time,
-  not re-rendered dynamically like `WebGLRenderer.shadowMap`.
+  mesh implicitly. Browser shadow parity remains partial: static maps are still
+  baked at export time, except for animated directional shadow-light transforms
+  handled by the compact dynamic pass above.
 - Done: CPU `RectAreaLight` now uses finite rectangular quadrature with
   width/height, emitter facing, distance attenuation, and area scaling instead
   of treating the rectangle as a center-point directional light. Full three.js
@@ -907,7 +917,8 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
-  point-light cube shadows and cascaded shadow maps,
+  animated-caster invalidation, spot-light shadow cameras, point-light cube
+  shadows, and cascaded shadow maps,
   full three.js skeleton lifecycle/renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,

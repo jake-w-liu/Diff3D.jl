@@ -1388,13 +1388,24 @@ deterministic_bytes(n::Int) =
                                                  [[0.0], [0.0]], [[0.0], [0.0]])
         ])
         stale_shadow_ids = Diff3D._web_stale_shadow_light_ids([clip])
+        dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids([clip])
         @test moving_shadow_dir.id in stale_shadow_ids
+        @test moving_shadow_dir.id in dynamic_shadow_ids
+        @test animated_spot.id in stale_shadow_ids
         @test !(shadow_dir.id in stale_shadow_ids)
+        component_shadow_clip = AnimationClip("component_shadow", AbstractKeyframeTrack[
+            NumberKeyframeTrack(moving_shadow_dir, "position.x", [0.0, 1.0], [0.0, 0.8])
+        ])
+        @test moving_shadow_dir.id in
+              Diff3D._web_stale_shadow_light_ids([component_shadow_clip])
+        @test moving_shadow_dir.id in
+              Diff3D._web_dynamic_directional_shadow_light_ids([component_shadow_clip])
         lights_json = Diff3D._web_lights_json(scene, Diff3D._web_animation_target_ids([clip]),
-                                              stale_shadow_ids)
+                                              stale_shadow_ids, dynamic_shadow_ids)
         @test occursin("\"id\":$(moving_shadow_dir.id),\"name\":\"export_moving_shadow_dir\"",
                        lights_json)
-        @test occursin("\"castShadow\":true,\"shadow\":null", lights_json)
+        @test occursin("\"castShadow\":true,\"shadow\":{\"type\":\"directionalDynamic\"",
+                       lights_json)
         @test occursin("\"id\":$(shadow_dir.id),\"name\":\"DirectionalLight\"", lights_json)
         @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", lights_json)
         sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
@@ -2028,11 +2039,18 @@ deterministic_bytes(n::Int) =
         @test occursin("\"castShadow\":true", html)
         @test occursin("\"receiveShadow\":true", html)
         @test occursin("\"receiveShadow\":false", html)
+        @test occursin("\"shadow\":{\"type\":\"directionalDynamic\",\"size\":64", html)
         @test occursin("\"shadow\":{\"type\":\"directionalStatic\",\"size\":64", html)
         @test occursin("\"shadow\":{\"type\":\"pointStatic\",\"size\":64", html)
         @test occursin("\"shadow\":{\"type\":\"spotStatic\",\"size\":64", html)
         @test occursin("\"pcfRadius\":1", html)
         @test occursin("makeShadowTexture", html)
+        @test occursin("makeDynamicShadowTarget", html)
+        @test occursin("depthProgram=program(DVSH,DFSH)", html)
+        @test occursin("function shadowBounds", html)
+        @test occursin("function directionalShadowMatrix", html)
+        @test occursin("function updateDynamicDirectionalShadows", html)
+        @test occursin("updateDynamicDirectionalShadows(active,visible); const light=lighting(active)", html)
         @test occursin("shadowTexturesEnabled", html)
         @test occursin("const shadowTextureUnits=usesClearcoatNormal&&clearcoatNormalTexturesEnabled?[12]:[12,15]", html)
         @test occursin("shadowTextureSlots=shadowTextureUnits.filter", html)
