@@ -987,6 +987,16 @@ deterministic_bytes(n::Int) =
                                   name="export_phong_alpha_map")
         phong_alpha_mapped.position = Vec3(-0.1, -0.8, 0.0)
         add!(scene, phong_alpha_mapped)
+        toon_textured_alpha = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                   MeshToonMaterial(color=Color3(0.9, 0.7, 0.25),
+                                                    map=Texture(texdata; filter=:nearest,
+                                                                colorspace=:linear),
+                                                    alpha_map=Texture(alphadata; filter=:nearest),
+                                                    alpha_test=0.5,
+                                                    side=:double);
+                                   name="export_toon_textured_alpha")
+        toon_textured_alpha.position = Vec3(0.6, -0.8, 0.0)
+        add!(scene, toon_textured_alpha)
         wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
                               MeshBasicMaterial(color=Color3(1.0, 0.3, 0.1),
                                                 wireframe=true);
@@ -1431,6 +1441,10 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_phong_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_phong_alpha_map\".*\"materialType\":\"phong\".*\"alphaTest\":0\.45000000000000001", html)
         @test occursin(r"\"name\":\"export_phong_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin("\"name\":\"export_toon_textured_alpha\"", html)
+        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"materialType\":\"toon\".*\"alphaTest\":0\.5", html)
+        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"texture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_emissive_map\"", html)
@@ -2804,8 +2818,24 @@ deterministic_bytes(n::Int) =
                                                          position=Vec3(0.0,0,-1.0))])
         @test front.r ≈ 0.9
         @test back.r ≈ 0.2
-        @test MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3, 1.0, false,
-                               :front, true, true).gradient_map === nothing
+        surface_map = Texture(ones(Float64, 1, 1, 3); filter=:nearest)
+        textured = MeshToonMaterial(map=surface_map, alpha_map=surface_map,
+                                    alpha_test=0.44)
+        @test textured.map === surface_map
+        @test textured.alpha_map === surface_map
+        @test textured.alpha_test ≈ 0.44
+        @test material_alpha_test(textured) ≈ 0.44
+        legacy = MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3, 1.0, false,
+                                  :front, true, true)
+        @test legacy.gradient_map === nothing
+        @test legacy.map === nothing
+        @test legacy.alpha_map === nothing
+        @test legacy.alpha_test == 0.0
+        legacy_gradient = MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3,
+                                           gradient_map, 1.0, false, :front,
+                                           true, true)
+        @test legacy_gradient.gradient_map === gradient_map
+        @test legacy_gradient.map === nothing
         @test_throws ArgumentError MeshToonMaterial(gradient_steps=0)
         @test_throws ArgumentError MeshToonMaterial(gradient_map=:not_a_texture)
     end
@@ -2890,6 +2920,7 @@ deterministic_bytes(n::Int) =
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test material_alpha_test(MeshToonMaterial(alpha_test=0.31)) ≈ 0.31
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
         @test material_depth_write(SpriteMaterial(depth_write=false)) == false
@@ -6990,6 +7021,10 @@ deterministic_bytes(n::Int) =
                     MeshPhongMaterial(color=Color3(1.0, 0.0, 0.0),
                                       side=:double, alpha_test=0.5,
                                       alpha_map=alpha_map) :
+                    material === :toon ?
+                    MeshToonMaterial(color=Color3(1.0, 0.0, 0.0),
+                                     side=:double, alpha_test=0.5,
+                                     alpha_map=alpha_map) :
                     MeshStandardMaterial(color=Color3(1.0, 0.0, 0.0),
                                          roughness=1.0, metalness=0.0,
                                          side=:double, alpha_test=0.5,
@@ -7014,13 +7049,53 @@ deterministic_bytes(n::Int) =
             @test rt_basic_alpha_one.color[16, 16, 1] > 0.9
             rt_basic_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true, material=:basic)
             @test sum(@view rt_basic_alpha_zero_smooth.color[16, 16, :]) == 0.0
-            for material in (:lambert, :phong)
+            for material in (:lambert, :phong, :toon)
                 rt_alpha_zero = alpha_map_plane(alpha_zero; material=material)
                 @test sum(@view rt_alpha_zero.color[16, 16, :]) == 0.0
                 rt_alpha_one = alpha_map_plane(alpha_one; material=material)
                 @test rt_alpha_one.color[16, 16, 1] > 0.1
                 rt_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true, material=material)
                 @test sum(@view rt_alpha_zero_smooth.color[16, 16, :]) == 0.0
+            end
+
+            function toon_map_plane(data; smooth=false, alpha_test=0.0)
+                sc = Scene()
+                add!(sc, AmbientLight(intensity=1.0))
+                mat = MeshToonMaterial(color=Color3(1.0, 1.0, 1.0),
+                                       side=:double,
+                                       alpha_test=alpha_test,
+                                       map=Texture(data; filter=:nearest,
+                                                   colorspace=:linear))
+                mesh = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                            mat; flat_shading=smooth ? false : nothing)
+                add!(sc, mesh)
+                rt = RenderTarget(32, 32)
+                render!(rt, sc, depth_cam; shading=smooth ? :smooth : :flat)
+                return rt
+            end
+
+            toon_green = zeros(Float64, 2, 2, 3)
+            toon_green[:, :, 2] .= 1.0
+            for smooth in (false, true)
+                rt_toon_green = toon_map_plane(toon_green; smooth=smooth)
+                @test rt_toon_green.color[16, 16, 1] < 0.1
+                @test rt_toon_green.color[16, 16, 2] > 0.9
+                @test rt_toon_green.color[16, 16, 3] < 0.1
+            end
+
+            toon_rgba_masked = ones(Float64, 2, 2, 4)
+            toon_rgba_masked[:, :, 4] .= 0.25
+            toon_rgba_visible = copy(toon_rgba_masked)
+            toon_rgba_visible[:, :, 4] .= 0.75
+            for smooth in (false, true)
+                rt_toon_rgba_masked = toon_map_plane(toon_rgba_masked;
+                                                     smooth=smooth,
+                                                     alpha_test=0.5)
+                @test sum(@view rt_toon_rgba_masked.color[16, 16, :]) == 0.0
+                rt_toon_rgba_visible = toon_map_plane(toon_rgba_visible;
+                                                      smooth=smooth,
+                                                      alpha_test=0.5)
+                @test rt_toon_rgba_visible.color[16, 16, 1] > 0.9
             end
         end
 
