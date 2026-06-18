@@ -878,23 +878,37 @@ deterministic_bytes(n::Int) =
                                       position=Vec3(1.0, 2.0, 3.0),
                                       cast_shadow=true)
         add!(scene, shadow_dir)
+        moving_shadow_dir = DirectionalLight(color=Color3(0.7, 0.8, 1.0), intensity=0.35,
+                                             position=Vec3(2.0, 4.0, 1.0),
+                                             name="export_moving_shadow_dir",
+                                             cast_shadow=true)
+        moving_shadow_dir.target = Vec3(0.0, 0.0, 0.0)
+        add!(scene, moving_shadow_dir)
         add!(scene, PointLight(color=Color3(0.4, 0.7, 1.0), intensity=6.0,
                                distance=8.0, decay=2.0, position=Vec3(1.0, 1.5, 2.0),
                                cast_shadow=true))
-        add!(scene, DirectionalLight(color=Color3(0.5, 0.6, 0.7), intensity=0.8,
-                                     position=Vec3(-2.0, 3.0, 1.0)))
+        animated_dir = DirectionalLight(color=Color3(0.5, 0.6, 0.7), intensity=0.8,
+                                        position=Vec3(-2.0, 3.0, 1.0))
+        animated_dir.target = Vec3(0.0, 0.0, 0.0)
+        add!(scene, animated_dir)
         spot = SpotLight(color=Color3(1.0, 0.5, 0.3), intensity=4.0,
                          distance=9.0, angle=pi/5, penumbra=0.25, decay=2.0,
                          position=Vec3(0.0, 4.0, 3.0), cast_shadow=true)
         spot.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, spot)
-        add!(scene, HemisphereLight(color=Color3(0.25, 0.35, 0.5),
-                                    ground_color=Color3(0.08, 0.07, 0.04),
-                                    intensity=0.6))
+        hemi = HemisphereLight(color=Color3(0.25, 0.35, 0.5),
+                               ground_color=Color3(0.08, 0.07, 0.04),
+                               intensity=0.6)
+        add!(scene, hemi)
         rect = RectAreaLight(color=Color3(0.9, 0.8, 0.6), intensity=0.7,
                              width=2.0, height=1.0, position=Vec3(0.0, 3.0, 1.0))
         rect.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, rect)
+        animated_spot = SpotLight(color=Color3(0.35, 0.8, 1.0), intensity=1.6,
+                                  distance=6.0, angle=pi / 4, penumbra=0.1,
+                                  decay=2.0, position=Vec3(-1.5, 2.5, 2.5))
+        animated_spot.target = Vec3(0.0, 0.2, 0.0)
+        add!(scene, animated_spot)
         mesh = Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.2, 0.7, 1.0));
                     name="export_box", cast_shadow=true, receive_shadow=true)
         add!(scene, mesh)
@@ -1333,6 +1347,25 @@ deterministic_bytes(n::Int) =
             NumberKeyframeTrack(phong_material_mesh, "specular.g", [0.0, 1.0], [0.92, 0.2]),
             NumberKeyframeTrack(ambient, "intensity", [0.0, 1.0], [0.1, 0.9]),
             NumberKeyframeTrack(ambient, "color.g", [0.0, 1.0], [0.3, 0.8]),
+            NumberKeyframeTrack(hemi, "groundColor.b", [0.0, 1.0], [0.04, 0.12]),
+            KeyframeTrack(animated_dir, :position, [0.0, 1.0],
+                          [Vec3(-2.0,3.0,1.0), Vec3(-3.0,2.5,1.4)]),
+            KeyframeTrack(animated_dir, :target, [0.0, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.3,0.2,0.0)]),
+            KeyframeTrack(moving_shadow_dir, :position, [0.0, 1.0],
+                          [Vec3(2.0,4.0,1.0), Vec3(2.6,4.2,0.7)]),
+            KeyframeTrack(hidden_light, :position, [0.0, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.4,1.1,0.2)]),
+            KeyframeTrack(animated_spot, :position, [0.0, 1.0],
+                          [Vec3(-1.5,2.5,2.5), Vec3(-1.0,2.2,2.0)]),
+            KeyframeTrack(animated_spot, :target, [0.0, 1.0],
+                          [Vec3(0.0,0.2,0.0), Vec3(0.2,0.5,0.1)]),
+            NumberKeyframeTrack(animated_spot, "angle", [0.0, 1.0], [pi / 4, pi / 5]),
+            NumberKeyframeTrack(animated_spot, "penumbra", [0.0, 1.0], [0.1, 0.45]),
+            KeyframeTrack(rect, :target, [0.0, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.3,0.1,0.0)]),
+            NumberKeyframeTrack(rect, "width", [0.0, 1.0], [2.0, 2.6]),
+            NumberKeyframeTrack(rect, "height", [0.0, 1.0], [1.0, 1.4]),
             MorphWeightsKeyframeTrack(morph_mesh, :morph_target_influences,
                                       [0.0, 1.0], [[0.0], [1.0]]),
             NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[0]",
@@ -1352,6 +1385,16 @@ deterministic_bytes(n::Int) =
                                                  [0.0, 1.0], [[0.0], [1.0]],
                                                  [[0.0], [0.0]], [[0.0], [0.0]])
         ])
+        stale_shadow_ids = Diff3D._web_stale_shadow_light_ids([clip])
+        @test moving_shadow_dir.id in stale_shadow_ids
+        @test !(shadow_dir.id in stale_shadow_ids)
+        lights_json = Diff3D._web_lights_json(scene, Diff3D._web_animation_target_ids([clip]),
+                                              stale_shadow_ids)
+        @test occursin("\"id\":$(moving_shadow_dir.id),\"name\":\"export_moving_shadow_dir\"",
+                       lights_json)
+        @test occursin("\"castShadow\":true,\"shadow\":null", lights_json)
+        @test occursin("\"id\":$(shadow_dir.id),\"name\":\"DirectionalLight\"", lights_json)
+        @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", lights_json)
         sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
                                       Diff3D._web_collect_drawables(scene)))
         @test occursin("\"mode\":\"sprite\"", sprite_drawable)
@@ -1920,6 +1963,18 @@ deterministic_bytes(n::Int) =
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
         @test occursin("\"property\":\"linewidth\"", html)
+        @test occursin("\"target\":$(animated_dir.id),\"property\":\"position\"", html)
+        @test occursin("\"target\":$(animated_dir.id),\"property\":\"target\"", html)
+        @test occursin("\"target\":$(moving_shadow_dir.id),\"property\":\"position\"", html)
+        @test occursin("\"target\":$(hidden_light.id),\"property\":\"position\"", html)
+        @test occursin("\"target\":$(animated_spot.id),\"property\":\"position\"", html)
+        @test occursin("\"target\":$(animated_spot.id),\"property\":\"target\"", html)
+        @test occursin("\"target\":$(animated_spot.id),\"property\":\"angle\"", html)
+        @test occursin("\"target\":$(animated_spot.id),\"property\":\"penumbra\"", html)
+        @test occursin("\"target\":$(rect.id),\"property\":\"target\"", html)
+        @test occursin("\"target\":$(rect.id),\"property\":\"width\"", html)
+        @test occursin("\"target\":$(rect.id),\"property\":\"height\"", html)
+        @test occursin("\"target\":$(hemi.id),\"property\":\"groundColor\",\"component\":3", html)
         @test occursin("prop===\"visible\"||prop===\"spriteSizeAttenuation\"", html)
         @test occursin("\"component\":1", html)
         @test occursin("\"component\":2", html)
@@ -1938,6 +1993,18 @@ deterministic_bytes(n::Int) =
         @test occursin("lightById", html)
         @test occursin("setLightAnim", html)
         @test occursin("resetLightAnim", html)
+        @test occursin("function captureLightBase(l)", html)
+        @test occursin("function refreshLightDerived(l)", html)
+        @test occursin("function buildLight(l)", html)
+        @test occursin("c.lights=(c.lights||[]).map(buildLight)", html)
+        @test occursin("l.baseLight=captureLightBase(l)", html)
+        @test occursin("l.direction=norm(sub(l.position,l.target))", html)
+        @test occursin("l.direction=norm(sub(l.target,l.position))", html)
+        @test occursin("l.coneCos=Math.cos(angle)", html)
+        @test occursin("l.penumbraCos=Math.cos(angle*(1-pen))", html)
+        @test occursin("l.forward=f; l.u=norm(cross(ref,f)); l.v=cross(f,l.u)", html)
+        @test occursin("cloneAnimValue(b[k])", html)
+        @test occursin("refreshLightDerived(l); return true", html)
         @test occursin("tr.component||0", html)
         @test occursin("function catmull3", html)
         @test occursin("function catmullN", html)
@@ -1990,10 +2057,14 @@ deterministic_bytes(n::Int) =
         @test occursin("\"distance\":8", html)
         @test occursin("\"decay\":2", html)
         @test occursin("\"direction\"", html)
+        @test occursin("\"target\":[", html)
+        @test occursin("\"angle\":0.78539816339744828", html)
+        @test occursin("\"penumbra\":0.10000000000000001", html)
+        @test occursin("\"name\":\"export_moving_shadow_dir\"", html)
         @test occursin("\"side\":\"front\"", html)
         @test occursin("\"side\":\"double\"", html)
-        @test occursin("const MAX_DIR=2, MAX_POINT=3, MAX_SPOT=1, MAX_HEMI=1, MAX_RECT=1;", html)
-        @test occursin("const int MAX_DIR=2; const int MAX_POINT=3; const int MAX_SPOT=1; const int MAX_HEMI=1; const int MAX_RECT=1;", html)
+        @test occursin("const MAX_DIR=3, MAX_POINT=3, MAX_SPOT=2, MAX_HEMI=1, MAX_RECT=1;", html)
+        @test occursin("const int MAX_DIR=3; const int MAX_POINT=3; const int MAX_SPOT=2; const int MAX_HEMI=1; const int MAX_RECT=1;", html)
         @test occursin("uDirLight[0]", html)
         @test occursin("uSpotCount", html)
         @test occursin("uHemiCount", html)

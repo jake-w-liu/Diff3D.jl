@@ -565,6 +565,7 @@ function _animation_property_symbol(s::AbstractString)
     s == "depthTest" && return :depth_test
     s == "depthWrite" && return :depth_write
     s == "normalScale" && return :normal_scale
+    s == "groundColor" && return :ground_color
     s == "lineWidth" && return :linewidth
     s == "emissiveIntensity" && return :emissive_intensity
     s == "aoMapIntensity" && return :ao_map_intensity

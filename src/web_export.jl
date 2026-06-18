@@ -376,7 +376,9 @@ end
 
 const WEB_SHADOW_RESOLUTION = 64
 
-function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight})
+function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight};
+                          static_shadow::Bool=true)
+    static_shadow || return "null"
     (hasproperty(light, :cast_shadow) && getproperty(light, :cast_shadow)) || return "null"
     sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION, pcf_radius=1)
     H, W = size(sm.depth)
@@ -429,7 +431,8 @@ end
 
 function _web_light_json(light::AmbientLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     return "{" *
            "\"type\":\"ambient\"" *
            ",\"id\":" * string(light.id) *
@@ -443,7 +446,8 @@ end
 
 function _web_light_json(light::DirectionalLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     pos = get_position(light)
     target = light.target
     dir = normalize(pos - target)
@@ -454,16 +458,19 @@ function _web_light_json(light::DirectionalLight, scene::Scene;
            ",\"visible\":" * (is_visible(light) ? "true" : "false") *
            ",\"color\":" * _js_color(light.color) *
            ",\"intensity\":" * _js_num(light.intensity) *
+           ",\"position\":" * _js_vec(pos) *
+           ",\"target\":" * _js_vec(target) *
            ",\"direction\":" * _js_vec(dir) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
 function _web_light_json(light::PointLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     return "{" *
            "\"type\":\"point\"" *
            ",\"id\":" * string(light.id) *
@@ -475,14 +482,15 @@ function _web_light_json(light::PointLight, scene::Scene;
            ",\"distance\":" * _js_num(light.distance) *
            ",\"decay\":" * _js_num(light.decay) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
 function _web_light_json(light::SpotLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     pos = get_position(light)
     target = light.target
     dir = normalize(target - pos)
@@ -497,20 +505,24 @@ function _web_light_json(light::SpotLight, scene::Scene;
            ",\"color\":" * _js_color(light.color) *
            ",\"intensity\":" * _js_num(light.intensity) *
            ",\"position\":" * _js_vec(pos) *
+           ",\"target\":" * _js_vec(target) *
            ",\"direction\":" * _js_vec(dir) *
            ",\"distance\":" * _js_num(light.distance) *
            ",\"decay\":" * _js_num(light.decay) *
+           ",\"angle\":" * _js_num(light.angle) *
+           ",\"penumbra\":" * _js_num(light.penumbra) *
            ",\"coneCos\":" * _js_num(cos(cone)) *
            ",\"penumbraCos\":" * _js_num(cos(inner)) *
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light) *
+           ",\"shadow\":" * _web_shadow_json(scene, light; static_shadow=static_shadow) *
            _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
            "}"
 end
 
 function _web_light_json(light::HemisphereLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     return "{" *
            "\"type\":\"hemisphere\"" *
            ",\"id\":" * string(light.id) *
@@ -525,7 +537,8 @@ end
 
 function _web_light_json(light::RectAreaLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[])
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         static_shadow::Bool=true)
     pos = get_position(light)
     forward = normalize(light.target - pos)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -539,6 +552,7 @@ function _web_light_json(light::RectAreaLight;
            ",\"color\":" * _js_color(light.color) *
            ",\"intensity\":" * _js_num(light.intensity) *
            ",\"position\":" * _js_vec(pos) *
+           ",\"target\":" * _js_vec(light.target) *
            ",\"forward\":" * _js_vec(forward) *
            ",\"u\":" * _js_vec(u) *
            ",\"v\":" * _js_vec(v) *
@@ -551,7 +565,8 @@ end
 _web_light_json(light::AbstractLight; kwargs...) = nothing
 _web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json(light; kwargs...)
 
-function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}())
+function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
+                          stale_shadow_ids::Set{Int}=Set{Int}())
     lights = String[]
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
     # own visibility or ancestor visibility is animated (force_ids) must be
@@ -562,9 +577,11 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}())
     for light in all_lights
         _web_visible_or_forced(light, force_ids) || continue
         visibility_ids, visibility_values = _web_visibility_chain(light)
+        static_shadow = !(light.id in stale_shadow_ids)
         item = _web_light_json(light, scene;
                                visibility_target_ids=visibility_ids,
-                               visibility_values=visibility_values)
+                               visibility_values=visibility_values,
+                               static_shadow=static_shadow)
         item !== nothing && push!(lights, item)
     end
     return "[" * join(lights, ",") * "]"
@@ -930,6 +947,19 @@ function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
     return ids
 end
 
+const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set{Symbol}((:position, :target, :angle))
+
+function _web_stale_shadow_light_ids(animations::AbstractVector{AnimationClip})
+    ids = Set{Int}()
+    for clip in animations, track in clip.tracks
+        target = track.target
+        target isa Union{DirectionalLight,PointLight,SpotLight} || continue
+        track.property in WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES || continue
+        push!(ids, target.id)
+    end
+    return ids
+end
+
 function _web_wireframe_proxy(obj)
     mat = obj.material
     proxy_mat = LineBasicMaterial(color=_web_material_color(mat),
@@ -1115,6 +1145,7 @@ function _web_track_property_name(prop::Symbol)
     prop === :depth_test && return "depthTest"
     prop === :depth_write && return "depthWrite"
     prop === :normal_scale && return "normalScale"
+    prop === :ground_color && return "groundColor"
     (prop === :line_width || prop === :lineWidth) && return "linewidth"
     prop === :gradient_steps && return "toonSteps"
     prop === :near && return "depthNear"
@@ -1300,6 +1331,8 @@ function _web_clip_json(clip::AnimationClip)
 end
 
 function _web_case_json(case::WebGLExportCase)
+    animation_target_ids = _web_animation_target_ids(case.animations)
+    stale_shadow_ids = _web_stale_shadow_light_ids(case.animations)
     return "{" *
            "\"id\":" * _js_str(case.id) *
            ",\"title\":" * _js_str(case.title) *
@@ -1317,9 +1350,9 @@ function _web_case_json(case::WebGLExportCase)
            ",\"outputColorSpace\":" * _js_str(String(case.output_color_space)) *
            ",\"outputColorSpaceMode\":" * string(_web_output_color_space_id(case.output_color_space)) *
            ",\"clippingPlanes\":[" * join((_js_plane(p) for p in case.clipping_planes), ",") * "]" *
-           ",\"lights\":" * _web_lights_json(case.scene, _web_animation_target_ids(case.animations)) *
-           ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, _web_animation_target_ids(case.animations)), ",") * "]" *
-           ",\"objects\":[" * join(_web_collect_drawables(case.scene, _web_animation_target_ids(case.animations),
+           ",\"lights\":" * _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids) *
+           ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, animation_target_ids), ",") * "]" *
+           ",\"objects\":[" * join(_web_collect_drawables(case.scene, animation_target_ids,
                                                           case.radius), ",") * "]" *
            ",\"animations\":[" * join((_web_clip_json(c) for c in case.animations), ",") * "]" *
            "}"
@@ -1682,7 +1715,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   for(const c of DATA.cases) c.objects=c.objects.map(buildObj);
   const shadowTextureSlots=shadowTextureUnits.filter(u=>maxTextureUnits>u&&maxCombinedTextureUnits>u);
   const shadowTexturesEnabled=shadowTextureSlots.length>0;
-  for(const c of DATA.cases) for(const l of c.lights||[]){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; }
+  function cloneAnimValue(v){ return Array.isArray(v)?v.slice():v; }
+  function captureLightBase(l){ const b={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; for(const k of ["position","target","direction","angle","penumbra","coneCos","penumbraCos","forward","u","v","width","height"]) if(l[k]!==undefined) b[k]=cloneAnimValue(l[k]); return b; }
+  function refreshLightDerived(l){ if(l.type==="directional"&&l.position&&l.target) l.direction=norm(sub(l.position,l.target)); else if(l.type==="spot"){ if(l.position&&l.target) l.direction=norm(sub(l.target,l.position)); const fallback=l.coneCos==null?Math.cos(Math.PI/3):Math.max(-1,Math.min(1,l.coneCos)); const angle=Math.max(0,Math.min(Math.PI,l.angle==null?Math.acos(fallback):l.angle)); const pen=Math.max(0,Math.min(1,l.penumbra==null?0:l.penumbra)); l.coneCos=Math.cos(angle); l.penumbraCos=Math.cos(angle*(1-pen)); } else if(l.type==="rectArea"&&l.position&&l.target){ const f=norm(sub(l.target,l.position)), ref=Math.abs(f[1])<.95?[0,1,0]:[1,0,0]; l.forward=f; l.u=norm(cross(ref,f)); l.v=cross(f,l.u); } }
+  function buildLight(l){ if(l.shadow) l.shadowTexture=shadowTexturesEnabled?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
+  for(const c of DATA.cases) c.lights=(c.lights||[]).map(buildLight);
   const objectById = new Map(); for(const c of DATA.cases) for(const o of c.objects) if(!objectById.has(o.id)) objectById.set(o.id,[]); for(const c of DATA.cases) for(const o of c.objects) objectById.get(o.id).push(o);
   const lightById = new Map(); for(const c of DATA.cases) for(const l of c.lights||[]){ if(!lightById.has(l.id)) lightById.set(l.id,[]); lightById.get(l.id).push(l); }
   const cameraById = new Map(); for(const c of DATA.cases){ const cam=c.camera; if(cam){ if(!cameraById.has(cam.id)) cameraById.set(cam.id,[]); cameraById.get(cam.id).push(cam); } }
@@ -1722,8 +1759,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function assignComponent(dst,component,v){ if(component>0) dst[component-1]=v[0]; else for(let i=0;i<Math.min(dst.length,v.length);i++) dst[i]=v[i]; return dst; }
   function setRenderableAnim(o,prop,v,component=0){ if(!(prop in o)) return false; if(prop==="visible"||prop==="spriteSizeAttenuation"||typeof o[prop]==="boolean"){ o[prop]=v[0]>=.5; if(prop==="transparent") o.animTransparent=o.transparent||o.opacity<1; return true; } if(Array.isArray(o[prop])) assignComponent(o[prop],component,v); else o[prop]=component>0?v[0]:v[0]; if(prop==="opacity") o.animTransparent=(o.baseTransparent||false)||o.opacity<1; return true; }
   function resetRenderableAnim(o){ const b=o.baseRenderable; if(!b)return; for(const k in b) o[k]=Array.isArray(b[k])?b[k].slice():b[k]; o.animTransparent=o.baseTransparent; for(const s of (o.visibilityStates||[])) s.visible=s.baseVisible; }
-  function setLightAnim(l,prop,v,component=0){ if(!(prop in l)) return false; if(prop==="visible"){ l.visible=v[0]>=.5; return true; } if(Array.isArray(l[prop])) assignComponent(l[prop],component,v); else l[prop]=component>0?v[0]:v[0]; return true; }
-  function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=Array.isArray(b[k])?b[k].slice():b[k]; for(const s of (l.visibilityStates||[])) s.visible=s.baseVisible; }
+  function setLightAnim(l,prop,v,component=0){ if(!(prop in l)) return false; if(prop==="visible"){ l.visible=v[0]>=.5; refreshLightDerived(l); return true; } if(Array.isArray(l[prop])) assignComponent(l[prop],component,v); else l[prop]=component>0?v[0]:v[0]; refreshLightDerived(l); return true; }
+  function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=cloneAnimValue(b[k]); for(const s of (l.visibilityStates||[])) s.visible=s.baseVisible; refreshLightDerived(l); }
   function setCameraAnim(cam,prop,v,component=0){ if(!cam||!(prop in cam)) return false; if(Array.isArray(cam[prop])) assignComponent(cam[prop],component,v); else cam[prop]=component>0?v[0]:v[0]; return true; }
   function resetCameraAnim(cam){ const b=cam&&cam.baseCamera; if(!b)return; for(const k in b) if(b[k]!==undefined) cam[k]=Array.isArray(b[k])?b[k].slice():b[k]; }
   function setNodeAnim(n,prop,v,component=0){ if(prop==="position") assignComponent(n.animPos,component,v); else if(prop==="scale") assignComponent(n.animScale,component,v); else if(prop==="quaternion") assignComponent(n.animQuat,component,v); else if(prop==="rotation"){ assignComponent(n.animEuler,component,v); n.animQuat=eulerToQuat(n.animEuler,n.baseEulerOrder||"XYZ"); } n.matrix=M4.mul(n.parentMatrix||M4.ident(),M4.trs(n.animPos,n.animQuat,n.animScale)); }

@@ -631,6 +631,12 @@ Parallel audits split the remaining work into five critical tracks:
   ground color, intensity, distance, and decay fields. CPU light color/intensity
   `NumberKeyframeTrack` playback is also covered, so animated lighting changes
   can affect generated WebGL pages instead of remaining static serialized data.
+- Done: bind generated-browser light transform and shape animation for the
+  compact light fields used by shading: point/spot positions, directional and
+  spot targets/directions, spot cone angle/penumbra, and rectangular-area-light
+  target/basis/width/height. Transform-animated shadow-casting lights no longer
+  export stale baked shadow maps; full dynamic browser shadow-map rendering is
+  still tracked as renderer work.
 - Done: align CPU `AnimationMixer` and browser-exported animation playback for
   bounded loop timing: repeat, once, ping-pong, finite repetitions,
   clamp-when-finished, and clip time-scale metadata now resolve to the same
