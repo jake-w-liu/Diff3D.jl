@@ -9,7 +9,8 @@ using Diff3D
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
 
-function clipping_scene(; include_helpers::Bool=true)
+function clipping_scene(; include_helpers::Bool=true,
+                        object_clipping_planes=Plane{Float64}[])
     scene = Scene(background=Color3(0.035, 0.038, 0.045),
                   fog=Fog(color=Color3(0.035, 0.038, 0.045), near=6.0, far=14.0))
     add!(scene, AmbientLight(color=Color3(0.80, 0.80, 0.80), intensity=0.75))
@@ -22,7 +23,8 @@ function clipping_scene(; include_helpers::Bool=true)
     object = Mesh(TorusKnotGeometry(radius=0.4, tube=0.08,
                                     tubular_segments=95, radial_segments=20),
                   MeshPhongMaterial(color=Color3(0.50, 0.93, 0.06),
-                                    shininess=100.0, side=:double);
+                                    shininess=100.0, side=:double,
+                                    clipping_planes=object_clipping_planes);
                   name="clipped_torus_knot",
                   cast_shadow=true, receive_shadow=true)
     object.position = Vec3(0.0, 1.0, 0.0)
@@ -58,6 +60,8 @@ function build_cases()
     base_scene, base_clip = clipping_scene(; include_helpers=false)
     global_scene, global_clip = clipping_scene()
     cap_scene, cap_clip = clipping_scene()
+    local_scene, local_clip = clipping_scene(
+        object_clipping_planes=[Plane(Vec3(0.0, -1.0, 0.0), 1.18)])
 
     return [
         WebGLExportCase("clipping-reference", "Clipping Reference",
@@ -72,11 +76,16 @@ function build_cases()
                         clipping_planes=[Plane(Vec3(-1.0, 0.0, 0.0), 0.1)],
                         output_color_space=:srgb),
         WebGLExportCase("clipping-cap", "Clipping Plane Pair",
-                        "Two exported world clipping planes approximate the upstream local/global clipping controls without GUI mutation.",
+                        "Two exported world clipping planes approximate the upstream clipping controls without GUI mutation.",
                         cap_scene; target=Vec3(0.0, 0.9, 0.0), radius=6.0, height=1.4,
                         fov=36pi / 180, animations=[cap_clip],
                         clipping_planes=[Plane(Vec3(-1.0, 0.0, 0.0), 0.1),
                                          Plane(Vec3(0.0, -1.0, 0.0), 1.18)],
+                        output_color_space=:srgb),
+        WebGLExportCase("clipping-local", "Material Clipping Plane",
+                        "The torus knot carries a MeshPhongMaterial-local clipping plane while helpers and ground stay unclipped by that material plane.",
+                        local_scene; target=Vec3(0.0, 0.9, 0.0), radius=6.0, height=1.4,
+                        fov=36pi / 180, animations=[local_clip],
                         output_color_space=:srgb),
     ]
 end

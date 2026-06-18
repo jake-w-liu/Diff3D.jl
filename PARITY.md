@@ -434,6 +434,10 @@ Parallel audits split the remaining work into five critical tracks:
   same CPU flat/smooth vertex-color modulation and compact browser vertex-color
   export path as other color-aware mesh materials; the
   `webgl_geometry_colors` port now uses flat Phong with `shininess=0.0`.
+- Done: add `MeshPhongMaterial.clipping_planes` as a material-local clipping
+  slice. CPU flat/smooth mesh rasterization and compact browser export now
+  combine Phong local planes with renderer/case-level world clipping planes, and
+  `webgl_clipping` includes a material-local clipping case.
 - Done: add browser export for emissive, AO, light, roughness, metalness, and
   normal maps where matching Julia material fields already exist.
 - Done: add compact browser `MeshBasicMaterial` support with an explicit unlit
@@ -702,10 +706,11 @@ Parallel audits split the remaining work into five critical tracks:
   `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_clipping` via
   `examples/webgl_clipping.jl`, using Diff3D.jl case-level clipping planes,
-  `Plane`, `PlaneHelper`, `TorusKnotGeometry`, Phong lighting, and browser
-  clipping shader coverage. Upstream GUI mutation, material-local
-  `clippingPlanes`, `localClippingEnabled`, `clipShadows`, `alphaToCoverage`,
-  `Stats`, and `WebGLRenderer` internals remain documented deviations.
+  `MeshPhongMaterial` local clipping planes, `Plane`, `PlaneHelper`,
+  `TorusKnotGeometry`, Phong lighting, and browser clipping shader coverage.
+  Upstream GUI mutation, full `localClippingEnabled` renderer semantics,
+  `clipShadows`, `alphaToCoverage`, `Stats`, and `WebGLRenderer` internals
+  remain documented deviations.
 - Added a standalone partial port for `webgl_morphtargets` via
   `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
   attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and

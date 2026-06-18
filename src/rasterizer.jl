@@ -386,6 +386,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         normal_mat = mat4_transpose(mat4_inverse(world_mat))
         geo = mesh.geometry
         mat = mesh.material
+        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                         material_clipping_planes(mat))
         depth_test = material_depth_test(mat)
         depth_write = material_depth_write(mat)
         # Back-face culling, matching the flat path (`_rasterize_geo_flat!`): the
@@ -465,7 +467,7 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                     sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
                     sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
                     mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map, normal_map, roughness_map, metalness_map, physical_pbr_map,
-                    ao_map, emissive_map, light_map, normal_scale, clipping_planes;
+                    ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write)
             end
@@ -652,9 +654,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     for mesh in opaque_flat
         mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
+        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                         material_clipping_planes(mesh.material))
         _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                              lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                             shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
+                             shadow_fn=mesh_shadow_fn, clipping_planes=mesh_clipping_planes,
                              colorbuf=colorbuf,
                              xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                              log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
@@ -673,9 +677,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
             else
                 mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
+                mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                                 material_clipping_planes(im.material))
                 _rasterize_geo_flat!(rt, im.geometry, world, im.material,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                     shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
+                                     shadow_fn=mesh_shadow_fn, clipping_planes=mesh_clipping_planes,
                                      colorbuf=colorbuf,
                                      xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                      log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
@@ -701,12 +707,14 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         sid = 0
         for mesh in transparent
             mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
+            mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                             material_clipping_planes(mesh.material))
             sid += 1
             α = material_opacity(mesh.material)
             _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                                  lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
                                  alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
-                                 clipping_planes=clipping_planes,
+                                 clipping_planes=mesh_clipping_planes,
                                  colorbuf=colorbuf,
                                  xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                  log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
@@ -815,6 +823,14 @@ material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? ge
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
 material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ? Float64(getfield(m, :alpha_test)) : 0.0
 material_wireframe(m::AbstractMaterial) = hasfield(typeof(m), :wireframe) ? getfield(m, :wireframe) : false
+material_clipping_planes(m::AbstractMaterial) =
+    hasfield(typeof(m), :clipping_planes) ? getfield(m, :clipping_planes) : _NO_PLANES
+
+function _combined_clipping_planes(global_planes, material_planes)
+    isempty(material_planes) && return global_planes
+    isempty(global_planes) && return material_planes
+    return Plane{Float64}[global_planes...; material_planes...]
+end
 
 @inline _has_texture_alpha(tex) = tex isa Texture && size(tex.data, 3) >= 4
 @inline _has_alpha_map(tex) = tex isa Texture

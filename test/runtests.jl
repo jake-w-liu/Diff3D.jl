@@ -144,12 +144,14 @@ deterministic_bytes(n::Int) =
                 source=[
                     "TorusKnotGeometry(radius=0.4, tube=0.08",
                     "MeshPhongMaterial(color=Color3(0.50, 0.93, 0.06)",
+                    "clipping_planes=object_clipping_planes",
                     "PlaneHelper(Plane(Vec3(-1.0, 0.0, 0.0), 0.1)",
                     "clipping_planes=[Plane(Vec3(-1.0, 0.0, 0.0), 0.1)]",
                     "WebGLExportCase(\"clipping-global\"",
                     "WebGLExportCase(\"clipping-cap\"",
+                    "WebGLExportCase(\"clipping-local\"",
                 ],
-                prerequisites=["case-level clipping planes", "Plane", "browser clipping"],
+                prerequisites=["case-level clipping planes", "MeshPhongMaterial.clipping_planes", "Plane", "browser clipping"],
             ),
             "threejs_webgl_morphtargets" => (
                 source=[
@@ -937,6 +939,15 @@ deterministic_bytes(n::Int) =
                                    name="export_phong_material")
         phong_material_mesh.position = Vec3(5.4, 1.25, 0.0)
         add!(scene, phong_material_mesh)
+        phong_local_clip_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                     MeshPhongMaterial(color=Color3(0.9, 0.9, 0.2),
+                                                       specular=Color3(0.0, 0.0, 0.0),
+                                                       shininess=0.0,
+                                                       side=:double,
+                                                       clipping_planes=[Plane(Vec3(0.0, -1.0, 0.0), 0.2)]);
+                                     name="export_phong_local_clipping")
+        phong_local_clip_mesh.position = Vec3(6.1, 1.25, 0.0)
+        add!(scene, phong_local_clip_mesh)
         texdata = zeros(Float64, 2, 2, 4)
         texdata[1,1,:] .= (1.0, 0.0, 0.0, 1.0)
         texdata[1,2,:] .= (0.0, 1.0, 0.0, 0.5)
@@ -1425,6 +1436,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"name\":\"export_phong_material\"", html)
         @test occursin("\"materialType\":\"phong\"", html)
         @test occursin("\"shininess\":72", html)
+        @test occursin("\"name\":\"export_phong_local_clipping\"", html)
+        @test occursin(r"\"name\":\"export_phong_local_clipping\".*\"materialType\":\"phong\".*\"clippingPlanes\":\[\[0,-1,0,0\.20000000000000001\]\]", html)
         @test occursin("\"property\":\"shininess\"", html)
         @test occursin("shininess:o.shininess", html)
         @test occursin("\"specularColor\":[1,0.92000000000000004,0.71999999999999997]", html)
@@ -1599,6 +1612,9 @@ deterministic_bytes(n::Int) =
         @test occursin("uClipCount", html)
         @test occursin("uClipPlane[0]", html)
         @test occursin("function clipping", html)
+        @test occursin("function objectClipping", html)
+        @test occursin("const objClip=objectClipping(o,clip)", html)
+        @test occursin("uniform1i(p,\"uClipCount\",objClip.count)", html)
         @test occursin("if(clipped(vWorld)) discard", html)
         @test occursin("\"fog\":{\"type\":\"linear\",\"color\":[0.59999999999999998,0.69999999999999996,0.80000000000000004],\"near\":2,\"far\":18}", html)
         @test occursin("function fog", html)
@@ -2933,15 +2949,22 @@ deterministic_bytes(n::Int) =
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshPhongMaterial(vertex_colors=true).vertex_colors == true
+        local_clip = Plane(Vec3(0.0, 1.0, 0.0), 0.25)
+        phong_clipped = MeshPhongMaterial(clipping_planes=[local_clip])
+        @test length(phong_clipped.clipping_planes) == 1
+        @test phong_clipped.clipping_planes[1].normal.y ≈ 1.0
+        @test phong_clipped.clipping_planes[1].constant ≈ 0.25
         legacy_phong = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                          Color3(0,0,0), 30.0, 1.0, false,
                                          :front, nothing, nothing, true, true)
         @test legacy_phong.vertex_colors == false
+        @test isempty(legacy_phong.clipping_planes)
         legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                Color3(0,0,0), 30.0, 1.0, false,
                                                :front, nothing, alpha_tex, nothing,
                                                0.27, true, true)
         @test legacy_phong_alpha.vertex_colors == false
+        @test isempty(legacy_phong_alpha.clipping_planes)
         @test material_alpha_test(MeshToonMaterial(alpha_test=0.31)) ≈ 0.31
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
@@ -5147,6 +5170,42 @@ deterministic_bytes(n::Int) =
             full_px = count(i -> rt_full.color[i] > 0.0, eachindex(rt_full.color))
             half_px = count(i -> rt_half.color[i] > 0.0, eachindex(rt_half.color))
             @test 0 < half_px < full_px
+
+            local_scene = Scene()
+            add!(local_scene, AmbientLight(intensity=1.0))
+            local_cut = [Plane(Vec3(0.0, 0.0, 1.0), -100.0)]
+            local_mat = MeshPhongMaterial(color=Color3(0.9, 0.9, 0.9),
+                                          specular=Color3(0.0, 0.0, 0.0),
+                                          shininess=0.0,
+                                          clipping_planes=local_cut)
+            add!(local_scene, Mesh(BoxGeometry(), local_mat))
+            rt_local_none = RenderTarget(32, 32); render!(rt_local_none, local_scene, cam)
+            @test sum(rt_local_none.color) == 0.0
+
+            local_half_scene = Scene()
+            add!(local_half_scene, AmbientLight(intensity=1.0))
+            local_half_mat = MeshPhongMaterial(color=Color3(0.9, 0.9, 0.9),
+                                               specular=Color3(0.0, 0.0, 0.0),
+                                               shininess=0.0,
+                                               side=:double,
+                                               clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])
+            add!(local_half_scene, Mesh(BoxGeometry(), local_half_mat))
+            rt_local_half = RenderTarget(32, 32); render!(rt_local_half, local_half_scene, cam)
+            local_half_px = count(i -> rt_local_half.color[i] > 0.0, eachindex(rt_local_half.color))
+            @test 0 < local_half_px < full_px
+
+            smooth_scene = Scene()
+            add!(smooth_scene, AmbientLight(intensity=1.0))
+            add!(smooth_scene, Mesh(PlaneGeometry(width=2.0, height=2.0),
+                                    MeshPhongMaterial(color=Color3(0.9, 0.9, 0.9),
+                                                      specular=Color3(0.0, 0.0, 0.0),
+                                                      shininess=0.0,
+                                                      side=:double,
+                                                      clipping_planes=local_cut);
+                                    flat_shading=false))
+            rt_smooth_local_none = RenderTarget(32, 32)
+            render!(rt_smooth_local_none, smooth_scene, cam; shading=:smooth)
+            @test sum(rt_smooth_local_none.color) == 0.0
         end
 
         # [RAS:rasterizer+renderer] Smooth-path material maps (albedo + normalMap)

@@ -135,6 +135,8 @@ _web_material_specular_color_texture(mat) =
     hasproperty(mat, :specular_color_map) && getproperty(mat, :specular_color_map) isa Texture ? getproperty(mat, :specular_color_map) : nothing
 _web_material_env_texture(mat) =
     hasproperty(mat, :envmap) && getproperty(mat, :envmap) isa CubeTexture ? getproperty(mat, :envmap) : nothing
+_web_material_clipping_planes(mat) =
+    hasproperty(mat, :clipping_planes) ? getproperty(mat, :clipping_planes) : Plane{Float64}[]
 _web_material_emissive_color(mat) =
     hasproperty(mat, :emissive) ? getproperty(mat, :emissive) : Color3(0.0, 0.0, 0.0)
 _web_material_emissive_intensity(mat) =
@@ -835,6 +837,9 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
            ",\"side\":" * _js_str(_web_material_side(mat)) *
            ",\"depthTest\":" * (_web_material_depth_test(mat) ? "true" : "false") *
            ",\"depthWrite\":" * (_web_material_depth_write(mat) ? "true" : "false") *
+           ",\"clippingPlanes\":[" *
+               join((_js_plane(p) for p in _web_material_clipping_planes(mat)), ",") *
+           "]" *
            ",\"pointSize\":" * _js_num(_web_material_size(mat)) *
            ",\"spriteCenter\":" * _js_vec(sprite_center) *
            ",\"spriteRotation\":" * _js_num(sprite_rotation) *
@@ -1671,6 +1676,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function padded2(items, limit, fn){ const out=new Array(limit*2).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*2]=v[0]; out[i*2+1]=v[1]; } return out; }
   function padded1(items, limit, fn, fill=0){ const out=new Array(limit).fill(fill); for(let i=0;i<Math.min(limit,items.length);i++) out[i]=fn(items[i]); return out; }
   function clipping(c){ const planes=c.clippingPlanes||[], out=new Array(16).fill(0); for(let i=0;i<Math.min(4,planes.length);i++){ const p=planes[i]; out[i*4]=p[0]; out[i*4+1]=p[1]; out[i*4+2]=p[2]; out[i*4+3]=p[3]; } return {count:Math.min(4,planes.length), planes:out}; }
+  function objectClipping(o,clip){ const planes=clip.planes.slice(), locals=o.clippingPlanes||[]; let count=clip.count; for(let i=0;i<locals.length&&count<4;i++,count++){ const p=locals[i], k=count*4; planes[k]=p[0]; planes[k+1]=p[1]; planes[k+2]=p[2]; planes[k+3]=p[3]; } return {count:count, planes:planes}; }
   function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near==null?1:f.near,far:f.far||1000,density:f.density||0}; }
   function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[]; let shadow=null; for(const l of c.lights||[]){ if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); if(!shadow && l.shadowTexture) shadow={kind:1,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); if(!shadow && l.shadowTexture) shadow={kind:3,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); if(!shadow && l.shadowTexture) shadow={kind:2,index:idx,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64)}; } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadow:shadow,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
   function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
@@ -1703,8 +1709,9 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.uniform3fv(gl.getUniformLocation(p,"uColor"),new Float32Array(o.color));
     gl.uniform1f(gl.getUniformLocation(p,"uGlow"),o.glow||0);
     gl.uniform1f(gl.getUniformLocation(p,"uOpacity"),o.opacity);
-    uniform1i(p,"uClipCount",clip.count);
-    uniform4v(p,"uClipPlane[0]",clip.planes);
+    const objClip=objectClipping(o,clip);
+    uniform1i(p,"uClipCount",objClip.count);
+    uniform4v(p,"uClipPlane[0]",objClip.planes);
     uniform1i(p,"uToneMapping",tm.mode);
     uniform1f(p,"uToneExposure",tm.exposure);
     uniform1i(p,"uOutputColorSpace",tm.output);
