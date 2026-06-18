@@ -62,6 +62,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lod.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lod.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_clipping"
+upstream_url = "https://threejs.org/examples/#webgl_clipping"
+local_script = "examples/webgl_clipping.jl"
+status = "partial"
+prerequisites = ["case-level clipping planes", "Plane", "PlaneHelper", "TorusKnotGeometry", "MeshPhongMaterial", "browser clipping"]
+known_deviations = [
+  "Uses exported case-level world clipping planes instead of upstream mutable GUI controls and material-local clippingPlanes",
+  "Uses compact Diff3D.jl lighting, shadows, and clipping shaders rather than three.js WebGLRenderer localClippingEnabled, clipShadows, alphaToCoverage, and Stats internals"
+]
+verification = ["julia --project=. examples/webgl_clipping.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_materials_normal"
 upstream_url = "https://threejs.org/examples/#webgl_materials_normal"
 local_script = "examples/webgl_materials_normal.jl"

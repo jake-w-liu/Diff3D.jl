@@ -686,6 +686,12 @@ Parallel audits split the remaining work into five critical tracks:
   `IcosahedronGeometry`, Lambert wireframe rendering, fog, and browser-side LOD
   selection. Upstream `FlyControls`, random 1000-object placement, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_clipping` via
+  `examples/webgl_clipping.jl`, using Diff3D.jl case-level clipping planes,
+  `Plane`, `PlaneHelper`, `TorusKnotGeometry`, Phong lighting, and browser
+  clipping shader coverage. Upstream GUI mutation, material-local
+  `clippingPlanes`, `localClippingEnabled`, `clipShadows`, `alphaToCoverage`,
+  `Stats`, and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_animation_keyframes` via
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset

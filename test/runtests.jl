@@ -56,6 +56,7 @@ deterministic_bytes(n::Int) =
             "threejs_webgl_geometry_colors",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
+            "threejs_webgl_clipping",
             "threejs_webgl_materials_normal",
             "threejs_webgl_materials_depth",
             "threejs_webgl_materials_variations_basic",
@@ -135,6 +136,17 @@ deterministic_bytes(n::Int) =
                     "WebGLExportCase(\"lod-field\"",
                 ],
                 prerequisites=["LOD", "add_lod_level!", "browser LOD selection"],
+            ),
+            "threejs_webgl_clipping" => (
+                source=[
+                    "TorusKnotGeometry(radius=0.4, tube=0.08",
+                    "MeshPhongMaterial(color=Color3(0.50, 0.93, 0.06)",
+                    "PlaneHelper(Plane(Vec3(-1.0, 0.0, 0.0), 0.1)",
+                    "clipping_planes=[Plane(Vec3(-1.0, 0.0, 0.0), 0.1)]",
+                    "WebGLExportCase(\"clipping-global\"",
+                    "WebGLExportCase(\"clipping-cap\"",
+                ],
+                prerequisites=["case-level clipping planes", "Plane", "browser clipping"],
             ),
             "threejs_webgl_materials_normal" => (
                 source=[
