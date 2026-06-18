@@ -36,6 +36,105 @@ deterministic_array(dims::Int...) =
 deterministic_bytes(n::Int) =
     UInt8[mod(53 * i + 19, 256) for i in 1:n]
 
+const TEST_ADAM7_PASSES = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
+
+test_be32(x::Integer) =
+    UInt8[(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
+
+test_pass_size(n::Int, start::Int, step::Int) =
+    n <= start ? 0 : ((n - start + step - 1) ÷ step)
+
+function test_paeth(a::Int, b::Int, c::Int)
+    p = a + b - c
+    pa = abs(p - a)
+    pb = abs(p - b)
+    pc = abs(p - c)
+    return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
+end
+
+function test_png_filter(scanline::Vector{UInt8}, prev::Vector{UInt8},
+                         bpp::Int, ftype::UInt8)
+    out = similar(scanline)
+    for i in eachindex(scanline)
+        a = i > bpp ? scanline[i-bpp] : 0x00
+        b = prev[i]
+        c = i > bpp ? prev[i-bpp] : 0x00
+        pred = if ftype == 0
+            0
+        elseif ftype == 1
+            Int(a)
+        elseif ftype == 2
+            Int(b)
+        elseif ftype == 3
+            (Int(a) + Int(b)) ÷ 2
+        elseif ftype == 4
+            test_paeth(Int(a), Int(b), Int(c))
+        else
+            error("bad test PNG filter")
+        end
+        out[i] = UInt8(mod(Int(scanline[i]) - pred, 256))
+    end
+    return out
+end
+
+function test_adam7_png_bytes(img::Array{T,3}) where {T<:Unsigned}
+    H, W, C = size(img)
+    C in (1, 3, 4) || error("test_adam7_png_bytes expects gray, RGB, or RGBA data")
+    bitdepth = T === UInt8 ? 8 : T === UInt16 ? 16 :
+               error("test_adam7_png_bytes expects UInt8 or UInt16 data")
+    color_type = C == 1 ? 0x00 : C == 3 ? 0x02 : 0x06
+    raw = UInt8[]
+    bps = bitdepth ÷ 8
+    bpp = C * bps
+    for (pass_index, (x0, y0, xstep, ystep)) in enumerate(TEST_ADAM7_PASSES)
+        pass_w = test_pass_size(W, x0, xstep)
+        pass_h = test_pass_size(H, y0, ystep)
+        (pass_w == 0 || pass_h == 0) && continue
+        prev = zeros(UInt8, pass_w * bpp)
+        for prow in 0:(pass_h - 1)
+            scanline = Vector{UInt8}(undef, pass_w * bpp)
+            k = 1
+            row = y0 + prow * ystep + 1
+            for pcol in 0:(pass_w - 1)
+                col = x0 + pcol * xstep + 1
+                for c in 1:C
+                    value = UInt(img[row, col, c])
+                    if bitdepth == 8
+                        scanline[k] = UInt8(value)
+                        k += 1
+                    else
+                        scanline[k] = UInt8((value >> 8) & 0xff)
+                        scanline[k + 1] = UInt8(value & 0xff)
+                        k += 2
+                    end
+                end
+            end
+            ftype = UInt8((pass_index + prow - 1) % 5)
+            push!(raw, ftype)
+            append!(raw, test_png_filter(scanline, prev, bpp, ftype))
+            prev = scanline
+        end
+    end
+    io = IOBuffer()
+    write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+    ihdr = UInt8[]
+    append!(ihdr, test_be32(W))
+    append!(ihdr, test_be32(H))
+    append!(ihdr, UInt8[bitdepth, color_type, 0x00, 0x00, 0x01])
+    Diff3D._png_chunk(io, "IHDR", ihdr)
+    Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(raw))
+    Diff3D._png_chunk(io, "IEND", UInt8[])
+    return take!(io)
+end
+
 @testset "Diff3D.jl" begin
 
     @testset "Official examples parity registry" begin
@@ -3581,6 +3680,29 @@ deterministic_bytes(n::Int) =
         tex = TextureLoader(f); rm(f)
         @test tex isa Texture
         @test size(tex.data) == (12, 20, 3)
+
+        adam7 = Array{UInt8}(undef, 8, 8, 3)
+        for i in 1:8, j in 1:8, c in 1:3
+            adam7[i, j, c] = UInt8(mod(41 * i + 29 * j + 67 * c, 256))
+        end
+        af = tempname() * ".png"
+        write(af, test_adam7_png_bytes(adam7))
+        adec = load_png(af)
+        @test size(adec) == (8, 8, 3)
+        @test maximum(abs.(adec .- Float64.(adam7) ./ 255)) <= 1e-12
+        atex = TextureLoader(af); rm(af)
+        @test atex isa Texture
+        @test maximum(abs.(atex.data .- Float64.(adam7) ./ 255)) <= 1e-12
+
+        adam16 = Array{UInt16}(undef, 7, 5, 4)
+        for i in 1:7, j in 1:5, c in 1:4
+            adam16[i, j, c] = UInt16(mod(3001 * i + 7001 * j + 11003 * c, 65536))
+        end
+        af16 = tempname() * ".png"
+        write(af16, test_adam7_png_bytes(adam16))
+        adec16 = load_png(af16); rm(af16)
+        @test size(adec16) == (7, 5, 4)
+        @test maximum(abs.(adec16 .- Float64.(adam16) ./ 65535)) <= 1e-12
     end
 
     @testset "OBJ .mtl materials" begin
@@ -4949,6 +5071,25 @@ deterministic_bytes(n::Int) =
                 @test size(mat.map.data) == (2, 2, 3)
                 @test mat.map.colorspace === :srgb
                 @test all(mat.map.data .≈ 1.0)
+            end
+
+            let dir = mktempdir()
+                img = fill(UInt8(64), 3, 3, 3)
+                png_bytes = test_adam7_png_bytes(img)
+                gltf = Dict{String,Any}(
+                    "bufferViews"=>Any[
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
+                                         "byteLength"=>Float64(length(png_bytes)))],
+                    "images"=>Any[
+                        Dict{String,Any}("bufferView"=>0.0, "mimeType"=>"image/png")],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                mat = Diff3D._gltf_material(gltf, [png_bytes], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (3, 3, 3)
+                @test maximum(abs.(mat.map.data .- 64 / 255)) <= 1e-12
             end
 
             let dir = mktempdir()
@@ -8337,14 +8478,12 @@ deterministic_bytes(n::Int) =
             mixer_set_time!(cub_mixer, 1.0)
             @test morph_mesh.morph_target_influences ≈ [1.0, 0.5]
 
-            # --- interlaced (Adam7) PNG rejected with a clear error ---
-            ihdr_data = UInt8[0,0,0,1, 0,0,0,1, 8, 0, 0, 0, 1]   # 1x1 8-bit gray, interlace=1
-            png_bytes = vcat(UInt8[137,80,78,71,13,10,26,10],
-                             UInt8[0,0,0,13], b"IHDR", ihdr_data, UInt8[0,0,0,0],
-                             UInt8[0,0,0,0], b"IEND", UInt8[0,0,0,0])
+            # --- interlaced (Adam7) PNGs decode instead of being rejected ---
+            png_data = fill(UInt8(192), 3, 3, 3)
+            png_bytes = test_adam7_png_bytes(png_data)
             ipath = joinpath(dir, "interlaced.png")
             write(ipath, png_bytes)
-            @test_throws "interlaced (Adam7)" load_png(ipath)
+            @test maximum(abs.(load_png(ipath) .- 192 / 255)) <= 1e-12
         end
 
         @testset "web_export" begin

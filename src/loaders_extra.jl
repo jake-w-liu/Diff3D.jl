@@ -207,11 +207,106 @@ const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
 _is_png_bytes(bytes::Vector{UInt8}) =
     length(bytes) >= length(_PNG_SIGNATURE) && bytes[1:length(_PNG_SIGNATURE)] == _PNG_SIGNATURE
 
+const _PNG_ADAM7_PASSES = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
+
+@inline _png_pass_size(n::Int, start::Int, step::Int) =
+    n <= start ? 0 : ((n - start + step - 1) ÷ step)
+
+function _png_unfilter_scanline!(cur::Vector{UInt8}, prev::Vector{UInt8},
+                                 bpp::Int, ftype::UInt8)
+    stride = length(cur)
+    length(prev) == stride || error("PNG previous scanline length mismatch")
+    @inbounds for i in 1:stride
+        a = i > bpp ? cur[i-bpp] : 0x00
+        b = prev[i]
+        c = i > bpp ? prev[i-bpp] : 0x00
+        x = cur[i]
+        cur[i] = if ftype == 0; x
+                 elseif ftype == 1; x + a
+                 elseif ftype == 2; x + b
+                 elseif ftype == 3; x + UInt8((Int(a) + Int(b)) ÷ 2)
+                 elseif ftype == 4; x + UInt8(_paeth(Int(a), Int(b), Int(c)))
+                 else error("bad PNG filter $ftype") end
+    end
+    return cur
+end
+
+@inline function _png_channel_value(cur::Vector{UInt8}, base::Int,
+                                   bps::Int, norm::Float64)
+    return bps == 2 ? ((Int(cur[base]) << 8) | Int(cur[base + 1])) / norm :
+                      cur[base] / norm
+end
+
+function _png_store_scanline!(img::Array{Float64,3}, row::Int, cur::Vector{UInt8},
+                              W::Int, channels::Int, bps::Int, bpp::Int,
+                              norm::Float64)
+    @inbounds for j in 1:W, c in 1:channels
+        base = (j - 1) * bpp + (c - 1) * bps + 1
+        img[row, j, c] = _png_channel_value(cur, base, bps, norm)
+    end
+    return img
+end
+
+function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
+                                    W::Int, H::Int, channels::Int, bps::Int,
+                                    bpp::Int, norm::Float64)
+    stride = W * bpp
+    prev = zeros(UInt8, stride)
+    p = 1
+    for row in 1:H
+        p <= length(raw) || error("PNG image data is truncated")
+        ftype = raw[p]; p += 1
+        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
+        cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+        _png_unfilter_scanline!(cur, prev, bpp, ftype)
+        _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm)
+        prev = cur
+    end
+    return img
+end
+
+function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
+                            W::Int, H::Int, channels::Int, bps::Int,
+                            bpp::Int, norm::Float64)
+    p = 1
+    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
+        pass_w = _png_pass_size(W, x0, xstep)
+        pass_h = _png_pass_size(H, y0, ystep)
+        (pass_w == 0 || pass_h == 0) && continue
+        stride = pass_w * bpp
+        prev = zeros(UInt8, stride)
+        for prow in 0:(pass_h - 1)
+            p <= length(raw) || error("PNG image data is truncated")
+            ftype = raw[p]; p += 1
+            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
+            cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+            _png_unfilter_scanline!(cur, prev, bpp, ftype)
+            row = y0 + prow * ystep + 1
+            for pcol in 0:(pass_w - 1), c in 1:channels
+                col = x0 + pcol * xstep + 1
+                base = pcol * bpp + (c - 1) * bps + 1
+                img[row, col, c] = _png_channel_value(cur, base, bps, norm)
+            end
+            prev = cur
+        end
+    end
+    return img
+end
+
 """
     load_png(path) -> Array{Float64,3}
 
 Decode an 8-bit or 16-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [0,1].
-Implements full INFLATE (stored/fixed/dynamic Huffman) and all five PNG filters.
+Implements full INFLATE (stored/fixed/dynamic Huffman), all five PNG filters,
+and Adam7 interlacing for supported 8-bit and 16-bit color types.
 """
 function _decode_png(bytes::Vector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
@@ -232,41 +327,17 @@ function _decode_png(bytes::Vector{UInt8})
         pos += len + 4                          # data + CRC
     end
     (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
-    interlace == 0 || error("interlaced (Adam7) PNG decode is not supported")
+    (interlace == 0 || interlace == 1) || error("unsupported PNG interlace method $interlace")
     channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 6 ? 4 :
                error("unsupported PNG color type $colortype")
-    bps = bitdepth ÷ 8                          # bytes per sample
+    bps = Int(bitdepth) ÷ 8                     # bytes per sample
     bpp = channels * bps                        # bytes per pixel (filter window)
     raw = zlib_inflate(idat)
-    stride = W * bpp
     img = Array{Float64}(undef, H, W, channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
-    prev = zeros(UInt8, stride)
-    p = 1
-    for row in 1:H
-        ftype = raw[p]; p += 1
-        cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
-        # Unfilter in place (filter window is one pixel = bpp bytes).
-        for i in 1:stride
-            a = i > bpp ? cur[i-bpp] : 0x00
-            b = prev[i]
-            c = i > bpp ? prev[i-bpp] : 0x00
-            x = cur[i]
-            cur[i] = if ftype == 0; x
-                     elseif ftype == 1; x + a
-                     elseif ftype == 2; x + b
-                     elseif ftype == 3; x + UInt8((Int(a) + Int(b)) ÷ 2)
-                     elseif ftype == 4; x + UInt8(_paeth(Int(a), Int(b), Int(c)))
-                     else error("bad PNG filter $ftype") end
-        end
-        for j in 1:W, c in 1:channels
-            base = (j-1)*bpp + (c-1)*bps + 1
-            img[row, j, c] = bps == 2 ? ((Int(cur[base]) << 8) | Int(cur[base+1])) / norm :
-                                        cur[base] / norm
-        end
-        prev = cur
-    end
-    return img
+    return interlace == 0 ?
+           _png_decode_noninterlaced!(img, raw, W, H, channels, bps, bpp, norm) :
+           _png_decode_adam7!(img, raw, W, H, channels, bps, bpp, norm)
 end
 
 function load_png(path::String)

@@ -112,9 +112,10 @@ replacement for three.js `WebGLRenderer`.
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
   including texture references for clearcoat, clearcoat normals, transmission,
   sheen, iridescence, specular, and inherited PBR maps, plus the scalar
-  `KHR_materials_dispersion` field. PNG glTF images load from URI,
-  data URI, and bufferView sources with MIME/extension routing, and external
-  buffer/image URI paths are resolved with percent-decoding and clear
+  `KHR_materials_dispersion` field. PNG glTF images, including Adam7
+  interlaced PNGs, load from URI, data URI, and bufferView sources with
+  MIME/extension routing, and external buffer/image URI paths are resolved with
+  percent-decoding and clear
   unsupported-scheme errors. glTF data URI resources are validated with strict
   base64 and clear malformed-data errors; JPEG and KTX2 image references fail
   clearly until those decoders exist. Renderer shading of every physical
@@ -596,9 +597,9 @@ Parallel audits split the remaining work into five critical tracks:
   approximations. Exact clearcoat-layer BRDF parity and full chromatic
   refraction remain part of the broader physical-renderer parity work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
-  extension, including `image/png` bufferView images. Unsupported JPEG and KTX2
-  references now fail with explicit loader errors instead of falling through PNG
-  decoding.
+  extension, including `image/png` bufferView images and Adam7 interlaced PNG
+  payloads. Unsupported JPEG and KTX2 references now fail with explicit loader
+  errors instead of falling through PNG decoding.
 - Done: resolve local external glTF buffer and image URI paths with
   percent-decoding, query/fragment stripping, `file:` URI support, and clear
   errors for unsupported external schemes.
