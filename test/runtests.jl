@@ -884,16 +884,20 @@ deterministic_bytes(n::Int) =
                                              cast_shadow=true)
         moving_shadow_dir.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, moving_shadow_dir)
-        add!(scene, PointLight(color=Color3(0.4, 0.7, 1.0), intensity=6.0,
-                               distance=8.0, decay=2.0, position=Vec3(1.0, 1.5, 2.0),
-                               cast_shadow=true))
+        shadow_point = PointLight(color=Color3(0.4, 0.7, 1.0), intensity=6.0,
+                                  distance=8.0, decay=2.0,
+                                  position=Vec3(1.0, 1.5, 2.0),
+                                  cast_shadow=true,
+                                  name="export_shadow_point")
+        add!(scene, shadow_point)
         animated_dir = DirectionalLight(color=Color3(0.5, 0.6, 0.7), intensity=0.8,
                                         position=Vec3(-2.0, 3.0, 1.0))
         animated_dir.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, animated_dir)
         spot = SpotLight(color=Color3(1.0, 0.5, 0.3), intensity=4.0,
                          distance=9.0, angle=pi/5, penumbra=0.25, decay=2.0,
-                         position=Vec3(0.0, 4.0, 3.0), cast_shadow=true)
+                         position=Vec3(0.0, 4.0, 3.0), cast_shadow=true,
+                         name="export_shadow_spot")
         spot.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, spot)
         hemi = HemisphereLight(color=Color3(0.25, 0.35, 0.5),
@@ -1387,12 +1391,12 @@ deterministic_bytes(n::Int) =
                                                  [0.0, 1.0], [[0.0], [1.0]],
                                                  [[0.0], [0.0]], [[0.0], [0.0]])
         ])
-        stale_shadow_ids = Diff3D._web_stale_shadow_light_ids([clip])
-        dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids([clip])
-        @test moving_shadow_dir.id in stale_shadow_ids
-        @test moving_shadow_dir.id in dynamic_shadow_ids
-        @test animated_spot.id in stale_shadow_ids
-        @test !(shadow_dir.id in stale_shadow_ids)
+        light_stale_shadow_ids = Diff3D._web_stale_shadow_light_ids([clip])
+        light_dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids([clip])
+        @test moving_shadow_dir.id in light_stale_shadow_ids
+        @test moving_shadow_dir.id in light_dynamic_shadow_ids
+        @test animated_spot.id in light_stale_shadow_ids
+        @test !(shadow_dir.id in light_stale_shadow_ids)
         component_shadow_clip = AnimationClip("component_shadow", AbstractKeyframeTrack[
             NumberKeyframeTrack(moving_shadow_dir, "position.x", [0.0, 1.0], [0.0, 0.8])
         ])
@@ -1400,6 +1404,13 @@ deterministic_bytes(n::Int) =
               Diff3D._web_stale_shadow_light_ids([component_shadow_clip])
         @test moving_shadow_dir.id in
               Diff3D._web_dynamic_directional_shadow_light_ids([component_shadow_clip])
+        stale_shadow_ids = Diff3D._web_stale_shadow_light_ids(scene, [clip])
+        dynamic_shadow_ids = Diff3D._web_dynamic_directional_shadow_light_ids(scene, [clip])
+        @test moving_shadow_dir.id in dynamic_shadow_ids
+        @test shadow_dir.id in dynamic_shadow_ids
+        @test shadow_point.id in stale_shadow_ids
+        @test spot.id in stale_shadow_ids
+        @test animated_spot.id in stale_shadow_ids
         lights_json = Diff3D._web_lights_json(scene, Diff3D._web_animation_target_ids([clip]),
                                               stale_shadow_ids, dynamic_shadow_ids)
         @test occursin("\"id\":$(moving_shadow_dir.id),\"name\":\"export_moving_shadow_dir\"",
@@ -1407,7 +1418,24 @@ deterministic_bytes(n::Int) =
         @test occursin("\"castShadow\":true,\"shadow\":{\"type\":\"directionalDynamic\"",
                        lights_json)
         @test occursin("\"id\":$(shadow_dir.id),\"name\":\"DirectionalLight\"", lights_json)
-        @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", lights_json)
+        @test length(findall("\"type\":\"directionalDynamic\"", lights_json)) >= 2
+        @test occursin(Regex("\"id\":$(shadow_point.id).*?\"shadow\":null"), lights_json)
+        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":null"), lights_json)
+        static_shadow_scene = Scene()
+        add!(static_shadow_scene,
+             Mesh(BoxGeometry(), MeshStandardMaterial(); cast_shadow=true,
+                  receive_shadow=true))
+        add!(static_shadow_scene,
+             DirectionalLight(position=Vec3(1.0, 2.0, 3.0), cast_shadow=true))
+        add!(static_shadow_scene,
+             PointLight(position=Vec3(2.0, 3.0, 4.0), cast_shadow=true))
+        add!(static_shadow_scene,
+             SpotLight(position=Vec3(-2.0, 3.0, 4.0), target=Vec3(),
+                       cast_shadow=true))
+        static_shadow_json = Diff3D._web_lights_json(static_shadow_scene)
+        @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", static_shadow_json)
+        @test occursin("\"shadow\":{\"type\":\"pointStatic\"", static_shadow_json)
+        @test occursin("\"shadow\":{\"type\":\"spotStatic\"", static_shadow_json)
         sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
                                       Diff3D._web_collect_drawables(scene)))
         @test occursin("\"mode\":\"sprite\"", sprite_drawable)
@@ -2040,9 +2068,8 @@ deterministic_bytes(n::Int) =
         @test occursin("\"receiveShadow\":true", html)
         @test occursin("\"receiveShadow\":false", html)
         @test occursin("\"shadow\":{\"type\":\"directionalDynamic\",\"size\":64", html)
-        @test occursin("\"shadow\":{\"type\":\"directionalStatic\",\"size\":64", html)
-        @test occursin("\"shadow\":{\"type\":\"pointStatic\",\"size\":64", html)
-        @test occursin("\"shadow\":{\"type\":\"spotStatic\",\"size\":64", html)
+        @test occursin(Regex("\"id\":$(shadow_point.id).*?\"shadow\":null"), html)
+        @test occursin(Regex("\"id\":$(spot.id).*?\"shadow\":null"), html)
         @test occursin("\"pcfRadius\":1", html)
         @test occursin("makeShadowTexture", html)
         @test occursin("makeDynamicShadowTarget", html)

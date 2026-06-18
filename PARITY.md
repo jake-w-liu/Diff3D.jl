@@ -421,9 +421,15 @@ Parallel audits split the remaining work into five critical tracks:
   color-depth framebuffer, recompute directional light orthographic bounds from
   the visible shadow caster/receiver set, render cast-shadow triangle drawables
   into the map each frame, and feed the updated matrix/texture through the same
-  two-slot shadow sampler used by static shadows. Dynamic point-light cube
-  shadows, spot-light shadow cameras, cascades, and static lights whose
-  shadow-casting objects animate remain open.
+  two-slot shadow sampler used by static shadows.
+- Done: make browser shadow export invalidate stale baked maps when
+  shadow-casting or shadow-receiving drawables animate. Object/group transform,
+  visibility, and morph-weight tracks now make static cast-shadow
+  `DirectionalLight`s use the dynamic directional pass, while point and spot
+  shadow maps are serialized as `null` instead of stale baked textures until
+  their dynamic shadow-camera paths exist. Dynamic point-light cube shadows,
+  spot-light shadow cameras, cascades, and bone-deformed shadow-map rendering
+  remain open.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
@@ -917,8 +923,8 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
-  animated-caster invalidation, spot-light shadow cameras, point-light cube
-  shadows, and cascaded shadow maps,
+  spot-light shadow cameras, point-light cube shadows, cascaded shadow maps,
+  and bone-deformed shadow-map rendering,
   full three.js skeleton lifecycle/renderer integration, and broader per-object
   animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,

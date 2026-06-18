@@ -979,12 +979,16 @@ end
 
 const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set(("position", "target", "angle"))
 const WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES = Set(("position", "target"))
+const WEB_SHADOW_DRAWABLE_TRACK_PROPERTIES = Set((
+    "position", "scale", "quaternion", "rotation", "visible",
+    "morph_target_influences", "morphTargetInfluences",
+))
 
 function _web_shadow_track_root_name(track::AbstractKeyframeTrack)
     name = _web_track_property_name(track)
-    dot = findfirst(==('.'), name)
-    dot === nothing && return name
-    return name[firstindex(name):prevind(name, dot)]
+    split_at = findfirst(c -> c == '.' || c == '[', name)
+    split_at === nothing && return name
+    return name[firstindex(name):prevind(name, split_at)]
 end
 
 function _web_stale_shadow_light_ids(animations::AbstractVector{AnimationClip})
@@ -1007,6 +1011,63 @@ function _web_dynamic_directional_shadow_light_ids(animations::AbstractVector{An
         _web_shadow_track_root_name(track) in WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES || continue
         push!(ids, target.id)
     end
+    return ids
+end
+
+function _web_shadow_drawable_animation_target_ids(animations::AbstractVector{AnimationClip})
+    ids = Set{Int}()
+    for clip in animations, track in clip.tracks
+        track.target isa AbstractLight && continue
+        _web_shadow_track_root_name(track) in WEB_SHADOW_DRAWABLE_TRACK_PROPERTIES || continue
+        push!(ids, track.target.id)
+    end
+    return ids
+end
+
+function _web_object_or_ancestor_targeted(obj::AbstractObject3D, target_ids::Set{Int})
+    current = obj
+    while current !== nothing
+        current.id in target_ids && return true
+        current = get_parent(current)
+    end
+    return false
+end
+
+function _web_has_animated_shadow_drawable(scene::Scene,
+                                           animations::AbstractVector{AnimationClip})
+    target_ids = _web_shadow_drawable_animation_target_ids(animations)
+    isempty(target_ids) && return false
+    found = Ref(false)
+    traverse(scene, obj -> begin
+        found[] && return
+        _web_is_drawable(obj) || return
+        (object_casts_shadow(obj) || object_receives_shadow(obj)) || return
+        _web_object_or_ancestor_targeted(obj, target_ids) || return
+        found[] = true
+    end)
+    return found[]
+end
+
+function _web_stale_shadow_light_ids(scene::Scene, animations::AbstractVector{AnimationClip})
+    ids = _web_stale_shadow_light_ids(animations)
+    _web_has_animated_shadow_drawable(scene, animations) || return ids
+    traverse(scene, obj -> begin
+        obj isa Union{PointLight,SpotLight} || return
+        obj.cast_shadow || return
+        push!(ids, obj.id)
+    end)
+    return ids
+end
+
+function _web_dynamic_directional_shadow_light_ids(scene::Scene,
+                                                   animations::AbstractVector{AnimationClip})
+    ids = _web_dynamic_directional_shadow_light_ids(animations)
+    _web_has_animated_shadow_drawable(scene, animations) || return ids
+    traverse(scene, obj -> begin
+        obj isa DirectionalLight || return
+        obj.cast_shadow || return
+        push!(ids, obj.id)
+    end)
     return ids
 end
 
@@ -1384,8 +1445,8 @@ end
 
 function _web_case_json(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
-    stale_shadow_ids = _web_stale_shadow_light_ids(case.animations)
-    dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.animations)
+    stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
+    dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
     return "{" *
            "\"id\":" * _js_str(case.id) *
            ",\"title\":" * _js_str(case.title) *
