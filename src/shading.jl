@@ -248,9 +248,11 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
     MeshLambertMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
                         opacity=m.opacity, transparent=m.transparent,
                         wireframe=m.wireframe, side=m.side,
-                        map=m.map, ao_map=m.ao_map, emissive_map=m.emissive_map,
+                        map=m.map, alpha_map=m.alpha_map, ao_map=m.ao_map,
+                        emissive_map=m.emissive_map,
                         vertex_colors=m.vertex_colors, light_map=m.light_map,
-                        depth_test=m.depth_test, depth_write=m.depth_write)
+                        alpha_test=m.alpha_test, depth_test=m.depth_test,
+                        depth_write=m.depth_write)
 end
 function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
     MeshStandardMaterial(color=_modulate(m.color, vc), emissive=m.emissive,

@@ -423,6 +423,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add `MeshBasicMaterial.alpha_map` so basic unlit materials participate
   in the same CPU rasterization and compact browser alpha-map paths as other
   mapped materials.
+- Done: add `alpha_map` and `alpha_test` fields to `MeshLambertMaterial` and
+  `MeshPhongMaterial`, with CPU flat/smooth raster discard and compact browser
+  alpha-texture serialization covered by tests.
 - Done: add browser export for emissive, AO, light, roughness, metalness, and
   normal maps where matching Julia material fields already exist.
 - Done: add compact browser `MeshBasicMaterial` support with an explicit unlit
