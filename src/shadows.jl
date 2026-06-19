@@ -82,9 +82,17 @@ function _light_view_proj(light::PointLight, center::Vec3, radius)
     return lp * lv
 end
 
-# Depth-only triangle rasterization into the shadow buffer.
+# Depth-only triangle rasterization into the shadow buffer. The optional material
+# inputs mirror the color rasterizer's alpha-test and clipping discard paths.
 @inline function _raster_depth!(depth::Matrix{Float64}, W, H,
-                                s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3)
+                                s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3;
+                                clipping_planes=_NO_PLANES,
+                                wp1::Vec3=_ZERO_V3, wp2::Vec3=_ZERO_V3, wp3::Vec3=_ZERO_V3,
+                                iw1::Float64=1.0, iw2::Float64=1.0, iw3::Float64=1.0,
+                                alpha_test::Float64=0.0, alpha_base::Float64=1.0,
+                                albedo_map=nothing, alpha_map=nothing,
+                                uv1::Vec2=_ZERO_V2, uv2::Vec2=_ZERO_V2, uv3::Vec2=_ZERO_V2,
+                                uv2_1::Vec2=_ZERO_V2, uv2_2::Vec2=_ZERO_V2, uv2_3::Vec2=_ZERO_V2)
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-12 && return nothing
     inv_area = 1.0 / area
@@ -92,12 +100,33 @@ end
     max_x = min(ceil(Int, max(s1x, s2x, s3x)), W)
     min_y = max(floor(Int, min(s1y, s2y, s3y)), 1)
     max_y = min(ceil(Int, max(s1y, s2y, s3y)), H)
+    has_clip = !isempty(clipping_planes)
+    has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     @inbounds for py in min_y:max_y, px in min_x:max_x
         cx = px - 0.5; cy = py - 0.5
         w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
         w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
         w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
         if w0 >= 0 && w1 >= 0 && w2 >= 0
+            if has_clip || has_alpha
+                iw = w0 * iw1 + w1 * iw2 + w2 * iw3
+                iw <= 0 && continue
+                a0 = w0 * iw1 / iw; a1 = w1 * iw2 / iw; a2 = w2 * iw3 / iw
+                if has_clip
+                    wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                              a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                              a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                    _clip_keep(clipping_planes, wp) || continue
+                end
+                if has_alpha
+                    u = a0*uv1.x + a1*uv2.x + a2*uv3.x
+                    v = a0*uv1.y + a1*uv2.y + a2*uv3.y
+                    u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
+                    v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
+                    _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
+                        continue
+                end
+            end
             z = w0 * z1 + w1 * z2 + w2 * z3
             z < depth[py, px] && (depth[py, px] = z)
         end
@@ -105,23 +134,54 @@ end
     return nothing
 end
 
-function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int, geo, mvp::Mat4)
+function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
+                                  geo, world_mat::Mat4, mvp::Mat4, mat;
+                                  clipping_planes=_NO_PLANES)
+    has_uvs = length(geo.uvs) >= geo.n_vertices * 2
+    albedo_map = has_uvs ? _material_field(mat, :map) : nothing
+    alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
+    alpha_test = material_alpha_test(mat)
+    alpha_base = Float64(material_opacity(mat))
+    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
+    uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
+    has_clip = !isempty(clipping_planes)
     for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        c1 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i1)))
-        c2 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i2)))
-        c3 = mat4_transform_vec4(mvp, _vh(get_vertex(geo, i3)))
+        v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
+        c1 = mat4_transform_vec4(mvp, _vh(v1))
+        c2 = mat4_transform_vec4(mvp, _vh(v2))
+        c3 = mat4_transform_vec4(mvp, _vh(v3))
         (c1.w <= 1e-6 || c2.w <= 1e-6 || c3.w <= 1e-6) && continue
+        uv1 = _ZERO_V2; uv2v = _ZERO_V2; uv3 = _ZERO_V2
+        uv2_1 = _ZERO_V2; uv2_2 = _ZERO_V2; uv2_3 = _ZERO_V2
+        if use_fragment_alpha
+            uv1 = has_uvs ? Vec2(geo.uvs[(i1-1)*2+1], geo.uvs[(i1-1)*2+2]) : _ZERO_V2
+            uv2v = has_uvs ? Vec2(geo.uvs[(i2-1)*2+1], geo.uvs[(i2-1)*2+2]) : _ZERO_V2
+            uv3 = has_uvs ? Vec2(geo.uvs[(i3-1)*2+1], geo.uvs[(i3-1)*2+2]) : _ZERO_V2
+            uv2_1 = uv2_attr === nothing ? uv1 : Vec2(_vertex_uv_attr(uv2_attr, i1)...)
+            uv2_2 = uv2_attr === nothing ? uv2v : Vec2(_vertex_uv_attr(uv2_attr, i2)...)
+            uv2_3 = uv2_attr === nothing ? uv3 : Vec2(_vertex_uv_attr(uv2_attr, i3)...)
+        end
+        wp1 = has_clip ? mat4_transform_point(world_mat, v1) : _ZERO_V3
+        wp2 = has_clip ? mat4_transform_point(world_mat, v2) : _ZERO_V3
+        wp3 = has_clip ? mat4_transform_point(world_mat, v3) : _ZERO_V3
         _raster_depth!(depth, W, H,
             (c1.x/c1.w+1)*0.5*W, (1-c1.y/c1.w)*0.5*H, c1.z/c1.w,
             (c2.x/c2.w+1)*0.5*W, (1-c2.y/c2.w)*0.5*H, c2.z/c2.w,
-            (c3.x/c3.w+1)*0.5*W, (1-c3.y/c3.w)*0.5*H, c3.z/c3.w)
+            (c3.x/c3.w+1)*0.5*W, (1-c3.y/c3.w)*0.5*H, c3.z/c3.w;
+            clipping_planes=clipping_planes,
+            wp1=wp1, wp2=wp2, wp3=wp3,
+            iw1=1.0/c1.w, iw2=1.0/c2.w, iw3=1.0/c3.w,
+            alpha_test=alpha_test, alpha_base=alpha_base,
+            albedo_map=albedo_map, alpha_map=alpha_map,
+            uv1=uv1, uv2=uv2v, uv3=uv3,
+            uv2_1=uv2_1, uv2_2=uv2_2, uv2_3=uv2_3)
     end
     return depth
 end
 
 """
-    compute_shadow_map(scene, light; resolution=512, bias=3e-3, pcf_radius=0)
+    compute_shadow_map(scene, light; resolution=512, bias=3e-3, pcf_radius=0, clipping_planes=_NO_PLANES)
 
 Render the scene's depth from `light`'s viewpoint into a [`ShadowMap`].
 
@@ -130,7 +190,8 @@ the map with [`shadow_visibility`](@ref): a value `r` samples a `(2r+1)x(2r+1)`
 neighbourhood of the depth map and returns the lit fraction in `[0,1]`. The
 default `pcf_radius=0` reproduces the original single-sample hard shadow exactly.
 """
-function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_radius::Int=0)
+function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_radius::Int=0,
+                            clipping_planes=_NO_PLANES)
     pcf_radius >= 0 || throw(ArgumentError("pcf_radius must be >= 0, got $pcf_radius"))
     meshes = collect_meshes(scene)
     _append_skinned_render_meshes!(meshes, scene)
@@ -147,14 +208,21 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_ra
         is_visible(mesh) || continue
         object_casts_shadow(mesh) || continue
         wm = compute_world_matrix(mesh); geo = mesh.geometry
-        _raster_shadow_geometry!(depth, W, H, geo, vp * wm)
+        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                         material_clipping_planes(mesh.material))
+        _raster_shadow_geometry!(depth, W, H, geo, wm, vp * wm, mesh.material;
+                                 clipping_planes=mesh_clipping_planes)
     end
     for im in instanced
         _visible_in_tree(im) || continue
         object_casts_shadow(im) || continue
         base = compute_world_matrix(im)
+        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                         material_clipping_planes(im.material))
         for M in im.instance_matrices
-            _raster_shadow_geometry!(depth, W, H, im.geometry, vp * base * M)
+            world = base * M
+            _raster_shadow_geometry!(depth, W, H, im.geometry, world, vp * world, im.material;
+                                     clipping_planes=mesh_clipping_planes)
         end
     end
     return ShadowMap(depth, vp, bias, pcf_radius)
@@ -211,11 +279,14 @@ end
 # `pcf_radius=0` keeps the original hard-shadow behaviour; a positive radius bakes
 # percentage-closer soft shadows into every map, so the query closure returns the
 # lit fraction in [0,1] via the radius stored on each `ShadowMap`.
-function _build_shadow_query(scene, lights; resolution::Int=512, pcf_radius::Int=0)
+function _build_shadow_query(scene, lights; resolution::Int=512, pcf_radius::Int=0,
+                             clipping_planes=_NO_PLANES)
     maps = IdDict{AbstractLight, ShadowMap}()
     for light in lights
         if !_is_fill_light(light) && hasfield(typeof(light), :cast_shadow) && getfield(light, :cast_shadow)
-            maps[light] = compute_shadow_map(scene, light; resolution=resolution, pcf_radius=pcf_radius)
+            maps[light] = compute_shadow_map(scene, light; resolution=resolution,
+                                             pcf_radius=pcf_radius,
+                                             clipping_planes=clipping_planes)
         end
     end
     isempty(maps) && return nothing

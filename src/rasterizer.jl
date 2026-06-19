@@ -589,7 +589,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         lights = _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
     end
     _append_skinned_render_meshes!(meshes, scene)
-    shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution) : nothing
+    shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution,
+                                              clipping_planes=clipping_planes) : nothing
 
     # View-projection frustum for culling whole meshes that fall offscreen.
     frustum = frustum_cull ? frustum_from_matrix(proj * view) : nothing

@@ -1579,8 +1579,8 @@ end
         add!(static_shadow_scene,
              Mesh(BoxGeometry(), MeshStandardMaterial(); cast_shadow=true,
                   receive_shadow=true))
-        add!(static_shadow_scene,
-             DirectionalLight(position=Vec3(1.0, 2.0, 3.0), cast_shadow=true))
+        static_dir = DirectionalLight(position=Vec3(1.0, 2.0, 3.0), cast_shadow=true)
+        add!(static_shadow_scene, static_dir)
         add!(static_shadow_scene,
              PointLight(position=Vec3(2.0, 3.0, 4.0), cast_shadow=true))
         add!(static_shadow_scene,
@@ -1590,6 +1590,11 @@ end
         @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", static_shadow_json)
         @test occursin("\"shadow\":{\"type\":\"pointStatic\"", static_shadow_json)
         @test occursin("\"shadow\":{\"type\":\"spotStatic\"", static_shadow_json)
+        clipped_shadow_json = Diff3D._web_shadow_json(static_shadow_scene, static_dir;
+            clipping_planes=[Plane(Vec3(0.0, 1.0, 0.0), -10.0)])
+        clipped_shadow_data = match(r"\"data\":\[(.*?)\]", clipped_shadow_json)
+        @test clipped_shadow_data !== nothing
+        @test all(==(255), parse.(Int, split(clipped_shadow_data.captures[1], ",")))
         sprite_drawable = only(filter(d -> occursin("\"name\":\"export_sprite\"", d),
                                       Diff3D._web_collect_drawables(scene)))
         @test occursin("\"mode\":\"sprite\"", sprite_drawable)
@@ -2254,8 +2259,20 @@ end
         @test occursin("function renderDynamicPointShadow", html)
         @test occursin("function renderDynamicSpotShadow", html)
         @test occursin("function updateDynamicShadows", html)
-        @test occursin("else if(l.shadow.type===\"pointDynamic\") renderDynamicPointShadow(l,visible)", html)
-        @test occursin("updateDynamicShadows(active,visible); const light=lighting(active)", html)
+        @test occursin("function bindShadowMaterialState", html)
+        @test occursin("uShadowAlphaTest", html)
+        @test occursin("uShadowOpacity", html)
+        @test occursin("uShadowColorMap", html)
+        @test occursin("uShadowAlphaMap", html)
+        @test occursin("uShadowClipCount", html)
+        @test occursin("uShadowClipPlane[0]", html)
+        @test occursin("shadowDepthAlpha", html)
+        @test occursin("shadowDepthClipped", html)
+        @test occursin("bindShadowMaterialState(p,o,clip)", html)
+        @test occursin("function drawShadowCaster(o,viewProj,clip)", html)
+        @test occursin("function drawPointShadowCaster(o,viewProj,pos,far,clip)", html)
+        @test occursin("else if(l.shadow.type===\"pointDynamic\") renderDynamicPointShadow(l,visible,clip)", html)
+        @test occursin("updateDynamicShadows(active,visible,clip); const light=lighting(active)", html)
         @test occursin("uShadowMode[0]", html)
         @test occursin("uShadowPointMatrix0[0]", html)
         @test occursin("pointShadowSample0", html)
@@ -7992,6 +8009,136 @@ end
                 @test shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)) == 0.0
                 @test shadow_visibility(sm, Vec3(1.8, 0.0, 0.0)) == 1.0
             end
+
+            function cutout_shadow(alpha_value, make_material)
+                sc = Scene()
+                ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshLambertMaterial();
+                              receive_shadow=true)
+                ground.rotation = Euler(-pi/2, 0.0, 0.0)
+                add!(sc, ground)
+                caster = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                              make_material(alpha_value); cast_shadow=true)
+                caster.position = Vec3(0.0, 1.0, 0.0)
+                add!(sc, caster)
+                light = SpotLight(position=Vec3(0.0, 5.0, 0.0),
+                                  angle=pi/4, target=Vec3(0.0, 0.0, 0.0))
+                sm = compute_shadow_map(sc, light; resolution=128)
+                return shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)), count(isfinite, sm.depth)
+            end
+
+            rgba_material(alpha_value; ctor=MeshBasicMaterial) = begin
+                data = ones(Float64, 2, 2, 4)
+                data[:, :, 4] .= alpha_value
+                ctor(color=Color3(1.0, 1.0, 1.0), side=:double, alpha_test=0.5,
+                     map=Texture(data; filter=:nearest, colorspace=:linear))
+            end
+            material_ctors = (
+                MeshBasicMaterial,
+                MeshLambertMaterial,
+                MeshPhongMaterial,
+                MeshStandardMaterial,
+                MeshPhysicalMaterial,
+                MeshToonMaterial,
+            )
+            for ctor in material_ctors
+                vis, finite_depths = cutout_shadow(1.0, a -> rgba_material(a; ctor=ctor))
+                @test vis == 0.0
+                @test finite_depths > 0
+                vis_masked, masked_depths = cutout_shadow(0.0, a -> rgba_material(a; ctor=ctor))
+                @test vis_masked == 1.0
+                @test masked_depths == 0
+            end
+
+            function caster_shadow(caster)
+                sc = Scene()
+                ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshLambertMaterial();
+                              receive_shadow=true)
+                ground.rotation = Euler(-pi/2, 0.0, 0.0)
+                add!(sc, ground)
+                caster.position = Vec3(0.0, 1.0, 0.0)
+                add!(sc, caster)
+                light = SpotLight(position=Vec3(0.0, 5.0, 0.0),
+                                  angle=pi/4, target=Vec3(0.0, 0.0, 0.0))
+                sm = compute_shadow_map(sc, light; resolution=128)
+                return shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)), count(isfinite, sm.depth)
+            end
+            instanced_masked = InstancedMesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                rgba_material(0.0), 1; cast_shadow=true)
+            instanced_vis, instanced_depths = caster_shadow(instanced_masked)
+            @test instanced_vis == 1.0
+            @test instanced_depths == 0
+            skinned_geo = BoxGeometry(width=1.0, height=1.0, depth=1.0)
+            skinned_masked = SkinnedMesh(skinned_geo, rgba_material(0.0),
+                Skeleton([Bone()]), fill((1, 1, 1, 1), skinned_geo.n_vertices),
+                fill((1.0, 0.0, 0.0, 0.0), skinned_geo.n_vertices);
+                cast_shadow=true)
+            skinned_vis, skinned_depths = caster_shadow(skinned_masked)
+            @test skinned_vis == 1.0
+            @test skinned_depths == 0
+
+            function uv2_alpha_map_shadow(u2)
+                sc = Scene()
+                ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshLambertMaterial();
+                              receive_shadow=true)
+                ground.rotation = Euler(-pi/2, 0.0, 0.0)
+                add!(sc, ground)
+                alpha_data = ones(Float64, 2, 2, 3)
+                alpha_data[:, 1, 2] .= 0.0
+                alpha_data[:, 2, 2] .= 1.0
+                alpha_map = Texture(alpha_data; filter=:nearest, colorspace=:linear,
+                                    tex_coord=1)
+                geo = PlaneGeometry(width=1.0, height=1.0)
+                set_attribute!(geo, :uv2, repeat([u2, 0.5], geo.n_vertices), 2)
+                caster = Mesh(geo,
+                    MeshBasicMaterial(side=:double, alpha_test=0.5,
+                                      alpha_map=alpha_map); cast_shadow=true)
+                caster.rotation = Euler(-pi/2, 0.0, 0.0)
+                caster.position = Vec3(0.0, 1.0, 0.0)
+                add!(sc, caster)
+                light = SpotLight(position=Vec3(0.0, 5.0, 0.0),
+                                  angle=pi/4, target=Vec3(0.0, 0.0, 0.0))
+                sm = compute_shadow_map(sc, light; resolution=128)
+                return shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)), count(isfinite, sm.depth)
+            end
+            uv2_visible, uv2_visible_depths = uv2_alpha_map_shadow(0.75)
+            @test uv2_visible == 0.0
+            @test uv2_visible_depths > 0
+            uv2_masked, uv2_masked_depths = uv2_alpha_map_shadow(0.25)
+            @test uv2_masked == 1.0
+            @test uv2_masked_depths == 0
+
+            function clipped_shadow(; material_clip=false, global_clip=false)
+                sc = Scene()
+                ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshLambertMaterial();
+                              receive_shadow=true)
+                ground.rotation = Euler(-pi/2, 0.0, 0.0)
+                add!(sc, ground)
+                clip_all = [Plane(Vec3(0.0, 1.0, 0.0), -10.0)]
+                mat = material_clip ?
+                    MeshPhongMaterial(side=:double, clipping_planes=clip_all) :
+                    MeshPhongMaterial(side=:double)
+                caster = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                              mat; cast_shadow=true)
+                caster.position = Vec3(0.0, 1.0, 0.0)
+                add!(sc, caster)
+                light = SpotLight(position=Vec3(0.0, 5.0, 0.0),
+                                  angle=pi/4, target=Vec3(0.0, 0.0, 0.0))
+                planes = global_clip ? clip_all : Plane{Float64}[]
+                sm = compute_shadow_map(sc, light; resolution=128,
+                                        clipping_planes=planes)
+                return shadow_visibility(sm, Vec3(0.0, 0.0, 0.0)), count(isfinite, sm.depth)
+            end
+            unclipped_vis, unclipped_depths = clipped_shadow()
+            @test unclipped_vis == 0.0
+            @test unclipped_depths > 0
+            material_clipped_vis, material_clipped_depths =
+                clipped_shadow(material_clip=true)
+            @test material_clipped_vis == 1.0
+            @test material_clipped_depths == 0
+            global_clipped_vis, global_clipped_depths =
+                clipped_shadow(global_clip=true)
+            @test global_clipped_vis == 1.0
+            @test global_clipped_depths == 0
         end
 
         @testset "textures" begin

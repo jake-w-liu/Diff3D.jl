@@ -443,9 +443,8 @@ Parallel audits split the remaining work into five critical tracks:
   static directional/spot shadow maps dynamic and point-light maps stale, the
   generated depth pass mirrors the main mesh skinning path for uniform and
   bone-texture skinning, and dynamic shadow camera bounds include the same
-  deformed vertex positions before rendering casters. Cascaded shadow maps,
-  alpha-tested/clipped shadow-caster material parity, and full three.js shadow
-  helper/renderer-state integration remain open.
+  deformed vertex positions before rendering casters. Cascaded shadow maps and
+  full three.js shadow helper/renderer-state integration remain open.
 - Done: add compact browser dynamic point-light cube-shadow rendering. Animated
   cast-shadow `PointLight` positions/distances and animated shadow
   caster/receiver scenes now serialize point lights as `pointDynamic`;
@@ -454,9 +453,17 @@ Parallel audits split the remaining work into five critical tracks:
   the same skinned/instanced caster path as other dynamic shadows, and sample
   the atlas through the existing two-slot shadow list for point-light
   contribution. This is a compact atlas implementation rather than three.js's
-  full `WebGLCubeRenderTarget`/shadow-camera helper stack; cascades,
-  alpha-tested/clipped shadow-caster material parity, and full renderer-state
-  integration remain open.
+  full `WebGLCubeRenderTarget`/shadow-camera helper stack; cascades and full
+  renderer-state integration remain open.
+- Done: make alpha-tested and clipped shadow casters participate consistently in
+  CPU, static WebGL, and dynamic WebGL shadow paths. CPU shadow-map rasterization
+  now receives material/global clipping state, interpolates world position plus
+  UV/UV2 coordinates, and applies the same opacity, albedo-alpha, alpha-map
+  green-channel, and clipping-plane discards used by the color rasterizer for
+  mesh, instanced, and skinned casters. Browser static shadow export passes case
+  clipping planes into the baked map, and dynamic directional/spot/point depth
+  shaders bind caster UVs, alpha textures, alpha tests, opacity, and
+  object/case clipping planes before writing depth.
 - Done: add three.js-style object shadow flags for mesh-like drawables:
   `cast_shadow=false` and `receive_shadow=false` now default off on `Mesh`,
   `InstancedMesh`, and `SkinnedMesh`. CPU shadow maps only rasterize
@@ -950,9 +957,8 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Expand browser export toward renderer parity: full LTC rect-area lights,
   exact physical-material BRDFs, dynamic shadow rendering including
-  cascaded shadow maps, alpha-tested/clipped shadow-caster material parity,
-  full three.js skeleton lifecycle/renderer integration, and broader per-object
-  animation binding.
+  cascaded shadow maps, full three.js skeleton lifecycle/renderer integration,
+  and broader per-object animation binding.
 - Fill glTF gaps in a test-driven order: deeper material texture/runtime parity,
   richer animation/runtime binding, and full three.js skinning parity.
 - Port official examples one at a time, using each port to drive missing core
