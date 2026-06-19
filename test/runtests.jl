@@ -1297,6 +1297,7 @@ end
                              repeat=Vec2(0.5, 0.75),
                              rotation=0.1,
                              center=Vec2(0.5, 0.5))
+        points_alpha = Texture(alphadata; filter=:nearest, colorspace=:linear)
         points_map_geo = BufferGeometry([0.0, 0.0, 0.0,
                                          0.4, 0.0, 0.0],
                                         Float64[], [0.25, 0.25, 0.75, 0.75],
@@ -1305,7 +1306,9 @@ end
                                      PointsMaterial(color=Color3(1.0, 1.0, 1.0),
                                                     size=9.0,
                                                     transparent=true,
-                                                    map=points_tex);
+                                                    map=points_tex,
+                                                    alpha_map=points_alpha,
+                                                    alpha_test=0.3);
                                      name="export_points_map")
         add!(scene, points_mapped)
         morph_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
@@ -1425,6 +1428,10 @@ end
                               name="export_step_quaternion")
         step_quat_mesh.position = Vec3(5.6, -0.8, 0.0)
         add!(scene, step_quat_mesh)
+        quat_component_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.35,0.85,1.0));
+                                   name="export_quaternion_component")
+        quat_component_mesh.position = Vec3(6.3, -0.8, 0.0)
+        add!(scene, quat_component_mesh)
         animated_group = Group(name="export_animated_group")
         animated_group.position = Vec3(0.5, 0.0, 0.0)
         grouped_motion_child = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.2,1.0,0.5));
@@ -1459,6 +1466,8 @@ end
             QuaternionKeyframeTrack(step_quat_mesh, "quaternion", [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 2, 0.0)];
                                     interpolation=:step),
+            NumberKeyframeTrack(quat_component_mesh, "quaternion.y",
+                                [0.0, 1.0], [0.0, sin(pi / 4)]),
             NumberKeyframeTrack(mesh, "opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "color.r", [0.0, 1.0], [0.2, 1.0]),
@@ -1469,7 +1478,9 @@ end
             NumberKeyframeTrack(textured, "material.depthWrite", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(textured, "material.map.offset.x", [0.0, 1.0], [0.25, 0.5]),
             NumberKeyframeTrack(textured, "material.map.repeat.y", [0.0, 1.0], [1.0, 1.5]),
+            NumberKeyframeTrack(textured, "material.map.center.x", [0.0, 1.0], [0.5, 0.25]),
             NumberKeyframeTrack(textured, "material.map.rotation", [0.0, 1.0], [0.2, 0.4]),
+            NumberKeyframeTrack(textured, "material.map.matrixAutoUpdate", [0.0, 1.0], [1.0, 0.0]),
             NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
             NumberKeyframeTrack(normal_mapped, "material.normalScale", [0.0, 1.0], [0.35, 0.7]),
             NumberKeyframeTrack(depth_material_mesh, "material.near", [0.0, 1.0], [1.0, 2.0]),
@@ -1635,7 +1646,9 @@ end
         @test occursin("\"mode\":\"points\"", points_drawable)
         @test occursin("\"pointSize\":9", points_drawable)
         @test occursin("\"transparent\":true", points_drawable)
+        @test occursin("\"alphaTest\":0.29999999999999999", points_drawable)
         @test occursin("\"texture\":{\"width\":2,\"height\":2", points_drawable)
+        @test occursin("\"alphaTexture\":{\"width\":2,\"height\":2", points_drawable)
         @test occursin("\"filter\":\"nearest\"", points_drawable)
         @test occursin("\"minFilter\":\"nearest\"", points_drawable)
         @test occursin("\"magFilter\":\"nearest\"", points_drawable)
@@ -1731,6 +1744,10 @@ end
         @test occursin("packDepthToRGB", html)
         @test occursin("packDepthToRG", html)
         @test occursin("viewZToPerspectiveDepth", html)
+        @test occursin("viewZToOrthographicDepth", html)
+        @test occursin("uDepthOrthographic", html)
+        @test occursin("uDepthOrthographic==1?viewZToOrthographicDepth(viewZ):viewZToPerspectiveDepth(viewZ)", html)
+        @test occursin("uniform1i(p,\"uDepthOrthographic\",active.camera&&active.camera.type===\"orthographic\"?1:0)", html)
         @test occursin("varying float vViewZ", html)
         @test occursin("depthColor(vViewZ)", html)
         @test !occursin("viewDistance-uDepthNear", html)
@@ -1822,6 +1839,15 @@ end
         @test occursin("uPointColorSpace", html)
         @test occursin("uniform1i(p,\"uPointColorSpace\",textureColorSpace(o.texture))", html)
         @test occursin("colorTex(uPointMap,pointUv,uPointColorSpace)", html)
+        @test occursin("uUsePointAlphaMap", html)
+        @test occursin("uPointAlphaTest", html)
+        @test occursin("pointAlphaUv=(uPointAlphaMatrix*vec3(gl_PointCoord,1.0)).xy", html)
+        @test occursin("alphaTex=uUsePointAlphaMap<0.5?1.0:texture2D(uPointAlphaMap,pointAlphaUv).g", html)
+        @test occursin("if(outAlpha<uPointAlphaTest) discard", html)
+        @test occursin("uniformTexMatrix(p,\"uPointAlphaMatrix\",o.alphaTexture)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uUsePointAlphaMap\"),o.alphaTex?1:0)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointAlphaTest\"),o.alphaTest||0)", html)
+        @test occursin("gl.uniform1i(gl.getUniformLocation(p,\"uPointAlphaMap\"),1)", html)
         @test occursin("uSpriteMatrix", html)
         @test occursin("spriteUv=(uSpriteMatrix*vec3(vUv,1.0)).xy", html)
         @test occursin("uSpriteColorSpace", html)
@@ -1979,14 +2005,29 @@ end
         @test occursin("const clearcoatNormalTexturesEnabled=usesClearcoatNormal&&maxTextureUnits>clearcoatNormalTextureUnit&&maxCombinedTextureUnits>clearcoatNormalTextureUnit", html)
         @test occursin("o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture]", html)
         @test occursin("[o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])", html)
-        @test occursin("texture2D(uPhysicalScalarMap,phys1Uv)", html)
-        @test occursin("phys2Uv=uvFor(uPhysicalScalar2Matrix,uPhysicalScalar2TexCoord)", html)
-        @test occursin("uniform1i(p,\"uPhysicalScalar2TexCoord\",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture,0))", html)
-        @test occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture||o.anisotropyTexture)", html)
-        @test !occursin("uniform1i(p,\"uPhysicalScalar2TexCoord\",texCoord(o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture,0))", html)
-        @test !occursin("uniformTexMatrix(p,\"uPhysicalScalar2Matrix\",o.iridescenceTexture||o.iridescenceThicknessTexture||o.specularIntensityTexture||o.thicknessTexture)", html)
-        @test occursin("float thickness=max(uThickness*mix(1.0,phys2.a,uUseThicknessMap),0.0)", html)
-        @test occursin("float anisotropy=clamp(uAnisotropy*mix(1.0,phys2.a,uUseAnisotropyMap),0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
+        @test occursin("clearcoatUv=uvFor(uClearcoatMatrix,uClearcoatTexCoord)", html)
+        @test occursin("sheenRoughnessUv=uvFor(uSheenRoughnessMatrix,uSheenRoughnessTexCoord)", html)
+        @test occursin("iridescenceThicknessUv=uvFor(uIridescenceThicknessMatrix,uIridescenceThicknessTexCoord)", html)
+        @test occursin("float clearcoatMap=uUseClearcoatMap<0.5?1.0:texture2D(uPhysicalScalarMap,clearcoatUv).r", html)
+        @test occursin("float clearcoatRoughMap=uUseClearcoatRoughnessMap<0.5?1.0:texture2D(uPhysicalScalarMap,clearcoatRoughnessUv).g", html)
+        @test occursin("float transmissionMap=uUseTransmissionMap<0.5?1.0:texture2D(uPhysicalScalarMap,transmissionUv).b", html)
+        @test occursin("float sheenRoughMap=uUseSheenRoughnessMap<0.5?1.0:texture2D(uPhysicalScalarMap,sheenRoughnessUv).a", html)
+        @test occursin("float iridescenceMap=uUseIridescenceMap<0.5?1.0:texture2D(uPhysicalScalar2Map,iridescenceUv).r", html)
+        @test occursin("float iridThicknessMap=uUseIridescenceThicknessMap<0.5?1.0:texture2D(uPhysicalScalar2Map,iridescenceThicknessUv).g", html)
+        @test occursin("float specIntensityMap=uUseSpecularIntensityMap<0.5?1.0:texture2D(uPhysicalScalar2Map,specularIntensityUv).b", html)
+        @test occursin("float thicknessMap=uUseThicknessMap<0.5?1.0:texture2D(uPhysicalScalar2Map,thicknessUv).a", html)
+        @test occursin("float anisotropyMap=uUseAnisotropyMap<0.5?1.0:texture2D(uPhysicalScalar2Map,anisotropyUv).a", html)
+        @test occursin("uniform1i(p,\"uClearcoatTexCoord\",texCoord(o.clearcoatTexture,0))", html)
+        @test occursin("uniform1i(p,\"uTransmissionTexCoord\",texCoord(o.transmissionTexture,0))", html)
+        @test occursin("uniform1i(p,\"uIridescenceThicknessTexCoord\",texCoord(o.iridescenceThicknessTexture,0))", html)
+        @test occursin("uniform1i(p,\"uAnisotropyTexCoord\",texCoord(o.anisotropyTexture,0))", html)
+        @test occursin("uniformTexMatrix(p,\"uClearcoatMatrix\",o.clearcoatTexture)", html)
+        @test occursin("uniformTexMatrix(p,\"uThicknessMatrix\",o.thicknessTexture)", html)
+        @test occursin("uniformTexMatrix(p,\"uAnisotropyMatrix\",o.anisotropyTexture)", html)
+        @test !occursin("phys1Uv", html)
+        @test !occursin("phys2Uv", html)
+        @test occursin("float thickness=max(uThickness*thicknessMap,0.0)", html)
+        @test occursin("float anisotropy=clamp(uAnisotropy*anisotropyMap,0.0,1.0); rough=sqrt(mix(rough*rough,1.0,anisotropy*anisotropy));", html)
         @test occursin("vec3 mappedClearcoatNormal(vec3 n, vec2 uv)", html)
         @test occursin("vec3 clearcoatN=mappedClearcoatNormal(n,clearcoatNormalUv)", html)
         @test occursin("float coatNdv=max(dot(clearcoatN,v),0.0); vec3 coat=specular*pow(coatNdv,coatPower)*clearcoat", html)
@@ -2184,7 +2225,9 @@ end
         @test occursin("\"interpolation\":\"slerp\"", html)
         @test occursin("\"interpolation\":\"step\"", html)
         @test occursin("\"property\":\"quaternion\"", html)
+        @test occursin("\"property\":\"quaternion\",\"component\":2", html)
         @test occursin("prop===\"quaternion\"", html)
+        @test occursin("n.animQuat=norm4(n.animQuat)", html)
         @test occursin("function eulerToQuat", html)
         @test occursin("prop===\"rotation\"", html)
         @test occursin("n.animEuler", html)
@@ -2452,7 +2495,9 @@ end
         @test occursin("for(const t of objectTextures(o)) resetTextureAnim(t)", html)
         @test occursin("\"property\":\"map_offset\",\"component\":1", html)
         @test occursin("\"property\":\"map_repeat\",\"component\":2", html)
+        @test occursin("\"property\":\"map_center\",\"component\":1", html)
         @test occursin("\"property\":\"map_rotation\",\"component\":0", html)
+        @test occursin("\"property\":\"map_matrix_auto_update\",\"component\":0", html)
         @test occursin("uniformTexMatrix(p,\"uAlphaMatrix\",o.alphaTexture)", html)
         @test occursin("uniformMatrix3fv", html)
         @test occursin("\"opacity\":0.5", html)
@@ -3498,6 +3543,12 @@ end
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
+        @test PointsMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        legacy_points = PointsMaterial(Color3(1, 1, 1), 2.0, 1.0, false,
+                                       nothing, true, true)
+        @test legacy_points.alpha_map === nothing
+        @test legacy_points.alpha_test == 0.0
         @test MeshPhongMaterial(vertex_colors=true).vertex_colors == true
         local_clip = Plane(Vec3(0.0, 1.0, 0.0), 0.25)
         phong_clipped = MeshPhongMaterial(clipping_planes=[local_clip])
@@ -3683,6 +3734,45 @@ end
         ps = Scene(background=Color3(0.0,0,0)); add!(ps, PointsObject(pg, PointsMaterial(color=Color3(0.0,1,0), size=3.0)))
         rtp = RenderTarget(40,40); render!(rtp, ps, cam)
         @test count(>(0.5), rtp.color[:,:,2]) >= 1          # point lit
+
+        point_cam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+                                       near=0.1, far=10.0)
+        point_cam.position = Vec3(0.0, 0.0, 2.0)
+        point_cam.target = Vec3(0.0, 0.0, 0.0)
+        function point_center_color(; color=Color3(1.0, 0.0, 0.0),
+                                    map=nothing, alpha_map=nothing, alpha_test=0.0)
+            geo = BufferGeometry()
+            geo.positions = [0.0, 0.0, 0.0]
+            geo.n_vertices = 1
+            sc = Scene(background=Color3(0.0, 0.0, 1.0))
+            add!(sc, PointsObject(geo, PointsMaterial(color=color,
+                                                      size=7.0,
+                                                      map=map,
+                                                      alpha_map=alpha_map,
+                                                      alpha_test=alpha_test,
+                                                      depth_write=false)))
+            rt = RenderTarget(32, 32)
+            render!(rt, sc, point_cam)
+            return Vec3(rt.color[16, 16, 1], rt.color[16, 16, 2], rt.color[16, 16, 3])
+        end
+        point_green_map = zeros(Float64, 1, 1, 3)
+        point_green_map[1, 1, :] .= (0.0, 1.0, 0.0)
+        mapped_point = point_center_color(color=Color3(1.0, 1.0, 1.0),
+                                          map=Texture(point_green_map; filter=:nearest,
+                                                      colorspace=:linear))
+        @test mapped_point.x ≈ 0.0 atol=1e-12
+        @test mapped_point.y ≈ 1.0 atol=1e-12
+        @test mapped_point.z ≈ 0.0 atol=1e-12
+        point_alpha_zero = zeros(Float64, 1, 1, 3)
+        point_alpha_one = ones(Float64, 1, 1, 3)
+        rejected_point = point_center_color(alpha_map=Texture(point_alpha_zero; filter=:nearest,
+                                                              colorspace=:linear),
+                                            alpha_test=0.5)
+        accepted_point = point_center_color(alpha_map=Texture(point_alpha_one; filter=:nearest,
+                                                              colorspace=:linear),
+                                            alpha_test=0.5)
+        @test rejected_point == Vec3(0.0, 0.0, 1.0)
+        @test accepted_point == Vec3(1.0, 0.0, 0.0)
     end
 
     @testset "EffectComposer post-processing" begin
@@ -5146,6 +5236,17 @@ end
                 @test obj.material.opacity ≈ 0.6
                 @test obj.material.transparent
                 @test obj.geometry.uvs == [0.0, 0.0, 1.0, 1.0]
+
+                gltf["materials"][1]["alphaMode"] = "MASK"
+                gltf["materials"][1]["alphaCutoff"] = 0.42
+                masked_obj = only(get_children(only(get_children(
+                    Diff3D._gltf_build_scene(gltf, [buf]; dir=dir)))))
+                @test masked_obj isa PointsObject
+                @test masked_obj.material isa PointsMaterial
+                @test masked_obj.material.opacity ≈ 0.6
+                @test !masked_obj.material.transparent
+                @test masked_obj.material.alpha_test ≈ 0.42
+                @test masked_obj.material.map isa Texture
             end
 
             let dir = mktempdir()

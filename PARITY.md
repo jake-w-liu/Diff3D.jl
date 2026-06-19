@@ -495,6 +495,10 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Done: add browser export for alpha maps where matching Julia material fields
   already exist.
+- Done: add `PointsMaterial.alpha_map` and `PointsMaterial.alpha_test`, carry
+  glTF masked point primitives through `PointsMaterial`, and apply point
+  texture color, map alpha, alpha-map green-channel discard, and alpha-test
+  behavior in CPU point rasterization plus compact browser point sprites.
 - Done: add `MeshBasicMaterial.alpha_map` so basic unlit materials participate
   in the same CPU rasterization and compact browser alpha-map paths as other
   mapped materials.
@@ -526,6 +530,9 @@ Parallel audits split the remaining work into five critical tracks:
   uniform and normal-to-RGB shader branch.
 - Done: add compact browser `MeshDepthMaterial` support with near/far material
   serialization plus basic/RGBA/RGB/RG depth-packing shader branches.
+- Done: make compact browser `MeshDepthMaterial` switch depth conversion for
+  orthographic exported cameras instead of always using perspective view-Z
+  math.
 - Done: add compact browser `MeshToonMaterial` support with `gradient_steps`
   serialization, quantized diffuse light bands, and optional `gradient_map`
   sampling.
@@ -608,6 +615,9 @@ Parallel audits split the remaining work into five critical tracks:
   iridescence, iridescence-thickness, specular-intensity, specular-color, and
   anisotropy strength when the packed alpha slot is not already occupied by
   thickness.
+  Packed scalar maps now keep per-channel texture-coordinate and transform
+  uniforms, so maps sharing a packed browser sampler no longer inherit the first
+  packed texture's UV set or matrix.
   The compact browser runtime packs these into four extra physical map samplers
   and falls back to scalar physical terms on contexts with fewer than 12
   fragment texture units. Full tangent-space anisotropic GGX and three.js BRDF
@@ -699,7 +709,7 @@ Parallel audits split the remaining work into five critical tracks:
   animation path.
 - Done: bind nested material texture transform animation paths such as
   `material.map.offset.x`, `material.map.repeat.y`, `material.map.rotation`,
-  and `material.map.matrixAutoUpdate`. CPU playback mutates the material
+  `material.map.center.x`, and `material.map.matrixAutoUpdate`. CPU playback mutates the material
   `Texture` object and refreshes its UV matrix when auto-update is enabled;
   browser playback resets serialized texture transform state each frame,
   applies flattened texture tracks, and recomputes sampler matrices before
@@ -724,6 +734,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: bind direct `.quaternion` animation tracks to object rotation in CPU
   playback and generated WebGL runtime playback, matching the existing
   quaternion data path used by rotation tracks.
+- Done: normalize generated-browser quaternion animation after scalar component
+  tracks such as `quaternion.y` update one component, matching CPU
+  `NumberKeyframeTrack` quaternion-component playback.
 - Done: fix generated WebGL transform-animation semantics so object and bone
   position/scale/quaternion tracks reset to serialized local base transforms
   and rebuild world matrices from `parentMatrix * localTRS`, matching three.js

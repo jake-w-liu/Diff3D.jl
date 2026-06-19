@@ -499,7 +499,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     return rt
 end
 
-"""Rasterize `PointsObject` vertices as small squares sized by the material."""
+"""Rasterize `PointsObject` vertices as small point sprites sized by the material."""
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
                         ylo::Int=1, yhi::Int=rt.height)
@@ -514,7 +514,13 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
         alpha = clamp(Float64(material_opacity(obj.material)), 0.0, 1.0)
         depth_test = material_depth_test(obj.material)
         depth_write = material_depth_write(obj.material)
+        alpha_test = material_alpha_test(obj.material)
+        albedo_map = _material_field(obj.material, :map)
+        alpha_map = _material_field(obj.material, :alpha_map)
+        use_color_map = albedo_map isa Texture
+        use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
         r = max(Int(round(hasfield(typeof(obj.material), :size) ? obj.material.size : 1.0)) ÷ 2, 0)
+        diameter = max(2r + 1, 1)
         for vi in 1:geo.n_vertices
             pv = mat4_transform_point(view, mat4_transform_point(wm, get_vertex(geo, vi)))
             pv.z <= -near || continue      # near-plane cull, matching the mesh path
@@ -526,7 +532,18 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
             min_py = max(cy - r, ylo)
             max_py = min(cy + r, yhi)
             for py in min_py:max_py, px in min_px:max_px
-                _put_pixel!(rt, px, py, pz, col, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha)
+                u = clamp((px - (cx - r) + 0.5) / diameter, 0.0, 1.0)
+                v = clamp(1.0 - (py - (cy - r) + 0.5) / diameter, 0.0, 1.0)
+                frag_alpha = use_fragment_alpha ?
+                    _fragment_alpha(alpha, albedo_map, alpha_map, u, v, u, v) : alpha
+                frag_alpha >= alpha_test || continue
+                point_col = col
+                if use_color_map
+                    tex_col = sample_texture_linear(albedo_map, u, v)
+                    point_col = Color3(col.r * tex_col.r, col.g * tex_col.g, col.b * tex_col.b)
+                end
+                _put_pixel!(rt, px, py, pz, point_col, xlo, xhi, ylo, yhi,
+                            depth_test, depth_write, frag_alpha)
             end
         end
     end)

@@ -1169,6 +1169,10 @@ _gltf_material_depth_write(mat) =
     hasproperty(mat, :depth_write) ? Bool(getproperty(mat, :depth_write)) : true
 _gltf_material_map(mat) =
     hasproperty(mat, :map) ? getproperty(mat, :map) : nothing
+_gltf_material_alpha_map(mat) =
+    hasproperty(mat, :alpha_map) ? getproperty(mat, :alpha_map) : nothing
+_gltf_material_alpha_test(mat) =
+    hasproperty(mat, :alpha_test) ? Float64(getproperty(mat, :alpha_test)) : 0.0
 
 function _gltf_line_material(mat)
     LineBasicMaterial(color=_gltf_material_color(mat),
@@ -1182,6 +1186,8 @@ function _gltf_points_material(mat)
                    opacity=_gltf_material_opacity(mat),
                    transparent=_gltf_material_transparent(mat),
                    map=_gltf_material_map(mat),
+                   alpha_map=_gltf_material_alpha_map(mat),
+                   alpha_test=_gltf_material_alpha_test(mat),
                    depth_test=_gltf_material_depth_test(mat),
                    depth_write=_gltf_material_depth_write(mat))
 end

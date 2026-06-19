@@ -242,13 +242,23 @@ struct PointsMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     map::Any
+    alpha_map::Any
+    alpha_test::Float64
     depth_test::Bool
     depth_write::Bool
 end
 
 function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0,
-                        transparent=false, map=nothing, depth_test=true, depth_write=true)
-    PointsMaterial(color, size, opacity, transparent, map, depth_test, depth_write)
+                        transparent=false, map=nothing, alpha_map=nothing,
+                        alpha_test=0.0, depth_test=true, depth_write=true)
+    PointsMaterial(color, size, opacity, transparent, map, alpha_map,
+                   Float64(alpha_test), depth_test, depth_write)
+end
+
+function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
+                        depth_test::Bool, depth_write::Bool)
+    PointsMaterial(color, size, opacity, transparent, map, nothing, 0.0,
+                   depth_test, depth_write)
 end
 
 # ========================== MeshPhysicalMaterial ==========================
