@@ -1247,8 +1247,10 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
             end
         elseif obj isa InstancedMesh
             parent = compute_world_matrix(obj)
+            draw_mode = String(obj.draw_mode)
+            wire_triangles = obj.draw_mode === :triangles && material_wireframe(obj.material)
             if !_web_material_transparent(obj.material)
-                if material_wireframe(obj.material)
+                if wire_triangles
                     proxy = _web_wireframe_proxy(obj)
                     push!(out, _web_drawable_json(proxy, parent; mode="lines",
                                                   transform_obj=obj,
@@ -1260,7 +1262,7 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                   lod_distance=lod_distance,
                                                   lod_hysteresis=lod_hysteresis))
                 else
-                    push!(out, _web_drawable_json(obj, parent; mode="triangles",
+                    push!(out, _web_drawable_json(obj, parent; mode=draw_mode,
                                                   instance_matrices=obj.instance_matrices,
                                                   morph_target_ids=ancestor_ids,
                                                   visibility_target_ids=visibility_ids,
@@ -1271,7 +1273,7 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                 end
             else
                 for im in obj.instance_matrices
-                    if material_wireframe(obj.material)
+                    if wire_triangles
                         proxy = _web_wireframe_proxy(obj)
                         push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
                                                       transform_obj=obj,
@@ -1283,7 +1285,7 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                       lod_distance=lod_distance,
                                                       lod_hysteresis=lod_hysteresis))
                     else
-                        push!(out, _web_drawable_json(obj, parent * im; mode="triangles",
+                        push!(out, _web_drawable_json(obj, parent * im; mode=draw_mode,
                                                       instance_matrix=im,
                                                       morph_target_ids=ancestor_ids,
                                                       visibility_target_ids=visibility_ids,

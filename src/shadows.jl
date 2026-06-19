@@ -34,6 +34,7 @@ function _scene_bounds(meshes, instanced)
     for im in instanced
         # collect_instanced traverses without pruning invisible subtrees.
         _visible_in_tree(im) || continue
+        _instanced_triangle_drawable(im) || continue
         (object_casts_shadow(im) || object_receives_shadow(im)) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
@@ -203,7 +204,8 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf
     _append_skinned_render_meshes!(meshes, scene)
     instanced = collect_instanced(scene)
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
-                 any(im -> _visible_in_tree(im) && object_casts_shadow(im), instanced)
+                 any(im -> _visible_in_tree(im) && _instanced_triangle_drawable(im) &&
+                           object_casts_shadow(im), instanced)
     has_caster ||
         return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), shadow_bias, pcf)
     center, radius = _scene_bounds(meshes, instanced)
@@ -221,6 +223,7 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf
     end
     for im in instanced
         _visible_in_tree(im) || continue
+        _instanced_triangle_drawable(im) || continue
         object_casts_shadow(im) || continue
         base = compute_world_matrix(im)
         mesh_clipping_planes = _combined_clipping_planes(clipping_planes,

@@ -88,10 +88,11 @@ end
 
 function test_adam7_png_bytes(img::Array{T,3}) where {T<:Unsigned}
     H, W, C = size(img)
-    C in (1, 3, 4) || error("test_adam7_png_bytes expects gray, RGB, or RGBA data")
+    C in (1, 2, 3, 4) ||
+        error("test_adam7_png_bytes expects gray, gray+alpha, RGB, or RGBA data")
     bitdepth = T === UInt8 ? 8 : T === UInt16 ? 16 :
                error("test_adam7_png_bytes expects UInt8 or UInt16 data")
-    color_type = C == 1 ? 0x00 : C == 3 ? 0x02 : 0x06
+    color_type = C == 1 ? 0x00 : C == 2 ? 0x04 : C == 3 ? 0x02 : 0x06
     raw = UInt8[]
     bps = bitdepth ÷ 8
     bpp = C * bps
@@ -3119,7 +3120,11 @@ end
         v 1 0 0
         v 1 1 0
         v 0 1 0
-        f 1 2 3 4
+        vt 0 0
+        vt 1 0
+        vt 1 1
+        vt 0 1
+        f 1/1 2/2 3/3 4/4
         """
         f = tempname() * ".obj"
         write(f, obj)
@@ -3130,6 +3135,8 @@ end
         @test get_vertex(geo, 2).x ≈ 1.0
         # Computed normals point +z for a planar quad in the z=0 plane.
         @test get_normal(geo, 1).z ≈ 1.0 atol=1e-10
+        @test geo.uvs == [0.0,0.0, 1.0,0.0, 1.0,1.0,
+                          0.0,0.0, 1.0,1.0, 0.0,1.0]
         rm(f)
     end
 
@@ -3534,6 +3541,10 @@ end
         im = InstancedMesh(BoxGeometry(width=1.0,height=1.0,depth=1.0),
                            MeshBasicMaterial(color=Color3(1.0,1.0,1.0)), 2)
         @test instanced_count(im) == 2
+        @test im.draw_mode === :triangles
+        @test_throws ArgumentError InstancedMesh(BoxGeometry(), MeshBasicMaterial(), -1)
+        @test_throws ArgumentError InstancedMesh(BoxGeometry(), MeshBasicMaterial(), 1;
+                                                draw_mode=:triangle_fan)
         set_instance_matrix!(im, 1, mat4_translation(-2.0, 0.0, 0.0))
         set_instance_matrix!(im, 2, mat4_translation( 2.0, 0.0, 0.0))
         add!(scene, im)
@@ -3548,6 +3559,54 @@ end
         center = count(>(0.5), @view rt.color[:, 30:35, 1])
         @test left > 20 && right > 20
         @test center == 0
+    end
+
+    @testset "InstancedMesh point and line draw modes" begin
+        cam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+                                 near=0.1, far=10.0)
+        cam.position = Vec3(0.0, 0.0, 2.0)
+        cam.target = Vec3(0.0, 0.0, 0.0)
+
+        point_geo = BufferGeometry()
+        point_geo.positions = [0.0, 0.0, 0.0]
+        point_geo.n_vertices = 1
+        point_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        point_inst = InstancedMesh(point_geo,
+                                   PointsMaterial(color=Color3(0.0, 1.0, 0.0),
+                                                  size=5.0,
+                                                  size_attenuation=false),
+                                   2; draw_mode=:points, cast_shadow=true)
+        set_instance_matrix!(point_inst, 1, mat4_translation(-0.5, 0.0, 0.0))
+        set_instance_matrix!(point_inst, 2, mat4_translation(0.5, 0.0, 0.0))
+        add!(point_scene, point_inst)
+        rt_points = RenderTarget(64, 64)
+        render!(rt_points, point_scene, cam)
+        @test count(>(0.5), @view rt_points.color[:, 1:24, 2]) > 0
+        @test count(>(0.5), @view rt_points.color[:, 41:64, 2]) > 0
+
+        tiled_points = RenderTarget(64, 64)
+        render_tiled!(tiled_points, point_scene, cam)
+        @test maximum(tiled_points.color) == 0.0
+        point_shadow = compute_shadow_map(point_scene,
+                                          DirectionalLight(position=Vec3(0.0, 2.0, 2.0));
+                                          resolution=16)
+        @test all(isinf, point_shadow.depth)
+
+        line_geo = BufferGeometry()
+        line_geo.positions = [0.0, -0.45, 0.0, 0.0, 0.45, 0.0]
+        line_geo.n_vertices = 2
+        line_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        line_inst = InstancedMesh(line_geo,
+                                  LineBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                    linewidth=2.0),
+                                  2; draw_mode=:lines)
+        set_instance_matrix!(line_inst, 1, mat4_translation(-0.5, 0.0, 0.0))
+        set_instance_matrix!(line_inst, 2, mat4_translation(0.5, 0.0, 0.0))
+        add!(line_scene, line_inst)
+        rt_lines = RenderTarget(64, 64)
+        render!(rt_lines, line_scene, cam)
+        @test count(>(0.5), @view rt_lines.color[:, 1:24, 1]) > 0
+        @test count(>(0.5), @view rt_lines.color[:, 41:64, 1]) > 0
     end
 
     @testset "StereoCamera eye offset" begin
@@ -4289,22 +4348,55 @@ end
         adec16 = load_png(af16); rm(af16)
         @test size(adec16) == (7, 5, 4)
         @test maximum(abs.(adec16 .- Float64.(adam16) ./ 65535)) <= 1e-12
+
+        gray_alpha = Array{UInt8}(undef, 5, 6, 2)
+        for i in 1:5, j in 1:6
+            gray_alpha[i, j, 1] = UInt8(mod(17 * i + 31 * j, 256))
+            gray_alpha[i, j, 2] = UInt8(mod(251 - 19 * i - 23 * j, 256))
+        end
+        gaf = tempname() * ".png"
+        write(gaf, test_adam7_png_bytes(gray_alpha))
+        gadec = load_png(gaf)
+        @test size(gadec) == (5, 6, 2)
+        @test maximum(abs.(gadec .- Float64.(gray_alpha) ./ 255)) <= 1e-12
+        gatex = TextureLoader(gaf); rm(gaf)
+        @test sample_texture(gatex, 0.5, 0.5).r ==
+              Diff3D.sample_texture_channel(gatex, 0.5, 0.5, 1)
+        @test Diff3D.sample_texture_channel(gatex, 0.5, 0.5, 2) !=
+              Diff3D.sample_texture_channel(gatex, 0.5, 0.5, 1)
+
+        gray_alpha16 = Array{UInt16}(undef, 3, 4, 2)
+        for i in 1:3, j in 1:4
+            gray_alpha16[i, j, 1] = UInt16(mod(1234 * i + 4567 * j, 65536))
+            gray_alpha16[i, j, 2] = UInt16(mod(61000 - 2345 * i - 3456 * j, 65536))
+        end
+        gaf16 = tempname() * ".png"
+        write(gaf16, test_adam7_png_bytes(gray_alpha16))
+        gadec16 = load_png(gaf16); rm(gaf16)
+        @test size(gadec16) == (3, 4, 2)
+        @test maximum(abs.(gadec16 .- Float64.(gray_alpha16) ./ 65535)) <= 1e-12
     end
 
     @testset "OBJ .mtl materials" begin
         dir = mktempdir()
-        write(joinpath(dir, "m.mtl"), "newmtl red\nKd 0.8 0.2 0.1\nKs 0.5 0.5 0.5\nNs 64\n")
+        save_png(joinpath(dir, "diffuse.png"), fill(0.25, 1, 1, 3))
+        write(joinpath(dir, "m.mtl"),
+              "newmtl red\nKd 0.8 0.2 0.1\nKs 0.5 0.5 0.5\nNs 64\nmap_Kd -s 1 1 diffuse.png\n")
         mats = load_mtl(joinpath(dir, "m.mtl"))
         @test haskey(mats, "red")
         @test mats["red"].color.r ≈ 0.8 && mats["red"].color.g ≈ 0.2
         @test mats["red"].shininess ≈ 64.0
+        @test mats["red"].map isa Texture
+        @test sample_texture(mats["red"].map, 0.5, 0.5).r ≈ 0.25 atol=1/255
         # OBJ referencing the mtl with usemtl.
         write(joinpath(dir, "t.obj"),
-              "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n")
+              "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl red\nf 1/1 2/2 3/3\n")
         geo, face_mtl, m2 = load_obj_groups(joinpath(dir, "t.obj"))
         @test geo.n_faces == 1
+        @test geo.uvs == [0.0,0.0, 1.0,0.0, 0.0,1.0]
         @test face_mtl == ["red"]
         @test haskey(m2, "red") && m2["red"].color.r ≈ 0.8
+        @test m2["red"].map isa Texture
         rm(dir; recursive=true)
     end
 
@@ -5483,6 +5575,7 @@ end
             scene = Diff3D._gltf_build_scene(gltf, buffers)
             inst = only(collect_instanced(scene))
             @test instanced_count(inst) == 2
+            @test inst.draw_mode === :triangles
             @test mat4_transform_point(get_instance_matrix(inst, 2), Vec3(0.0, 0.0, 0.0)) ==
                   Vec3(2.0, 0.0, 0.0)
 
@@ -5498,8 +5591,25 @@ end
             @test_throws ErrorException Diff3D._gltf_build_scene(bad_counts, bad_count_buffers)
             no_mesh, no_mesh_buffers = instancing_fixture(include_mesh=false)
             @test_throws ErrorException Diff3D._gltf_build_scene(no_mesh, no_mesh_buffers)
-            points, point_buffers = instancing_fixture(mode=0)
-            @test_throws ErrorException Diff3D._gltf_build_scene(points, point_buffers)
+
+            for (mode, expected_mode, material_type, web_mode) in
+                ((0, :points, PointsMaterial, "\"mode\":\"points\""),
+                 (1, :lines, LineBasicMaterial, "\"mode\":\"lines\""),
+                 (2, :line_loop, LineBasicMaterial, "\"mode\":\"line_loop\""),
+                 (3, :line_strip, LineBasicMaterial, "\"mode\":\"line_strip\""))
+                primitive_gltf, primitive_buffers = instancing_fixture(mode=mode)
+                primitive_scene = Diff3D._gltf_build_scene(primitive_gltf, primitive_buffers)
+                primitive_inst = only(collect_instanced(primitive_scene))
+                @test primitive_inst.draw_mode === expected_mode
+                @test primitive_inst.material isa material_type
+                @test instanced_count(primitive_inst) == 2
+                @test mat4_transform_point(get_instance_matrix(primitive_inst, 2),
+                                           Vec3(0.0, 0.0, 0.0)) ==
+                      Vec3(2.0, 0.0, 0.0)
+                drawable_json = only(Diff3D._web_collect_drawables(primitive_scene))
+                @test occursin(web_mode, drawable_json)
+                @test occursin("\"instanceMatrices\":[", drawable_json)
+            end
         end
 
         @testset "glTF mesh attribute loading" begin
@@ -5955,6 +6065,24 @@ end
                 msg = sprint(showerror, err)
                 @test occursin("image/ktx2", msg)
                 @test occursin("not supported", msg)
+
+                basisu = Dict{String,Any}(
+                    "images"=>Any[Dict{String,Any}("uri"=>"texture.ktx2")],
+                    "textures"=>Any[Dict{String,Any}(
+                        "extensions"=>Dict{String,Any}(
+                            "KHR_texture_basisu"=>Dict{String,Any}("source"=>0.0)))],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                basisu_err = try
+                    Diff3D._gltf_material(basisu, [UInt8[]], dir, 0.0)
+                    nothing
+                catch e
+                    e
+                end
+                basisu_msg = sprint(showerror, basisu_err)
+                @test occursin("KHR_texture_basisu", basisu_msg)
+                @test occursin("KTX2/Basis", basisu_msg)
             end
         end
 
@@ -7689,7 +7817,8 @@ end
         end
 
         @testset "load_gltf primitive modes" begin
-            function primitive_mode_path(mode::Int, order::Vector{Int}; name="mode_$mode")
+            function primitive_mode_path(mode::Int, order::Vector{Int}; name="mode_$mode",
+                                         morph::Bool=false, weight::Real=0.5)
                 dir = mktempdir()
                 bin = UInt8[]
                 append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
@@ -7698,26 +7827,39 @@ end
                 append_f32!([0,0,0, 1,0,0, 0,1,0, 1,1,0])
                 off_idx = length(bin)
                 append_u16!(order)
+                off_morph = 0
+                if morph
+                    off_morph = length(bin)
+                    append_f32!([0,0,2, 0,0,2, 0,0,2, 0,0,2])
+                end
                 write(joinpath(dir, "primitive_mode.bin"), bin)
+                node_json = morph ?
+                    "{\"name\":\"$name\",\"mesh\":0,\"weights\":[$(Float64(weight))]}" :
+                    "{\"name\":\"$name\",\"mesh\":0}"
+                morph_view = morph ?
+                    ",\n                   {\"buffer\":0,\"byteOffset\":$off_morph,\"byteLength\":48}" : ""
+                morph_accessor = morph ?
+                    ",\n                   {\"bufferView\":2,\"componentType\":5126,\"count\":4,\"type\":\"VEC3\"}" : ""
+                targets_json = morph ? ",\"targets\":[{\"POSITION\":2}]" : ""
                 json = """
                 {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
-                 "nodes":[{"name":"$name","mesh":0}],
+                 "nodes":[$node_json],
                  "buffers":[{"byteLength":$(length(bin)),"uri":"primitive_mode.bin"}],
                  "bufferViews":[
                    {"buffer":0,"byteOffset":$off_pos,"byteLength":48},
-                   {"buffer":0,"byteOffset":$off_idx,"byteLength":$(2 * length(order))}],
+                   {"buffer":0,"byteOffset":$off_idx,"byteLength":$(2 * length(order))}$morph_view],
                  "accessors":[
                    {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},
-                   {"bufferView":1,"componentType":5123,"count":$(length(order)),"type":"SCALAR"}],
+                   {"bufferView":1,"componentType":5123,"count":$(length(order)),"type":"SCALAR"}$morph_accessor],
                  "meshes":[{"primitives":[{"attributes":{"POSITION":0},
-                                            "indices":1,"mode":$mode}]}]}
+                                            "indices":1,"mode":$mode$targets_json}]}]}
                 """
                 path = joinpath(dir, "primitive_mode.gltf")
                 write(path, json)
                 return path
             end
-            mode_object(mode, order) =
-                get_children(get_children(load_gltf_asset(primitive_mode_path(mode, order)).scene)[1])[1]
+            mode_object(mode, order; kwargs...) =
+                get_children(get_children(load_gltf_asset(primitive_mode_path(mode, order; kwargs...)).scene)[1])[1]
 
             pts_obj = mode_object(0, [2, 0])
             @test pts_obj isa PointsObject
@@ -7742,6 +7884,16 @@ end
             @test line_strip_obj isa LineObject
             @test line_strip_obj.geometry.n_vertices == 3
             @test get_vertex(line_strip_obj.geometry, 3) == Vec3(1.0, 1.0, 0.0)
+
+            morphed_pts = mode_object(0, [2, 0]; morph=true, weight=0.5)
+            @test morphed_pts isa PointsObject
+            @test get_vertex(morphed_pts.geometry, 1) == Vec3(0.0, 1.0, 1.0)
+            @test get_vertex(morphed_pts.geometry, 2) == Vec3(0.0, 0.0, 1.0)
+
+            morphed_line = mode_object(1, [0, 1]; morph=true, weight=0.25)
+            @test morphed_line isa LineSegments
+            @test get_vertex(morphed_line.geometry, 1) == Vec3(0.0, 0.0, 0.5)
+            @test get_vertex(morphed_line.geometry, 2) == Vec3(1.0, 0.0, 0.5)
 
             tri_obj = mode_object(4, [0, 1, 2])
             @test tri_obj isa Mesh
@@ -8114,6 +8266,39 @@ end
             @test gb.indices == [1,2,3]
             @test Diff3D.get_attribute(gb, :color).data == expect_col
             rm(pb; force=true)
+
+            # --- binary_big_endian ---
+            hdr_be = "ply\nformat binary_big_endian 1.0\nelement vertex 3\n" *
+                "property float x\nproperty float y\nproperty float z\n" *
+                "property float nx\nproperty float ny\nproperty float nz\n" *
+                "property uchar red\nproperty uchar green\nproperty uchar blue\n" *
+                "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+            body_be = Vector{UInt8}(codeunits(hdr_be))
+            function append_be32!(out::Vector{UInt8}, word::UInt32)
+                push!(out, UInt8(word >> 24), UInt8((word >> 16) & 0xff),
+                      UInt8((word >> 8) & 0xff), UInt8(word & 0xff))
+            end
+            append_be_f32!(out::Vector{UInt8}, x) =
+                append_be32!(out, only(reinterpret(UInt32, Float32[Float32(x)])))
+            append_be_i32!(out::Vector{UInt8}, x) =
+                append_be32!(out, only(reinterpret(UInt32, Int32[Int32(x)])))
+            for v in verts
+                for k in 1:6
+                    append_be_f32!(body_be, v[k])
+                end
+                push!(body_be, v[7], v[8], v[9])
+            end
+            push!(body_be, 0x03)
+            for u in Int32[0,1,2]
+                append_be_i32!(body_be, u)
+            end
+            pbe = tempname() * ".ply"; write(pbe, body_be)
+            gbe = Diff3D.load_ply(pbe)
+            @test gbe.positions == expect_pos
+            @test gbe.normals == [0.0,0.0,1.0, 0.0,0.0,1.0, 0.0,0.0,1.0]
+            @test gbe.indices == [1,2,3]
+            @test Diff3D.get_attribute(gbe, :color).data == expect_col
+            rm(pbe; force=true)
         end
 
     end

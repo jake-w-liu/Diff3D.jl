@@ -24,6 +24,14 @@ layers_test(a::Layers, b::Layers) = (a.mask & b.mask) != 0
 # ========================== InstancedMesh ==========================
 # One geometry/material drawn at many transforms with bounded extra memory.
 
+const _INSTANCED_DRAW_MODES = (:triangles, :points, :lines, :line_loop, :line_strip)
+
+function _validate_instanced_draw_mode(draw_mode::Symbol)
+    draw_mode in _INSTANCED_DRAW_MODES ||
+        throw(ArgumentError("unsupported InstancedMesh draw_mode: $draw_mode"))
+    return draw_mode
+end
+
 mutable struct InstancedMesh <: AbstractObject3D
     position::Vec3{Float64}
     rotation::Euler{Float64}
@@ -38,14 +46,44 @@ mutable struct InstancedMesh <: AbstractObject3D
     cast_shadow::Bool
     receive_shadow::Bool
     instance_matrices::Vector{Mat4{Float64}}
+    draw_mode::Symbol
+
+    function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
+                           scale::Vec3{Float64},
+                           parent::Union{Nothing, AbstractObject3D},
+                           children::Vector{AbstractObject3D},
+                           visible::Bool, name::String, id::Int,
+                           geometry, material, cast_shadow::Bool,
+                           receive_shadow::Bool,
+                           instance_matrices::Vector{Mat4{Float64}},
+                           draw_mode::Symbol)
+        new(position, rotation, scale, parent, children, visible, name, id,
+            geometry, material, cast_shadow, receive_shadow, instance_matrices,
+            _validate_instanced_draw_mode(draw_mode))
+    end
 end
 
 function InstancedMesh(geometry, material, count::Int; name="InstancedMesh",
-                       cast_shadow::Bool=false, receive_shadow::Bool=false)
+                       cast_shadow::Bool=false, receive_shadow::Bool=false,
+                       draw_mode::Symbol=:triangles)
+    count >= 0 || throw(ArgumentError("InstancedMesh count must be non-negative"))
     mats = [Mat4{Float64}() for _ in 1:count]
     InstancedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                   true, name, _next_id(), geometry, material,
-                  cast_shadow, receive_shadow, mats)
+                  cast_shadow, receive_shadow, mats, draw_mode)
+end
+
+function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
+                       scale::Vec3{Float64},
+                       parent::Union{Nothing, AbstractObject3D},
+                       children::Vector{AbstractObject3D},
+                       visible::Bool, name::String, id::Int,
+                       geometry, material, cast_shadow::Bool,
+                       receive_shadow::Bool,
+                       instance_matrices::Vector{Mat4{Float64}})
+    InstancedMesh(position, rotation, scale, parent, children, visible, name, id,
+                  geometry, material, cast_shadow, receive_shadow,
+                  instance_matrices, :triangles)
 end
 
 get_position(o::InstancedMesh) = o.position
@@ -59,6 +97,10 @@ set_parent!(o::InstancedMesh, p) = (o.parent = p)
 instanced_count(o::InstancedMesh) = length(o.instance_matrices)
 set_instance_matrix!(o::InstancedMesh, i::Int, m::Mat4) = (o.instance_matrices[i] = m)
 get_instance_matrix(o::InstancedMesh, i::Int) = o.instance_matrices[i]
+_instanced_triangle_drawable(o::InstancedMesh) = o.draw_mode === :triangles
+_instanced_point_drawable(o::InstancedMesh) = o.draw_mode === :points
+_instanced_line_drawable(o::InstancedMesh) =
+    o.draw_mode === :lines || o.draw_mode === :line_loop || o.draw_mode === :line_strip
 
 """Collect every `InstancedMesh` under `root` (used by the rasterizer)."""
 function collect_instanced(root::AbstractObject3D)

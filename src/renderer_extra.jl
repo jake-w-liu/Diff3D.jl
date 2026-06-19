@@ -293,34 +293,46 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     near = _camera_near(camera)
     stamp = zeros(Int, rt.height, rt.width)
     stamp_id = 0
+
+    function draw_line_geometry!(geo, material, wm::Mat4, line_mode::Symbol)
+        col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
+        linewidth = hasfield(typeof(material), :linewidth) ? material.linewidth : 1.0
+        alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+        depth_test = material_depth_test(material)
+        depth_write = material_depth_write(material)
+        stride = line_mode === :lines ? 2 : 1
+        nv = geo.n_vertices
+        i = 1
+        while i + 1 <= nv
+            a = mat4_transform_point(wm, get_vertex(geo, i))
+            b = mat4_transform_point(wm, get_vertex(geo, i+1))
+            stamp_id += 1
+            _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                        xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+                                        stamp, stamp_id)
+            i += stride
+        end
+        if line_mode === :line_loop && nv > 2
+            a = mat4_transform_point(wm, get_vertex(geo, nv))
+            b = mat4_transform_point(wm, get_vertex(geo, 1))
+            stamp_id += 1
+            _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                        xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+                                        stamp, stamp_id)
+        end
+        return nothing
+    end
+
     traverse(scene, function(obj)
         _visible_in_tree(obj) || return
         if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
-            wm = compute_world_matrix(obj); geo = obj.geometry
-            col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
-            linewidth = hasfield(typeof(obj.material), :linewidth) ? obj.material.linewidth : 1.0
-            alpha = clamp(Float64(material_opacity(obj.material)), 0.0, 1.0)
-            depth_test = material_depth_test(obj.material)
-            depth_write = material_depth_write(obj.material)
-            stride = obj isa LineSegments ? 2 : 1
-            nv = geo.n_vertices
-            i = 1
-            while i + 1 <= nv
-                a = mat4_transform_point(wm, get_vertex(geo, i))
-                b = mat4_transform_point(wm, get_vertex(geo, i+1))
-                stamp_id += 1
-                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
-                                            xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                            stamp, stamp_id)
-                i += stride
-            end
-            if obj isa LineLoop && nv > 2
-                a = mat4_transform_point(wm, get_vertex(geo, nv))
-                b = mat4_transform_point(wm, get_vertex(geo, 1))
-                stamp_id += 1
-                _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
-                                            xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                            stamp, stamp_id)
+            line_mode = obj isa LineSegments ? :lines :
+                        obj isa LineLoop ? :line_loop : :line_strip
+            draw_line_geometry!(obj.geometry, obj.material, compute_world_matrix(obj), line_mode)
+        elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+            base = compute_world_matrix(obj)
+            for M in obj.instance_matrices
+                draw_line_geometry!(obj.geometry, obj.material, base * M, obj.draw_mode)
             end
         end
     end)
@@ -522,20 +534,19 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     view = view_matrix(camera)
     near = _camera_near(camera)
     W, H = rt.width, rt.height
-    traverse(scene, function(obj)
-        (obj isa PointsObject && _visible_in_tree(obj)) || return
-        wm = compute_world_matrix(obj); geo = obj.geometry
-        col = hasfield(typeof(obj.material), :color) ? obj.material.color : Color3(1.0,1.0,1.0)
-        alpha = clamp(Float64(material_opacity(obj.material)), 0.0, 1.0)
-        depth_test = material_depth_test(obj.material)
-        depth_write = material_depth_write(obj.material)
-        alpha_test = material_alpha_test(obj.material)
-        albedo_map = _material_field(obj.material, :map)
-        alpha_map = _material_field(obj.material, :alpha_map)
+
+    function draw_points_geometry!(geo, material, wm::Mat4)
+        col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
+        alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+        depth_test = material_depth_test(material)
+        depth_write = material_depth_write(material)
+        alpha_test = material_alpha_test(material)
+        albedo_map = _material_field(material, :map)
+        alpha_map = _material_field(material, :alpha_map)
         use_color_map = albedo_map isa Texture
         use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
-        base_size = hasfield(typeof(obj.material), :size) ? Float64(obj.material.size) : 1.0
-        size_attenuation = _material_field(obj.material, :size_attenuation)
+        base_size = hasfield(typeof(material), :size) ? Float64(material.size) : 1.0
+        size_attenuation = _material_field(material, :size_attenuation)
         size_attenuation === nothing && (size_attenuation = true)
         reference_depth = camera isa PerspectiveCamera ?
             max(norm(camera.position - camera.target), near) : 1.0
@@ -568,6 +579,19 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
                 end
                 _put_pixel!(rt, px, py, pz, point_col, xlo, xhi, ylo, yhi,
                             depth_test, depth_write, frag_alpha)
+            end
+        end
+        return nothing
+    end
+
+    traverse(scene, function(obj)
+        _visible_in_tree(obj) || return
+        if obj isa PointsObject
+            draw_points_geometry!(obj.geometry, obj.material, compute_world_matrix(obj))
+        elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
+            base = compute_world_matrix(obj)
+            for M in obj.instance_matrices
+                draw_points_geometry!(obj.geometry, obj.material, base * M)
             end
         end
     end)
@@ -961,6 +985,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         for im in instanced
             # collect_instanced traverses without pruning invisible subtrees.
             _visible_in_tree(im) || continue
+            _instanced_triangle_drawable(im) || continue
             base = compute_world_matrix(im)
             for M in im.instance_matrices
                 _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,

@@ -304,7 +304,7 @@ end
 """
     load_png(path) -> Array{Float64,3}
 
-Decode an 8-bit or 16-bit PNG (grayscale, RGB, or RGBA) to an H×W×C array in [0,1].
+Decode an 8-bit or 16-bit PNG (grayscale, grayscale+alpha, RGB, or RGBA) to an H×W×C array in [0,1].
 Implements full INFLATE (stored/fixed/dynamic Huffman), all five PNG filters,
 and Adam7 interlacing for supported 8-bit and 16-bit color types.
 """
@@ -328,7 +328,8 @@ function _decode_png(bytes::Vector{UInt8})
     end
     (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
     (interlace == 0 || interlace == 1) || error("unsupported PNG interlace method $interlace")
-    channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 6 ? 4 :
+    channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 4 ? 2 :
+               colortype == 6 ? 4 :
                error("unsupported PNG color type $colortype")
     bps = Int(bitdepth) ÷ 8                     # bytes per sample
     bpp = channels * bps                        # bytes per pixel (filter window)
@@ -353,17 +354,47 @@ TextureLoader(path::String; kwargs...) = Texture(load_png(path); kwargs...)
     load_mtl(path) -> Dict{String, MeshPhongMaterial}
 
 Parse a Wavefront .mtl file: `newmtl`, `Kd` (diffuse), `Ks` (specular),
-`Ns` (shininess), `Ke` (emissive), `d`/`Tr` (opacity).
+`Ns` (shininess), `Ke` (emissive), `d`/`Tr` (opacity), and `map_Kd`
+(diffuse texture).
 """
+function _mtl_texture_path(tokens::Vector{SubString{String}})
+    numeric_option_max = Dict("-boost"=>1, "-mm"=>2, "-o"=>3, "-s"=>3,
+                              "-t"=>3, "-texres"=>1, "-bm"=>1)
+    string_option_counts = Dict("-blendu"=>1, "-blendv"=>1, "-clamp"=>1,
+                                "-imfchan"=>1, "-type"=>1, "-cc"=>1)
+    i = 2
+    while i <= length(tokens)
+        tok = String(tokens[i])
+        if startswith(tok, "-")
+            if haskey(numeric_option_max, tok)
+                i += 1
+                skipped = 0
+                while i <= length(tokens) && skipped < numeric_option_max[tok] &&
+                      tryparse(Float64, String(tokens[i])) !== nothing
+                    i += 1
+                    skipped += 1
+                end
+            else
+                i += 1 + get(string_option_counts, tok, 0)
+            end
+        else
+            return join(String.(tokens[i:end]), " ")
+        end
+    end
+    return ""
+end
+
 function load_mtl(path::String)
     mats = Dict{String, MeshPhongMaterial}()
     name = ""
     kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0); ke = Color3(0.0,0.0,0.0)
-    ns = 30.0; d = 1.0
+    ns = 30.0; d = 1.0; diffuse_map = nothing
+    dir = dirname(path)
     function flush!()
         isempty(name) && return
         mats[name] = MeshPhongMaterial(color=kd, specular=ks, emissive=ke, shininess=ns,
-                                       opacity=d, transparent=(d < 1.0))
+                                       opacity=d, transparent=(d < 1.0),
+                                       map=diffuse_map)
     end
     for raw in eachline(path)
         t = split(strip(raw))
@@ -372,13 +403,17 @@ function load_mtl(path::String)
         if tag == "newmtl"
             flush!()
             name = t[2]; kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
-            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0
+            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0; diffuse_map = nothing
         elseif tag == "Kd"; kd = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
         elseif tag == "Ks"; ks = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
         elseif tag == "Ke"; ke = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
         elseif tag == "Ns"; ns = parse(Float64, t[2])
         elseif tag == "d";  d = parse(Float64, t[2])
         elseif tag == "Tr"; d = 1.0 - parse(Float64, t[2])
+        elseif tag == "map_Kd"
+            texpath = _mtl_texture_path(t)
+            isempty(texpath) && error("MTL map_Kd requires a texture path")
+            diffuse_map = TextureLoader(isabspath(texpath) ? texpath : joinpath(dir, texpath))
         end
     end
     flush!()
@@ -392,10 +427,10 @@ Like [`load_obj`](@ref) but also returns, per triangle, the active `usemtl`
 name and the material dictionary parsed from any referenced `mtllib`.
 """
 function load_obj_groups(path::String)
-    verts = Float64[]; file_normals = Float64[]
-    out_pos = Float64[]; out_nrm = Float64[]; indices = Int[]
+    verts = Float64[]; file_uvs = Float64[]; file_normals = Float64[]
+    out_pos = Float64[]; out_uvs = Float64[]; out_nrm = Float64[]; indices = Int[]
     face_mtl = String[]
-    have_normals = false; out_vi = 0; cur_mtl = ""
+    have_normals = false; have_uvs = false; out_vi = 0; cur_mtl = ""
     materials = Dict{String, MeshPhongMaterial}()
     parse_index(tok, n) = (i = parse(Int, tok); i < 0 ? n + i + 1 : i)
     dir = dirname(path)
@@ -405,6 +440,8 @@ function load_obj_groups(path::String)
         t = split(line); tag = t[1]
         if tag == "v"
             push!(verts, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
+        elseif tag == "vt"
+            push!(file_uvs, parse(Float64,t[2]), parse(Float64,t[3]))
         elseif tag == "vn"
             push!(file_normals, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4])); have_normals = true
         elseif tag == "mtllib"
@@ -412,13 +449,20 @@ function load_obj_groups(path::String)
         elseif tag == "usemtl"
             cur_mtl = t[2]
         elseif tag == "f"
-            nv = length(verts) ÷ 3; nn = length(file_normals) ÷ 3
+            nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
             corners = t[2:end]
             for k in 2:(length(corners) - 1)
                 for c in (corners[1], corners[k], corners[k+1])
                     sub = split(c, '/')
                     vidx = parse_index(sub[1], nv); base = (vidx-1)*3
                     push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
+                    if length(sub) >= 2 && !isempty(sub[2])
+                        uidx = parse_index(sub[2], nuv); ub = (uidx-1)*2
+                        push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
+                        have_uvs = true
+                    else
+                        push!(out_uvs, 0.0, 0.0)
+                    end
                     if have_normals && length(sub) >= 3 && !isempty(sub[3])
                         nidx = parse_index(sub[3], nn); nb = (nidx-1)*3
                         push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
@@ -432,7 +476,8 @@ function load_obj_groups(path::String)
         end
     end
     nfaces = length(indices) ÷ 3
-    geo = BufferGeometry(out_pos, out_nrm, Float64[], indices, out_vi, nfaces)
+    geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],
+                         indices, out_vi, nfaces)
     # Recompute smooth normals when the file had none, or when ANY emitted vertex
     # normal is zero-length (some faces lacked vn) — otherwise those vertices
     # keep a degenerate (0,0,0) normal and shade black.
@@ -1012,7 +1057,14 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     haskey(gltf, "textures") || return nothing
     ti = Int(texinfo["index"])
     texdef = gltf["textures"][ti + 1]
-    haskey(texdef, "source") || return nothing
+    if !haskey(texdef, "source")
+        basisu = get(get(texdef, "extensions", Dict{String,Any}()),
+                     "KHR_texture_basisu", nothing)
+        basisu === nothing && return nothing
+        haskey(basisu, "source") ||
+            error("glTF KHR_texture_basisu texture requires a source image index")
+        error("glTF KHR_texture_basisu textures are not supported; KTX2/Basis texture loading is not implemented")
+    end
     imgdef = gltf["images"][Int(texdef["source"]) + 1]
     bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
     bytes === nothing && return nothing
@@ -1599,15 +1651,48 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         return [String(name) for name in names]
     end
 
+    function _gltf_instanced_draw_mode(obj)
+        obj isa Mesh && return :triangles
+        obj isa PointsObject && return :points
+        obj isa LineSegments && return :lines
+        obj isa LineLoop && return :line_loop
+        obj isa LineObject && return :line_strip
+        error("EXT_mesh_gpu_instancing only supports mesh, point, and line primitives")
+    end
+
+    function _gltf_bake_static_morphs!(geo::BufferGeometry,
+                                       morph_weights::Vector{Float64})
+        isempty(morph_weights) && return geo
+        for (ti, weight) in enumerate(morph_weights)
+            weight == 0.0 && continue
+            pos_name = Symbol("morphPosition$(ti - 1)")
+            if has_attribute(geo, pos_name)
+                attr = get_attribute(geo, pos_name)
+                attr.item_size == 3 && length(attr.data) == length(geo.positions) ||
+                    error("glTF morph target POSITION count does not match primitive positions")
+                @inbounds for i in eachindex(geo.positions)
+                    geo.positions[i] += weight * attr.data[i]
+                end
+            end
+            nrm_name = Symbol("morphNormal$(ti - 1)")
+            if !isempty(geo.normals) && has_attribute(geo, nrm_name)
+                attr = get_attribute(geo, nrm_name)
+                attr.item_size == 3 && length(attr.data) == length(geo.normals) ||
+                    error("glTF morph target NORMAL count does not match primitive normals")
+                @inbounds for i in eachindex(geo.normals)
+                    geo.normals[i] += weight * attr.data[i]
+                end
+            end
+        end
+        return geo
+    end
+
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
                              morph_names=String[])
         mode = Int(get(prim, "mode", 4))
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
             error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
-        (mode in (0, 1, 2, 3) &&
-         (!isempty(get(prim, "targets", Any[])) || !isempty(morph_weights))) &&
-            error("glTF primitive mode $mode morph targets are not supported")
         attrs = prim["attributes"]
         pos, _, nverts = _gltf_accessor(gltf, buffers, Int(attrs["POSITION"]))
         normals = Float64[]
@@ -1655,6 +1740,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
         if mode in (0, 1, 2, 3)
             geo = _gltf_expand_nontriangle_geometry(geo, indices)
+            _gltf_bake_static_morphs!(geo, morph_weights)
         elseif isempty(normals)
             compute_vertex_normals!(geo)
         end
@@ -1733,9 +1819,6 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             morph_names = _gltf_target_names(mesh_def)
             for prim in mesh_def["primitives"]
                 if instance_matrices !== nothing
-                    mode = Int(get(prim, "mode", 4))
-                    mode in (4, 5, 6) ||
-                        error("EXT_mesh_gpu_instancing only supports triangle mesh primitives")
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
                 end
@@ -1744,13 +1827,13 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 if instance_matrices === nothing
                     add!(obj, mesh_obj)
                 else
-                    mesh_obj isa Mesh ||
-                        error("EXT_mesh_gpu_instancing only supports mesh primitives")
+                    draw_mode = _gltf_instanced_draw_mode(mesh_obj)
                     inst = InstancedMesh(mesh_obj.geometry, mesh_obj.material,
                                          length(instance_matrices);
                                          name=mesh_obj.name,
-                                         cast_shadow=mesh_obj.cast_shadow,
-                                         receive_shadow=mesh_obj.receive_shadow)
+                                         cast_shadow=object_casts_shadow(mesh_obj),
+                                         receive_shadow=object_receives_shadow(mesh_obj),
+                                         draw_mode=draw_mode)
                     inst.instance_matrices = copy(instance_matrices)
                     add!(obj, inst)
                 end

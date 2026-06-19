@@ -146,17 +146,20 @@ end
 """
     load_obj(path) -> BufferGeometry
 
-Load a Wavefront OBJ mesh (vertices and faces; polygons fan-triangulated).
-Normals are taken from the file when present, otherwise computed smoothly.
-Texture coordinates and materials are ignored.
+Load a Wavefront OBJ mesh (vertices, texture coordinates, normals, and faces;
+polygons fan-triangulated). Normals are taken from the file when present,
+otherwise computed smoothly. Materials are ignored.
 """
 function load_obj(path::String)
     verts = Float64[]            # v
+    file_uvs = Float64[]         # vt
     file_normals = Float64[]     # vn
     out_pos = Float64[]
+    out_uvs = Float64[]
     out_nrm = Float64[]
     indices = Int[]
     have_normals = false
+    have_uvs = false
     out_vi = 0
 
     parse_index(tok, n) = (i = parse(Int, tok); i < 0 ? n + i + 1 : i)
@@ -168,11 +171,14 @@ function load_obj(path::String)
         tag = t[1]
         if tag == "v"
             push!(verts, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
+        elseif tag == "vt"
+            push!(file_uvs, parse(Float64, t[2]), parse(Float64, t[3]))
         elseif tag == "vn"
             push!(file_normals, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
             have_normals = true
         elseif tag == "f"
             nverts_v = length(verts) ÷ 3
+            nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
             corners = t[2:end]
             # Fan-triangulate polygon (corner 1, k, k+1).
@@ -182,6 +188,14 @@ function load_obj(path::String)
                     vidx = parse_index(sub[1], nverts_v)
                     base = (vidx - 1) * 3
                     push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
+                    if length(sub) >= 2 && !isempty(sub[2])
+                        uidx = parse_index(sub[2], nverts_uv)
+                        ub = (uidx - 1) * 2
+                        push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
+                        have_uvs = true
+                    else
+                        push!(out_uvs, 0.0, 0.0)
+                    end
                     if have_normals && length(sub) >= 3 && !isempty(sub[3])
                         nidx = parse_index(sub[3], nverts_n)
                         nb = (nidx - 1) * 3
@@ -195,7 +209,8 @@ function load_obj(path::String)
         end
     end
     nfaces = length(indices) ÷ 3
-    geo = BufferGeometry(out_pos, out_nrm, Float64[], indices, out_vi, nfaces)
+    geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],
+                         indices, out_vi, nfaces)
     # Recompute smooth normals when the file had none, or when ANY emitted vertex
     # normal is zero-length (e.g. a face lacked vn) — otherwise those vertices
     # keep a degenerate (0,0,0) normal and shade black.
@@ -292,7 +307,7 @@ load_xyz(path::String) = parse_xyz(read(path, String); source=path)
 
 # ========================== PLY ==========================
 
-# Size in bytes and an LE reader for each Stanford-PLY scalar type. Type aliases
+# Size in bytes and binary readers for each Stanford-PLY scalar type. Type aliases
 # (char/int8, uchar/uint8, short/int16, ushort/uint16, int/int32, uint/uint32,
 # float/float32, double/float64) are normalised to a canonical token.
 const _PLY_TYPE = Dict(
@@ -334,10 +349,43 @@ _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
     end
 end
 
+# Read one scalar of canonical type `t` from byte vector `b` at 1-based offset
+# `p` (big-endian). Returns (value::Float64, next_offset).
+@inline function _ply_read_be(b::Vector{UInt8}, p::Int, t::Symbol)
+    if t === :u8
+        return (Float64(b[p]), p + 1)
+    elseif t === :i8
+        return (Float64(reinterpret(Int8, b[p])), p + 1)
+    elseif t === :u16
+        v = (UInt16(b[p]) << 8) | UInt16(b[p+1]); return (Float64(v), p + 2)
+    elseif t === :i16
+        v = (UInt16(b[p]) << 8) | UInt16(b[p+1]); return (Float64(reinterpret(Int16, v)), p + 2)
+    elseif t === :u32
+        v = (UInt32(b[p]) << 24) | (UInt32(b[p+1]) << 16) |
+            (UInt32(b[p+2]) << 8) | UInt32(b[p+3])
+        return (Float64(v), p + 4)
+    elseif t === :i32
+        v = (UInt32(b[p]) << 24) | (UInt32(b[p+1]) << 16) |
+            (UInt32(b[p+2]) << 8) | UInt32(b[p+3])
+        return (Float64(reinterpret(Int32, v)), p + 4)
+    elseif t === :f32
+        v = (UInt32(b[p]) << 24) | (UInt32(b[p+1]) << 16) |
+            (UInt32(b[p+2]) << 8) | UInt32(b[p+3])
+        return (Float64(reinterpret(Float32, v)), p + 4)
+    else  # :f64
+        v = UInt64(0)
+        @inbounds for k in 0:7
+            v = (v << 8) | UInt64(b[p+k])
+        end
+        return (reinterpret(Float64, v), p + 8)
+    end
+end
+
 """
     load_ply(path) -> BufferGeometry
 
-Load a Stanford `.ply` mesh (ASCII or `binary_little_endian`). Reads the
+Load a Stanford `.ply` mesh (ASCII, `binary_little_endian`, or
+`binary_big_endian`). Reads the
 `vertex` element (`x,y,z`; optional `nx,ny,nz`; optional `red,green,blue`) and
 the `face` element (a vertex-index list per face, fan-triangulated). Returns a
 [`BufferGeometry`](@ref) with positions, normals (file normals when present,
@@ -351,7 +399,7 @@ function load_ply(path::String)
 
     # --- Parse the (always-ASCII) header line by line over the byte stream. ---
     # `i` walks the byte offset; after "end_header" it marks the body start.
-    format = :ascii                 # :ascii | :binary_little_endian
+    format = :ascii                 # :ascii | :binary_little_endian | :binary_big_endian
     # Per element, in declared order: name, count, and an ordered property list.
     # Vertex/scalar properties are stored as (:scalar, name, type). A face list
     # property is stored as (:list, name, count_type, index_type).
@@ -381,6 +429,8 @@ function load_ply(path::String)
                 format = :ascii
             elseif fmt == "binary_little_endian"
                 format = :binary_little_endian
+            elseif fmt == "binary_big_endian"
+                format = :binary_big_endian
             else
                 error("unsupported PLY format $fmt")
             end
@@ -406,6 +456,7 @@ function load_ply(path::String)
     indices = Int[]
     have_normals = false; have_color = false
     color_is_int = false
+    read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
 
     for (ename, ecount, props) in elements
         if ename == "vertex"
@@ -447,7 +498,7 @@ function load_ply(path::String)
                 for v in 0:ecount-1
                     b3 = v * 3
                     for (c, p) in enumerate(props)
-                        val, i = _ply_read_le(bytes, i, types[c])
+                        val, i = read_binary(bytes, i, types[c])
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val
                         elseif c == iz; positions[b3+3] = val
@@ -480,11 +531,11 @@ function load_ply(path::String)
                 end
             else
                 for _ in 0:ecount-1
-                    cnt, i = _ply_read_le(bytes, i, ct)
+                    cnt, i = read_binary(bytes, i, ct)
                     nidx = Int(round(cnt))
                     fan = Vector{Int}(undef, nidx)
                     for k in 1:nidx
-                        val, i = _ply_read_le(bytes, i, it)
+                        val, i = read_binary(bytes, i, it)
                         fan[k] = Int(round(val))        # 0-based
                     end
                     for k in 2:(nidx - 1)

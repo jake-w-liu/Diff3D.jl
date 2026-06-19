@@ -116,13 +116,14 @@ replacement for three.js `WebGLRenderer`.
   including texture references for clearcoat, clearcoat normals, transmission,
   sheen, iridescence, specular, and inherited PBR maps, plus the scalar
   `KHR_materials_dispersion` field. PNG glTF images, including Adam7
-  interlaced PNGs, load from URI, data URI, and bufferView sources with
+  interlaced grayscale, grayscale+alpha, RGB, and RGBA PNGs, load from URI,
+  data URI, and bufferView sources with
   MIME/extension routing, and external buffer/image URI paths are resolved with
   percent-decoding and clear
   unsupported-scheme errors. glTF data URI resources are validated with strict
   base64 and clear malformed-data errors; JPEG images now decode through
-  JpegTurbo, while KTX2 image references fail clearly until compressed-texture
-  loading exists. Renderer shading of every physical
+  JpegTurbo, while `.ktx2`/`KHR_texture_basisu` image references fail clearly
+  until compressed-texture loading exists. Renderer shading of every physical
   extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
   now bind to CPU playback and browser weight serialization. Static skinned poses and
   animated bone tracks export to browser shader-side uniform skinning for small
@@ -133,7 +134,7 @@ replacement for three.js `WebGLRenderer`.
   bind-mode metadata plus mesh-level bind matrices through CPU skinning, glTF
   loading, and browser export/runtime skinning paths. glTF
   `EXT_mesh_gpu_instancing` mesh nodes load into native `InstancedMesh`
-  children for non-skinned, non-morphed triangle primitives with
+  children for non-skinned, non-morphed point, line, and triangle primitives with
   translation/rotation/scale instance attributes. It does
   not yet cover the full glTF feature set such as remaining texture/material
   extensions and browser/runtime material extensions.
@@ -685,10 +686,12 @@ Parallel audits split the remaining work into five critical tracks:
   approximations. Exact clearcoat-layer BRDF parity and full chromatic
   refraction remain part of the broader physical-renderer parity work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
-  extension, including `image/png` bufferView images, Adam7 interlaced PNG
-  payloads, and `image/jpeg`/`.jpg`/`.jpeg` URI, data URI, and bufferView
-  payloads through JpegTurbo. Unsupported KTX2 references still fail with an
-  explicit compressed-texture loader error.
+  extension, including `image/png` bufferView images, Adam7 interlaced
+  grayscale/grayscale+alpha/RGB/RGBA PNG payloads, and
+  `image/jpeg`/`.jpg`/`.jpeg` URI, data URI, and bufferView
+  payloads through JpegTurbo. Unsupported `.ktx2` and extension-only
+  `KHR_texture_basisu` references still fail with an explicit
+  compressed-texture loader error.
 - Done: resolve local external glTF buffer and image URI paths with
   percent-decoding, query/fragment stripping, `file:` URI support, and clear
   errors for unsupported external schemes.
@@ -711,12 +714,13 @@ Parallel audits split the remaining work into five critical tracks:
   in its compact shader approximation, and CPU flat/smooth shading samples the
   same represented maps in its compact physical-material approximation. Full
   shader-model parity remains renderer work.
-- Done: parse `EXT_mesh_gpu_instancing` on glTF mesh nodes and map simple
-  non-skinned, non-morphed triangle primitives to native `InstancedMesh`
-  objects. `TRANSLATION`, `ROTATION`, and `SCALE` instance accessors compose
-  node-local instance matrices, required-extension validation accepts the
-  extension, and unsupported point/line, skinned, or morphed instancing paths
-  fail clearly until represented.
+- Done: parse `EXT_mesh_gpu_instancing` on glTF mesh nodes and map
+  non-skinned, non-morphed point, line, and triangle primitives to native
+  `InstancedMesh` objects with explicit draw modes. `TRANSLATION`, `ROTATION`,
+  and `SCALE` instance accessors compose node-local instance matrices,
+  required-extension validation accepts the extension, CPU point/line renderers
+  draw instanced non-triangle modes, and unsupported skinned or morphed
+  instancing paths fail clearly until represented.
 - Done: implement `CUBICSPLINE` transform interpolation for glTF assets and
   browser-exported animation tracks.
 - Done: parse and instantiate glTF cameras and `KHR_lights_punctual`
@@ -724,7 +728,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: bind glTF skins to `Bone`/`Skeleton`/`SkinnedMesh` for CPU skinning.
 - Done: parse glTF morph target `POSITION`/`NORMAL`/`TANGENT` data, preserve
   `mesh.extras.targetNames`, and evaluate position, normal, and tangent morphs
-  on CPU from mesh influences.
+  on CPU from mesh influences. Static point and line primitive morph weights
+  are baked into loaded geometry; animated point/line morph playback remains
+  outside the current object model.
 - Done: reject unsupported `extensionsRequired` entries before reading external
   buffers, while allowing required extensions covered by the current loader.
 - Done: parse glTF `weights` animation channels into CPU morph-weight tracks for
@@ -1022,13 +1028,15 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_loader_obj` via
   `examples/webgl_loader_obj.jl`, generating temporary OBJ/MTL assets,
   loading them through Diff3D.jl `load_obj_groups`/`load_mtl`, and exporting
-  material-split meshes to the compact browser path. Exact upstream OBJ/MTL
+  material-split meshes to the compact browser path. The core OBJ/MTL loaders
+  preserve `vt` UVs and bind `map_Kd` diffuse textures. Exact upstream OBJ/MTL
   assets and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_ply` via
   `examples/webgl_loader_ply.jl`, generating temporary ASCII and
   `binary_little_endian` PLY assets, loading both through Diff3D.jl `load_ply`,
-  and exporting vertex-color meshes to the compact browser path. Exact upstream
-  PLY assets and `WebGLRenderer` internals remain documented deviations.
+  and exporting vertex-color meshes to the compact browser path. The core PLY
+  loader also accepts `binary_big_endian` fixtures. Exact upstream PLY assets
+  and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_gltf` via
   `examples/webgl_loader_gltf.jl`, generating a deterministic external-buffer
   glTF asset plus a deterministic binary GLB companion with embedded BIN

@@ -684,6 +684,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
     for im in instanced
         !_visible_in_tree(im) && continue
+        _instanced_triangle_drawable(im) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
             world = base * M
