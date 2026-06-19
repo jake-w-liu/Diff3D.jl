@@ -1817,6 +1817,11 @@ end
         aniso_tex = Texture(ones(Float64, 2, 2, 3); max_anisotropy=12)
         @test aniso_tex.max_anisotropy == 12.0
         @test occursin("\"maxAnisotropy\":12", Diff3D._web_texture_json(aniso_tex))
+        canvas_update_tex = CanvasTexture(ones(Float64, 2, 2, 3);
+                                          filter=:nearest,
+                                          needs_update=true)
+        @test canvas_update_tex.needs_update
+        @test occursin("\"needsUpdate\":true", Diff3D._web_texture_json(canvas_update_tex))
         legacy_tex = Texture(aniso_tex.data, aniso_tex.wrap_s, aniso_tex.wrap_t,
                              aniso_tex.filter, aniso_tex.min_filter, aniso_tex.mag_filter,
                              aniso_tex.mipmaps, aniso_tex.colorspace, aniso_tex.offset,
@@ -1824,6 +1829,14 @@ end
                              aniso_tex.matrix, aniso_tex.matrix_auto_update,
                              aniso_tex.tex_coord)
         @test legacy_tex.max_anisotropy == 1.0
+        legacy_aniso_tex = Texture(aniso_tex.data, aniso_tex.wrap_s, aniso_tex.wrap_t,
+                                   aniso_tex.filter, aniso_tex.min_filter, aniso_tex.mag_filter,
+                                   aniso_tex.mipmaps, aniso_tex.colorspace, aniso_tex.offset,
+                                   aniso_tex.repeat, aniso_tex.rotation, aniso_tex.center,
+                                   aniso_tex.matrix, aniso_tex.matrix_auto_update,
+                                   aniso_tex.tex_coord, 6.0)
+        @test legacy_aniso_tex.max_anisotropy == 6.0
+        @test legacy_aniso_tex.needs_update == false
         @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=0.5)
         @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=Inf)
         linear_sampler_json = Diff3D._web_texture_json(Texture(ones(Float64, 1, 1, 3);
@@ -1850,6 +1863,13 @@ end
         @test occursin("TEXTURE_MAX_ANISOTROPY_EXT", html)
         @test occursin("applyAnisotropy(gl.TEXTURE_2D,t)", html)
         @test occursin("applyAnisotropy(gl.TEXTURE_CUBE_MAP,first)", html)
+        @test occursin("function uploadTextureData(t,tex)", html)
+        @test occursin("t.needsUpdate=false", html)
+        @test occursin("t.__webglTexture=tex", html)
+        @test occursin("function refreshObjectTextures(o)", html)
+        @test occursin("for(const o of visible) refreshObjectTextures(o); updateDynamicShadows(active,visible,clip);", html)
+        @test occursin("\"needsUpdate\":false", html)
+        @test occursin("if(packed){ if(o.physicalScalarTex) uploadTextureData(packed,o.physicalScalarTex);", html)
         @test occursin("\"maxAnisotropy\":8", html)
         @test occursin("\"name\":\"export_box\"", html)
         @test occursin("\"name\":\"export_drawable_parent_child\"", html)
@@ -3526,6 +3546,34 @@ end
         @test length(ac.viewports) == 2
         ac2 = ArrayCamera(cams, [(0,0,400,300), (400,0,400,300)])
         @test ac2.viewports[2] == (400,0,400,300)
+
+        scene = Scene(background=Color3(0.0, 0.0, 0.15))
+        add!(scene, Mesh(BoxGeometry(width=1.6, height=1.6, depth=1.6),
+                         MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0))))
+        left = PerspectiveCamera(fov=π/4, aspect=32 / 48, near=0.1, far=100.0)
+        left.position = Vec3(0.0, 0.0, 5.0)
+        left.target = Vec3(0.0, 0.0, 0.0)
+        right = PerspectiveCamera(fov=π/4, aspect=32 / 48, near=0.1, far=100.0)
+        right.position = Vec3(20.0, 0.0, 5.0)
+        right.target = Vec3(20.0, 0.0, 0.0)
+        split = ArrayCamera([left, right], [(0, 0, 32, 48), (32, 0, 32, 48)])
+
+        rt = RenderTarget(64, 48)
+        render!(rt, scene, split)
+        @test count(>(0.5), @view rt.color[:, 1:32, 1]) > 100
+        @test count(>(0.5), @view rt.color[:, 33:64, 1]) == 0
+        @test all(isapprox.(rt.color[:, 33:64, 3], 0.15; atol=1e-12))
+
+        rt_outer = RenderTarget(64, 48)
+        clear!(rt_outer, Color3(0.25, 0.35, 0.45))
+        render!(rt_outer, scene, split; scissor=(0, 0, 32, 48), scissor_test=true)
+        @test count(>(0.5), @view rt_outer.color[:, 1:32, 1]) > 100
+        @test all(isapprox.(rt_outer.color[:, 33:64, 1], 0.25; atol=1e-12))
+        @test all(isapprox.(rt_outer.color[:, 33:64, 2], 0.35; atol=1e-12))
+        @test all(isapprox.(rt_outer.color[:, 33:64, 3], 0.45; atol=1e-12))
+
+        bad = ArrayCamera([left, right], [(0, 0, 32, 48)])
+        @test_throws ArgumentError render!(RenderTarget(16, 16), scene, bad)
     end
 
     @testset "Polyhedra (+ subdivision)" begin

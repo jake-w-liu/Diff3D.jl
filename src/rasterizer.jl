@@ -39,6 +39,22 @@ function clear_rect!(rt::RenderTarget, bg::Color3, xlo::Int, xhi::Int, ylo::Int,
     return rt
 end
 
+function _scissor_bounds(rt::RenderTarget, scissor::NTuple{4,Int})
+    sxr, syr, swr, shr = scissor
+    xlo = max(1, sxr + 1); xhi = min(rt.width, sxr + swr)
+    ylo = max(1, syr + 1); yhi = min(rt.height, syr + shr)
+    return xlo, xhi, ylo, yhi
+end
+
+function _intersect_scissor(a::NTuple{4,Int}, b::NTuple{4,Int})
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    x0 = max(ax, bx); y0 = max(ay, by)
+    x1 = min(ax + aw, bx + bw); y1 = min(ay + ah, by + bh)
+    (x1 <= x0 || y1 <= y0) && return nothing
+    return (x0, y0, x1 - x0, y1 - y0)
+end
+
 @inline _camera_near(c::AbstractCamera) = c.near
 @inline _camera_far(c::AbstractCamera) = c.far
 
@@ -552,9 +568,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     use_scissor = scissor_test && scissor !== nothing
     xlo = 1; xhi = W; ylo = 1; yhi = H
     if use_scissor
-        sxr, syr, swr, shr = scissor
-        xlo = max(1, sxr + 1); xhi = min(W, sxr + swr)
-        ylo = max(1, syr + 1); yhi = min(H, syr + shr)
+        xlo, xhi, ylo, yhi = _scissor_bounds(rt, scissor)
     end
 
     # Clear: full frame normally, or only the scissor box under scissor testing.
@@ -735,6 +749,37 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
     render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
 
+    return rt
+end
+
+"""
+    render!(rt, scene, camera::ArrayCamera; kwargs...)
+
+Render each sub-camera into its `ArrayCamera.viewports` rectangle, compositing
+the results into one `RenderTarget`. Viewports use Diff3D's CPU scissor
+convention: `(x, y, width, height)` with a top-left origin and 0-based `x`/`y`.
+Empty or fully off-target viewports are skipped.
+"""
+function render!(rt::RenderTarget, scene::Scene, camera::ArrayCamera;
+                 scissor::Union{Nothing,NTuple{4,Int}}=nothing,
+                 scissor_test::Bool=false, kwargs...)
+    length(camera.cameras) == length(camera.viewports) ||
+        throw(ArgumentError("ArrayCamera cameras and viewports lengths must match"))
+    outer_scissor = scissor_test && scissor !== nothing
+    if outer_scissor
+        clear_rect!(rt, scene.background, _scissor_bounds(rt, scissor)...)
+    else
+        clear!(rt, scene.background)
+    end
+    for (subcamera, viewport) in zip(camera.cameras, camera.viewports)
+        sx, sy, sw, sh = viewport
+        sw > 0 && sh > 0 || continue
+        view_scissor = outer_scissor ? _intersect_scissor(viewport, scissor) : viewport
+        view_scissor === nothing && continue
+        sx, sy, sw, sh = view_scissor
+        sx < rt.width && sy < rt.height && sx + sw > 0 && sy + sh > 0 || continue
+        render!(rt, scene, subcamera; kwargs..., scissor=view_scissor, scissor_test=true)
+    end
     return rt
 end
 

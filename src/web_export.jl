@@ -343,6 +343,7 @@ function _web_texture_json(tex)
            ",\"matrix\":[" * join((_js_num(x) for x in tex.matrix.e), ",") * "]" *
            ",\"matrixAutoUpdate\":" * (tex.matrix_auto_update ? "true" : "false") *
            ",\"texCoord\":" * string(tex.tex_coord) *
+           ",\"needsUpdate\":" * (tex.needs_update ? "true" : "false") *
            ",\"data\":[" * join(rgba, ",") * "]" *
            "}"
 end
@@ -1875,9 +1876,10 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     const a=Math.max(1,Math.min(maxTextureAnisotropy,Number(t.maxAnisotropy||1)));
     if(a>1) gl.texParameterf(target,anisotropyExt.TEXTURE_MAX_ANISOTROPY_EXT,a);
   }
-  function makeTexture(t){
-    if(!t) return null;
-    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+  function validTexturePayload(t){ return !!(t&&Number.isFinite(t.width)&&Number.isFinite(t.height)&&t.width>0&&t.height>0&&t.data&&t.data.length===t.width*t.height*4); }
+  function uploadTextureData(t,tex){
+    if(!validTexturePayload(t)) throw new Error("Texture payload is invalid");
+    gl.bindTexture(gl.TEXTURE_2D,tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,t.width,t.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(t.data));
     const pot=isPow2(t.width)&&isPow2(t.height);
@@ -1888,6 +1890,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
     applyAnisotropy(gl.TEXTURE_2D,t);
+    t.needsUpdate=false;
+  }
+  function makeTexture(t){
+    if(!t) return null;
+    const tex=gl.createTexture();
+    uploadTextureData(t,tex);
+    t.__webglTexture=tex;
     return tex;
   }
   const cubeTargets=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
@@ -2003,6 +2012,21 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function buildCamera(cam){ if(!cam) return null; cam.baseCamera={position:(cam.position||[0,0,0]).slice(),target:(cam.target||[0,0,0]).slice(),up:(cam.up||[0,1,0]).slice(),fov:cam.fov,aspect:cam.aspect,near:cam.near,far:cam.far,zoom:cam.zoom,left:cam.left,right:cam.right,bottom:cam.bottom,top:cam.top}; return cam; }
   const textureAnimBindings=[["clearcoat_normal_map_","clearcoatNormalTexture"],["clearcoat_roughness_map_","clearcoatRoughnessTexture"],["iridescence_thickness_map_","iridescenceThicknessTexture"],["specular_intensity_map_","specularIntensityTexture"],["specular_color_map_","specularColorTexture"],["sheen_roughness_map_","sheenRoughnessTexture"],["sheen_color_map_","sheenColorTexture"],["transmission_map_","transmissionTexture"],["thickness_map_","thicknessTexture"],["iridescence_map_","iridescenceTexture"],["anisotropy_map_","anisotropyTexture"],["emissive_map_","emissiveTexture"],["roughness_map_","roughnessTexture"],["metalness_map_","metalnessTexture"],["gradient_map_","gradientTexture"],["normal_map_","normalTexture"],["alpha_map_","alphaTexture"],["light_map_","lightTexture"],["ao_map_","aoTexture"],["clearcoat_map_","clearcoatTexture"],["matcap_","matcapTexture"],["map_","texture"]];
   function objectTextures(o){ return [o.texture,o.alphaTexture,o.emissiveTexture,o.aoTexture,o.lightTexture,o.roughnessTexture,o.metalnessTexture,o.normalTexture,o.matcapTexture,o.gradientTexture,o.clearcoatTexture,o.clearcoatRoughnessTexture,o.clearcoatNormalTexture,o.transmissionTexture,o.thicknessTexture,o.sheenColorTexture,o.sheenRoughnessTexture,o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.specularColorTexture,o.anisotropyTexture].filter(t=>t); }
+  function refreshTexture(t){ if(t&&t.needsUpdate===true&&t.__webglTexture) uploadTextureData(t,t.__webglTexture); }
+  function refreshObjectTextures(o){
+    const dirty=objectTextures(o).filter(t=>t.needsUpdate===true);
+    for(const t of dirty) refreshTexture(t);
+    if(physicalTexturesEnabled&&dirty.length){
+      if([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture].some(t=>dirty.indexOf(t)>=0)){
+        const packed=packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3]);
+        if(packed){ if(o.physicalScalarTex) uploadTextureData(packed,o.physicalScalarTex); else o.physicalScalarTex=makeTexture(packed); }
+      }
+      if([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture,o.anisotropyTexture].some(t=>dirty.indexOf(t)>=0)){
+        const packed=packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2]);
+        if(packed){ if(o.physicalScalar2Tex) uploadTextureData(packed,o.physicalScalar2Tex); else o.physicalScalar2Tex=makeTexture(packed); }
+      }
+    }
+  }
   function captureTextureBase(t){ if(!t||t.baseTexture) return; t.baseTexture={offset:(t.offset||[0,0]).slice(),repeat:(t.repeat||[1,1]).slice(),rotation:t.rotation||0,center:(t.center||[0,0]).slice(),matrix:(t.matrix||[1,0,0,0,1,0,0,0,1]).slice(),matrixAutoUpdate:t.matrixAutoUpdate!==false}; }
   function updateTextureMatrix(t){ if(!t||t.matrixAutoUpdate===false) return; const sx=(t.repeat||[1,1])[0], sy=(t.repeat||[1,1])[1], tx=(t.offset||[0,0])[0], ty=(t.offset||[0,0])[1], cx=(t.center||[0,0])[0], cy=(t.center||[0,0])[1], c=Math.cos(t.rotation||0), s=Math.sin(t.rotation||0); t.matrix=[sx*c,sx*s,-sx*(c*cx+s*cy)+cx+tx,-sy*s,sy*c,sy*(s*cx-c*cy)+cy+ty,0,0,1]; }
   function resetTextureAnim(t){ const b=t&&t.baseTexture; if(!b) return; t.offset=b.offset.slice(); t.repeat=b.repeat.slice(); t.rotation=b.rotation; t.center=b.center.slice(); t.matrix=b.matrix.slice(); t.matrixAutoUpdate=b.matrixAutoUpdate; }
@@ -2393,7 +2417,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function zoomBy(f){ dist=Math.max(2.5,Math.min(24,dist*f)); rememberCameraOrbitOffsets(); }
   speedEl.addEventListener("input",()=>{ animSpeed=Number(speedEl.value); speedValue.textContent=animSpeed.toFixed(2)+"x"; });
   playToggle.addEventListener("click",()=>{ animPaused=!animPaused; playToggle.textContent=animPaused?">":"||"; playToggle.title=animPaused?"Play animation":"Pause animation"; playToggle.setAttribute("aria-label",playToggle.title); });
-  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect, camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale/camZoom, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else { const fov=cam&&cam.fov?cam.fov:active.fov, zoomedFov=2*Math.atan(Math.tan(fov*.5)/camZoom); proj=M4.perspective(zoomedFov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); } const clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); updateDynamicShadows(active,visible,clip); const light=lighting(active); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
+  function render(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const cam=active.camera; if(cam) applyCameraOrbit(cam); const baseTarget=cam?cam.target:active.target, target=add(baseTarget,targetOffset); const eye=[target[0]+dist*Math.cos(pitch)*Math.cos(yaw), target[1]+dist*Math.sin(pitch), target[2]+dist*Math.cos(pitch)*Math.sin(yaw)]; const up=cam&&cam.up?cam.up:[0,1,0]; const view=M4.lookAt(eye,target,up); const forward=norm(sub(target,eye)); let cameraRight=norm(cross(forward,up)); if(!isFinite(cameraRight[0])) cameraRight=[1,0,0]; const basis={right:cameraRight,up:cross(cameraRight,forward)}; const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect, camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1; let proj; if(cam&&cam.type==="orthographic"){ const s=orbitDistScale/camZoom, cx=(cam.left+cam.right)*.5, cy=(cam.bottom+cam.top)*.5, hx=(cam.right-cam.left)*.5*s, hy=(cam.top-cam.bottom)*.5*s; proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far); } else { const fov=cam&&cam.fov?cam.fov:active.fov, zoomedFov=2*Math.atan(Math.tan(fov*.5)/camZoom); proj=M4.perspective(zoomedFov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180); } const clip=clipping(active), fg=fog(active), tm=tone(active), lod=lodChoices(active,eye); const visible=active.objects.filter(o=>(!o.lodGroup||lod.get(o.lodGroup)===o)&&(o.visibilityStates||[]).every(s=>s.visible!==false)); for(const o of visible) refreshObjectTextures(o); updateDynamicShadows(active,visible,clip); const light=lighting(active); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; for(const o of visible.filter(o=>!(o.animTransparent==null?o.transparent:o.animTransparent))){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } const transparent=visible.filter(o=>(o.animTransparent==null?o.transparent:o.animTransparent)).sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye)); for(const o of transparent){ draw(o,view,proj,eye,basis,light,clip,fg,tm); drawn++; } gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; requestAnimationFrame(render); }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; dollyMode=false; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; dollyMode=e.button===1; panMode=e.button===2||e.shiftKey||e.ctrlKey||e.metaKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=Math.max(2.5,Math.min(24,dist*(pinchDist/nd))); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); rememberCameraOrbitOffsets(); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(dollyMode) zoomBy(Math.exp(dy*.003)); else if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.006)); rememberCameraOrbitOffsets(); } });

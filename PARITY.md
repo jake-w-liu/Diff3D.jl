@@ -16,7 +16,7 @@ replacement for three.js `WebGLRenderer`.
 - Scene graph: `Object3D`, `Scene`, `Group`, parent/child traversal,
   visibility, persistent layer masks, world matrix computation, and reparenting.
 - Cameras: perspective and orthographic camera projection/view basics including
-  camera `zoom`.
+  camera `zoom`, plus CPU `ArrayCamera` viewport compositing.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
   capsules, lathes, and text-like/path helpers. Box geometry now supports
@@ -403,6 +403,10 @@ Parallel audits split the remaining work into five critical tracks:
   Orbit/pan/zoom controls now apply as offsets over the sampled camera state
   instead of forcing the active camera back to its static export pose each
   frame.
+- Done: render CPU `ArrayCamera` sub-cameras into their stored viewport
+  rectangles, intersecting each viewport with the existing top-left-origin CPU
+  scissor rectangle when scissor testing is enabled. Browser scissor-split
+  export remains a separate compact-runtime gap.
 - Done: export drawable `visible` state and bind browser `NumberKeyframeTrack`
   playback for `visible`, while preserving initially invisible animated
   drawables in generated scene data.
@@ -988,8 +992,9 @@ Parallel audits split the remaining work into five critical tracks:
   texture assets, and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_materials_texture_canvas` via
   `examples/webgl_materials_texture_canvas.jl`, using a generated
-  `CanvasTexture` on a rotating `BoxGeometry` cube. Live DOM canvas drawing,
-  pointer events, runtime `needsUpdate`, and `WebGLRenderer` internals remain
+  `CanvasTexture` on a rotating `BoxGeometry` cube. Runtime texture
+  `needsUpdate` flags now re-upload browser texture payloads on the next frame.
+  Live DOM canvas drawing, pointer events, and `WebGLRenderer` internals remain
   documented deviations.
 - Tightened the official examples parity registry so every registered example
   has focused source/prerequisite assertions in `test/runtests.jl`, preventing
