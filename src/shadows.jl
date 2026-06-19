@@ -181,25 +181,31 @@ function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
 end
 
 """
-    compute_shadow_map(scene, light; resolution=512, bias=3e-3, pcf_radius=0, clipping_planes=_NO_PLANES)
+    compute_shadow_map(scene, light; resolution=512, bias=nothing, pcf_radius=nothing, clipping_planes=_NO_PLANES)
 
 Render the scene's depth from `light`'s viewpoint into a [`ShadowMap`].
 
 `pcf_radius` selects percentage-closer filtering (PCF) soft shadows when querying
 the map with [`shadow_visibility`](@ref): a value `r` samples a `(2r+1)x(2r+1)`
-neighbourhood of the depth map and returns the lit fraction in `[0,1]`. The
-default `pcf_radius=0` reproduces the original single-sample hard shadow exactly.
+neighbourhood of the depth map and returns the lit fraction in `[0,1]`. When
+`pcf_radius` or `bias` is `nothing`, three.js-style per-light `shadow_pcf_radius`
+or `shadow_bias` settings are used when present; otherwise the historical hard
+shadow (`pcf_radius=0`) and `bias=3e-3` defaults are preserved.
 """
-function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_radius::Int=0,
+function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                             clipping_planes=_NO_PLANES)
-    pcf_radius >= 0 || throw(ArgumentError("pcf_radius must be >= 0, got $pcf_radius"))
+    shadow_bias = bias === nothing ? _light_shadow_bias(light, 3e-3) :
+                  _validated_shadow_bias(bias)
+    pcf = pcf_radius === nothing ? _light_shadow_pcf_radius(light, 0) :
+          _validated_shadow_pcf_radius(pcf_radius)
+    pcf === nothing && (pcf = 0)
     meshes = collect_meshes(scene)
     _append_skinned_render_meshes!(meshes, scene)
     instanced = collect_instanced(scene)
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
                  any(im -> _visible_in_tree(im) && object_casts_shadow(im), instanced)
     has_caster ||
-        return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), bias, pcf_radius)
+        return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), shadow_bias, pcf)
     center, radius = _scene_bounds(meshes, instanced)
     vp = _light_view_proj(light, center, radius)
     W = H = resolution
@@ -225,7 +231,7 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=3e-3, pcf_ra
                                      clipping_planes=mesh_clipping_planes)
         end
     end
-    return ShadowMap(depth, vp, bias, pcf_radius)
+    return ShadowMap(depth, vp, shadow_bias, pcf)
 end
 
 @inline _vh(v::Vec3) = Vec4(v.x, v.y, v.z, 1.0)
@@ -279,13 +285,13 @@ end
 # `pcf_radius=0` keeps the original hard-shadow behaviour; a positive radius bakes
 # percentage-closer soft shadows into every map, so the query closure returns the
 # lit fraction in [0,1] via the radius stored on each `ShadowMap`.
-function _build_shadow_query(scene, lights; resolution::Int=512, pcf_radius::Int=0,
+function _build_shadow_query(scene, lights; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                              clipping_planes=_NO_PLANES)
     maps = IdDict{AbstractLight, ShadowMap}()
     for light in lights
         if !_is_fill_light(light) && hasfield(typeof(light), :cast_shadow) && getfield(light, :cast_shadow)
             maps[light] = compute_shadow_map(scene, light; resolution=resolution,
-                                             pcf_radius=pcf_radius,
+                                             bias=bias, pcf_radius=pcf_radius,
                                              clipping_planes=clipping_planes)
         end
     end

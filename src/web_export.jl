@@ -334,6 +334,7 @@ function _web_texture_json(tex)
            ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
            ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
+           ",\"maxAnisotropy\":" * _js_num(tex.max_anisotropy) *
            ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
            ",\"offset\":[" * _js_num(tex.offset.x) * "," * _js_num(tex.offset.y) * "]" *
            ",\"repeat\":[" * _js_num(tex.repeat.x) * "," * _js_num(tex.repeat.y) * "]" *
@@ -378,6 +379,7 @@ function _web_cube_face_json(tex)
            ",\"filter\":" * _js_str(String(tex.filter)) *
            ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
            ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
+           ",\"maxAnisotropy\":" * _js_num(tex.max_anisotropy) *
            ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
            ",\"mipmaps\":[" * mipmaps * "]" *
            "}"
@@ -392,6 +394,14 @@ function _web_material_texture(mat)
 end
 
 const WEB_SHADOW_RESOLUTION = 64
+const WEB_MAX_SHADOW_PCF_RADIUS = 4
+
+function _web_shadow_pcf_radius(light, fallback::Integer)
+    r = _light_shadow_pcf_radius(light, fallback)
+    r <= WEB_MAX_SHADOW_PCF_RADIUS ||
+        throw(ArgumentError("compact WebGL shadow_pcf_radius supports 0:$(WEB_MAX_SHADOW_PCF_RADIUS), got $r"))
+    return r
+end
 
 function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight};
                           shadow_mode::Symbol=:static,
@@ -410,16 +420,20 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
             light isa PointLight || return "null"
             typ = "pointDynamic"
         end
+        pcf = _web_shadow_pcf_radius(light, shadow_mode === :point_dynamic ? 0 : 1)
+        bias = _light_shadow_bias(light, 3e-3) * 0.5
         return "{" *
                "\"type\":" * _js_str(typ) *
                ",\"size\":" * string(WEB_SHADOW_RESOLUTION) *
-               ",\"bias\":" * _js_num(1.5e-3) *
-               ",\"pcfRadius\":" * string(shadow_mode === :point_dynamic ? 0 : 1) *
+               ",\"bias\":" * _js_num(bias) *
+               ",\"pcfRadius\":" * string(pcf) *
                ",\"matrix\":" * _js_mat(Mat4()) *
                "}"
     end
     shadow_mode === :static || return "null"
-    sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION, pcf_radius=1,
+    pcf = _web_shadow_pcf_radius(light, 1)
+    sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION,
+                            bias=_light_shadow_bias(light, 3e-3), pcf_radius=pcf,
                             clipping_planes=clipping_planes)
     H, W = size(sm.depth)
     data = Int[]
@@ -1683,6 +1697,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   if (!gl) throw new Error("WebGL is not available");
   gl.getExtension("OES_standard_derivatives");
   const instancingExt=gl.getExtension("ANGLE_instanced_arrays");
+  const anisotropyExt=gl.getExtension("EXT_texture_filter_anisotropic")||gl.getExtension("MOZ_EXT_texture_filter_anisotropic")||gl.getExtension("WEBKIT_EXT_texture_filter_anisotropic");
+  const maxTextureAnisotropy=anisotropyExt?gl.getParameter(anisotropyExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT):1;
 
   const M4 = {
     ident(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; },
@@ -1753,7 +1769,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   uniform float uShadowBias[MAX_SHADOW],uShadowTexel[MAX_SHADOW],uShadowPointFar[MAX_SHADOW];
   uniform vec3 uSheenColor,uSpecularColor,uAttenuationColor,uShadowPointPos[MAX_SHADOW];
   uniform int uDirCount,uPointCount,uSpotCount,uHemiCount,uRectCount,uClipCount,uFogType,uToneMapping,uOutputColorSpace,uShadowCount,uMaterialMode,uDepthPacking,uDepthOrthographic,uMapTexCoord,uAlphaTexCoord,uEmissiveTexCoord,uAoTexCoord,uLightTexCoord,uRoughnessTexCoord,uMetalnessTexCoord,uNormalTexCoord,uClearcoatNormalTexCoord,uClearcoatTexCoord,uClearcoatRoughnessTexCoord,uTransmissionTexCoord,uSheenRoughnessTexCoord,uIridescenceTexCoord,uIridescenceThicknessTexCoord,uSpecularIntensityTexCoord,uThicknessTexCoord,uAnisotropyTexCoord,uSheenColorTexCoord,uSpecularColorTexCoord,uMapColorSpace,uEmissiveColorSpace,uMatcapColorSpace,uSheenColorSpace,uSpecularColorSpace,uUseTangents;
-  uniform int uShadowLightIndex[MAX_SHADOW],uShadowKind[MAX_SHADOW],uShadowMode[MAX_SHADOW];
+  uniform int uShadowLightIndex[MAX_SHADOW],uShadowKind[MAX_SHADOW],uShadowMode[MAX_SHADOW],uShadowPcfRadius[MAX_SHADOW];
   uniform vec4 uClipPlane[MAX_CLIP];
   uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT];
   uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uClearcoatNormalMap,uMatcapMap,uGradientMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uShadowMap0,uShadowMap1;
@@ -1781,11 +1797,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   vec3 iridescenceTint(float ndv){ float phase=uIridescenceThickness*.018 + uIridescenceIor*2.1 + ndv*3.14159; return .5+.5*cos(vec3(phase,phase+2.094,phase+4.188)); }
   float rectNode(int i){ return i==0?-0.7745967:(i==1?0.0:0.7745967); }
   float rectWeight(int i){ return i==1?0.8888889:0.5555556; }
-  float shadowSample0(vec3 p){ vec4 q=uShadowMatrix[0]*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias[0]; float sum=0.0; for(int yy=-1;yy<=1;yy++) for(int xx=-1;xx<=1;xx++){ vec2 off=vec2(float(xx),float(yy))*uShadowTexel[0]; float stored=texture2D(uShadowMap0,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; } return sum/9.0; }
-  float shadowSample1(vec3 p){ vec4 q=uShadowMatrix[1]*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias[1]; float sum=0.0; for(int yy=-1;yy<=1;yy++) for(int xx=-1;xx<=1;xx++){ vec2 off=vec2(float(xx),float(yy))*uShadowTexel[1]; float stored=texture2D(uShadowMap1,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; } return sum/9.0; }
+  float shadowSample0(vec3 p){ vec4 q=uShadowMatrix[0]*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias[0]; int r=uShadowPcfRadius[0]; if(r<0) r=0; if(r>4) r=4; float sum=0.0,total=0.0; for(int yy=-4;yy<=4;yy++) for(int xx=-4;xx<=4;xx++){ if(xx < -r || xx > r || yy < -r || yy > r) continue; vec2 off=vec2(float(xx),float(yy))*uShadowTexel[0]; float stored=texture2D(uShadowMap0,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; total += 1.0; } return total>0.0 ? sum/total : 1.0; }
+  float shadowSample1(vec3 p){ vec4 q=uShadowMatrix[1]*vec4(p,1.0); if(q.w<=0.0) return 1.0; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) return 1.0; vec2 uv=ndc.xy*.5+.5; float current=ndc.z*.5+.5-uShadowBias[1]; int r=uShadowPcfRadius[1]; if(r<0) r=0; if(r>4) r=4; float sum=0.0,total=0.0; for(int yy=-4;yy<=4;yy++) for(int xx=-4;xx<=4;xx++){ if(xx < -r || xx > r || yy < -r || yy > r) continue; vec2 off=vec2(float(xx),float(yy))*uShadowTexel[1]; float stored=texture2D(uShadowMap1,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; total += 1.0; } return total>0.0 ? sum/total : 1.0; }
   vec2 pointAtlasOffset(int face){ if(face==0) return vec2(0.0,0.0); if(face==1) return vec2(1.0,0.0); if(face==2) return vec2(2.0,0.0); if(face==3) return vec2(3.0,0.0); if(face==4) return vec2(0.0,1.0); return vec2(1.0,1.0); }
-  float pointShadowSample0(vec3 p){ vec3 rel=p-uShadowPointPos[0]; float current=length(rel)/max(uShadowPointFar[0],0.0001)-uShadowBias[0]; for(int i=0;i<6;i++){ vec4 q=uShadowPointMatrix0[i]*vec4(p,1.0); if(q.w<=0.0) continue; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) continue; vec2 uv=(ndc.xy*.5+.5+pointAtlasOffset(i))/vec2(4.0,2.0); float stored=texture2D(uShadowMap0,clamp(uv,0.0,1.0)).r; return current>stored ? 0.35 : 1.0; } return 1.0; }
-  float pointShadowSample1(vec3 p){ vec3 rel=p-uShadowPointPos[1]; float current=length(rel)/max(uShadowPointFar[1],0.0001)-uShadowBias[1]; for(int i=0;i<6;i++){ vec4 q=uShadowPointMatrix1[i]*vec4(p,1.0); if(q.w<=0.0) continue; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) continue; vec2 uv=(ndc.xy*.5+.5+pointAtlasOffset(i))/vec2(4.0,2.0); float stored=texture2D(uShadowMap1,clamp(uv,0.0,1.0)).r; return current>stored ? 0.35 : 1.0; } return 1.0; }
+  float pointShadowSample0(vec3 p){ vec3 rel=p-uShadowPointPos[0]; float current=length(rel)/max(uShadowPointFar[0],0.0001)-uShadowBias[0]; int r=uShadowPcfRadius[0]; if(r<0) r=0; if(r>4) r=4; for(int i=0;i<6;i++){ vec4 q=uShadowPointMatrix0[i]*vec4(p,1.0); if(q.w<=0.0) continue; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) continue; vec2 uv=(ndc.xy*.5+.5+pointAtlasOffset(i))/vec2(4.0,2.0); float sum=0.0,total=0.0; for(int yy=-4;yy<=4;yy++) for(int xx=-4;xx<=4;xx++){ if(xx < -r || xx > r || yy < -r || yy > r) continue; vec2 off=vec2(float(xx)*uShadowTexel[0]*0.25,float(yy)*uShadowTexel[0]*0.5); float stored=texture2D(uShadowMap0,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; total += 1.0; } return total>0.0 ? sum/total : 1.0; } return 1.0; }
+  float pointShadowSample1(vec3 p){ vec3 rel=p-uShadowPointPos[1]; float current=length(rel)/max(uShadowPointFar[1],0.0001)-uShadowBias[1]; int r=uShadowPcfRadius[1]; if(r<0) r=0; if(r>4) r=4; for(int i=0;i<6;i++){ vec4 q=uShadowPointMatrix1[i]*vec4(p,1.0); if(q.w<=0.0) continue; vec3 ndc=q.xyz/q.w; if(abs(ndc.x)>1.0||abs(ndc.y)>1.0||ndc.z<-1.0||ndc.z>1.0) continue; vec2 uv=(ndc.xy*.5+.5+pointAtlasOffset(i))/vec2(4.0,2.0); float sum=0.0,total=0.0; for(int yy=-4;yy<=4;yy++) for(int xx=-4;xx<=4;xx++){ if(xx < -r || xx > r || yy < -r || yy > r) continue; vec2 off=vec2(float(xx)*uShadowTexel[1]*0.25,float(yy)*uShadowTexel[1]*0.5); float stored=texture2D(uShadowMap1,clamp(uv+off,0.0,1.0)).r; sum += current>stored ? 0.35 : 1.0; total += 1.0; } return total>0.0 ? sum/total : 1.0; } return 1.0; }
   float shadowFor(int kind, int index, vec3 p){ float sh=1.0; if(uShadowCount>0&&uShadowKind[0]==kind&&uShadowLightIndex[0]==index) sh*=uShadowMode[0]==1?pointShadowSample0(p):shadowSample0(p); if(uShadowCount>1&&uShadowKind[1]==kind&&uShadowLightIndex[1]==index) sh*=uShadowMode[1]==1?pointShadowSample1(p):shadowSample1(p); return sh; }
   void main(){ if(clipped(vWorld)) discard; vec2 uv=uvFor(uMapMatrix,uMapTexCoord); vec2 alphaUv=uvFor(uAlphaMatrix,uAlphaTexCoord); vec2 emissiveUv=uvFor(uEmissiveMatrix,uEmissiveTexCoord); vec2 aoUv=uvFor(uAoMatrix,uAoTexCoord); vec2 lightUv=uvFor(uLightMatrix,uLightTexCoord); vec2 roughnessUv=uvFor(uRoughnessMatrix,uRoughnessTexCoord); vec2 metalnessUv=uvFor(uMetalnessMatrix,uMetalnessTexCoord); vec2 normalUv=uvFor(uNormalMatrix,uNormalTexCoord); vec2 clearcoatNormalUv=uvFor(uClearcoatNormalMatrix,uClearcoatNormalTexCoord); vec2 clearcoatUv=uvFor(uClearcoatMatrix,uClearcoatTexCoord); vec2 clearcoatRoughnessUv=uvFor(uClearcoatRoughnessMatrix,uClearcoatRoughnessTexCoord); vec2 transmissionUv=uvFor(uTransmissionMatrix,uTransmissionTexCoord); vec2 sheenRoughnessUv=uvFor(uSheenRoughnessMatrix,uSheenRoughnessTexCoord); vec2 iridescenceUv=uvFor(uIridescenceMatrix,uIridescenceTexCoord); vec2 iridescenceThicknessUv=uvFor(uIridescenceThicknessMatrix,uIridescenceThicknessTexCoord); vec2 specularIntensityUv=uvFor(uSpecularIntensityMatrix,uSpecularIntensityTexCoord); vec2 thicknessUv=uvFor(uThicknessMatrix,uThicknessTexCoord); vec2 anisotropyUv=uvFor(uAnisotropyMatrix,uAnisotropyTexCoord); vec2 sheenColorUv=uvFor(uSheenColorMatrix,uSheenColorTexCoord); vec2 specularColorUv=uvFor(uSpecularColorMatrix,uSpecularColorTexCoord); vec3 n=normalize(vNormal); if(!gl_FrontFacing)n=-n; n=mappedNormal(n,normalUv); vec3 clearcoatN=mappedClearcoatNormal(n,clearcoatNormalUv); float viewDistance=length(uCamera-vWorld); if(uMaterialMode==1){ vec3 nc=clamp(n*.5+.5,0.0,1.0); nc=mix(nc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(nc),uOpacity); return; } if(uMaterialMode==2){ gl_FragColor=depthColor(vViewZ); return; } vec3 v=normalize(uCamera-vWorld); if(uMaterialMode==4){ float f=max(dot(n,v),0.0); vec3 viewN=normalize(uViewNormalMat*n); vec3 viewDir=normalize(uViewNormalMat*v); vec3 matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x)); vec3 matcapY=cross(viewDir,matcapX); vec2 muv=clamp(vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5),0.0,1.0); vec3 fallback=vec3(0.35+0.65*f); vec3 mc=uColor*mix(fallback,colorTex(uMatcapMap,muv,uMatcapColorSpace).rgb,uUseMatcapMap); mc=mix(mc,uFogColor,fogFactor(viewDistance)); gl_FragColor=vec4(outputColor(toneMap(mc)),uOpacity); return; } vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0);
     for(int i=0;i<MAX_HEMI;i++){ if(i>=uHemiCount) break; float h=clamp(n.y*.5+.5,0.0,1.0); diffuse+=mix(uHemiGround[i],uHemiSky[i],h); }
@@ -1854,6 +1870,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     return gl.LINEAR_MIPMAP_LINEAR;
   }
   function usesMipmaps(v){ return !!v&&v.indexOf("mipmap")>=0; }
+  function applyAnisotropy(target,t){
+    if(!anisotropyExt) return;
+    const a=Math.max(1,Math.min(maxTextureAnisotropy,Number(t.maxAnisotropy||1)));
+    if(a>1) gl.texParameterf(target,anisotropyExt.TEXTURE_MAX_ANISOTROPY_EXT,a);
+  }
   function makeTexture(t){
     if(!t) return null;
     const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
@@ -1866,6 +1887,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     if(pot&&usesMipmaps(minFilter)) gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
+    applyAnisotropy(gl.TEXTURE_2D,t);
     return tex;
   }
   const cubeTargets=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
@@ -1918,6 +1940,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,minFilterMode(minFilter,pot));
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,magFilterMode(magFilter));
+    applyAnisotropy(gl.TEXTURE_CUBE_MAP,first);
     return {texture:tex,maxLod:maxLod};
   }
   const defaultEnvCubeTex=cubeTexturesEnabled?makeSolidCubeTexture():null;
@@ -2068,7 +2091,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function clipping(c){ const planes=c.clippingPlanes||[], out=new Array(16).fill(0); for(let i=0;i<Math.min(4,planes.length);i++){ const p=planes[i]; out[i*4]=p[0]; out[i*4+1]=p[1]; out[i*4+2]=p[2]; out[i*4+3]=p[3]; } return {count:Math.min(4,planes.length), planes:out}; }
   function objectClipping(o,clip){ const planes=clip.planes.slice(), locals=o.clippingPlanes||[]; let count=clip.count; for(let i=0;i<locals.length&&count<4;i++,count++){ const p=locals[i], k=count*4; planes[k]=p[0]; planes[k+1]=p[1]; planes[k+2]=p[2]; planes[k+3]=p[3]; } return {count:count, planes:planes}; }
   function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near==null?1:f.near,far:f.far||1000,density:f.density||0}; }
-  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[], shadows=[]; const addShadow=(kind,index,l)=>{ if(l.shadowTexture&&shadows.length<shadowTextureSlots.length){ const pointMode=l.shadow&&l.shadow.type==="pointDynamic"; shadows.push({kind:kind,index:index,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias||0.0015,texel:1/(l.shadow.size||64),mode:pointMode?1:0,pointPosition:l.position||[0,0,0],pointFar:l.shadow.far||1,pointMatrices:l.shadow.matrices||[]}); } }; for(const l of c.lights||[]){ if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); addShadow(1,idx,l); } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); addShadow(3,idx,l); } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); addShadow(2,idx,l); } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadows:shadows,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
+  function lighting(c){ const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[], shadows=[]; const addShadow=(kind,index,l)=>{ if(l.shadowTexture&&shadows.length<shadowTextureSlots.length){ const pointMode=l.shadow&&l.shadow.type==="pointDynamic"; shadows.push({kind:kind,index:index,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias==null?0.0015:l.shadow.bias,pcfRadius:l.shadow.pcfRadius==null?0:l.shadow.pcfRadius,texel:1/(l.shadow.size||64),mode:pointMode?1:0,pointPosition:l.position||[0,0,0],pointFar:l.shadow.far||1,pointMatrices:l.shadow.matrices||[]}); } }; for(const l of c.lights||[]){ if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); addShadow(1,idx,l); } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); addShadow(3,idx,l); } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); addShadow(2,idx,l); } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadows:shadows,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
   function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
   function uniform2v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
   function uniform4v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
@@ -2167,6 +2190,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       uniform1i(p,"uShadowCount",objShadows.length);
       gl.uniformMatrix4fv(gl.getUniformLocation(p,"uShadowMatrix[0]"),false,new Float32Array(shadowMatrices(objShadows)));
       uniform1fv(p,"uShadowBias[0]",shadowValues(objShadows,"bias",0.0015));
+      uniform1iv(p,"uShadowPcfRadius[0]",shadowValues(objShadows,"pcfRadius",1));
       uniform1fv(p,"uShadowTexel[0]",shadowValues(objShadows,"texel",0.015625));
       uniform1iv(p,"uShadowKind[0]",shadowValues(objShadows,"kind",0));
       uniform1iv(p,"uShadowLightIndex[0]",shadowValues(objShadows,"index",-1));

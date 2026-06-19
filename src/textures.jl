@@ -21,6 +21,7 @@ mutable struct Texture
     matrix::Mat3{Float64}              # UV transform matrix
     matrix_auto_update::Bool           # recompute matrix from offset/repeat/rotation/center
     tex_coord::Int                     # glTF textureInfo.texCoord / UV set index (0 => uv, 1 => uv2)
+    max_anisotropy::Float64            # WebGL anisotropic filtering request (1 = disabled)
 end
 
 function _texture_mag_filter_symbol(v)::Symbol
@@ -38,12 +39,20 @@ function _texture_min_filter_symbol(v)::Symbol
     throw(ArgumentError("unsupported texture min_filter: $s"))
 end
 
+function _texture_max_anisotropy(v)::Float64
+    f = Float64(v)
+    isfinite(f) || throw(ArgumentError("Texture max_anisotropy must be finite"))
+    f >= 1.0 || throw(ArgumentError("Texture max_anisotropy must be at least 1"))
+    return f
+end
+
 function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=:bilinear,
                  min_filter=nothing, mag_filter=nothing,
                  mipmaps::Vector{Array{Float64,3}}=Array{Float64,3}[], colorspace::Symbol=:srgb,
                  offset=Vec2(0.0, 0.0), repeat=Vec2(1.0, 1.0),
                  rotation::Real=0.0, center=Vec2(0.0, 0.0),
-                 matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0)
+                 matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0,
+                 max_anisotropy=1.0)
     tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     minf = min_filter === nothing ? _texture_min_filter_symbol(filter) :
            _texture_min_filter_symbol(min_filter)
@@ -55,8 +64,20 @@ function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=
                   Float64(rotation),
                   Vec2(Float64(center.x), Float64(center.y)),
                   Mat3{Float64}(Tuple(Float64(x) for x in matrix.e)),
-                  matrix_auto_update, Int(tex_coord))
+                  matrix_auto_update, Int(tex_coord),
+                  _texture_max_anisotropy(max_anisotropy))
     matrix_auto_update ? texture_update_matrix!(tex) : tex
+end
+
+function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter::Symbol,
+                 min_filter::Symbol, mag_filter::Symbol,
+                 mipmaps::Vector{Array{Float64,3}}, colorspace::Symbol,
+                 offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
+                 center::Vec2{Float64}, matrix::Mat3{Float64},
+                 matrix_auto_update::Bool, tex_coord::Integer)
+    Texture(data, wrap_s, wrap_t, filter, min_filter, mag_filter, mipmaps, colorspace,
+            offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
+            Int(tex_coord), 1.0)
 end
 DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)

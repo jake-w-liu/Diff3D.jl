@@ -19,14 +19,25 @@ struct MeshBasicMaterial <: AbstractMaterial
     alpha_test::Float64
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                            transparent=false, wireframe=false, side=:front, map=nothing,
                            alpha_map=nothing, vertex_colors=false, alpha_test=0.0,
-                           depth_test=true, depth_write=true)
+                           depth_test=true, depth_write=true,
+                           clipping_planes=Plane{Float64}[])
     MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map, vertex_colors,
-                      Float64(alpha_test), depth_test, depth_write)
+                      Float64(alpha_test), depth_test, depth_write,
+                      _material_clipping_planes(clipping_planes))
+end
+
+function MeshBasicMaterial(color::Color3, opacity, transparent::Bool, wireframe::Bool,
+                           side::Symbol, map, alpha_map, vertex_colors::Bool,
+                           alpha_test, depth_test::Bool, depth_write::Bool)
+    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map,
+                      vertex_colors, alpha_test, depth_test, depth_write,
+                      Plane{Float64}[])
 end
 
 struct SpriteMaterial <: AbstractMaterial
@@ -79,6 +90,7 @@ struct MeshLambertMaterial <: AbstractMaterial
     alpha_test::Float64
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
@@ -88,11 +100,21 @@ function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               emissive_map=nothing, emissive_intensity=1.0,
                               vertex_colors=false,
                               light_map=nothing, alpha_test=0.0,
-                              depth_test=true, depth_write=true)
+                              depth_test=true, depth_write=true,
+                              clipping_planes=Plane{Float64}[])
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
                         alpha_map, ao_map, emissive_map, Float64(emissive_intensity),
                         vertex_colors, light_map, Float64(alpha_test), depth_test,
-                        depth_write)
+                        depth_write, _material_clipping_planes(clipping_planes))
+end
+
+function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
+                             wireframe::Bool, side::Symbol, map, alpha_map, ao_map,
+                             emissive_map, emissive_intensity, vertex_colors::Bool,
+                             light_map, alpha_test, depth_test::Bool, depth_write::Bool)
+    MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
+                        alpha_map, ao_map, emissive_map, emissive_intensity, vertex_colors,
+                        light_map, alpha_test, depth_test, depth_write, Plane{Float64}[])
 end
 
 function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
@@ -220,6 +242,7 @@ struct MeshStandardMaterial <: AbstractMaterial
     env_map_intensity::Float64
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
@@ -233,13 +256,18 @@ function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
                                envmap=nothing, light_map=nothing,
                                emissive_intensity=1.0, ao_map_intensity=1.0,
                                light_map_intensity=1.0, env_map_intensity=1.0,
-                               depth_test=true, depth_write=true)
+                               depth_test=true, depth_write=true,
+                               clipping_planes=Plane{Float64}[])
     MeshStandardMaterial(color, emissive, metalness, roughness, opacity, transparent, side,
                          map, normal_map, Float64(normal_scale), roughness_map, metalness_map, alpha_map,
                          ao_map, emissive_map, vertex_colors, Float64(alpha_test), envmap, light_map,
                          emissive_intensity, ao_map_intensity, light_map_intensity,
-                         env_map_intensity, depth_test, depth_write)
+                         env_map_intensity, depth_test, depth_write,
+                         _material_clipping_planes(clipping_planes))
 end
+
+MeshStandardMaterial(args::Vararg{Any,25}) =
+    MeshStandardMaterial(args..., Plane{Float64}[])
 
 # ========================== MeshNormalMaterial ==========================
 # Maps normals to RGB
@@ -250,12 +278,18 @@ struct MeshNormalMaterial <: AbstractMaterial
     side::Symbol
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshNormalMaterial(; opacity=1.0, transparent=false, side=:front,
-                            depth_test=true, depth_write=true)
-    MeshNormalMaterial(opacity, transparent, side, depth_test, depth_write)
+                            depth_test=true, depth_write=true,
+                            clipping_planes=Plane{Float64}[])
+    MeshNormalMaterial(opacity, transparent, side, depth_test, depth_write,
+                       _material_clipping_planes(clipping_planes))
 end
+
+MeshNormalMaterial(args::Vararg{Any,5}) =
+    MeshNormalMaterial(args..., Plane{Float64}[])
 
 # ========================== LineBasicMaterial ==========================
 
@@ -369,6 +403,7 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     anisotropy_map::Any
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
@@ -396,7 +431,8 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                clearcoat_normal_scale=1.0, dispersion=0.0,
                                anisotropy=0.0, anisotropy_rotation=0.0,
                                anisotropy_map=nothing,
-                               depth_test=true, depth_write=true)
+                               depth_test=true, depth_write=true,
+                               clipping_planes=Plane{Float64}[])
     MeshPhysicalMaterial(color, emissive, metalness, roughness, clearcoat,
                          clearcoat_roughness, transmission, ior, opacity, transparent, side,
                           envmap, map, normal_map, Float64(normal_scale), roughness_map, metalness_map, ao_map,
@@ -413,8 +449,12 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          clearcoat_normal_map, Float64(clearcoat_normal_scale),
                          Float64(dispersion), Float64(anisotropy),
                          Float64(anisotropy_rotation), anisotropy_map,
-                         depth_test, depth_write)
+                         depth_test, depth_write,
+                         _material_clipping_planes(clipping_planes))
 end
+
+MeshPhysicalMaterial(args::Vararg{Any,56}) =
+    MeshPhysicalMaterial(args..., Plane{Float64}[])
 
 # ========================== MeshToonMaterial ==========================
 # Quantized (cel-shaded) diffuse, optionally sampled from a toon gradient map.
@@ -446,17 +486,18 @@ struct MeshToonMaterial <: AbstractMaterial
     side::Symbol
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 
     function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
                               gradient_map, map, alpha_map, emissive_map,
                               emissive_intensity, alpha_test, opacity,
                               transparent::Bool, side::Symbol, depth_test::Bool,
-                              depth_write::Bool)
+                              depth_write::Bool, clipping_planes)
         new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
             map, alpha_map, emissive_map, Float64(emissive_intensity),
             Float64(alpha_test), Float64(opacity), transparent, side, depth_test,
-            depth_write)
+            depth_write, _material_clipping_planes(clipping_planes))
     end
 end
 
@@ -465,10 +506,21 @@ function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0
                            alpha_map=nothing, emissive_map=nothing,
                            emissive_intensity=1.0, alpha_test=0.0, opacity=1.0,
                            transparent=false, side=:front,
-                           depth_test=true, depth_write=true)
+                           depth_test=true, depth_write=true,
+                           clipping_planes=Plane{Float64}[])
     MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, alpha_map,
                      emissive_map, emissive_intensity, alpha_test, opacity,
-                     transparent, side, depth_test, depth_write)
+                     transparent, side, depth_test, depth_write, clipping_planes)
+end
+
+function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                          gradient_map, map, alpha_map, emissive_map,
+                          emissive_intensity, alpha_test, opacity,
+                          transparent::Bool, side::Symbol, depth_test::Bool,
+                          depth_write::Bool)
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, alpha_map,
+                     emissive_map, emissive_intensity, alpha_test, opacity, transparent,
+                     side, depth_test, depth_write, Plane{Float64}[])
 end
 
 function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
@@ -509,13 +561,19 @@ struct MeshMatcapMaterial <: AbstractMaterial
     side::Symbol
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
                              opacity=1.0, transparent=false, side=:front,
-                             depth_test=true, depth_write=true)
-    MeshMatcapMaterial(color, matcap, opacity, transparent, side, depth_test, depth_write)
+                             depth_test=true, depth_write=true,
+                             clipping_planes=Plane{Float64}[])
+    MeshMatcapMaterial(color, matcap, opacity, transparent, side, depth_test, depth_write,
+                       _material_clipping_planes(clipping_planes))
 end
+
+MeshMatcapMaterial(args::Vararg{Any,7}) =
+    MeshMatcapMaterial(args..., Plane{Float64}[])
 
 # ========================== MeshDepthMaterial ==========================
 # Renders normalized camera-space depth. `:basic` displays near → bright;
@@ -543,19 +601,30 @@ struct MeshDepthMaterial <: AbstractMaterial
     side::Symbol
     depth_test::Bool
     depth_write::Bool
+    clipping_planes::Vector{Plane{Float64}}
 end
 
 function MeshDepthMaterial(near::Real, far::Real, opacity::Real, transparent::Bool,
                            side::Symbol, depth_test::Bool, depth_write::Bool)
     MeshDepthMaterial(Float64(near), Float64(far), :basic, Float64(opacity),
-                      transparent, side, depth_test, depth_write)
+                      transparent, side, depth_test, depth_write, Plane{Float64}[])
+end
+
+function MeshDepthMaterial(near::Real, far::Real, depth_packing, opacity::Real,
+                           transparent::Bool, side::Symbol, depth_test::Bool,
+                           depth_write::Bool)
+    MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
+                      Float64(opacity), transparent, side, depth_test, depth_write,
+                      Plane{Float64}[])
 end
 
 function MeshDepthMaterial(; near=0.1, far=100.0, depth_packing=:basic,
                            opacity=1.0, transparent=false, side=:front,
-                           depth_test=true, depth_write=true)
+                           depth_test=true, depth_write=true,
+                           clipping_planes=Plane{Float64}[])
     MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
-                      Float64(opacity), transparent, side, depth_test, depth_write)
+                      Float64(opacity), transparent, side, depth_test, depth_write,
+                      _material_clipping_planes(clipping_planes))
 end
 
 # ========================== ShaderMaterial ==========================

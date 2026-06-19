@@ -487,6 +487,12 @@ Parallel audits split the remaining work into five critical tracks:
   mesh implicitly. Browser shadow parity remains partial: static maps are still
   baked at export time, except for animated directional shadow-light transforms
   handled by the compact dynamic pass above.
+- Done: add per-light shadow filter controls for `DirectionalLight`,
+  `PointLight`, and `SpotLight`. Optional `shadow_bias` and
+  `shadow_pcf_radius` settings now feed CPU shadow-map generation and compact
+  browser static/dynamic shadow metadata; the generated shader uses the
+  serialized PCF radius for bounded filtering. Full three.js shadow-camera
+  helper, cascaded-shadow, and renderer-state parity remain open.
 - Done: CPU `RectAreaLight` now uses finite rectangular quadrature with
   width/height, emitter facing, distance attenuation, and area scaling instead
   of treating the rectangle as a center-point directional light. Full three.js
@@ -532,12 +538,17 @@ Parallel audits split the remaining work into five critical tracks:
   apply it with a WebGL `ALIASED_LINE_WIDTH_RANGE` clamp for line, line-loop, and
   line-strip draw modes. Platforms whose WebGL line-width range is `[1, 1]`
   still render one-pixel native lines, matching the browser limitation.
-- Done: add `MeshPhongMaterial.clipping_planes` as a material-local clipping
-  slice. CPU flat/smooth mesh rasterization and compact browser export now
-  combine Phong local planes with renderer/case-level world clipping planes, and
-  `webgl_clipping` includes a material-local clipping case.
+- Done: extend material-local `clipping_planes` across mesh material
+  constructors for Basic, Lambert, Phong, Standard, Physical, Toon, Matcap,
+  Normal, and Depth materials. CPU render tests cover local clipping on the
+  expanded mesh-material set, smooth-path coverage includes Phong and Standard,
+  and compact browser export serializes both Phong and Standard local planes.
 - Done: add browser export for emissive, AO, light, roughness, metalness, and
   normal maps where matching Julia material fields already exist.
+- Done: add `Texture.max_anisotropy` metadata and compact browser export support
+  for `EXT_texture_filter_anisotropic`, including capped sampler-state setup for
+  2D textures and cube maps. CPU `sample_texture_aniso` remains the dedicated
+  software filtering path.
 - Done: add compact browser `MeshBasicMaterial` support with an explicit unlit
   material-mode shader branch.
 - Done: add compact browser `MeshNormalMaterial` support with a material-mode

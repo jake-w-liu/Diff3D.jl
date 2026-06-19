@@ -173,6 +173,29 @@ get_parent(o::AmbientLight) = o.parent
 is_visible(o::AmbientLight) = o.visible
 set_parent!(o::AmbientLight, p) = (o.parent = p)
 
+function _validated_shadow_bias(v)
+    v === nothing && return nothing
+    b = Float64(v)
+    isfinite(b) || throw(ArgumentError("shadow_bias must be finite"))
+    return b
+end
+
+function _validated_shadow_pcf_radius(v)
+    v === nothing && return nothing
+    v isa Integer || throw(ArgumentError("shadow_pcf_radius must be an integer or nothing"))
+    r = Int(v)
+    r >= 0 || throw(ArgumentError("shadow_pcf_radius must be >= 0, got $r"))
+    return r
+end
+
+_light_shadow_bias(light, fallback::Real=3e-3) =
+    hasproperty(light, :shadow_bias) && getproperty(light, :shadow_bias) !== nothing ?
+    Float64(getproperty(light, :shadow_bias)) : Float64(fallback)
+
+_light_shadow_pcf_radius(light, fallback::Integer=0) =
+    hasproperty(light, :shadow_pcf_radius) && getproperty(light, :shadow_pcf_radius) !== nothing ?
+    Int(getproperty(light, :shadow_pcf_radius)) : Int(fallback)
+
 # ========================== DirectionalLight ==========================
 
 mutable struct DirectionalLight <: AbstractLight
@@ -188,14 +211,24 @@ mutable struct DirectionalLight <: AbstractLight
     intensity::Float64
     target::Vec3{Float64}
     cast_shadow::Bool
+    shadow_bias::Union{Nothing, Float64}
+    shadow_pcf_radius::Union{Nothing, Int}
 end
+
+DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
+                 color, intensity, target, cast_shadow) =
+    DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
+                     color, intensity, target, cast_shadow, nothing, nothing)
 
 function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
-                           cast_shadow=false)
+                           cast_shadow=false, shadow_bias=nothing,
+                           shadow_pcf_radius=nothing)
     DirectionalLight(position, Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
-                     color, intensity, Vec3(), cast_shadow)
+                     color, intensity, Vec3(), cast_shadow,
+                     _validated_shadow_bias(shadow_bias),
+                     _validated_shadow_pcf_radius(shadow_pcf_radius))
 end
 
 get_position(o::DirectionalLight) = o.position
@@ -222,15 +255,26 @@ mutable struct PointLight <: AbstractLight
     distance::Float64
     decay::Float64
     cast_shadow::Bool
+    shadow_bias::Union{Nothing, Float64}
+    shadow_pcf_radius::Union{Nothing, Int}
     ies_profile::Any   # optional IESProfile photometric distribution (nothing = isotropic)
 end
 
+PointLight(position, rotation, scale, parent, children, visible, name, id,
+           color, intensity, distance, decay, cast_shadow, ies_profile) =
+    PointLight(position, rotation, scale, parent, children, visible, name, id,
+               color, intensity, distance, decay, cast_shadow, nothing, nothing,
+               ies_profile)
+
 function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                     distance=0.0, decay=2.0, position=Vec3(),
-                    name="PointLight", cast_shadow=false, ies_profile=nothing)
+                    name="PointLight", cast_shadow=false, shadow_bias=nothing,
+                    shadow_pcf_radius=nothing, ies_profile=nothing)
     PointLight(position, Euler(), Vec3(1.0,1.0,1.0),
                nothing, AbstractObject3D[], true, name, _next_id(),
-               color, intensity, distance, decay, cast_shadow, ies_profile)
+               color, intensity, distance, decay, cast_shadow,
+               _validated_shadow_bias(shadow_bias),
+               _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
 end
 
 get_position(o::PointLight) = o.position
@@ -260,17 +304,28 @@ mutable struct SpotLight <: AbstractLight
     decay::Float64
     target::Vec3{Float64}
     cast_shadow::Bool
+    shadow_bias::Union{Nothing, Float64}
+    shadow_pcf_radius::Union{Nothing, Int}
     ies_profile::Any   # optional IESProfile photometric distribution (nothing = analytic cone)
 end
+
+SpotLight(position, rotation, scale, parent, children, visible, name, id,
+          color, intensity, distance, angle, penumbra, decay, target, cast_shadow,
+          ies_profile) =
+    SpotLight(position, rotation, scale, parent, children, visible, name, id,
+              color, intensity, distance, angle, penumbra, decay, target,
+              cast_shadow, nothing, nothing, ies_profile)
 
 function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
                    position=Vec3(0.0, 1.0, 0.0), name="SpotLight",
-                   target=Vec3(), cast_shadow=false, ies_profile=nothing)
+                   target=Vec3(), cast_shadow=false, shadow_bias=nothing,
+                   shadow_pcf_radius=nothing, ies_profile=nothing)
     SpotLight(position, Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
               color, intensity, distance, angle, penumbra, decay,
-              target, cast_shadow, ies_profile)
+              target, cast_shadow, _validated_shadow_bias(shadow_bias),
+              _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
 end
 
 get_position(o::SpotLight) = o.position

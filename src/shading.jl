@@ -242,7 +242,8 @@ function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
                       side=m.side, map=m.map, alpha_map=m.alpha_map,
                       vertex_colors=m.vertex_colors,
                       alpha_test=m.alpha_test, depth_test=m.depth_test,
-                      depth_write=m.depth_write)
+                      depth_write=m.depth_write,
+                      clipping_planes=m.clipping_planes)
 end
 function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
     MeshLambertMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
@@ -253,7 +254,8 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
                         emissive_intensity=m.emissive_intensity,
                         vertex_colors=m.vertex_colors, light_map=m.light_map,
                         alpha_test=m.alpha_test, depth_test=m.depth_test,
-                        depth_write=m.depth_write)
+                        depth_write=m.depth_write,
+                        clipping_planes=m.clipping_planes)
 end
 function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
     MeshPhongMaterial(color=_modulate(m.color, vc), specular=m.specular,
@@ -279,7 +281,8 @@ function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
                          ao_map_intensity=m.ao_map_intensity,
                          light_map_intensity=m.light_map_intensity,
                          env_map_intensity=m.env_map_intensity,
-                         depth_test=m.depth_test, depth_write=m.depth_write)
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
     MeshPhysicalMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
@@ -321,7 +324,8 @@ function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
                          anisotropy=m.anisotropy,
                          anisotropy_rotation=m.anisotropy_rotation,
                          anisotropy_map=m.anisotropy_map,
-                         depth_test=m.depth_test, depth_write=m.depth_write)
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 
 # Per-face average of the three vertices' RGB colors from the geometry's :color
@@ -395,7 +399,9 @@ function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, 
                          emissive_intensity=m.emissive_intensity,
                          ao_map_intensity=m.ao_map_intensity,
                          light_map_intensity=m.light_map_intensity,
-                         env_map_intensity=m.env_map_intensity)
+                         env_map_intensity=m.env_map_intensity,
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, u, v, u2, v2)
     ru, rv = roughness_map === nothing ? (u, v) : _map_uv(roughness_map, u, v, u2, v2)
@@ -413,7 +419,9 @@ function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, 
                          emissive_intensity=m.emissive_intensity,
                          ao_map_intensity=m.ao_map_intensity,
                          light_map_intensity=m.light_map_intensity,
-                         env_map_intensity=m.env_map_intensity)
+                         env_map_intensity=m.env_map_intensity,
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v)
     roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
@@ -472,7 +480,8 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                           thickness_map=m.thickness_map,
                           attenuation_distance=m.attenuation_distance,
                          attenuation_color=m.attenuation_color,
-                         depth_test=m.depth_test, depth_write=m.depth_write)
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v, u2, v2)
     uv_for(tex) = tex === nothing ? (u, v) : _map_uv(tex, u, v, u2, v2)
@@ -546,7 +555,8 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                          thickness_map=m.thickness_map,
                          attenuation_distance=m.attenuation_distance,
                          attenuation_color=m.attenuation_color,
-                         depth_test=m.depth_test, depth_write=m.depth_write)
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
 end
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m

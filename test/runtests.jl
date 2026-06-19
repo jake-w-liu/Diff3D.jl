@@ -1052,12 +1052,16 @@ end
         add!(scene, ambient)
         shadow_dir = DirectionalLight(color=Color3(1.0, 0.9, 0.8), intensity=1.2,
                                       position=Vec3(1.0, 2.0, 3.0),
-                                      cast_shadow=true)
+                                      cast_shadow=true,
+                                      shadow_bias=0.02,
+                                      shadow_pcf_radius=2)
         add!(scene, shadow_dir)
         moving_shadow_dir = DirectionalLight(color=Color3(0.7, 0.8, 1.0), intensity=0.35,
                                              position=Vec3(2.0, 4.0, 1.0),
                                              name="export_moving_shadow_dir",
-                                             cast_shadow=true)
+                                             cast_shadow=true,
+                                             shadow_bias=0.012,
+                                             shadow_pcf_radius=3)
         moving_shadow_dir.target = Vec3(0.0, 0.0, 0.0)
         add!(scene, moving_shadow_dir)
         shadow_point = PointLight(color=Color3(0.4, 0.7, 1.0), intensity=6.0,
@@ -1179,6 +1183,15 @@ end
                                      name="export_phong_local_clipping")
         phong_local_clip_mesh.position = Vec3(6.1, 1.25, 0.0)
         add!(scene, phong_local_clip_mesh)
+        standard_local_clip_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                        MeshStandardMaterial(color=Color3(0.2, 0.9, 0.9),
+                                                             roughness=1.0,
+                                                             metalness=0.0,
+                                                             side=:double,
+                                                             clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)]);
+                                        name="export_standard_local_clipping")
+        standard_local_clip_mesh.position = Vec3(6.8, 1.25, 0.0)
+        add!(scene, standard_local_clip_mesh)
         texdata = zeros(Float64, 2, 2, 4)
         texdata[1,1,:] .= (1.0, 0.0, 0.0, 1.0)
         texdata[1,2,:] .= (0.0, 1.0, 0.0, 0.5)
@@ -1193,7 +1206,8 @@ end
                                           map=Texture(texdata; offset=Vec2(0.25, 0.0),
                                                       repeat=Vec2(2.0, 1.0),
                                                       rotation=0.2,
-                                                      center=Vec2(0.5, 0.5)));
+                                                      center=Vec2(0.5, 0.5),
+                                                      max_anisotropy=8));
                         name="export_textured")
         textured.position = Vec3(1.5, 0.0, 0.0)
         add!(scene, textured)
@@ -1797,7 +1811,20 @@ end
         sampler_json = Diff3D._web_texture_json(sampler_tex)
         @test occursin("\"minFilter\":\"linear_mipmap_linear\"", sampler_json)
         @test occursin("\"magFilter\":\"nearest\"", sampler_json)
+        @test occursin("\"maxAnisotropy\":1", sampler_json)
         @test occursin("\"colorspace\":\"srgb\"", sampler_json)
+        aniso_tex = Texture(ones(Float64, 2, 2, 3); max_anisotropy=12)
+        @test aniso_tex.max_anisotropy == 12.0
+        @test occursin("\"maxAnisotropy\":12", Diff3D._web_texture_json(aniso_tex))
+        legacy_tex = Texture(aniso_tex.data, aniso_tex.wrap_s, aniso_tex.wrap_t,
+                             aniso_tex.filter, aniso_tex.min_filter, aniso_tex.mag_filter,
+                             aniso_tex.mipmaps, aniso_tex.colorspace, aniso_tex.offset,
+                             aniso_tex.repeat, aniso_tex.rotation, aniso_tex.center,
+                             aniso_tex.matrix, aniso_tex.matrix_auto_update,
+                             aniso_tex.tex_coord)
+        @test legacy_tex.max_anisotropy == 1.0
+        @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=0.5)
+        @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=Inf)
         linear_sampler_json = Diff3D._web_texture_json(Texture(ones(Float64, 1, 1, 3);
                                                                colorspace=:linear))
         @test occursin("\"colorspace\":\"linear\"", linear_sampler_json)
@@ -1807,6 +1834,7 @@ end
         cube_face[1, 1, :] .= (1.0, 0.0, 0.0)
         cube_face[1, 2, :] .= (0.0, 1.0, 0.0)
         cube_face[2, 1, :] .= (0.0, 0.0, 1.0)
+        @test occursin("\"maxAnisotropy\":12", Diff3D._web_cube_face_json(aniso_tex))
         cube_face[2, 2, :] .= (1.0, 1.0, 1.0)
         @test occursin("\"data\":[255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255]",
                        Diff3D._web_cube_face_json(Texture(cube_face; filter=:nearest)))
@@ -1816,6 +1844,12 @@ end
         @test occursin("preserveDrawingBuffer:true", html)
         @test occursin("function minFilterMode", html)
         @test occursin("gl.generateMipmap(gl.TEXTURE_2D)", html)
+        @test occursin("EXT_texture_filter_anisotropic", html)
+        @test occursin("MAX_TEXTURE_MAX_ANISOTROPY_EXT", html)
+        @test occursin("TEXTURE_MAX_ANISOTROPY_EXT", html)
+        @test occursin("applyAnisotropy(gl.TEXTURE_2D,t)", html)
+        @test occursin("applyAnisotropy(gl.TEXTURE_CUBE_MAP,first)", html)
+        @test occursin("\"maxAnisotropy\":8", html)
         @test occursin("\"name\":\"export_box\"", html)
         @test occursin("\"name\":\"export_drawable_parent_child\"", html)
         @test occursin("\"parentId\":$(mesh.id)", html)
@@ -1892,6 +1926,8 @@ end
         @test occursin(r"\"name\":\"export_phong_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.45", html)
         @test occursin("\"name\":\"export_phong_local_clipping\"", html)
         @test occursin(r"\"name\":\"export_phong_local_clipping\".*\"materialType\":\"phong\".*\"clippingPlanes\":\[\[0,-1,0,0\.20000000000000001\]\]", html)
+        @test occursin("\"name\":\"export_standard_local_clipping\"", html)
+        @test occursin(r"\"name\":\"export_standard_local_clipping\".*\"materialType\":\"lit\".*\"clippingPlanes\":\[\[1,0,0,0\]\]", html)
         @test occursin("\"property\":\"shininess\"", html)
         @test occursin("shininess:o.shininess", html)
         @test occursin("\"specularColor\":[1,0.92000000000000004,0.71999999999999997]", html)
@@ -2450,6 +2486,26 @@ end
         @test occursin(Regex("\"id\":$(animated_spot.id).*?\"shadow\":\\{\"type\":\"spotDynamic\""),
                        html)
         @test occursin("\"pcfRadius\":1", html)
+        @test occursin(Regex("\"id\":$(shadow_dir.id).*?\"shadow\":\\{\"type\":\"directionalDynamic\",\"size\":64,\"bias\":0\\.01,\"pcfRadius\":2"), html)
+        @test occursin(Regex("\"id\":$(moving_shadow_dir.id).*?\"shadow\":\\{\"type\":\"directionalDynamic\",\"size\":64,\"bias\":0\\.006[0-9]*,\"pcfRadius\":3"), html)
+        @test occursin("uShadowPcfRadius[MAX_SHADOW]", html)
+        @test occursin("int r=uShadowPcfRadius[0]; if(r<0) r=0; if(r>4) r=4", html)
+        @test occursin("uniform1iv(p,\"uShadowPcfRadius[0]\",shadowValues(objShadows,\"pcfRadius\",1))", html)
+        @test occursin("bias:l.shadow.bias==null?0.0015:l.shadow.bias", html)
+        @test occursin("pcfRadius:l.shadow.pcfRadius==null?0:l.shadow.pcfRadius", html)
+        static_shadow_scene = Scene()
+        static_shadow_caster = Mesh(BoxGeometry(), MeshBasicMaterial(); cast_shadow=true)
+        add!(static_shadow_scene, static_shadow_caster)
+        static_shadow_light = DirectionalLight(position=Vec3(1.0, 2.0, 3.0),
+                                               cast_shadow=true,
+                                               shadow_bias=0.02,
+                                               shadow_pcf_radius=2)
+        static_shadow_json = Diff3D._web_shadow_json(static_shadow_scene, static_shadow_light)
+        @test occursin("\"type\":\"directionalStatic\",\"size\":64,\"bias\":0.01,\"pcfRadius\":2",
+                       static_shadow_json)
+        @test_throws ArgumentError Diff3D._web_shadow_json(
+            static_shadow_scene,
+            DirectionalLight(cast_shadow=true, shadow_pcf_radius=5))
         @test occursin("makeShadowTexture", html)
         @test occursin("makeDynamicShadowTarget", html)
         @test occursin("depthProgram=program(DVSH,DFSH), depthBoneProgram=boneTexturesEnabled?program(DVSH_BONE_TEXTURE,DFSH):depthProgram, pointDepthProgram=program(PDVSH,PDFSH), pointDepthBoneProgram=boneTexturesEnabled?program(PDVSH_BONE_TEXTURE,PDFSH):pointDepthProgram", html)
@@ -3713,6 +3769,28 @@ end
         @test length(phong_clipped.clipping_planes) == 1
         @test phong_clipped.clipping_planes[1].normal.y ≈ 1.0
         @test phong_clipped.clipping_planes[1].constant ≈ 0.25
+        material_clip_cases = (
+            MeshBasicMaterial(clipping_planes=[local_clip]),
+            MeshLambertMaterial(clipping_planes=[local_clip]),
+            MeshStandardMaterial(clipping_planes=[local_clip]),
+            MeshPhysicalMaterial(clipping_planes=[local_clip]),
+            MeshToonMaterial(clipping_planes=[local_clip]),
+            MeshMatcapMaterial(clipping_planes=[local_clip]),
+            MeshNormalMaterial(clipping_planes=[local_clip]),
+            MeshDepthMaterial(clipping_planes=[local_clip]),
+        )
+        for mat in material_clip_cases
+            @test length(mat.clipping_planes) == 1
+            @test mat.clipping_planes[1].normal.y ≈ 1.0
+            @test mat.clipping_planes[1].constant ≈ 0.25
+        end
+        for mat in (MeshBasicMaterial(), MeshLambertMaterial(), MeshStandardMaterial(),
+                    MeshPhysicalMaterial(), MeshToonMaterial(), MeshMatcapMaterial(),
+                    MeshNormalMaterial(), MeshDepthMaterial())
+            names = (n for n in fieldnames(typeof(mat)) if n !== :clipping_planes)
+            legacy = typeof(mat)((getfield(mat, n) for n in names)...)
+            @test isempty(legacy.clipping_planes)
+        end
         legacy_phong = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                          Color3(0,0,0), 30.0, 1.0, false,
                                          :front, nothing, nothing, true, true)
@@ -6352,6 +6430,38 @@ end
             rt_local_none = RenderTarget(32, 32); render!(rt_local_none, local_scene, cam)
             @test sum(rt_local_none.color) == 0.0
 
+            local_material_factories = (
+                () -> MeshBasicMaterial(color=Color3(0.9, 0.9, 0.9)),
+                () -> MeshLambertMaterial(color=Color3(0.9, 0.9, 0.9)),
+                () -> MeshStandardMaterial(color=Color3(0.9, 0.9, 0.9),
+                                           roughness=1.0, metalness=0.0),
+                () -> MeshPhysicalMaterial(color=Color3(0.9, 0.9, 0.9),
+                                           roughness=1.0, metalness=0.0),
+                () -> MeshToonMaterial(color=Color3(0.9, 0.9, 0.9)),
+                () -> MeshMatcapMaterial(color=Color3(0.9, 0.9, 0.9)),
+                () -> MeshNormalMaterial(),
+                () -> MeshDepthMaterial(),
+            )
+            for make_mat in local_material_factories
+                full_scene = Scene()
+                add!(full_scene, AmbientLight(intensity=1.0))
+                add!(full_scene, Mesh(BoxGeometry(), make_mat()))
+                rt_material_full = RenderTarget(32, 32)
+                render!(rt_material_full, full_scene, cam)
+                @test sum(rt_material_full.color) > 0.0
+
+                clipped_scene = Scene()
+                add!(clipped_scene, AmbientLight(intensity=1.0))
+                clipped_mat = make_mat()
+                clipped_mat = typeof(clipped_mat)((
+                    getfield(clipped_mat, n) for n in fieldnames(typeof(clipped_mat))
+                    if n !== :clipping_planes)..., local_cut)
+                add!(clipped_scene, Mesh(BoxGeometry(), clipped_mat))
+                rt_material_clipped = RenderTarget(32, 32)
+                render!(rt_material_clipped, clipped_scene, cam)
+                @test sum(rt_material_clipped.color) == 0.0
+            end
+
             local_half_scene = Scene()
             add!(local_half_scene, AmbientLight(intensity=1.0))
             local_half_mat = MeshPhongMaterial(color=Color3(0.9, 0.9, 0.9),
@@ -6376,6 +6486,17 @@ end
             rt_smooth_local_none = RenderTarget(32, 32)
             render!(rt_smooth_local_none, smooth_scene, cam; shading=:smooth)
             @test sum(rt_smooth_local_none.color) == 0.0
+
+            smooth_standard_scene = Scene()
+            add!(smooth_standard_scene, AmbientLight(intensity=1.0))
+            add!(smooth_standard_scene, Mesh(PlaneGeometry(width=2.0, height=2.0),
+                                             MeshStandardMaterial(color=Color3(0.9, 0.9, 0.9),
+                                                                  side=:double,
+                                                                  clipping_planes=local_cut);
+                                             flat_shading=false))
+            rt_smooth_standard_none = RenderTarget(32, 32)
+            render!(rt_smooth_standard_none, smooth_standard_scene, cam; shading=:smooth)
+            @test sum(rt_smooth_standard_none.color) == 0.0
         end
 
         # [RAS:rasterizer+renderer] Smooth-path material maps (albedo + normalMap)
@@ -6503,6 +6624,16 @@ end
             # Default kwarg path matches the explicit r=0 override exactly.
             @test shadow_visibility(hard, Vec3(0.0, 0.0, 0.0); pcf_radius=0) ==
                   shadow_visibility(hard, Vec3(0.0, 0.0, 0.0))
+            tuned_key = DirectionalLight(position=Vec3(0.0, 10.0, 0.0), intensity=1.0,
+                                         shadow_bias=0.123, shadow_pcf_radius=3)
+            tuned_key.target = Vec3(0.0, 0.0, 0.0)
+            tuned = compute_shadow_map(scene, tuned_key; resolution=128)
+            @test tuned.bias ≈ 0.123
+            @test tuned.pcf_radius == 3
+            overridden = compute_shadow_map(scene, tuned_key; resolution=128,
+                                            bias=0.004, pcf_radius=1)
+            @test overridden.bias ≈ 0.004
+            @test overridden.pcf_radius == 1
 
             # 3-arg ShadowMap constructor still works and defaults to a hard shadow.
             sm3 = ShadowMap(hard.depth, hard.light_vp, hard.bias)
@@ -8520,6 +8651,38 @@ end
         end
 
         @testset "lights" begin
+            tuned_dir = DirectionalLight(cast_shadow=true, shadow_bias=0.01,
+                                         shadow_pcf_radius=2)
+            @test tuned_dir.shadow_bias ≈ 0.01
+            @test tuned_dir.shadow_pcf_radius == 2
+            tuned_point = PointLight(cast_shadow=true, shadow_bias=0.02,
+                                     shadow_pcf_radius=3)
+            @test tuned_point.shadow_bias ≈ 0.02
+            @test tuned_point.shadow_pcf_radius == 3
+            tuned_spot = SpotLight(cast_shadow=true, shadow_bias=0.03,
+                                   shadow_pcf_radius=4)
+            @test tuned_spot.shadow_bias ≈ 0.03
+            @test tuned_spot.shadow_pcf_radius == 4
+            @test_throws ArgumentError DirectionalLight(shadow_bias=Inf)
+            @test_throws ArgumentError PointLight(shadow_pcf_radius=-1)
+            @test_throws ArgumentError SpotLight(shadow_pcf_radius=1.5)
+            legacy_dir = DirectionalLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
+                                          nothing, AbstractObject3D[], true, "legacy_dir", 10001,
+                                          Color3(1.0,1.0,1.0), 1.0, Vec3(), true)
+            @test legacy_dir.shadow_bias === nothing
+            @test legacy_dir.shadow_pcf_radius === nothing
+            legacy_point = PointLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
+                                      nothing, AbstractObject3D[], true, "legacy_point", 10002,
+                                      Color3(1.0,1.0,1.0), 1.0, 0.0, 2.0, true, nothing)
+            @test legacy_point.shadow_bias === nothing
+            @test legacy_point.shadow_pcf_radius === nothing
+            legacy_spot = SpotLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
+                                    nothing, AbstractObject3D[], true, "legacy_spot", 10003,
+                                    Color3(1.0,1.0,1.0), 1.0, 0.0, pi / 3,
+                                    0.0, 2.0, Vec3(), true, nothing)
+            @test legacy_spot.shadow_bias === nothing
+            @test legacy_spot.shadow_pcf_radius === nothing
+
             # collect_lights respects visibility: own flag and ancestor (group) pruning
             scene = Scene()
             pl = PointLight(position=Vec3(0.0, 0.0, 3.0))
