@@ -98,6 +98,18 @@ end
 function build_cases()
     perspective_scene, perspective_cam, _, perspective_clip = build_camera_scene()
     ortho_scene, _, ortho_cam, ortho_clip = build_camera_scene()
+    split_scene, split_left_cam, _, split_clip = build_camera_scene()
+    split_left_cam.name = "camera_split_left"
+    split_left_cam.position = Vec3(-2.4, 2.4, 11.0)
+    split_left_cam.target = Vec3(0.0, 0.0, 0.0)
+    split_right_cam = PerspectiveCamera(fov=50pi / 180, aspect=1.0,
+                                        near=0.2, far=30.0,
+                                        name="camera_split_right")
+    split_right_cam.position = Vec3(2.4, 2.4, 11.0)
+    split_right_cam.target = Vec3(0.0, 0.0, 0.0)
+    split_camera = ArrayCamera([split_left_cam, split_right_cam],
+                               [(0, 0, 400, 360), (400, 0, 400, 360)])
+    add!(split_scene, CameraHelper(split_right_cam; color=Color3(0.95, 0.25, 0.9)))
 
     return [
         WebGLExportCase("camera-perspective", "Camera Perspective",
@@ -111,6 +123,12 @@ function build_cases()
                         ortho_scene; camera=ortho_cam,
                         target=ortho_cam.target, radius=12.3, height=2.8,
                         animations=[ortho_clip],
+                        output_color_space=:srgb),
+        WebGLExportCase("camera-split", "Camera Split",
+                        "ArrayCamera scissor viewports render two browser camera views from one Diff3D.jl scene.",
+                        split_scene; camera=split_camera,
+                        target=split_left_cam.target, radius=12.3, height=2.8,
+                        animations=[split_clip],
                         output_color_space=:srgb),
     ]
 end

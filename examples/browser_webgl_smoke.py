@@ -113,14 +113,15 @@ def smoke_html(path: Path) -> int:
             page.wait_for_timeout(350)
             draw_counts = page.evaluate(
                 """() => {
-                    const expected = window.__diff3dDebug.activeObjectCount();
+                    const views = window.__diff3dDebug.activeViewCount ? window.__diff3dDebug.activeViewCount() : 1;
+                    const expected = window.__diff3dDebug.activeObjectCount() * Math.max(1, views);
                     const actual = Number((document.getElementById('stats').textContent.match(/\\d+/) || ['0'])[0]);
-                    return { expected, actual };
+                    return { expected, actual, views };
                 }"""
             )
             if draw_counts["actual"] != draw_counts["expected"]:
                 errors.append(
-                    f"{path}: drew {draw_counts['actual']} of {draw_counts['expected']} objects from underside in case {i}"
+                    f"{path}: drew {draw_counts['actual']} of {draw_counts['expected']} object-views from underside in case {i} ({draw_counts['views']} view(s))"
                 )
             pixels = page.evaluate(
                 """() => {

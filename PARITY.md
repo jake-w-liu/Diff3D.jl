@@ -16,7 +16,8 @@ replacement for three.js `WebGLRenderer`.
 - Scene graph: `Object3D`, `Scene`, `Group`, parent/child traversal,
   visibility, persistent layer masks, world matrix computation, and reparenting.
 - Cameras: perspective and orthographic camera projection/view basics including
-  camera `zoom`, plus CPU `ArrayCamera` viewport compositing.
+  camera `zoom`, CPU `ArrayCamera` viewport compositing, and compact browser
+  `ArrayCamera` scissor-split export.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
   capsules, lathes, and text-like/path helpers. Box geometry now supports
@@ -405,8 +406,10 @@ Parallel audits split the remaining work into five critical tracks:
   frame.
 - Done: render CPU `ArrayCamera` sub-cameras into their stored viewport
   rectangles, intersecting each viewport with the existing top-left-origin CPU
-  scissor rectangle when scissor testing is enabled. Browser scissor-split
-  export remains a separate compact-runtime gap.
+  scissor rectangle when scissor testing is enabled. Browser export now
+  serializes `ArrayCamera` sub-cameras, maps exported viewport rectangles to
+  WebGL viewport/scissor rectangles, and draws each sub-camera view with its
+  own camera-dependent material state.
 - Done: export drawable `visible` state and bind browser `NumberKeyframeTrack`
   playback for `visible`, while preserving initially invisible animated
   drawables in generated scene data.
@@ -876,8 +879,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and
-  browser-exported camera metadata across separate perspective/orthographic
-  cases. Upstream scissor-split rendering, O/P keyboard switching, live
+  browser-exported camera metadata across perspective, orthographic, and
+  `ArrayCamera` scissor-split cases. Upstream O/P keyboard switching, live
   projection mutation, `Stats`, and `WebGLRenderer` internals remain documented
   deviations.
 - Added a standalone partial port for `webgl_lod` via
@@ -996,6 +999,8 @@ Parallel audits split the remaining work into five critical tracks:
   `needsUpdate` flags now re-upload browser texture payloads on the next frame.
   Live DOM canvas drawing, pointer events, and `WebGLRenderer` internals remain
   documented deviations.
+- Added compact browser `ArrayCamera` export and runtime scissor-split drawing,
+  plus an `ArrayCamera` split-view case in `examples/webgl_camera.jl`.
 - Tightened the official examples parity registry so every registered example
   has focused source/prerequisite assertions in `test/runtests.jl`, preventing
   future parity entries from being tracked only by script existence and smoke

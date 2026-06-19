@@ -259,10 +259,12 @@ end
                     "CameraHelper(ortho_cam",
                     "PointsObject(deterministic_points_geometry()",
                     "QuaternionKeyframeTrack(camera_rig, :rotation",
+                    "ArrayCamera([split_left_cam, split_right_cam]",
                     "WebGLExportCase(\"camera-perspective\"",
                     "WebGLExportCase(\"camera-orthographic\"",
+                    "WebGLExportCase(\"camera-split\"",
                 ],
-                prerequisites=["PerspectiveCamera", "OrthographicCamera", "CameraHelper", "explicit camera export"],
+                prerequisites=["PerspectiveCamera", "OrthographicCamera", "ArrayCamera", "CameraHelper", "explicit camera export", "browser scissor-split export"],
             ),
             "threejs_webgl_lod" => (
                 source=[
@@ -1902,7 +1904,7 @@ end
         @test occursin("viewZToOrthographicDepth", html)
         @test occursin("uDepthOrthographic", html)
         @test occursin("uDepthOrthographic==1?viewZToOrthographicDepth(viewZ):viewZToPerspectiveDepth(viewZ)", html)
-        @test occursin("uniform1i(p,\"uDepthOrthographic\",active.camera&&active.camera.type===\"orthographic\"?1:0)", html)
+        @test occursin("uniform1i(p,\"uDepthOrthographic\",currentDrawCamera&&currentDrawCamera.type===\"orthographic\"?1:0)", html)
         @test occursin("varying float vViewZ", html)
         @test occursin("depthColor(vViewZ)", html)
         @test !occursin("viewDistance-uDepthNear", html)
@@ -2007,8 +2009,8 @@ end
         @test occursin("float atten=uPointSizeAttenuation<0.5?1.0:max(0.1,uPointReferenceDistance/max(0.0001,-viewPos.z))", html)
         @test occursin("pointUv=(uPointMatrix*vec3(gl_PointCoord,1.0)).xy", html)
         @test occursin("uniformTexMatrix(p,\"uPointMatrix\",o.texture)", html)
-        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointSizeAttenuation\"),(o.pointSizeAttenuation===false||(active.camera&&active.camera.type===\"orthographic\"))?0:1)", html)
-        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointReferenceDistance\"),Math.max(1e-6,dist))", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointSizeAttenuation\"),(o.pointSizeAttenuation===false||(currentDrawCamera&&currentDrawCamera.type===\"orthographic\"))?0:1)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointReferenceDistance\"),Math.max(1e-6,currentDrawDistance))", html)
         @test occursin("uPointColorSpace", html)
         @test occursin("uniform1i(p,\"uPointColorSpace\",textureColorSpace(o.texture))", html)
         @test occursin("colorTex(uPointMap,pointUv,uPointColorSpace)", html)
@@ -2619,7 +2621,7 @@ end
         @test occursin("c.lodState||(c.lodState=new Map())", html)
         @test occursin("o.lodHysteresis||0", html)
         @test occursin("lodChoices(active,eye)", html)
-        @test occursin(".sort((a,b)=>objectDepth(b,eye)-objectDepth(a,eye))", html)
+        @test occursin(".sort((a,b)=>objectDepth(b,state.eye)-objectDepth(a,state.eye))", html)
         cap_scene = Scene()
         add!(cap_scene, Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.4, 0.5, 0.6))))
         for i in 1:5
@@ -2794,11 +2796,47 @@ end
         @test occursin("orthographic(left,right,bottom,top,near,far)", camera_html)
         @test occursin("if(cam&&cam.type===\"orthographic\")", camera_html)
         @test occursin("camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1", camera_html)
-        @test occursin("const s=orbitDistScale/camZoom", camera_html)
-        @test occursin("proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far)", camera_html)
-        @test occursin("const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect, camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1", camera_html)
+        @test occursin("s=orbitDistScale/camZoom", camera_html)
+        @test occursin("return M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,near,far)", camera_html)
+        @test occursin("viewportAspect=viewport&&viewport[3]>0?Math.max(1e-6,viewport[2]/viewport[3]):Math.max(1e-6,canvas.width/canvas.height)", camera_html)
         @test occursin("zoomedFov=2*Math.atan(Math.tan(fov*.5)/camZoom)", camera_html)
-        @test occursin("proj=M4.perspective(zoomedFov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
+        @test occursin("return M4.perspective(zoomedFov,aspect,near,far)", camera_html)
+        array_left = PerspectiveCamera(fov=0.65, aspect=4/3, near=0.1, far=50.0)
+        array_left.position = Vec3(-2.0, 1.0, 6.0)
+        array_left.target = Vec3(-1.0, 0.0, 0.0)
+        array_right = PerspectiveCamera(fov=0.55, aspect=4/3, near=0.1, far=50.0)
+        array_right.position = Vec3(2.0, 1.0, 6.0)
+        array_right.target = Vec3(1.0, 0.0, 0.0)
+        array_camera = ArrayCamera([array_left, array_right],
+                                   [(0, 0, 400, 300), (400, 0, 400, 300)])
+        array_clip = AnimationClip("array-camera", AbstractKeyframeTrack[
+            NumberKeyframeTrack(array_right, :fov, [0.0, 1.0], [0.55, 0.7]),
+        ])
+        array_file = tempname() * ".html"
+        save_webgl_html(array_file,
+                        [WebGLExportCase("arraycam", "Array Camera", "split view", scene;
+                                         camera=array_camera,
+                                         animations=[array_clip])])
+        array_html = read(array_file, String)
+        rm(array_file; force=true)
+        @test occursin("\"camera\":{\"type\":\"array\"", array_html)
+        @test occursin("\"cameras\":[{\"type\":\"perspective\"", array_html)
+        @test occursin("\"viewports\":[[0,0,400,300],[400,0,400,300]]", array_html)
+        @test occursin("\"target\":$(array_right.id),\"property\":\"fov\"", array_html)
+        @test occursin("function eachCamera(cam,fn)", array_html)
+        @test occursin("function primaryCamera(cam)", array_html)
+        @test occursin("function cameraViews(cam)", array_html)
+        @test occursin("function arrayViewport(cam,index)", array_html)
+        @test occursin("gl.scissor(vp[0],vp[1],vp[2],vp[3])", array_html)
+        @test occursin("gl.enable(gl.SCISSOR_TEST)", array_html)
+        @test occursin("currentDrawCamera&&currentDrawCamera.type===\"orthographic\"", array_html)
+        @test occursin("currentDrawDistance", array_html)
+        bad_array_camera = ArrayCamera([array_left, array_right], [(0, 0, 400, 300)])
+        bad_array_file = tempname() * ".html"
+        @test_throws ArgumentError save_webgl_html(
+            bad_array_file,
+            [WebGLExportCase("badarray", "Bad Array", "bad", scene; camera=bad_array_camera)])
+        rm(bad_array_file; force=true)
         @test_throws ArgumentError WebGLExportCase("badcam", "Bad", "Bad", scene; camera=Scene())
         @test occursin("\"loop\":\"repeat\"", html)
         @test occursin("\"repetitions\":-1", html)

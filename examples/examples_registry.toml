@@ -66,9 +66,9 @@ upstream_id = "threejs_webgl_camera"
 upstream_url = "https://threejs.org/examples/#webgl_camera"
 local_script = "examples/webgl_camera.jl"
 status = "partial"
-prerequisites = ["PerspectiveCamera", "OrthographicCamera", "CameraHelper", "PointsObject", "explicit camera export", "browser animation playback"]
+prerequisites = ["PerspectiveCamera", "OrthographicCamera", "ArrayCamera", "CameraHelper", "PointsObject", "explicit camera export", "browser animation playback", "browser scissor-split export"]
 known_deviations = [
-  "Uses two exported cases for perspective and orthographic views instead of the upstream scissor-split renderer and O/P keyboard camera switch",
+  "Uses exported perspective, orthographic, and ArrayCamera split cases instead of the upstream O/P keyboard camera switch",
   "Uses deterministic point data and keyframe motion instead of upstream random points, live camera projection mutation, Stats, and WebGLRenderer internals"
 ]
 verification = ["julia --project=. examples/webgl_camera.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_camera.html"]
