@@ -250,6 +250,7 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
                         wireframe=m.wireframe, side=m.side,
                         map=m.map, alpha_map=m.alpha_map, ao_map=m.ao_map,
                         emissive_map=m.emissive_map,
+                        emissive_intensity=m.emissive_intensity,
                         vertex_colors=m.vertex_colors, light_map=m.light_map,
                         alpha_test=m.alpha_test, depth_test=m.depth_test,
                         depth_write=m.depth_write)
@@ -259,8 +260,10 @@ function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
                       emissive=m.emissive, shininess=m.shininess,
                       opacity=m.opacity, transparent=m.transparent,
                       side=m.side, map=m.map, alpha_map=m.alpha_map,
-                      light_map=m.light_map, vertex_colors=m.vertex_colors,
+                      emissive_map=m.emissive_map, light_map=m.light_map,
+                      vertex_colors=m.vertex_colors,
                       alpha_test=m.alpha_test, clipping_planes=m.clipping_planes,
+                      emissive_intensity=m.emissive_intensity,
                       depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)

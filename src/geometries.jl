@@ -209,17 +209,32 @@ end
 
 # ========================== Box Geometry ==========================
 
-function BoxGeometry(; width=1.0, height=1.0, depth=1.0)
+function _geometry_segment_count(name::String, value)
+    try
+        n = Int(value)
+        n >= 1 || throw(ArgumentError("$name must be at least 1"))
+        return n
+    catch err
+        err isa ArgumentError && rethrow()
+        throw(ArgumentError("$name must be a positive integer"))
+    end
+end
+
+function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
+                     width_segments=1, height_segments=1, depth_segments=1)
+    ws = _geometry_segment_count("width_segments", width_segments)
+    hs = _geometry_segment_count("height_segments", height_segments)
+    ds = _geometry_segment_count("depth_segments", depth_segments)
     w, h, d = width/2, height/2, depth/2
 
-    # 8 corners, 24 vertices (4 per face for proper normals)
+    # Vertices are duplicated per face so each face keeps flat normals and UVs.
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
     indices = Int[]
     vi = 0  # vertex counter
 
-    function add_face!(p1, p2, p3, p4, n)
+    function add_quad_face!(p1, p2, p3, p4, n)
         for p in (p1, p2, p3, p4)
             append!(positions, [p.x, p.y, p.z])
             append!(normals_arr, [n.x, n.y, n.z])
@@ -230,18 +245,51 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0)
         vi += 4
     end
 
+    function add_grid_face!(p1, p2, p3, p4, n, u_segments::Int, v_segments::Int)
+        base = vi + 1
+        for j in 0:v_segments
+            tv = j / v_segments
+            left = p1 * (1 - tv) + p4 * tv
+            right = p2 * (1 - tv) + p3 * tv
+            for i in 0:u_segments
+                tu = i / u_segments
+                p = left * (1 - tu) + right * tu
+                append!(positions, [p.x, p.y, p.z])
+                append!(normals_arr, [n.x, n.y, n.z])
+                append!(uvs_arr, [tu, tv])
+            end
+        end
+        row = u_segments + 1
+        for j in 0:(v_segments - 1), i in 0:(u_segments - 1)
+            a = base + j * row + i
+            b = a + 1
+            d0 = a + row
+            c = d0 + 1
+            append!(indices, [a, b, c, a, c, d0])
+        end
+        vi += row * (v_segments + 1)
+    end
+
+    function add_face!(p1, p2, p3, p4, n, u_segments::Int, v_segments::Int)
+        if ws == 1 && hs == 1 && ds == 1
+            add_quad_face!(p1, p2, p3, p4, n)
+        else
+            add_grid_face!(p1, p2, p3, p4, n, u_segments, v_segments)
+        end
+    end
+
     # +Z face
-    add_face!(Vec3(-w,-h,d), Vec3(w,-h,d), Vec3(w,h,d), Vec3(-w,h,d), Vec3(0,0,1))
+    add_face!(Vec3(-w,-h,d), Vec3(w,-h,d), Vec3(w,h,d), Vec3(-w,h,d), Vec3(0,0,1), ws, hs)
     # -Z face
-    add_face!(Vec3(w,-h,-d), Vec3(-w,-h,-d), Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0,0,-1))
+    add_face!(Vec3(w,-h,-d), Vec3(-w,-h,-d), Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0,0,-1), ws, hs)
     # +Y face
-    add_face!(Vec3(-w,h,d), Vec3(w,h,d), Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0,1,0))
+    add_face!(Vec3(-w,h,d), Vec3(w,h,d), Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0,1,0), ws, ds)
     # -Y face
-    add_face!(Vec3(-w,-h,-d), Vec3(w,-h,-d), Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0,-1,0))
+    add_face!(Vec3(-w,-h,-d), Vec3(w,-h,-d), Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0,-1,0), ws, ds)
     # +X face
-    add_face!(Vec3(w,-h,d), Vec3(w,-h,-d), Vec3(w,h,-d), Vec3(w,h,d), Vec3(1,0,0))
+    add_face!(Vec3(w,-h,d), Vec3(w,-h,-d), Vec3(w,h,-d), Vec3(w,h,d), Vec3(1,0,0), ds, hs)
     # -X face
-    add_face!(Vec3(-w,-h,-d), Vec3(-w,-h,d), Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(-1,0,0))
+    add_face!(Vec3(-w,-h,-d), Vec3(-w,-h,d), Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(-1,0,0), ds, hs)
 
     n_verts = vi
     n_faces = length(indices) ÷ 3

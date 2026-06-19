@@ -168,6 +168,7 @@ end
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
             "threejs_webgl_materials_texture_rotation",
+            "threejs_webgl_materials_texture_canvas",
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
@@ -376,6 +377,17 @@ end
                     "manual_matrix = Mat3{Float64}",
                 ],
                 prerequisites=["Texture.rotation", "Texture.matrix_auto_update"],
+            ),
+            "threejs_webgl_materials_texture_canvas" => (
+                source=[
+                    "function drawing_canvas_texture(; n::Int=128)",
+                    "CanvasTexture(data; filter=:nearest",
+                    "BoxGeometry(width=2.0, height=2.0, depth=2.0)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), map=canvas_texture",
+                    "QuaternionKeyframeTrack(cube, :rotation",
+                    "WebGLExportCase(\"materials-texture-canvas\"",
+                ],
+                prerequisites=["CanvasTexture", "MeshBasicMaterial.map", "BoxGeometry"],
             ),
             "threejs_webgl_loader_stl" => (
                 source=[
@@ -674,6 +686,33 @@ end
         @test pi.x ≈ 5.0 && pi.y ≈ 3.0 && pi.z ≈ 1.0
     end
 
+    @testset "Camera zoom projection" begin
+        pbase = PerspectiveCamera(fov=π / 4, aspect=1.5, near=0.1, far=100.0)
+        pzoom = PerspectiveCamera(fov=π / 4, aspect=1.5, near=0.1, far=100.0,
+                                  zoom=2.0)
+        P0 = projection_matrix(pbase)
+        P1 = projection_matrix(pzoom)
+        @test pbase.zoom ≈ 1.0
+        @test P1.e[1] ≈ 2.0 * P0.e[1]
+        @test P1.e[6] ≈ 2.0 * P0.e[6]
+        pzoom.zoom = 0.0
+        @test_throws ArgumentError projection_matrix(pzoom)
+        @test_throws ArgumentError PerspectiveCamera(zoom=0.0)
+
+        obase = OrthographicCamera(left=-2.0, right=2.0, bottom=-1.0, top=1.0,
+                                   near=0.1, far=100.0)
+        ozoom = OrthographicCamera(left=-2.0, right=2.0, bottom=-1.0, top=1.0,
+                                   near=0.1, far=100.0, zoom=2.0)
+        O0 = projection_matrix(obase)
+        O1 = projection_matrix(ozoom)
+        @test obase.zoom ≈ 1.0
+        @test O1.e[1] ≈ 2.0 * O0.e[1]
+        @test O1.e[6] ≈ 2.0 * O0.e[6]
+        ozoom.zoom = Inf
+        @test_throws ArgumentError projection_matrix(ozoom)
+        @test_throws ArgumentError OrthographicCamera(zoom=-1.0)
+    end
+
     @testset "BoxGeometry" begin
         geo = BoxGeometry(width=2.0, height=2.0, depth=2.0)
         @test geo.n_vertices == 24  # 4 per face × 6 faces
@@ -688,6 +727,31 @@ end
             @test -1.0 <= geo.positions[k+1] <= 1.0
             @test -1.0 <= geo.positions[k+2] <= 1.0
         end
+
+        # Default single-segment output keeps the historical first face layout.
+        @test get_face(geo, 1) == (1, 2, 3)
+        @test get_vertex(geo, 1) == Vec3(-1.0, -1.0, 1.0)
+        @test get_vertex(geo, 2) == Vec3(1.0, -1.0, 1.0)
+        @test get_vertex(geo, 3) == Vec3(1.0, 1.0, 1.0)
+
+        seg = BoxGeometry(width=2.0, height=4.0, depth=6.0,
+                          width_segments=2, height_segments=3, depth_segments=4)
+        @test seg.n_vertices == 2 * ((2 + 1) * (3 + 1) +
+                                     (2 + 1) * (4 + 1) +
+                                     (4 + 1) * (3 + 1))
+        @test seg.n_faces == 4 * (2 * 3 + 2 * 4 + 4 * 3)
+        seg_box = compute_bounding_box(seg)
+        @test seg_box.min.x ≈ -1.0 && seg_box.min.y ≈ -2.0 && seg_box.min.z ≈ -3.0
+        @test seg_box.max.x ≈ 1.0 && seg_box.max.y ≈ 2.0 && seg_box.max.z ≈ 3.0
+        @test all(0.0 <= uv <= 1.0 for uv in seg.uvs)
+        for fi in 1:seg.n_faces
+            fn = compute_face_normal(seg, fi)
+            for vi in get_face(seg, fi)
+                @test dot(fn, get_normal(seg, vi)) > 0.99
+            end
+        end
+        @test_throws ArgumentError BoxGeometry(width_segments=0)
+        @test_throws ArgumentError BoxGeometry(height_segments=1.5)
     end
 
     @testset "SphereGeometry" begin
@@ -1051,9 +1115,17 @@ end
         toon_gradient[1, 2, :] .= 0.35
         toon_gradient[1, 3, :] .= 0.7
         toon_gradient[1, 4, :] .= 1.0
+        emissive_fixture_data = ones(Float64, 2, 2, 3)
+        emissive_fixture_data[:, :, 1] .= [1.0 0.25; 0.5 0.9]
+        emissive_fixture_data[:, :, 2] .= [0.4 1.0; 0.8 0.2]
+        emissive_fixture_data[:, :, 3] .= [0.2 0.6; 1.0 0.7]
+        emissive_fixture = Texture(emissive_fixture_data; filter=:nearest,
+                                   colorspace=:srgb)
         toon_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
                                   MeshToonMaterial(color=Color3(1.0, 0.75, 0.25),
                                                    emissive=Color3(0.05, 0.02, 0.0),
+                                                   emissive_map=emissive_fixture,
+                                                   emissive_intensity=1.25,
                                                    gradient_steps=4,
                                                    gradient_map=Texture(toon_gradient; filter=:nearest,
                                                                         wrap_s=:clamp, wrap_t=:clamp,
@@ -1082,13 +1154,18 @@ end
         add!(scene, basic_material_mesh)
         lambert_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
                                      MeshLambertMaterial(color=Color3(0.95, 0.45, 0.28),
-                                                         emissive=Color3(0.02, 0.0, 0.0));
+                                                         emissive=Color3(0.02, 0.0, 0.0),
+                                                         emissive_map=emissive_fixture,
+                                                         emissive_intensity=1.35);
                                      name="export_lambert_material")
         lambert_material_mesh.position = Vec3(4.5, 1.25, 0.0)
         add!(scene, lambert_material_mesh)
         phong_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
                                    MeshPhongMaterial(color=Color3(0.42, 0.7, 1.0),
                                                      specular=Color3(1.0, 0.92, 0.72),
+                                                     emissive=Color3(0.03, 0.04, 0.05),
+                                                     emissive_map=emissive_fixture,
+                                                     emissive_intensity=1.45,
                                                      shininess=72.0);
                                    name="export_phong_material")
         phong_material_mesh.position = Vec3(5.4, 1.25, 0.0)
@@ -1296,6 +1373,13 @@ end
         add!(scene, line_loop)
         sp = Sprite(SpriteMaterial(color=Color3(1.0, 0.8, 0.2),
                                    map=Texture(texdata; filter=:nearest),
+                                   alpha_map=Texture(alphadata; filter=:nearest,
+                                                     colorspace=:linear,
+                                                     offset=Vec2(0.125, 0.25),
+                                                     repeat=Vec2(0.5, 0.75),
+                                                     rotation=0.1,
+                                                     center=Vec2(0.5, 0.5)),
+                                   alpha_test=0.35,
                                    rotation=0.3,
                                    size_attenuation=false);
                     name="export_sprite", center=Vec2(0.25, 0.75))
@@ -1321,7 +1405,8 @@ end
                                                     transparent=true,
                                                     map=points_tex,
                                                     alpha_map=points_alpha,
-                                                    alpha_test=0.3);
+                                                    alpha_test=0.3,
+                                                    size_attenuation=false);
                                      name="export_points_map")
         add!(scene, points_mapped)
         morph_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
@@ -1511,6 +1596,7 @@ end
             NumberKeyframeTrack(physical_mapped, "material.dispersion", [0.0, 1.0], [0.5, 0.1]),
             NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1]),
             NumberKeyframeTrack(sp, "material.sizeAttenuation", [0.0, 1.0], [1.0, 0.0]),
+            NumberKeyframeTrack(points_mapped, "material.sizeAttenuation", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(line_loop, "material.lineWidth", [0.0, 1.0], [2.5, 1.0]),
             NumberKeyframeTrack(phong_material_mesh, "shininess", [0.0, 1.0], [72.0, 12.0]),
             NumberKeyframeTrack(phong_material_mesh, "specular.g", [0.0, 1.0], [0.92, 0.2]),
@@ -1658,6 +1744,7 @@ end
                                       Diff3D._web_collect_drawables(scene)))
         @test occursin("\"mode\":\"points\"", points_drawable)
         @test occursin("\"pointSize\":9", points_drawable)
+        @test occursin("\"pointSizeAttenuation\":false", points_drawable)
         @test occursin("\"transparent\":true", points_drawable)
         @test occursin("\"alphaTest\":0.29999999999999999", points_drawable)
         @test occursin("\"texture\":{\"width\":2,\"height\":2", points_drawable)
@@ -1797,10 +1884,12 @@ end
         @test occursin("o.materialType===\"basic\"?5", html)
         @test occursin("\"name\":\"export_lambert_material\"", html)
         @test occursin("\"materialType\":\"lambert\"", html)
+        @test occursin(r"\"name\":\"export_lambert_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.35", html)
         @test occursin("uMaterialMode==6", html)
         @test occursin("\"name\":\"export_phong_material\"", html)
         @test occursin("\"materialType\":\"phong\"", html)
         @test occursin("\"shininess\":72", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.45", html)
         @test occursin("\"name\":\"export_phong_local_clipping\"", html)
         @test occursin(r"\"name\":\"export_phong_local_clipping\".*\"materialType\":\"phong\".*\"clippingPlanes\":\[\[0,-1,0,0\.20000000000000001\]\]", html)
         @test occursin("\"property\":\"shininess\"", html)
@@ -1810,6 +1899,7 @@ end
         @test occursin("uMaterialMode==7", html)
         @test occursin("uShininess", html)
         @test occursin("o.materialType===\"phong\"?7", html)
+        @test occursin(r"\"name\":\"export_toon_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.25", html)
         @test occursin("\"name\":\"export_alpha_map\"", html)
         @test occursin("\"name\":\"export_basic_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"materialType\":\"basic\".*\"alphaTest\":0\.40000000000000002", html)
@@ -1839,6 +1929,8 @@ end
         @test occursin("\"name\":\"export_physical_anisotropy_map\"", html)
         @test occursin(r"\"name\":\"export_physical_anisotropy_map\".*\"anisotropyTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
         @test occursin("\"name\":\"export_sprite\"", html)
+        @test occursin(r"\"name\":\"export_sprite\".*\"alphaTest\":0\.34999999999999998", html)
+        @test occursin(r"\"name\":\"export_sprite\".*\"alphaTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001", html)
         @test occursin("\"name\":\"export_points_map\"", html)
         @test occursin("spriteProgram", html)
         @test occursin("uCameraRight", html)
@@ -1846,9 +1938,20 @@ end
         @test occursin("uSpriteRotation", html)
         @test occursin("uSpriteSizeAttenuation", html)
         @test occursin("uUseSpriteMap", html)
+        @test occursin("uUseSpriteAlphaMap", html)
+        @test occursin("uSpriteAlphaTest", html)
+        @test occursin("spriteAlphaUv=(uSpriteAlphaMatrix*vec3(vUv,1.0)).xy", html)
+        @test occursin("alphaTex=uUseSpriteAlphaMap<0.5?1.0:texture2D(uSpriteAlphaMap,spriteAlphaUv).g", html)
+        @test occursin("if(outAlpha<uSpriteAlphaTest) discard", html)
         @test occursin("uPointMatrix", html)
+        @test occursin("uPointSizeAttenuation", html)
+        @test occursin("uPointReferenceDistance", html)
+        @test occursin("vec4 viewPos=uView*w", html)
+        @test occursin("float atten=uPointSizeAttenuation<0.5?1.0:max(0.1,uPointReferenceDistance/max(0.0001,-viewPos.z))", html)
         @test occursin("pointUv=(uPointMatrix*vec3(gl_PointCoord,1.0)).xy", html)
         @test occursin("uniformTexMatrix(p,\"uPointMatrix\",o.texture)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointSizeAttenuation\"),(o.pointSizeAttenuation===false||(active.camera&&active.camera.type===\"orthographic\"))?0:1)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointReferenceDistance\"),Math.max(1e-6,dist))", html)
         @test occursin("uPointColorSpace", html)
         @test occursin("uniform1i(p,\"uPointColorSpace\",textureColorSpace(o.texture))", html)
         @test occursin("colorTex(uPointMap,pointUv,uPointColorSpace)", html)
@@ -1867,6 +1970,10 @@ end
         @test occursin("uniform1i(p,\"uSpriteColorSpace\",textureColorSpace(o.texture))", html)
         @test occursin("colorTex(uSpriteMap,spriteUv,uSpriteColorSpace)", html)
         @test occursin("uniformTexMatrix(p,\"uSpriteMatrix\",o.texture)", html)
+        @test occursin("uniformTexMatrix(p,\"uSpriteAlphaMatrix\",o.alphaTexture)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uUseSpriteAlphaMap\"),o.alphaTex?1:0)", html)
+        @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uSpriteAlphaTest\"),o.alphaTest||0)", html)
+        @test occursin("gl.uniform1i(gl.getUniformLocation(p,\"uSpriteAlphaMap\"),1)", html)
         @test occursin("\"emissiveTexture\":", html)
         @test occursin("\"emissive\":[0.20000000000000001,0.40000000000000002,1]", html)
         @test occursin("\"emissiveIntensity\":1.5", html)
@@ -2279,6 +2386,7 @@ end
         @test occursin("\"property\":\"dispersion\"", html)
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
+        @test occursin("\"target\":$(points_mapped.id),\"property\":\"pointSizeAttenuation\"", html)
         @test occursin("\"property\":\"linewidth\"", html)
         @test occursin("\"target\":$(ambient.id),\"property\":\"color\",\"kind\":\"vec3\"", html)
         @test occursin("\"target\":$(hemi.id),\"property\":\"groundColor\",\"kind\":\"vec3\"", html)
@@ -2538,11 +2646,12 @@ end
         @test occursin("pinchMode=true", html)
         @test occursin("pinchDist/nd", html)
         @test occursin("try{ canvas.setPointerCapture", html)
-        pcamera = PerspectiveCamera(fov=0.7, aspect=1.25, near=0.3, far=77.0)
+        pcamera = PerspectiveCamera(fov=0.7, aspect=1.25, near=0.3, far=77.0,
+                                    zoom=1.4)
         pcamera.position = Vec3(1.0, 2.0, 9.0)
         pcamera.target = Vec3(0.25, 0.5, 0.75)
         ocamera = OrthographicCamera(left=-2.0, right=3.0, bottom=-1.5, top=1.25,
-                                     near=0.2, far=55.0)
+                                     near=0.2, far=55.0, zoom=1.75)
         ocamera.position = Vec3(-1.0, 4.0, 8.0)
         ocamera.target = Vec3(0.0, 0.25, 0.0)
         camera_clip = AnimationClip("camera-move", AbstractKeyframeTrack[
@@ -2554,9 +2663,11 @@ end
             NumberKeyframeTrack(pcamera, :aspect, [0.0, 1.0], [1.25, 1.75]),
             NumberKeyframeTrack(pcamera, :near, [0.0, 1.0], [0.3, 0.45]),
             NumberKeyframeTrack(pcamera, :far, [0.0, 1.0], [77.0, 90.0]),
+            NumberKeyframeTrack(pcamera, :zoom, [0.0, 1.0], [1.4, 2.0]),
         ])
         ortho_camera_clip = AnimationClip("ortho-camera", AbstractKeyframeTrack[
             NumberKeyframeTrack(ocamera, :left, [0.0, 1.0], [-2.0, -1.4]),
+            NumberKeyframeTrack(ocamera, :zoom, [0.0, 1.0], [1.75, 1.25]),
         ])
         camera_file = tempname() * ".html"
         save_webgl_html(camera_file,
@@ -2573,12 +2684,14 @@ end
         @test occursin("\"aspect\":1.25", camera_html)
         @test occursin("\"near\":0.29999999999999999", camera_html)
         @test occursin("\"far\":77", camera_html)
+        @test occursin("\"zoom\":1.3999999999999999", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"position\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"target\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"fov\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"aspect\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"near\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"far\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"zoom\"", camera_html)
         @test !occursin("\"target\":$(pcamera.id),\"property\":\"depthNear\"", camera_html)
         @test occursin("\"camera\":{\"type\":\"orthographic\"", camera_html)
         @test occursin("\"left\":-2", camera_html)
@@ -2587,12 +2700,15 @@ end
         @test occursin("\"top\":1.25", camera_html)
         @test occursin("\"near\":0.20000000000000001", camera_html)
         @test occursin("\"far\":55", camera_html)
+        @test occursin("\"zoom\":1.75", camera_html)
         @test occursin("\"target\":$(ocamera.id),\"property\":\"left\"", camera_html)
+        @test occursin("\"target\":$(ocamera.id),\"property\":\"zoom\"", camera_html)
         @test occursin("function buildCamera(cam)", camera_html)
         @test occursin("const cameraById = new Map()", camera_html)
         @test occursin("function setCameraAnim(cam,prop,v,component=0)", camera_html)
         @test occursin("function resetCameraAnim(cam)", camera_html)
         @test occursin("aspect:cam.aspect", camera_html)
+        @test occursin("zoom:cam.zoom", camera_html)
         @test occursin("if(c.camera) resetCameraAnim(c.camera)", camera_html)
         @test occursin("for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0)", camera_html)
         @test occursin("function applyCameraOrbit(cam)", camera_html)
@@ -2600,10 +2716,12 @@ end
         @test occursin("rememberCameraOrbitOffsets()", camera_html)
         @test occursin("orthographic(left,right,bottom,top,near,far)", camera_html)
         @test occursin("if(cam&&cam.type===\"orthographic\")", camera_html)
-        @test occursin("const s=orbitDistScale", camera_html)
+        @test occursin("camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1", camera_html)
+        @test occursin("const s=orbitDistScale/camZoom", camera_html)
         @test occursin("proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far)", camera_html)
-        @test occursin("const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect", camera_html)
-        @test occursin("M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
+        @test occursin("const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect, camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1", camera_html)
+        @test occursin("zoomedFov=2*Math.atan(Math.tan(fov*.5)/camZoom)", camera_html)
+        @test occursin("proj=M4.perspective(zoomedFov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
         @test_throws ArgumentError WebGLExportCase("badcam", "Bad", "Bad", scene; camera=Scene())
         @test occursin("\"loop\":\"repeat\"", html)
         @test occursin("\"repetitions\":-1", html)
@@ -3560,14 +3678,35 @@ end
         @test MeshBasicMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test material_alpha_test(MeshLambertMaterial(alpha_test=0.42)) ≈ 0.42
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshLambertMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
+        @test MeshLambertMaterial(emissive_intensity=1.7).emissive_intensity ≈ 1.7
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
+        @test MeshPhongMaterial(emissive_intensity=2.4).emissive_intensity ≈ 2.4
+        @test MeshToonMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
+        @test MeshToonMaterial(emissive_intensity=1.6).emissive_intensity ≈ 1.6
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
         @test PointsMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test PointsMaterial().size_attenuation === true
+        @test PointsMaterial(size_attenuation=false).size_attenuation === false
         legacy_points = PointsMaterial(Color3(1, 1, 1), 2.0, 1.0, false,
                                        nothing, true, true)
         @test legacy_points.alpha_map === nothing
         @test legacy_points.alpha_test == 0.0
+        @test legacy_points.size_attenuation === true
+        legacy_points_alpha = PointsMaterial(Color3(1, 1, 1), 2.0, 1.0, false,
+                                             nothing, alpha_tex, 0.2, true, true)
+        @test legacy_points_alpha.alpha_map === alpha_tex
+        @test legacy_points_alpha.alpha_test == 0.2
+        @test legacy_points_alpha.size_attenuation === true
+        sprite_alpha_mat = SpriteMaterial(alpha_map=alpha_tex, alpha_test=0.33)
+        @test sprite_alpha_mat.alpha_map === alpha_tex
+        @test material_alpha_test(sprite_alpha_mat) ≈ 0.33
+        legacy_sprite = SpriteMaterial(Color3(1, 1, 1), 1.0, false,
+                                       nothing, 0.0, true, true, true)
+        @test legacy_sprite.alpha_map === nothing
+        @test legacy_sprite.alpha_test == 0.0
         @test MeshPhongMaterial(vertex_colors=true).vertex_colors == true
         local_clip = Plane(Vec3(0.0, 1.0, 0.0), 0.25)
         phong_clipped = MeshPhongMaterial(clipping_planes=[local_clip])
@@ -3579,12 +3718,25 @@ end
                                          :front, nothing, nothing, true, true)
         @test legacy_phong.vertex_colors == false
         @test isempty(legacy_phong.clipping_planes)
+        @test legacy_phong.emissive_map === nothing
+        @test legacy_phong.emissive_intensity == 1.0
         legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                Color3(0,0,0), 30.0, 1.0, false,
                                                :front, nothing, alpha_tex, nothing,
                                                0.27, true, true)
         @test legacy_phong_alpha.vertex_colors == false
         @test isempty(legacy_phong_alpha.clipping_planes)
+        @test legacy_phong_alpha.emissive_map === nothing
+        @test legacy_phong_alpha.emissive_intensity == 1.0
+        legacy_lambert = MeshLambertMaterial(Color3(1,1,1), Color3(0,0,0),
+                                             1.0, false, false, :front,
+                                             nothing, nothing, nothing, false,
+                                             nothing, true, true)
+        @test legacy_lambert.emissive_intensity == 1.0
+        legacy_toon = MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3,
+                                       1.0, false, :front, true, true)
+        @test legacy_toon.emissive_map === nothing
+        @test legacy_toon.emissive_intensity == 1.0
         @test material_alpha_test(MeshToonMaterial(alpha_test=0.31)) ≈ 0.31
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
@@ -8085,12 +8237,61 @@ end
             @test alpha_point.y ≈ 0.0 atol=1e-12
             @test alpha_point.z ≈ 0.75 atol=1e-12
 
+            point_atten_cam = PerspectiveCamera(fov=pi / 3, aspect=1.0,
+                                                near=0.1, far=10.0)
+            point_atten_cam.position = Vec3(0.0, 0.0, 0.0)
+            point_atten_cam.target = Vec3(0.0, 0.0, -1.0)
+            function point_coverage(z; size_attenuation)
+                geo = BufferGeometry()
+                geo.positions = [0.0, 0.0, z]
+                geo.n_vertices = 1
+                scene = Scene()
+                add!(scene, PointsObject(geo,
+                    PointsMaterial(color=Color3(1.0, 0.0, 0.0), size=9.0,
+                                   size_attenuation=size_attenuation,
+                                   depth_write=false)))
+                rt = RenderTarget(64, 64)
+                render_points!(rt, scene, point_atten_cam)
+                return count(px -> px > 0.5, @view rt.color[:, :, 1])
+            end
+            atten_near = point_coverage(-0.5; size_attenuation=true)
+            atten_far = point_coverage(-2.0; size_attenuation=true)
+            constant_near = point_coverage(-0.5; size_attenuation=false)
+            constant_far = point_coverage(-2.0; size_attenuation=false)
+            @test atten_near > atten_far
+            @test constant_near == constant_far
+
             alpha_sprite = primitive_alpha_center(Sprite(
                 SpriteMaterial(color=Color3(1.0, 0.0, 0.0), opacity=0.25,
                                transparent=true, depth_write=false)))
             @test alpha_sprite.x ≈ 0.25 atol=1e-12
             @test alpha_sprite.y ≈ 0.0 atol=1e-12
             @test alpha_sprite.z ≈ 0.75 atol=1e-12
+
+            sprite_mask_data = ones(Float64, 1, 1, 3)
+            sprite_mask_data[:, :, 2] .= 0.0
+            masked_sprite = primitive_alpha_center(Sprite(
+                SpriteMaterial(color=Color3(1.0, 0.0, 0.0),
+                               alpha_map=Texture(sprite_mask_data;
+                                                 filter=:nearest,
+                                                 colorspace=:linear),
+                               alpha_test=0.5,
+                               depth_write=false)))
+            @test masked_sprite.x ≈ 0.0 atol=1e-12
+            @test masked_sprite.y ≈ 0.0 atol=1e-12
+            @test masked_sprite.z ≈ 1.0 atol=1e-12
+
+            sprite_mask_data[:, :, 2] .= 1.0
+            accepted_sprite = primitive_alpha_center(Sprite(
+                SpriteMaterial(color=Color3(1.0, 0.0, 0.0),
+                               alpha_map=Texture(sprite_mask_data;
+                                                 filter=:nearest,
+                                                 colorspace=:linear),
+                               alpha_test=0.5,
+                               depth_write=false)))
+            @test accepted_sprite.x ≈ 1.0 atol=1e-12
+            @test accepted_sprite.y ≈ 0.0 atol=1e-12
+            @test accepted_sprite.z ≈ 0.0 atol=1e-12
 
             wf_geo = BufferGeometry()
             wf_geo.positions = [-1.0, -1.0, 0.0,
@@ -8250,6 +8451,30 @@ end
                                           emissive_map=etex)
             c_white = shade_mesh_faces(plane, Mat4(), m_white, no_lights, campos)
             @test all(c -> isapprox(c.r, 0.25; atol=1e-6) && isapprox(c.g, 0.25; atol=1e-6), c_white)
+            m_lambert_intense = MeshLambertMaterial(color=Color3(0.0, 0.0, 0.0),
+                                                    emissive=Color3(1.0, 1.0, 1.0),
+                                                    emissive_map=etex,
+                                                    emissive_intensity=2.0)
+            c_lambert_intense = shade_mesh_faces(plane, Mat4(), m_lambert_intense,
+                                                 no_lights, campos)
+            @test all(c -> isapprox(c.r, 0.5; atol=1e-6) &&
+                           isapprox(c.g, 0.5; atol=1e-6), c_lambert_intense)
+            for mat in (
+                MeshPhongMaterial(color=Color3(0.0, 0.0, 0.0),
+                                  specular=Color3(0.0, 0.0, 0.0),
+                                  emissive=Color3(1.0, 0.5, 0.25),
+                                  emissive_map=etex,
+                                  emissive_intensity=2.0),
+                MeshToonMaterial(color=Color3(0.0, 0.0, 0.0),
+                                 emissive=Color3(1.0, 0.5, 0.25),
+                                 emissive_map=etex,
+                                 emissive_intensity=2.0)
+            )
+                c_emissive = shade_mesh_faces(plane, Mat4(), mat, no_lights, campos)
+                @test all(c -> isapprox(c.r, 0.5; atol=1e-6) &&
+                               isapprox(c.g, 0.25; atol=1e-6) &&
+                               isapprox(c.b, 0.125; atol=1e-6), c_emissive)
+            end
             # Emission stays OUT of the diffuse map chain: an albedo map must not
             # attenuate it (three.js adds emissive after diffuse * map).
             atex = Texture(fill(0.25, 2, 2, 3); filter=:nearest, colorspace=:linear)

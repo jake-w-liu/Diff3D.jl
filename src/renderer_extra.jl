@@ -364,7 +364,7 @@ end
     ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, c.z*iw, iw, wp, true)
 end
 
-# Rasterize one sprite quad triangle with z-test, optional albedo texture
+# Rasterize one sprite quad triangle with z-test, optional albedo/alpha textures
 # (perspective-correct UV), tint colour, and world-space clipping planes.
 @inline function _rasterize_sprite_tri!(rt::RenderTarget,
         s1x, s1y, z1, iw1, u1, v1, wp1::Vec3,
@@ -374,6 +374,8 @@ end
         xlo::Int, xhi::Int, ylo::Int, yhi::Int,
         depth_test::Bool=true, depth_write::Bool=true,
         alpha::Float64=1.0,
+        alpha_test::Float64=0.0,
+        alpha_map=nothing,
         stamp=nothing, stamp_id::Int=0)
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
@@ -386,6 +388,8 @@ end
     (min_x <= max_x && min_y <= max_y) || return nothing
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
+    has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
+    needs_uv = has_tex || has_alpha
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
             cx = px - 0.5; cy = py - 0.5
@@ -396,29 +400,37 @@ end
             stamp !== nothing && stamp[py, px] == stamp_id && continue
             z = b0 * z1 + b1 * z2 + b2 * z3
             (!depth_test || z < rt.depth[py, px]) || continue
-            if has_clip
-                wp = Vec3(b0*wp1.x + b1*wp2.x + b2*wp3.x,
-                          b0*wp1.y + b1*wp2.y + b2*wp3.y,
-                          b0*wp1.z + b1*wp2.z + b2*wp3.z)
-                _clip_keep(clipping_planes, wp) || continue
-            end
-            col = tint
-            if has_tex
+            a0 = b0; a1 = b1; a2 = b2
+            if has_clip || needs_uv
                 iw = b0*iw1 + b1*iw2 + b2*iw3
                 a0 = b0*iw1/iw; a1 = b1*iw2/iw; a2 = b2*iw3/iw
-                u = a0*u1 + a1*u2 + a2*u3
-                v = a0*v1 + a1*v2 + a2*v3
+                if has_clip
+                    wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                              a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                              a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                    _clip_keep(clipping_planes, wp) || continue
+                end
+            end
+            u = a0*u1 + a1*u2 + a2*u3
+            v = a0*v1 + a1*v2 + a2*v3
+            frag_alpha = alpha
+            col = tint
+            if has_tex
                 col = col * sample_texture(tex, u, v)
+            end
+            if has_alpha
+                frag_alpha = _fragment_alpha(Float64(alpha), tex, alpha_map, u, v, u, v)
+                frag_alpha >= alpha_test || continue
             end
             col = clamp_color(col)
             depth_write && (rt.depth[py, px] = z)
-            if alpha >= 1.0
+            if frag_alpha >= 1.0
                 rt.color[py, px, 1] = col.r; rt.color[py, px, 2] = col.g; rt.color[py, px, 3] = col.b
-            elseif alpha > 0.0
-                ia = 1.0 - alpha
-                rt.color[py, px, 1] = col.r * alpha + rt.color[py, px, 1] * ia
-                rt.color[py, px, 2] = col.g * alpha + rt.color[py, px, 2] * ia
-                rt.color[py, px, 3] = col.b * alpha + rt.color[py, px, 3] * ia
+            elseif frag_alpha > 0.0
+                ia = 1.0 - frag_alpha
+                rt.color[py, px, 1] = col.r * frag_alpha + rt.color[py, px, 1] * ia
+                rt.color[py, px, 2] = col.g * frag_alpha + rt.color[py, px, 2] * ia
+                rt.color[py, px, 3] = col.b * frag_alpha + rt.color[py, px, 3] * ia
             end
             stamp !== nothing && (stamp[py, px] = stamp_id)
         end
@@ -436,7 +448,8 @@ sprite's scale, projected, and drawn depth-tested. `SpriteMaterial.rotation` is
 applied in the billboard plane, and `SpriteMaterial.size_attenuation=false`
 keeps approximate screen size under perspective projection. The sprite
 material's `map` texture (if any) is sampled per pixel and modulated by its
-`color` tint; without a map the flat tint colour is used.
+`color` tint; `alpha_map`, map alpha, and `alpha_test` mask the same fragments
+as other CPU-rasterized materials. Without a map the flat tint colour is used.
 """
 function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                          clipping_planes=_NO_PLANES,
@@ -456,6 +469,8 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
         tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
         alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
         tex = _material_field(mat, :map)
+        alpha_test = material_alpha_test(mat)
+        alpha_map = _material_field(mat, :alpha_map)
         rot = _material_field(mat, :rotation)
         rot === nothing && (rot = 0.0)
         depth_test = material_depth_test(mat)
@@ -487,14 +502,14 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
             s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
             tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-            stamp, stamp_id)
+            alpha_test, alpha_map, stamp, stamp_id)
         # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
             s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
             s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
             tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-            stamp, stamp_id)
+            alpha_test, alpha_map, stamp, stamp_id)
     end)
     return rt
 end
@@ -519,13 +534,22 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
         alpha_map = _material_field(obj.material, :alpha_map)
         use_color_map = albedo_map isa Texture
         use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
-        r = max(Int(round(hasfield(typeof(obj.material), :size) ? obj.material.size : 1.0)) ÷ 2, 0)
-        diameter = max(2r + 1, 1)
+        base_size = hasfield(typeof(obj.material), :size) ? Float64(obj.material.size) : 1.0
+        size_attenuation = _material_field(obj.material, :size_attenuation)
+        size_attenuation === nothing && (size_attenuation = true)
+        reference_depth = camera isa PerspectiveCamera ?
+            max(norm(camera.position - camera.target), near) : 1.0
         for vi in 1:geo.n_vertices
             pv = mat4_transform_point(view, mat4_transform_point(wm, get_vertex(geo, vi)))
             pv.z <= -near || continue      # near-plane cull, matching the mesh path
             (px, py, pz, ok) = _project(proj, pv, W, H)
             ok || continue
+            effective_size = base_size
+            if size_attenuation && camera isa PerspectiveCamera
+                effective_size *= reference_depth / max(1e-6, -pv.z)
+            end
+            r = max(Int(round(effective_size)) ÷ 2, 0)
+            diameter = max(2r + 1, 1)
             cx = round(Int, px); cy = round(Int, py)
             min_px = max(cx - r, xlo)
             max_px = min(cx + r, xhi)

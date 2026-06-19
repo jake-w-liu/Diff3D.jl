@@ -17,15 +17,35 @@ mutable struct PerspectiveCamera <: AbstractCamera
     aspect::Float64
     near::Float64
     far::Float64
+    zoom::Float64
     target::Vec3{Float64}  # look-at target
     up::Vec3{Float64}
 end
 
-function PerspectiveCamera(; fov=π/4, aspect=1.0, near=0.1, far=1000.0, name="PerspectiveCamera")
+function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
+                           scale::Vec3{Float64},
+                           parent::Union{Nothing, AbstractObject3D},
+                           children::Vector{AbstractObject3D}, visible::Bool,
+                           name::String, id::Int, fov, aspect, near, far,
+                           target::Vec3{Float64}, up::Vec3{Float64})
+    PerspectiveCamera(position, rotation, scale, parent, children, visible,
+                      name, id, Float64(fov), Float64(aspect), Float64(near),
+                      Float64(far), 1.0, target, up)
+end
+
+function _validated_camera_zoom(zoom)
+    z = Float64(zoom)
+    (isfinite(z) && z > 0.0) || throw(ArgumentError("camera zoom must be positive and finite"))
+    return z
+end
+
+function PerspectiveCamera(; fov=π/4, aspect=1.0, near=0.1, far=1000.0,
+                           zoom=1.0, name="PerspectiveCamera")
     PerspectiveCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
-        fov, aspect, near, far, Vec3(), Vec3(0.0, 1.0, 0.0)
+        fov, aspect, near, far, _validated_camera_zoom(zoom),
+        Vec3(), Vec3(0.0, 1.0, 0.0)
     )
 end
 
@@ -38,7 +58,9 @@ is_visible(c::PerspectiveCamera) = c.visible
 set_parent!(c::PerspectiveCamera, p) = (c.parent = p)
 
 function projection_matrix(c::PerspectiveCamera)
-    mat4_perspective(c.fov, c.aspect, c.near, c.far)
+    zoom = _validated_camera_zoom(c.zoom)
+    fov = 2.0 * atan(tan(c.fov / 2.0) / zoom)
+    mat4_perspective(fov, c.aspect, c.near, c.far)
 end
 
 function view_matrix(c::PerspectiveCamera)
@@ -60,16 +82,30 @@ mutable struct OrthographicCamera <: AbstractCamera
     top::Float64
     near::Float64
     far::Float64
+    zoom::Float64
     target::Vec3{Float64}
     up::Vec3{Float64}
 end
 
+function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
+                            scale::Vec3{Float64},
+                            parent::Union{Nothing, AbstractObject3D},
+                            children::Vector{AbstractObject3D}, visible::Bool,
+                            name::String, id::Int, left, right, bottom, top,
+                            near, far, target::Vec3{Float64}, up::Vec3{Float64})
+    OrthographicCamera(position, rotation, scale, parent, children, visible,
+                       name, id, Float64(left), Float64(right),
+                       Float64(bottom), Float64(top), Float64(near),
+                       Float64(far), 1.0, target, up)
+end
+
 function OrthographicCamera(; left=-1.0, right=1.0, bottom=-1.0, top=1.0,
-                             near=0.1, far=1000.0, name="OrthographicCamera")
+                             near=0.1, far=1000.0, zoom=1.0,
+                             name="OrthographicCamera")
     OrthographicCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
-        left, right, bottom, top, near, far,
+        left, right, bottom, top, near, far, _validated_camera_zoom(zoom),
         Vec3(), Vec3(0.0, 1.0, 0.0)
     )
 end
@@ -83,7 +119,12 @@ is_visible(c::OrthographicCamera) = c.visible
 set_parent!(c::OrthographicCamera, p) = (c.parent = p)
 
 function projection_matrix(c::OrthographicCamera)
-    mat4_orthographic(c.left, c.right, c.bottom, c.top, c.near, c.far)
+    zoom = _validated_camera_zoom(c.zoom)
+    cx = (c.left + c.right) * 0.5
+    cy = (c.bottom + c.top) * 0.5
+    hx = (c.right - c.left) * 0.5 / zoom
+    hy = (c.top - c.bottom) * 0.5 / zoom
+    mat4_orthographic(cx - hx, cx + hx, cy - hy, cy + hy, c.near, c.far)
 end
 
 function view_matrix(c::OrthographicCamera)
@@ -114,7 +155,7 @@ function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
     for (sub, sign) in ((s.cameraL, -1.0), (s.cameraR, 1.0))
         off = right * (sign * half)
         sub.fov = cam.fov; sub.aspect = cam.aspect
-        sub.near = cam.near; sub.far = cam.far; sub.up = cam.up
+        sub.near = cam.near; sub.far = cam.far; sub.zoom = cam.zoom; sub.up = cam.up
         sub.position = cam.position + off
         sub.target = cam.target + off
     end

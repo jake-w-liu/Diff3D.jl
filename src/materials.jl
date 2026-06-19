@@ -34,17 +34,29 @@ struct SpriteMaterial <: AbstractMaterial
     opacity::Float64
     transparent::Bool
     map::Any
+    alpha_map::Any
     rotation::Float64
     size_attenuation::Bool
+    alpha_test::Float64
     depth_test::Bool
     depth_write::Bool
 end
 
+function SpriteMaterial(color::Color3, opacity, transparent::Bool, map,
+                        rotation, size_attenuation::Bool, depth_test::Bool,
+                        depth_write::Bool)
+    SpriteMaterial(color, Float64(opacity), transparent, map, nothing,
+                   Float64(rotation), size_attenuation, 0.0,
+                   depth_test, depth_write)
+end
+
 function SpriteMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
-                        transparent=false, map=nothing, rotation=0.0,
-                        size_attenuation=true, depth_test=true, depth_write=true)
-    SpriteMaterial(color, opacity, transparent, map, Float64(rotation),
-                   size_attenuation, depth_test, depth_write)
+                        transparent=false, map=nothing, alpha_map=nothing,
+                        rotation=0.0, size_attenuation=true, alpha_test=0.0,
+                        depth_test=true, depth_write=true)
+    SpriteMaterial(color, Float64(opacity), transparent, map, alpha_map,
+                   Float64(rotation), size_attenuation, Float64(alpha_test),
+                   depth_test, depth_write)
 end
 
 # ========================== MeshLambertMaterial ==========================
@@ -61,6 +73,7 @@ struct MeshLambertMaterial <: AbstractMaterial
     alpha_map::Any
     ao_map::Any
     emissive_map::Any
+    emissive_intensity::Float64
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
     alpha_test::Float64
@@ -72,12 +85,23 @@ function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               emissive=Color3(0.0, 0.0, 0.0),
                               opacity=1.0, transparent=false, wireframe=false, side=:front,
                               map=nothing, alpha_map=nothing, ao_map=nothing,
-                              emissive_map=nothing, vertex_colors=false,
+                              emissive_map=nothing, emissive_intensity=1.0,
+                              vertex_colors=false,
                               light_map=nothing, alpha_test=0.0,
                               depth_test=true, depth_write=true)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
-                        alpha_map, ao_map, emissive_map, vertex_colors, light_map,
-                        Float64(alpha_test), depth_test, depth_write)
+                        alpha_map, ao_map, emissive_map, Float64(emissive_intensity),
+                        vertex_colors, light_map, Float64(alpha_test), depth_test,
+                        depth_write)
+end
+
+function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
+                             wireframe::Bool, side::Symbol, map, alpha_map, ao_map,
+                             emissive_map, vertex_colors::Bool, light_map, alpha_test,
+                             depth_test::Bool, depth_write::Bool)
+    MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
+                        alpha_map, ao_map, emissive_map, 1.0, vertex_colors,
+                        light_map, alpha_test, depth_test, depth_write)
 end
 
 function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
@@ -85,7 +109,7 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              vertex_colors::Bool, light_map, depth_test::Bool,
                              depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
-                        nothing, ao_map, emissive_map, vertex_colors, light_map,
+                        nothing, ao_map, emissive_map, 1.0, vertex_colors, light_map,
                         0.0, depth_test, depth_write)
 end
 
@@ -102,10 +126,12 @@ struct MeshPhongMaterial <: AbstractMaterial
     side::Symbol
     map::Any
     alpha_map::Any
+    emissive_map::Any
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     alpha_test::Float64
     clipping_planes::Vector{Plane{Float64}}
+    emissive_intensity::Float64
     depth_test::Bool
     depth_write::Bool
 end
@@ -115,12 +141,14 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             emissive=Color3(0.0, 0.0, 0.0),
                             shininess=30.0, opacity=1.0,
                             transparent=false, side=:front, map=nothing, alpha_map=nothing,
-                            light_map=nothing, vertex_colors=false, alpha_test=0.0,
+                            emissive_map=nothing, light_map=nothing, vertex_colors=false,
+                            alpha_test=0.0, emissive_intensity=1.0,
                             clipping_planes=Plane{Float64}[],
                             depth_test=true, depth_write=true)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent, side, map,
-                      alpha_map, light_map, vertex_colors, Float64(alpha_test),
-                      _material_clipping_planes(clipping_planes), depth_test, depth_write)
+                      alpha_map, emissive_map, light_map, vertex_colors,
+                      Float64(alpha_test), _material_clipping_planes(clipping_planes),
+                      Float64(emissive_intensity), depth_test, depth_write)
 end
 
 function _material_clipping_planes(clipping_planes)
@@ -133,24 +161,34 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, sh
                            light_map, vertex_colors::Bool, alpha_test, depth_test::Bool,
                            depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      side, map, alpha_map, light_map, vertex_colors, alpha_test,
-                      Plane{Float64}[], depth_test, depth_write)
+                      side, map, alpha_map, nothing, light_map, vertex_colors,
+                      alpha_test, Plane{Float64}[], 1.0, depth_test, depth_write)
+end
+
+function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
+                           opacity, transparent::Bool, side::Symbol, map, alpha_map,
+                           light_map, vertex_colors::Bool, alpha_test,
+                           clipping_planes::Vector{Plane{Float64}},
+                           depth_test::Bool, depth_write::Bool)
+    MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
+                      side, map, alpha_map, nothing, light_map, vertex_colors,
+                      alpha_test, clipping_planes, 1.0, depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
                            opacity, transparent::Bool, side::Symbol, map, alpha_map,
                            light_map, alpha_test, depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      side, map, alpha_map, light_map, false, alpha_test,
-                      Plane{Float64}[], depth_test, depth_write)
+                      side, map, alpha_map, nothing, light_map, false, alpha_test,
+                      Plane{Float64}[], 1.0, depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
                            opacity, transparent::Bool, side::Symbol, map, light_map,
                            depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      side, map, nothing, light_map, false, 0.0, Plane{Float64}[],
-                      depth_test, depth_write)
+                      side, map, nothing, nothing, light_map, false, 0.0,
+                      Plane{Float64}[], 1.0, depth_test, depth_write)
 end
 
 # ========================== MeshStandardMaterial ==========================
@@ -244,21 +282,30 @@ struct PointsMaterial <: AbstractMaterial
     map::Any
     alpha_map::Any
     alpha_test::Float64
+    size_attenuation::Bool
     depth_test::Bool
     depth_write::Bool
 end
 
 function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0,
                         transparent=false, map=nothing, alpha_map=nothing,
-                        alpha_test=0.0, depth_test=true, depth_write=true)
+                        alpha_test=0.0, size_attenuation=true,
+                        depth_test=true, depth_write=true)
     PointsMaterial(color, size, opacity, transparent, map, alpha_map,
-                   Float64(alpha_test), depth_test, depth_write)
+                   Float64(alpha_test), size_attenuation, depth_test, depth_write)
+end
+
+function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
+                        alpha_map, alpha_test, depth_test::Bool,
+                        depth_write::Bool)
+    PointsMaterial(color, size, opacity, transparent, map, alpha_map,
+                   Float64(alpha_test), true, depth_test, depth_write)
 end
 
 function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
                         depth_test::Bool, depth_write::Bool)
     PointsMaterial(color, size, opacity, transparent, map, nothing, 0.0,
-                   depth_test, depth_write)
+                   true, depth_test, depth_write)
 end
 
 # ========================== MeshPhysicalMaterial ==========================
@@ -391,6 +438,8 @@ struct MeshToonMaterial <: AbstractMaterial
     gradient_map::Any
     map::Any
     alpha_map::Any
+    emissive_map::Any
+    emissive_intensity::Float64
     alpha_test::Float64
     opacity::Float64
     transparent::Bool
@@ -399,37 +448,52 @@ struct MeshToonMaterial <: AbstractMaterial
     depth_write::Bool
 
     function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
-                              gradient_map, map, alpha_map, alpha_test, opacity,
+                              gradient_map, map, alpha_map, emissive_map,
+                              emissive_intensity, alpha_test, opacity,
                               transparent::Bool, side::Symbol, depth_test::Bool,
                               depth_write::Bool)
         new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
-            map, alpha_map, Float64(alpha_test), Float64(opacity), transparent,
-            side, depth_test, depth_write)
+            map, alpha_map, emissive_map, Float64(emissive_intensity),
+            Float64(alpha_test), Float64(opacity), transparent, side, depth_test,
+            depth_write)
     end
 end
 
 function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
                            gradient_steps=3, gradient_map=nothing, map=nothing,
-                           alpha_map=nothing, alpha_test=0.0, opacity=1.0,
+                           alpha_map=nothing, emissive_map=nothing,
+                           emissive_intensity=1.0, alpha_test=0.0, opacity=1.0,
                            transparent=false, side=:front,
                            depth_test=true, depth_write=true)
     MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, alpha_map,
-                     alpha_test, opacity, transparent, side, depth_test, depth_write)
+                     emissive_map, emissive_intensity, alpha_test, opacity,
+                     transparent, side, depth_test, depth_write)
+end
+
+function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                          gradient_map, map, alpha_map, alpha_test, opacity,
+                          transparent::Bool, side::Symbol, depth_test::Bool,
+                          depth_write::Bool)
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, alpha_map,
+                     nothing, 1.0, alpha_test, opacity, transparent, side,
+                     depth_test, depth_write)
 end
 
 function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
                           gradient_map, opacity, transparent::Bool,
                           side::Symbol, depth_test::Bool, depth_write::Bool)
-    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, nothing, nothing, 0.0,
-                     opacity, transparent, side, depth_test, depth_write)
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, nothing, nothing,
+                     nothing, 1.0, 0.0, opacity, transparent, side, depth_test,
+                     depth_write)
 end
 
 function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
                           opacity, transparent::Bool, side::Symbol,
                           depth_test::Bool, depth_write::Bool)
-    MeshToonMaterial(color, emissive, gradient_steps, nothing, nothing, nothing, 0.0,
-                     opacity, transparent, side, depth_test, depth_write)
+    MeshToonMaterial(color, emissive, gradient_steps, nothing, nothing, nothing,
+                     nothing, 1.0, 0.0, opacity, transparent, side, depth_test,
+                     depth_write)
 end
 
 # ========================== MeshMatcapMaterial ==========================

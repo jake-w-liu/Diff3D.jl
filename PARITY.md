@@ -15,15 +15,17 @@ replacement for three.js `WebGLRenderer`.
   spheres, planes, rays, and common transforms.
 - Scene graph: `Object3D`, `Scene`, `Group`, parent/child traversal,
   visibility, persistent layer masks, world matrix computation, and reparenting.
-- Cameras: perspective and orthographic camera projection/view basics.
+- Cameras: perspective and orthographic camera projection/view basics including
+  camera `zoom`.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
-  capsules, lathes, and text-like/path helpers.
+  capsules, lathes, and text-like/path helpers. Box geometry now supports
+  width/height/depth segment counts.
 - Objects: `Mesh`, `InstancedMesh`, `PointsObject`, `LineObject`,
   `LineSegments`, `LineLoop`, `Sprite`, `LOD`, `Bone`, `Skeleton`, and
   `SkinnedMesh` data structures.
 - Materials: basic, standard, normal, Lambert, Phong, line, points,
-  sprite-material data models, common standard-material map/intensity fields,
+  sprite-material data models, common material map/intensity fields,
   simple color/size export behavior, compact browser unlit output for
   `MeshBasicMaterial`, compact browser normal-color output for
   `MeshNormalMaterial`, and compact browser grayscale output for
@@ -74,7 +76,7 @@ replacement for three.js `WebGLRenderer`.
   static mesh morph target influences, animated browser morph-weight playback,
   static skinned-mesh poses, CPU-side animated browser skinned-mesh vertex playback,
   textured browser sprite billboards,
-  explicit perspective/orthographic camera metadata for export cases,
+  explicit perspective/orthographic camera metadata and zoom for export cases,
   runtime drawable and light visibility toggles,
   dynamic camera-distance LOD selection for exported browser drawables,
   orbit/zoom interaction, case switching, and exported linear, step,
@@ -136,7 +138,8 @@ replacement for three.js `WebGLRenderer`.
 - Sprites render in the CPU path as camera-facing quads and export to the
   browser showcase as camera-facing textured quads. Browser sprite export now
   carries sampled material maps, `Sprite.center`, `SpriteMaterial.rotation`,
-  `SpriteMaterial.sizeAttenuation`, and transparent sorting/depth metadata.
+  `SpriteMaterial.sizeAttenuation`, alpha maps, alpha tests, and transparent
+  sorting/depth metadata.
   Remaining sprite gaps are full DOM renderer integration details rather than
   the core billboard/material fields.
 - LOD containers are represented in Julia and browser export now serializes LOD
@@ -391,11 +394,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: serialize explicit `PerspectiveCamera` and `OrthographicCamera`
   metadata for `WebGLExportCase` and use it in the compact browser runtime,
   including camera position, target, up vector, near/far planes, perspective
-  FOV/aspect, and orthographic extents. The old radius/height orbit fallback
-  remains available for cases without an explicit camera.
+  FOV/aspect, camera zoom, and orthographic extents. The old radius/height
+  orbit fallback remains available for cases without an explicit camera.
 - Done: bind browser animation tracks whose target is the active
   `WebGLExportCase.camera`, including camera position, target, up vector,
-  perspective FOV/aspect, near/far planes, and orthographic extents.
+  perspective FOV/aspect, near/far planes, camera zoom, and orthographic extents.
   Orbit/pan/zoom controls now apply as offsets over the sampled camera state
   instead of forcing the active camera back to its static export pose each
   frame.
@@ -502,6 +505,11 @@ Parallel audits split the remaining work into five critical tracks:
   glTF masked point primitives through `PointsMaterial`, and apply point
   texture color, map alpha, alpha-map green-channel discard, and alpha-test
   behavior in CPU point rasterization plus compact browser point sprites.
+- Done: add `PointsMaterial.size_attenuation`, including constant-size opt-out
+  and reference-distance attenuation for CPU and compact browser point sprites.
+- Done: add `SpriteMaterial.alpha_map` and `SpriteMaterial.alpha_test`, apply
+  map alpha and alpha-map green-channel discard in CPU sprite rasterization,
+  and bind sprite alpha textures/tests in the compact browser sprite shader.
 - Done: add `MeshBasicMaterial.alpha_map` so basic unlit materials participate
   in the same CPU rasterization and compact browser alpha-map paths as other
   mapped materials.
@@ -516,6 +524,9 @@ Parallel audits split the remaining work into five critical tracks:
   same CPU flat/smooth vertex-color modulation and compact browser vertex-color
   export path as other color-aware mesh materials; the
   `webgl_geometry_colors` port now uses flat Phong with `shininess=0.0`.
+- Done: add `emissive_map`/`emissive_intensity` field parity for
+  `MeshLambertMaterial`, `MeshPhongMaterial`, and `MeshToonMaterial`, with CPU
+  emissive-map modulation and compact browser serialization covered by tests.
 - Done: serialize `LineBasicMaterial.linewidth` into browser export, restore it
   through renderable animation reset state, animate it with number tracks, and
   apply it with a WebGL `ALIASED_LINE_WIDTH_RANGE` clamp for line, line-loop, and
@@ -713,9 +724,9 @@ Parallel audits split the remaining work into five critical tracks:
   scale, toon step count, depth near/far, roughness, metalness, emissive, point
   size, Phong shininess/specular color, and compact physical-material
   scalar/color fields, including volume attenuation distance/color, dispersion,
-  and physical anisotropy strength and rotation. Sprite
-  material rotation and size attenuation now bind through the same CPU/browser
-  animation path.
+  and physical anisotropy strength and rotation. Sprite material rotation plus
+  sprite/point size attenuation now bind through the same CPU/browser animation
+  path.
 - Done: bind nested material texture transform animation paths such as
   `material.map.offset.x`, `material.map.repeat.y`, `material.map.rotation`,
   `material.map.center.x`, and `material.map.matrixAutoUpdate`. CPU playback mutates the material
@@ -867,8 +878,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_morphtargets` via
   `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
   attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and
-  browser runtime morph-target updates. Upstream segmented `BoxGeometry`
-  construction and GUI sliders remain documented deviations.
+  browser runtime morph-target updates. The local port still uses a procedural
+  subdivided buffer geometry and omits upstream GUI sliders.
 - Added a standalone partial port for `webgl_animation_keyframes` via
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset
@@ -962,6 +973,11 @@ Parallel audits split the remaining work into five critical tracks:
   `Texture.rotation`, `Texture.center`, `Texture.matrix`, and
   `Texture.matrix_auto_update` semantics in browser export. Exact upstream GUI,
   texture assets, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_materials_texture_canvas` via
+  `examples/webgl_materials_texture_canvas.jl`, using a generated
+  `CanvasTexture` on a rotating `BoxGeometry` cube. Live DOM canvas drawing,
+  pointer events, runtime `needsUpdate`, and `WebGLRenderer` internals remain
+  documented deviations.
 - Tightened the official examples parity registry so every registered example
   has focused source/prerequisite assertions in `test/runtests.jl`, preventing
   future parity entries from being tracked only by script existence and smoke
