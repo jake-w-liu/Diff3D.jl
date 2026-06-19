@@ -3,18 +3,23 @@ uuid = "72681062-5925-4945-963f-74d9429756fe"
 version = "0.1.3"
 
 [deps]
+ColorTypes = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+JpegTurbo = "b835a17e-a41a-41e7-81f0-2f016b05efe0"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 [compat]
+ColorTypes = "0.12.1"
 ForwardDiff = "0.10"
+JpegTurbo = "0.1.6"
 julia = "1.9"
 
 [extras]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "ForwardDiff", "TOML"]
+test = ["Test", "Base64", "ForwardDiff", "TOML"]

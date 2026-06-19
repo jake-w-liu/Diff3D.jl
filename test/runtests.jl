@@ -26,6 +26,7 @@ if get(ENV, "DIFF3D_TEST_LOWOPT", "") != "1" && Base.JLOptions().opt_level > 0
 end
 
 using Test
+using Base64
 using Diff3D
 using ForwardDiff
 using TOML
@@ -5766,27 +5767,53 @@ end
                 @test_throws "base64" Diff3D._gltf_material(bad, [UInt8[]], dir, 0.0)
             end
 
+            jpeg64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8APnAOP//Z"
+            jpeg_bytes = base64decode(jpeg64)
+
             let dir = mktempdir()
-                jpg_bytes = UInt8[0xff, 0xd8, 0xff, 0xd9]
                 gltf = Dict{String,Any}(
                     "bufferViews"=>Any[
                         Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
-                                         "byteLength"=>Float64(length(jpg_bytes)))],
+                                         "byteLength"=>Float64(length(jpeg_bytes)))],
                     "images"=>Any[
                         Dict{String,Any}("bufferView"=>0.0, "mimeType"=>"image/jpeg")],
                     "textures"=>Any[Dict{String,Any}("source"=>0.0)],
                     "materials"=>Any[Dict{String,Any}(
                         "pbrMetallicRoughness"=>Dict{String,Any}(
                             "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
-                err = try
-                    Diff3D._gltf_material(gltf, [jpg_bytes], dir, 0.0)
-                    nothing
-                catch e
-                    e
-                end
-                msg = sprint(showerror, err)
-                @test occursin("image/jpeg", msg)
-                @test occursin("not supported", msg)
+                mat = Diff3D._gltf_material(gltf, [jpeg_bytes], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (2, 2, 3)
+                @test mat.map.colorspace === :srgb
+                @test mat.map.data[1, 1, 1] ≈ 64 / 255 atol=0.02
+                @test mat.map.data[1, 1, 2] ≈ 128 / 255 atol=0.02
+                @test mat.map.data[1, 1, 3] ≈ 191 / 255 atol=0.02
+            end
+
+            let dir = mktempdir()
+                uri = "data:image/jpeg;base64," * jpeg64
+                gltf = Dict{String,Any}(
+                    "images"=>Any[Dict{String,Any}("uri"=>uri)],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (2, 2, 3)
+            end
+
+            let dir = mktempdir()
+                write(joinpath(dir, "texture.jpg"), jpeg_bytes)
+                gltf = Dict{String,Any}(
+                    "images"=>Any[Dict{String,Any}("uri"=>"texture.jpg")],
+                    "textures"=>Any[Dict{String,Any}("source"=>0.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (2, 2, 3)
             end
 
             let dir = mktempdir()

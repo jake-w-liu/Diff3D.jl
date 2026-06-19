@@ -21,6 +21,8 @@ module Diff3D
 using LinearAlgebra: norm as la_norm, dot as la_dot, cross as la_cross
 using Printf
 using ForwardDiff
+using ColorTypes: RGB, red, green, blue
+using JpegTurbo: jpeg_decode
 
 # ========================== Math ==========================
 include("math.jl")

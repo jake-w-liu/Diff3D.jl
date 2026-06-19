@@ -957,15 +957,54 @@ function _gltf_decode_image(bytes::Vector{UInt8}, mime::AbstractString)
     if image_mime == "" || image_mime == "image/png"
         _is_png_bytes(bytes) ||
             error(image_mime == "" ?
-                  "glTF image has unsupported or unknown format; only image/png is currently supported" :
+                  "glTF image has unsupported or unknown format; image/png and image/jpeg are supported" :
                   "glTF image MIME image/png does not contain PNG data")
         return _decode_png(bytes)
     elseif image_mime == "image/jpeg" || image_mime == "image/jpg"
-        error("glTF image MIME $image_mime is not supported; only image/png is currently supported")
+        return _decode_jpeg(bytes)
     elseif image_mime == "image/ktx2"
         error("glTF image MIME image/ktx2 is not supported; KTX2/Basis texture loading is not implemented")
     end
-    error("glTF image MIME $image_mime is not supported; only image/png is currently supported")
+    error("glTF image MIME $image_mime is not supported; image/png and image/jpeg are supported")
+end
+
+function _jpeg_bytes_for_jpegturbo(bytes::Vector{UInt8})
+    length(bytes) > 623 && return bytes
+    length(bytes) >= 4 &&
+        bytes[1] == 0xff && bytes[2] == 0xd8 &&
+        bytes[end - 1] == 0xff && bytes[end] == 0xd9 ||
+        return bytes
+    # JpegTurbo rejects some tiny valid JPEG payloads; a COM segment before EOI
+    # preserves the image stream while meeting the decoder's input-size floor.
+    payload_len = max(0, 624 - length(bytes) - 4)
+    segment_len = payload_len + 2
+    segment_len <= typemax(UInt16) ||
+        error("JPEG compatibility comment segment is too large")
+    padded = UInt8[]
+    sizehint!(padded, length(bytes) + payload_len + 4)
+    append!(padded, @view bytes[1:end - 2])
+    push!(padded, UInt8(0xff), UInt8(0xfe),
+          UInt8(segment_len >>> 8), UInt8(segment_len & 0xff))
+    append!(padded, zeros(UInt8, payload_len))
+    append!(padded, @view bytes[end - 1:end])
+    return padded
+end
+
+function _decode_jpeg(bytes::Vector{UInt8})
+    try
+        img = jpeg_decode(RGB, _jpeg_bytes_for_jpegturbo(bytes))
+        H, W = size(img)
+        out = Array{Float64}(undef, H, W, 3)
+        @inbounds for y in 1:H, x in 1:W
+            px = img[y, x]
+            out[y, x, 1] = Float64(red(px))
+            out[y, x, 2] = Float64(green(px))
+            out[y, x, 3] = Float64(blue(px))
+        end
+        return out
+    catch err
+        error("glTF image MIME image/jpeg could not be decoded: $(sprint(showerror, err))")
+    end
 end
 
 function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb)
