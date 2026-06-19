@@ -559,7 +559,76 @@ function _animation_component_index(s::AbstractString)
     throw(ArgumentError("unsupported animation component: $s"))
 end
 
+const _TEXTURE_ANIMATION_FIELD_ALIASES = Dict(
+    "map" => "map",
+    "alphaMap" => "alpha_map",
+    "alpha_map" => "alpha_map",
+    "aoMap" => "ao_map",
+    "ao_map" => "ao_map",
+    "lightMap" => "light_map",
+    "light_map" => "light_map",
+    "emissiveMap" => "emissive_map",
+    "emissive_map" => "emissive_map",
+    "roughnessMap" => "roughness_map",
+    "roughness_map" => "roughness_map",
+    "metalnessMap" => "metalness_map",
+    "metalness_map" => "metalness_map",
+    "normalMap" => "normal_map",
+    "normal_map" => "normal_map",
+    "matcap" => "matcap",
+    "gradientMap" => "gradient_map",
+    "gradient_map" => "gradient_map",
+    "clearcoatMap" => "clearcoat_map",
+    "clearcoat_map" => "clearcoat_map",
+    "clearcoatRoughnessMap" => "clearcoat_roughness_map",
+    "clearcoat_roughness_map" => "clearcoat_roughness_map",
+    "clearcoatNormalMap" => "clearcoat_normal_map",
+    "clearcoat_normal_map" => "clearcoat_normal_map",
+    "transmissionMap" => "transmission_map",
+    "transmission_map" => "transmission_map",
+    "thicknessMap" => "thickness_map",
+    "thickness_map" => "thickness_map",
+    "sheenColorMap" => "sheen_color_map",
+    "sheen_color_map" => "sheen_color_map",
+    "sheenRoughnessMap" => "sheen_roughness_map",
+    "sheen_roughness_map" => "sheen_roughness_map",
+    "iridescenceMap" => "iridescence_map",
+    "iridescence_map" => "iridescence_map",
+    "iridescenceThicknessMap" => "iridescence_thickness_map",
+    "iridescence_thickness_map" => "iridescence_thickness_map",
+    "specularIntensityMap" => "specular_intensity_map",
+    "specular_intensity_map" => "specular_intensity_map",
+    "specularColorMap" => "specular_color_map",
+    "specular_color_map" => "specular_color_map",
+    "anisotropyMap" => "anisotropy_map",
+    "anisotropy_map" => "anisotropy_map",
+)
+
+const _TEXTURE_ANIMATION_PROPERTY_ALIASES = Dict(
+    "offset" => "offset",
+    "repeat" => "repeat",
+    "center" => "center",
+    "rotation" => "rotation",
+    "matrixAutoUpdate" => "matrix_auto_update",
+    "matrix_auto_update" => "matrix_auto_update",
+)
+
+const _TEXTURE_ANIMATION_FIELDS = Tuple(Symbol(v) for v in
+    sort!(unique(collect(values(_TEXTURE_ANIMATION_FIELD_ALIASES)));
+          by=length, rev=true))
+
+function _texture_animation_property_symbol(s::AbstractString)
+    parts = split(String(s), ".")
+    length(parts) == 2 || return nothing
+    field = get(_TEXTURE_ANIMATION_FIELD_ALIASES, parts[1], nothing)
+    property = get(_TEXTURE_ANIMATION_PROPERTY_ALIASES, parts[2], nothing)
+    (field === nothing || property === nothing) && return nothing
+    return Symbol(field * "_" * property)
+end
+
 function _animation_property_symbol(s::AbstractString)
+    texture_property = _texture_animation_property_symbol(s)
+    texture_property !== nothing && return texture_property
     s = replace(s, "." => "_")
     s == "alphaTest" && return :alpha_test
     s == "depthTest" && return :depth_test
@@ -1146,6 +1215,11 @@ function _with_component(v::Vec3, component::Int, x::Real)
     component == 3 && return Vec3(v.x, v.y, Float64(x))
     throw(ArgumentError("Vec3 animation component must be x/y/z"))
 end
+function _with_component(v::Vec2, component::Int, x::Real)
+    component == 1 && return Vec2(Float64(x), v.y)
+    component == 2 && return Vec2(v.x, Float64(x))
+    throw(ArgumentError("Vec2 animation component must be x/y"))
+end
 function _with_component(v::Euler, component::Int, x::Real)
     component == 1 && return Euler(Float64(x), v.y, v.z, v.order)
     component == 2 && return Euler(v.x, Float64(x), v.z, v.order)
@@ -1209,6 +1283,86 @@ function _write_material_track_value!(target, property::Symbol, component::Int, 
     return true
 end
 
+function _split_texture_track_property(property::Symbol)
+    name = String(property)
+    for field in _TEXTURE_ANIMATION_FIELDS
+        prefix = String(field) * "_"
+        startswith(name, prefix) || continue
+        texture_property = Symbol(name[(lastindex(prefix) + 1):end])
+        texture_property in (:offset, :repeat, :center, :rotation, :matrix_auto_update) ||
+            return nothing
+        return field, texture_property
+    end
+    return nothing
+end
+
+function _material_texture_for_track(target, property::Symbol)
+    split = _split_texture_track_property(property)
+    split === nothing && return nothing
+    hasproperty(target, :material) || return nothing
+    field, texture_property = split
+    mat = getproperty(target, :material)
+    hasproperty(mat, field) || return nothing
+    tex = getproperty(mat, field)
+    tex isa Texture || throw(ArgumentError("material.$field is not a Texture"))
+    return tex, texture_property
+end
+
+function _refresh_texture_track_matrix!(tex::Texture)
+    tex.matrix_auto_update && texture_update_matrix!(tex)
+    return tex
+end
+
+function _write_texture_track_value!(target, property::Symbol, component::Int, value::Real)
+    resolved = _material_texture_for_track(target, property)
+    resolved === nothing && return false
+    tex, texture_property = resolved
+    if texture_property === :matrix_auto_update
+        component == 0 || throw(ArgumentError("matrixAutoUpdate is a scalar animation property"))
+        tex.matrix_auto_update = value >= 0.5
+    elseif texture_property === :rotation
+        component == 0 || throw(ArgumentError("texture rotation is a scalar animation property"))
+        tex.rotation = Float64(value)
+    else
+        current = getproperty(tex, texture_property)
+        setproperty!(tex, texture_property, _with_component(current, component, value))
+    end
+    _refresh_texture_track_matrix!(tex)
+    return true
+end
+
+function _write_texture_track_value!(target, property::Symbol, value::Float64)
+    resolved = _material_texture_for_track(target, property)
+    resolved === nothing && return false
+    tex, texture_property = resolved
+    if texture_property === :matrix_auto_update
+        tex.matrix_auto_update = value >= 0.5
+    elseif texture_property === :rotation
+        tex.rotation = value
+    else
+        throw(ArgumentError("texture $texture_property requires a component animation path"))
+    end
+    _refresh_texture_track_matrix!(tex)
+    return true
+end
+
+function _write_texture_track_value!(target, property::Symbol, value::Vec3)
+    resolved = _material_texture_for_track(target, property)
+    resolved === nothing && return false
+    tex, texture_property = resolved
+    if texture_property in (:offset, :repeat, :center)
+        setproperty!(tex, texture_property, Vec2(value.x, value.y))
+    elseif texture_property === :rotation
+        tex.rotation = value.x
+    elseif texture_property === :matrix_auto_update
+        tex.matrix_auto_update = value.x >= 0.5
+    else
+        return false
+    end
+    _refresh_texture_track_matrix!(tex)
+    return true
+end
+
 function _write_morph_component!(target, property::Symbol, component::Int, v::Real)
     wrote = false
     function write_one!(obj)
@@ -1233,6 +1387,8 @@ function _write_track_value!(target, property::Symbol, component::Int, v::Real)
         return _write_quaternion_component!(target, component, v)
     property === :morph_target_influences &&
         return _write_morph_component!(target, property, component, v)
+    _write_texture_track_value!(target, property, component, Float64(v)) &&
+        return target
     if !hasproperty(target, property) &&
        _write_material_track_value!(target, property, component, Float64(v))
         return target
@@ -1282,6 +1438,8 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
         current = getproperty(target, property)
         setproperty!(target, property,
                      current isa Color3 ? Color3(v.x, v.y, v.z) : v)
+    elseif _write_texture_track_value!(target, property, v)
+        return target
     elseif _write_material_track_value!(target, property, Color3(v.x, v.y, v.z))
         return target
     else
@@ -1294,6 +1452,8 @@ function _write_track_value!(target, property::Symbol, v::Float64)
     if hasproperty(target, property)
         current = getproperty(target, property)
         setproperty!(target, property, current isa Bool ? v >= 0.5 : v)
+    elseif _write_texture_track_value!(target, property, v)
+        return target
     elseif _write_material_track_value!(target, property, v)
         return target
     else

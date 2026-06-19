@@ -1467,6 +1467,9 @@ end
                           [Vec3(0.8,0.7,0.6), Vec3(0.2,0.3,0.4)]),
             NumberKeyframeTrack(textured, "material.depthTest", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(textured, "material.depthWrite", [0.0, 1.0], [0.0, 1.0]),
+            NumberKeyframeTrack(textured, "material.map.offset.x", [0.0, 1.0], [0.25, 0.5]),
+            NumberKeyframeTrack(textured, "material.map.repeat.y", [0.0, 1.0], [1.0, 1.5]),
+            NumberKeyframeTrack(textured, "material.map.rotation", [0.0, 1.0], [0.2, 0.4]),
             NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
             NumberKeyframeTrack(normal_mapped, "material.normalScale", [0.0, 1.0], [0.35, 0.7]),
             NumberKeyframeTrack(depth_material_mesh, "material.near", [0.0, 1.0], [1.0, 2.0]),
@@ -2443,6 +2446,13 @@ end
         @test occursin("\"matrix\":[", html)
         @test occursin("uMapMatrix", html)
         @test occursin("function texMatrix(t)", html)
+        @test occursin("const textureAnimBindings", html)
+        @test occursin("function setTextureAnim", html)
+        @test occursin("function updateTextureMatrix", html)
+        @test occursin("for(const t of objectTextures(o)) resetTextureAnim(t)", html)
+        @test occursin("\"property\":\"map_offset\",\"component\":1", html)
+        @test occursin("\"property\":\"map_repeat\",\"component\":2", html)
+        @test occursin("\"property\":\"map_rotation\",\"component\":0", html)
         @test occursin("uniformTexMatrix(p,\"uAlphaMatrix\",o.alphaTexture)", html)
         @test occursin("uniformMatrix3fv", html)
         @test occursin("\"opacity\":0.5", html)
@@ -4231,6 +4241,27 @@ end
         aspect_track = NumberKeyframeTrack(aspect_cam, :aspect, [0.0, 1.0], [1.25, 1.75])
         mixer_set_time!(AnimationMixer(AnimationClip("camera_aspect", [aspect_track])), 0.5)
         @test aspect_cam.aspect ≈ 1.5
+        tex_anim = Texture(ones(Float64, 2, 2, 3);
+                           offset=Vec2(0.1, 0.2), repeat=Vec2(1.0, 1.0),
+                           rotation=0.0, center=Vec2(0.5, 0.5))
+        tex_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(map=tex_anim))
+        tex_offset = NumberKeyframeTrack(tex_mesh, "material.map.offset.x",
+                                         [0.0, 1.0], [0.1, 0.5])
+        tex_repeat = NumberKeyframeTrack(tex_mesh, "material.map.repeat.y",
+                                         [0.0, 1.0], [1.0, 2.0])
+        tex_rotation = NumberKeyframeTrack(tex_mesh, "material.map.rotation",
+                                           [0.0, 1.0], [0.0, 0.4])
+        mixer_set_time!(AnimationMixer(AnimationClip("texture_transform",
+                                                    [tex_offset, tex_repeat, tex_rotation])), 0.5)
+        @test tex_anim.offset.x ≈ 0.3
+        @test tex_anim.offset.y ≈ 0.2
+        @test tex_anim.repeat.y ≈ 1.5
+        @test tex_anim.rotation ≈ 0.2
+        @test tex_anim.matrix.e != Mat3().e
+        tex_auto = NumberKeyframeTrack(tex_mesh, "material.map.matrixAutoUpdate",
+                                       [0.0, 1.0], [1.0, 0.0])
+        mixer_set_time!(AnimationMixer(AnimationClip("texture_auto", [tex_auto])), 0.75)
+        @test tex_anim.matrix_auto_update === false
         morph_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.0, 0.0])
         mw = NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[1]",
                                  [0.0, 1.0], [0.0, 0.8])

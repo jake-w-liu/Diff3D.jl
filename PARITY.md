@@ -697,6 +697,13 @@ Parallel audits split the remaining work into five critical tracks:
   and physical anisotropy strength and rotation. Sprite
   material rotation and size attenuation now bind through the same CPU/browser
   animation path.
+- Done: bind nested material texture transform animation paths such as
+  `material.map.offset.x`, `material.map.repeat.y`, `material.map.rotation`,
+  and `material.map.matrixAutoUpdate`. CPU playback mutates the material
+  `Texture` object and refreshes its UV matrix when auto-update is enabled;
+  browser playback resets serialized texture transform state each frame,
+  applies flattened texture tracks, and recomputes sampler matrices before
+  rendering.
 - Done: export light IDs and bind browser animation tracks to light color,
   ground color, intensity, distance, and decay fields. CPU light color/intensity
   `NumberKeyframeTrack` playback is also covered, so animated lighting changes
