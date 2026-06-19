@@ -2464,7 +2464,7 @@ end
         @test occursin("pinchMode=true", html)
         @test occursin("pinchDist/nd", html)
         @test occursin("try{ canvas.setPointerCapture", html)
-        pcamera = PerspectiveCamera(fov=0.7, near=0.3, far=77.0)
+        pcamera = PerspectiveCamera(fov=0.7, aspect=1.25, near=0.3, far=77.0)
         pcamera.position = Vec3(1.0, 2.0, 9.0)
         pcamera.target = Vec3(0.25, 0.5, 0.75)
         ocamera = OrthographicCamera(left=-2.0, right=3.0, bottom=-1.5, top=1.25,
@@ -2477,6 +2477,7 @@ end
             KeyframeTrack(pcamera, :target, [0.0, 1.0],
                           [Vec3(0.25, 0.5, 0.75), Vec3(0.0, 0.7, 0.4)]),
             NumberKeyframeTrack(pcamera, :fov, [0.0, 1.0], [0.7, 0.6]),
+            NumberKeyframeTrack(pcamera, :aspect, [0.0, 1.0], [1.25, 1.75]),
             NumberKeyframeTrack(pcamera, :near, [0.0, 1.0], [0.3, 0.45]),
             NumberKeyframeTrack(pcamera, :far, [0.0, 1.0], [77.0, 90.0]),
         ])
@@ -2495,11 +2496,13 @@ end
         @test occursin("\"position\":[1,2,9]", camera_html)
         @test occursin("\"target\":[0.25,0.5,0.75]", camera_html)
         @test occursin("\"fov\":0.69999999999999996", camera_html)
+        @test occursin("\"aspect\":1.25", camera_html)
         @test occursin("\"near\":0.29999999999999999", camera_html)
         @test occursin("\"far\":77", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"position\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"target\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"fov\"", camera_html)
+        @test occursin("\"target\":$(pcamera.id),\"property\":\"aspect\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"near\"", camera_html)
         @test occursin("\"target\":$(pcamera.id),\"property\":\"far\"", camera_html)
         @test !occursin("\"target\":$(pcamera.id),\"property\":\"depthNear\"", camera_html)
@@ -2515,6 +2518,7 @@ end
         @test occursin("const cameraById = new Map()", camera_html)
         @test occursin("function setCameraAnim(cam,prop,v,component=0)", camera_html)
         @test occursin("function resetCameraAnim(cam)", camera_html)
+        @test occursin("aspect:cam.aspect", camera_html)
         @test occursin("if(c.camera) resetCameraAnim(c.camera)", camera_html)
         @test occursin("for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0)", camera_html)
         @test occursin("function applyCameraOrbit(cam)", camera_html)
@@ -2524,6 +2528,7 @@ end
         @test occursin("if(cam&&cam.type===\"orthographic\")", camera_html)
         @test occursin("const s=orbitDistScale", camera_html)
         @test occursin("proj=M4.orthographic(cx-hx,cx+hx,cy-hy,cy+hy,cam.near,cam.far)", camera_html)
+        @test occursin("const canvasAspect=canvas.width/canvas.height, aspect=cam&&cam.aspect!=null?cam.aspect:canvasAspect", camera_html)
         @test occursin("M4.perspective(cam&&cam.fov?cam.fov:active.fov,aspect,cam&&cam.near!=null?cam.near:.1,cam&&cam.far!=null?cam.far:180)", camera_html)
         @test_throws ArgumentError WebGLExportCase("badcam", "Bad", "Bad", scene; camera=Scene())
         @test occursin("\"loop\":\"repeat\"", html)
@@ -4222,6 +4227,10 @@ end
         @test mesh.visible === true
         mixer_set_time!(AnimationMixer(AnimationClip("visible", [vis])), 0.75)
         @test mesh.visible === false
+        aspect_cam = PerspectiveCamera(aspect=1.25)
+        aspect_track = NumberKeyframeTrack(aspect_cam, :aspect, [0.0, 1.0], [1.25, 1.75])
+        mixer_set_time!(AnimationMixer(AnimationClip("camera_aspect", [aspect_track])), 0.5)
+        @test aspect_cam.aspect ≈ 1.5
         morph_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.0, 0.0])
         mw = NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[1]",
                                  [0.0, 1.0], [0.0, 0.8])

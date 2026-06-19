@@ -388,13 +388,14 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: serialize explicit `PerspectiveCamera` and `OrthographicCamera`
   metadata for `WebGLExportCase` and use it in the compact browser runtime,
   including camera position, target, up vector, near/far planes, perspective
-  FOV, and orthographic extents. The old radius/height orbit fallback remains
-  available for cases without an explicit camera.
+  FOV/aspect, and orthographic extents. The old radius/height orbit fallback
+  remains available for cases without an explicit camera.
 - Done: bind browser animation tracks whose target is the active
   `WebGLExportCase.camera`, including camera position, target, up vector,
-  perspective FOV, near/far planes, and orthographic extents. Orbit/pan/zoom
-  controls now apply as offsets over the sampled camera state instead of
-  forcing the active camera back to its static export pose each frame.
+  perspective FOV/aspect, near/far planes, and orthographic extents.
+  Orbit/pan/zoom controls now apply as offsets over the sampled camera state
+  instead of forcing the active camera back to its static export pose each
+  frame.
 - Done: export drawable `visible` state and bind browser `NumberKeyframeTrack`
   playback for `visible`, while preserving initially invisible animated
   drawables in generated scene data.
