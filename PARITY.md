@@ -830,6 +830,12 @@ Parallel audits split the remaining work into five critical tracks:
   legend texture. Upstream `pressure.json`, live `Lut` GUI palette switching,
   the second orthographic UI scene, `renderer.autoClear=false`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_shapes` via
+  `examples/webgl_geometry_shapes.jl`, using Diff3D.jl convex
+  `ShapeGeometry`, `ExtrudeGeometry`, `LineLoop` outlines, textured shape caps,
+  and browser mesh/line export. Upstream curved, holed, and complex
+  `Shape` paths, exact `ShapeUtils` triangulation, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and

@@ -50,6 +50,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_colors_lookuptable.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_colors_lookuptable.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_shapes"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_shapes"
+local_script = "examples/webgl_geometry_shapes.jl"
+status = "partial"
+prerequisites = ["ShapeGeometry", "ExtrudeGeometry", "LineLoop", "MeshPhongMaterial.map", "browser mesh and line export"]
+known_deviations = [
+  "Uses deterministic convex Diff3D.jl polygons rather than the upstream curved, holed, and complex Shape paths",
+  "Uses compact Diff3D.jl lighting, texture, extrusion, and line rendering rather than three.js ShapeUtils triangulation and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_geometry_shapes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_shapes.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_camera"
 upstream_url = "https://threejs.org/examples/#webgl_camera"
 local_script = "examples/webgl_camera.jl"

@@ -154,6 +154,7 @@ end
             "threejs_webgl_geometry_cube",
             "threejs_webgl_geometry_colors",
             "threejs_webgl_geometry_colors_lookuptable",
+            "threejs_webgl_geometry_shapes",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -235,6 +236,18 @@ end
                     "WebGLExportCase(\"geometry-colors-lookuptable\"",
                 ],
                 prerequisites=["BufferGeometry custom attributes", "MeshLambertMaterial.vertex_colors", "SpriteMaterial.map"],
+            ),
+            "threejs_webgl_geometry_shapes" => (
+                source=[
+                    "function regular_shape(n::Int",
+                    "ShapeGeometry(shape)",
+                    "ExtrudeGeometry(shape, depth=0.38)",
+                    "LineLoop(line_loop_geometry(shape)",
+                    "MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "map=texture",
+                    "WebGLExportCase(\"geometry-shapes\"",
+                ],
+                prerequisites=["ShapeGeometry", "ExtrudeGeometry", "LineLoop", "MeshPhongMaterial.map"],
             ),
             "threejs_webgl_camera" => (
                 source=[
