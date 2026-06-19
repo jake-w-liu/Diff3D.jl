@@ -248,6 +248,7 @@ end
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
             "threejs_webgl_points_sprites",
+            "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
             "threejs_webgl_lines_colors",
             "threejs_webgl_helpers",
@@ -563,6 +564,21 @@ end
                     "map=sprite_map",
                 ],
                 prerequisites=["PointsMaterial.map", "SpriteMaterial"],
+            ),
+            "threejs_webgl_points_billboards" => (
+                source=[
+                    "function billboard_disc_texture(; n::Int=48)",
+                    "Texture(data; filter=:linear, min_filter=:linear_mipmap_linear",
+                    "function billboard_geometry(; n::Int=2200)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "PointsObject(",
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "alpha_test=0.04",
+                    "size_attenuation=true",
+                    "FogExp2(color=Color3",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                ],
+                prerequisites=["PointsMaterial.map", "PointsMaterial.alpha_test", "PointsMaterial.size_attenuation", "FogExp2"],
             ),
             "threejs_webgl_instancing_dynamic" => (
                 source=[
@@ -1329,6 +1345,12 @@ end
                               name="export_wireframe")
         wireframe_mesh.position = Vec3(-2.3, 0.0, 0.0)
         add!(scene, wireframe_mesh)
+        phong_wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                    MeshPhongMaterial(color=Color3(0.2, 0.8, 1.0),
+                                                      wireframe=true);
+                                    name="export_phong_wireframe")
+        phong_wireframe_mesh.position = Vec3(-2.9, 0.0, 0.0)
+        add!(scene, phong_wireframe_mesh)
         emissive_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                MeshStandardMaterial(color=Color3(0.1, 0.1, 0.1),
                                                     emissive=Color3(0.2, 0.4, 1.0),
@@ -1940,6 +1962,30 @@ end
                                    aniso_tex.tex_coord, 6.0)
         @test legacy_aniso_tex.max_anisotropy == 6.0
         @test legacy_aniso_tex.needs_update == false
+        @test_throws ArgumentError Texture(aniso_tex.data, :bad, aniso_tex.wrap_t,
+                                           aniso_tex.filter, aniso_tex.min_filter,
+                                           aniso_tex.mag_filter, aniso_tex.mipmaps,
+                                           aniso_tex.colorspace, aniso_tex.offset,
+                                           aniso_tex.repeat, aniso_tex.rotation,
+                                           aniso_tex.center, aniso_tex.matrix,
+                                           aniso_tex.matrix_auto_update,
+                                           aniso_tex.tex_coord)
+        @test_throws ArgumentError Texture(aniso_tex.data, aniso_tex.wrap_s, aniso_tex.wrap_t,
+                                           :bad, aniso_tex.min_filter,
+                                           aniso_tex.mag_filter, aniso_tex.mipmaps,
+                                           aniso_tex.colorspace, aniso_tex.offset,
+                                           aniso_tex.repeat, aniso_tex.rotation,
+                                           aniso_tex.center, aniso_tex.matrix,
+                                           aniso_tex.matrix_auto_update,
+                                           aniso_tex.tex_coord)
+        @test_throws ArgumentError Texture(aniso_tex.data, aniso_tex.wrap_s, aniso_tex.wrap_t,
+                                           aniso_tex.filter, aniso_tex.min_filter,
+                                           aniso_tex.mag_filter, aniso_tex.mipmaps,
+                                           aniso_tex.colorspace, aniso_tex.offset,
+                                           aniso_tex.repeat, aniso_tex.rotation,
+                                           aniso_tex.center, aniso_tex.matrix,
+                                           aniso_tex.matrix_auto_update,
+                                           -1)
         @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=0.5)
         @test_throws ArgumentError Texture(ones(Float64, 1, 1, 3); max_anisotropy=Inf)
         linear_sampler_json = Diff3D._web_texture_json(Texture(ones(Float64, 1, 1, 3);
@@ -2076,6 +2122,8 @@ end
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
+        @test occursin("\"name\":\"export_phong_wireframe\"", html)
+        @test occursin(r"\"name\":\"export_phong_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
         @test occursin("const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1]", html)
         @test occursin("function webLineWidth(w)", html)
@@ -3986,6 +4034,7 @@ end
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshPhongMaterial(emissive_intensity=2.4).emissive_intensity ≈ 2.4
+        @test MeshPhongMaterial(wireframe=true).wireframe === true
         @test MeshToonMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshToonMaterial(emissive_intensity=1.6).emissive_intensity ≈ 1.6
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
@@ -4041,6 +4090,7 @@ end
                                          Color3(0,0,0), 30.0, 1.0, false,
                                          :front, nothing, nothing, true, true)
         @test legacy_phong.vertex_colors == false
+        @test legacy_phong.wireframe == false
         @test isempty(legacy_phong.clipping_planes)
         @test legacy_phong.emissive_map === nothing
         @test legacy_phong.emissive_intensity == 1.0
@@ -4052,6 +4102,15 @@ end
         @test isempty(legacy_phong_alpha.clipping_planes)
         @test legacy_phong_alpha.emissive_map === nothing
         @test legacy_phong_alpha.emissive_intensity == 1.0
+        legacy_phong_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
+                                              Color3(0,0,0), 30.0, 1.0, false,
+                                              :front, nothing, nothing, alpha_tex, nothing,
+                                              true, 0.1, Plane{Float64}[],
+                                              2.0, true, true)
+        @test legacy_phong_full.wireframe == false
+        @test legacy_phong_full.emissive_map === alpha_tex
+        @test legacy_phong_full.vertex_colors == true
+        @test legacy_phong_full.emissive_intensity == 2.0
         legacy_lambert = MeshLambertMaterial(Color3(1,1,1), Color3(0,0,0),
                                              1.0, false, false, :front,
                                              nothing, nothing, nothing, false,
@@ -4067,6 +4126,7 @@ end
         @test material_depth_write(SpriteMaterial(depth_write=false)) == false
         @test material_wireframe(MeshBasicMaterial(wireframe=true)) == true
         @test material_wireframe(MeshLambertMaterial(wireframe=true)) == true
+        @test material_wireframe(MeshPhongMaterial(wireframe=true)) == true
         @test material_wireframe(MeshStandardMaterial()) == false
 
         rgba_alpha = ones(Float64, 2, 2, 4)
@@ -4338,6 +4398,13 @@ end
         base = Texture(data; filter=:nearest, wrap_s=:repeat, wrap_t=:repeat)
         @test base.min_filter === :nearest
         @test base.mag_filter === :nearest
+        @test Texture(copy(data); filter=:linear).filter === :bilinear
+        @test_throws ArgumentError Texture(copy(data); filter=:bad, min_filter=:linear, mag_filter=:linear)
+        @test_throws ArgumentError Texture(copy(data); mag_filter=:bad)
+        @test_throws ArgumentError Texture(copy(data); wrap_s=:bad)
+        invalid_wrap = Texture(copy(data); filter=:nearest)
+        invalid_wrap.wrap_t = :bad
+        @test_throws ArgumentError sample_texture(invalid_wrap, 0.5, 0.5)
         sampler_meta = Texture(copy(data); filter=:bilinear,
                                min_filter=:nearest_mipmap_linear,
                                mag_filter=:nearest)
@@ -6661,6 +6728,7 @@ end
         @testset "sample_texture_auto mipmap LOD" begin
             # 8x8 checker -> mipmap pyramid down to 1x1 (3 levels: 4x4,2x2,1x1).
             tex = checker_texture(; n=2, cell=4, filter=:bilinear)  # 8x8
+            tex.min_filter = :linear_mipmap_linear
             @test isempty(tex.mipmaps)
             # No mipmaps -> falls back to sample_texture exactly.
             fb = sample_texture_auto(tex, 0.3, 0.7, 0.5)
@@ -6682,6 +6750,42 @@ end
             # Intermediate footprint stays a convex blend within the channel range.
             mid = sample_texture_auto(tex, 0.3, 0.7, 0.25)
             @test 0.0 <= mid.r <= 1.0
+
+            # The minification filter controls both texel filtering and mip-level
+            # selection, matching WebGL/three.js sampler semantics.
+            data = zeros(Float64, 2, 2, 3)
+            data[1, 2, :] .= 1.0
+            data[2, 1, :] .= 1.0
+            nearest_prefix = Texture(copy(data); filter=:bilinear,
+                                     min_filter=:nearest_mipmap_linear)
+            linear_prefix = Texture(copy(data); filter=:nearest,
+                                    min_filter=:linear_mipmap_nearest)
+            @test sample_texture_auto(nearest_prefix, 0.5, 0.5, 1.0).r ≈ 0.0
+            @test sample_texture_auto(linear_prefix, 0.5, 0.5, 1.0).r ≈ 0.5
+            mag_linear = Texture(copy(data); filter=:nearest,
+                                 min_filter=:nearest, mag_filter=:linear)
+            mag_nearest = Texture(copy(data); filter=:bilinear,
+                                  min_filter=:linear, mag_filter=:nearest)
+            @test sample_texture_auto(mag_linear, 0.5, 0.5, 1e-6).r ≈ 0.5
+            @test sample_texture_auto(mag_nearest, 0.5, 0.5, 1e-6).r ≈ 0.0
+
+            base = fill(0.0, 4, 4, 3)
+            mip1 = fill(0.25, 2, 2, 3)
+            mip2 = fill(1.0, 1, 1, 3)
+            mip_levels = Array{Float64,3}[mip1, mip2]
+            lod15_footprint = sqrt(8.0) / 4.0
+            nearest_mip = Texture(copy(base); filter=:nearest,
+                                  min_filter=:linear_mipmap_nearest,
+                                  mipmaps=mip_levels)
+            linear_mip = Texture(copy(base); filter=:nearest,
+                                 min_filter=:linear_mipmap_linear,
+                                 mipmaps=mip_levels)
+            non_mip = Texture(copy(base); filter=:bilinear,
+                              min_filter=:linear,
+                              mipmaps=mip_levels)
+            @test sample_texture_auto(nearest_mip, 0.5, 0.5, lod15_footprint).r ≈ 1.0
+            @test sample_texture_auto(linear_mip, 0.5, 0.5, lod15_footprint).r ≈ 0.625
+            @test sample_texture_auto(non_mip, 0.5, 0.5, lod15_footprint).r ≈ 0.0
         end
 
         # [GEO:geometry-groups] BufferGeometry draw groups (multi-material per geometry)
@@ -9109,6 +9213,15 @@ end
             @test wf_rt.color[32, 32, 1] ≈ 0.0 atol=1e-12
             @test wf_rt.color[32, 32, 3] ≈ 1.0 atol=1e-12
             @test maximum(@view wf_rt.color[:, :, 1]) > 0.9
+            phong_wf_scene = Scene(background=Color3(0.0, 0.0, 1.0))
+            add!(phong_wf_scene, Mesh(wf_geo,
+                                      MeshPhongMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                        wireframe=true, side=:double)))
+            phong_wf_rt = RenderTarget(64, 64)
+            render!(phong_wf_rt, phong_wf_scene, depth_cam)
+            @test phong_wf_rt.color[32, 32, 1] ≈ 0.0 atol=1e-12
+            @test phong_wf_rt.color[32, 32, 3] ≈ 1.0 atol=1e-12
+            @test maximum(@view phong_wf_rt.color[:, :, 1]) > 0.9
 
             # Fix 6: CPU mesh rasterization honors texture alpha and alpha_map
             # for alpha_test discard in both flat and smooth paths.

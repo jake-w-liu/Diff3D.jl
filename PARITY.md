@@ -582,6 +582,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add compact browser `MeshLambertMaterial` and `MeshPhongMaterial`
   support with material-mode branches plus Phong `specular`/`shininess`
   serialization.
+- Done: add `MeshPhongMaterial.wireframe` parity through the same CPU and
+  compact browser wireframe paths as Basic/Lambert materials, while preserving
+  legacy constructor defaults.
 - Done: add browser export for environment maps where matching Julia material
   fields already exist. The compact browser runtime serializes the six
   `CubeTexture` faces, samples them through a WebGL `samplerCube` when
@@ -612,8 +615,10 @@ Parallel audits split the remaining work into five critical tracks:
   flat CPU shading, smooth CPU rasterization, and compact browser WebGL export.
 - Done: preserve glTF sampler `minFilter`/`magFilter` metadata on loaded
   textures, generate CPU mipmaps when glTF minification filters request them,
-  and serialize those sampler choices into the compact browser texture setup
-  with WebGL mipmap generation for power-of-two textures.
+  honor magnification filtering plus nearest/linear minified texel filtering
+  and nearest/linear mip-level selection in CPU automatic mipmap sampling, and
+  serialize those sampler choices into the compact browser texture setup with
+  WebGL mipmap generation for power-of-two textures.
 - Done: parse glTF `KHR_texture_transform` offset, scale, rotation, and
   extension-level `texCoord` overrides into `Texture` transform metadata so
   loaded material maps share the same CPU sampling and per-sampler compact
@@ -955,6 +960,12 @@ Parallel audits split the remaining work into five critical tracks:
   point sprites plus billboard `Sprite` proxies with sampled material maps and
   sprite center/rotation/size-attenuation support. Compact browser billboarding
   and `WebGLRenderer` internals remain documented deviations in the registry.
+- Added a standalone partial port for `webgl_points_billboards` via
+  `examples/webgl_points_billboards.jl`, using deterministic
+  `BufferGeometry` point data, a generated disc `Texture`, `PointsMaterial`
+  map/alpha-test/size-attenuation fields, `FogExp2`, and keyframed group
+  rotation. Upstream randomized data, sprite asset, pointer-following camera,
+  and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_instancing_dynamic` via
   `examples/webgl_instancing_dynamic.jl`, using Diff3D.jl `InstancedMesh`,
   generated instance matrices, shadows, fog, tone mapping, and quaternion/scale

@@ -25,10 +25,24 @@ mutable struct Texture
     needs_update::Bool                 # browser runtime re-upload marker
 end
 
+function _texture_wrap_symbol(v)::Symbol
+    s = Symbol(v)
+    s in (:repeat, :clamp, :mirror) && return s
+    throw(ArgumentError("unsupported texture wrap mode: $s"))
+end
+
+function _texture_filter_symbol(v)::Symbol
+    s = Symbol(v)
+    s === :nearest && return :nearest
+    (s === :linear || s === :bilinear) && return :bilinear
+    throw(ArgumentError("unsupported texture filter: $s"))
+end
+
 function _texture_mag_filter_symbol(v)::Symbol
     s = Symbol(v)
     s === :nearest && return :nearest
-    return :linear
+    (s === :linear || s === :bilinear) && return :linear
+    throw(ArgumentError("unsupported texture mag_filter: $s"))
 end
 
 function _texture_min_filter_symbol(v)::Symbol
@@ -55,11 +69,13 @@ function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=
                  matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0,
                  max_anisotropy=1.0, needs_update::Bool=false)
     tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
-    minf = min_filter === nothing ? _texture_min_filter_symbol(filter) :
+    base_filter = _texture_filter_symbol(filter)
+    minf = min_filter === nothing ? _texture_min_filter_symbol(base_filter) :
            _texture_min_filter_symbol(min_filter)
-    magf = mag_filter === nothing ? _texture_mag_filter_symbol(filter) :
+    magf = mag_filter === nothing ? _texture_mag_filter_symbol(base_filter) :
            _texture_mag_filter_symbol(mag_filter)
-    tex = Texture(data, wrap_s, wrap_t, filter, minf, magf, mipmaps, colorspace,
+    tex = Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
+                  base_filter, minf, magf, mipmaps, colorspace,
                   Vec2(Float64(offset.x), Float64(offset.y)),
                   Vec2(Float64(repeat.x), Float64(repeat.y)),
                   Float64(rotation),
@@ -76,7 +92,10 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
                  center::Vec2{Float64}, matrix::Mat3{Float64},
                  matrix_auto_update::Bool, tex_coord::Integer)
-    Texture(data, wrap_s, wrap_t, filter, min_filter, mag_filter, mipmaps, colorspace,
+    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
+    Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
+            _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
+            _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
             Int(tex_coord), 1.0, false)
 end
@@ -86,7 +105,10 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
                  center::Vec2{Float64}, matrix::Mat3{Float64},
                  matrix_auto_update::Bool, tex_coord::Integer, max_anisotropy)
-    Texture(data, wrap_s, wrap_t, filter, min_filter, mag_filter, mipmaps, colorspace,
+    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
+    Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
+            _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
+            _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
             Int(tex_coord), _texture_max_anisotropy(max_anisotropy), false)
 end
@@ -103,9 +125,11 @@ DepthTexture(depth::Matrix{Float64}; kwargs...) =
         return mod(i, n)
     elseif mode === :clamp
         return clamp(i, 0, n - 1)
-    else # :mirror — triangle reflection with period 2n
+    elseif mode === :mirror
         p = mod(i, 2n)
         return p < n ? p : (2n - 1 - p)
+    else
+        throw(ArgumentError("unsupported texture wrap mode: $mode"))
     end
 end
 
@@ -249,12 +273,47 @@ function sample_texture_lod(tex::Texture, u, v, lod::Int)
     return sample_texture(tmp, u, v)
 end
 
+@inline _texture_min_filter_uses_mipmaps(filter::Symbol) =
+    filter in (:nearest_mipmap_nearest, :nearest_mipmap_linear,
+               :linear_mipmap_nearest, :linear_mipmap_linear)
+@inline _texture_min_filter_blends_mipmaps(filter::Symbol) =
+    filter in (:nearest_mipmap_linear, :linear_mipmap_linear)
+@inline _texture_min_filter_texel_filter(filter::Symbol) =
+    filter in (:nearest, :nearest_mipmap_nearest, :nearest_mipmap_linear) ? :nearest : :bilinear
+@inline _texture_mag_filter_texel_filter(filter::Symbol) =
+    filter === :nearest ? :nearest : :bilinear
+
+function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol)
+    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter)
+    isempty(tex.mipmaps) && return _sample_texture_filtered(tex, u, v, filter)
+    lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
+    tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=filter,
+                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
+                  colorspace=tex.colorspace, offset=tex.offset, repeat=tex.repeat,
+                  rotation=tex.rotation, center=tex.center, matrix=tex.matrix,
+                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord,
+                  max_anisotropy=tex.max_anisotropy)
+    return sample_texture(tmp, u, v)
+end
+
+function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol)
+    tmp = Texture(tex.data; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=filter,
+                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
+                  mipmaps=tex.mipmaps, colorspace=tex.colorspace,
+                  offset=tex.offset, repeat=tex.repeat, rotation=tex.rotation,
+                  center=tex.center, matrix=tex.matrix,
+                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord,
+                  max_anisotropy=tex.max_anisotropy)
+    return sample_texture(tmp, u, v)
+end
+
 """
     sample_texture_auto(tex, u, v, duv) -> Color3
 
-Sample with automatic level-of-detail selection from the per-pixel UV
-footprint `duv` (the maximum texel span covered by one screen pixel, as a
-fraction of the [0,1] UV range). The continuous LOD is
+Sample with automatic magnification/minification selection from the per-pixel
+UV footprint `duv` (the maximum texel span covered by one screen pixel, as a
+fraction of the [0,1] UV range). Magnifying footprints use `mag_filter`.
+Minifying footprints use the continuous LOD
 
     lod = clamp(log2(max(duv * size, 1)), 0, length(mipmaps))
 
@@ -262,28 +321,42 @@ with `size = max(W, H)` the base texel dimension, mirroring the GPU mipmap
 selection used by three.js. The two bracketing integer levels are sampled
 with `sample_texture_lod` and trilinearly blended by the fractional part of
 `lod`. When the texture has no mipmaps the call falls back to
-`sample_texture`. The integer level choice is a discrete decision, but the
-blend weight is carried through unchanged so the result stays smooth for
-`ForwardDiff.Dual`/`ADVar` `duv`.
+the base level using the texture's minification filter. The four mipmap
+minification filters are honored: nearest/linear texel filtering is selected
+from the filter prefix, and nearest/linear mip-level selection is selected from
+the filter suffix. The integer level choice is a discrete decision, but the
+linear mip blend weight is carried through unchanged so the result stays smooth
+for `ForwardDiff.Dual`/`ADVar` `duv`.
 """
 function sample_texture_auto(tex::Texture, u, v, duv)
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
     H, W, _ = size(tex.data)
     sz = max(W, H)
+    span_raw = abs(duv) * sz
+    if Float64(span_raw) <= 1.0
+        return _sample_texture_filtered(tex, u, v,
+                                        _texture_mag_filter_texel_filter(tex.mag_filter))
+    end
+    filter = _texture_min_filter_texel_filter(tex.min_filter)
+    (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(tex.min_filter)) &&
+        return _sample_texture_filtered(tex, u, v, filter)
     nlevels = length(tex.mipmaps)
     # Continuous LOD; clamp to [0, nlevels]. Keep AD type for the blend weight.
     # Use log(x)/log(2) rather than log2 so the reverse-mode `ADVar` path (which
     # defines `log` but not `log2`) keeps its derivative instead of falling back
     # to a value-only `float` conversion.
-    span = max(duv * sz, one(duv))
+    span = max(span_raw, one(span_raw))
     lod = clamp(log(span) / log(oftype(float(span), 2)), zero(duv), oftype(float(duv), nlevels))
     lod_f = Float64(lod)                       # discrete-selection scalar
+    if !_texture_min_filter_blends_mipmaps(tex.min_filter)
+        nearest_level = clamp(floor(Int, lod_f + 0.5), 0, nlevels)
+        return _sample_texture_lod_filtered(tex, u, v, nearest_level, filter)
+    end
     l0 = floor(Int, lod_f)
     frac = lod - l0                            # fractional blend weight (AD-stable)
     l1 = min(l0 + 1, nlevels)
-    c0 = sample_texture_lod(tex, u, v, l0)
+    c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
     frac <= 0 && return c0                      # exactly on a level
-    c1 = sample_texture_lod(tex, u, v, l1)
+    c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter)
     return c0 * (1 - frac) + c1 * frac
 end
 
