@@ -1529,14 +1529,30 @@ function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
     return light
 end
 
-function _gltf_joint_node_set(gltf)
-    out = Set{Int}()
+function _gltf_checked_node_index(raw, node_count::Int, label::String)
+    idx = Int(raw)
+    0 <= idx < node_count || error("glTF $label node index $idx out of bounds")
+    return idx
+end
+
+function _gltf_skin_node_sets(gltf)
+    joint_nodes = Set{Int}()
+    skin_root_nodes = Set{Int}()
+    node_count = length(get(gltf, "nodes", Any[]))
     for skin in get(gltf, "skins", Any[])
+        skin_joints = Set{Int}()
         for j in get(skin, "joints", Any[])
-            push!(out, Int(j))
+            idx = _gltf_checked_node_index(j, node_count, "skin joint")
+            idx in skin_joints && error("glTF skin joints must be unique")
+            push!(skin_joints, idx)
+            push!(joint_nodes, idx)
+        end
+        if haskey(skin, "skeleton")
+            push!(skin_root_nodes,
+                  _gltf_checked_node_index(skin["skeleton"], node_count, "skin.skeleton"))
         end
     end
-    return out
+    return joint_nodes, skin_root_nodes
 end
 
 function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int; indices::Bool=false)
@@ -1573,7 +1589,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     _gltf_check_required_extensions(gltf)
     scene = Scene()
     node_objects = Dict{Int, AbstractObject3D}()
-    joint_nodes = _gltf_joint_node_set(gltf)
+    joint_nodes, skin_root_nodes = _gltf_skin_node_sets(gltf)
     pending_skin_binds = SkinnedMesh[]
     pending_inverse_calcs = SkinnedMesh[]
 
@@ -1699,7 +1715,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         create_node_object!(node_idx)
     end
 
+    scene_linked_nodes = Set{Int}()
+
     function add_node!(parent, node_idx)
+        push!(scene_linked_nodes, node_idx)
         node = gltf["nodes"][node_idx + 1]
         obj = node_objects[node_idx]
         add!(parent, obj)
@@ -1742,9 +1761,23 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
     end
 
+    function link_node_hierarchy!(node_idx)
+        node = gltf["nodes"][node_idx + 1]
+        obj = node_objects[node_idx]
+        for child in get(node, "children", Any[])
+            child_idx = Int(child)
+            child_obj = node_objects[child_idx]
+            add!(obj, child_obj)
+            link_node_hierarchy!(child_idx)
+        end
+    end
+
     scene_def = gltf["scenes"][Int(get(gltf, "scene", 0.0)) + 1]
     for n in scene_def["nodes"]
         add_node!(scene, Int(n))
+    end
+    for root_idx in skin_root_nodes
+        root_idx in scene_linked_nodes || link_node_hierarchy!(root_idx)
     end
     for sm in pending_inverse_calcs
         calculate_inverses!(sm.skeleton)

@@ -7845,6 +7845,82 @@ end
             @test apply_skinning(sm)[2].x ≈ 2.0
         end
 
+        @testset "load_gltf_asset skin.skeleton root outside scene" begin
+            dir = mktempdir()
+            bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            append_u16!(xs) = append!(bin, reinterpret(UInt8, UInt16.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_joints = length(bin); append_u16!([0,0,0,0, 0,0,0,0, 0,0,0,0])
+            off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+            off_inv = length(bin); append_f32!([1,0,0,0, 0,1,0,0, 0,0,1,0, -5,0,0,1])
+            write(joinpath(dir, "skin_skeleton_root.bin"), bin)
+            json = """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"name":"skinned","translation":[10,0,0],"mesh":0,"skin":0},
+                      {"name":"skeleton_root","translation":[2,0,0],"children":[2]},
+                      {"name":"joint","translation":[3,0,0]}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"skin_skeleton_root.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_joints,"byteLength":24},
+               {"buffer":0,"byteOffset":$off_weights,"byteLength":48},
+               {"buffer":0,"byteOffset":$off_inv,"byteLength":64}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},
+               {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
+               {"bufferView":3,"componentType":5126,"count":1,"type":"MAT4"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+             "skins":[{"skeleton":1,"joints":[2]}]}
+            """
+            path = joinpath(dir, "skin_skeleton_root.gltf")
+            write(path, json)
+            asset = load_gltf_asset(path)
+            @test length(get_children(asset.scene)) == 1
+            scene_root = get_children(asset.scene)[1]
+            sm = get_children(scene_root)[1]
+            @test sm isa SkinnedMesh
+            joint = sm.skeleton.bones[1]
+            skeleton_root = get_parent(joint)
+            @test skeleton_root !== nothing
+            @test skeleton_root.name == "skeleton_root"
+            @test get_parent(skeleton_root) === nothing
+            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 0.0
+            @test apply_skinning(sm)[2].x ≈ 1.0
+            skeleton_root.position = Vec3(4.0, 0.0, 0.0)
+            @test apply_skinning(sm)[2].x ≈ 3.0
+
+            explicit_path = joinpath(dir, "skin_skeleton_root_explicit.gltf")
+            write(explicit_path,
+                  replace(json,
+                          "\"skins\":[{\"skeleton\":1,\"joints\":[2]}]" =>
+                          "\"skins\":[{\"skeleton\":1,\"joints\":[2],\"inverseBindMatrices\":3}]"))
+            explicit_asset = load_gltf_asset(explicit_path)
+            explicit_sm = get_children(get_children(explicit_asset.scene)[1])[1]
+            explicit_joint = explicit_sm.skeleton.bones[1]
+            explicit_root = get_parent(explicit_joint)
+            @test explicit_root !== nothing
+            @test explicit_sm.skeleton.bones == [explicit_joint]
+            @test apply_skinning(explicit_sm)[2].x ≈ 1.0
+            explicit_root.position = Vec3(4.0, 0.0, 0.0)
+            @test apply_skinning(explicit_sm)[2].x ≈ 3.0
+
+            invalid = joinpath(dir, "bad_skin_skeleton_root.gltf")
+            write(invalid, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "nodes":[{}],"skins":[{"skeleton":2,"joints":[0]}]}
+            """)
+            try
+                load_gltf_asset(invalid)
+                @test false
+            catch err
+                @test err isa ErrorException
+                @test occursin("glTF skin.skeleton node index 2 out of bounds",
+                               sprint(showerror, err))
+            end
+        end
+
         @testset "load_gltf_asset morph targets" begin
             dir = mktempdir()
             bin = UInt8[]

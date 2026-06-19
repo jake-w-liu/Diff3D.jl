@@ -372,8 +372,10 @@ Parallel audits split the remaining work into five critical tracks:
   browser float bone-texture skinning, and browser CPU fallback now apply
   `bindMatrixInverse * boneMatrix * bindMatrix`, and glTF skins without
   `inverseBindMatrices` calculate inverse binds after the node hierarchy is
-  fully parented. Remaining skinning gaps are full three.js skeleton pose/update
-  lifecycle and `skin.skeleton` root semantics.
+  fully parented. glTF `skin.skeleton` roots that are not otherwise scene
+  reachable now have their root hierarchies linked before inverse-bind
+  calculation and binding, without changing `skin.joints` bone order.
+  Remaining skinning gaps are full three.js skeleton pose/update lifecycle.
 - Done: route visible `SkinnedMesh` objects through CPU flat, smooth,
   transparent, wireframe, cached, tiled, and shadow-depth rendering by building
   deformed render proxies from the current skeleton pose. CPU render proxies
