@@ -4691,6 +4691,47 @@ end
         orbit_zoom!(constrained, 0.01)
         sph = Diff3D.cartesian_to_spherical(constrained.camera.position - constrained.target)
         @test sph.radius ≈ 2.0 atol=1e-9
+
+        disabled_cam = PerspectiveCamera()
+        disabled_cam.position = Vec3(0.0, 0.0, 5.0)
+        disabled = OrbitControls(disabled_cam; enabled=false, enable_damping=true)
+        disabled_pos = disabled.camera.position
+        disabled_target = disabled.target
+        orbit_rotate!(disabled, 0.7, 0.2)
+        orbit_zoom!(disabled, 0.25)
+        orbit_pan!(disabled, 1.0, -0.5)
+        @test disabled.camera.position == disabled_pos
+        @test disabled.target == disabled_target
+        @test disabled.v_azimuth == 0.0
+        @test disabled.v_polar == 0.0
+        @test disabled.v_zoom == 0.0
+        @test disabled.v_pan == Vec3(0.0, 0.0, 0.0)
+        disabled.v_azimuth = 0.3
+        disabled.v_polar = 0.4
+        disabled.v_zoom = log(0.8)
+        disabled.v_pan = Vec3(0.5, 0.0, 0.0)
+        orbit_update!(disabled)
+        @test disabled.camera.position == disabled_pos
+        @test disabled.target == disabled_target
+        @test disabled.v_azimuth == 0.3
+        @test disabled.v_polar == 0.4
+        @test disabled.v_zoom == log(0.8)
+        @test disabled.v_pan == Vec3(0.5, 0.0, 0.0)
+
+        no_rotate = OrbitControls(PerspectiveCamera(); enable_rotate=false)
+        no_rotate_pos = no_rotate.camera.position
+        orbit_rotate!(no_rotate, 0.5, 0.0)
+        @test no_rotate.camera.position == no_rotate_pos
+        no_zoom = OrbitControls(PerspectiveCamera(); enable_zoom=false)
+        no_zoom_radius = norm(no_zoom.camera.position - no_zoom.target)
+        orbit_zoom!(no_zoom, 0.5)
+        @test norm(no_zoom.camera.position - no_zoom.target) == no_zoom_radius
+        no_pan = OrbitControls(PerspectiveCamera(); enable_pan=false)
+        no_pan_pos = no_pan.camera.position
+        no_pan_target = no_pan.target
+        orbit_pan!(no_pan, 1.0, 0.0)
+        @test no_pan.camera.position == no_pan_pos
+        @test no_pan.target == no_pan_target
     end
 
     @testset "FlyControls" begin
@@ -6345,10 +6386,25 @@ end
             cam0 = PerspectiveCamera()
             oc0 = OrbitControls(cam0)
             @test !oc0.enable_damping
+            @test oc0.enabled
+            @test oc0.enable_rotate
+            @test oc0.enable_zoom
+            @test oc0.enable_pan
             p_before = oc0.camera.position
             orbit_rotate!(oc0, 0.3, 0.0)
             @test oc0.camera.position.x != p_before.x   # moved right away
             @test orbit_update!(oc0) === oc0            # no-op when damping off
+            legacy_oc = OrbitControls(cam0, oc0.target, oc0.enable_damping,
+                                      oc0.damping_factor, oc0.min_distance,
+                                      oc0.max_distance, oc0.min_polar_angle,
+                                      oc0.max_polar_angle, oc0.min_azimuth_angle,
+                                      oc0.max_azimuth_angle, oc0.v_azimuth,
+                                      oc0.v_polar, oc0.v_zoom, oc0.v_pan,
+                                      oc0.position0, oc0.target0)
+            @test legacy_oc.enabled
+            @test legacy_oc.enable_rotate
+            @test legacy_oc.enable_zoom
+            @test legacy_oc.enable_pan
 
             # Damped path: rotation is queued, not applied until orbit_update!.
             cam = PerspectiveCamera()

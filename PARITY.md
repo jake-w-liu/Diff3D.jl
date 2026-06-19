@@ -828,8 +828,9 @@ Parallel audits split the remaining work into five critical tracks:
 
 ### Milestone 4: Controls and events
 
-- Done: expand programmatic `OrbitControls` behavior with damping/inertia,
-  pole-safe pan, zoom, and min/max distance, polar-angle, and azimuth-angle constraints.
+- Done: expand programmatic `OrbitControls` behavior with enabled/no-op gates,
+  per-action rotate/zoom/pan gates, damping/inertia, pole-safe pan, zoom, and
+  min/max distance, polar-angle, and azimuth-angle constraints.
   Browser exporter controls now support orbit, wheel zoom, middle-button drag
   dolly, and right-drag, shift-drag, ctrl-drag, or meta-drag target panning,
   plus two-pointer touch-style pinch zoom and target pan in the generated

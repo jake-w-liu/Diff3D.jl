@@ -9,6 +9,10 @@
 mutable struct OrbitControls
     camera::PerspectiveCamera
     target::Vec3{Float64}
+    enabled::Bool
+    enable_rotate::Bool
+    enable_zoom::Bool
+    enable_pan::Bool
     # Damping/inertia (three.js OrbitControls.enableDamping). When enabled, each
     # interaction adds to a residual velocity that `orbit_update!` applies and
     # decays. Backward-compatible: defaults reproduce the original immediate
@@ -33,6 +37,8 @@ end
 # Positional/keyword constructors. The two original positional forms still work;
 # damping and constraint fields are keyword-only with three.js-matching defaults.
 function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
+                       enabled::Bool=true, enable_rotate::Bool=true,
+                       enable_zoom::Bool=true, enable_pan::Bool=true,
                        enable_damping::Bool=false, damping_factor::Real=0.05,
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
@@ -43,12 +49,30 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
         throw(ArgumentError("min_polar_angle must be <= max_polar_angle"))
     min_azimuth_angle <= max_azimuth_angle ||
         throw(ArgumentError("min_azimuth_angle must be <= max_azimuth_angle"))
-    OrbitControls(cam, target, enable_damping, Float64(damping_factor),
+    OrbitControls(cam, target, enabled, enable_rotate, enable_zoom, enable_pan,
+                  enable_damping, Float64(damping_factor),
                   Float64(min_distance), Float64(max_distance),
                   Float64(min_polar_angle), Float64(max_polar_angle),
                   Float64(min_azimuth_angle), Float64(max_azimuth_angle),
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position, target)
 end
+
+function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
+                       enable_damping::Bool, damping_factor::Real,
+                       min_distance::Real, max_distance::Real,
+                       min_polar_angle::Real, max_polar_angle::Real,
+                       min_azimuth_angle::Real, max_azimuth_angle::Real,
+                       v_azimuth::Real, v_polar::Real, v_zoom::Real,
+                       v_pan::Vec3{Float64}, position0::Vec3{Float64},
+                       target0::Vec3{Float64})
+    OrbitControls(camera, target, true, true, true, true, enable_damping,
+                  Float64(damping_factor), Float64(min_distance),
+                  Float64(max_distance), Float64(min_polar_angle),
+                  Float64(max_polar_angle), Float64(min_azimuth_angle),
+                  Float64(max_azimuth_angle), Float64(v_azimuth),
+                  Float64(v_polar), Float64(v_zoom), v_pan, position0, target0)
+end
+
 OrbitControls(cam::PerspectiveCamera; kwargs...) =
     OrbitControls(cam, cam.target; kwargs...)
 
@@ -129,6 +153,7 @@ as before. With damping enabled the deltas are added to the residual angular
 velocity instead, to be consumed by `orbit_update!`.
 """
 function orbit_rotate!(oc::OrbitControls, d_azimuth, d_polar)
+    (oc.enabled && oc.enable_rotate) || return oc
     if oc.enable_damping
         oc.v_azimuth += d_azimuth
         oc.v_polar += d_polar
@@ -144,6 +169,7 @@ With damping enabled the dolly accumulates as a residual log-scale velocity
 consumed by `orbit_update!`; non-damped behaviour is unchanged.
 """
 function orbit_zoom!(oc::OrbitControls, factor)
+    (oc.enabled && oc.enable_zoom) || return oc
     if oc.enable_damping
         oc.v_zoom += log(factor)
         return oc
@@ -158,6 +184,7 @@ With damping enabled the pan offset accumulates as a residual world-space
 velocity consumed by `orbit_update!`; non-damped behaviour is unchanged.
 """
 function orbit_pan!(oc::OrbitControls, dx, dy)
+    (oc.enabled && oc.enable_pan) || return oc
     if oc.enable_damping
         right, up = _orbit_pan_basis(oc)
         oc.v_pan = oc.v_pan + right * dx + up * dy
@@ -177,6 +204,7 @@ the total converges to the queued deltas (three.js `OrbitControls.update`).
 Velocity components below a small threshold are zeroed to avoid endless drift.
 """
 function orbit_update!(oc::OrbitControls)
+    oc.enabled || return oc
     oc.enable_damping || return oc
     decay = 1.0 - oc.damping_factor
     # Apply `damping_factor` of the residual velocities for this frame, so the
