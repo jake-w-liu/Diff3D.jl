@@ -301,10 +301,93 @@ function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
     return img
 end
 
+@inline function _png_packed_index(cur::Vector{UInt8}, pcol::Int, bitdepth::Int)
+    if bitdepth == 8
+        return Int(cur[pcol + 1])
+    elseif bitdepth == 4
+        byte = cur[(pcol ÷ 2) + 1]
+        return iseven(pcol) ? Int(byte >> 4) : Int(byte & 0x0f)
+    elseif bitdepth == 2
+        byte = cur[(pcol ÷ 4) + 1]
+        shift = 6 - 2 * (pcol % 4)
+        return Int((byte >> shift) & 0x03)
+    else # bitdepth == 1
+        byte = cur[(pcol ÷ 8) + 1]
+        shift = 7 - (pcol % 8)
+        return Int((byte >> shift) & 0x01)
+    end
+end
+
+function _png_store_palette_pixel!(img::Array{Float64,3}, row::Int, col::Int,
+                                   idx::Int, palette::Vector{UInt8},
+                                   trns::Vector{UInt8}, channels::Int)
+    entry = 3idx + 1
+    entry + 2 <= length(palette) || error("PNG palette index $idx is out of range")
+    img[row, col, 1] = palette[entry] / 255
+    img[row, col, 2] = palette[entry + 1] / 255
+    img[row, col, 3] = palette[entry + 2] / 255
+    if channels == 4
+        alpha = idx + 1 <= length(trns) ? trns[idx + 1] : UInt8(255)
+        img[row, col, 4] = alpha / 255
+    end
+    return img
+end
+
+function _png_decode_palette_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
+                                            W::Int, H::Int, bitdepth::Int,
+                                            palette::Vector{UInt8},
+                                            trns::Vector{UInt8}, channels::Int)
+    stride = cld(W * bitdepth, 8)
+    prev = zeros(UInt8, stride)
+    p = 1
+    for row in 1:H
+        p <= length(raw) || error("PNG image data is truncated")
+        ftype = raw[p]; p += 1
+        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
+        cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+        _png_unfilter_scanline!(cur, prev, 1, ftype)
+        for pcol in 0:(W - 1)
+            idx = _png_packed_index(cur, pcol, bitdepth)
+            _png_store_palette_pixel!(img, row, pcol + 1, idx, palette, trns, channels)
+        end
+        prev = cur
+    end
+    return img
+end
+
+function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
+                                    W::Int, H::Int, bitdepth::Int,
+                                    palette::Vector{UInt8},
+                                    trns::Vector{UInt8}, channels::Int)
+    p = 1
+    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
+        pass_w = _png_pass_size(W, x0, xstep)
+        pass_h = _png_pass_size(H, y0, ystep)
+        (pass_w == 0 || pass_h == 0) && continue
+        stride = cld(pass_w * bitdepth, 8)
+        prev = zeros(UInt8, stride)
+        for prow in 0:(pass_h - 1)
+            p <= length(raw) || error("PNG image data is truncated")
+            ftype = raw[p]; p += 1
+            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
+            cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+            _png_unfilter_scanline!(cur, prev, 1, ftype)
+            row = y0 + prow * ystep + 1
+            for pcol in 0:(pass_w - 1)
+                col = x0 + pcol * xstep + 1
+                idx = _png_packed_index(cur, pcol, bitdepth)
+                _png_store_palette_pixel!(img, row, col, idx, palette, trns, channels)
+            end
+            prev = cur
+        end
+    end
+    return img
+end
+
 """
     load_png(path) -> Array{Float64,3}
 
-Decode an 8-bit or 16-bit PNG (grayscale, grayscale+alpha, RGB, or RGBA) to an H×W×C array in [0,1].
+Decode an 8-bit or 16-bit PNG (grayscale, grayscale+alpha, RGB, RGBA, or palette) to an H×W×C array in [0,1].
 Implements full INFLATE (stored/fixed/dynamic Huffman), all five PNG filters,
 and Adam7 interlacing for supported 8-bit and 16-bit color types.
 """
@@ -312,6 +395,8 @@ function _decode_png(bytes::Vector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
     idat = UInt8[]
+    palette = UInt8[]
+    trns = UInt8[]
     while pos <= length(bytes)
         len = _rd_be32(bytes, pos); pos += 4
         ctype = String(bytes[pos:pos+3]); pos += 4
@@ -321,13 +406,33 @@ function _decode_png(bytes::Vector{UInt8})
             interlace = bytes[pos+12]
         elseif ctype == "IDAT"
             append!(idat, @view bytes[pos:pos+len-1])
+        elseif ctype == "PLTE"
+            palette = collect(@view bytes[pos:pos+len-1])
+        elseif ctype == "tRNS"
+            trns = collect(@view bytes[pos:pos+len-1])
         elseif ctype == "IEND"
             break
         end
         pos += len + 4                          # data + CRC
     end
-    (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
     (interlace == 0 || interlace == 1) || error("unsupported PNG interlace method $interlace")
+    if colortype == 3
+        bitdepth in (1, 2, 4, 8) || error("unsupported PNG palette bit depth $bitdepth")
+        (!isempty(palette) && length(palette) % 3 == 0 && length(palette) <= 768) ||
+            error("PNG palette is missing or malformed")
+        length(trns) <= length(palette) ÷ 3 ||
+            error("PNG tRNS palette alpha data is longer than the palette")
+        palette_bitdepth = Int(bitdepth)
+        channels = isempty(trns) ? 3 : 4
+        raw = zlib_inflate(idat)
+        img = Array{Float64}(undef, H, W, channels)
+        return interlace == 0 ?
+               _png_decode_palette_noninterlaced!(img, raw, W, H, palette_bitdepth,
+                                                   palette, trns, channels) :
+               _png_decode_palette_adam7!(img, raw, W, H, palette_bitdepth,
+                                          palette, trns, channels)
+    end
+    (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
     channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 4 ? 2 :
                colortype == 6 ? 4 :
                error("unsupported PNG color type $colortype")

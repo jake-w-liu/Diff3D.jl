@@ -137,6 +137,71 @@ function test_adam7_png_bytes(img::Array{T,3}) where {T<:Unsigned}
     return take!(io)
 end
 
+function test_pack_png_indices(indices::Vector{UInt8}, bitdepth::Int)
+    bitdepth in (1, 2, 4, 8) || error("test palette PNG bit depth must be 1, 2, 4, or 8")
+    max_index = UInt8((UInt16(1) << bitdepth) - 1)
+    out = zeros(UInt8, cld(length(indices) * bitdepth, 8))
+    for (i, idx) in enumerate(indices)
+        idx <= max_index || error("palette index exceeds bit depth")
+        pcol = i - 1
+        if bitdepth == 8
+            out[i] = idx
+        else
+            bitpos = pcol * bitdepth
+            byte_i = (bitpos ÷ 8) + 1
+            shift = 8 - bitdepth - (bitpos % 8)
+            out[byte_i] |= UInt8(idx << shift)
+        end
+    end
+    return out
+end
+
+function test_palette_png_bytes(indices::Matrix{UInt8}; bitdepth::Int=8,
+                                palette::Vector{UInt8}, trns::Vector{UInt8}=UInt8[],
+                                interlace::Bool=false)
+    H, W = size(indices)
+    raw = UInt8[]
+    if interlace
+        for (pass_index, (x0, y0, xstep, ystep)) in enumerate(TEST_ADAM7_PASSES)
+            pass_w = test_pass_size(W, x0, xstep)
+            pass_h = test_pass_size(H, y0, ystep)
+            (pass_w == 0 || pass_h == 0) && continue
+            prev = zeros(UInt8, cld(pass_w * bitdepth, 8))
+            for prow in 0:(pass_h - 1)
+                row = y0 + prow * ystep + 1
+                scanline = test_pack_png_indices(
+                    UInt8[indices[row, x0 + pcol * xstep + 1] for pcol in 0:(pass_w - 1)],
+                    bitdepth)
+                ftype = UInt8((pass_index + prow - 1) % 5)
+                push!(raw, ftype)
+                append!(raw, test_png_filter(scanline, prev, 1, ftype))
+                prev = scanline
+            end
+        end
+    else
+        prev = zeros(UInt8, cld(W * bitdepth, 8))
+        for row in 1:H
+            scanline = test_pack_png_indices(vec(indices[row, :]), bitdepth)
+            ftype = UInt8((row - 1) % 5)
+            push!(raw, ftype)
+            append!(raw, test_png_filter(scanline, prev, 1, ftype))
+            prev = scanline
+        end
+    end
+    io = IOBuffer()
+    write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+    ihdr = UInt8[]
+    append!(ihdr, test_be32(W))
+    append!(ihdr, test_be32(H))
+    append!(ihdr, UInt8[bitdepth, 0x03, 0x00, 0x00, interlace ? 0x01 : 0x00])
+    Diff3D._png_chunk(io, "IHDR", ihdr)
+    Diff3D._png_chunk(io, "PLTE", palette)
+    isempty(trns) || Diff3D._png_chunk(io, "tRNS", trns)
+    Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(raw))
+    Diff3D._png_chunk(io, "IEND", UInt8[])
+    return take!(io)
+end
+
 @testset "Diff3D.jl" begin
 
     @testset "Official examples parity registry" begin
@@ -4375,6 +4440,63 @@ end
         gadec16 = load_png(gaf16); rm(gaf16)
         @test size(gadec16) == (3, 4, 2)
         @test maximum(abs.(gadec16 .- Float64.(gray_alpha16) ./ 65535)) <= 1e-12
+
+        palette = UInt8[
+            255, 0, 0,
+            0, 255, 0,
+            0, 0, 255,
+            255, 255, 255,
+        ]
+        pal_indices = UInt8[
+            0 1 2 3 0;
+            1 2 3 0 1;
+            2 3 0 1 2;
+        ]
+        pf = tempname() * ".png"
+        write(pf, test_palette_png_bytes(pal_indices; bitdepth=2, palette=palette))
+        pdec = load_png(pf)
+        @test size(pdec) == (3, 5, 3)
+        @test pdec[1, 1, :] == [1.0, 0.0, 0.0]
+        @test pdec[1, 2, :] == [0.0, 1.0, 0.0]
+        @test pdec[1, 3, :] == [0.0, 0.0, 1.0]
+        @test pdec[1, 4, :] == [1.0, 1.0, 1.0]
+        rm(pf)
+
+        bw_palette = UInt8[0, 0, 0, 255, 255, 255]
+        bw_indices = UInt8[0 1 0 1 1 0 1 0 1]
+        bwf = tempname() * ".png"
+        write(bwf, test_palette_png_bytes(bw_indices; bitdepth=1, palette=bw_palette))
+        bwdec = load_png(bwf)
+        @test size(bwdec) == (1, 9, 3)
+        @test bwdec[1, 1, :] == [0.0, 0.0, 0.0]
+        @test bwdec[1, 2, :] == [1.0, 1.0, 1.0]
+        rm(bwf)
+
+        badtrnsf = tempname() * ".png"
+        write(badtrnsf, test_palette_png_bytes(UInt8[0 1]; bitdepth=1,
+                                               palette=bw_palette,
+                                               trns=UInt8[0, 255, 128]))
+        @test_throws ErrorException load_png(badtrnsf)
+        rm(badtrnsf)
+
+        trns = UInt8[255, 128, 0, 64]
+        adam_palette_indices = UInt8[mod(i + 2j, 4) for i in 1:5, j in 1:7]
+        apf = tempname() * ".png"
+        write(apf, test_palette_png_bytes(adam_palette_indices;
+                                          bitdepth=4, palette=palette,
+                                          trns=trns, interlace=true))
+        apdec = load_png(apf)
+        @test size(apdec) == (5, 7, 4)
+        for i in 1:5, j in 1:7
+            idx = Int(adam_palette_indices[i, j])
+            @test apdec[i, j, 1] == palette[3idx + 1] / 255
+            @test apdec[i, j, 2] == palette[3idx + 2] / 255
+            @test apdec[i, j, 3] == palette[3idx + 3] / 255
+            @test apdec[i, j, 4] == trns[idx + 1] / 255
+        end
+        aptex = TextureLoader(apf); rm(apf)
+        @test size(aptex.data, 3) == 4
+        @test Diff3D.sample_texture_channel(aptex, 0.5, 0.5, 4; default=1.0) < 1.0
     end
 
     @testset "OBJ .mtl materials" begin
@@ -8266,6 +8388,41 @@ end
             @test gb.indices == [1,2,3]
             @test Diff3D.get_attribute(gb, :color).data == expect_col
             rm(pb; force=true)
+
+            # Unknown binary elements with list properties are skipped row-by-row
+            # so later elements stay aligned.
+            hdr_unknown = "ply\nformat binary_little_endian 1.0\nelement vertex 3\n" *
+                "property float x\nproperty float y\nproperty float z\n" *
+                "element edge 1\nproperty uchar id\nproperty list uchar int vertex_indices\nproperty float weight\n" *
+                "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+            body_unknown = Vector{UInt8}(codeunits(hdr_unknown))
+            for xyz in Float32[0,0,0, 1,0,0, 0,1,0]
+                append!(body_unknown, reinterpret(UInt8, [xyz]))
+            end
+            push!(body_unknown, 0x09, 0x02)
+            for u in Int32[0,1]
+                append!(body_unknown, reinterpret(UInt8, [u]))
+            end
+            append!(body_unknown, reinterpret(UInt8, Float32[0.5]))
+            push!(body_unknown, 0x03)
+            for u in Int32[0,1,2]
+                append!(body_unknown, reinterpret(UInt8, [u]))
+            end
+            pu = tempname() * ".ply"; write(pu, body_unknown)
+            gu = Diff3D.load_ply(pu)
+            @test gu.positions == expect_pos
+            @test gu.indices == [1,2,3]
+            @test gu.n_faces == 1
+            rm(pu; force=true)
+
+            hdr_trunc_unknown = "ply\nformat binary_little_endian 1.0\n" *
+                "element edge 1\nproperty list uchar int vertex_indices\nend_header\n"
+            body_trunc_unknown = Vector{UInt8}(codeunits(hdr_trunc_unknown))
+            push!(body_trunc_unknown, 0x02)
+            append!(body_trunc_unknown, reinterpret(UInt8, Int32[7]))
+            pt = tempname() * ".ply"; write(pt, body_trunc_unknown)
+            @test_throws ErrorException Diff3D.load_ply(pt)
+            rm(pt; force=true)
 
             # --- binary_big_endian ---
             hdr_be = "ply\nformat binary_big_endian 1.0\nelement vertex 3\n" *

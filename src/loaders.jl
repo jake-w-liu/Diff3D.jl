@@ -457,6 +457,17 @@ function load_ply(path::String)
     have_normals = false; have_color = false
     color_is_int = false
     read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
+    function checked_binary_skip!(nbytes::Int)
+        nbytes >= 0 || error("PLY binary skip size must be non-negative")
+        i + nbytes - 1 <= n || error("PLY binary element data is truncated")
+        i += nbytes
+        return nothing
+    end
+    function checked_list_count(cnt)
+        isfinite(cnt) && cnt >= 0 && cnt == floor(cnt) ||
+            error("PLY list property count must be a non-negative integer")
+        return Int(cnt)
+    end
 
     for (ename, ecount, props) in elements
         if ename == "vertex"
@@ -548,13 +559,17 @@ function load_ply(path::String)
             if format == :ascii
                 for _ in 0:ecount-1; next_line(); end
             else
-                # Skip only when every property is fixed-size scalar (lists need
-                # per-row length; unsupported skip would corrupt the stream).
-                for p in props
-                    p[1] === :list && error("cannot skip PLY element '$ename' with list property")
+                for _ in 0:ecount-1
+                    for p in props
+                        if p[1] === :scalar
+                            checked_binary_skip!(_PLY_SIZE[p[3]])
+                        else
+                            cnt, i = read_binary(bytes, i, p[3])
+                            nitems = checked_list_count(cnt)
+                            checked_binary_skip!(nitems * _PLY_SIZE[p[4]])
+                        end
+                    end
                 end
-                rowbytes = sum(_PLY_SIZE[p[3]] for p in props)
-                i += ecount * rowbytes
             end
         end
     end

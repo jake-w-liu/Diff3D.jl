@@ -115,9 +115,9 @@ replacement for three.js `WebGLRenderer`.
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
   including texture references for clearcoat, clearcoat normals, transmission,
   sheen, iridescence, specular, and inherited PBR maps, plus the scalar
-  `KHR_materials_dispersion` field. PNG glTF images, including Adam7
-  interlaced grayscale, grayscale+alpha, RGB, and RGBA PNGs, load from URI,
-  data URI, and bufferView sources with
+  `KHR_materials_dispersion` field. PNG glTF images, including palette/`tRNS`
+  payloads and Adam7 interlaced grayscale, grayscale+alpha, RGB, and RGBA PNGs,
+  load from URI, data URI, and bufferView sources with
   MIME/extension routing, and external buffer/image URI paths are resolved with
   percent-decoding and clear
   unsupported-scheme errors. glTF data URI resources are validated with strict
@@ -686,8 +686,8 @@ Parallel audits split the remaining work into five critical tracks:
   approximations. Exact clearcoat-layer BRDF parity and full chromatic
   refraction remain part of the broader physical-renderer parity work.
 - Done: route glTF image data by declared MIME type, data URI MIME, or URI
-  extension, including `image/png` bufferView images, Adam7 interlaced
-  grayscale/grayscale+alpha/RGB/RGBA PNG payloads, and
+  extension, including `image/png` bufferView images, palette/`tRNS` PNGs,
+  Adam7 interlaced grayscale/grayscale+alpha/RGB/RGBA PNG payloads, and
   `image/jpeg`/`.jpg`/`.jpeg` URI, data URI, and bufferView
   payloads through JpegTurbo. Unsupported `.ktx2` and extension-only
   `KHR_texture_basisu` references still fail with an explicit
@@ -1035,8 +1035,9 @@ Parallel audits split the remaining work into five critical tracks:
   `examples/webgl_loader_ply.jl`, generating temporary ASCII and
   `binary_little_endian` PLY assets, loading both through Diff3D.jl `load_ply`,
   and exporting vertex-color meshes to the compact browser path. The core PLY
-  loader also accepts `binary_big_endian` fixtures. Exact upstream PLY assets
-  and `WebGLRenderer` internals remain documented deviations.
+  loader also accepts `binary_big_endian` fixtures and skips unknown binary
+  list-property elements without corrupting later elements. Exact upstream PLY
+  assets and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_gltf` via
   `examples/webgl_loader_gltf.jl`, generating a deterministic external-buffer
   glTF asset plus a deterministic binary GLB companion with embedded BIN
