@@ -127,7 +127,10 @@ replacement for three.js `WebGLRenderer`.
   morphed or unsupported skinned meshes. Static morph target influences export
   to browser geometry positions. Skinned meshes also carry attached/detached
   bind-mode metadata plus mesh-level bind matrices through CPU skinning, glTF
-  loading, and browser export/runtime skinning paths. It does
+  loading, and browser export/runtime skinning paths. glTF
+  `EXT_mesh_gpu_instancing` mesh nodes load into native `InstancedMesh`
+  children for non-skinned, non-morphed triangle primitives with
+  translation/rotation/scale instance attributes. It does
   not yet cover the full glTF feature set such as remaining texture/material
   extensions and browser/runtime material extensions.
 - Sprites render in the CPU path as camera-facing quads and export to the
@@ -675,6 +678,12 @@ Parallel audits split the remaining work into five critical tracks:
   in its compact shader approximation, and CPU flat/smooth shading samples the
   same represented maps in its compact physical-material approximation. Full
   shader-model parity remains renderer work.
+- Done: parse `EXT_mesh_gpu_instancing` on glTF mesh nodes and map simple
+  non-skinned, non-morphed triangle primitives to native `InstancedMesh`
+  objects. `TRANSLATION`, `ROTATION`, and `SCALE` instance accessors compose
+  node-local instance matrices, required-extension validation accepts the
+  extension, and unsupported point/line, skinned, or morphed instancing paths
+  fail clearly until represented.
 - Done: implement `CUBICSPLINE` transform interpolation for glTF assets and
   browser-exported animation tracks.
 - Done: parse and instantiate glTF cameras and `KHR_lights_punctual`

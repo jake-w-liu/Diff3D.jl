@@ -874,6 +874,7 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_specular",
     "KHR_materials_dispersion",
     "KHR_materials_anisotropy",
+    "EXT_mesh_gpu_instancing",
 ])
 
 function _gltf_check_required_extensions(gltf)
@@ -1323,6 +1324,48 @@ function _gltf_node_matrix(node)
     return T * R * S
 end
 
+function _gltf_instance_attribute(gltf, buffers, attrs, name::String, ncomp::Int)
+    haskey(attrs, name) || return nothing
+    data, item_size, count = _gltf_accessor(gltf, buffers, Int(attrs[name]))
+    item_size == ncomp || error("EXT_mesh_gpu_instancing $name accessor must be $(ncomp == 3 ? "VEC3" : "VEC4")")
+    return data, count
+end
+
+function _gltf_instance_matrices(gltf, buffers, node)
+    ext = get(get(node, "extensions", Dict{String,Any}()),
+              "EXT_mesh_gpu_instancing", nothing)
+    ext === nothing && return nothing
+    attrs = get(ext, "attributes", nothing)
+    attrs isa AbstractDict || error("EXT_mesh_gpu_instancing requires an attributes object")
+    isempty(attrs) && error("EXT_mesh_gpu_instancing attributes must not be empty")
+    translation = _gltf_instance_attribute(gltf, buffers, attrs, "TRANSLATION", 3)
+    rotation = _gltf_instance_attribute(gltf, buffers, attrs, "ROTATION", 4)
+    scale = _gltf_instance_attribute(gltf, buffers, attrs, "SCALE", 3)
+    counts = Int[]
+    translation !== nothing && push!(counts, translation[2])
+    rotation !== nothing && push!(counts, rotation[2])
+    scale !== nothing && push!(counts, scale[2])
+    isempty(counts) && error("EXT_mesh_gpu_instancing must define TRANSLATION, ROTATION, or SCALE")
+    all(==(counts[1]), counts) ||
+        error("EXT_mesh_gpu_instancing attribute accessors must have matching counts")
+    count = counts[1]
+    matrices = Vector{Mat4{Float64}}(undef, count)
+    for i in 1:count
+        ti = translation === nothing ? (0.0, 0.0, 0.0) :
+             (translation[1][3i - 2], translation[1][3i - 1], translation[1][3i])
+        ri = rotation === nothing ? (0.0, 0.0, 0.0, 1.0) :
+             (rotation[1][4i - 3], rotation[1][4i - 2],
+              rotation[1][4i - 1], rotation[1][4i])
+        si = scale === nothing ? (1.0, 1.0, 1.0) :
+             (scale[1][3i - 2], scale[1][3i - 1], scale[1][3i])
+        q = quat_normalize(Quaternion(ri[1], ri[2], ri[3], ri[4]))
+        matrices[i] = mat4_translation(ti[1], ti[2], ti[3]) *
+                      quat_to_mat4(q) *
+                      mat4_scaling(si[1], si[2], si[3])
+    end
+    return matrices
+end
+
 # Decompose a column-major TRS matrix `M` into (position, rotation::Euler{:XYZ},
 # scale), matching three.js `Matrix4.decompose` + `Euler.setFromRotationMatrix`
 # (order XYZ). Returned components recompose as T*R*S exactly as
@@ -1621,14 +1664,38 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         node = gltf["nodes"][node_idx + 1]
         obj = node_objects[node_idx]
         add!(parent, obj)
+        instance_matrices = _gltf_instance_matrices(gltf, buffers, node)
+        instance_matrices !== nothing && !haskey(node, "mesh") &&
+            error("EXT_mesh_gpu_instancing can only be used on glTF mesh nodes")
         if haskey(node, "mesh")
+            instance_matrices !== nothing && haskey(node, "skin") &&
+                error("EXT_mesh_gpu_instancing with skinned meshes is not supported")
             mesh_def = gltf["meshes"][Int(node["mesh"]) + 1]
             morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
             morph_names = _gltf_target_names(mesh_def)
             for prim in mesh_def["primitives"]
+                if instance_matrices !== nothing
+                    mode = Int(get(prim, "mode", 4))
+                    mode in (4, 5, 6) ||
+                        error("EXT_mesh_gpu_instancing only supports triangle mesh primitives")
+                    (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
+                        error("EXT_mesh_gpu_instancing with morph targets is not supported")
+                end
                 mesh_obj = build_primitive(prim, get(node, "skin", nothing),
                                            morph_weights, morph_names)
-                add!(obj, mesh_obj)
+                if instance_matrices === nothing
+                    add!(obj, mesh_obj)
+                else
+                    mesh_obj isa Mesh ||
+                        error("EXT_mesh_gpu_instancing only supports mesh primitives")
+                    inst = InstancedMesh(mesh_obj.geometry, mesh_obj.material,
+                                         length(instance_matrices);
+                                         name=mesh_obj.name,
+                                         cast_shadow=mesh_obj.cast_shadow,
+                                         receive_shadow=mesh_obj.receive_shadow)
+                    inst.instance_matrices = copy(instance_matrices)
+                    add!(obj, inst)
+                end
             end
         end
         for child in get(node, "children", Any[])

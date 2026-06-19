@@ -5074,6 +5074,81 @@ end
             end
         end
 
+        @testset "glTF EXT_mesh_gpu_instancing" begin
+            function add_f32_accessor!(buf, views, accessors, values, type::String, count::Int)
+                offset = length(buf)
+                bytes = reinterpret(UInt8, Float32.(values)) |> collect
+                append!(buf, bytes)
+                push!(views, Dict{String,Any}("buffer"=>0, "byteOffset"=>offset,
+                                              "byteLength"=>length(bytes)))
+                push!(accessors, Dict{String,Any}("bufferView"=>length(views) - 1,
+                                                  "componentType"=>5126,
+                                                  "count"=>count, "type"=>type))
+                return length(accessors) - 1
+            end
+            function instancing_fixture(; required=false, mode=4, include_mesh=true,
+                                        rotation=false, scale=false, mismatch=false)
+                buf = UInt8[]
+                views = Any[]
+                accessors = Any[]
+                pos = add_f32_accessor!(buf, views, accessors,
+                                        [0,0,0, 1,0,0, 0,1,0], "VEC3", 3)
+                trans = add_f32_accessor!(buf, views, accessors,
+                                          [0,0,0, 2,0,0], "VEC3", 2)
+                attrs = Dict{String,Any}("TRANSLATION"=>trans)
+                if rotation
+                    rot = add_f32_accessor!(buf, views, accessors,
+                                            [0,0,0,1,
+                                             0,0,sin(pi / 4),cos(pi / 4)],
+                                            "VEC4", 2)
+                    attrs["ROTATION"] = rot
+                end
+                if scale
+                    scale_values = mismatch ? [1,1,1] : [1,1,1, 2,3,4]
+                    scl = add_f32_accessor!(buf, views, accessors, scale_values,
+                                            "VEC3", mismatch ? 1 : 2)
+                    attrs["SCALE"] = scl
+                end
+                inst_ext = Dict{String,Any}("attributes"=>attrs)
+                node = Dict{String,Any}(
+                    "extensions"=>Dict{String,Any}("EXT_mesh_gpu_instancing"=>inst_ext))
+                include_mesh && (node["mesh"] = 0)
+                gltf = Dict{String,Any}(
+                    "scene"=>0, "scenes"=>Any[Dict{String,Any}("nodes"=>Any[0])],
+                    "nodes"=>Any[node],
+                    "meshes"=>Any[Dict{String,Any}("primitives"=>Any[
+                        Dict{String,Any}("attributes"=>Dict{String,Any}("POSITION"=>pos),
+                                         "mode"=>mode)])],
+                    "buffers"=>Any[Dict{String,Any}("byteLength"=>length(buf))],
+                    "bufferViews"=>views,
+                    "accessors"=>accessors)
+                required && (gltf["extensionsRequired"] = Any["EXT_mesh_gpu_instancing"])
+                return gltf, [buf]
+            end
+
+            gltf, buffers = instancing_fixture(required=true)
+            scene = Diff3D._gltf_build_scene(gltf, buffers)
+            inst = only(collect_instanced(scene))
+            @test instanced_count(inst) == 2
+            @test mat4_transform_point(get_instance_matrix(inst, 2), Vec3(0.0, 0.0, 0.0)) ==
+                  Vec3(2.0, 0.0, 0.0)
+
+            trs_gltf, trs_buffers = instancing_fixture(rotation=true, scale=true)
+            trs_inst = only(collect_instanced(Diff3D._gltf_build_scene(trs_gltf, trs_buffers)))
+            expected = mat4_translation(2.0, 0.0, 0.0) *
+                       quat_to_mat4(Quaternion(0.0, 0.0, sin(pi / 4), cos(pi / 4))) *
+                       mat4_scaling(2.0, 3.0, 4.0)
+            @test maximum(abs.(collect(get_instance_matrix(trs_inst, 2).e) .-
+                               collect(expected.e))) < 1e-6
+
+            bad_counts, bad_count_buffers = instancing_fixture(scale=true, mismatch=true)
+            @test_throws ErrorException Diff3D._gltf_build_scene(bad_counts, bad_count_buffers)
+            no_mesh, no_mesh_buffers = instancing_fixture(include_mesh=false)
+            @test_throws ErrorException Diff3D._gltf_build_scene(no_mesh, no_mesh_buffers)
+            points, point_buffers = instancing_fixture(mode=0)
+            @test_throws ErrorException Diff3D._gltf_build_scene(points, point_buffers)
+        end
+
         @testset "glTF mesh attribute loading" begin
             let buf = UInt8[], views = Any[], accessors = Any[]
                 function add_f32_accessor(data, typ, item_size)
