@@ -4533,25 +4533,61 @@ end
         @test obj.rotation.x ≈ 0.1 atol=1e-12
         @test obj.rotation.y ≈ 0.2 atol=1e-12
         @test obj.rotation.z ≈ 0.3 atol=1e-12
+        transform_set_enabled!(tc, false)
+        transform_set_mode!(tc, :translate)
+        transform_apply!(tc, Vec3(5.0, 5.0, 5.0))
+        @test obj.position == Vec3(1.0, 2.0, 3.0)
+        transform_set_enabled!(tc, true)
+        transform_set_axis!(tc, :X)
+        transform_set_translation_snap!(tc, 0.5)
+        obj.position = Vec3(0.12, 0.25, 0.25)
+        transform_apply!(tc, Vec3(0.44, 1.0, 1.0))
+        @test obj.position.x ≈ 0.5 atol=1e-12
+        @test obj.position.y ≈ 0.25 atol=1e-12
+        @test obj.position.z ≈ 0.25 atol=1e-12
+        transform_set_translation_snap!(tc, nothing)
+        transform_set_mode!(tc, :scale)
+        transform_set_axis!(tc, :YZ)
+        transform_set_scale_snap!(tc, 0.5)
+        obj.scale = Vec3(1.0, 1.0, 1.0)
+        transform_apply!(tc, Vec3(4.0, 1.26, 0.24))
+        @test obj.scale.x ≈ 1.0 atol=1e-12
+        @test obj.scale.y ≈ 1.5 atol=1e-12
+        @test obj.scale.z ≈ 0.5 atol=1e-12
+        transform_set_scale_snap!(tc, nothing)
+        transform_set_mode!(tc, :rotate)
+        transform_set_axis!(tc, :Z)
+        transform_set_rotation_snap!(tc, 0.25)
+        obj.rotation = Euler(0.0, 0.0, 0.1)
+        transform_apply!(tc, Vec3(1.0, 1.0, 0.14))
+        @test obj.rotation.x ≈ 0.0 atol=1e-12
+        @test obj.rotation.y ≈ 0.0 atol=1e-12
+        @test obj.rotation.z ≈ 0.35 atol=1e-12
         local_obj = Group()
         local_obj.rotation = Euler(0.0, π/2, 0.0)
-        local_tc = TransformControls(cam; space=:local)
+        local_tc = TransformControls(cam; space=:local, axis=:X)
         transform_attach!(local_tc, local_obj)
-        transform_apply!(local_tc, Vec3(1.0, 0.0, 0.0))
+        transform_apply!(local_tc, Vec3(1.0, 5.0, 5.0))
         @test local_obj.position.x ≈ 0.0 atol=1e-12
         @test local_obj.position.z ≈ -1.0 atol=1e-12
         transform_set_space!(local_tc, :world)
         transform_apply!(local_tc, Vec3(1.0, 0.0, 0.0))
         @test local_obj.position.x ≈ 1.0 atol=1e-12
         @test local_obj.position.z ≈ -1.0 atol=1e-12
+        detached_position = obj.position
         transform_detach!(tc)
         transform_set_mode!(tc, :translate)
         transform_apply!(tc, Vec3(1.0,1.0,1.0))
-        @test obj.position == Vec3(1.0,2.0,3.0)
+        @test obj.position == detached_position
         @test_throws ArgumentError TransformControls(cam; mode=:skew)
         @test_throws ArgumentError TransformControls(cam; space=:screen)
+        @test_throws ArgumentError TransformControls(cam; axis=:W)
         @test_throws ArgumentError transform_set_mode!(tc, :skew)
         @test_throws ArgumentError transform_set_space!(tc, :screen)
+        @test_throws ArgumentError transform_set_axis!(tc, :W)
+        @test_throws ArgumentError transform_set_translation_snap!(tc, 0.0)
+        @test_throws ArgumentError transform_set_rotation_snap!(tc, -0.1)
+        @test_throws ArgumentError transform_set_scale_snap!(tc, Inf)
     end
 
     @testset "Clock" begin

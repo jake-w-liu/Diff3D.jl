@@ -420,25 +420,95 @@ mutable struct TransformControls
     object::Union{Nothing, AbstractObject3D}
     mode::Symbol
     space::Symbol
+    enabled::Bool
+    axis::Union{Nothing, Symbol}
+    translation_snap::Union{Nothing, Float64}
+    rotation_snap::Union{Nothing, Float64}
+    scale_snap::Union{Nothing, Float64}
 end
-function TransformControls(camera::PerspectiveCamera; mode::Symbol=:translate, space::Symbol=:world)
+
+function _transform_validate_mode(mode::Symbol)
     mode in (:translate, :rotate, :scale) ||
         throw(ArgumentError("unsupported transform mode: $mode"))
+    return mode
+end
+
+function _transform_validate_space(space::Symbol)
     space in (:world, :local) ||
         throw(ArgumentError("unsupported transform space: $space"))
-    return TransformControls(camera, nothing, mode, space)
+    return space
 end
+
+function _transform_validate_axis(axis::Union{Nothing,Symbol})
+    axis === nothing && return axis
+    axis in (:X, :Y, :Z, :XY, :YZ, :XZ, :XYZ) ||
+        throw(ArgumentError("unsupported transform axis: $axis"))
+    return axis
+end
+
+function _transform_validate_snap(snap::Union{Nothing,Real}, label::String)
+    snap === nothing && return nothing
+    value = Float64(snap)
+    isfinite(value) && value > 0 ||
+        throw(ArgumentError("TransformControls $label snap must be finite and positive"))
+    return value
+end
+
+function TransformControls(camera::PerspectiveCamera;
+                           mode::Symbol=:translate,
+                           space::Symbol=:world,
+                           enabled::Bool=true,
+                           axis::Union{Nothing,Symbol}=:XYZ,
+                           translation_snap::Union{Nothing,Real}=nothing,
+                           rotation_snap::Union{Nothing,Real}=nothing,
+                           scale_snap::Union{Nothing,Real}=nothing)
+    return TransformControls(camera, nothing,
+                             _transform_validate_mode(mode),
+                             _transform_validate_space(space),
+                             enabled,
+                             _transform_validate_axis(axis),
+                             _transform_validate_snap(translation_snap, "translation"),
+                             _transform_validate_snap(rotation_snap, "rotation"),
+                             _transform_validate_snap(scale_snap, "scale"))
+end
+
+TransformControls(camera::PerspectiveCamera,
+                  object::Union{Nothing, AbstractObject3D},
+                  mode::Symbol,
+                  space::Symbol) =
+    TransformControls(camera, object,
+                      _transform_validate_mode(mode),
+                      _transform_validate_space(space),
+                      true, :XYZ, nothing, nothing, nothing)
 
 transform_attach!(tc::TransformControls, obj::AbstractObject3D) = (tc.object = obj; tc)
 transform_detach!(tc::TransformControls) = (tc.object = nothing; tc)
 function transform_set_mode!(tc::TransformControls, mode::Symbol)
-    mode in (:translate, :rotate, :scale) || throw(ArgumentError("unsupported transform mode: $mode"))
-    tc.mode = mode
+    tc.mode = _transform_validate_mode(mode)
     return tc
 end
 function transform_set_space!(tc::TransformControls, space::Symbol)
-    space in (:world, :local) || throw(ArgumentError("unsupported transform space: $space"))
-    tc.space = space
+    tc.space = _transform_validate_space(space)
+    return tc
+end
+function transform_set_enabled!(tc::TransformControls, enabled::Bool)
+    tc.enabled = enabled
+    return tc
+end
+function transform_set_axis!(tc::TransformControls, axis::Union{Nothing,Symbol})
+    tc.axis = _transform_validate_axis(axis)
+    return tc
+end
+function transform_set_translation_snap!(tc::TransformControls, snap::Union{Nothing,Real})
+    tc.translation_snap = _transform_validate_snap(snap, "translation")
+    return tc
+end
+function transform_set_rotation_snap!(tc::TransformControls, snap::Union{Nothing,Real})
+    tc.rotation_snap = _transform_validate_snap(snap, "rotation")
+    return tc
+end
+function transform_set_scale_snap!(tc::TransformControls, snap::Union{Nothing,Real})
+    tc.scale_snap = _transform_validate_snap(snap, "scale")
     return tc
 end
 
@@ -448,17 +518,67 @@ function _transform_local_delta(obj::AbstractObject3D, delta::Vec3)
     return mat4_transform_direction(quat_to_mat4(q), delta)
 end
 
+_transform_axis_has(axis::Union{Nothing,Symbol}, label::Char) =
+    axis !== nothing && occursin(string(label), String(axis))
+
+function _transform_axis_vec(axis::Union{Nothing,Symbol}, delta::Vec3;
+                             default::Float64=0.0)
+    axis === nothing && return Vec3(default, default, default)
+    return Vec3(_transform_axis_has(axis, 'X') ? delta.x : default,
+                _transform_axis_has(axis, 'Y') ? delta.y : default,
+                _transform_axis_has(axis, 'Z') ? delta.z : default)
+end
+
+_transform_snap_value(value::Real, snap::Float64) =
+    round(Float64(value) / snap) * snap
+
+function _transform_snap_position(pos::Vec3, snap::Float64,
+                                  axis::Union{Nothing,Symbol})
+    axis === nothing && return pos
+    return Vec3(_transform_axis_has(axis, 'X') ? _transform_snap_value(pos.x, snap) : pos.x,
+                _transform_axis_has(axis, 'Y') ? _transform_snap_value(pos.y, snap) : pos.y,
+                _transform_axis_has(axis, 'Z') ? _transform_snap_value(pos.z, snap) : pos.z)
+end
+
+function _transform_snap_scale_value(value::Real, snap::Float64)
+    snapped = _transform_snap_value(value, snap)
+    return snapped == 0.0 ? snap : snapped
+end
+
+function _transform_snap_scale(scale::Vec3, snap::Float64,
+                               axis::Union{Nothing,Symbol})
+    axis === nothing && return scale
+    return Vec3(_transform_axis_has(axis, 'X') ? _transform_snap_scale_value(scale.x, snap) : scale.x,
+                _transform_axis_has(axis, 'Y') ? _transform_snap_scale_value(scale.y, snap) : scale.y,
+                _transform_axis_has(axis, 'Z') ? _transform_snap_scale_value(scale.z, snap) : scale.z)
+end
+
 function transform_apply!(tc::TransformControls, delta::Vec3)
     obj = tc.object
-    obj === nothing && return tc
+    (obj === nothing || !tc.enabled || tc.axis === nothing) && return tc
     if tc.mode === :translate
-        move = tc.space === :local ? _transform_local_delta(obj, delta) : delta
+        axis_delta = _transform_axis_vec(tc.axis, delta)
+        move = tc.space === :local ? _transform_local_delta(obj, axis_delta) : axis_delta
         obj.position = obj.position + move
+        tc.translation_snap !== nothing &&
+            (obj.position = _transform_snap_position(obj.position, tc.translation_snap, tc.axis))
     elseif tc.mode === :scale
-        obj.scale = Vec3(obj.scale.x * delta.x, obj.scale.y * delta.y, obj.scale.z * delta.z)
+        factors = _transform_axis_vec(tc.axis, delta; default=1.0)
+        obj.scale = Vec3(obj.scale.x * factors.x, obj.scale.y * factors.y, obj.scale.z * factors.z)
+        tc.scale_snap !== nothing &&
+            (obj.scale = _transform_snap_scale(obj.scale, tc.scale_snap, tc.axis))
     elseif tc.mode === :rotate
-        obj.rotation = Euler(obj.rotation.x + delta.x, obj.rotation.y + delta.y,
-                             obj.rotation.z + delta.z, obj.rotation.order)
+        angles = _transform_axis_vec(tc.axis, delta)
+        if tc.rotation_snap !== nothing
+            angles = Vec3(_transform_axis_has(tc.axis, 'X') ?
+                          _transform_snap_value(angles.x, tc.rotation_snap) : angles.x,
+                          _transform_axis_has(tc.axis, 'Y') ?
+                          _transform_snap_value(angles.y, tc.rotation_snap) : angles.y,
+                          _transform_axis_has(tc.axis, 'Z') ?
+                          _transform_snap_value(angles.z, tc.rotation_snap) : angles.z)
+        end
+        obj.rotation = Euler(obj.rotation.x + angles.x, obj.rotation.y + angles.y,
+                             obj.rotation.z + angles.z, obj.rotation.order)
     end
     return tc
 end

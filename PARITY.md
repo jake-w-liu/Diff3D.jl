@@ -821,11 +821,13 @@ Parallel audits split the remaining work into five critical tracks:
   separate exporter/runtime work.
 - Done: add focused programmatic equivalents for `TransformControls`,
   `PointerLockControls`, `TrackballControls`, and `DragControls` where feasible
-  in a Julia workflow. Trackball controls now support rotate, pan, zoom,
-  save-state, reset, and enabled/no-op behavior; drag controls now support
-  direct managed-object selection, recursive child selection, single-group
-  transform selection, and NDC raycast picking through the existing CPU
-  raycaster. Browser DOM/touch/gizmo event semantics remain open.
+  in a Julia workflow. Transform controls now support enabled/no-op state, axis
+  masks, and translation/rotation/scale snap increments for programmatic
+  translate/rotate/scale application. Trackball controls now support rotate,
+  pan, zoom, save-state, reset, and enabled/no-op behavior; drag controls now
+  support direct managed-object selection, recursive child selection,
+  single-group transform selection, and NDC raycast picking through the existing
+  CPU raycaster. Browser DOM/touch/gizmo event semantics remain open.
 - Done: add `examples/browser_webgl_smoke.py`, a reusable Playwright browser
   smoke that opens generated HTML, switches cases, simulates pointer drag and
   wheel zoom, exercises keyboard pan/zoom, verifies middle-button dolly and
