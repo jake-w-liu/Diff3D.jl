@@ -1439,13 +1439,15 @@ end
             NumberKeyframeTrack(mesh, "position.y", [0.0, 1.0], [0.0, 0.35]),
             QuaternionKeyframeTrack(mesh, :quaternion, [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 4, 0.0)]),
-            QuaternionKeyframeTrack(step_quat_mesh, :quaternion, [0.0, 1.0],
+            QuaternionKeyframeTrack(step_quat_mesh, "quaternion", [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 2, 0.0)];
                                     interpolation=:step),
             NumberKeyframeTrack(mesh, "opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.25, 0.85]),
             NumberKeyframeTrack(mesh, "color.r", [0.0, 1.0], [0.2, 1.0]),
             NumberKeyframeTrack(mesh, "material.color.g", [0.0, 1.0], [0.3, 0.9]),
+            KeyframeTrack(physical_mapped, "material.color", [0.0, 1.0],
+                          [Vec3(0.8,0.7,0.6), Vec3(0.2,0.3,0.4)]),
             NumberKeyframeTrack(textured, "material.depthTest", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(textured, "material.depthWrite", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
@@ -1721,6 +1723,7 @@ end
         @test occursin("ceil(clamp(max(d,0.0),0.0,1.0)*uToonSteps)/uToonSteps", html)
         @test occursin("toonBand(dot(n,l))", html)
         @test occursin("uRectColor[i]*toonBand(dot(n,l))*a", html)
+        @test occursin("*(dot(n,l)>0.0?1.0:0.0)*a", html)
         @test occursin("\"name\":\"export_matcap_material\"", html)
         @test occursin("\"materialType\":\"matcap\"", html)
         @test occursin("\"matcapTexture\":", html)
@@ -2167,6 +2170,7 @@ end
         @test occursin("\"property\":\"opacity\"", html)
         @test occursin("\"property\":\"color\"", html)
         @test occursin("\"property\":\"color\",\"component\":2", html)
+        @test occursin("\"target\":$(physical_mapped.id),\"property\":\"color\"", html)
         @test occursin("\"property\":\"depthTest\"", html)
         @test occursin("\"property\":\"depthWrite\"", html)
         @test occursin("\"property\":\"alphaTest\"", html)
@@ -3526,6 +3530,15 @@ end
         cnear = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[near])
         cfar = shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat, AbstractLight[far])
         @test cnear.r > cfar.r
+
+        zero_width = RectAreaLight(intensity=10.0, width=0.0, height=1.0,
+                                   position=Vec3(0.0,0,5.0))
+        negative_height = RectAreaLight(intensity=10.0, width=1.0, height=-1.0,
+                                        position=Vec3(0.0,0,5.0))
+        @test shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat,
+                         AbstractLight[zero_width]).r ≈ 0.0
+        @test shade_face(Vec3(0.0,0,1.0), Vec3(0.0,0,1), Vec3(), mat,
+                         AbstractLight[negative_height]).r ≈ 0.0
     end
 
     @testset "Shadow mapping" begin
@@ -4267,6 +4280,36 @@ end
         @test material_mesh.material.depth_write === true
         @test sprite_material.material.rotation ≈ 0.5
         @test sprite_material.material.size_attenuation === false
+
+        vector_material_mesh = Mesh(BoxGeometry(),
+                                    MeshStandardMaterial(color=Color3(0.0, 0.0, 0.0),
+                                                         emissive=Color3(0.0, 0.0, 0.0)))
+        material_color_path =
+            KeyframeTrack(vector_material_mesh, "material.color",
+                          [0.0, 1.0],
+                          [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
+        material_emissive_path =
+            CubicSplineKeyframeTrack(vector_material_mesh, "material.emissive",
+                                     [0.0, 1.0],
+                                     [Vec3(0.0, 0.1, 0.2), Vec3(0.6, 0.5, 0.4)],
+                                     [Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)],
+                                     [Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)])
+        @test material_color_path.property === :color
+        @test material_emissive_path.property === :emissive
+        @test_throws ArgumentError KeyframeTrack(vector_material_mesh, "material.color.r",
+                                                 [0.0, 1.0],
+                                                 [Vec3(0.0, 0.0, 0.0),
+                                                  Vec3(1.0, 1.0, 1.0)])
+        mixer_set_time!(AnimationMixer(AnimationClip("material_vector_paths",
+                                                     [material_color_path,
+                                                      material_emissive_path])), 0.5)
+        @test material_color_path isa AbstractKeyframeTrack
+        @test vector_material_mesh.material.color.r ≈ 0.5
+        @test vector_material_mesh.material.color.g ≈ 0.5
+        @test vector_material_mesh.material.color.b ≈ 0.5
+        @test vector_material_mesh.material.emissive.r ≈ 0.3
+        @test vector_material_mesh.material.emissive.g ≈ 0.3
+        @test vector_material_mesh.material.emissive.b ≈ 0.3
 
         depth_anim_mesh = Mesh(BoxGeometry(), MeshDepthMaterial(near=1.0, far=8.0))
         depth_near = NumberKeyframeTrack(depth_anim_mesh, "material.near",
@@ -5400,6 +5443,16 @@ end
             @test qalias_obj.rotation isa Euler
             @test isapprox(qalias_obj.rotation.y, pi/4; atol=1e-9)
 
+            qpath_obj = Group()
+            qpath = QuaternionKeyframeTrack(qpath_obj, "quaternion", [0.0, 1.0], [q0, q1])
+            @test qpath.property === :quaternion
+            @test_throws ArgumentError QuaternionKeyframeTrack(qpath_obj, "quaternion.y",
+                                                               [0.0, 1.0], [q0, q1])
+            mixer_set_time!(AnimationMixer(AnimationClip("quat_path",
+                                                        AbstractKeyframeTrack[qpath])), 0.5)
+            @test qpath_obj.rotation isa Euler
+            @test isapprox(qpath_obj.rotation.y, pi/4; atol=1e-9)
+
             euler_obj = Group()
             euler_track = KeyframeTrack(euler_obj, :rotation, [0.0, 1.0],
                                         [Vec3(0.0, 0.0, 0.0), Vec3(0.0, pi/2, 0.0)])
@@ -5431,7 +5484,12 @@ end
             tr = MorphWeightsKeyframeTrack(mesh, :morph_target_influences,
                                            [0.0, 1.0],
                                            [[0.0, 1.0], [1.0, 0.0]])
+            tr_path = MorphWeightsKeyframeTrack(mesh, "morphTargetInfluences",
+                                                [0.0, 1.0],
+                                                [[0.0, 1.0], [1.0, 0.0]])
+            @test tr_path.property === :morph_target_influences
             @test sample_track(tr, 0.25) ≈ [0.25, 0.75]
+            @test sample_track(tr_path, 0.25) ≈ [0.25, 0.75]
             mixer = AnimationMixer(AnimationClip("weights", AbstractKeyframeTrack[tr]))
             mixer_set_time!(mixer, 0.5)
             @test mesh.morph_target_influences ≈ [0.5, 0.5]
@@ -5454,7 +5512,13 @@ end
                                                             [[0.0, 1.0], [1.0, 0.0]],
                                                             [[0.0, 0.0], [0.0, 0.0]],
                                                             [[0.0, 0.0], [0.0, 0.0]])
+            tr_cubic_path = CubicSplineMorphWeightsKeyframeTrack(mesh, "morphTargetInfluences",
+                                                                 [0.0, 1.0],
+                                                                 [[0.0, 1.0], [1.0, 0.0]],
+                                                                 [[0.0, 0.0], [0.0, 0.0]],
+                                                                 [[0.0, 0.0], [0.0, 0.0]])
             @test sample_track(tr_cubic, 0.5) ≈ [0.5, 0.5]
+            @test sample_track(tr_cubic_path, 0.5) ≈ [0.5, 0.5]
             mixer_set_time!(AnimationMixer(AnimationClip("cubic_weights",
                                                         AbstractKeyframeTrack[tr_cubic])), 0.5)
             @test mesh.morph_target_influences ≈ [0.5, 0.5]

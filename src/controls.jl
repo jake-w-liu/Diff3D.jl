@@ -612,6 +612,14 @@ function _parse_animation_property_path(path::AbstractString)
     return _animation_property_symbol(p), 0
 end
 
+function _parse_animation_whole_property_path(path::AbstractString,
+                                              track_type::AbstractString)
+    property, component = _parse_animation_property_path(path)
+    component == 0 ||
+        throw(ArgumentError("$track_type component property paths require NumberKeyframeTrack"))
+    return property
+end
+
 # Backward-compatible four-argument constructor: the original positional call
 # `KeyframeTrack(target, property, times, values)` keeps working and defaults to
 # linear; `interpolation=:cubic` selects the spline mode.
@@ -621,6 +629,13 @@ KeyframeTrack(target::AbstractObject3D, property::Symbol,
     interpolation in (:linear, :step, :cubic) ?
         KeyframeTrack(target, property, times, values, interpolation) :
         throw(ArgumentError("unsupported keyframe interpolation: $interpolation"))
+
+KeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
+              times::Vector{Float64}, values::Vector{Vec3{Float64}};
+              interpolation::Symbol=:linear) =
+    KeyframeTrack(target,
+                  _parse_animation_whole_property_path(property_path, "KeyframeTrack"),
+                  times, values; interpolation=interpolation)
 
 function NumberKeyframeTrack(target::AbstractObject3D, property::Symbol,
                              times::Vector{Float64}, values::Vector{Float64};
@@ -666,6 +681,15 @@ QuaternionKeyframeTrack(target::AbstractObject3D, property::Symbol,
                         interpolation::Symbol=:slerp) =
     QuaternionKeyframeTrack(target, property, times, values, interpolation)
 
+QuaternionKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
+                        times::Vector{Float64},
+                        values::Vector{Quaternion{Float64}};
+                        interpolation::Symbol=:slerp) =
+    QuaternionKeyframeTrack(target,
+                            _parse_animation_whole_property_path(property_path,
+                                                                 "QuaternionKeyframeTrack"),
+                            times, values; interpolation=interpolation)
+
 struct MorphWeightsKeyframeTrack <: AbstractKeyframeTrack
     target::AbstractObject3D
     property::Symbol
@@ -694,6 +718,16 @@ function MorphWeightsKeyframeTrack(target::AbstractObject3D, property::Symbol,
     MorphWeightsKeyframeTrack(target, property, times,
                               [collect(Float64, v) for v in values],
                               interpolation)
+end
+
+function MorphWeightsKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
+                                   times::Vector{Float64},
+                                   values::Vector{Vector{Float64}};
+                                   interpolation::Symbol=:linear)
+    property = _parse_animation_whole_property_path(property_path,
+                                                    "MorphWeightsKeyframeTrack")
+    return MorphWeightsKeyframeTrack(target, property, times, values;
+                                     interpolation=interpolation)
 end
 
 struct CubicSplineKeyframeTrack <: AbstractKeyframeTrack
@@ -763,6 +797,39 @@ struct CubicSplineMorphWeightsKeyframeTrack <: AbstractKeyframeTrack
         new(target, property, times, values, in_tangents, out_tangents)
     end
 end
+
+CubicSplineKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
+                         times::Vector{Float64}, values::Vector{Vec3{Float64}},
+                         in_tangents::Vector{Vec3{Float64}},
+                         out_tangents::Vector{Vec3{Float64}}) =
+    CubicSplineKeyframeTrack(target,
+                             _parse_animation_whole_property_path(property_path,
+                                                                  "CubicSplineKeyframeTrack"),
+                             times, values, in_tangents, out_tangents)
+
+CubicSplineQuaternionKeyframeTrack(target::AbstractObject3D,
+                                   property_path::AbstractString,
+                                   times::Vector{Float64},
+                                   values::Vector{Quaternion{Float64}},
+                                   in_tangents::Vector{Quaternion{Float64}},
+                                   out_tangents::Vector{Quaternion{Float64}}) =
+    CubicSplineQuaternionKeyframeTrack(target,
+                                       _parse_animation_whole_property_path(
+                                           property_path,
+                                           "CubicSplineQuaternionKeyframeTrack"),
+                                       times, values, in_tangents, out_tangents)
+
+CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
+                                     property_path::AbstractString,
+                                     times::Vector{Float64},
+                                     values::Vector{Vector{Float64}},
+                                     in_tangents::Vector{Vector{Float64}},
+                                     out_tangents::Vector{Vector{Float64}}) =
+    CubicSplineMorphWeightsKeyframeTrack(target,
+                                         _parse_animation_whole_property_path(
+                                             property_path,
+                                             "CubicSplineMorphWeightsKeyframeTrack"),
+                                         times, values, in_tangents, out_tangents)
 
 # Catmull-Rom spline tangent: derivative estimated from the neighbouring
 # keyframes, clamped at the endpoints (matches three.js CubicInterpolant on a

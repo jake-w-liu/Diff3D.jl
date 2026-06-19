@@ -166,7 +166,10 @@ replacement for three.js `WebGLRenderer`.
   render-property tracks to drawable material fields such as color, opacity,
   roughness, metalness, Phong shininess/specular color, and physical scalar
   controls. Generated WebGL now reclassifies objects for transparent sorting
-  when opacity animation crosses below full opacity.
+  when opacity animation crosses below full opacity. Whole-value string paths
+  such as `material.color`, `material.emissive`, `quaternion`, and
+  `morphTargetInfluences` now bind through the same constructors as the symbol
+  paths for vector/quaternion/morph tracks.
   Browser export updates mesh morph positions from morph-weight tracks by
   streaming updated positions into the vertex buffer. CPU and browser playback
   also support scalar object, parent/group, and light visibility tracks,
@@ -479,7 +482,9 @@ Parallel audits split the remaining work into five critical tracks:
   LTC rectangular-area BRDF parity remains renderer/shader work.
 - Done: browser `RectAreaLight` runtime now matches the CPU finite-rectangle
   approximation by serializing position/forward/basis vectors and evaluating
-  3x3 rectangular quadrature in the mesh fragment shader.
+  3x3 rectangular quadrature in the mesh fragment shader. The browser rect
+  specular term is also masked by `N·L > 0` to match CPU direct-light behavior
+  for samples behind the shaded surface.
 
 ### Milestone 2: Material and texture parity
 

@@ -314,8 +314,8 @@ is_visible(o::HemisphereLight) = o.visible
 set_parent!(o::HemisphereLight, p) = (o.parent = p)
 
 # ========================== RectAreaLight ==========================
-# A rectangular emitter. Shaded as a directional source from its centre with an
-# emission plane defined by `target` (no distance falloff, single-sided).
+# A single-sided rectangular emitter. Lit paths integrate a small finite
+# quadrature over the target-facing plane with inverse-square falloff.
 
 mutable struct RectAreaLight <: AbstractLight
     position::Vec3{Float64}
