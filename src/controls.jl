@@ -1279,7 +1279,9 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
         return target
     end
     if hasproperty(target, property)
-        setproperty!(target, property, v)
+        current = getproperty(target, property)
+        setproperty!(target, property,
+                     current isa Color3 ? Color3(v.x, v.y, v.z) : v)
     elseif _write_material_track_value!(target, property, Color3(v.x, v.y, v.z))
         return target
     else

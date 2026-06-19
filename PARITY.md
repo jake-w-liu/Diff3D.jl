@@ -355,6 +355,10 @@ Parallel audits split the remaining work into five critical tracks:
   serialized, skinned, and used by tangent-space browser normal mapping.
   Skeleton pose/update lifecycle and renderer-program integration remain
   renderer work.
+- Done: preserve compact-browser bone parent IDs and recompute exported bone
+  hierarchies after animation tracks are sampled, so animated parent bones feed
+  child bone matrices before uniform, float bone-texture, or CPU fallback
+  skinning updates run.
 - Done: add mesh-level skinned bind metadata and attached/detached bind-mode
   semantics. CPU `apply_skinning`, glTF skin loading, browser uniform skinning,
   browser float bone-texture skinning, and browser CPU fallback now apply
@@ -696,6 +700,9 @@ Parallel audits split the remaining work into five critical tracks:
   ground color, intensity, distance, and decay fields. CPU light color/intensity
   `NumberKeyframeTrack` playback is also covered, so animated lighting changes
   can affect generated WebGL pages instead of remaining static serialized data.
+- Done: keep CPU whole-value vector light color tracks type-correct by writing
+  `Color3` fields back as `Color3`, including hemisphere `ground_color`, while
+  matching browser whole-value light `color`/`groundColor` vector export.
 - Done: bind generated-browser light transform and shape animation for the
   compact light fields used by shading: point/spot positions, directional and
   spot targets/directions, spot cone angle/penumbra, and rectangular-area-light

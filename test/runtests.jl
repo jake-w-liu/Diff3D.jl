@@ -1382,6 +1382,21 @@ end
                                            fill((1.0,0.0,0.0,0.0), 3);
                                            name="export_bone_texture_skin")
         add!(scene, bone_texture_skinned)
+        hierarchy_skin_geo = BufferGeometry([0.0,0,0, 0.4,0,0, 0.0,0.4,0],
+                                            [0.0,0,1.0, 0.0,0,1.0, 0.0,0,1.0],
+                                            [0.0,0, 1.0,0, 0.0,1.0], Int[1,2,3], 3, 1)
+        hierarchy_root = Bone(name="export_hierarchy_root")
+        hierarchy_child = Bone(name="export_hierarchy_child")
+        hierarchy_child.position = Vec3(0.35, 0.0, 0.0)
+        add!(hierarchy_root, hierarchy_child)
+        hierarchy_skeleton = Skeleton([hierarchy_root, hierarchy_child])
+        hierarchy_skinned = SkinnedMesh(hierarchy_skin_geo,
+                                        MeshStandardMaterial(color=Color3(0.95,0.35,0.35)),
+                                        hierarchy_skeleton,
+                                        fill((2,1,1,1), 3),
+                                        fill((1.0,0.0,0.0,0.0), 3);
+                                        name="export_hierarchy_skin")
+        add!(scene, hierarchy_skinned)
         hidden_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.9,0.4,0.1));
                            name="export_visibility")
         hidden_mesh.visible = false
@@ -1436,6 +1451,8 @@ end
                           [Vec3(2.0,0.0,0.0), Vec3(3.0,0.0,0.0)]),
             KeyframeTrack(shader_shadow_bone, :position, [0.0, 1.0],
                           [Vec3(0.2,0.0,0.0), Vec3(0.8,0.0,0.0)]),
+            KeyframeTrack(hierarchy_root, :position, [0.0, 1.0],
+                          [Vec3(0.0,0.0,0.0), Vec3(0.0,0.6,0.0)]),
             NumberKeyframeTrack(mesh, "position.y", [0.0, 1.0], [0.0, 0.35]),
             QuaternionKeyframeTrack(mesh, :quaternion, [0.0, 1.0],
                                     [Quaternion(), quat_from_euler(0.0, pi / 4, 0.0)]),
@@ -1472,6 +1489,10 @@ end
             NumberKeyframeTrack(phong_material_mesh, "specular.g", [0.0, 1.0], [0.92, 0.2]),
             NumberKeyframeTrack(ambient, "intensity", [0.0, 1.0], [0.1, 0.9]),
             NumberKeyframeTrack(ambient, "color.g", [0.0, 1.0], [0.3, 0.8]),
+            KeyframeTrack(ambient, :color, [0.0, 1.0],
+                          [Vec3(0.1,0.2,0.3), Vec3(0.7,0.8,0.9)]),
+            KeyframeTrack(hemi, :ground_color, [0.0, 1.0],
+                          [Vec3(0.1,0.2,0.3), Vec3(0.3,0.4,0.5)]),
             NumberKeyframeTrack(hemi, "groundColor.b", [0.0, 1.0], [0.04, 0.12]),
             KeyframeTrack(animated_dir, :position, [0.0, 1.0],
                           [Vec3(-2.0,3.0,1.0), Vec3(-3.0,2.5,1.4)]),
@@ -2017,6 +2038,7 @@ end
         @test occursin("\"weights\":[1,0,0,0,1,0,0,0,1,0,0,0]", html)
         @test occursin("\"bones\":[{\"id\":", html)
         @test occursin("\"name\":\"export_bone\"", html)
+        @test occursin("\"parentId\":0", html)
         @test occursin("\"basePosition\":[2,0,0]", html)
         @test occursin("\"baseScale\":[1,1,1]", html)
         @test occursin("\"baseQuaternion\":[0,0,0,1]", html)
@@ -2051,6 +2073,14 @@ end
         @test occursin("attrib(p,\"aSkinIndex\",o.skinIndexBuf,4)", html)
         @test occursin("attrib(p,\"aTangent\",o.tanBuf,4)", html)
         @test occursin("function skinMatrices", html)
+        @test occursin("\"name\":\"export_hierarchy_skin\"", html)
+        @test occursin("\"name\":\"export_hierarchy_root\"", html)
+        @test occursin("\"name\":\"export_hierarchy_child\"", html)
+        @test occursin(Regex("\"name\":\"export_hierarchy_child\".*?\"parentId\":$(hierarchy_root.id)"), html)
+        @test occursin("\"target\":$(hierarchy_root.id),\"property\":\"position\"", html)
+        @test occursin("function updateBoneGraph", html)
+        @test occursin("if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)) parent=graph.get(b.parentId).matrix; }", html)
+        @test occursin("updateTransformGraph(c); updateBoneGraph(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); }", html)
         @test occursin("uUseSkin", html)
         @test occursin("uUseTangents", html)
         @test occursin("function updateSkin", html)
@@ -2191,6 +2221,8 @@ end
         @test occursin("\"property\":\"spriteRotation\"", html)
         @test occursin("\"property\":\"spriteSizeAttenuation\"", html)
         @test occursin("\"property\":\"linewidth\"", html)
+        @test occursin("\"target\":$(ambient.id),\"property\":\"color\",\"kind\":\"vec3\"", html)
+        @test occursin("\"target\":$(hemi.id),\"property\":\"groundColor\",\"kind\":\"vec3\"", html)
         @test occursin("\"target\":$(animated_dir.id),\"property\":\"position\"", html)
         @test occursin("\"target\":$(animated_dir.id),\"property\":\"target\"", html)
         @test occursin("\"target\":$(moving_shadow_dir.id),\"property\":\"position\"", html)
@@ -4413,6 +4445,21 @@ end
         @test light.intensity ≈ 2.0
         @test light.color.r ≈ 0.2
         @test light.color.g ≈ 0.6
+        lcolor = KeyframeTrack(light, :color, [0.0, 1.0],
+                               [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
+        mixer_set_time!(AnimationMixer(AnimationClip("light_color", [lcolor])), 0.5)
+        @test light.color isa Color3
+        @test light.color.r ≈ 0.5
+        @test light.color.g ≈ 0.5
+        @test light.color.b ≈ 0.5
+        hemi_light = HemisphereLight(ground_color=Color3(0.1, 0.2, 0.3))
+        hground = KeyframeTrack(hemi_light, :ground_color, [0.0, 1.0],
+                                [Vec3(0.1, 0.2, 0.3), Vec3(0.5, 0.6, 0.7)])
+        mixer_set_time!(AnimationMixer(AnimationClip("hemi_ground", [hground])), 0.5)
+        @test hemi_light.ground_color isa Color3
+        @test hemi_light.ground_color.r ≈ 0.3
+        @test hemi_light.ground_color.g ≈ 0.4
+        @test hemi_light.ground_color.b ≈ 0.5
         lvis = NumberKeyframeTrack(light, "visible", [0.0, 1.0], [1.0, 0.0])
         mixer_set_time!(AnimationMixer(AnimationClip("light_visibility", [lvis])), 0.75)
         @test light.visible === false
