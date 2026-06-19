@@ -771,11 +771,12 @@ Parallel audits split the remaining work into five critical tracks:
 
 - Done: expand programmatic `OrbitControls` behavior with damping/inertia,
   pole-safe pan, zoom, and min/max distance, polar-angle, and azimuth-angle constraints.
-  Browser exporter controls now support orbit, wheel zoom, and right-drag or
-  shift-drag target panning, plus two-pointer touch-style pinch zoom and target
-  pan in the generated runtime. The exported canvas is keyboard-focusable and
-  supports arrow-key target panning plus `+`/`-` zoom. Higher-level DOM
-  integration details remain separate exporter/runtime work.
+  Browser exporter controls now support orbit, wheel zoom, middle-button drag
+  dolly, and right-drag, shift-drag, ctrl-drag, or meta-drag target panning,
+  plus two-pointer touch-style pinch zoom and target pan in the generated
+  runtime. The exported canvas is keyboard-focusable and supports arrow-key
+  target panning plus `+`/`-` zoom. Higher-level DOM integration details remain
+  separate exporter/runtime work.
 - Done: add focused programmatic equivalents for `TransformControls`,
   `PointerLockControls`, `TrackballControls`, and `DragControls` where feasible
   in a Julia workflow. Trackball controls now support rotate, pan, zoom,
@@ -785,8 +786,9 @@ Parallel audits split the remaining work into five critical tracks:
   raycaster. Browser DOM/touch/gizmo event semantics remain open.
 - Done: add `examples/browser_webgl_smoke.py`, a reusable Playwright browser
   smoke that opens generated HTML, switches cases, simulates pointer drag and
-  wheel zoom, exercises keyboard pan/zoom, forces an underside orbit view,
-  exercises synthetic two-pointer pinch input, checks that every exported
+  wheel zoom, exercises keyboard pan/zoom, verifies middle-button dolly and
+  ctrl-left target panning through runtime state, forces an underside orbit
+  view, exercises synthetic two-pointer pinch input, checks that every exported
   object remains drawn, and checks that the WebGL canvas stays drawable.
 
 ### Milestone 5: Official examples parity

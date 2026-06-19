@@ -60,6 +60,28 @@ def smoke_html(path: Path) -> int:
             page.keyboard.press("ArrowUp")
             page.keyboard.press("=")
             page.wait_for_timeout(250)
+            before_middle_dist = page.evaluate("() => window.__diff3dDebug.orbitDistance()")
+            middle_dy = -160 if before_middle_dist > 20 else 160
+            page.mouse.move(x, y)
+            page.mouse.down(button="middle")
+            page.mouse.move(x, y + middle_dy, steps=10)
+            page.mouse.up(button="middle")
+            page.wait_for_timeout(250)
+            after_middle_dist = page.evaluate("() => window.__diff3dDebug.orbitDistance()")
+            if abs(after_middle_dist - before_middle_dist) < 1e-5:
+                errors.append(f"{path}: middle-button drag did not dolly orbit distance in case {i}")
+            before_ctrl_pan = page.evaluate("() => window.__diff3dDebug.targetOffset()")
+            page.keyboard.down("Control")
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + 120, y + 60, steps=10)
+            page.mouse.up()
+            page.keyboard.up("Control")
+            page.wait_for_timeout(250)
+            after_ctrl_pan = page.evaluate("() => window.__diff3dDebug.targetOffset()")
+            ctrl_pan_delta = sum((a - b) ** 2 for a, b in zip(after_ctrl_pan, before_ctrl_pan)) ** 0.5
+            if ctrl_pan_delta < 1e-5:
+                errors.append(f"{path}: ctrl-left drag did not pan target offset in case {i}")
             page.keyboard.down("Shift")
             page.mouse.move(x, y)
             page.mouse.down()
