@@ -1747,6 +1747,12 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     scene = Scene()
     node_objects = Dict{Int, AbstractObject3D}()
     joint_nodes, skin_root_nodes = _gltf_skin_node_sets(gltf)
+    morph_animated_nodes = Set{Int}()
+    for anim in get(gltf, "animations", Any[]), ch in get(anim, "channels", Any[])
+        target = get(ch, "target", Dict{String,Any}())
+        get(target, "path", "") == "weights" && haskey(target, "node") &&
+            push!(morph_animated_nodes, Int(target["node"]))
+    end
     pending_skin_binds = SkinnedMesh[]
     pending_inverse_calcs = SkinnedMesh[]
 
@@ -1793,7 +1799,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
-                             morph_names=String[])
+                             morph_names=String[]; preserve_nontriangle_morphs::Bool=false)
         mode = Int(get(prim, "mode", 4))
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
@@ -1845,16 +1851,26 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
         if mode in (0, 1, 2, 3)
             geo = _gltf_expand_nontriangle_geometry(geo, indices)
-            _gltf_bake_static_morphs!(geo, morph_weights)
+            preserve_nontriangle_morphs || _gltf_bake_static_morphs!(geo, morph_weights)
         elseif isempty(normals)
             compute_vertex_normals!(geo)
         end
         mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
         has_attribute(geo, :color) && (mat = _gltf_enable_vertex_colors(mat))
-        mode == 0 && return PointsObject(geo, _gltf_points_material(mat))
-        mode == 1 && return LineSegments(geo, _gltf_line_material(mat))
-        mode == 2 && return LineLoop(geo, _gltf_line_material(mat))
-        mode == 3 && return LineObject(geo, _gltf_line_material(mat))
+        nontriangle_weights = preserve_nontriangle_morphs ? morph_weights : Float64[]
+        nontriangle_names = preserve_nontriangle_morphs ? morph_names : String[]
+        mode == 0 && return PointsObject(geo, _gltf_points_material(mat);
+                                         morph_target_influences=nontriangle_weights,
+                                         morph_target_names=nontriangle_names)
+        mode == 1 && return LineSegments(geo, _gltf_line_material(mat);
+                                         morph_target_influences=nontriangle_weights,
+                                         morph_target_names=nontriangle_names)
+        mode == 2 && return LineLoop(geo, _gltf_line_material(mat);
+                                     morph_target_influences=nontriangle_weights,
+                                     morph_target_names=nontriangle_names)
+        mode == 3 && return LineObject(geo, _gltf_line_material(mat);
+                                       morph_target_influences=nontriangle_weights,
+                                       morph_target_names=nontriangle_names)
         if skin_idx === nothing
             return Mesh(geo, mat; morph_target_influences=morph_weights,
                         morph_target_names=morph_names)
@@ -1927,8 +1943,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
                 end
-                mesh_obj = build_primitive(prim, get(node, "skin", nothing),
-                                           morph_weights, morph_names)
+                mesh_obj = build_primitive(
+                    prim, get(node, "skin", nothing), morph_weights, morph_names;
+                    preserve_nontriangle_morphs=(node_idx in morph_animated_nodes))
                 if instance_matrices === nothing
                     add!(obj, mesh_obj)
                 else

@@ -129,8 +129,10 @@ replacement for three.js `WebGLRenderer`.
   animated bone tracks export to browser shader-side uniform skinning for small
   skeletons, compact float bone-texture skinning for larger non-morphed
   skeletons on capable WebGL contexts, and CPU-side vertex-buffer fallback for
-  morphed or unsupported skinned meshes. Static morph target influences export
-  to browser geometry positions. Skinned meshes also carry attached/detached
+  morphed or unsupported skinned meshes. Static mesh morph target influences
+  export to browser geometry positions, and animated glTF point/line morph
+  weights now stay live through native point/line objects, CPU ray/render paths,
+  and compact browser morph buffers. Skinned meshes also carry attached/detached
   bind-mode metadata plus mesh-level bind matrices through CPU skinning, glTF
   loading, and browser export/runtime skinning paths. glTF
   `EXT_mesh_gpu_instancing` mesh nodes load into native `InstancedMesh`
@@ -729,8 +731,12 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse glTF morph target `POSITION`/`NORMAL`/`TANGENT` data, preserve
   `mesh.extras.targetNames`, and evaluate position, normal, and tangent morphs
   on CPU from mesh influences. Static point and line primitive morph weights
-  are baked into loaded geometry; animated point/line morph playback remains
-  outside the current object model.
+  are still baked into loaded geometry when no weight animation targets the
+  node, preserving existing static behavior. Animated point and line primitive
+  morph weights now remain live on `PointsObject`, `LineObject`, `LineLoop`,
+  and `LineSegments`, update through CPU morph-weight tracks, affect CPU
+  point/line raycasting and rendering, and serialize to compact browser morph
+  buffers.
 - Done: reject unsupported `extensionsRequired` entries before reading external
   buffers, while allowing required extensions covered by the current loader.
 - Done: parse glTF `weights` animation channels into CPU morph-weight tracks for

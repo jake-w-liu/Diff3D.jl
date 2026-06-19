@@ -1492,6 +1492,26 @@ end
                                                     size_attenuation=false);
                                      name="export_points_map")
         add!(scene, points_mapped)
+        morph_points_geo = BufferGeometry([0.0, 0.0, 0.0,
+                                           0.25, 0.0, 0.0],
+                                          Float64[], Float64[], Int[], 2, 0)
+        set_attribute!(morph_points_geo, :morphPosition0,
+                       [0.0, 0.0, 0.5, 0.0, 0.0, 0.5], 3)
+        morph_points = PointsObject(morph_points_geo,
+                                    PointsMaterial(color=Color3(0.2, 0.8, 1.0), size=6.0);
+                                    name="export_morph_points",
+                                    morph_target_influences=[0.25])
+        add!(scene, morph_points)
+        morph_line_geo = BufferGeometry([0.0, 0.0, 0.0,
+                                         0.4, 0.0, 0.0],
+                                        Float64[], Float64[], Int[], 2, 0)
+        set_attribute!(morph_line_geo, :morphPosition0,
+                       [0.0, 0.0, 0.25, 0.0, 0.0, 0.25], 3)
+        morph_line = LineSegments(morph_line_geo,
+                                  LineBasicMaterial(color=Color3(1.0, 0.6, 0.1));
+                                  name="export_morph_line",
+                                  morph_target_influences=[0.5])
+        add!(scene, morph_line)
         morph_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                    Float64[], Float64[], Int[1,2,3], 3, 1)
         set_attribute!(morph_geo, :morphPosition0,
@@ -1712,6 +1732,10 @@ end
                                       [0.0, 1.0], [[0.0], [1.0]]),
             NumberKeyframeTrack(morph_mesh, "morphTargetInfluences[0]",
                                 [0.0, 1.0], [0.0, 0.75]),
+            MorphWeightsKeyframeTrack(morph_points, :morph_target_influences,
+                                      [0.0, 1.0], [[0.25], [1.0]]),
+            MorphWeightsKeyframeTrack(morph_line, :morph_target_influences,
+                                      [0.0, 1.0], [[0.5], [0.0]]),
             NumberKeyframeTrack(hidden_mesh, "visible", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(hidden_group, "visible", [0.0, 1.0], [0.0, 1.0]),
             NumberKeyframeTrack(hidden_light, "visible", [0.0, 1.0], [0.0, 1.0]),
@@ -1840,6 +1864,17 @@ end
         @test occursin("\"repeat\":[0.5,0.75]", points_drawable)
         @test occursin("\"rotation\":0.10000000000000001", points_drawable)
         @test occursin("\"matrix\":[", points_drawable)
+        morph_points_drawable = only(filter(d -> occursin("\"name\":\"export_morph_points\"", d),
+                                            Diff3D._web_collect_drawables(scene)))
+        @test occursin("\"mode\":\"points\"", morph_points_drawable)
+        @test occursin("\"morphTargets\":[[0,0,0.5,0,0,0.5]]", morph_points_drawable)
+        @test occursin("\"morphWeights\":[0.25]", morph_points_drawable)
+        @test occursin("\"basePositions\":[0,0,0,0.25,0,0]", morph_points_drawable)
+        morph_line_drawable = only(filter(d -> occursin("\"name\":\"export_morph_line\"", d),
+                                          Diff3D._web_collect_drawables(scene)))
+        @test occursin("\"mode\":\"lines\"", morph_line_drawable)
+        @test occursin("\"morphTargets\":[[0,0,0.25,0,0,0.25]]", morph_line_drawable)
+        @test occursin("\"morphWeights\":[0.5]", morph_line_drawable)
         skin_drawable = only(filter(d -> occursin("\"name\":\"export_skin\"", d),
                                     Diff3D._web_collect_drawables(scene)))
         @test occursin("\"skin\":{", skin_drawable)
@@ -6418,6 +6453,34 @@ end
                                                         AbstractKeyframeTrack[tr_parent])), 1.0)
             @test child.morph_target_influences == [1.0]
 
+            point_geo = BufferGeometry([1.0, 1.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+            set_attribute!(point_geo, :morphPosition0, [0.0, -1.0, 0.0], 3)
+            points = PointsObject(point_geo, PointsMaterial(); morph_target_influences=[0.0])
+            point_parent = Group()
+            point_mid = Group()
+            add!(point_parent, point_mid)
+            add!(point_mid, points)
+            point_track = MorphWeightsKeyframeTrack(point_parent, :morph_target_influences,
+                                                    [0.0, 1.0], [[0.0], [1.0]])
+            mixer_set_time!(AnimationMixer(AnimationClip("point_weights",
+                                                        AbstractKeyframeTrack[point_track])), 1.0)
+            @test points.morph_target_influences == [1.0]
+            @test apply_morph_targets(points)[1] == Vec3(1.0, 0.0, 0.0)
+            point_hits = raycast(Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0);
+                                           point_threshold=0.05), points)
+            @test length(point_hits) == 1
+
+            line_geo = BufferGeometry([1.0, 1.0, 0.0, 1.0, 2.0, 0.0],
+                                      Float64[], Float64[], Int[], 2, 0)
+            set_attribute!(line_geo, :morphPosition0, [0.0, -1.0, 0.0, 0.0, -1.0, 0.0], 3)
+            line = LineSegments(line_geo, LineBasicMaterial(); morph_target_influences=[0.0])
+            line_track = MorphWeightsKeyframeTrack(line, "morphTargetInfluences",
+                                                   [0.0, 1.0], [[0.0], [1.0]])
+            mixer_set_time!(AnimationMixer(AnimationClip("line_weights",
+                                                        AbstractKeyframeTrack[line_track])), 0.5)
+            @test line.morph_target_influences ≈ [0.5]
+            @test apply_morph_targets(line)[1] == Vec3(1.0, 0.5, 0.0)
+
             tr_cubic = CubicSplineMorphWeightsKeyframeTrack(mesh, :morph_target_influences,
                                                             [0.0, 1.0],
                                                             [[0.0, 1.0], [1.0, 0.0]],
@@ -7940,7 +8003,8 @@ end
 
         @testset "load_gltf primitive modes" begin
             function primitive_mode_path(mode::Int, order::Vector{Int}; name="mode_$mode",
-                                         morph::Bool=false, weight::Real=0.5)
+                                         morph::Bool=false, weight::Real=0.5,
+                                         animate_weights::Bool=false)
                 dir = mktempdir()
                 bin = UInt8[]
                 append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
@@ -7954,6 +8018,15 @@ end
                     off_morph = length(bin)
                     append_f32!([0,0,2, 0,0,2, 0,0,2, 0,0,2])
                 end
+                off_anim_time = 0
+                off_anim_weight = 0
+                if animate_weights
+                    morph || error("animated primitive weights test requires morph=true")
+                    off_anim_time = length(bin)
+                    append_f32!([0, 1])
+                    off_anim_weight = length(bin)
+                    append_f32!([0, 1])
+                end
                 write(joinpath(dir, "primitive_mode.bin"), bin)
                 node_json = morph ?
                     "{\"name\":\"$name\",\"mesh\":0,\"weights\":[$(Float64(weight))]}" :
@@ -7962,19 +8035,27 @@ end
                     ",\n                   {\"buffer\":0,\"byteOffset\":$off_morph,\"byteLength\":48}" : ""
                 morph_accessor = morph ?
                     ",\n                   {\"bufferView\":2,\"componentType\":5126,\"count\":4,\"type\":\"VEC3\"}" : ""
+                anim_view = animate_weights ?
+                    ",\n                   {\"buffer\":0,\"byteOffset\":$off_anim_time,\"byteLength\":8}," *
+                    "\n                   {\"buffer\":0,\"byteOffset\":$off_anim_weight,\"byteLength\":8}" : ""
+                anim_accessor = animate_weights ?
+                    ",\n                   {\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"}," *
+                    "\n                   {\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"}" : ""
                 targets_json = morph ? ",\"targets\":[{\"POSITION\":2}]" : ""
+                animations_json = animate_weights ?
+                    ",\n                 \"animations\":[{\"name\":\"point_line_weights\",\"samplers\":[{\"input\":3,\"output\":4,\"interpolation\":\"LINEAR\"}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":0,\"path\":\"weights\"}}]}]" : ""
                 json = """
                 {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
                  "nodes":[$node_json],
                  "buffers":[{"byteLength":$(length(bin)),"uri":"primitive_mode.bin"}],
                  "bufferViews":[
                    {"buffer":0,"byteOffset":$off_pos,"byteLength":48},
-                   {"buffer":0,"byteOffset":$off_idx,"byteLength":$(2 * length(order))}$morph_view],
+                   {"buffer":0,"byteOffset":$off_idx,"byteLength":$(2 * length(order))}$morph_view$anim_view],
                  "accessors":[
                    {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},
-                   {"bufferView":1,"componentType":5123,"count":$(length(order)),"type":"SCALAR"}$morph_accessor],
+                   {"bufferView":1,"componentType":5123,"count":$(length(order)),"type":"SCALAR"}$morph_accessor$anim_accessor],
                  "meshes":[{"primitives":[{"attributes":{"POSITION":0},
-                                            "indices":1,"mode":$mode$targets_json}]}]}
+                                            "indices":1,"mode":$mode$targets_json}]}]$animations_json}
                 """
                 path = joinpath(dir, "primitive_mode.gltf")
                 write(path, json)
@@ -8016,6 +8097,27 @@ end
             @test morphed_line isa LineSegments
             @test get_vertex(morphed_line.geometry, 1) == Vec3(0.0, 0.0, 0.5)
             @test get_vertex(morphed_line.geometry, 2) == Vec3(1.0, 0.0, 0.5)
+
+            animated_point_asset = load_gltf_asset(
+                primitive_mode_path(0, [2, 0]; name="animated_points",
+                                    morph=true, weight=0.0, animate_weights=true))
+            animated_pts = get_children(get_children(animated_point_asset.scene)[1])[1]
+            @test animated_pts isa PointsObject
+            @test animated_pts.morph_target_influences == [0.0]
+            @test has_attribute(animated_pts.geometry, :morphPosition0)
+            @test get_vertex(animated_pts.geometry, 1) == Vec3(0.0, 1.0, 0.0)
+            mixer_set_time!(AnimationMixer(animated_point_asset.animations[1]), 0.5)
+            @test animated_pts.morph_target_influences ≈ [0.5]
+            @test apply_morph_targets(animated_pts)[1] == Vec3(0.0, 1.0, 1.0)
+
+            animated_line_asset = load_gltf_asset(
+                primitive_mode_path(1, [0, 1]; name="animated_lines",
+                                    morph=true, weight=0.0, animate_weights=true))
+            animated_line = get_children(get_children(animated_line_asset.scene)[1])[1]
+            @test animated_line isa LineSegments
+            mixer_set_time!(AnimationMixer(animated_line_asset.animations[1]), 0.25)
+            @test animated_line.morph_target_influences ≈ [0.25]
+            @test apply_morph_targets(animated_line)[2] == Vec3(1.0, 0.0, 0.5)
 
             tri_obj = mode_object(4, [0, 1, 2])
             @test tri_obj isa Mesh

@@ -166,9 +166,10 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa PointsObject
         wm = compute_world_matrix(obj)
         geo = obj.geometry
+        morphed_positions = _object_morph_positions(obj, geo)
         thr = rc.point_threshold
         @inbounds for vi in 1:geo.n_vertices
-            p = mat4_transform_point(wm, get_vertex(geo, vi))
+            p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
             t, dist = _ray_point_distance(o, d, p)
             if dist < thr && rc.near <= t <= rc.far
                 # Report the point itself as the hit location; face_index = vertex index.
@@ -178,14 +179,15 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         wm = compute_world_matrix(obj)
         geo = obj.geometry
+        morphed_positions = _object_morph_positions(obj, geo)
         thr = rc.line_threshold
         # LineSegments: disjoint pairs. LineObject: consecutive vertices.
         # LineLoop closes the final vertex back to the first, matching three.js.
         step = obj isa LineSegments ? 2 : 1
         nv = geo.n_vertices
         @inbounds for vi in 1:step:(nv - 1)
-            a = mat4_transform_point(wm, get_vertex(geo, vi))
-            b = mat4_transform_point(wm, get_vertex(geo, vi + 1))
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi + 1))
             t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
             if dist < thr && rc.near <= t <= rc.far
                 # face_index = the segment's start vertex index (three.js index).
@@ -193,8 +195,8 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
             end
         end
         if obj isa LineLoop && nv > 2
-            a = mat4_transform_point(wm, get_vertex(geo, nv))
-            b = mat4_transform_point(wm, get_vertex(geo, 1))
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, nv))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, 1))
             t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
             if dist < thr && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, seg_pt, obj, nv))

@@ -294,7 +294,8 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     stamp = zeros(Int, rt.height, rt.width)
     stamp_id = 0
 
-    function draw_line_geometry!(geo, material, wm::Mat4, line_mode::Symbol)
+    function draw_line_geometry!(geo, material, wm::Mat4, line_mode::Symbol,
+                                 morphed_positions=nothing)
         col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
         linewidth = hasfield(typeof(material), :linewidth) ? material.linewidth : 1.0
         alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
@@ -304,8 +305,8 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
         nv = geo.n_vertices
         i = 1
         while i + 1 <= nv
-            a = mat4_transform_point(wm, get_vertex(geo, i))
-            b = mat4_transform_point(wm, get_vertex(geo, i+1))
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i+1))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -313,8 +314,8 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             i += stride
         end
         if line_mode === :line_loop && nv > 2
-            a = mat4_transform_point(wm, get_vertex(geo, nv))
-            b = mat4_transform_point(wm, get_vertex(geo, 1))
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, nv))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, 1))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -328,7 +329,10 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
         if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
             line_mode = obj isa LineSegments ? :lines :
                         obj isa LineLoop ? :line_loop : :line_strip
-            draw_line_geometry!(obj.geometry, obj.material, compute_world_matrix(obj), line_mode)
+            geo = obj.geometry
+            morphed_positions = _object_morph_positions(obj, geo)
+            draw_line_geometry!(geo, obj.material, compute_world_matrix(obj), line_mode,
+                                morphed_positions)
         elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
             base = compute_world_matrix(obj)
             for M in obj.instance_matrices
@@ -535,7 +539,7 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     near = _camera_near(camera)
     W, H = rt.width, rt.height
 
-    function draw_points_geometry!(geo, material, wm::Mat4)
+    function draw_points_geometry!(geo, material, wm::Mat4, morphed_positions=nothing)
         col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
         alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
         depth_test = material_depth_test(material)
@@ -551,7 +555,7 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
         reference_depth = camera isa PerspectiveCamera ?
             max(norm(camera.position - camera.target), near) : 1.0
         for vi in 1:geo.n_vertices
-            pv = mat4_transform_point(view, mat4_transform_point(wm, get_vertex(geo, vi)))
+            pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
             pv.z <= -near || continue      # near-plane cull, matching the mesh path
             (px, py, pz, ok) = _project(proj, pv, W, H)
             ok || continue
@@ -587,7 +591,9 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     traverse(scene, function(obj)
         _visible_in_tree(obj) || return
         if obj isa PointsObject
-            draw_points_geometry!(obj.geometry, obj.material, compute_world_matrix(obj))
+            geo = obj.geometry
+            draw_points_geometry!(geo, obj.material, compute_world_matrix(obj),
+                                  _object_morph_positions(obj, geo))
         elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
             base = compute_world_matrix(obj)
             for M in obj.instance_matrices

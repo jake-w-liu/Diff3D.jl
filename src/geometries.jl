@@ -91,6 +91,18 @@ function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Rea
     return out
 end
 
+function _object_morph_positions(obj, geo::BufferGeometry)
+    hasproperty(obj, :morph_target_influences) || return nothing
+    influences = getproperty(obj, :morph_target_influences)
+    isempty(influences) && return nothing
+    return apply_morph_targets(geo, influences)
+end
+
+@inline _geometry_vertex(geo::BufferGeometry, morphed_positions::Nothing, i::Int) =
+    get_vertex(geo, i)
+@inline _geometry_vertex(geo::BufferGeometry, morphed_positions::AbstractVector, i::Int) =
+    morphed_positions[i]
+
 function _normalize_attribute3!(data::Vector{Float64}, n_vertices::Int, item_size::Int)
     @inbounds for vi in 1:n_vertices
         base = (vi - 1) * item_size + 1

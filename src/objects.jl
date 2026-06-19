@@ -123,11 +123,25 @@ mutable struct LineSegments <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
-function LineSegments(geometry, material; name="LineSegments")
+function LineSegments(geometry, material; name="LineSegments",
+                      morph_target_influences=Float64[], morph_target_names=String[])
     LineSegments(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-                 true, name, _next_id(), geometry, material)
+                 true, name, _next_id(), geometry, material,
+                 collect(Float64, morph_target_influences),
+                 collect(String, morph_target_names))
+end
+
+function LineSegments(position::Vec3{Float64}, rotation::Euler{Float64},
+                      scale::Vec3{Float64},
+                      parent::Union{Nothing, AbstractObject3D},
+                      children::Vector{AbstractObject3D},
+                      visible::Bool, name::String, id::Int, geometry, material)
+    LineSegments(position, rotation, scale, parent, children, visible, name, id,
+                 geometry, material, Float64[], String[])
 end
 
 get_position(o::LineSegments) = o.position
@@ -137,6 +151,8 @@ get_children(o::LineSegments) = o.children
 get_parent(o::LineSegments) = o.parent
 is_visible(o::LineSegments) = o.visible
 set_parent!(o::LineSegments, p) = (o.parent = p)
+apply_morph_targets(line::LineSegments) =
+    apply_morph_targets(line.geometry, line.morph_target_influences)
 
 # ========================== LineLoop ==========================
 # Geometry vertices interpreted as a closed polyline; the final vertex reconnects to the first.
@@ -152,11 +168,25 @@ mutable struct LineLoop <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
-function LineLoop(geometry, material; name="LineLoop")
+function LineLoop(geometry, material; name="LineLoop",
+                  morph_target_influences=Float64[], morph_target_names=String[])
     LineLoop(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-             true, name, _next_id(), geometry, material)
+             true, name, _next_id(), geometry, material,
+             collect(Float64, morph_target_influences),
+             collect(String, morph_target_names))
+end
+
+function LineLoop(position::Vec3{Float64}, rotation::Euler{Float64},
+                  scale::Vec3{Float64},
+                  parent::Union{Nothing, AbstractObject3D},
+                  children::Vector{AbstractObject3D},
+                  visible::Bool, name::String, id::Int, geometry, material)
+    LineLoop(position, rotation, scale, parent, children, visible, name, id,
+             geometry, material, Float64[], String[])
 end
 
 get_position(o::LineLoop) = o.position
@@ -166,6 +196,8 @@ get_children(o::LineLoop) = o.children
 get_parent(o::LineLoop) = o.parent
 is_visible(o::LineLoop) = o.visible
 set_parent!(o::LineLoop, p) = (o.parent = p)
+apply_morph_targets(line::LineLoop) =
+    apply_morph_targets(line.geometry, line.morph_target_influences)
 
 # ========================== Sprite ==========================
 # A camera-facing billboard.

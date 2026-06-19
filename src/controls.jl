@@ -1495,9 +1495,7 @@ function _write_morph_component!(target, property::Symbol, component::Int, v::Re
         return true
     end
     wrote |= write_one!(target)
-    for child in get_children(target)
-        wrote |= write_one!(child)
-    end
+    traverse(target, obj -> obj !== target && (wrote |= write_one!(obj)))
     wrote || throw(ArgumentError("target does not expose morph target influences"))
     return target
 end
@@ -1524,12 +1522,13 @@ function _write_track_value!(target, property::Symbol, v::Vector{Float64})
             setproperty!(target, property, copy(v))
             wrote = true
         end
-        for child in get_children(target)
+        traverse(target, child -> begin
+            child === target && return
             if hasproperty(child, property)
                 setproperty!(child, property, copy(v))
                 wrote = true
             end
-        end
+        end)
         wrote || setproperty!(target, property, copy(v))
     else
         setproperty!(target, property, copy(v))

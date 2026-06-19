@@ -228,12 +228,25 @@ mutable struct LineObject <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
-function LineObject(geometry, material; name="Line")
+function LineObject(geometry, material; name="Line",
+                    morph_target_influences=Float64[], morph_target_names=String[])
     LineObject(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
-              geometry, material)
+              geometry, material, collect(Float64, morph_target_influences),
+              collect(String, morph_target_names))
+end
+
+function LineObject(position::Vec3{Float64}, rotation::Euler{Float64},
+                    scale::Vec3{Float64},
+                    parent::Union{Nothing, AbstractObject3D},
+                    children::Vector{AbstractObject3D},
+                    visible::Bool, name::String, id::Int, geometry, material)
+    LineObject(position, rotation, scale, parent, children, visible, name, id,
+               geometry, material, Float64[], String[])
 end
 
 get_position(o::LineObject) = o.position
@@ -243,6 +256,8 @@ get_children(o::LineObject) = o.children
 get_parent(o::LineObject) = o.parent
 is_visible(o::LineObject) = o.visible
 set_parent!(o::LineObject, p) = (o.parent = p)
+apply_morph_targets(line::LineObject) =
+    apply_morph_targets(line.geometry, line.morph_target_influences)
 
 # ========================== Points ==========================
 
@@ -257,12 +272,25 @@ mutable struct PointsObject <: AbstractObject3D
     id::Int
     geometry::Any
     material::Any
+    morph_target_influences::Vector{Float64}
+    morph_target_names::Vector{String}
 end
 
-function PointsObject(geometry, material; name="Points")
+function PointsObject(geometry, material; name="Points",
+                      morph_target_influences=Float64[], morph_target_names=String[])
     PointsObject(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
                  nothing, AbstractObject3D[], true, name, _next_id(),
-                 geometry, material)
+                 geometry, material, collect(Float64, morph_target_influences),
+                 collect(String, morph_target_names))
+end
+
+function PointsObject(position::Vec3{Float64}, rotation::Euler{Float64},
+                      scale::Vec3{Float64},
+                      parent::Union{Nothing, AbstractObject3D},
+                      children::Vector{AbstractObject3D},
+                      visible::Bool, name::String, id::Int, geometry, material)
+    PointsObject(position, rotation, scale, parent, children, visible, name, id,
+                 geometry, material, Float64[], String[])
 end
 
 get_position(o::PointsObject) = o.position
@@ -272,6 +300,8 @@ get_children(o::PointsObject) = o.children
 get_parent(o::PointsObject) = o.parent
 is_visible(o::PointsObject) = o.visible
 set_parent!(o::PointsObject, p) = (o.parent = p)
+apply_morph_targets(points::PointsObject) =
+    apply_morph_targets(points.geometry, points.morph_target_influences)
 
 # ========================== Traversal ==========================
 

@@ -688,8 +688,10 @@ function _web_flatten_vec3(vs::AbstractVector{<:Vec3})
 end
 
 function _web_positions(obj, geo::BufferGeometry)
-    if obj isa Mesh && !isempty(obj.morph_target_influences)
-        return _web_flatten_vec3(apply_morph_targets(obj))
+    obj isa SkinnedMesh && return geo.positions
+    morphed_positions = _object_morph_positions(obj, geo)
+    if morphed_positions !== nothing
+        return _web_flatten_vec3(morphed_positions)
     end
     return geo.positions
 end
@@ -722,7 +724,8 @@ function _web_morph_vec3_targets(geo::BufferGeometry, prefix::String)
 end
 
 function _web_morph_targets_json(obj, geo::BufferGeometry)
-    (obj isa Mesh || obj isa SkinnedMesh) || return "\"morphTargets\":[],\"morphWeights\":[]"
+    hasproperty(obj, :morph_target_influences) ||
+        return "\"morphTargets\":[],\"morphWeights\":[]"
     targets = String[]
     i = 0
     while true
