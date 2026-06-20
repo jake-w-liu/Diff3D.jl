@@ -205,8 +205,9 @@ replacement for three.js `WebGLRenderer`.
   logarithmic depth, full tone-output/color-management parity, and texture
   sampling parity.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
-  KTX2Loader, EXR/RGBE/HDR loaders, SVGLoader, FontLoader, AudioLoader, and
-  other three.js examples infrastructure.
+  KTX2Loader, EXR loaders, broader HDR/environment-map infrastructure,
+  SVGLoader, FontLoader, AudioLoader, and other three.js examples
+  infrastructure.
 - Full controls/event parity such as remaining OrbitControls browser/touch
   details, TransformControls, DragControls, PointerLockControls,
   TrackballControls, keyboard/mouse/touch event interoperability, and DOM
@@ -750,6 +751,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: validate glTF data URI resources with strict base64 decoding for both
   embedded buffers and images, while keeping the exported general-purpose
   `base64_decode` helper backward-compatible.
+- Done: add Radiance RGBE/HDR texture loading via `load_rgbe`, `load_hdr`, and
+  `RGBELoader`, covering flat and standard per-channel RLE scanlines,
+  orientation signs, RGBE-to-linear floating-point conversion, and clear errors
+  for malformed headers/truncated payloads. EXR, KTX2/Basis, PMREM generation,
+  and broader environment-map loader parity remain open.
 - Done: parse basic glTF material extensions/properties:
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, and
   `occlusionTexture.strength`.

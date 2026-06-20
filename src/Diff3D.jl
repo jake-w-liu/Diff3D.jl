@@ -231,7 +231,7 @@ export
 
     # Loaders
     compute_vertex_normals!, save_stl_binary, load_stl, load_obj,
-    inflate, zlib_inflate, load_png, TextureLoader,
+    inflate, zlib_inflate, load_png, load_rgbe, load_hdr, TextureLoader, RGBELoader,
     load_mtl, load_obj_groups, base64_decode, load_gltf,
     GLTFAsset, load_gltf_asset, parse_xyz, load_xyz,
 

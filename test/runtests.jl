@@ -4988,6 +4988,86 @@ end
         @test Diff3D.sample_texture_channel(aptex, 0.5, 0.5, 4; default=1.0) < 1.0
     end
 
+    @testset "Radiance RGBE/HDR decode" begin
+        function hdr_bytes(width, height, pixel_bytes; ysign="-", xsign="+")
+            bytes = Vector{UInt8}(codeunits(
+                "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n$(ysign)Y $height $(xsign)X $width\n"))
+            append!(bytes, pixel_bytes)
+            return bytes
+        end
+
+        flat_pixels = UInt8[
+            128, 64, 32, 129,    0, 0, 0, 0,
+             64,128,255, 130,   32,32,32,128,
+        ]
+        flat_path = tempname() * ".hdr"
+        write(flat_path, hdr_bytes(2, 2, flat_pixels))
+        flat = load_rgbe(flat_path)
+        @test size(flat) == (2, 2, 3)
+        @test flat[1, 1, :] ≈ [1.0, 0.5, 0.25]
+        @test flat[1, 2, :] == [0.0, 0.0, 0.0]
+        @test flat[2, 1, :] ≈ [1.0, 2.0, 255 / 64]
+        @test flat[2, 2, :] ≈ [0.125, 0.125, 0.125]
+        @test load_hdr(flat_path) == flat
+        tex = RGBELoader(flat_path)
+        @test tex isa Texture
+        @test tex.colorspace === :linear
+        @test tex.data == flat
+        rm(flat_path)
+
+        flipped_path = tempname() * ".hdr"
+        write(flipped_path, hdr_bytes(2, 1, UInt8[128,0,0,129, 0,128,0,129];
+                                      ysign="+", xsign="-"))
+        flipped = load_rgbe(flipped_path)
+        @test flipped[1, 1, :] ≈ [0.0, 1.0, 0.0]
+        @test flipped[1, 2, :] ≈ [1.0, 0.0, 0.0]
+        rm(flipped_path)
+
+        function rle_channel(vals::Vector{UInt8})
+            if all(==(vals[1]), vals)
+                return UInt8[0x80 + UInt8(length(vals)), vals[1]]
+            end
+            return UInt8[UInt8(length(vals)); vals]
+        end
+        function rle_scanline(width, r, g, b, e)
+            bytes = UInt8[0x02, 0x02, UInt8(width >> 8), UInt8(width & 0xff)]
+            append!(bytes, rle_channel(r))
+            append!(bytes, rle_channel(g))
+            append!(bytes, rle_channel(b))
+            append!(bytes, rle_channel(e))
+            return bytes
+        end
+        width = 8
+        rle_pixels = UInt8[]
+        append!(rle_pixels, rle_scanline(width, fill(UInt8(128), width),
+                                         UInt8[0,16,32,48,64,80,96,112],
+                                         fill(UInt8(64), width),
+                                         fill(UInt8(129), width)))
+        append!(rle_pixels, rle_scanline(width, UInt8[8,16,24,32,40,48,56,64],
+                                         fill(UInt8(128), width),
+                                         fill(UInt8(0), width),
+                                         fill(UInt8(130), width)))
+        rle_path = tempname() * ".hdr"
+        write(rle_path, hdr_bytes(width, 2, rle_pixels))
+        rle = load_rgbe(rle_path)
+        @test size(rle) == (2, width, 3)
+        @test rle[1, 1, :] ≈ [1.0, 0.0, 0.5]
+        @test rle[1, 8, :] ≈ [1.0, 112 / 128, 0.5]
+        @test rle[2, 1, :] ≈ [8 / 64, 2.0, 0.0]
+        @test rle[2, 8, :] ≈ [1.0, 2.0, 0.0]
+        rm(rle_path)
+
+        bad_format = tempname() * ".hdr"
+        write(bad_format, Vector{UInt8}(codeunits("#?RADIANCE\nFORMAT=32-bit_rle_xyze\n\n-Y 1 +X 1\n")))
+        @test_throws ErrorException load_rgbe(bad_format)
+        rm(bad_format)
+
+        truncated = tempname() * ".hdr"
+        write(truncated, hdr_bytes(2, 1, UInt8[128, 128, 128, 129]))
+        @test_throws ErrorException load_rgbe(truncated)
+        rm(truncated)
+    end
+
     @testset "OBJ .mtl materials" begin
         dir = mktempdir()
         save_png(joinpath(dir, "diffuse.png"), fill(0.25, 1, 1, 3))

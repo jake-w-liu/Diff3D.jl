@@ -453,6 +453,163 @@ end
 """Load a PNG into a [`Texture`]."""
 TextureLoader(path::String; kwargs...) = Texture(load_png(path); kwargs...)
 
+# ========================== Radiance RGBE / HDR decode ==========================
+
+function _rgbe_read_line(bytes::Vector{UInt8}, pos::Int)
+    pos <= length(bytes) || error("RGBE file ended before header completed")
+    start = pos
+    while pos <= length(bytes) && bytes[pos] != UInt8('\n')
+        pos += 1
+    end
+    line_bytes = collect(@view bytes[start:pos-1])
+    if !isempty(line_bytes) && line_bytes[end] == UInt8('\r')
+        pop!(line_bytes)
+    end
+    pos <= length(bytes) && bytes[pos] == UInt8('\n') && (pos += 1)
+    return String(line_bytes), pos
+end
+
+function _rgbe_parse_resolution(line::AbstractString)
+    parts = split(strip(line))
+    length(parts) == 4 || return nothing
+    function axis_token(tok)
+        length(tok) == 2 || return nothing
+        sign = tok[1]
+        axis = tok[2]
+        (sign == '+' || sign == '-') || return nothing
+        (axis == 'X' || axis == 'Y') || return nothing
+        return (axis=axis, sign=sign)
+    end
+    a1 = axis_token(parts[1])
+    a2 = axis_token(parts[3])
+    (a1 === nothing || a2 === nothing) && return nothing
+    n1 = tryparse(Int, parts[2])
+    n2 = tryparse(Int, parts[4])
+    (n1 === nothing || n2 === nothing || n1 <= 0 || n2 <= 0) && return nothing
+    (a1.axis == 'Y' && a2.axis == 'X') ||
+        error("RGBE loader supports Y-major resolution lines like -Y height +X width")
+    return (height=n1, width=n2, y_sign=a1.sign, x_sign=a2.sign)
+end
+
+@inline _rgbe_value(c::UInt8, e::UInt8) =
+    e == 0x00 ? 0.0 : ldexp(Float64(c), Int(e) - 136)
+
+function _rgbe_flat_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
+    needed = 4 * width
+    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
+    channels = Matrix{UInt8}(undef, 4, width)
+    @inbounds for x in 1:width
+        base = pos + 4 * (x - 1)
+        channels[1, x] = bytes[base]
+        channels[2, x] = bytes[base + 1]
+        channels[3, x] = bytes[base + 2]
+        channels[4, x] = bytes[base + 3]
+    end
+    return channels, pos + needed
+end
+
+function _rgbe_rle_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
+    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
+    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
+        return _rgbe_flat_scanline(bytes, pos, width)
+    (bytes[pos + 2] & 0x80) == 0x00 ||
+        error("unsupported old-style RGBE run-length encoding")
+    encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
+    encoded_width == width ||
+        error("RGBE RLE scanline width $encoded_width does not match header width $width")
+    pos += 4
+    channels = Matrix{UInt8}(undef, 4, width)
+    @inbounds for c in 1:4
+        x = 1
+        while x <= width
+            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
+            count = Int(bytes[pos])
+            pos += 1
+            if count > 128
+                run = count - 128
+                run > 0 || error("RGBE RLE run length must be positive")
+                x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
+                pos <= length(bytes) || error("RGBE RLE run value is truncated")
+                value = bytes[pos]
+                pos += 1
+                for i in x:(x + run - 1)
+                    channels[c, i] = value
+                end
+                x += run
+            elseif count > 0
+                x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
+                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
+                for i in x:(x + count - 1)
+                    channels[c, i] = bytes[pos]
+                    pos += 1
+                end
+                x += count
+            else
+                error("RGBE RLE packet length must be positive")
+            end
+        end
+    end
+    return channels, pos
+end
+
+function _decode_rgbe(bytes::Vector{UInt8})
+    line, pos = _rgbe_read_line(bytes, 1)
+    (startswith(line, "#?RADIANCE") || startswith(line, "#?RGBE")) ||
+        error("not a Radiance RGBE/HDR file")
+    have_format = false
+    resolution = nothing
+    while pos <= length(bytes)
+        line, pos = _rgbe_read_line(bytes, pos)
+        s = strip(line)
+        isempty(s) && continue
+        parsed_resolution = _rgbe_parse_resolution(s)
+        if parsed_resolution !== nothing
+            resolution = parsed_resolution
+            break
+        elseif startswith(s, "FORMAT=")
+            s == "FORMAT=32-bit_rle_rgbe" ||
+                error("unsupported RGBE format $(repr(s)); expected FORMAT=32-bit_rle_rgbe")
+            have_format = true
+        end
+    end
+    have_format || error("RGBE FORMAT=32-bit_rle_rgbe header is required")
+    resolution === nothing && error("RGBE resolution line is missing")
+
+    height = resolution.height
+    width = resolution.width
+    img = Array{Float64}(undef, height, width, 3)
+    use_rle = 8 <= width <= 0x7fff
+    @inbounds for sy in 1:height
+        channels, pos = use_rle ? _rgbe_rle_scanline(bytes, pos, width) :
+                                  _rgbe_flat_scanline(bytes, pos, width)
+        row = resolution.y_sign == '-' ? sy : height - sy + 1
+        for sx in 1:width
+            col = resolution.x_sign == '+' ? sx : width - sx + 1
+            e = channels[4, sx]
+            img[row, col, 1] = _rgbe_value(channels[1, sx], e)
+            img[row, col, 2] = _rgbe_value(channels[2, sx], e)
+            img[row, col, 3] = _rgbe_value(channels[3, sx], e)
+        end
+    end
+    return img
+end
+
+"""
+    load_rgbe(path) -> Array{Float64,3}
+
+Decode a Radiance RGBE/HDR image with `FORMAT=32-bit_rle_rgbe` into a linear
+H×W×3 floating-point array. Supports both flat scanlines and the standard
+per-channel RLE scanline encoding used by `.hdr` environment maps.
+"""
+load_rgbe(path::String) = _decode_rgbe(read(path))
+
+"""Alias for [`load_rgbe`](@ref), matching common `.hdr` file naming."""
+load_hdr(path::String) = load_rgbe(path)
+
+"""Load a Radiance RGBE/HDR image into a linear [`Texture`]."""
+RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
+    Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
+
 # ========================== OBJ .mtl materials ==========================
 
 """
