@@ -1452,13 +1452,35 @@ function _svg_attribute_selector(raw::AbstractString)
     if m !== nothing
         return _SVGAttributeSelector(lowercase(m.captures[1]), :exists, "")
     end
-    m = match(r"^([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(.+)$", s)
+    m = match(r"^([A-Za-z_:][-A-Za-z0-9_:.]*)\s*(~=|\|=|\^=|\$=|\*=|=)\s*(.+)$", s)
     if m !== nothing
-        value = _svg_unquote_css_attr_value(m.captures[2])
+        value = _svg_unquote_css_attr_value(m.captures[3])
         value === nothing && return nothing
-        return _SVGAttributeSelector(lowercase(m.captures[1]), :equals, value)
+        op = Dict("=" => :equals, "~=" => :includes, "|=" => :dashmatch,
+                  "^=" => :prefix, "\$=" => :suffix, "*=" => :substring)[m.captures[2]]
+        return _SVGAttributeSelector(lowercase(m.captures[1]), op, value)
     end
     return nothing
+end
+
+function _svg_unsupported_selector_syntax(raw::String)
+    bracket_depth = 0
+    active_quote = nothing
+    for ch in raw
+        if active_quote !== nothing
+            ch == active_quote && (active_quote = nothing)
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+        elseif ch == '['
+            bracket_depth += 1
+        elseif ch == ']'
+            bracket_depth == 0 && return true
+            bracket_depth -= 1
+        elseif bracket_depth == 0 && (ch == '>' || ch == '+' || ch == '~' || ch == ':')
+            return true
+        end
+    end
+    return active_quote !== nothing || bracket_depth != 0
 end
 
 function _svg_selector_parts(raw::String)
@@ -1494,10 +1516,26 @@ function _svg_selector_parts(raw::String)
     return parts
 end
 
+function _svg_selector_bracket_close(rest::String)
+    first(rest) == '[' || return nothing
+    active_quote = nothing
+    for i in eachindex(rest)
+        ch = rest[i]
+        if active_quote !== nothing
+            ch == active_quote && (active_quote = nothing)
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+        elseif ch == ']' && i != firstindex(rest)
+            return i
+        end
+    end
+    return nothing
+end
+
 function _svg_simple_selector(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
-    occursin(r"[>+~:]", raw) && return nothing
+    _svg_unsupported_selector_syntax(raw) && return nothing
 
     rest = raw
     tag = nothing
@@ -1517,9 +1555,8 @@ function _svg_simple_selector(selector::AbstractString)
     while !isempty(rest)
         prefix = rest[1]
         if prefix == '['
-            close_idx = findfirst(==(']'), rest)
+            close_idx = _svg_selector_bracket_close(rest)
             close_idx === nothing && return nothing
-            close_idx == firstindex(rest) && return nothing
             content = rest[nextind(rest, firstindex(rest)):prevind(rest, close_idx)]
             attr = _svg_attribute_selector(content)
             attr === nothing && return nothing
@@ -1549,7 +1586,7 @@ end
 function _svg_selector_chain(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
-    occursin(r"[>+~:]", raw) && return nothing
+    _svg_unsupported_selector_syntax(raw) && return nothing
     chain = _SVGSimpleSelector[]
     parts = _svg_selector_parts(raw)
     parts === nothing && return nothing
@@ -1597,10 +1634,33 @@ function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
         all(cls -> cls in classes, selector.classes) || return false
     end
     for attr in selector.attributes
+        value = get(attrs, attr.key, nothing)
         if attr.op === :exists
             haskey(attrs, attr.key) || return false
         elseif attr.op === :equals
-            get(attrs, attr.key, nothing) == attr.value || return false
+            value == attr.value || return false
+        elseif attr.op === :includes
+            value !== nothing || return false
+            !isempty(attr.value) || return false
+            attr.value in split(value) || return false
+        elseif attr.op === :dashmatch
+            value !== nothing || return false
+            if value != attr.value
+                !isempty(attr.value) || return false
+                startswith(value, attr.value * "-") || return false
+            end
+        elseif attr.op === :prefix
+            value !== nothing || return false
+            !isempty(attr.value) || return false
+            startswith(value, attr.value) || return false
+        elseif attr.op === :suffix
+            value !== nothing || return false
+            !isempty(attr.value) || return false
+            endswith(value, attr.value) || return false
+        elseif attr.op === :substring
+            value !== nothing || return false
+            !isempty(attr.value) || return false
+            occursin(attr.value, value) || return false
         else
             return false
         end

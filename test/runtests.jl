@@ -5428,6 +5428,39 @@ end
         @test css_strokes[3].material.opacity == 0.125
         rm(css_path)
 
+        attr_ops_path = tempname() * ".svg"
+        write(attr_ops_path, """
+        <svg>
+          <style>
+            [data-tags ~= "selected"] { fill: #f00; }
+            [lang|=en] { stroke: #0f0; }
+            rect[href^="https://"] { fill-opacity: .2; }
+            rect[href\$=".svg"] { stroke-opacity: .3; }
+            rect[title*="icon"] { stroke-width: 4; }
+          </style>
+          <rect data-tags="base selected focus" lang="en-US"
+                href="https://example.com/logo.svg" title="main icon glyph"
+                width="1" height="1"/>
+          <rect x="2" data-tags="base" lang="fr"
+                href="http://example.com/logo.png" title="main glyph"
+                width="1" height="1"/>
+        </svg>
+        """)
+        attr_ops_svg = load_svg(attr_ops_path)
+        @test attr_ops_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test attr_ops_svg.paths[1].style.stroke == Color3(0.0, 1.0, 0.0)
+        @test attr_ops_svg.paths[1].style.fill_opacity == 0.2
+        @test attr_ops_svg.paths[1].style.stroke_opacity == 0.3
+        @test attr_ops_svg.paths[1].style.stroke_width == 4.0
+        @test attr_ops_svg.paths[2].style.fill == Color3(0.0, 0.0, 0.0)
+        @test attr_ops_svg.paths[2].style.stroke === nothing
+        @test attr_ops_svg.paths[2].style.fill_opacity == 1.0
+        @test attr_ops_svg.paths[2].style.stroke_width == 1.0
+        @test svg_meshes(attr_ops_svg)[1].material.opacity == 0.2
+        @test length(svg_strokes(attr_ops_svg)) == 1
+        @test svg_strokes(attr_ops_svg)[1].material.opacity == 0.3
+        rm(attr_ops_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
