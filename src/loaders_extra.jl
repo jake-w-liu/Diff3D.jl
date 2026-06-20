@@ -1323,10 +1323,15 @@ const _SVG_DEFAULT_STYLE =
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity")
 
-struct _SVGStyleRule
+struct _SVGSimpleSelector
     tag::Union{Nothing,String}
     id::Union{Nothing,String}
     classes::Vector{String}
+    specificity::Int
+end
+
+struct _SVGStyleRule
+    chain::Vector{_SVGSimpleSelector}
     declarations::Dict{String,String}
     specificity::Int
     order::Int
@@ -1418,18 +1423,18 @@ function _svg_drop_ascii_prefix(s::String, n::Integer)
     return s[nextind(s, firstindex(s), n):end]
 end
 
-function _svg_simple_selector(selector::AbstractString, order::Integer)
+function _svg_simple_selector(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
-    occursin(r"[\s>+~\[:]", raw) && return nothing
-    raw == "*" && return _SVGStyleRule(nothing, nothing, String[],
-                                       Dict{String,String}(), 0, order)
+    occursin(r"[>+~\[:]", raw) && return nothing
 
     rest = raw
     tag = nothing
     id = nothing
     classes = String[]
-    if !startswith(rest, ".") && !startswith(rest, "#")
+    if startswith(rest, "*")
+        rest = _svg_drop_ascii_prefix(rest, 1)
+    elseif !startswith(rest, ".") && !startswith(rest, "#")
         m = match(r"^[A-Za-z][A-Za-z0-9_-]*", rest)
         m === nothing && return nothing
         tag = lowercase(m.match)
@@ -1453,8 +1458,21 @@ function _svg_simple_selector(selector::AbstractString, order::Integer)
 
     specificity = (id === nothing ? 0 : 100) + 10 * length(classes) +
                   (tag === nothing ? 0 : 1)
-    return _SVGStyleRule(tag, id, classes, Dict{String,String}(),
-                         specificity, order)
+    return _SVGSimpleSelector(tag, id, classes, specificity)
+end
+
+function _svg_selector_chain(selector::AbstractString)
+    raw = String(strip(String(selector)))
+    isempty(raw) && return nothing
+    occursin(r"[>+~\[:]", raw) && return nothing
+    chain = _SVGSimpleSelector[]
+    for part in split(raw)
+        parsed = _svg_simple_selector(part)
+        parsed === nothing && return nothing
+        push!(chain, parsed)
+    end
+    isempty(chain) && return nothing
+    return chain
 end
 
 function _svg_css_rules(raw::AbstractString)
@@ -1471,33 +1489,57 @@ function _svg_css_rules(raw::AbstractString)
                                 if k in _SVG_STYLE_KEYS)
             isempty(declarations) && continue
             for selector in split(block.captures[1], ',')
-                parsed = _svg_simple_selector(selector, order)
-                parsed === nothing && continue
+                chain = _svg_selector_chain(selector)
+                chain === nothing && continue
+                specificity = sum(sel.specificity for sel in chain)
                 order += 1
-                push!(rules, _SVGStyleRule(parsed.tag, parsed.id,
-                                           parsed.classes, declarations,
-                                           parsed.specificity, order))
+                push!(rules, _SVGStyleRule(chain, declarations,
+                                           specificity, order))
             end
         end
     end
     return rules
 end
 
-function _svg_rule_matches(rule::_SVGStyleRule, tag::String,
-                           attrs::AbstractDict)
-    rule.tag !== nothing && rule.tag != lowercase(tag) && return false
-    rule.id !== nothing && get(attrs, "id", "") != rule.id && return false
-    if !isempty(rule.classes)
+function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
+                                      attrs::AbstractDict)
+    selector.tag !== nothing && selector.tag != lowercase(tag) && return false
+    selector.id !== nothing && get(attrs, "id", "") != selector.id && return false
+    if !isempty(selector.classes)
         classes = Set(split(get(attrs, "class", "")))
-        all(cls -> cls in classes, rule.classes) || return false
+        all(cls -> cls in classes, selector.classes) || return false
+    end
+    return true
+end
+
+const _SVGAncestorStack = Vector{Tuple{String,Dict{String,String}}}
+
+function _svg_rule_matches(rule::_SVGStyleRule, tag::String,
+                           attrs::AbstractDict, ancestors::_SVGAncestorStack)
+    _svg_simple_selector_matches(rule.chain[end], tag, attrs) || return false
+    idx = length(ancestors)
+    for selector in Iterators.reverse(rule.chain[1:end-1])
+        found = false
+        while idx >= 1
+            ancestor_tag, ancestor_attrs = ancestors[idx]
+            if _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs)
+                found = true
+                idx -= 1
+                break
+            end
+            idx -= 1
+        end
+        found || return false
     end
     return true
 end
 
 function _svg_css_attrs(tag::String, attrs::AbstractDict,
-                        rules::Vector{_SVGStyleRule})
+                        rules::Vector{_SVGStyleRule},
+                        ancestors::_SVGAncestorStack=_SVGAncestorStack())
     out = Dict{String,String}()
-    for rule in sort([rule for rule in rules if _svg_rule_matches(rule, tag, attrs)];
+    for rule in sort([rule for rule in rules
+                      if _svg_rule_matches(rule, tag, attrs, ancestors)];
                      by=rule -> (rule.specificity, rule.order))
         for (key, value) in rule.declarations
             out[key] = value
@@ -1580,12 +1622,13 @@ end
 
 function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
                                css_rules::Vector{_SVGStyleRule}=_SVGStyleRule[],
-                               tag::String="")
+                               tag::String="",
+                               ancestors::_SVGAncestorStack=_SVGAncestorStack())
     local_attrs = Dict{String,String}()
     for key in _SVG_STYLE_KEYS
         haskey(attrs, key) && (local_attrs[key] = attrs[key])
     end
-    for (key, value) in _svg_css_attrs(tag, attrs, css_rules)
+    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, ancestors)
         local_attrs[key] = value
     end
     if haskey(attrs, "style")
@@ -2016,6 +2059,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     paths = SVGPath[]
     transform_stack = [_svg_identity_transform()]
     style_stack = [_SVG_DEFAULT_STYLE]
+    ancestor_stack = _SVGAncestorStack()
     css_rules = _svg_css_rules(raw)
 
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
@@ -2029,13 +2073,15 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             if closing
                 length(transform_stack) > 1 && pop!(transform_stack)
                 length(style_stack) > 1 && pop!(style_stack)
+                !isempty(ancestor_stack) && pop!(ancestor_stack)
             elseif !self_closing
                 push!(transform_stack,
                       _svg_compose_transform(transform_stack[end],
                                              _svg_transform_from_attrs(attrs)))
                 push!(style_stack,
                       _svg_style_from_attrs(style_stack[end], attrs, css_rules,
-                                            tag))
+                                            tag, ancestor_stack))
+                push!(ancestor_stack, (tag, attrs))
             end
             continue
         end
@@ -2044,7 +2090,8 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         local_transform = _svg_transform_from_attrs(attrs)
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
-        style = _svg_style_from_attrs(style_stack[end], attrs, css_rules, tag)
+        style = _svg_style_from_attrs(style_stack[end], attrs, css_rules, tag,
+                                      ancestor_stack)
         element_paths = SVGPath[]
         if tag == "path"
             d = get(attrs, "d", nothing)
