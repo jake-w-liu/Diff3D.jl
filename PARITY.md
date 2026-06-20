@@ -803,8 +803,9 @@ Parallel audits split the remaining work into five critical tracks:
   `svg_stroke_meshes` and `svg_strokes` output into visible dash subpaths.
   `stroke-linecap` now parses `butt`, `square`, and `round`, with square and
   round caps expanded by `svg_stroke_meshes` for open solid or dashed stroke
-  subpaths. Advanced stroke joins, fill-rule holes, clipping, and DOM-level SVG
-  parsing remain open.
+  subpaths. `stroke-linejoin` now parses `miter`, `bevel`, and `round`, honors
+  `stroke-miterlimit`, and expands exterior joins in `svg_stroke_meshes`.
+  Fill-rule holes, clipping, and DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

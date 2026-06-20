@@ -5410,8 +5410,8 @@ end
                2.0, -1.0, 0.0, 2.0, 1.0, 0.0]
         @test stroke_meshes[1].geometry.indices == [1, 2, 3, 1, 3, 4]
         @test stroke_meshes[2].material.color == Color3(1.0, 0.0, 0.0)
-        @test stroke_meshes[2].geometry.n_vertices == 12
-        @test stroke_meshes[2].geometry.n_faces == 6
+        @test stroke_meshes[2].geometry.n_vertices == 21
+        @test stroke_meshes[2].geometry.n_faces == 9
         @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
         rm(stroke_mesh_path)
 
@@ -5495,6 +5495,40 @@ end
         @test minimum(round_ys) ≈ 1.0
         @test maximum(round_ys) ≈ 3.0
         rm(stroke_cap_path)
+
+        stroke_join_path = tempname() * ".svg"
+        write(stroke_join_path, """
+        <svg>
+          <polyline points="0,0 2,0 2,2" fill="none" stroke="#000"
+                    stroke-width="2" stroke-linejoin="bevel"/>
+          <polyline points="0,3 2,3 2,5" fill="none" stroke="#000"
+                    stroke-width="2" stroke-linejoin="miter"
+                    stroke-miterlimit="4"/>
+          <polyline points="0,6 2,6 2,8" fill="none" stroke="#000"
+                    stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        """)
+        stroke_join_svg = load_svg(stroke_join_path)
+        @test stroke_join_svg.paths[1].style.stroke_linejoin === :bevel
+        @test stroke_join_svg.paths[2].style.stroke_linejoin === :miter
+        @test stroke_join_svg.paths[2].style.stroke_miterlimit == 4.0
+        @test stroke_join_svg.paths[3].style.stroke_linejoin === :round
+        stroke_join_meshes = svg_stroke_meshes(stroke_join_svg)
+        @test length(stroke_join_meshes) == 3
+        @test stroke_join_meshes[1].geometry.n_vertices == 11
+        @test stroke_join_meshes[1].geometry.n_faces == 5
+        @test stroke_join_meshes[2].geometry.n_vertices == 11
+        @test stroke_join_meshes[2].geometry.n_faces == 5
+        @test stroke_join_meshes[3].geometry.n_vertices == 16
+        @test stroke_join_meshes[3].geometry.n_faces == 10
+        miter_positions = stroke_join_meshes[2].geometry.positions
+        miter_xy = collect(zip(miter_positions[1:3:end], miter_positions[2:3:end]))
+        @test any(p -> p[1] ≈ 3.0 && p[2] ≈ 2.0, miter_xy)
+        round_positions = stroke_join_meshes[3].geometry.positions
+        round_xy = collect(zip(round_positions[1:3:end], round_positions[2:3:end]))
+        @test any(p -> p[1] ≈ 2.0 && p[2] ≈ 5.0, round_xy)
+        @test any(p -> p[1] ≈ 3.0 && p[2] ≈ 6.0, round_xy)
+        rm(stroke_join_path)
 
         css_path = tempname() * ".svg"
         write(css_path, """

@@ -1374,25 +1374,35 @@ struct SVGStyle
     stroke_dasharray::Vector{Float64}
     stroke_dashoffset::Float64
     stroke_linecap::Symbol
+    stroke_linejoin::Symbol
+    stroke_miterlimit::Float64
 end
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
              Float64(fill_opacity), Float64(stroke_opacity), Float64[], 0.0,
-             :butt)
+             :butt, :miter, 4.0)
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
          stroke_dasharray, stroke_dashoffset) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
              Float64(fill_opacity), Float64(stroke_opacity),
              [Float64(x) for x in stroke_dasharray],
-             Float64(stroke_dashoffset), :butt)
+             Float64(stroke_dashoffset), :butt, :miter, 4.0)
+
+SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
+         stroke_dasharray, stroke_dashoffset, stroke_linecap) =
+    SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
+             Float64(fill_opacity), Float64(stroke_opacity),
+             [Float64(x) for x in stroke_dasharray],
+             Float64(stroke_dashoffset), stroke_linecap, :miter, 4.0)
 
 const _SVG_DEFAULT_STYLE =
     SVGStyle(Color3(0.0, 0.0, 0.0), nothing, 1.0, 1.0, 1.0, 1.0)
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity", "stroke-dasharray",
-                         "stroke-dashoffset", "stroke-linecap")
+                         "stroke-dashoffset", "stroke-linecap",
+                         "stroke-linejoin", "stroke-miterlimit")
 
 struct _SVGAttributeSelector
     key::String
@@ -2200,9 +2210,16 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
     linecap = haskey(local_attrs, "stroke-linecap") ?
               _svg_linecap(local_attrs["stroke-linecap"]) :
               parent.stroke_linecap
+    linejoin = haskey(local_attrs, "stroke-linejoin") ?
+               _svg_linejoin(local_attrs["stroke-linejoin"]) :
+               parent.stroke_linejoin
+    miterlimit = haskey(local_attrs, "stroke-miterlimit") ?
+                 _svg_miterlimit(local_attrs["stroke-miterlimit"]) :
+                 parent.stroke_miterlimit
     stroke_width >= 0.0 || error("SVG stroke-width must be non-negative")
     return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
-                    stroke_opacity, dasharray, dashoffset, linecap)
+                    stroke_opacity, dasharray, dashoffset, linecap, linejoin,
+                    miterlimit)
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -2240,6 +2257,20 @@ function _svg_linecap(raw::AbstractString)
     value == "round" && return :round
     value == "square" && return :square
     error("unsupported SVG stroke-linecap $raw")
+end
+
+function _svg_linejoin(raw::AbstractString)
+    value = lowercase(strip(String(raw)))
+    value == "miter" && return :miter
+    value == "round" && return :round
+    value == "bevel" && return :bevel
+    error("unsupported SVG stroke-linejoin $raw")
+end
+
+function _svg_miterlimit(raw::AbstractString)
+    value = _svg_length(Dict("stroke-miterlimit" => raw), "stroke-miterlimit")
+    value >= 1.0 || error("SVG stroke-miterlimit must be at least 1")
+    return value
 end
 
 function _svg_root_size(root_attrs::AbstractDict)
@@ -2932,9 +2963,141 @@ function _svg_add_round_cap!(positions::Vector{Float64},
     return nothing
 end
 
+_svg_cross2(ax::Float64, ay::Float64, bx::Float64, by::Float64) = ax * by - ay * bx
+
+function _svg_join_directions(prev::Vec2{Float64}, p::Vec2{Float64},
+                              next::Vec2{Float64})
+    d1x = p.x - prev.x
+    d1y = p.y - prev.y
+    d2x = next.x - p.x
+    d2y = next.y - p.y
+    len1 = hypot(d1x, d1y)
+    len2 = hypot(d2x, d2y)
+    (len1 > 0.0 && len2 > 0.0) || return nothing
+    return (d1x / len1, d1y / len1), (d2x / len2, d2y / len2)
+end
+
+function _svg_offset_line_intersection(p1::Vec2{Float64}, d1,
+                                       p2::Vec2{Float64}, d2)
+    denom = _svg_cross2(d1[1], d1[2], d2[1], d2[2])
+    abs(denom) > 1e-12 || return nothing
+    qx = p2.x - p1.x
+    qy = p2.y - p1.y
+    t = _svg_cross2(qx, qy, d2[1], d2[2]) / denom
+    return Vec2(p1.x + d1[1] * t, p1.y + d1[2] * t)
+end
+
+function _svg_join_outer_points(prev::Vec2{Float64}, p::Vec2{Float64},
+                                next::Vec2{Float64}, half_width::Float64)
+    dirs = _svg_join_directions(prev, p, next)
+    dirs === nothing && return nothing
+    d1, d2 = dirs
+    turn = _svg_cross2(d1[1], d1[2], d2[1], d2[2])
+    abs(turn) > 1e-12 || return nothing
+    side = turn > 0.0 ? -1.0 : 1.0
+    n1 = (-d1[2] * side, d1[1] * side)
+    n2 = (-d2[2] * side, d2[1] * side)
+    outer1 = Vec2(p.x + n1[1] * half_width, p.y + n1[2] * half_width)
+    outer2 = Vec2(p.x + n2[1] * half_width, p.y + n2[2] * half_width)
+    return d1, d2, turn, outer1, outer2
+end
+
+function _svg_add_bevel_join!(positions::Vector{Float64},
+                              normals::Vector{Float64}, uvs::Vector{Float64},
+                              indices::Vector{Int}, p::Vec2{Float64},
+                              outer1::Vec2{Float64}, outer2::Vec2{Float64})
+    center = _svg_push_stroke_vertex!(positions, normals, uvs, p, 0.5, 0.5)
+    a = _svg_push_stroke_vertex!(positions, normals, uvs, outer1, 0.0, 0.0)
+    b = _svg_push_stroke_vertex!(positions, normals, uvs, outer2, 1.0, 1.0)
+    push!(indices, center, a, b)
+    return nothing
+end
+
+function _svg_add_miter_join!(positions::Vector{Float64},
+                              normals::Vector{Float64}, uvs::Vector{Float64},
+                              indices::Vector{Int}, p::Vec2{Float64}, d1, d2,
+                              outer1::Vec2{Float64}, outer2::Vec2{Float64},
+                              half_width::Float64, miterlimit::Float64)
+    miter = _svg_offset_line_intersection(outer1, d1, outer2, d2)
+    if miter === nothing ||
+       hypot(miter.x - p.x, miter.y - p.y) > half_width * miterlimit + 1e-9
+        _svg_add_bevel_join!(positions, normals, uvs, indices, p, outer1, outer2)
+        return nothing
+    end
+    a = _svg_push_stroke_vertex!(positions, normals, uvs, outer1, 0.0, 0.0)
+    m = _svg_push_stroke_vertex!(positions, normals, uvs, miter, 0.5, 1.0)
+    b = _svg_push_stroke_vertex!(positions, normals, uvs, outer2, 1.0, 0.0)
+    push!(indices, a, m, b)
+    return nothing
+end
+
+function _svg_round_join_sweep(start_angle::Float64, stop_angle::Float64,
+                               turn::Float64)
+    if turn > 0.0
+        while stop_angle <= start_angle
+            stop_angle += 2pi
+        end
+    else
+        while stop_angle >= start_angle
+            stop_angle -= 2pi
+        end
+    end
+    return start_angle, stop_angle
+end
+
+function _svg_add_round_join!(positions::Vector{Float64},
+                              normals::Vector{Float64}, uvs::Vector{Float64},
+                              indices::Vector{Int}, p::Vec2{Float64},
+                              outer1::Vec2{Float64}, outer2::Vec2{Float64},
+                              half_width::Float64, turn::Float64)
+    start_angle = atan(outer1.y - p.y, outer1.x - p.x)
+    stop_angle = atan(outer2.y - p.y, outer2.x - p.x)
+    start_angle, stop_angle = _svg_round_join_sweep(start_angle, stop_angle, turn)
+    sweep = stop_angle - start_angle
+    segments = max(1, ceil(Int, abs(sweep) / pi * _SVG_ROUND_CAP_SEGMENTS))
+    center_idx = _svg_push_stroke_vertex!(positions, normals, uvs, p, 0.5, 0.5)
+    prev = _svg_push_stroke_vertex!(positions, normals, uvs, outer1, 0.0, 0.0)
+    for step in 1:segments
+        t = step / Float64(segments)
+        angle = start_angle + sweep * t
+        next_idx = _svg_push_stroke_vertex!(positions, normals, uvs,
+                                            Vec2(p.x + cos(angle) * half_width,
+                                                 p.y + sin(angle) * half_width),
+                                            t, 1.0)
+        push!(indices, center_idx, prev, next_idx)
+        prev = next_idx
+    end
+    return nothing
+end
+
+function _svg_add_stroke_join!(positions::Vector{Float64},
+                               normals::Vector{Float64}, uvs::Vector{Float64},
+                               indices::Vector{Int}, prev::Vec2{Float64},
+                               p::Vec2{Float64}, next::Vec2{Float64},
+                               half_width::Float64, linejoin::Symbol,
+                               miterlimit::Float64)
+    info = _svg_join_outer_points(prev, p, next, half_width)
+    info === nothing && return nothing
+    d1, d2, turn, outer1, outer2 = info
+    if linejoin === :bevel
+        _svg_add_bevel_join!(positions, normals, uvs, indices, p, outer1, outer2)
+    elseif linejoin === :round
+        _svg_add_round_join!(positions, normals, uvs, indices, p, outer1, outer2,
+                             half_width, turn)
+    elseif linejoin === :miter
+        _svg_add_miter_join!(positions, normals, uvs, indices, p, d1, d2,
+                             outer1, outer2, half_width, miterlimit)
+    else
+        error("unsupported SVG stroke-linejoin $(linejoin)")
+    end
+    return nothing
+end
+
 function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
                                       closed::Bool, stroke_width::Float64,
-                                      linecap::Symbol=:butt)
+                                      linecap::Symbol=:butt,
+                                      linejoin::Symbol=:miter,
+                                      miterlimit::Float64=4.0)
     positions = Float64[]
     normals = Float64[]
     uvs = Float64[]
@@ -2943,6 +3106,9 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
     length(work_points) >= 2 && stroke_width > 0.0 || return BufferGeometry()
     linecap in (:butt, :round, :square) ||
         error("unsupported SVG stroke-linecap $(linecap)")
+    linejoin in (:miter, :round, :bevel) ||
+        error("unsupported SVG stroke-linejoin $(linejoin)")
+    miterlimit >= 1.0 || error("SVG stroke-miterlimit must be at least 1")
     half_width = stroke_width / 2.0
     closed_path = closed && length(work_points) >= 3
     if !closed_path && linecap === :square
@@ -2970,6 +3136,22 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
         end
         push!(indices, quad_indices[1], quad_indices[2], quad_indices[3],
               quad_indices[1], quad_indices[3], quad_indices[4])
+    end
+    if closed_path
+        for i in 1:length(work_points)
+            prev = work_points[i == 1 ? end : i - 1]
+            p = work_points[i]
+            next = work_points[i == length(work_points) ? 1 : i + 1]
+            _svg_add_stroke_join!(positions, normals, uvs, indices, prev, p, next,
+                                  half_width, linejoin, miterlimit)
+        end
+    else
+        for i in 2:(length(work_points) - 1)
+            _svg_add_stroke_join!(positions, normals, uvs, indices,
+                                  work_points[i - 1], work_points[i],
+                                  work_points[i + 1], half_width, linejoin,
+                                  miterlimit)
+        end
     end
     if !closed_path && linecap === :round
         dirs = _svg_endpoint_directions(work_points)
@@ -3007,11 +3189,10 @@ svg_meshes(path::String; kwargs...) = svg_meshes(load_svg(path; kwargs...))
 
 """Build triangle meshes for stroked SVG paths using parsed stroke styles.
 
-The outline tessellator emits a quad per non-degenerate path segment with butt
-caps and expands `stroke-dasharray`/`stroke-dashoffset` into visible stroked
-subpaths. It is useful when a downstream renderer needs triangle meshes instead
-of native line primitives; advanced SVG line joins and caps are not expanded by
-this helper.
+The outline tessellator emits a quad per non-degenerate path segment, expands
+`stroke-dasharray`/`stroke-dashoffset` into visible stroked subpaths, and adds
+square/round caps plus miter/bevel/round exterior joins. It is useful when a
+downstream renderer needs triangle meshes instead of native line primitives.
 """
 function svg_stroke_meshes(svg::SVGDocument)
     out = Mesh[]
@@ -3029,7 +3210,9 @@ function svg_stroke_meshes(svg::SVGDocument)
                                  path.style.stroke_dashoffset)
             geo = _svg_stroke_outline_geometry(subpath, subpath_closed,
                                                path.style.stroke_width,
-                                               path.style.stroke_linecap)
+                                               path.style.stroke_linecap,
+                                               path.style.stroke_linejoin,
+                                               path.style.stroke_miterlimit)
             geo.n_faces > 0 && push!(geos, geo)
         end
         isempty(geos) && continue
