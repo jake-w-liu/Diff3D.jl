@@ -1333,6 +1333,8 @@ struct _SVGPseudoSelector
     name::Symbol
     a::Int
     b::Int
+    argument::String
+    specificity::Int
 end
 
 struct _SVGSimpleSelector
@@ -1489,6 +1491,53 @@ function _svg_unsupported_selector_syntax(raw::String)
     return active_quote !== nothing || bracket_depth != 0
 end
 
+function _svg_split_selector_list(raw::AbstractString)
+    selectors = String[]
+    buf = IOBuffer()
+    bracket_depth = 0
+    paren_depth = 0
+    active_quote = nothing
+
+    function push_selector!()
+        selector = String(strip(String(take!(buf))))
+        isempty(selector) && return false
+        push!(selectors, selector)
+        return true
+    end
+
+    for ch in String(raw)
+        if active_quote !== nothing
+            print(buf, ch)
+            ch == active_quote && (active_quote = nothing)
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+            print(buf, ch)
+        elseif ch == '['
+            bracket_depth += 1
+            print(buf, ch)
+        elseif ch == ']'
+            bracket_depth == 0 && return nothing
+            bracket_depth -= 1
+            print(buf, ch)
+        elseif ch == '(' && bracket_depth == 0
+            paren_depth += 1
+            print(buf, ch)
+        elseif ch == ')' && bracket_depth == 0
+            paren_depth == 0 && return nothing
+            paren_depth -= 1
+            print(buf, ch)
+        elseif ch == ',' && bracket_depth == 0 && paren_depth == 0
+            push_selector!() || return nothing
+        else
+            print(buf, ch)
+        end
+    end
+    active_quote === nothing || return nothing
+    bracket_depth == 0 && paren_depth == 0 || return nothing
+    push_selector!() || return nothing
+    return selectors
+end
+
 function _svg_selector_parts(raw::String)
     parts = String[]
     combinators = Symbol[]
@@ -1571,6 +1620,53 @@ function _svg_selector_bracket_close(rest::String)
     return nothing
 end
 
+function _svg_function_argument(rest::String)
+    startswith(rest, "(") || return nothing
+    active_quote = nothing
+    bracket_depth = 0
+    paren_depth = 0
+    content_start = nextind(rest, firstindex(rest))
+    for i in eachindex(rest)
+        ch = rest[i]
+        if active_quote !== nothing
+            ch == active_quote && (active_quote = nothing)
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+        elseif ch == '['
+            bracket_depth += 1
+        elseif ch == ']'
+            bracket_depth == 0 && return nothing
+            bracket_depth -= 1
+        elseif ch == '(' && bracket_depth == 0
+            paren_depth += 1
+        elseif ch == ')' && bracket_depth == 0
+            paren_depth == 0 && return nothing
+            paren_depth -= 1
+            if paren_depth == 0
+                content = content_start == i ? "" :
+                          rest[content_start:prevind(rest, i)]
+                next_idx = nextind(rest, i)
+                remainder = next_idx > lastindex(rest) ? "" : rest[next_idx:end]
+                return content, remainder
+            end
+        end
+    end
+    return nothing
+end
+
+function _svg_selector_list_specificity(raw::AbstractString)
+    selectors = _svg_split_selector_list(raw)
+    selectors === nothing && return nothing
+    specificity = 0
+    for selector in selectors
+        parsed = _svg_selector_chain(selector)
+        parsed === nothing && return nothing
+        chain, _ = parsed
+        specificity = max(specificity, sum(sel.specificity for sel in chain))
+    end
+    return specificity
+end
+
 function _svg_nth_formula(raw::AbstractString)
     s = replace(lowercase(strip(String(raw))), r"\s+" => "")
     isempty(s) && return nothing
@@ -1617,27 +1713,31 @@ function _svg_pseudo_selector(rest::String)
     after = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
     if name == "root"
         startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:root, 0, 0), after
+        return _SVGPseudoSelector(:root, 0, 0, "", 10), after
     elseif name == "first-child"
         startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:first_child, 0, 0), after
+        return _SVGPseudoSelector(:first_child, 0, 0, "", 10), after
     elseif name == "first-of-type"
         startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:first_of_type, 0, 0), after
+        return _SVGPseudoSelector(:first_of_type, 0, 0, "", 10), after
     elseif name == "nth-child" || name == "nth-of-type"
-        startswith(after, "(") || return nothing
-        close_idx = findnext(==(')'), after, nextind(after, firstindex(after)))
-        close_idx === nothing && return nothing
-        content_start = nextind(after, firstindex(after))
-        content = content_start == close_idx ? "" :
-                  after[content_start:prevind(after, close_idx)]
+        parsed_arg = _svg_function_argument(after)
+        parsed_arg === nothing && return nothing
+        content, remainder = parsed_arg
         formula = _svg_nth_formula(content)
         formula === nothing && return nothing
-        next_idx = nextind(after, close_idx)
-        remainder = next_idx > lastindex(after) ? "" : after[next_idx:end]
         symbol = name == "nth-child" ? :nth_child : :nth_of_type
         a, b = formula
-        return _SVGPseudoSelector(symbol, a, b), remainder
+        return _SVGPseudoSelector(symbol, a, b, "", 10), remainder
+    elseif name == "is" || name == "not" || name == "where"
+        parsed_arg = _svg_function_argument(after)
+        parsed_arg === nothing && return nothing
+        argument, remainder = parsed_arg
+        specificity = _svg_selector_list_specificity(argument)
+        specificity === nothing && return nothing
+        symbol = name == "is" ? :is : (name == "not" ? :not : :where)
+        return _SVGPseudoSelector(symbol, 0, 0, String(argument),
+                                  symbol === :where ? 0 : specificity), remainder
     end
     return nothing
 end
@@ -1694,7 +1794,8 @@ function _svg_simple_selector(selector::AbstractString)
     end
 
     specificity = (id === nothing ? 0 : 100) + 10 * length(classes) +
-                  10 * length(attributes) + 10 * length(pseudos) +
+                  10 * length(attributes) +
+                  sum((p.specificity for p in pseudos); init=0) +
                   (tag === nothing ? 0 : 1)
     return _SVGSimpleSelector(tag, id, classes, attributes, pseudos, specificity)
 end
@@ -1729,7 +1830,9 @@ function _svg_css_rules(raw::AbstractString)
                                 _svg_style_declarations(block.captures[2])
                                 if k in _SVG_STYLE_KEYS)
             isempty(declarations) && continue
-            for selector in split(block.captures[1], ',')
+            selectors = _svg_split_selector_list(block.captures[1])
+            selectors === nothing && continue
+            for selector in selectors
                 parsed = _svg_selector_chain(selector)
                 parsed === nothing && continue
                 chain, combinators = parsed
@@ -1819,6 +1922,20 @@ function _svg_nth_matches(index::Int, a::Int, b::Int)
     return div(delta, a) >= 0
 end
 
+function _svg_selector_list_matches(raw::AbstractString,
+                                    context::_SVGElementContext)
+    selectors = _svg_split_selector_list(raw)
+    selectors === nothing && return false
+    for selector in selectors
+        parsed = _svg_selector_chain(selector)
+        parsed === nothing && return false
+        chain, combinators = parsed
+        rule = _SVGStyleRule(chain, combinators, Dict{String,String}(), 0, 0)
+        _svg_rule_matches(rule, context) && return true
+    end
+    return false
+end
+
 function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
                                       context::_SVGElementContext)
     child_index = length(context.previous_siblings) + 1
@@ -1834,6 +1951,10 @@ function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
         return type_index == 1
     elseif pseudo.name === :nth_of_type
         return _svg_nth_matches(type_index, pseudo.a, pseudo.b)
+    elseif pseudo.name === :is || pseudo.name === :where
+        return _svg_selector_list_matches(pseudo.argument, context)
+    elseif pseudo.name === :not
+        return !_svg_selector_list_matches(pseudo.argument, context)
     end
     return false
 end

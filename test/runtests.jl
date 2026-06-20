@@ -5555,6 +5555,41 @@ end
         @test length(svg_strokes(pseudo_css_svg)) == 3
         rm(pseudo_css_path)
 
+        functional_pseudo_css_path = tempname() * ".svg"
+        write(functional_pseudo_css_path, """
+        <svg>
+          <style>
+            :is(rect.primary, circle.accent) { stroke: #00f; }
+            :where(rect.primary) { stroke-width: 5; }
+            rect { stroke-width: 2; }
+            rect:not(.skip) { fill: #f00; fill-opacity: .5; }
+            :where(g.scope > circle.accent, rect.missing) { fill: #0f0; }
+            rect:not(:is(.primary, .skip)) { stroke-opacity: .25; }
+          </style>
+          <g class="scope">
+            <rect class="primary" width="1" height="1"/>
+            <rect class="skip" x="2" width="1" height="1"/>
+            <circle class="accent" cx="5" cy="1" r="1"/>
+            <rect class="plain" x="8" width="1" height="1"/>
+          </g>
+        </svg>
+        """)
+        functional_pseudo_css_svg = load_svg(functional_pseudo_css_path)
+        @test functional_pseudo_css_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test functional_pseudo_css_svg.paths[1].style.fill_opacity == 0.5
+        @test functional_pseudo_css_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test functional_pseudo_css_svg.paths[1].style.stroke_width == 2.0
+        @test functional_pseudo_css_svg.paths[2].style.fill == Color3(0.0, 0.0, 0.0)
+        @test functional_pseudo_css_svg.paths[2].style.stroke === nothing
+        @test functional_pseudo_css_svg.paths[2].style.stroke_width == 2.0
+        @test functional_pseudo_css_svg.paths[3].style.fill == Color3(0.0, 1.0, 0.0)
+        @test functional_pseudo_css_svg.paths[3].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test functional_pseudo_css_svg.paths[4].style.fill == Color3(1.0, 0.0, 0.0)
+        @test functional_pseudo_css_svg.paths[4].style.stroke_opacity == 0.25
+        @test svg_meshes(functional_pseudo_css_svg)[1].material.opacity == 0.5
+        @test length(svg_strokes(functional_pseudo_css_svg)) == 2
+        rm(functional_pseudo_css_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
