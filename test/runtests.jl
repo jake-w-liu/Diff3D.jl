@@ -5454,6 +5454,36 @@ end
         @test length(svg_strokes(stroke_dash_cascade)) == 4
         rm(stroke_dash_cascade_path)
 
+        stroke_cap_path = tempname() * ".svg"
+        write(stroke_cap_path, """
+        <svg>
+          <polyline points="0,0 2,0" fill="none" stroke="#000"
+                    stroke-width="2" stroke-linecap="square"/>
+          <polyline points="0,2 2,2" fill="none" stroke="#000"
+                    stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        """)
+        stroke_cap_svg = load_svg(stroke_cap_path)
+        @test stroke_cap_svg.paths[1].style.stroke_linecap === :square
+        @test stroke_cap_svg.paths[2].style.stroke_linecap === :round
+        stroke_cap_meshes = svg_stroke_meshes(stroke_cap_svg)
+        @test length(stroke_cap_meshes) == 2
+        @test stroke_cap_meshes[1].geometry.n_vertices == 4
+        @test stroke_cap_meshes[1].geometry.n_faces == 2
+        @test stroke_cap_meshes[1].geometry.positions ==
+              [-1.0, 1.0, 0.0, -1.0, -1.0, 0.0,
+               3.0, -1.0, 0.0, 3.0, 1.0, 0.0]
+        round_positions = stroke_cap_meshes[2].geometry.positions
+        round_xs = round_positions[1:3:end]
+        round_ys = round_positions[2:3:end]
+        @test stroke_cap_meshes[2].geometry.n_vertices == 32
+        @test stroke_cap_meshes[2].geometry.n_faces == 26
+        @test minimum(round_xs) ≈ -1.0
+        @test maximum(round_xs) ≈ 3.0
+        @test minimum(round_ys) ≈ 1.0
+        @test maximum(round_ys) ≈ 3.0
+        rm(stroke_cap_path)
+
         css_path = tempname() * ".svg"
         write(css_path, """
         <svg>

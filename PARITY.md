@@ -798,7 +798,9 @@ Parallel audits split the remaining work into five critical tracks:
   per-segment quads. `stroke-dasharray` and `stroke-dashoffset` now cascade
   from attributes, inline styles, and parsed stylesheets, then split
   `svg_stroke_meshes` and `svg_strokes` output into visible dash subpaths.
-  Advanced stroke joins, caps, fill-rule holes, clipping, and DOM-level SVG
+  `stroke-linecap` now parses `butt`, `square`, and `round`, with square and
+  round caps expanded by `svg_stroke_meshes` for open solid or dashed stroke
+  subpaths. Advanced stroke joins, fill-rule holes, clipping, and DOM-level SVG
   parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser

@@ -1318,17 +1318,26 @@ struct SVGStyle
     stroke_opacity::Float64
     stroke_dasharray::Vector{Float64}
     stroke_dashoffset::Float64
+    stroke_linecap::Symbol
 end
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
-             Float64(fill_opacity), Float64(stroke_opacity), Float64[], 0.0)
+             Float64(fill_opacity), Float64(stroke_opacity), Float64[], 0.0,
+             :butt)
+
+SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
+         stroke_dasharray, stroke_dashoffset) =
+    SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
+             Float64(fill_opacity), Float64(stroke_opacity),
+             [Float64(x) for x in stroke_dasharray],
+             Float64(stroke_dashoffset), :butt)
 
 const _SVG_DEFAULT_STYLE =
     SVGStyle(Color3(0.0, 0.0, 0.0), nothing, 1.0, 1.0, 1.0, 1.0)
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity", "stroke-dasharray",
-                         "stroke-dashoffset")
+                         "stroke-dashoffset", "stroke-linecap")
 
 struct _SVGAttributeSelector
     key::String
@@ -2133,9 +2142,12 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
     dashoffset = haskey(local_attrs, "stroke-dashoffset") ?
                  _svg_length(local_attrs, "stroke-dashoffset") :
                  parent.stroke_dashoffset
+    linecap = haskey(local_attrs, "stroke-linecap") ?
+              _svg_linecap(local_attrs["stroke-linecap"]) :
+              parent.stroke_linecap
     stroke_width >= 0.0 || error("SVG stroke-width must be non-negative")
     return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
-                    stroke_opacity, dasharray, dashoffset)
+                    stroke_opacity, dasharray, dashoffset, linecap)
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -2165,6 +2177,14 @@ function _svg_dasharray(raw::AbstractString)
     all(iszero, values) && return Float64[]
     isodd(length(values)) && append!(values, copy(values))
     return values
+end
+
+function _svg_linecap(raw::AbstractString)
+    value = lowercase(strip(String(raw)))
+    value == "butt" && return :butt
+    value == "round" && return :round
+    value == "square" && return :square
+    error("unsupported SVG stroke-linecap $raw")
 end
 
 function _svg_root_size(root_attrs::AbstractDict)
@@ -2779,19 +2799,104 @@ function _svg_stroke_subpaths(points::Vector{Vec2{Float64}}, closed::Bool,
     return out
 end
 
+const _SVG_ROUND_CAP_SEGMENTS = 12
+
+function _svg_compact_consecutive_points(points::Vector{Vec2{Float64}})
+    out = Vec2{Float64}[]
+    for p in points
+        _svg_push_unique_point!(out, p)
+    end
+    return out
+end
+
+function _svg_endpoint_directions(points::Vector{Vec2{Float64}})
+    first_dir = nothing
+    for i in 1:(length(points) - 1)
+        a = points[i]
+        b = points[i + 1]
+        len = hypot(b.x - a.x, b.y - a.y)
+        if len > 0.0
+            first_dir = ((b.x - a.x) / len, (b.y - a.y) / len)
+            break
+        end
+    end
+    first_dir === nothing && return nothing
+    for i in (length(points) - 1):-1:1
+        a = points[i]
+        b = points[i + 1]
+        len = hypot(b.x - a.x, b.y - a.y)
+        if len > 0.0
+            return first_dir, ((b.x - a.x) / len, (b.y - a.y) / len)
+        end
+    end
+    return nothing
+end
+
+function _svg_square_cap_points(points::Vector{Vec2{Float64}}, half_width::Float64)
+    dirs = _svg_endpoint_directions(points)
+    dirs === nothing && return points
+    first_dir, last_dir = dirs
+    out = copy(points)
+    out[1] = Vec2(out[1].x - first_dir[1] * half_width,
+                  out[1].y - first_dir[2] * half_width)
+    out[end] = Vec2(out[end].x + last_dir[1] * half_width,
+                    out[end].y + last_dir[2] * half_width)
+    return out
+end
+
+function _svg_push_stroke_vertex!(positions::Vector{Float64},
+                                  normals::Vector{Float64},
+                                  uvs::Vector{Float64}, p::Vec2{Float64},
+                                  u::Float64, v::Float64)
+    push!(positions, p.x, p.y, 0.0)
+    push!(normals, 0.0, 0.0, 1.0)
+    push!(uvs, u, v)
+    return length(positions) ÷ 3
+end
+
+function _svg_add_round_cap!(positions::Vector{Float64},
+                             normals::Vector{Float64}, uvs::Vector{Float64},
+                             indices::Vector{Int}, center::Vec2{Float64},
+                             start_angle::Float64, stop_angle::Float64,
+                             half_width::Float64)
+    center_idx = _svg_push_stroke_vertex!(positions, normals, uvs, center, 0.5, 0.5)
+    prev = _svg_push_stroke_vertex!(positions, normals, uvs,
+                                    Vec2(center.x + cos(start_angle) * half_width,
+                                         center.y + sin(start_angle) * half_width),
+                                    0.0, 0.0)
+    for step in 1:_SVG_ROUND_CAP_SEGMENTS
+        t = step / Float64(_SVG_ROUND_CAP_SEGMENTS)
+        angle = start_angle + (stop_angle - start_angle) * t
+        next = _svg_push_stroke_vertex!(positions, normals, uvs,
+                                        Vec2(center.x + cos(angle) * half_width,
+                                             center.y + sin(angle) * half_width),
+                                        t, 1.0)
+        push!(indices, center_idx, prev, next)
+        prev = next
+    end
+    return nothing
+end
+
 function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
-                                      closed::Bool, stroke_width::Float64)
+                                      closed::Bool, stroke_width::Float64,
+                                      linecap::Symbol=:butt)
     positions = Float64[]
     normals = Float64[]
     uvs = Float64[]
     indices = Int[]
-    length(points) >= 2 && stroke_width > 0.0 || return BufferGeometry()
+    work_points = _svg_compact_consecutive_points(points)
+    length(work_points) >= 2 && stroke_width > 0.0 || return BufferGeometry()
+    linecap in (:butt, :round, :square) ||
+        error("unsupported SVG stroke-linecap $(linecap)")
     half_width = stroke_width / 2.0
-    segment_count = closed && length(points) >= 3 ? length(points) : length(points) - 1
-    vi = 0
+    closed_path = closed && length(work_points) >= 3
+    if !closed_path && linecap === :square
+        work_points = _svg_square_cap_points(work_points, half_width)
+    end
+    segment_count = closed_path ? length(work_points) : length(work_points) - 1
     for i in 1:segment_count
-        a = points[i]
-        b = points[i == length(points) ? 1 : i + 1]
+        a = work_points[i]
+        b = work_points[i == length(work_points) ? 1 : i + 1]
         dx = b.x - a.x
         dy = b.y - a.y
         len = hypot(dx, dy)
@@ -2802,15 +2907,29 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
                 Vec2(a.x - nx, a.y - ny),
                 Vec2(b.x - nx, b.y - ny),
                 Vec2(b.x + nx, b.y + ny))
+        quad_indices = Int[]
         for (u, p) in zip((0.0, 0.0, 1.0, 1.0), quad)
-            push!(positions, p.x, p.y, 0.0)
-            push!(normals, 0.0, 0.0, 1.0)
-            push!(uvs, u, i == 1 ? 0.0 : 1.0)
+            push!(quad_indices,
+                  _svg_push_stroke_vertex!(positions, normals, uvs, p, u,
+                                           i == 1 ? 0.0 : 1.0))
         end
-        push!(indices, vi + 1, vi + 2, vi + 3, vi + 1, vi + 3, vi + 4)
-        vi += 4
+        push!(indices, quad_indices[1], quad_indices[2], quad_indices[3],
+              quad_indices[1], quad_indices[3], quad_indices[4])
     end
-    return BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+    if !closed_path && linecap === :round
+        dirs = _svg_endpoint_directions(work_points)
+        if dirs !== nothing
+            first_dir, last_dir = dirs
+            start_angle = atan(first_dir[2], first_dir[1]) + pi / 2.0
+            _svg_add_round_cap!(positions, normals, uvs, indices, work_points[1],
+                                start_angle, start_angle + pi, half_width)
+            stop_angle = atan(last_dir[2], last_dir[1]) - pi / 2.0
+            _svg_add_round_cap!(positions, normals, uvs, indices, work_points[end],
+                                stop_angle, stop_angle + pi, half_width)
+        end
+    end
+    return BufferGeometry(positions, normals, uvs, indices, length(positions) ÷ 3,
+                          length(indices) ÷ 3)
 end
 
 """Build `Mesh` objects for filled, closed SVG paths using parsed fill styles."""
@@ -2854,7 +2973,8 @@ function svg_stroke_meshes(svg::SVGDocument)
                                  path.style.stroke_dasharray,
                                  path.style.stroke_dashoffset)
             geo = _svg_stroke_outline_geometry(subpath, subpath_closed,
-                                               path.style.stroke_width)
+                                               path.style.stroke_width,
+                                               path.style.stroke_linecap)
             geo.n_faces > 0 && push!(geos, geo)
         end
         isempty(geos) && continue
