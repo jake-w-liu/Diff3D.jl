@@ -1371,6 +1371,12 @@ end
                                     name="export_phong_wireframe")
         phong_wireframe_mesh.position = Vec3(-2.9, 0.0, 0.0)
         add!(scene, phong_wireframe_mesh)
+        matcap_wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                     MeshMatcapMaterial(color=Color3(0.7, 0.4, 0.9),
+                                                        wireframe=true);
+                                     name="export_matcap_wireframe")
+        matcap_wireframe_mesh.position = Vec3(-3.6, 0.75, 0.0)
+        add!(scene, matcap_wireframe_mesh)
         emissive_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                MeshStandardMaterial(color=Color3(0.1, 0.1, 0.1),
                                                     emissive=Color3(0.2, 0.4, 1.0),
@@ -1457,6 +1463,19 @@ end
                                   name="export_toon_normal_map")
         toon_normal_mapped.position = Vec3(-5.0, 0.75, 0.0)
         add!(scene, toon_normal_mapped)
+        matcap_map_alpha_normal = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                       MeshMatcapMaterial(color=Color3(0.9, 0.75, 0.65),
+                                                          matcap=Texture(matcap_data; filter=:nearest,
+                                                                         colorspace=:linear),
+                                                          map=Texture(texdata; filter=:nearest,
+                                                                      colorspace=:linear),
+                                                          alpha_map=Texture(alphadata; filter=:nearest),
+                                                          alpha_test=0.45,
+                                                          normal_map=Texture(normaldata; filter=:nearest),
+                                                          normal_scale=0.6);
+                                       name="export_matcap_map_alpha_normal")
+        matcap_map_alpha_normal.position = Vec3(-5.7, 0.75, 0.0)
+        add!(scene, matcap_map_alpha_normal)
         envfaces = ntuple(i -> begin
             face = fill(Float64(i) / 6, 4, 4, 3)
             face[1, 1, 1] = min(1.0, face[1, 1, 1] + 0.125)
@@ -1772,6 +1791,7 @@ end
             NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
             NumberKeyframeTrack(normal_mapped, "material.normalScale", [0.0, 1.0], [0.35, 0.7]),
             NumberKeyframeTrack(toon_normal_mapped, "material.normalScale", [0.0, 1.0], [0.55, 0.2]),
+            NumberKeyframeTrack(matcap_map_alpha_normal, "material.normalScale", [0.0, 1.0], [0.6, 0.25]),
             NumberKeyframeTrack(toon_ao_light_mapped, "material.aoMapIntensity", [0.0, 1.0], [0.35, 0.8]),
             NumberKeyframeTrack(toon_ao_light_mapped, "material.lightMapIntensity", [0.0, 1.0], [0.65, 0.25]),
             NumberKeyframeTrack(depth_material_mesh, "material.near", [0.0, 1.0], [1.0, 2.0]),
@@ -2140,6 +2160,12 @@ end
         @test occursin("\"name\":\"export_matcap_material\"", html)
         @test occursin("\"materialType\":\"matcap\"", html)
         @test occursin("\"matcapTexture\":", html)
+        @test occursin("\"name\":\"export_matcap_map_alpha_normal\"", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"materialType\":\"matcap\".*\"alphaTest\":0\.45000000000000001", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"texture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"normalTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"normalScale\":0\.59999999999999998", html)
         @test occursin("uMaterialMode==4", html)
         @test occursin("uUseMatcapMap", html)
         @test occursin("uMatcapMap", html)
@@ -2148,6 +2174,9 @@ end
         @test occursin("matcapX=normalize(vec3(viewDir.z,0.0,-viewDir.x))", html)
         @test occursin("vec2(dot(matcapX,viewN),dot(matcapY,viewN))*.495+vec2(.5)", html)
         @test occursin("colorTex(uMatcapMap,muv,uMatcapColorSpace)", html)
+        @test occursin("vec4 matcapTex=mix(vec4(1.0),colorTex(uMap,uv,uMapColorSpace),uUseMap)", html)
+        @test occursin("if(matcapAlpha<uAlphaTest) discard", html)
+        @test occursin("uColor*vColor*matcapTex.rgb*mix(fallback,colorTex(uMatcapMap,muv,uMatcapColorSpace).rgb,uUseMatcapMap)", html)
         @test occursin("0.35+0.65*f", html)
         @test occursin("\"name\":\"export_basic_material\"", html)
         @test occursin("\"materialType\":\"basic\"", html)
@@ -2194,6 +2223,8 @@ end
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_phong_wireframe\"", html)
         @test occursin(r"\"name\":\"export_phong_wireframe\".*\"mode\":\"lines\"", html)
+        @test occursin("\"name\":\"export_matcap_wireframe\"", html)
+        @test occursin(r"\"name\":\"export_matcap_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
         @test occursin("const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1]", html)
         @test occursin("function webLineWidth(w)", html)
@@ -2723,6 +2754,7 @@ end
         @test occursin("\"property\":\"aoIntensity\"", html)
         @test occursin("\"property\":\"lightMapIntensity\"", html)
         @test occursin("\"target\":$(toon_normal_mapped.id),\"property\":\"normalScale\"", html)
+        @test occursin("\"target\":$(matcap_map_alpha_normal.id),\"property\":\"normalScale\"", html)
         @test occursin("\"target\":$(toon_ao_light_mapped.id),\"property\":\"aoIntensity\"", html)
         @test occursin("\"target\":$(toon_ao_light_mapped.id),\"property\":\"lightMapIntensity\"", html)
         @test occursin("\"property\":\"depthNear\"", html)
@@ -4114,6 +4146,52 @@ end
         @test c.r ≈ 0.5
         @test c.g ≈ 0.25
         @test c.b ≈ 0.5
+
+        map_tex = Texture(fill(0.5, 2, 2, 3); filter=:nearest, colorspace=:linear)
+        alpha_tex = Texture(ones(Float64, 2, 2, 3); filter=:nearest, colorspace=:linear)
+        mapped = MeshMatcapMaterial(color=Color3(1.0, 1.0, 1.0),
+                                    map=map_tex, alpha_map=alpha_tex,
+                                    alpha_test=0.35, normal_scale=0.5,
+                                    wireframe=true)
+        @test mapped.map === map_tex
+        @test mapped.alpha_map === alpha_tex
+        @test mapped.alpha_test ≈ 0.35
+        @test mapped.normal_scale ≈ 0.5
+        @test mapped.wireframe === true
+        geo = PlaneGeometry(width=2.0, height=2.0)
+        wm = Mat4{Float64}()
+        campos = Vec3(0.0, 0.0, 3.0)
+        mapped_color = shade_mesh_faces(geo, wm,
+                                        MeshMatcapMaterial(color=Color3(1.0,1.0,1.0),
+                                                           map=map_tex),
+                                        AbstractLight[], campos)
+        untextured_color = shade_mesh_faces(geo, wm, MeshMatcapMaterial(),
+                                            AbstractLight[], campos)
+        @test mapped_color[1].r ≈ untextured_color[1].r * 0.5 atol=1e-9
+        flatmap = DataTexture(cat(fill(0.5,4,4), fill(0.5,4,4), fill(1.0,4,4); dims=3))
+        tiltmap = DataTexture(cat(fill(0.95,4,4), fill(0.5,4,4), fill(0.7,4,4); dims=3))
+        matcap_base = shade_mesh_faces(geo, wm, MeshMatcapMaterial(), AbstractLight[], campos)
+        matcap_same = shade_mesh_faces(geo, wm,
+                                       MeshMatcapMaterial(normal_map=flatmap),
+                                       AbstractLight[], campos)
+        @test matcap_same[1].r ≈ matcap_base[1].r atol=1e-9
+        matcap_tilt = shade_mesh_faces(geo, wm,
+                                       MeshMatcapMaterial(normal_map=tiltmap),
+                                       AbstractLight[], campos)
+        @test abs(matcap_tilt[1].r - matcap_base[1].r) > 1e-3
+        matcap_zero_scale = shade_mesh_faces(geo, wm,
+                                             MeshMatcapMaterial(normal_map=tiltmap,
+                                                                normal_scale=0.0),
+                                             AbstractLight[], campos)
+        @test matcap_zero_scale[1].r ≈ matcap_base[1].r atol=1e-9
+        legacy = MeshMatcapMaterial(Color3(1,1,1), tex, 1.0, false, :front,
+                                    true, true)
+        @test legacy.map === nothing
+        @test legacy.normal_map === nothing
+        @test legacy.normal_scale == 1.0
+        @test legacy.alpha_map === nothing
+        @test legacy.alpha_test == 0.0
+        @test legacy.wireframe === false
     end
 
     @testset "MeshPhysicalMaterial — clearcoat adds highlight" begin
@@ -4247,6 +4325,12 @@ end
         @test MeshToonMaterial(light_map=alpha_tex).light_map === alpha_tex
         @test MeshToonMaterial(ao_map_intensity=0.25).ao_map_intensity ≈ 0.25
         @test MeshToonMaterial(light_map_intensity=0.45).light_map_intensity ≈ 0.45
+        @test MeshMatcapMaterial(map=alpha_tex).map === alpha_tex
+        @test MeshMatcapMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshMatcapMaterial(alpha_test=0.37).alpha_test ≈ 0.37
+        @test MeshMatcapMaterial(normal_map=alpha_tex).normal_map === alpha_tex
+        @test MeshMatcapMaterial(normal_scale=0.25).normal_scale ≈ 0.25
+        @test MeshMatcapMaterial(wireframe=true).wireframe === true
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
         @test PointsMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test PointsMaterial().size_attenuation === true
@@ -4381,6 +4465,7 @@ end
         @test material_wireframe(MeshBasicMaterial(wireframe=true)) == true
         @test material_wireframe(MeshLambertMaterial(wireframe=true)) == true
         @test material_wireframe(MeshPhongMaterial(wireframe=true)) == true
+        @test material_wireframe(MeshMatcapMaterial(wireframe=true)) == true
         @test material_wireframe(MeshStandardMaterial()) == false
 
         rgba_alpha = ones(Float64, 2, 2, 4)
@@ -9724,6 +9809,10 @@ end
                     MeshToonMaterial(color=Color3(1.0, 0.0, 0.0),
                                      side=:double, alpha_test=0.5,
                                      alpha_map=alpha_map) :
+                    material === :matcap ?
+                    MeshMatcapMaterial(color=Color3(1.0, 0.0, 0.0),
+                                       side=:double, alpha_test=0.5,
+                                       alpha_map=alpha_map) :
                     MeshStandardMaterial(color=Color3(1.0, 0.0, 0.0),
                                          roughness=1.0, metalness=0.0,
                                          side=:double, alpha_test=0.5,
@@ -9748,7 +9837,7 @@ end
             @test rt_basic_alpha_one.color[16, 16, 1] > 0.9
             rt_basic_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true, material=:basic)
             @test sum(@view rt_basic_alpha_zero_smooth.color[16, 16, :]) == 0.0
-            for material in (:lambert, :phong, :toon)
+            for material in (:lambert, :phong, :toon, :matcap)
                 rt_alpha_zero = alpha_map_plane(alpha_zero; material=material)
                 @test sum(@view rt_alpha_zero.color[16, 16, :]) == 0.0
                 rt_alpha_one = alpha_map_plane(alpha_one; material=material)

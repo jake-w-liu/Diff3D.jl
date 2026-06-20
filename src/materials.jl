@@ -682,6 +682,12 @@ end
 struct MeshMatcapMaterial <: AbstractMaterial
     color::Color3{Float64}
     matcap::Any
+    map::Any
+    normal_map::Any
+    normal_scale::Float64
+    alpha_map::Any
+    alpha_test::Float64
+    wireframe::Bool
     opacity::Float64
     transparent::Bool
     side::Symbol
@@ -691,14 +697,40 @@ struct MeshMatcapMaterial <: AbstractMaterial
 end
 
 function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
+                             map=nothing, normal_map=nothing, normal_scale=1.0,
+                             alpha_map=nothing, alpha_test=0.0, wireframe=false,
                              opacity=1.0, transparent=false, side=:front,
                              depth_test=true, depth_write=true,
                              clipping_planes=Plane{Float64}[])
-    MeshMatcapMaterial(color, matcap, opacity, transparent, side, depth_test, depth_write,
+    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
+                       Float64(normal_scale), alpha_map, Float64(alpha_test),
+                       wireframe, Float64(opacity), transparent, side, depth_test, depth_write,
+                       _material_clipping_planes(clipping_planes))
+end
+
+function MeshMatcapMaterial(color::Color3, matcap, map, normal_map, normal_scale,
+                            alpha_map, alpha_test, wireframe::Bool, opacity,
+                            transparent::Bool, side::Symbol, depth_test::Bool,
+                            depth_write::Bool)
+    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
+                       Float64(normal_scale), alpha_map, Float64(alpha_test),
+                       wireframe, Float64(opacity), transparent, side, depth_test, depth_write,
+                       Plane{Float64}[])
+end
+
+function MeshMatcapMaterial(color::Color3, matcap, opacity, transparent::Bool,
+                            side::Symbol, depth_test::Bool, depth_write::Bool,
+                            clipping_planes)
+    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, nothing, nothing,
+                       1.0, nothing, 0.0, false, Float64(opacity), transparent,
+                       side, depth_test, depth_write,
                        _material_clipping_planes(clipping_planes))
 end
 
 MeshMatcapMaterial(args::Vararg{Any,7}) =
+    MeshMatcapMaterial(args..., Plane{Float64}[])
+
+MeshMatcapMaterial(args::Vararg{Any,13}) =
     MeshMatcapMaterial(args..., Plane{Float64}[])
 
 # ========================== MeshDepthMaterial ==========================

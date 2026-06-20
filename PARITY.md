@@ -34,7 +34,8 @@ replacement for three.js `WebGLRenderer`.
   `MeshToonMaterial` with shared albedo, alpha, normal, AO, light, and
   emissive map fields, compact browser diffuse-only/specular-shininess output
   for `MeshLambertMaterial`/`MeshPhongMaterial`, and procedural or
-  texture-backed compact output for `MeshMatcapMaterial`.
+  texture-backed compact output for `MeshMatcapMaterial` with shared albedo,
+  alpha, normal, and wireframe fields.
 - Lights: ambient, directional, point, spot, hemisphere, rectangular area
   light data models used by CPU-side rendering paths.
 - Raycaster: mesh, points, line strip, line segments, line loop, perspective
@@ -291,7 +292,9 @@ Parallel audits split the remaining work into five critical tracks:
   Browser export now recognizes `MeshMatcapMaterial` and applies the same
   procedural fallback used by the CPU shading path, or samples a serialized
   `matcap` texture with view-space normal-derived matcap UVs when one is
-  present.
+  present. Matcap materials now also share color-map modulation, normal-map
+  perturbation, alpha-map discard, wireframe draw-mode handling, and
+  `normalScale` animation binding with the compact browser material paths.
   Browser export now recognizes `MeshLambertMaterial` and `MeshPhongMaterial`
   as explicit compact material modes; Lambert suppresses specular terms, and
   Phong serializes `specular` plus `shininess` into the browser shader. Exact
@@ -589,6 +592,11 @@ Parallel audits split the remaining work into five critical tracks:
   sampling.
 - Done: add compact browser `MeshMatcapMaterial` support with procedural
   fallback and view-space texture-backed matcap sampling.
+- Done: add `MeshMatcapMaterial.map`, `alpha_map`, `alpha_test`,
+  `normal_map`, `normal_scale`, and `wireframe` field parity through CPU
+  flat/smooth map paths, compact browser matcap map/alpha/normal serialization,
+  browser/runtime `normalScale` animation binding, generic wireframe rendering,
+  and legacy positional constructor defaults.
 - Done: add `KHR_materials_volume` fields to `MeshPhysicalMaterial`, glTF
   parsing, CPU transmission attenuation, green-channel thickness texture
   modulation, and compact browser attenuation.
