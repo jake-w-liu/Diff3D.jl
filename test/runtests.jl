@@ -1392,6 +1392,15 @@ end
                              name="export_normal_map")
         normal_mapped.position = Vec3(-4.3, 0.0, 0.0)
         add!(scene, normal_mapped)
+        phong_normal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                   MeshPhongMaterial(color=Color3(0.65, 0.55, 0.95),
+                                                     specular=Color3(0.15, 0.15, 0.15),
+                                                     shininess=12.0,
+                                                     normal_map=Texture(normaldata; filter=:nearest),
+                                                     normal_scale=0.45);
+                                   name="export_phong_normal_map")
+        phong_normal_mapped.position = Vec3(-4.3, 0.75, 0.0)
+        add!(scene, phong_normal_mapped)
         envfaces = ntuple(i -> begin
             face = fill(Float64(i) / 6, 4, 4, 3)
             face[1, 1, 1] = min(1.0, face[1, 1, 1] + 0.125)
@@ -2223,6 +2232,15 @@ end
         @test occursin("uMetalnessMap", html)
         @test occursin("\"normalTexture\":", html)
         @test occursin("\"normalScale\":0.34999999999999998", html)
+        phong_normal_range = findfirst("\"name\":\"export_phong_normal_map\"", html)
+        @test phong_normal_range !== nothing
+        if phong_normal_range !== nothing
+            phong_normal_window = html[first(phong_normal_range):min(lastindex(html), first(phong_normal_range) + 3000)]
+            @test occursin("\"materialType\":\"phong\"", phong_normal_window)
+            @test occursin("\"normalTexture\":{\"width\":2", phong_normal_window)
+            @test occursin("\"data\":[255,0,255,255", phong_normal_window)
+            @test occursin("\"normalScale\":0.45000000000000001", phong_normal_window)
+        end
         @test occursin("OES_standard_derivatives", html)
         @test occursin("uUseNormalMap", html)
         @test occursin("uNormalScale", html)
@@ -4035,6 +4053,19 @@ end
         @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshPhongMaterial(emissive_intensity=2.4).emissive_intensity ≈ 2.4
         @test MeshPhongMaterial(wireframe=true).wireframe === true
+        @test MeshPhongMaterial(normal_map=alpha_tex).normal_map === alpha_tex
+        @test MeshPhongMaterial(normal_scale=0.45).normal_scale ≈ 0.45
+        phong_vc = Diff3D._with_vertex_color(
+            MeshPhongMaterial(color=Color3(0.8, 0.6, 0.4),
+                              normal_map=alpha_tex, normal_scale=0.25,
+                              vertex_colors=true),
+            Color3(0.5, 1.0, 0.25),
+        )
+        @test phong_vc.color.r ≈ 0.4
+        @test phong_vc.color.g ≈ 0.6
+        @test phong_vc.color.b ≈ 0.1
+        @test phong_vc.normal_map === alpha_tex
+        @test phong_vc.normal_scale ≈ 0.25
         @test MeshToonMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshToonMaterial(emissive_intensity=1.6).emissive_intensity ≈ 1.6
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
@@ -4094,6 +4125,8 @@ end
         @test isempty(legacy_phong.clipping_planes)
         @test legacy_phong.emissive_map === nothing
         @test legacy_phong.emissive_intensity == 1.0
+        @test legacy_phong.normal_map === nothing
+        @test legacy_phong.normal_scale == 1.0
         legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                Color3(0,0,0), 30.0, 1.0, false,
                                                :front, nothing, alpha_tex, nothing,
@@ -4102,6 +4135,8 @@ end
         @test isempty(legacy_phong_alpha.clipping_planes)
         @test legacy_phong_alpha.emissive_map === nothing
         @test legacy_phong_alpha.emissive_intensity == 1.0
+        @test legacy_phong_alpha.normal_map === nothing
+        @test legacy_phong_alpha.normal_scale == 1.0
         legacy_phong_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                               Color3(0,0,0), 30.0, 1.0, false,
                                               :front, nothing, nothing, alpha_tex, nothing,
@@ -4111,6 +4146,17 @@ end
         @test legacy_phong_full.emissive_map === alpha_tex
         @test legacy_phong_full.vertex_colors == true
         @test legacy_phong_full.emissive_intensity == 2.0
+        @test legacy_phong_full.normal_map === nothing
+        @test legacy_phong_full.normal_scale == 1.0
+        legacy_phong_wire_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
+                                                   Color3(0,0,0), 30.0, 1.0, false,
+                                                   true, :front, nothing, nothing, alpha_tex,
+                                                   nothing, true, 0.1, Plane{Float64}[],
+                                                   2.0, true, true)
+        @test legacy_phong_wire_full.wireframe == true
+        @test legacy_phong_wire_full.emissive_map === alpha_tex
+        @test legacy_phong_wire_full.normal_map === nothing
+        @test legacy_phong_wire_full.normal_scale == 1.0
         legacy_lambert = MeshLambertMaterial(Color3(1,1,1), Color3(0,0,0),
                                              1.0, false, false, :front,
                                              nothing, nothing, nothing, false,
@@ -5289,6 +5335,12 @@ end
         mixer_set_time!(AnimationMixer(AnimationClip("phong_specular",
                                                     [spec_green])), 0.5)
         @test phong_material_mesh.material.specular.g ≈ 0.5
+        phong_normal_scale =
+            NumberKeyframeTrack(phong_material_mesh, "material.normalScale",
+                                [0.0, 1.0], [1.0, 0.4])
+        mixer_set_time!(AnimationMixer(AnimationClip("phong_normal_scale",
+                                                    [phong_normal_scale])), 0.5)
+        @test phong_material_mesh.material.normal_scale ≈ 0.7
 
         color = KeyframeTrack(material_mesh, :color, [0.0, 1.0],
                               [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
@@ -5454,6 +5506,18 @@ end
         @test abs(tilt[1].r - base[1].r) > 1e-3
         zero_scale = shade_mesh_faces(geo, wm, mk(tiltmap; scale=0.0), light, campos)
         @test zero_scale[1].r ≈ base[1].r atol=1e-9
+        mk_phong(nm; scale=1.0) = MeshPhongMaterial(color=Color3(0.8,0.8,0.8),
+                                                     specular=Color3(0.0,0.0,0.0),
+                                                     shininess=1.0,
+                                                     normal_map=nm,
+                                                     normal_scale=scale)
+        phong_base = shade_mesh_faces(geo, wm, mk_phong(nothing), light, campos)
+        phong_same = shade_mesh_faces(geo, wm, mk_phong(flatmap), light, campos)
+        @test phong_same[1].r ≈ phong_base[1].r atol=1e-9
+        phong_tilt = shade_mesh_faces(geo, wm, mk_phong(tiltmap), light, campos)
+        @test abs(phong_tilt[1].r - phong_base[1].r) > 1e-3
+        phong_zero_scale = shade_mesh_faces(geo, wm, mk_phong(tiltmap; scale=0.0), light, campos)
+        @test phong_zero_scale[1].r ≈ phong_base[1].r atol=1e-9
         n0 = Vec3(0.0, 0.0, 1.0)
         n_half = Diff3D._apply_normal_map(n0, tiltmap, 0.5, 0.5,
                                          Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),

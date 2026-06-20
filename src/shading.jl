@@ -262,6 +262,7 @@ function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
                       emissive=m.emissive, shininess=m.shininess,
                       opacity=m.opacity, transparent=m.transparent,
                       wireframe=m.wireframe, side=m.side, map=m.map, alpha_map=m.alpha_map,
+                      normal_map=m.normal_map, normal_scale=m.normal_scale,
                       emissive_map=m.emissive_map, light_map=m.light_map,
                       vertex_colors=m.vertex_colors,
                       alpha_test=m.alpha_test, clipping_planes=m.clipping_planes,

@@ -585,6 +585,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add `MeshPhongMaterial.wireframe` parity through the same CPU and
   compact browser wireframe paths as Basic/Lambert materials, while preserving
   legacy constructor defaults.
+- Done: add `MeshPhongMaterial.normal_map`/`normal_scale` parity, reusing the
+  shared tangent-space CPU flat/smooth normal-map path, compact browser
+  `normalTexture`/`normalScale` serialization, and material `normalScale`
+  animation binding while preserving legacy constructor defaults.
 - Done: add browser export for environment maps where matching Julia material
   fields already exist. The compact browser runtime serializes the six
   `CubeTexture` faces, samples them through a WebGL `samplerCube` when
