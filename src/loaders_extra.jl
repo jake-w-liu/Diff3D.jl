@@ -1323,10 +1323,17 @@ const _SVG_DEFAULT_STYLE =
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity")
 
+struct _SVGAttributeSelector
+    key::String
+    op::Symbol
+    value::String
+end
+
 struct _SVGSimpleSelector
     tag::Union{Nothing,String}
     id::Union{Nothing,String}
     classes::Vector{String}
+    attributes::Vector{_SVGAttributeSelector}
     specificity::Int
 end
 
@@ -1423,18 +1430,84 @@ function _svg_drop_ascii_prefix(s::String, n::Integer)
     return s[nextind(s, firstindex(s), n):end]
 end
 
+function _svg_unquote_css_attr_value(raw::AbstractString)
+    value = String(strip(String(raw)))
+    isempty(value) && return nothing
+    if (startswith(value, "\"") && endswith(value, "\"")) ||
+       (startswith(value, "'") && endswith(value, "'"))
+        if ncodeunits(value) == 2
+            return ""
+        end
+        lo = nextind(value, firstindex(value))
+        hi = prevind(value, lastindex(value))
+        return _svg_unescape_attr(value[lo:hi])
+    end
+    occursin(r"\s", value) && return nothing
+    return _svg_unescape_attr(value)
+end
+
+function _svg_attribute_selector(raw::AbstractString)
+    s = String(strip(String(raw)))
+    m = match(r"^([A-Za-z_:][-A-Za-z0-9_:.]*)$", s)
+    if m !== nothing
+        return _SVGAttributeSelector(lowercase(m.captures[1]), :exists, "")
+    end
+    m = match(r"^([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(.+)$", s)
+    if m !== nothing
+        value = _svg_unquote_css_attr_value(m.captures[2])
+        value === nothing && return nothing
+        return _SVGAttributeSelector(lowercase(m.captures[1]), :equals, value)
+    end
+    return nothing
+end
+
+function _svg_selector_parts(raw::String)
+    parts = String[]
+    buf = IOBuffer()
+    bracket_depth = 0
+    active_quote = nothing
+    for ch in raw
+        if active_quote !== nothing
+            print(buf, ch)
+            ch == active_quote && (active_quote = nothing)
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+            print(buf, ch)
+        elseif ch == '['
+            bracket_depth += 1
+            print(buf, ch)
+        elseif ch == ']'
+            bracket_depth == 0 && return nothing
+            bracket_depth -= 1
+            print(buf, ch)
+        elseif isspace(ch) && bracket_depth == 0
+            part = String(take!(buf))
+            !isempty(strip(part)) && push!(parts, String(strip(part)))
+        else
+            print(buf, ch)
+        end
+    end
+    active_quote === nothing || return nothing
+    bracket_depth == 0 || return nothing
+    part = String(take!(buf))
+    !isempty(strip(part)) && push!(parts, String(strip(part)))
+    return parts
+end
+
 function _svg_simple_selector(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
-    occursin(r"[>+~\[:]", raw) && return nothing
+    occursin(r"[>+~:]", raw) && return nothing
 
     rest = raw
     tag = nothing
     id = nothing
     classes = String[]
+    attributes = _SVGAttributeSelector[]
     if startswith(rest, "*")
         rest = _svg_drop_ascii_prefix(rest, 1)
-    elseif !startswith(rest, ".") && !startswith(rest, "#")
+    elseif !startswith(rest, ".") && !startswith(rest, "#") &&
+           !startswith(rest, "[")
         m = match(r"^[A-Za-z][A-Za-z0-9_-]*", rest)
         m === nothing && return nothing
         tag = lowercase(m.match)
@@ -1443,30 +1516,44 @@ function _svg_simple_selector(selector::AbstractString)
 
     while !isempty(rest)
         prefix = rest[1]
-        (prefix == '.' || prefix == '#') || return nothing
-        m = match(r"^[#.][A-Za-z_][A-Za-z0-9_-]*", rest)
-        m === nothing && return nothing
-        name = m.match[2:end]
-        if prefix == '#'
-            id === nothing || return nothing
-            id = name
+        if prefix == '['
+            close_idx = findfirst(==(']'), rest)
+            close_idx === nothing && return nothing
+            close_idx == firstindex(rest) && return nothing
+            content = rest[nextind(rest, firstindex(rest)):prevind(rest, close_idx)]
+            attr = _svg_attribute_selector(content)
+            attr === nothing && return nothing
+            push!(attributes, attr)
+            rest = _svg_drop_ascii_prefix(rest, close_idx)
         else
-            push!(classes, name)
+            (prefix == '.' || prefix == '#') || return nothing
+            m = match(r"^[#.][A-Za-z_][A-Za-z0-9_-]*", rest)
+            m === nothing && return nothing
+            name = m.match[2:end]
+            if prefix == '#'
+                id === nothing || return nothing
+                id = name
+            else
+                push!(classes, name)
+            end
+            rest = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
         end
-        rest = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
     end
 
     specificity = (id === nothing ? 0 : 100) + 10 * length(classes) +
+                  10 * length(attributes) +
                   (tag === nothing ? 0 : 1)
-    return _SVGSimpleSelector(tag, id, classes, specificity)
+    return _SVGSimpleSelector(tag, id, classes, attributes, specificity)
 end
 
 function _svg_selector_chain(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
-    occursin(r"[>+~\[:]", raw) && return nothing
+    occursin(r"[>+~:]", raw) && return nothing
     chain = _SVGSimpleSelector[]
-    for part in split(raw)
+    parts = _svg_selector_parts(raw)
+    parts === nothing && return nothing
+    for part in parts
         parsed = _svg_simple_selector(part)
         parsed === nothing && return nothing
         push!(chain, parsed)
@@ -1508,6 +1595,15 @@ function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
     if !isempty(selector.classes)
         classes = Set(split(get(attrs, "class", "")))
         all(cls -> cls in classes, selector.classes) || return false
+    end
+    for attr in selector.attributes
+        if attr.op === :exists
+            haskey(attrs, attr.key) || return false
+        elseif attr.op === :equals
+            get(attrs, attr.key, nothing) == attr.value || return false
+        else
+            return false
+        end
     end
     return true
 end

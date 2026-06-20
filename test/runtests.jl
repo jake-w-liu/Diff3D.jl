@@ -5385,13 +5385,15 @@ end
             polygon.warn { stroke-opacity: .25; }
             svg g .desc { fill: #ff0; stroke: #f0f; }
             g.scope rect.deep { fill-opacity: .2; }
+            rect[data-tone = "warm"] { stroke-opacity: .4; }
+            [data-muted] { fill-opacity: .25; }
           </style>
           <g class="warn scope" opacity="0.5">
             <rect id="hero" class="warn" width="2" height="1" fill="#000"/>
             <g>
-              <rect class="desc deep" x="3" width="1" height="1"/>
+              <rect class="desc deep" data-tone="warm" x="3" width="1" height="1"/>
             </g>
-            <polygon class="warn" points="0,0 1,0 0,1"/>
+            <polygon class="warn" data-muted="yes" points="0,0 1,0 0,1"/>
           </g>
         </svg>
         """)
@@ -5405,8 +5407,10 @@ end
         @test css_svg.paths[2].style.fill_opacity == 0.2
         @test css_svg.paths[2].style.stroke == Color3(1.0, 0.0, 1.0)
         @test css_svg.paths[2].style.stroke_width == 3.0
+        @test css_svg.paths[2].style.stroke_opacity == 0.4
         @test css_svg.paths[2].style.opacity == 0.5
         @test css_svg.paths[3].style.fill == Color3(0.0, 0.0, 0.0)
+        @test css_svg.paths[3].style.fill_opacity == 0.25
         @test css_svg.paths[3].style.stroke == Color3(0.0, 1.0, 0.0)
         @test css_svg.paths[3].style.stroke_opacity == 0.25
         css_meshes = svg_meshes(css_svg)
@@ -5415,11 +5419,12 @@ end
         @test css_meshes[1].material.opacity == 0.25
         @test css_meshes[2].material.color == Color3(1.0, 1.0, 0.0)
         @test css_meshes[2].material.opacity == 0.1
+        @test css_meshes[3].material.opacity == 0.125
         css_strokes = svg_strokes(css_svg)
         @test length(css_strokes) == 3
         @test css_strokes[1].material.linewidth == 3.0
         @test css_strokes[2].material.color == Color3(1.0, 0.0, 1.0)
-        @test css_strokes[2].material.opacity == 0.5
+        @test css_strokes[2].material.opacity == 0.2
         @test css_strokes[3].material.opacity == 0.125
         rm(css_path)
 

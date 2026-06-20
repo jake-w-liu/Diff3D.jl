@@ -786,8 +786,9 @@ Parallel audits split the remaining work into five critical tracks:
   `svg_strokes` helpers creating styled fill meshes and stroke line objects;
   simple `<style>` stylesheet rules for tag, class, id, and combined
   tag/class/id selectors plus whitespace descendant selectors now feed the same
-  cascade. Attribute/pseudo CSS selectors, fill-rule holes, stroked outline
-  triangulation, clipping, and DOM-level SVG parsing remain open.
+  cascade, including basic `[attr]` and `[attr=value]` attribute selectors.
+  Advanced attribute operators, pseudo CSS selectors, fill-rule holes, stroked
+  outline triangulation, clipping, and DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.
