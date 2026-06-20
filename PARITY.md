@@ -589,6 +589,11 @@ Parallel audits split the remaining work into five critical tracks:
   shared tangent-space CPU flat/smooth normal-map path, compact browser
   `normalTexture`/`normalScale` serialization, and material `normalScale`
   animation binding while preserving legacy constructor defaults.
+- Done: add `MeshLambertMaterial.normal_map`/`normal_scale` parity through the
+  same CPU flat/smooth normal-map path, compact browser `normalTexture`/
+  `normalScale` serialization, vertex-color-preserving material rewrites, and
+  material `normalScale` animation binding while preserving legacy constructor
+  defaults.
 - Done: add browser export for environment maps where matching Julia material
   fields already exist. The compact browser runtime serializes the six
   `CubeTexture` faces, samples them through a WebGL `samplerCube` when

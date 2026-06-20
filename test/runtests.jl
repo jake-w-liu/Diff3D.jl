@@ -1392,6 +1392,13 @@ end
                              name="export_normal_map")
         normal_mapped.position = Vec3(-4.3, 0.0, 0.0)
         add!(scene, normal_mapped)
+        lambert_normal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                     MeshLambertMaterial(color=Color3(0.45, 0.8, 0.55),
+                                                         normal_map=Texture(normaldata; filter=:nearest),
+                                                         normal_scale=0.25);
+                                     name="export_lambert_normal_map")
+        lambert_normal_mapped.position = Vec3(-5.0, 0.0, 0.0)
+        add!(scene, lambert_normal_mapped)
         phong_normal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                    MeshPhongMaterial(color=Color3(0.65, 0.55, 0.95),
                                                      specular=Color3(0.15, 0.15, 0.15),
@@ -2232,6 +2239,15 @@ end
         @test occursin("uMetalnessMap", html)
         @test occursin("\"normalTexture\":", html)
         @test occursin("\"normalScale\":0.34999999999999998", html)
+        lambert_normal_range = findfirst("\"name\":\"export_lambert_normal_map\"", html)
+        @test lambert_normal_range !== nothing
+        if lambert_normal_range !== nothing
+            lambert_normal_window = html[first(lambert_normal_range):min(lastindex(html), first(lambert_normal_range) + 3000)]
+            @test occursin("\"materialType\":\"lambert\"", lambert_normal_window)
+            @test occursin("\"normalTexture\":{\"width\":2", lambert_normal_window)
+            @test occursin("\"data\":[255,0,255,255", lambert_normal_window)
+            @test occursin("\"normalScale\":0.25", lambert_normal_window)
+        end
         phong_normal_range = findfirst("\"name\":\"export_phong_normal_map\"", html)
         @test phong_normal_range !== nothing
         if phong_normal_range !== nothing
@@ -4048,6 +4064,19 @@ end
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshLambertMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshLambertMaterial(emissive_intensity=1.7).emissive_intensity ≈ 1.7
+        @test MeshLambertMaterial(normal_map=alpha_tex).normal_map === alpha_tex
+        @test MeshLambertMaterial(normal_scale=0.35).normal_scale ≈ 0.35
+        lambert_vc = Diff3D._with_vertex_color(
+            MeshLambertMaterial(color=Color3(0.7, 0.5, 0.3),
+                                normal_map=alpha_tex, normal_scale=0.2,
+                                vertex_colors=true),
+            Color3(0.5, 1.0, 0.25),
+        )
+        @test lambert_vc.color.r ≈ 0.35
+        @test lambert_vc.color.g ≈ 0.5
+        @test lambert_vc.color.b ≈ 0.075
+        @test lambert_vc.normal_map === alpha_tex
+        @test lambert_vc.normal_scale ≈ 0.2
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
@@ -4162,6 +4191,8 @@ end
                                              nothing, nothing, nothing, false,
                                              nothing, true, true)
         @test legacy_lambert.emissive_intensity == 1.0
+        @test legacy_lambert.normal_map === nothing
+        @test legacy_lambert.normal_scale == 1.0
         legacy_toon = MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3,
                                        1.0, false, :front, true, true)
         @test legacy_toon.emissive_map === nothing
@@ -5341,6 +5372,15 @@ end
         mixer_set_time!(AnimationMixer(AnimationClip("phong_normal_scale",
                                                     [phong_normal_scale])), 0.5)
         @test phong_material_mesh.material.normal_scale ≈ 0.7
+        lambert_material_mesh = Mesh(BoxGeometry(),
+                                     MeshLambertMaterial(color=Color3(0.4, 0.7, 0.3),
+                                                         normal_scale=1.0))
+        lambert_normal_scale =
+            NumberKeyframeTrack(lambert_material_mesh, "material.normalScale",
+                                [0.0, 1.0], [1.0, 0.2])
+        mixer_set_time!(AnimationMixer(AnimationClip("lambert_normal_scale",
+                                                    [lambert_normal_scale])), 0.5)
+        @test lambert_material_mesh.material.normal_scale ≈ 0.6
 
         color = KeyframeTrack(material_mesh, :color, [0.0, 1.0],
                               [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
@@ -5506,6 +5546,16 @@ end
         @test abs(tilt[1].r - base[1].r) > 1e-3
         zero_scale = shade_mesh_faces(geo, wm, mk(tiltmap; scale=0.0), light, campos)
         @test zero_scale[1].r ≈ base[1].r atol=1e-9
+        mk_lambert(nm; scale=1.0) = MeshLambertMaterial(color=Color3(0.8,0.8,0.8),
+                                                         normal_map=nm,
+                                                         normal_scale=scale)
+        lambert_base = shade_mesh_faces(geo, wm, mk_lambert(nothing), light, campos)
+        lambert_same = shade_mesh_faces(geo, wm, mk_lambert(flatmap), light, campos)
+        @test lambert_same[1].r ≈ lambert_base[1].r atol=1e-9
+        lambert_tilt = shade_mesh_faces(geo, wm, mk_lambert(tiltmap), light, campos)
+        @test abs(lambert_tilt[1].r - lambert_base[1].r) > 1e-3
+        lambert_zero_scale = shade_mesh_faces(geo, wm, mk_lambert(tiltmap; scale=0.0), light, campos)
+        @test lambert_zero_scale[1].r ≈ lambert_base[1].r atol=1e-9
         mk_phong(nm; scale=1.0) = MeshPhongMaterial(color=Color3(0.8,0.8,0.8),
                                                      specular=Color3(0.0,0.0,0.0),
                                                      shininess=1.0,
