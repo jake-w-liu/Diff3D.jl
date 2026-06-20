@@ -1068,6 +1068,200 @@ function _json_number(p)
     return parse(Float64, p.s[start:p.i-1])
 end
 
+# ========================== FontLoader / typeface JSON ==========================
+
+"""One parsed command from a three.js typeface glyph outline."""
+struct FontCommand
+    kind::Symbol
+    points::Vector{Vec2{Float64}}
+end
+
+"""Typeface glyph metadata and parsed outline commands."""
+struct FontGlyph
+    char::String
+    advance_width::Float64
+    x_min::Float64
+    x_max::Float64
+    outline::String
+    commands::Vector{FontCommand}
+end
+
+"""Decoded three.js typeface JSON font data."""
+struct FontData
+    family_name::String
+    resolution::Float64
+    ascender::Float64
+    descender::Float64
+    glyphs::Dict{String,FontGlyph}
+end
+
+_font_float(d::AbstractDict, key::String, default::Real=0.0) =
+    haskey(d, key) && d[key] !== nothing ? Float64(d[key]) : Float64(default)
+
+function _font_parse_outline(outline::AbstractString)
+    tokens = split(strip(String(outline)))
+    commands = FontCommand[]
+    i = 1
+    function need(n::Int, cmd)
+        i + n - 1 <= length(tokens) || error("font glyph command $cmd is missing coordinates")
+    end
+    while i <= length(tokens)
+        cmd = lowercase(String(tokens[i]))
+        i += 1
+        if cmd == "m" || cmd == "l"
+            need(2, cmd)
+            x = parse(Float64, tokens[i])
+            y = parse(Float64, tokens[i + 1])
+            i += 2
+            push!(commands, FontCommand(cmd == "m" ? :move : :line,
+                                        [Vec2(x, y)]))
+        elseif cmd == "q"
+            need(4, cmd)
+            c = Vec2(parse(Float64, tokens[i]), parse(Float64, tokens[i + 1]))
+            p = Vec2(parse(Float64, tokens[i + 2]), parse(Float64, tokens[i + 3]))
+            i += 4
+            push!(commands, FontCommand(:quadratic, [c, p]))
+        elseif cmd == "b"
+            need(6, cmd)
+            c1 = Vec2(parse(Float64, tokens[i]), parse(Float64, tokens[i + 1]))
+            c2 = Vec2(parse(Float64, tokens[i + 2]), parse(Float64, tokens[i + 3]))
+            p = Vec2(parse(Float64, tokens[i + 4]), parse(Float64, tokens[i + 5]))
+            i += 6
+            push!(commands, FontCommand(:bezier, [c1, c2, p]))
+        else
+            error("unsupported font glyph outline command $cmd")
+        end
+    end
+    return commands
+end
+
+function _font_glyph(char::String, raw)
+    raw isa AbstractDict || error("font glyph $char must be a JSON object")
+    outline = String(get(raw, "o", ""))
+    return FontGlyph(char,
+                     _font_float(raw, "ha", _font_float(raw, "x_max", 0.0)),
+                     _font_float(raw, "x_min", 0.0),
+                     _font_float(raw, "x_max", 0.0),
+                     outline,
+                     _font_parse_outline(outline))
+end
+
+function _font_data(raw)
+    raw isa AbstractDict || error("font JSON root must be an object")
+    haskey(raw, "glyphs") || error("font JSON is missing glyphs")
+    glyph_defs = raw["glyphs"]
+    glyph_defs isa AbstractDict || error("font glyphs must be an object")
+    glyphs = Dict{String,FontGlyph}()
+    for (char, glyph_raw) in glyph_defs
+        glyphs[String(char)] = _font_glyph(String(char), glyph_raw)
+    end
+    resolution = _font_float(raw, "resolution", 1000.0)
+    resolution > 0 || error("font resolution must be positive")
+    return FontData(String(get(raw, "familyName", "")),
+                    resolution,
+                    _font_float(raw, "ascender", 0.0),
+                    _font_float(raw, "descender", 0.0),
+                    glyphs)
+end
+
+"""Load a three.js typeface JSON font."""
+load_font(path::String) = _font_data(_json_parse(read(path, String)))
+
+"""Alias for [`load_font`](@ref), matching three.js `FontLoader` naming."""
+FontLoader(path::String) = load_font(path)
+
+function _font_quadratic(p0::Vec2, c::Vec2, p1::Vec2, t::Float64)
+    u = 1.0 - t
+    return p0 * (u * u) + c * (2.0 * u * t) + p1 * (t * t)
+end
+
+function _font_bezier(p0::Vec2, c1::Vec2, c2::Vec2, p1::Vec2, t::Float64)
+    u = 1.0 - t
+    return p0 * (u * u * u) + c1 * (3.0 * u * u * t) +
+           c2 * (3.0 * u * t * t) + p1 * (t * t * t)
+end
+
+function _font_push_scaled!(shape::Vector{Vec2{Float64}}, p::Vec2, scale::Float64,
+                            offset_x::Float64)
+    push!(shape, Vec2(offset_x + p.x * scale, p.y * scale))
+end
+
+"""
+    font_glyph_shapes(font, char; size=1.0, curve_segments=8, offset_x=0.0)
+
+Flatten one glyph outline from a loaded typeface JSON font into one or more
+point loops suitable for `ShapeGeometry` when the glyph outline is simple.
+Quadratic (`q`) and cubic (`b`) commands are subdivided into `curve_segments`
+line segments.
+"""
+function font_glyph_shapes(font::FontData, char::AbstractString;
+                           size::Real=1.0, curve_segments::Integer=8,
+                           offset_x::Real=0.0)
+    haskey(font.glyphs, String(char)) || error("font has no glyph for $(repr(String(char)))")
+    curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
+    scale = Float64(size) / font.resolution
+    xoff = Float64(offset_x)
+    glyph = font.glyphs[String(char)]
+    shapes = Vector{Vec2{Float64}}[]
+    current = Vec2(0.0, 0.0)
+    active = Vec2{Float64}[]
+    for cmd in glyph.commands
+        if cmd.kind === :move
+            length(active) >= 2 && push!(shapes, active)
+            active = Vec2{Float64}[]
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff)
+        elseif cmd.kind === :line
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff)
+        elseif cmd.kind === :quadratic
+            start = current
+            control, stop = cmd.points
+            for step in 1:Int(curve_segments)
+                p = _font_quadratic(start, control, stop, step / Float64(curve_segments))
+                _font_push_scaled!(active, p, scale, xoff)
+            end
+            current = stop
+        elseif cmd.kind === :bezier
+            start = current
+            c1, c2, stop = cmd.points
+            for step in 1:Int(curve_segments)
+                p = _font_bezier(start, c1, c2, stop, step / Float64(curve_segments))
+                _font_push_scaled!(active, p, scale, xoff)
+            end
+            current = stop
+        else
+            error("unsupported font command $(cmd.kind)")
+        end
+    end
+    length(active) >= 2 && push!(shapes, active)
+    return shapes
+end
+
+"""
+    font_text_shapes(font, text; size=1.0, curve_segments=8)
+
+Flatten all available glyph outlines for `text` into point loops. Horizontal
+advance uses each glyph's `ha` metric from the typeface JSON data.
+"""
+function font_text_shapes(font::FontData, text::AbstractString;
+                          size::Real=1.0, curve_segments::Integer=8)
+    shapes = Vector{Vec2{Float64}}[]
+    cursor = 0.0
+    scale = Float64(size) / font.resolution
+    for ch in text
+        key = string(ch)
+        glyph = get(font.glyphs, key, nothing)
+        if glyph !== nothing
+            append!(shapes, font_glyph_shapes(font, key; size=size,
+                                              curve_segments=curve_segments,
+                                              offset_x=cursor))
+            cursor += glyph.advance_width * scale
+        end
+    end
+    return shapes
+end
+
 # ========================== base64 ==========================
 
 const _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

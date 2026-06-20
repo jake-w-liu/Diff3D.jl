@@ -5143,6 +5143,85 @@ end
         rm(bad_path)
     end
 
+    @testset "FontLoader typeface JSON" begin
+        font_path = tempname() * ".typeface.json"
+        write(font_path, """
+        {
+          "familyName": "UnitFont",
+          "resolution": 1000,
+          "ascender": 900,
+          "descender": -100,
+          "glyphs": {
+            "A": {
+              "ha": 1200,
+              "x_min": 0,
+              "x_max": 1000,
+              "o": "m 0 0 l 1000 0 l 1000 1000 l 0 1000"
+            },
+            "B": {
+              "ha": 800,
+              "x_min": 0,
+              "x_max": 1000,
+              "o": "m 0 0 q 500 1000 1000 0 b 900 -200 100 -200 0 0"
+            }
+          }
+        }
+        """)
+
+        font = load_font(font_path)
+        @test font isa FontData
+        @test FontLoader(font_path).family_name == "UnitFont"
+        @test font.family_name == "UnitFont"
+        @test font.resolution == 1000
+        @test font.ascender == 900
+        @test font.descender == -100
+        @test haskey(font.glyphs, "A")
+        @test font.glyphs["A"] isa FontGlyph
+        @test font.glyphs["A"].advance_width == 1200
+        @test [cmd.kind for cmd in font.glyphs["A"].commands] == [:move, :line, :line, :line]
+
+        shapes = font_glyph_shapes(font, "A"; size=2.0)
+        @test length(shapes) == 1
+        @test shapes[1] == [Vec2(0.0, 0.0), Vec2(2.0, 0.0),
+                            Vec2(2.0, 2.0), Vec2(0.0, 2.0)]
+        shape_geo = ShapeGeometry(shapes[1])
+        @test shape_geo.n_vertices == 4
+        @test shape_geo.n_faces == 2
+
+        curved = font_glyph_shapes(font, "B"; curve_segments=4)
+        @test length(curved) == 1
+        @test length(curved[1]) == 9
+        @test curved[1][1] == Vec2(0.0, 0.0)
+        @test curved[1][5] == Vec2(1.0, 0.0)
+        @test curved[1][end] == Vec2(0.0, 0.0)
+
+        text_shapes = font_text_shapes(font, "AZB"; curve_segments=4)
+        @test length(text_shapes) == 2
+        @test text_shapes[1][1] == Vec2(0.0, 0.0)
+        @test text_shapes[2][1] == Vec2(1.2, 0.0)
+
+        @test_throws "font has no glyph" font_glyph_shapes(font, "Z")
+        @test_throws ArgumentError font_glyph_shapes(font, "A"; curve_segments=0)
+        rm(font_path)
+
+        missing_path = tempname() * ".typeface.json"
+        write(missing_path, "{}")
+        @test_throws "missing glyphs" load_font(missing_path)
+        rm(missing_path)
+
+        bad_command_path = tempname() * ".typeface.json"
+        write(bad_command_path, """
+        {
+          "resolution": 1000,
+          "glyphs": {
+            "A": { "ha": 1000, "o": "m 0 0 x 1 1" }
+          }
+        }
+        """)
+        @test_throws "unsupported font glyph outline command" load_font(bad_command_path)
+        rm(bad_command_path)
+    end
+
     @testset "Radiance RGBE/HDR decode" begin
         function hdr_bytes(width, height, pixel_bytes; ysign="-", xsign="+")
             bytes = Vector{UInt8}(codeunits(
