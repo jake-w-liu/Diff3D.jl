@@ -5313,6 +5313,19 @@ end
     end
 
     @testset "SVGLoader basic shapes" begin
+        function svg_triangle_area_xy(geo)
+            area = 0.0
+            for i in 1:3:length(geo.indices)
+                ia, ib, ic = geo.indices[i:i + 2]
+                ax, ay = geo.positions[3ia - 2], geo.positions[3ia - 1]
+                bx, by = geo.positions[3ib - 2], geo.positions[3ib - 1]
+                cx, cy = geo.positions[3ic - 2], geo.positions[3ic - 1]
+                area += abs((bx - ax) * (cy - ay) -
+                            (by - ay) * (cx - ax)) / 2
+            end
+            return area
+        end
+
         svg_path = tempname() * ".svg"
         write(svg_path, """
         <svg width="20" height="10" xmlns="http://www.w3.org/2000/svg">
@@ -5807,6 +5820,42 @@ end
         @test length(svg_strokes(functional_pseudo_css_svg)) == 2
         rm(functional_pseudo_css_path)
 
+        fill_rule_path = tempname() * ".svg"
+        write(fill_rule_path, """
+        <svg>
+          <path fill-rule="evenodd"
+                d="M 0 0 L 1 0 L 1 1 L 0 1 Z
+                   M .25 .25 L .75 .25 L .75 .75 L .25 .75 Z"/>
+          <path d="M 2 0 L 3 0 L 3 1 L 2 1 Z
+                   M 2.25 .25 L 2.75 .25 L 2.75 .75 L 2.25 .75 Z"/>
+          <path style="fill-rule: nonzero"
+                d="M 4 0 L 5 0 L 5 1 L 4 1 Z
+                   M 4.25 .25 L 4.25 .75 L 4.75 .75 L 4.75 .25 Z"/>
+          <rect x="6" width="1" height="1"/>
+          <rect x="6.25" y=".25" width=".5" height=".5"/>
+        </svg>
+        """)
+        fill_rule_svg = load_svg(fill_rule_path)
+        @test length(fill_rule_svg.paths) == 8
+        @test fill_rule_svg.paths[1].style.fill_rule === :evenodd
+        @test fill_rule_svg.paths[1].element_id == fill_rule_svg.paths[2].element_id
+        @test fill_rule_svg.paths[3].style.fill_rule === :nonzero
+        @test fill_rule_svg.paths[5].style.fill_rule === :nonzero
+        fill_rule_meshes = svg_meshes(fill_rule_svg)
+        @test length(fill_rule_meshes) == 5
+        @test fill_rule_meshes[1].geometry.n_faces == 9
+        @test svg_triangle_area_xy(fill_rule_meshes[1].geometry) ≈ 0.75
+        @test fill_rule_meshes[2].geometry.n_faces == 2
+        @test svg_triangle_area_xy(fill_rule_meshes[2].geometry) ≈ 1.0
+        @test fill_rule_meshes[3].geometry.n_faces == 9
+        @test svg_triangle_area_xy(fill_rule_meshes[3].geometry) ≈ 0.75
+        @test svg_triangle_area_xy(fill_rule_meshes[4].geometry) ≈ 1.0
+        @test svg_triangle_area_xy(fill_rule_meshes[5].geometry) ≈ 0.25
+        fill_rule_geo = svg_geometry(fill_rule_svg)
+        @test fill_rule_geo.n_faces == 24
+        @test svg_triangle_area_xy(fill_rule_geo) ≈ 3.75
+        rm(fill_rule_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
@@ -5858,6 +5907,12 @@ end
         write(bad_rgb_color_path, "<svg><rect width=\"1\" height=\"1\" fill=\"rgb(nope,0,0)\"/></svg>")
         @test_throws "unsupported SVG color" load_svg(bad_rgb_color_path)
         rm(bad_rgb_color_path)
+
+        bad_fill_rule_path = tempname() * ".svg"
+        write(bad_fill_rule_path,
+              "<svg><rect width=\"1\" height=\"1\" fill-rule=\"inside-out\"/></svg>")
+        @test_throws "unsupported SVG fill-rule" load_svg(bad_fill_rule_path)
+        rm(bad_fill_rule_path)
 
         bad_segments_path = tempname() * ".svg"
         write(bad_segments_path, "<svg><circle r=\"1\"/></svg>")

@@ -808,7 +808,10 @@ Parallel audits split the remaining work into five critical tracks:
   round caps expanded by `svg_stroke_meshes` for open solid or dashed stroke
   subpaths. `stroke-linejoin` now parses `miter`, `bevel`, and `round`, honors
   `stroke-miterlimit`, and expands exterior joins in `svg_stroke_meshes`.
-  Fill-rule holes, clipping, and DOM-level SVG parsing remain open.
+  `fill-rule` now cascades from attributes, inline styles, and parsed
+  stylesheets; filled meshes and merged SVG geometry group same-element
+  compound paths with `nonzero` or `evenodd` hole semantics while preserving
+  separate element fills. Clipping and DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

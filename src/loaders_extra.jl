@@ -1908,33 +1908,43 @@ struct SVGStyle
     stroke_linecap::Symbol
     stroke_linejoin::Symbol
     stroke_miterlimit::Float64
+    fill_rule::Symbol
 end
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
              Float64(fill_opacity), Float64(stroke_opacity), Float64[], 0.0,
-             :butt, :miter, 4.0)
+             :butt, :miter, 4.0, :nonzero)
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
          stroke_dasharray, stroke_dashoffset) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
              Float64(fill_opacity), Float64(stroke_opacity),
              [Float64(x) for x in stroke_dasharray],
-             Float64(stroke_dashoffset), :butt, :miter, 4.0)
+             Float64(stroke_dashoffset), :butt, :miter, 4.0, :nonzero)
 
 SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
          stroke_dasharray, stroke_dashoffset, stroke_linecap) =
     SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
              Float64(fill_opacity), Float64(stroke_opacity),
              [Float64(x) for x in stroke_dasharray],
-             Float64(stroke_dashoffset), stroke_linecap, :miter, 4.0)
+             Float64(stroke_dashoffset), stroke_linecap, :miter, 4.0, :nonzero)
+
+SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity,
+         stroke_dasharray, stroke_dashoffset, stroke_linecap, stroke_linejoin,
+         stroke_miterlimit) =
+    SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
+             Float64(fill_opacity), Float64(stroke_opacity),
+             [Float64(x) for x in stroke_dasharray],
+             Float64(stroke_dashoffset), stroke_linecap, stroke_linejoin,
+             Float64(stroke_miterlimit), :nonzero)
 
 const _SVG_DEFAULT_STYLE =
     SVGStyle(Color3(0.0, 0.0, 0.0), nothing, 1.0, 1.0, 1.0, 1.0)
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity", "stroke-dasharray",
                          "stroke-dashoffset", "stroke-linecap",
-                         "stroke-linejoin", "stroke-miterlimit")
+                         "stroke-linejoin", "stroke-miterlimit", "fill-rule")
 
 struct _SVGAttributeSelector
     key::String
@@ -1973,11 +1983,15 @@ struct SVGPath
     points::Vector{Vec2{Float64}}
     closed::Bool
     style::SVGStyle
+    element_id::Int
 
     SVGPath(tag::Symbol, points::Vector{Vec2{Float64}}, closed::Bool,
-            style::SVGStyle) = new(tag, points, closed, style)
+            style::SVGStyle, element_id::Integer) =
+        new(tag, points, closed, style, Int(element_id))
+    SVGPath(tag::Symbol, points::Vector{Vec2{Float64}}, closed::Bool,
+            style::SVGStyle) = new(tag, points, closed, style, 0)
     SVGPath(tag::Symbol, points::Vector{Vec2{Float64}}, closed::Bool) =
-        new(tag, points, closed, _SVG_DEFAULT_STYLE)
+        new(tag, points, closed, _SVG_DEFAULT_STYLE, 0)
 end
 
 """Decoded SVG document with common primitives converted to point paths."""
@@ -2748,10 +2762,13 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
     miterlimit = haskey(local_attrs, "stroke-miterlimit") ?
                  _svg_miterlimit(local_attrs["stroke-miterlimit"]) :
                  parent.stroke_miterlimit
+    fill_rule = haskey(local_attrs, "fill-rule") ?
+                _svg_fill_rule(local_attrs["fill-rule"]) :
+                parent.fill_rule
     stroke_width >= 0.0 || error("SVG stroke-width must be non-negative")
     return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
                     stroke_opacity, dasharray, dashoffset, linecap, linejoin,
-                    miterlimit)
+                    miterlimit, fill_rule)
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -2797,6 +2814,13 @@ function _svg_linejoin(raw::AbstractString)
     value == "round" && return :round
     value == "bevel" && return :bevel
     error("unsupported SVG stroke-linejoin $raw")
+end
+
+function _svg_fill_rule(raw::AbstractString)
+    value = lowercase(strip(String(raw)))
+    value == "nonzero" && return :nonzero
+    value == "evenodd" && return :evenodd
+    error("unsupported SVG fill-rule $raw")
 end
 
 function _svg_miterlimit(raw::AbstractString)
@@ -2883,11 +2907,14 @@ end
 function _svg_transform_path(path::SVGPath, t)
     t == _svg_identity_transform() && return path
     return SVGPath(path.tag, [_svg_apply_transform(t, p) for p in path.points],
-                   path.closed, path.style)
+                   path.closed, path.style, path.element_id)
 end
 
 _svg_style_path(path::SVGPath, style::SVGStyle) =
-    SVGPath(path.tag, path.points, path.closed, style)
+    SVGPath(path.tag, path.points, path.closed, style, path.element_id)
+
+_svg_element_path(path::SVGPath, element_id::Int) =
+    SVGPath(path.tag, path.points, path.closed, path.style, element_id)
 
 function _svg_transform_numbers(raw::AbstractString)
     values = _svg_numbers(raw)
@@ -3203,6 +3230,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     ancestor_stack = _SVGAncestorStack()
     sibling_stack = _SVGSiblingStack([_SVGElementContext[]])
     css_rules = _svg_css_rules(raw)
+    next_element_id = 0
 
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
                        raw)
@@ -3269,8 +3297,11 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             length(points) >= 2 &&
                 push!(element_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
-        append!(paths, [_svg_transform_path(_svg_style_path(path, style),
-                                            total_transform)
+        next_element_id += 1
+        append!(paths, [_svg_element_path(
+                            _svg_transform_path(_svg_style_path(path, style),
+                                                total_transform),
+                            next_element_id)
                         for path in element_paths])
         push!(sibling_stack[end], context)
     end
@@ -3290,9 +3321,114 @@ svg_shapes(svg::SVGDocument) =
 
 svg_shapes(path::String; kwargs...) = svg_shapes(load_svg(path; kwargs...))
 
+function _svg_element_path_groups(paths::Vector{SVGPath})
+    buckets = Dict{Int,Vector{SVGPath}}()
+    order = Int[]
+    for (idx, path) in enumerate(paths)
+        key = path.element_id == 0 ? -idx : path.element_id
+        if !haskey(buckets, key)
+            buckets[key] = SVGPath[]
+            push!(order, key)
+        end
+        push!(buckets[key], path)
+    end
+    return [buckets[key] for key in order]
+end
+
+function _svg_fill_loop_groups(loops::Vector{Vector{Vec2{Float64}}},
+                               fill_rule::Symbol)
+    fill_rule === :nonzero || fill_rule === :evenodd ||
+        error("unsupported SVG fill-rule $(fill_rule)")
+    clean = [_font_loop_points(loop) for loop in loops]
+    clean = [loop for loop in clean
+             if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
+    groups = NamedTuple{(:outer, :holes),
+                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
+    isempty(clean) && return groups
+
+    areas = abs.(_font_polygon_area.(clean))
+    signs = [_font_polygon_area(loop) >= 0.0 ? 1 : -1 for loop in clean]
+    direct_parent = fill(0, length(clean))
+    for i in eachindex(clean)
+        p = clean[i][1]
+        best = 0
+        best_area = Inf
+        for j in eachindex(clean)
+            i == j && continue
+            areas[j] > areas[i] || continue
+            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
+                best = j
+                best_area = areas[j]
+            end
+        end
+        direct_parent[i] = best
+    end
+
+    depths = zeros(Int, length(clean))
+    ancestor_winding = zeros(Int, length(clean))
+    for i in eachindex(clean)
+        parent = direct_parent[i]
+        while parent != 0
+            depths[i] += 1
+            ancestor_winding[i] += signs[parent]
+            parent = direct_parent[parent]
+        end
+    end
+
+    is_outer = falses(length(clean))
+    is_hole = falses(length(clean))
+    for i in eachindex(clean)
+        if fill_rule === :evenodd
+            outside_filled = isodd(depths[i])
+            inside_filled = !outside_filled
+        else
+            outside_filled = ancestor_winding[i] != 0
+            inside_filled = ancestor_winding[i] + signs[i] != 0
+        end
+        is_outer[i] = !outside_filled && inside_filled
+        is_hole[i] = outside_filled && !inside_filled
+    end
+
+    outer_group = Dict{Int,Int}()
+    for i in eachindex(clean)
+        is_outer[i] || continue
+        holes = Vector{Vec2{Float64}}[]
+        push!(groups, (outer=_font_orient_loop(clean[i], true), holes=holes))
+        outer_group[i] = length(groups)
+    end
+    for i in eachindex(clean)
+        is_hole[i] || continue
+        parent = direct_parent[i]
+        while parent != 0
+            group_idx = get(outer_group, parent, 0)
+            if group_idx != 0
+                push!(groups[group_idx].holes, _font_orient_loop(clean[i], false))
+                break
+            end
+            parent = direct_parent[parent]
+        end
+    end
+    return groups
+end
+
+function _svg_fill_geometries(paths::Vector{SVGPath})
+    closed = [path for path in paths if path.closed && length(path.points) >= 3]
+    isempty(closed) && return BufferGeometry[]
+    fill_rule = closed[1].style.fill_rule
+    geos = BufferGeometry[]
+    for group in _svg_fill_loop_groups([path.points for path in closed], fill_rule)
+        geo = _font_shape_geometry_with_holes(group.outer, group.holes)
+        geo.n_faces > 0 && push!(geos, geo)
+    end
+    return geos
+end
+
 """Triangulate closed SVG loops into a merged `BufferGeometry`."""
 function svg_geometry(svg::SVGDocument)
-    geos = [ShapeGeometry(shape) for shape in svg_shapes(svg)]
+    geos = BufferGeometry[]
+    for paths in _svg_element_path_groups(svg.paths)
+        append!(geos, _svg_fill_geometries(paths))
+    end
     isempty(geos) && return BufferGeometry()
     return merge_geometries(geos; with_groups=false)
 end
@@ -3704,15 +3840,19 @@ end
 """Build `Mesh` objects for filled, closed SVG paths using parsed fill styles."""
 function svg_meshes(svg::SVGDocument)
     out = Mesh[]
-    for path in svg.paths
-        fill = path.style.fill
+    for paths in _svg_element_path_groups(svg.paths)
+        isempty(paths) && continue
+        style = paths[1].style
+        fill = style.fill
         fill === nothing && continue
-        path.closed && length(path.points) >= 3 || continue
-        opacity = path.style.opacity * path.style.fill_opacity
+        opacity = style.opacity * style.fill_opacity
         opacity > 0.0 || continue
+        geos = _svg_fill_geometries(paths)
+        isempty(geos) && continue
+        geo = length(geos) == 1 ? geos[1] : merge_geometries(geos; with_groups=false)
         mat = MeshBasicMaterial(color=fill, opacity=opacity,
                                 transparent=opacity < 1.0, side=:double)
-        push!(out, Mesh(ShapeGeometry(copy(path.points)), mat; name="SVGFill"))
+        push!(out, Mesh(geo, mat; name="SVGFill"))
     end
     return out
 end
