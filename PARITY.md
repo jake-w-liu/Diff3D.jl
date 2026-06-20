@@ -756,6 +756,11 @@ Parallel audits split the remaining work into five critical tracks:
   orientation signs, RGBE-to-linear floating-point conversion, and clear errors
   for malformed headers/truncated payloads. EXR, KTX2/Basis, PMREM generation,
   and broader environment-map loader parity remain open.
+- Done: expose native JPEG/JPG texture loading via `load_jpeg`, add
+  byte-signature `load_image` dispatch for PNG and JPEG, and route
+  `TextureLoader` through the shared PNG/JPEG path while preserving RGBE/HDR as
+  the explicit `RGBELoader` path. EXR, KTX2/Basis, SVG, font, audio, and
+  broader loader ecosystem parity remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

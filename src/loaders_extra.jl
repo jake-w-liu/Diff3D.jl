@@ -450,8 +450,30 @@ function load_png(path::String)
     _decode_png(read(path))
 end
 
-"""Load a PNG into a [`Texture`]."""
-TextureLoader(path::String; kwargs...) = Texture(load_png(path); kwargs...)
+@inline function _is_jpeg_bytes(bytes::Vector{UInt8})
+    length(bytes) >= 4 &&
+        bytes[1] == 0xff && bytes[2] == 0xd8 &&
+        bytes[end - 1] == 0xff && bytes[end] == 0xd9
+end
+
+"""Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""
+load_jpeg(path::String) = _decode_jpeg(read(path); label="JPEG image")
+
+"""
+    load_image(path) -> Array{Float64,3}
+
+Decode a PNG or JPEG/JPG image by inspecting the file bytes. Use
+[`load_rgbe`](@ref) / [`RGBELoader`](@ref) for Radiance HDR files.
+"""
+function load_image(path::String)
+    bytes = read(path)
+    _is_png_bytes(bytes) && return _decode_png(bytes)
+    _is_jpeg_bytes(bytes) && return _decode_jpeg(bytes; label="JPEG image")
+    error("unsupported image format for $path; TextureLoader supports PNG and JPEG/JPG")
+end
+
+"""Load a PNG or JPEG/JPG image into a [`Texture`]."""
+TextureLoader(path::String; kwargs...) = Texture(load_image(path); kwargs...)
 
 # ========================== Radiance RGBE / HDR decode ==========================
 
@@ -1297,7 +1319,7 @@ function _jpeg_bytes_for_jpegturbo(bytes::Vector{UInt8})
     return padded
 end
 
-function _decode_jpeg(bytes::Vector{UInt8})
+function _decode_jpeg(bytes::Vector{UInt8}; label::AbstractString="glTF image MIME image/jpeg")
     try
         img = jpeg_decode(RGB, _jpeg_bytes_for_jpegturbo(bytes))
         H, W = size(img)
@@ -1310,7 +1332,7 @@ function _decode_jpeg(bytes::Vector{UInt8})
         end
         return out
     catch err
-        error("glTF image MIME image/jpeg could not be decoded: $(sprint(showerror, err))")
+        error("$label could not be decoded: $(sprint(showerror, err))")
     end
 end
 

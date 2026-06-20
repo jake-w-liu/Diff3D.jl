@@ -4923,15 +4923,43 @@ end
         @test base64_decode("TQ==") == Vector{UInt8}(codeunits("M"))
     end
 
-    @testset "PNG decode round-trip" begin
+    @testset "Image decode round-trip" begin
         img = test_pattern(20, 12)
         f = tempname() * ".png"; save_png(f, img)
         dec = load_png(f)
         @test size(dec) == (12, 20, 3)
         @test maximum(abs.(dec .- img[:, :, 1:3])) <= 1/255 + 1e-9   # 8-bit quantization
+        @test load_image(f) == dec
         tex = TextureLoader(f); rm(f)
         @test tex isa Texture
         @test size(tex.data) == (12, 20, 3)
+
+        jpeg64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8APnAOP//Z"
+        jpeg_bytes = base64decode(jpeg64)
+        jf = tempname() * ".jpg"
+        write(jf, jpeg_bytes)
+        jdec = load_jpeg(jf)
+        @test size(jdec) == (2, 2, 3)
+        @test jdec[1, 1, 1] ≈ 64 / 255 atol=0.02
+        @test jdec[1, 1, 2] ≈ 128 / 255 atol=0.02
+        @test jdec[1, 1, 3] ≈ 191 / 255 atol=0.02
+        @test load_image(jf) == jdec
+        jtex = TextureLoader(jf)
+        @test jtex isa Texture
+        @test jtex.data == jdec
+        rm(jf)
+
+        disguised = tempname() * ".bin"
+        write(disguised, jpeg_bytes)
+        @test load_image(disguised) == jdec
+        @test TextureLoader(disguised).data == jdec
+        rm(disguised)
+
+        unsupported = tempname()
+        write(unsupported, UInt8[0x00, 0x01, 0x02, 0x03])
+        @test_throws "unsupported image format" load_image(unsupported)
+        @test_throws "unsupported image format" TextureLoader(unsupported)
+        rm(unsupported)
 
         adam7 = Array{UInt8}(undef, 8, 8, 3)
         for i in 1:8, j in 1:8, c in 1:3
