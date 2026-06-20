@@ -1358,6 +1358,237 @@ function _font_polygon_area(shape::Vector{Vec2{Float64}})
     return area / 2.0
 end
 
+function _font_orient_loop(shape::Vector{Vec2{Float64}}, ccw::Bool)
+    area = _font_polygon_area(shape)
+    if (area >= 0.0) == ccw
+        return copy(shape)
+    end
+    return reverse(copy(shape))
+end
+
+_font_same_point(a::Vec2{Float64}, b::Vec2{Float64}) =
+    hypot(a.x - b.x, a.y - b.y) <= 1e-9
+
+function _font_point_in_loop(p::Vec2{Float64}, loop::Vector{Vec2{Float64}})
+    inside = false
+    n = length(loop)
+    j = n
+    for i in 1:n
+        a = loop[i]
+        b = loop[j]
+        if ((a.y > p.y) != (b.y > p.y))
+            x = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
+            x > p.x && (inside = !inside)
+        end
+        j = i
+    end
+    return inside
+end
+
+function _font_loop_groups(loops::Vector{Vector{Vec2{Float64}}})
+    clean = [_font_loop_points(loop) for loop in loops]
+    clean = [loop for loop in clean if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
+    groups = NamedTuple{(:outer, :holes),
+                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
+    isempty(clean) && return groups
+    areas = abs.(_font_polygon_area.(clean))
+    direct_parent = fill(0, length(clean))
+    for i in eachindex(clean)
+        p = clean[i][1]
+        best = 0
+        best_area = Inf
+        for j in eachindex(clean)
+            i == j && continue
+            areas[j] > areas[i] || continue
+            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
+                best = j
+                best_area = areas[j]
+            end
+        end
+        direct_parent[i] = best
+    end
+    for i in eachindex(clean)
+        direct_parent[i] == 0 || continue
+        outer = _font_orient_loop(clean[i], true)
+        holes = Vector{Vec2{Float64}}[]
+        for j in eachindex(clean)
+            direct_parent[j] == i || continue
+            push!(holes, _font_orient_loop(clean[j], false))
+        end
+        push!(groups, (outer=outer, holes=holes))
+    end
+    return groups
+end
+
+function _font_ray_edge_intersection_x(p::Vec2{Float64}, a::Vec2{Float64},
+                                       b::Vec2{Float64})
+    abs(a.y - b.y) > 1e-12 || return nothing
+    ymin = min(a.y, b.y)
+    ymax = max(a.y, b.y)
+    (p.y >= ymin && p.y < ymax) || return nothing
+    t = (p.y - a.y) / (b.y - a.y)
+    (t >= -1e-12 && t <= 1.0 + 1e-12) || return nothing
+    x = a.x + (b.x - a.x) * t
+    x > p.x + 1e-12 || return nothing
+    return x
+end
+
+function _font_insert_bridge_point(poly::Vector{Vec2{Float64}},
+                                   point::Vec2{Float64}, edge_index::Int)
+    a = poly[edge_index]
+    b = poly[edge_index == length(poly) ? 1 : edge_index + 1]
+    if hypot(point.x - a.x, point.y - a.y) <= 1e-9
+        return copy(poly), edge_index
+    elseif hypot(point.x - b.x, point.y - b.y) <= 1e-9
+        return copy(poly), edge_index == length(poly) ? 1 : edge_index + 1
+    end
+    out = Vec2{Float64}[]
+    append!(out, poly[1:edge_index])
+    push!(out, point)
+    edge_index < length(poly) && append!(out, poly[edge_index + 1:end])
+    return out, edge_index + 1
+end
+
+function _font_bridge_one_hole(poly::Vector{Vec2{Float64}},
+                               hole::Vector{Vec2{Float64}})
+    hidx = argmax([p.x for p in hole])
+    hp = hole[hidx]
+    best_x = Inf
+    best_edge = 0
+    for i in eachindex(poly)
+        a = poly[i]
+        b = poly[i == length(poly) ? 1 : i + 1]
+        x = _font_ray_edge_intersection_x(hp, a, b)
+        x === nothing && continue
+        if x < best_x
+            best_x = x
+            best_edge = i
+        end
+    end
+    if best_edge == 0
+        best_edge = argmin([hypot(p.x - hp.x, p.y - hp.y) for p in poly])
+        bridge = poly[best_edge]
+    else
+        bridge = Vec2(best_x, hp.y)
+    end
+    bridged_poly, bridge_index = _font_insert_bridge_point(poly, bridge, best_edge)
+    ordered_hole = Vec2{Float64}[]
+    hidx < length(hole) && append!(ordered_hole, hole[hidx + 1:end])
+    hidx > 1 && append!(ordered_hole, hole[1:hidx - 1])
+    out = Vec2{Float64}[]
+    append!(out, bridged_poly[1:bridge_index])
+    push!(out, hp)
+    append!(out, ordered_hole)
+    push!(out, hp)
+    push!(out, bridged_poly[bridge_index])
+    bridge_index < length(bridged_poly) && append!(out, bridged_poly[bridge_index + 1:end])
+    return out
+end
+
+function _font_point_in_triangle(p::Vec2{Float64}, a::Vec2{Float64},
+                                 b::Vec2{Float64}, c::Vec2{Float64})
+    c1 = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    c2 = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x)
+    c3 = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x)
+    return c1 >= -1e-10 && c2 >= -1e-10 && c3 >= -1e-10
+end
+
+function _font_triangulate_simple(poly::Vector{Vec2{Float64}})
+    points = _font_loop_points(poly)
+    length(points) >= 3 || return points, NTuple{3,Int}[]
+    _font_polygon_area(points) < 0.0 && reverse!(points)
+    remaining = collect(eachindex(points))
+    tris = NTuple{3,Int}[]
+    guard = 0
+    while length(remaining) > 3 && guard < length(points)^2
+        guard += 1
+        clipped = false
+        for pos in eachindex(remaining)
+            ip = remaining[pos == 1 ? end : pos - 1]
+            ic = remaining[pos]
+            inext = remaining[pos == length(remaining) ? 1 : pos + 1]
+            a = points[ip]
+            b = points[ic]
+            c = points[inext]
+            cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+            cross > 1e-12 || continue
+            contains = false
+            for other in remaining
+                (other == ip || other == ic || other == inext) && continue
+                (_font_same_point(points[other], a) ||
+                 _font_same_point(points[other], b) ||
+                 _font_same_point(points[other], c)) && continue
+                if _font_point_in_triangle(points[other], a, b, c)
+                    contains = true
+                    break
+                end
+            end
+            contains && continue
+            push!(tris, (ip, ic, inext))
+            deleteat!(remaining, pos)
+            clipped = true
+            break
+        end
+        clipped && continue
+        break
+    end
+    if length(remaining) == 3
+        a, b, c = remaining
+        pa, pb, pc = points[a], points[b], points[c]
+        cross = (pb.x - pa.x) * (pc.y - pa.y) - (pb.y - pa.y) * (pc.x - pa.x)
+        abs(cross) > 1e-12 && push!(tris, cross > 0.0 ? (a, b, c) : (a, c, b))
+    end
+    length(tris) > 0 || error("font glyph loop triangulation failed")
+    return points, tris
+end
+
+function _font_triangulate_group(outer::Vector{Vec2{Float64}},
+                                 holes::Vector{Vector{Vec2{Float64}}})
+    poly = _font_orient_loop(_font_loop_points(outer), true)
+    clean_holes = Vector{Vec2{Float64}}[]
+    for h in holes
+        loop = _font_loop_points(h)
+        length(loop) >= 3 || continue
+        abs(_font_polygon_area(loop)) > 1e-12 || continue
+        push!(clean_holes, _font_orient_loop(loop, false))
+    end
+    ordered_holes = sort(clean_holes, by=h -> maximum(p.x for p in h),
+                         rev=true)
+    for hole in ordered_holes
+        length(hole) >= 3 || continue
+        poly = _font_bridge_one_hole(poly, hole)
+    end
+    return _font_triangulate_simple(poly)
+end
+
+function _font_text_shape_groups(font::FontData, text::AbstractString;
+                                 size::Real=1.0,
+                                 curve_segments::Integer=8)
+    groups = NamedTuple{(:outer, :holes),
+                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
+    cursor = 0.0
+    segments = _font_curve_segments(curve_segments)
+    scale = _font_scale(font, size)
+    previous_key = nothing
+    for ch in text
+        key = string(ch)
+        glyph = get(font.glyphs, key, nothing)
+        if glyph !== nothing
+            previous_key !== nothing &&
+                (cursor += font_kerning(font, previous_key, key) * scale)
+            loops = font_glyph_shapes(font, key; size=size,
+                                      curve_segments=segments,
+                                      offset_x=cursor)
+            append!(groups, _font_loop_groups(loops))
+            cursor += glyph.advance_width * scale
+            previous_key = key
+        else
+            previous_key = nothing
+        end
+    end
+    return groups
+end
+
 function _font_line_intersection(p1::Vec2{Float64}, d1, p2::Vec2{Float64}, d2)
     denom = d1[1] * d2[2] - d1[2] * d2[1]
     abs(denom) > 1e-12 || return nothing
@@ -1376,7 +1607,7 @@ function _font_inward_normal(a::Vec2{Float64}, b::Vec2{Float64}, ccw::Bool)
 end
 
 function _font_offset_loop(shape::Vector{Vec2{Float64}}, amount::Float64)
-    amount <= 0.0 && return copy(shape)
+    amount == 0.0 && return copy(shape)
     n = length(shape)
     n >= 3 || return copy(shape)
     ccw = _font_polygon_area(shape) >= 0.0
@@ -1402,6 +1633,41 @@ function _font_offset_loop(shape::Vector{Vec2{Float64}}, amount::Float64)
         push!(out, hit)
     end
     return out
+end
+
+function _font_clean_group(outer::Vector{Vec2{Float64}},
+                           holes::Vector{Vector{Vec2{Float64}}})
+    clean_outer = _font_loop_points(outer)
+    length(clean_outer) >= 3 || return clean_outer, Vector{Vec2{Float64}}[]
+    clean_outer = _font_orient_loop(clean_outer, true)
+    clean_holes = Vector{Vec2{Float64}}[]
+    for hole in holes
+        loop = _font_loop_points(hole)
+        length(loop) >= 3 || continue
+        abs(_font_polygon_area(loop)) > 1e-12 || continue
+        push!(clean_holes, _font_orient_loop(loop, false))
+    end
+    return clean_outer, clean_holes
+end
+
+function _font_shape_geometry_with_holes(outer::Vector{Vec2{Float64}},
+                                         holes::Vector{Vector{Vec2{Float64}}})
+    clean_outer, clean_holes = _font_clean_group(outer, holes)
+    length(clean_outer) >= 3 || return BufferGeometry()
+    points, tris = _font_triangulate_group(clean_outer, clean_holes)
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    for p in points
+        _font_push_geo_vertex!(positions, normals, uvs, p, 0.0,
+                               Vec3(0.0, 0.0, 1.0))
+    end
+    for (a, b, c) in tris
+        push!(indices, a, b, c)
+    end
+    return BufferGeometry(positions, normals, uvs, indices,
+                          length(points), length(indices) ÷ 3)
 end
 
 function _font_push_geo_vertex!(positions::Vector{Float64}, normals::Vector{Float64},
@@ -1431,32 +1697,97 @@ function _font_push_side_quad!(positions::Vector{Float64}, normals::Vector{Float
     push!(indices, i1, i2, i3, i1, i3, i4)
 end
 
-function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
+function _font_push_ring_sides!(positions::Vector{Float64},
+                                normals::Vector{Float64},
+                                uvs::Vector{Float64},
+                                indices::Vector{Int},
+                                lo::Vector{Vec2{Float64}},
+                                hi::Vector{Vec2{Float64}},
+                                za::Float64, zb::Float64)
+    n = length(lo)
+    n == length(hi) || error("font bevel rings have mismatched vertex counts")
+    for i in 1:n
+        j = i == n ? 1 : i + 1
+        _font_push_side_quad!(positions, normals, uvs, indices,
+                              lo[i], lo[j], hi[j], hi[i], za, zb)
+    end
+end
+
+function _font_extrude_geometry_with_holes(outer::Vector{Vec2{Float64}},
+                                           holes::Vector{Vector{Vec2{Float64}}};
+                                           depth::Float64)
+    clean_outer, clean_holes = _font_clean_group(outer, holes)
+    length(clean_outer) >= 3 || return BufferGeometry()
+    depth > 0.0 || return _font_shape_geometry_with_holes(clean_outer, clean_holes)
+    points, tris = _font_triangulate_group(clean_outer, clean_holes)
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    front = Int[]
+    back = Int[]
+    for p in points
+        push!(front, _font_push_geo_vertex!(positions, normals, uvs, p, 0.0,
+                                            Vec3(0.0, 0.0, -1.0)))
+    end
+    for p in points
+        push!(back, _font_push_geo_vertex!(positions, normals, uvs, p, depth,
+                                           Vec3(0.0, 0.0, 1.0)))
+    end
+    for (a, b, c) in tris
+        push!(indices, front[a], front[c], front[b])
+        push!(indices, back[a], back[b], back[c])
+    end
+    _font_push_ring_sides!(positions, normals, uvs, indices,
+                           clean_outer, clean_outer, 0.0, depth)
+    for hole in clean_holes
+        _font_push_ring_sides!(positions, normals, uvs, indices,
+                               hole, hole, 0.0, depth)
+    end
+    return BufferGeometry(positions, normals, uvs, indices,
+                          length(positions) ÷ 3, length(indices) ÷ 3)
+end
+
+function _font_offset_group(outer::Vector{Vec2{Float64}},
+                            holes::Vector{Vector{Vec2{Float64}}},
+                            amount::Float64)
+    offset_outer = _font_offset_loop(outer, amount)
+    offset_holes = Vector{Vec2{Float64}}[]
+    for hole in holes
+        push!(offset_holes, _font_offset_loop(hole, -amount))
+    end
+    return (outer=offset_outer, holes=offset_holes)
+end
+
+function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
+                                        holes::Vector{Vector{Vec2{Float64}}};
                                         depth::Float64,
                                         bevel_size::Float64,
                                         bevel_thickness::Float64,
                                         bevel_segments::Int)
-    base = _font_loop_points(shape)
-    length(base) >= 3 || return BufferGeometry()
-    depth > 0.0 || return ShapeGeometry(shape)
+    base_outer, base_holes = _font_clean_group(outer, holes)
+    length(base_outer) >= 3 || return BufferGeometry()
+    depth > 0.0 || return _font_shape_geometry_with_holes(base_outer, base_holes)
     actual_thickness = min(bevel_thickness, depth / 2.0)
     if bevel_size <= 0.0 || actual_thickness <= 0.0
-        return ExtrudeGeometry(shape; depth=depth)
+        return _font_extrude_geometry_with_holes(base_outer, base_holes;
+                                                depth=depth)
     end
-    rings = Vector{Vec2{Float64}}[]
+    layers = NamedTuple{(:outer, :holes),
+                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
     zs = Float64[]
     for step in 0:bevel_segments
         t = step / Float64(bevel_segments)
-        push!(rings, _font_offset_loop(base, bevel_size * t))
+        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
         push!(zs, actual_thickness * t)
     end
     if depth > 2actual_thickness + 1e-9
-        push!(rings, _font_offset_loop(base, bevel_size))
+        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size))
         push!(zs, depth - actual_thickness)
     end
     for step in (bevel_segments - 1):-1:0
         t = step / Float64(bevel_segments)
-        push!(rings, _font_offset_loop(base, bevel_size * t))
+        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
         push!(zs, depth - actual_thickness * t)
     end
 
@@ -1466,31 +1797,49 @@ function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
     indices = Int[]
     bottom = Int[]
     top = Int[]
-    for p in rings[1]
+    bottom_points, bottom_tris = _font_triangulate_group(layers[1].outer,
+                                                         layers[1].holes)
+    top_points, top_tris = _font_triangulate_group(layers[end].outer,
+                                                   layers[end].holes)
+    for p in bottom_points
         push!(bottom, _font_push_geo_vertex!(positions, normals, uvs, p, zs[1],
                                              Vec3(0.0, 0.0, -1.0)))
     end
-    for p in rings[end]
+    for p in top_points
         push!(top, _font_push_geo_vertex!(positions, normals, uvs, p, zs[end],
                                           Vec3(0.0, 0.0, 1.0)))
     end
-    n = length(base)
-    for k in 2:n-1
-        push!(indices, bottom[1], bottom[k + 1], bottom[k])
-        push!(indices, top[1], top[k], top[k + 1])
+    for (a, b, c) in bottom_tris
+        push!(indices, bottom[a], bottom[c], bottom[b])
     end
-    for ri in 1:(length(rings) - 1)
-        lo = rings[ri]
-        hi = rings[ri + 1]
-        for i in 1:n
-            j = i == n ? 1 : i + 1
-            _font_push_side_quad!(positions, normals, uvs, indices,
-                                  lo[i], lo[j], hi[j], hi[i], zs[ri],
-                                  zs[ri + 1])
+    for (a, b, c) in top_tris
+        push!(indices, top[a], top[b], top[c])
+    end
+    for ri in 1:(length(layers) - 1)
+        lo = layers[ri]
+        hi = layers[ri + 1]
+        _font_push_ring_sides!(positions, normals, uvs, indices,
+                               lo.outer, hi.outer, zs[ri], zs[ri + 1])
+        for i in eachindex(lo.holes)
+            _font_push_ring_sides!(positions, normals, uvs, indices,
+                                   lo.holes[i], hi.holes[i], zs[ri],
+                                   zs[ri + 1])
         end
     end
     return BufferGeometry(positions, normals, uvs, indices,
                           length(positions) ÷ 3, length(indices) ÷ 3)
+end
+
+function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
+                                        depth::Float64,
+                                        bevel_size::Float64,
+                                        bevel_thickness::Float64,
+                                        bevel_segments::Int)
+    return _font_beveled_extrude_geometry(shape, Vector{Vec2{Float64}}[];
+                                          depth=depth,
+                                          bevel_size=bevel_size,
+                                          bevel_thickness=bevel_thickness,
+                                          bevel_segments=bevel_segments)
 end
 
 """
@@ -1499,10 +1848,9 @@ end
                  bevel_thickness=bevel_size, bevel_segments=1)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
-Simple glyph loops are fan-triangulated through `ShapeGeometry`; when `depth` is
-positive each loop is routed through `ExtrudeGeometry`. With beveling enabled,
-simple closed loops are offset into bevel rings and extruded with chamfered side
-bands.
+Glyph contours are grouped into outer loops and simple holes before
+triangulation. With beveling enabled, closed contour groups are offset into
+bevel rings and extruded with chamfered side bands.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
@@ -1521,16 +1869,21 @@ function TextGeometry(font::FontData, text::AbstractString;
         throw(ArgumentError("bevel_thickness must be finite and non-negative"))
     bsegs = bevel_enabled ? _font_curve_segments(bevel_segments) : 1
     geos = BufferGeometry[]
-    for shape in font_text_shapes(font, text; size=size,
-                                  curve_segments=curve_segments)
-        length(shape) >= 3 || continue
+    for group in _font_text_shape_groups(font, text; size=size,
+                                         curve_segments=curve_segments)
+        length(group.outer) >= 3 || continue
         push!(geos, bevel_enabled ?
-                    _font_beveled_extrude_geometry(shape; depth=zdepth,
+                    _font_beveled_extrude_geometry(group.outer, group.holes;
+                                                   depth=zdepth,
                                                    bevel_size=bsize,
                                                    bevel_thickness=bthick,
                                                    bevel_segments=bsegs) :
-                    (zdepth == 0.0 ? ShapeGeometry(shape) :
-                                      ExtrudeGeometry(shape; depth=zdepth)))
+                    (zdepth == 0.0 ?
+                        _font_shape_geometry_with_holes(group.outer,
+                                                        group.holes) :
+                        _font_extrude_geometry_with_holes(group.outer,
+                                                          group.holes;
+                                                          depth=zdepth)))
     end
     isempty(geos) && return BufferGeometry()
     return merge_geometries(geos; with_groups=false)

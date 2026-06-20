@@ -5173,10 +5173,29 @@ end
               "x_min": 0,
               "x_max": 1000,
               "o": "m 0 0 q 500 1000 1000 0 b 900 -200 100 -200 0 0"
+            },
+            "O": {
+              "ha": 1200,
+              "x_min": 0,
+              "x_max": 1000,
+              "o": "m 0 0 l 1000 0 l 1000 1000 l 0 1000 m 250 250 l 250 750 l 750 750 l 750 250"
             }
           }
         }
         """)
+
+        function triangle_area_xy(geo)
+            area = 0.0
+            for i in 1:3:length(geo.indices)
+                ia, ib, ic = geo.indices[i:i + 2]
+                ax, ay = geo.positions[3ia - 2], geo.positions[3ia - 1]
+                bx, by = geo.positions[3ib - 2], geo.positions[3ib - 1]
+                cx, cy = geo.positions[3ic - 2], geo.positions[3ic - 1]
+                area += abs((bx - ax) * (cy - ay) -
+                            (by - ay) * (cx - ax)) / 2
+            end
+            return area
+        end
 
         font = load_font(font_path)
         @test font isa FontData
@@ -5219,9 +5238,9 @@ end
         @test reverse_kerned[2][1] == Vec2(0.9, 0.0)
 
         text_geo = TextGeometry(font, "AB"; curve_segments=4)
-        @test text_geo.n_vertices == 13
-        @test text_geo.n_faces == 9
-        @test get_vertex(text_geo, 5).x == 1.0
+        @test text_geo.n_vertices == 12
+        @test text_geo.n_faces == 8
+        @test minimum(text_geo.positions[3i - 2] for i in 5:text_geo.n_vertices) == 1.0
         @test isempty(text_geo.groups)
         @test TextGeometry("A", font; size=2.0).n_faces == 2
 
@@ -5244,6 +5263,25 @@ end
                                     bevel_size=0.1, bevel_thickness=0.05,
                                     bevel_segments=2)
         @test smooth_bevel.n_faces == 44
+
+        hole_shapes = font_glyph_shapes(font, "O")
+        @test length(hole_shapes) == 2
+        hole_text = TextGeometry(font, "O")
+        @test hole_text.n_faces == 9
+        @test triangle_area_xy(hole_text) ≈ 0.75
+        extruded_hole = TextGeometry(font, "O"; depth=0.25)
+        @test extruded_hole.n_faces == 34
+        @test triangle_area_xy(extruded_hole) ≈ 1.5
+        hole_box = compute_bounding_box(extruded_hole)
+        @test hole_box.min.z == 0.0
+        @test hole_box.max.z == 0.25
+        beveled_hole = TextGeometry(font, "O"; depth=0.4, bevel_enabled=true,
+                                    bevel_size=0.05, bevel_thickness=0.05,
+                                    bevel_segments=1)
+        @test beveled_hole.n_faces == 66
+        bevel_hole_box = compute_bounding_box(beveled_hole)
+        @test bevel_hole_box.min.z == 0.0
+        @test bevel_hole_box.max.z == 0.4
         @test TextGeometry(font, "Z").n_vertices == 0
 
         @test_throws "font has no glyph" font_glyph_shapes(font, "Z")
