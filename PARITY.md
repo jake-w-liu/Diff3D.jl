@@ -1071,6 +1071,11 @@ Parallel audits split the remaining work into five critical tracks:
   environment-map export. Exact three.js ShaderLib standard-material BRDF,
   PMREM environment lighting, upstream assets, and `WebGLRenderer` internals
   remain documented deviations.
+- Added a standalone partial port for `webgl_materials_cubemap_mipmaps` via
+  `examples/webgl_materials_cubemap_mipmaps.jl`, using generated and authored
+  `CubeTexture` mip chains with rough `MeshStandardMaterial` environment
+  reflections in the browser exporter. Exact upstream cube assets, PMREM, and
+  full three.js cube-map filtering internals remain documented deviations.
 - Added a standalone partial port for `webgl_materials_physical_clearcoat` via
   `examples/webgl_materials_physical_clearcoat.jl`, using Diff3D.jl
   `MeshPhysicalMaterial`, scalar clearcoat controls, generated clearcoat and

@@ -233,6 +233,7 @@ end
             "threejs_webgl_materials_variations_lambert",
             "threejs_webgl_materials_variations_phong",
             "threejs_webgl_materials_variations_standard",
+            "threejs_webgl_materials_cubemap_mipmaps",
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
             "threejs_webgl_materials_texture_rotation",
@@ -432,6 +433,17 @@ end
                     "WebGLExportCase(\"materials-variations-standard\"",
                 ],
                 prerequisites=["MeshStandardMaterial", "equirectangular_to_cubemap", "browser environment-map export"],
+            ),
+            "threejs_webgl_materials_cubemap_mipmaps" => (
+                source=[
+                    "function generated_mipmap_cube(; size::Int=32)",
+                    "generate_mipmaps!(tex)",
+                    "function authored_mipmap_cube(; size::Int=32)",
+                    "mipmaps=manual_mipmaps(face, size)",
+                    "envmap=env_map, env_map_intensity=1.0",
+                    "WebGLExportCase(\"materials-cubemap-mipmaps\"",
+                ],
+                prerequisites=["CubeTexture", "generate_mipmaps!", "authored cube-face mipmaps", "browser cubemap LOD export"],
             ),
             "threejs_webgl_materials_matcap" => (
                 source=[
