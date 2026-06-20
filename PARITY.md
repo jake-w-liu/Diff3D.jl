@@ -589,6 +589,11 @@ Parallel audits split the remaining work into five critical tracks:
   shared tangent-space CPU flat/smooth normal-map path, compact browser
   `normalTexture`/`normalScale` serialization, and material `normalScale`
   animation binding while preserving legacy constructor defaults.
+- Done: add `MeshPhongMaterial.ao_map`, `ao_map_intensity`, and
+  `light_map_intensity` parity so Phong AO/light maps serialize to the compact
+  browser runtime, affect CPU flat/smooth shading with authored strengths, and
+  bind through material animation tracks while preserving legacy constructor
+  defaults.
 - Done: add `MeshLambertMaterial.normal_map`/`normal_scale` parity through the
   same CPU flat/smooth normal-map path, compact browser `normalTexture`/
   `normalScale` serialization, vertex-color-preserving material rewrites, and

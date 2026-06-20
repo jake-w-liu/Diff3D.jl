@@ -1379,6 +1379,18 @@ end
         set_attribute!(lambert_ao_light_mapped.geometry, :uv2, fill(0.25, lambert_ao_light_mapped.geometry.n_vertices * 2), 2)
         lambert_ao_light_mapped.position = Vec3(-3.6, -0.8, 0.0)
         add!(scene, lambert_ao_light_mapped)
+        phong_ao_light_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                     MeshPhongMaterial(color=Color3(0.6, 0.7, 0.95),
+                                                       specular=Color3(0.08, 0.08, 0.08),
+                                                       shininess=8.0,
+                                                       ao_map=Texture(alphadata; filter=:nearest),
+                                                       light_map=Texture(texdata; filter=:nearest),
+                                                       ao_map_intensity=0.3,
+                                                       light_map_intensity=0.7);
+                                     name="export_phong_ao_light_map")
+        set_attribute!(phong_ao_light_mapped.geometry, :uv2, fill(0.25, phong_ao_light_mapped.geometry.n_vertices * 2), 2)
+        phong_ao_light_mapped.position = Vec3(-4.3, -0.8, 0.0)
+        add!(scene, phong_ao_light_mapped)
         pbrdata = ones(Float64, 2, 2, 3)
         pbrdata[:, :, 2] .= [0.2 0.8; 0.4 1.0]
         pbrdata[:, :, 3] .= [1.0 0.3; 0.7 0.1]
@@ -2157,6 +2169,7 @@ end
         @test occursin("\"name\":\"export_emissive_map\"", html)
         @test occursin("\"name\":\"export_ao_light_map\"", html)
         @test occursin("\"name\":\"export_lambert_ao_light_map\"", html)
+        @test occursin("\"name\":\"export_phong_ao_light_map\"", html)
         @test occursin("\"name\":\"export_rough_metal_map\"", html)
         @test occursin("\"name\":\"export_normal_map\"", html)
         @test occursin("\"name\":\"export_env_map\"", html)
@@ -2245,6 +2258,16 @@ end
             @test occursin("\"lightTexture\":{\"width\":2", lambert_ao_light_window)
             @test occursin("\"aoIntensity\":0.40000000000000002", lambert_ao_light_window)
             @test occursin("\"lightMapIntensity\":0.59999999999999998", lambert_ao_light_window)
+        end
+        phong_ao_light_range = findfirst("\"name\":\"export_phong_ao_light_map\"", html)
+        @test phong_ao_light_range !== nothing
+        if phong_ao_light_range !== nothing
+            phong_ao_light_window = html[first(phong_ao_light_range):min(lastindex(html), first(phong_ao_light_range) + 3000)]
+            @test occursin("\"materialType\":\"phong\"", phong_ao_light_window)
+            @test occursin("\"aoTexture\":{\"width\":2", phong_ao_light_window)
+            @test occursin("\"lightTexture\":{\"width\":2", phong_ao_light_window)
+            @test occursin("\"aoIntensity\":0.29999999999999999", phong_ao_light_window)
+            @test occursin("\"lightMapIntensity\":0.69999999999999996", phong_ao_light_window)
         end
         @test occursin("uUseAoMap", html)
         @test occursin("uUseLightMap", html)
@@ -4105,14 +4128,19 @@ end
         @test lambert_vc.light_map_intensity ≈ 0.65
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshPhongMaterial(ao_map=alpha_tex).ao_map === alpha_tex
         @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshPhongMaterial(emissive_intensity=2.4).emissive_intensity ≈ 2.4
+        @test MeshPhongMaterial(ao_map_intensity=0.25).ao_map_intensity ≈ 0.25
+        @test MeshPhongMaterial(light_map_intensity=0.35).light_map_intensity ≈ 0.35
         @test MeshPhongMaterial(wireframe=true).wireframe === true
         @test MeshPhongMaterial(normal_map=alpha_tex).normal_map === alpha_tex
         @test MeshPhongMaterial(normal_scale=0.45).normal_scale ≈ 0.45
         phong_vc = Diff3D._with_vertex_color(
             MeshPhongMaterial(color=Color3(0.8, 0.6, 0.4),
                               normal_map=alpha_tex, normal_scale=0.25,
+                              ao_map=alpha_tex, ao_map_intensity=0.45,
+                              light_map_intensity=0.55,
                               vertex_colors=true),
             Color3(0.5, 1.0, 0.25),
         )
@@ -4121,6 +4149,9 @@ end
         @test phong_vc.color.b ≈ 0.1
         @test phong_vc.normal_map === alpha_tex
         @test phong_vc.normal_scale ≈ 0.25
+        @test phong_vc.ao_map === alpha_tex
+        @test phong_vc.ao_map_intensity ≈ 0.45
+        @test phong_vc.light_map_intensity ≈ 0.55
         @test MeshToonMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshToonMaterial(emissive_intensity=1.6).emissive_intensity ≈ 1.6
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
@@ -4182,6 +4213,9 @@ end
         @test legacy_phong.emissive_intensity == 1.0
         @test legacy_phong.normal_map === nothing
         @test legacy_phong.normal_scale == 1.0
+        @test legacy_phong.ao_map === nothing
+        @test legacy_phong.ao_map_intensity == 1.0
+        @test legacy_phong.light_map_intensity == 1.0
         legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                Color3(0,0,0), 30.0, 1.0, false,
                                                :front, nothing, alpha_tex, nothing,
@@ -4192,6 +4226,9 @@ end
         @test legacy_phong_alpha.emissive_intensity == 1.0
         @test legacy_phong_alpha.normal_map === nothing
         @test legacy_phong_alpha.normal_scale == 1.0
+        @test legacy_phong_alpha.ao_map === nothing
+        @test legacy_phong_alpha.ao_map_intensity == 1.0
+        @test legacy_phong_alpha.light_map_intensity == 1.0
         legacy_phong_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                               Color3(0,0,0), 30.0, 1.0, false,
                                               :front, nothing, nothing, alpha_tex, nothing,
@@ -4203,6 +4240,9 @@ end
         @test legacy_phong_full.emissive_intensity == 2.0
         @test legacy_phong_full.normal_map === nothing
         @test legacy_phong_full.normal_scale == 1.0
+        @test legacy_phong_full.ao_map === nothing
+        @test legacy_phong_full.ao_map_intensity == 1.0
+        @test legacy_phong_full.light_map_intensity == 1.0
         legacy_phong_wire_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                    Color3(0,0,0), 30.0, 1.0, false,
                                                    true, :front, nothing, nothing, alpha_tex,
@@ -4212,6 +4252,9 @@ end
         @test legacy_phong_wire_full.emissive_map === alpha_tex
         @test legacy_phong_wire_full.normal_map === nothing
         @test legacy_phong_wire_full.normal_scale == 1.0
+        @test legacy_phong_wire_full.ao_map === nothing
+        @test legacy_phong_wire_full.ao_map_intensity == 1.0
+        @test legacy_phong_wire_full.light_map_intensity == 1.0
         legacy_lambert = MeshLambertMaterial(Color3(1,1,1), Color3(0,0,0),
                                              1.0, false, false, :front,
                                              nothing, nothing, nothing, false,
@@ -5397,9 +5440,19 @@ end
         phong_normal_scale =
             NumberKeyframeTrack(phong_material_mesh, "material.normalScale",
                                 [0.0, 1.0], [1.0, 0.4])
+        phong_ao_intensity =
+            NumberKeyframeTrack(phong_material_mesh, "material.aoMapIntensity",
+                                [0.0, 1.0], [1.0, 0.2])
+        phong_light_intensity =
+            NumberKeyframeTrack(phong_material_mesh, "material.lightMapIntensity",
+                                [0.0, 1.0], [1.0, 0.6])
         mixer_set_time!(AnimationMixer(AnimationClip("phong_normal_scale",
-                                                    [phong_normal_scale])), 0.5)
+                                                    [phong_normal_scale,
+                                                     phong_ao_intensity,
+                                                     phong_light_intensity])), 0.5)
         @test phong_material_mesh.material.normal_scale ≈ 0.7
+        @test phong_material_mesh.material.ao_map_intensity ≈ 0.6
+        @test phong_material_mesh.material.light_map_intensity ≈ 0.8
         lambert_material_mesh = Mesh(BoxGeometry(),
                                      MeshLambertMaterial(color=Color3(0.4, 0.7, 0.3),
                                                          normal_scale=1.0))
@@ -7312,6 +7365,20 @@ end
             # black emissive means the map adds nothing here.
             expected = decoded * (1.0 + (0.5 - 1.0) * 0.25) * (0.5 * 0.5)
             @test isapprox(rt.color[16, 16, 1], expected; atol=2e-2)
+
+            phong_mat = MeshPhongMaterial(color=Color3(1.0,1.0,1.0),
+                                          specular=Color3(0.0,0.0,0.0),
+                                          shininess=1.0,
+                                          map=color_tex, ao_map=data_tex,
+                                          light_map=data_tex,
+                                          ao_map_intensity=0.25,
+                                          light_map_intensity=0.5)
+            phong_scene = Scene()
+            add!(phong_scene, Mesh(PlaneGeometry(width=4.0, height=4.0), phong_mat))
+            add!(phong_scene, AmbientLight(intensity=1.0))
+            phong_rt = RenderTarget(32, 32)
+            render!(phong_rt, phong_scene, cam; shading=:smooth)
+            @test isapprox(phong_rt.color[16, 16, 1], expected; atol=2e-2)
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
             rough_map = Texture(rough_data; filter=:nearest, colorspace=:linear)

@@ -267,10 +267,12 @@ function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
                       opacity=m.opacity, transparent=m.transparent,
                       wireframe=m.wireframe, side=m.side, map=m.map, alpha_map=m.alpha_map,
                       normal_map=m.normal_map, normal_scale=m.normal_scale,
-                      emissive_map=m.emissive_map, light_map=m.light_map,
+                      ao_map=m.ao_map, emissive_map=m.emissive_map, light_map=m.light_map,
                       vertex_colors=m.vertex_colors,
                       alpha_test=m.alpha_test, clipping_planes=m.clipping_planes,
                       emissive_intensity=m.emissive_intensity,
+                      ao_map_intensity=m.ao_map_intensity,
+                      light_map_intensity=m.light_map_intensity,
                       depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)

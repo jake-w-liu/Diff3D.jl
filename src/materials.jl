@@ -187,12 +187,15 @@ struct MeshPhongMaterial <: AbstractMaterial
     normal_map::Any
     normal_scale::Float64
     alpha_map::Any
+    ao_map::Any
     emissive_map::Any
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     alpha_test::Float64
     clipping_planes::Vector{Plane{Float64}}
     emissive_intensity::Float64
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
     depth_test::Bool
     depth_write::Bool
 end
@@ -203,15 +206,17 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             shininess=30.0, opacity=1.0,
                             transparent=false, wireframe=false, side=:front, map=nothing,
                             normal_map=nothing, normal_scale=1.0, alpha_map=nothing,
-                            emissive_map=nothing, light_map=nothing, vertex_colors=false,
-                            alpha_test=0.0, emissive_intensity=1.0,
+                            ao_map=nothing, emissive_map=nothing, light_map=nothing,
+                            vertex_colors=false, alpha_test=0.0, emissive_intensity=1.0,
+                            ao_map_intensity=1.0, light_map_intensity=1.0,
                             clipping_planes=Plane{Float64}[],
                             depth_test=true, depth_write=true)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
                       wireframe, side, map, normal_map, Float64(normal_scale),
-                      alpha_map, emissive_map, light_map, vertex_colors,
+                      alpha_map, ao_map, emissive_map, light_map, vertex_colors,
                       Float64(alpha_test), _material_clipping_planes(clipping_planes),
-                      Float64(emissive_intensity), depth_test, depth_write)
+                      Float64(emissive_intensity), Float64(ao_map_intensity),
+                      Float64(light_map_intensity), depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
@@ -220,9 +225,10 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, sh
                            alpha_test, clipping_planes::Vector{Plane{Float64}},
                            emissive_intensity, depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      wireframe, side, map, nothing, 1.0, alpha_map, emissive_map,
-                      light_map, vertex_colors, alpha_test, clipping_planes,
-                      emissive_intensity, depth_test, depth_write)
+                      wireframe, side, map, nothing, 1.0, alpha_map, nothing,
+                      emissive_map, light_map, vertex_colors, alpha_test,
+                      clipping_planes, emissive_intensity, 1.0, 1.0,
+                      depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
@@ -231,8 +237,9 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, sh
                            clipping_planes::Vector{Plane{Float64}},
                            emissive_intensity, depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      false, side, map, nothing, 1.0, alpha_map, emissive_map, light_map,
-                      vertex_colors, alpha_test, clipping_planes, emissive_intensity,
+                      false, side, map, nothing, 1.0, alpha_map, nothing,
+                      emissive_map, light_map, vertex_colors, alpha_test,
+                      clipping_planes, emissive_intensity, 1.0, 1.0,
                       depth_test, depth_write)
 end
 
@@ -246,8 +253,9 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, sh
                            light_map, vertex_colors::Bool, alpha_test, depth_test::Bool,
                            depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      false, side, map, nothing, 1.0, alpha_map, nothing, light_map, vertex_colors,
-                      alpha_test, Plane{Float64}[], 1.0, depth_test, depth_write)
+                      false, side, map, nothing, 1.0, alpha_map, nothing, nothing,
+                      light_map, vertex_colors, alpha_test, Plane{Float64}[],
+                      1.0, 1.0, 1.0, depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
@@ -256,24 +264,27 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, sh
                            clipping_planes::Vector{Plane{Float64}},
                            depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      false, side, map, nothing, 1.0, alpha_map, nothing, light_map, vertex_colors,
-                      alpha_test, clipping_planes, 1.0, depth_test, depth_write)
+                      false, side, map, nothing, 1.0, alpha_map, nothing, nothing,
+                      light_map, vertex_colors, alpha_test, clipping_planes,
+                      1.0, 1.0, 1.0, depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
                            opacity, transparent::Bool, side::Symbol, map, alpha_map,
                            light_map, alpha_test, depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      false, side, map, nothing, 1.0, alpha_map, nothing, light_map, false, alpha_test,
-                      Plane{Float64}[], 1.0, depth_test, depth_write)
+                      false, side, map, nothing, 1.0, alpha_map, nothing, nothing,
+                      light_map, false, alpha_test, Plane{Float64}[], 1.0,
+                      1.0, 1.0, depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
                            opacity, transparent::Bool, side::Symbol, map, light_map,
                            depth_test::Bool, depth_write::Bool)
     MeshPhongMaterial(color, specular, emissive, shininess, opacity, transparent,
-                      false, side, map, nothing, 1.0, nothing, nothing, light_map, false, 0.0,
-                      Plane{Float64}[], 1.0, depth_test, depth_write)
+                      false, side, map, nothing, 1.0, nothing, nothing, nothing,
+                      light_map, false, 0.0, Plane{Float64}[], 1.0, 1.0,
+                      1.0, depth_test, depth_write)
 end
 
 # ========================== MeshStandardMaterial ==========================
