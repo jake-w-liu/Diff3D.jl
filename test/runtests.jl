@@ -5151,6 +5151,10 @@ end
           "resolution": 1000,
           "ascender": 900,
           "descender": -100,
+          "kernings": {
+            "A": { "B": -200 },
+            "BA": 100
+          },
           "glyphs": {
             "A": {
               "ha": 1200,
@@ -5179,6 +5183,9 @@ end
         @test font.glyphs["A"] isa FontGlyph
         @test font.glyphs["A"].advance_width == 1200
         @test [cmd.kind for cmd in font.glyphs["A"].commands] == [:move, :line, :line, :line]
+        @test font_kerning(font, "A", "B") == -200
+        @test font_kerning(font, "B", "A") == 100
+        @test font_kerning(font, "A", "A") == 0
 
         shapes = font_glyph_shapes(font, "A"; size=2.0)
         @test length(shapes) == 1
@@ -5200,10 +5207,15 @@ end
         @test text_shapes[1][1] == Vec2(0.0, 0.0)
         @test text_shapes[2][1] == Vec2(1.2, 0.0)
 
+        kerned_shapes = font_text_shapes(font, "AB"; curve_segments=4)
+        @test kerned_shapes[2][1] == Vec2(1.0, 0.0)
+        reverse_kerned = font_text_shapes(font, "BA"; curve_segments=4)
+        @test reverse_kerned[2][1] == Vec2(0.9, 0.0)
+
         text_geo = TextGeometry(font, "AB"; curve_segments=4)
         @test text_geo.n_vertices == 13
         @test text_geo.n_faces == 9
-        @test get_vertex(text_geo, 5).x == 1.2
+        @test get_vertex(text_geo, 5).x == 1.0
         @test isempty(text_geo.groups)
         @test TextGeometry("A", font; size=2.0).n_faces == 2
 

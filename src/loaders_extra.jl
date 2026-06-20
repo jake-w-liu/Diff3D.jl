@@ -1093,7 +1093,12 @@ struct FontData
     ascender::Float64
     descender::Float64
     glyphs::Dict{String,FontGlyph}
+    kernings::Dict{Tuple{String,String},Float64}
 end
+
+FontData(family_name, resolution, ascender, descender, glyphs) =
+    FontData(String(family_name), Float64(resolution), Float64(ascender),
+             Float64(descender), glyphs, Dict{Tuple{String,String},Float64}())
 
 _font_float(d::AbstractDict, key::String, default::Real=0.0) =
     haskey(d, key) && d[key] !== nothing ? Float64(d[key]) : Float64(default)
@@ -1146,6 +1151,44 @@ function _font_glyph(char::String, raw)
                      _font_parse_outline(outline))
 end
 
+function _font_kerning_amount(raw, context::AbstractString)
+    amount = Float64(raw)
+    isfinite(amount) || error("font kerning $context must be finite")
+    return amount
+end
+
+function _font_kerning_pair(raw::AbstractString)
+    key = strip(String(raw))
+    chars = collect(key)
+    if length(chars) == 2
+        return string(chars[1]), string(chars[2])
+    end
+    parts = split(key, r"[\s,]+", keepempty=false)
+    length(parts) == 2 && return String(parts[1]), String(parts[2])
+    error("font kerning key $(repr(key)) must name two glyphs")
+end
+
+function _font_kernings(raw)
+    out = Dict{Tuple{String,String},Float64}()
+    raw === nothing && return out
+    raw isa AbstractDict || error("font kernings must be a JSON object")
+    for (left_raw, value) in raw
+        left = String(left_raw)
+        if value isa AbstractDict
+            for (right_raw, amount_raw) in value
+                right = String(right_raw)
+                out[(left, right)] =
+                    _font_kerning_amount(amount_raw, "$(repr(left)) $(repr(right))")
+            end
+        else
+            left_key, right_key = _font_kerning_pair(left)
+            out[(left_key, right_key)] =
+                _font_kerning_amount(value, repr(left))
+        end
+    end
+    return out
+end
+
 function _font_data(raw)
     raw isa AbstractDict || error("font JSON root must be an object")
     haskey(raw, "glyphs") || error("font JSON is missing glyphs")
@@ -1161,7 +1204,8 @@ function _font_data(raw)
                     resolution,
                     _font_float(raw, "ascender", 0.0),
                     _font_float(raw, "descender", 0.0),
-                    glyphs)
+                    glyphs,
+                    _font_kernings(get(raw, "kernings", get(raw, "kerning", nothing))))
 end
 
 """Load a three.js typeface JSON font."""
@@ -1169,6 +1213,10 @@ load_font(path::String) = _font_data(_json_parse(read(path, String)))
 
 """Alias for [`load_font`](@ref), matching three.js `FontLoader` naming."""
 FontLoader(path::String) = load_font(path)
+
+"""Return the typeface kerning adjustment from `left` to `right`, in font units."""
+font_kerning(font::FontData, left::AbstractString, right::AbstractString) =
+    get(font.kernings, (String(left), String(right)), 0.0)
 
 function _font_quadratic(p0::Vec2, c::Vec2, p1::Vec2, t::Float64)
     u = 1.0 - t
@@ -1257,7 +1305,8 @@ end
     font_text_shapes(font, text; size=1.0, curve_segments=8)
 
 Flatten all available glyph outlines for `text` into point loops. Horizontal
-advance uses each glyph's `ha` metric from the typeface JSON data.
+advance uses each glyph's `ha` metric plus any parsed kerning pair adjustment
+from the typeface JSON data.
 """
 function font_text_shapes(font::FontData, text::AbstractString;
                           size::Real=1.0, curve_segments::Integer=8)
@@ -1265,14 +1314,20 @@ function font_text_shapes(font::FontData, text::AbstractString;
     cursor = 0.0
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
+    previous_key = nothing
     for ch in text
         key = string(ch)
         glyph = get(font.glyphs, key, nothing)
         if glyph !== nothing
+            previous_key !== nothing &&
+                (cursor += font_kerning(font, previous_key, key) * scale)
             append!(shapes, font_glyph_shapes(font, key; size=size,
                                               curve_segments=segments,
                                               offset_x=cursor))
             cursor += glyph.advance_width * scale
+            previous_key = key
+        else
+            previous_key = nothing
         end
     end
     return shapes

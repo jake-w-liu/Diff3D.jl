@@ -237,7 +237,7 @@ export
     load_rgbe, load_hdr, TextureLoader, RGBELoader,
     AudioBufferData, audio_duration, load_wav, load_audio, AudioLoader,
     FontCommand, FontGlyph, FontData, load_font, FontLoader,
-    font_glyph_shapes, font_text_shapes,
+    font_glyph_shapes, font_text_shapes, font_kerning,
     SVGStyle, SVGPath, SVGDocument, load_svg, SVGLoader, svg_shapes,
     svg_geometry, svg_meshes, svg_strokes, svg_stroke_meshes,
     load_mtl, load_obj_groups, base64_decode, load_gltf,

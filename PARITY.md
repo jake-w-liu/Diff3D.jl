@@ -772,8 +772,11 @@ Parallel audits split the remaining work into five critical tracks:
   `FontCommand`, `load_font`, and `FontLoader`, plus `font_glyph_shapes` and
   `font_text_shapes` outline flattening for `m`/`l`/`q`/`b` commands into
   `Vec2` loops consumable by `ShapeGeometry`. `TextGeometry` now builds flat or
-  depth-extruded geometry from those simple glyph loops. Glyph holes, kerning,
-  beveling, and browser font rendering remain open.
+  depth-extruded geometry from those simple glyph loops. Typeface JSON
+  `kernings`/`kerning` maps now load into `FontData`, are exposed through
+  `font_kerning`, and offset subsequent glyph loops in `font_text_shapes` and
+  `TextGeometry`. Glyph holes, beveling, and browser font rendering remain
+  open.
 - Done: add a native basic SVG loader surface via `SVGDocument`, `SVGPath`,
   `load_svg`, `SVGLoader`, `svg_shapes`, and `svg_geometry`, covering standalone
   `path`, `rect`, `circle`, `ellipse`, `polygon`, and `polyline` elements, plus
