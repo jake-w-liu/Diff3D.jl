@@ -205,7 +205,7 @@ replacement for three.js `WebGLRenderer`.
   logarithmic depth, full tone-output/color-management parity, and texture
   sampling parity.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
-  KTX2Loader, EXR loaders, broader HDR/environment-map infrastructure,
+  KTX2Loader, EXR loaders, PMREM/UltraHDR environment-map infrastructure,
   SVGLoader, FontLoader, AudioLoader, and other three.js examples
   infrastructure.
 - Full controls/event parity such as remaining OrbitControls browser/touch
@@ -756,6 +756,11 @@ Parallel audits split the remaining work into five critical tracks:
   orientation signs, RGBE-to-linear floating-point conversion, and clear errors
   for malformed headers/truncated payloads. EXR, KTX2/Basis, PMREM generation,
   and broader environment-map loader parity remain open.
+- Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
+  textures can feed existing `CubeTexture` environment-map shading and browser
+  export paths, with optional generated mip chains for roughness-aware sampling.
+  This closes the generated HDR-to-cubemap path without claiming PMREM
+  convolution or UltraHDR asset parity.
 - Done: parse basic glTF material extensions/properties:
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, and
   `occlusionTexture.strength`.
@@ -1110,11 +1115,12 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_loader_gltf` via
   `examples/webgl_loader_gltf.jl`, generating a deterministic external-buffer
   glTF asset plus a deterministic binary GLB companion with embedded BIN
-  geometry and a PNG image `bufferView`, `KHR_lights_punctual` light, and
+  geometry and a PNG image `bufferView`, plus a generated Radiance HDR
+  environment map converted to `CubeTexture`, `KHR_lights_punctual` light, and
   transform animation, then loading them through Diff3D.jl `load_gltf_asset`
   and `load_glb_asset` before browser export. Exact upstream sample-asset
-  catalogue, DamagedHelmet asset, UltraHDR environment, and `WebGLRenderer`
-  internals remain documented deviations.
+  catalogue, DamagedHelmet asset, UltraHDR/PMREM environment path, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_loader_xyz` via
   `examples/webgl_loader_xyz.jl`, generating deterministic XYZRGB helix
   point-cloud data, loading it through Diff3D.jl `load_xyz`, and exporting

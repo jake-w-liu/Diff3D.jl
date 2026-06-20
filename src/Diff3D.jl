@@ -221,7 +221,8 @@ export
 
     # Textures
     Texture, DataTexture, CanvasTexture, DepthTexture, CubeTexture,
-    sample_texture, sample_texture_lod, sample_cube, sample_cube_lod, generate_mipmaps!,
+    sample_texture, sample_texture_lod, sample_cube, sample_cube_lod,
+    equirectangular_to_cubemap, generate_mipmaps!,
     checker_texture, grid_texture, texture_transform_uv, texture_update_matrix!,
 
     # I/O

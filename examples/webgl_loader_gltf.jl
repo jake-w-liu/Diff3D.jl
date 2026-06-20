@@ -76,6 +76,35 @@ function write_glb!(path::String, gltf_json::String, bin::Vector{UInt8})
     return path
 end
 
+function rgbe_pixel(r::Real, g::Real, b::Real)
+    maxc = max(Float64(r), Float64(g), Float64(b))
+    maxc <= 1e-32 && return UInt8[0, 0, 0, 0]
+    mant, exponent = frexp(maxc)
+    scale = mant * 256.0 / maxc
+    return UInt8[
+        UInt8(clamp(round(Int, Float64(r) * scale), 0, 255)),
+        UInt8(clamp(round(Int, Float64(g) * scale), 0, 255)),
+        UInt8(clamp(round(Int, Float64(b) * scale), 0, 255)),
+        UInt8(exponent + 128),
+    ]
+end
+
+function write_hdr_environment!(path::String; width::Int=32, height::Int=16)
+    bytes = Vector{UInt8}(codeunits("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y $height +X $width\n"))
+    for row in 1:height, col in 1:width
+        u = (col - 0.5) / width
+        v = 1.0 - (row - 0.5) / height
+        horizon = 1.0 - abs(2v - 1.0)
+        warm = 0.5 + 0.5 * cos(2pi * (u - 0.08))
+        r = 0.10 + 0.55 * horizon + 0.45 * warm * horizon
+        g = 0.14 + 0.58 * horizon + 0.25 * v
+        b = 0.26 + 1.25 * v + 0.20 * horizon
+        append!(bytes, rgbe_pixel(r, g, b))
+    end
+    write(path, bytes)
+    return path
+end
+
 function texture_data(; n::Int=32)
     data = ones(Float64, n, n, 4)
     for y in 1:n, x in 1:n
@@ -261,14 +290,47 @@ end
 function loaded_loader_assets()
     mktempdir() do dir
         gltf_path, glb_path = write_gltf_assets!(dir)
-        return load_gltf_asset(gltf_path), load_glb_asset(glb_path)
+        hdr_path = write_hdr_environment!(joinpath(dir, "diff3d_loader_env.hdr"))
+        env_map = equirectangular_to_cubemap(RGBELoader(hdr_path);
+                                             size=12, generate_mipmaps=true)
+        return load_gltf_asset(gltf_path), load_glb_asset(glb_path), env_map
     end
 end
 
-function build_case(asset::GLTFAsset, case_id::String, title::String, description::String)
+function standard_with_env(m::MeshStandardMaterial, env_map::CubeTexture)
+    MeshStandardMaterial(color=m.color, emissive=m.emissive,
+                         metalness=m.metalness, roughness=m.roughness,
+                         opacity=m.opacity, transparent=m.transparent, side=m.side,
+                         map=m.map, normal_map=m.normal_map,
+                         normal_scale=m.normal_scale,
+                         roughness_map=m.roughness_map, metalness_map=m.metalness_map,
+                         alpha_map=m.alpha_map, ao_map=m.ao_map,
+                         emissive_map=m.emissive_map,
+                         vertex_colors=m.vertex_colors, alpha_test=m.alpha_test,
+                         envmap=env_map, light_map=m.light_map,
+                         emissive_intensity=m.emissive_intensity,
+                         ao_map_intensity=m.ao_map_intensity,
+                         light_map_intensity=m.light_map_intensity,
+                         env_map_intensity=0.55,
+                         depth_test=m.depth_test, depth_write=m.depth_write,
+                         clipping_planes=m.clipping_planes)
+end
+
+function attach_environment!(scene::Scene, env_map::CubeTexture)
+    traverse(scene, obj -> begin
+        if obj isa Mesh && obj.material isa MeshStandardMaterial
+            obj.material = standard_with_env(obj.material, env_map)
+        end
+    end)
+    return scene
+end
+
+function build_case(asset::GLTFAsset, env_map::CubeTexture,
+                    case_id::String, title::String, description::String)
     scene = asset.scene
     scene.background = Color3(0.014, 0.018, 0.026)
     scene.fog = FogExp2(color=Color3(0.014, 0.018, 0.026), density=0.035)
+    attach_environment!(scene, env_map)
     add!(scene, AmbientLight(color=Color3(0.34, 0.36, 0.44), intensity=0.48))
     add!(scene, HemisphereLight(color=Color3(0.58, 0.70, 0.92),
                                 ground_color=Color3(0.15, 0.13, 0.10),
@@ -277,7 +339,9 @@ function build_case(asset::GLTFAsset, case_id::String, title::String, descriptio
                                  position=Vec3(-3.2, 4.8, 3.1), cast_shadow=true))
 
     floor = Mesh(PlaneGeometry(width=6.5, height=6.5, width_segments=4, height_segments=4),
-                 MeshStandardMaterial(color=Color3(0.22, 0.24, 0.28), roughness=0.86);
+                 MeshStandardMaterial(color=Color3(0.22, 0.24, 0.28),
+                                      roughness=0.86, metalness=0.08,
+                                      envmap=env_map, env_map_intensity=0.35);
                  name="gltf_loader_floor", receive_shadow=true)
     floor.rotation = Euler(-pi / 2, 0.0, 0.0)
     floor.position = Vec3(0.0, -0.55, 0.0)
@@ -292,12 +356,12 @@ function build_case(asset::GLTFAsset, case_id::String, title::String, descriptio
 end
 
 function main()
-    gltf_asset, glb_asset = loaded_loader_assets()
+    gltf_asset, glb_asset, env_map = loaded_loader_assets()
     cases = [
-        build_case(gltf_asset, "loader-gltf", "GLTF Loader",
-                   "Generated glTF asset loaded through Diff3D.jl load_gltf_asset, including texture, punctual light, and animation clips."),
-        build_case(glb_asset, "loader-glb", "GLB Loader",
-                   "Generated binary GLB asset loaded through Diff3D.jl load_glb_asset, including embedded BIN geometry, PNG bufferView texture, punctual light, and animation clips."),
+        build_case(gltf_asset, env_map, "loader-gltf", "GLTF Loader",
+                   "Generated glTF asset loaded through Diff3D.jl load_gltf_asset, including texture, generated HDR environment map, punctual light, and animation clips."),
+        build_case(glb_asset, env_map, "loader-glb", "GLB Loader",
+                   "Generated binary GLB asset loaded through Diff3D.jl load_glb_asset, including embedded BIN geometry, PNG bufferView texture, generated HDR environment map, punctual light, and animation clips."),
     ]
     html = save_webgl_html(joinpath(OUT, "webgl_loader_gltf.html"), cases)
     println("WEBGL_LOADER_GLTF_OK $html")

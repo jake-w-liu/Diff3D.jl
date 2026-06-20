@@ -484,6 +484,9 @@ end
             "threejs_webgl_loader_gltf" => (
                 source=[
                     "return load_gltf_asset(gltf_path), load_glb_asset(glb_path)",
+                    "write_hdr_environment!(joinpath(dir, \"diff3d_loader_env.hdr\"))",
+                    "equirectangular_to_cubemap(RGBELoader(hdr_path)",
+                    "envmap=env_map, env_map_intensity=0.35",
                     "write_glb!(joinpath(dir, \"diff3d_loader_glb.glb\"), glb, glb_bytes)",
                     "image_json=\"{ \\\"bufferView\\\": 8, \\\"mimeType\\\": \\\"image/png\\\" }\"",
                     "\"KHR_lights_punctual\"",
@@ -493,7 +496,7 @@ end
                     "\"gltf_loader_turntable\"",
                     "\"loader-glb\"",
                 ],
-                prerequisites=["load_gltf_asset", "load_glb_asset", "GLB BIN chunk", "glTF animation clips"],
+                prerequisites=["load_gltf_asset", "load_glb_asset", "GLB BIN chunk", "RGBELoader", "equirectangular_to_cubemap", "glTF animation clips"],
             ),
             "threejs_webgl_loader_xyz" => (
                 source=[
@@ -4847,6 +4850,32 @@ end
         lod_env_json = Diff3D._web_env_json(lod_cube)
         @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", lod_env_json)
         @test occursin("{\"width\":1,\"height\":1", lod_env_json)
+        eq_h, eq_w = 64, 128
+        eq_data = Array{Float64}(undef, eq_h, eq_w, 3)
+        for row in 1:eq_h, col in 1:eq_w
+            eq_data[row, col, 1] = (col - 0.5) / eq_w
+            eq_data[row, col, 2] = 1.0 - (row - 0.5) / eq_h
+            eq_data[row, col, 3] = 0.25
+        end
+        eq = Texture(eq_data; wrap_s=:repeat, wrap_t=:clamp,
+                     filter=:bilinear, colorspace=:linear)
+        eq_cube = equirectangular_to_cubemap(eq; size=16, generate_mipmaps=true)
+        @test eq_cube isa CubeTexture
+        @test all(!isempty(face.mipmaps) for face in eq_cube.faces)
+        function expected_equirect_uv(dir::Vec3)
+            n = norm(dir)
+            return (0.5 + atan(dir.z / n, dir.x / n) / (2pi),
+                    0.5 + asin(clamp(dir.y / n, -1.0, 1.0)) / pi)
+        end
+        for dir in (Vec3(1.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0),
+                    Vec3(0.0, 0.0, -1.0), Vec3(0.0, 1.0, 0.0),
+                    Vec3(0.0, -1.0, 0.0))
+            u, v = expected_equirect_uv(dir)
+            c = sample_cube(eq_cube, dir)
+            @test c.r ≈ u atol=0.035
+            @test c.g ≈ v atol=0.035
+            @test c.b ≈ 0.25 atol=1e-12
+        end
         dt = DepthTexture(fill(0.7, 4, 4))
         @test sample_texture(dt, 0.5, 0.5).r ≈ 0.7          # single channel → gray
     end

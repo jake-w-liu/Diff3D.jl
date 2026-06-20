@@ -497,6 +497,71 @@ function sample_cube_lod(ct::CubeTexture, dir::Vec3, lod)
     return c0 * (1 - frac) + c1 * frac
 end
 
+function _cube_face_direction(face::Int, u::Float64, v::Float64)
+    dir = if face == 1       # +X
+        Vec3(1.0, 2v - 1, 1 - 2u)
+    elseif face == 2         # -X
+        Vec3(-1.0, 2v - 1, 2u - 1)
+    elseif face == 3         # +Y
+        Vec3(2u - 1, 1.0, 1 - 2v)
+    elseif face == 4         # -Y
+        Vec3(2u - 1, -1.0, 2v - 1)
+    elseif face == 5         # +Z
+        Vec3(2u - 1, 2v - 1, 1.0)
+    elseif face == 6         # -Z
+        Vec3(1 - 2u, 2v - 1, -1.0)
+    else
+        throw(ArgumentError("cube face index must be in 1:6"))
+    end
+    n = norm(dir)
+    n > 0 || return Vec3(1.0, 0.0, 0.0)
+    return dir / n
+end
+
+function _equirectangular_uv(dir::Vec3)
+    n = norm(dir)
+    n > 0 || return (0.5, 0.5)
+    x, y, z = dir.x / n, dir.y / n, dir.z / n
+    u = 0.5 + atan(z, x) / (2pi)
+    v = 0.5 + asin(clamp(y, -1.0, 1.0)) / pi
+    return (u, v)
+end
+
+"""
+    equirectangular_to_cubemap(tex; size=max(1, min(H, W ÷ 2)),
+                               generate_mipmaps=false) -> CubeTexture
+
+Convert an equirectangular environment texture to a six-face [`CubeTexture`](@ref)
+using Diff3D's cube-map face convention (`+x, -x, +y, -y, +z, -z`). The source
+texture is sampled as longitude/latitude with horizontal wrap and vertical
+top/bottom poles; HDR values are preserved as floating-point data. Set
+`generate_mipmaps=true` to build per-face mip chains for roughness-aware
+environment sampling.
+"""
+function equirectangular_to_cubemap(tex::Texture; size::Integer=max(1, min(Base.size(tex.data, 1), Base.size(tex.data, 2) ÷ 2)),
+                                    generate_mipmaps::Bool=false)
+    size > 0 || throw(ArgumentError("cubemap face size must be positive"))
+    face_size = Int(size)
+    faces = ntuple(face -> begin
+        data = Array{Float64}(undef, face_size, face_size, 3)
+        @inbounds for row in 1:face_size, col in 1:face_size
+            u_face = (col - 0.5) / face_size
+            v_face = 1.0 - (row - 0.5) / face_size
+            u_env, v_env = _equirectangular_uv(_cube_face_direction(face, u_face, v_face))
+            c = sample_texture(tex, u_env, v_env)
+            data[row, col, 1] = c.r
+            data[row, col, 2] = c.g
+            data[row, col, 3] = c.b
+        end
+        face_tex = Texture(data; wrap_s=:clamp, wrap_t=:clamp, filter=tex.filter,
+                           colorspace=tex.colorspace,
+                           max_anisotropy=tex.max_anisotropy)
+        generate_mipmaps && generate_mipmaps!(face_tex)
+        face_tex
+    end, 6)
+    return CubeTexture(faces)
+end
+
 # ========================== Procedural textures ==========================
 
 """`n`×`n`-cell checkerboard texture (each cell `cell` pixels) as an H×W×3 Texture."""

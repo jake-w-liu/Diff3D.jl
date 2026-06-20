@@ -279,10 +279,10 @@ upstream_id = "threejs_webgl_loader_gltf"
 upstream_url = "https://threejs.org/examples/#webgl_loader_gltf"
 local_script = "examples/webgl_loader_gltf.jl"
 status = "partial"
-prerequisites = ["load_gltf_asset", "load_glb_asset", "glTF external buffers", "GLB BIN chunk", "glTF texture images", "glTF animation clips", "KHR_lights_punctual", "browser mesh export"]
+prerequisites = ["load_gltf_asset", "load_glb_asset", "glTF external buffers", "GLB BIN chunk", "glTF texture images", "RGBELoader", "equirectangular_to_cubemap", "glTF animation clips", "KHR_lights_punctual", "browser mesh export"]
 known_deviations = [
   "Uses deterministic generated glTF and GLB assets instead of the upstream sample-asset catalogue and DamagedHelmet model",
-  "Uses compact Diff3D.jl lighting/background rather than UltraHDRLoader environment mapping and three.js WebGLRenderer"
+  "Uses a generated Radiance HDR cubemap instead of the upstream UltraHDR environment asset, PMREM path, and three.js WebGLRenderer"
 ]
 verification = ["julia --project=. examples/webgl_loader_gltf.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_loader_gltf.html"]
 
