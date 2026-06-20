@@ -1349,6 +1349,16 @@ end
                                    name="export_toon_textured_alpha")
         toon_textured_alpha.position = Vec3(0.6, -0.8, 0.0)
         add!(scene, toon_textured_alpha)
+        toon_ao_light_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                    MeshToonMaterial(color=Color3(0.85, 0.75, 0.35),
+                                                     ao_map=Texture(alphadata; filter=:nearest),
+                                                     light_map=Texture(texdata; filter=:nearest),
+                                                     ao_map_intensity=0.35,
+                                                     light_map_intensity=0.65);
+                                    name="export_toon_ao_light_map")
+        set_attribute!(toon_ao_light_mapped.geometry, :uv2, fill(0.25, toon_ao_light_mapped.geometry.n_vertices * 2), 2)
+        toon_ao_light_mapped.position = Vec3(1.3, -0.8, 0.0)
+        add!(scene, toon_ao_light_mapped)
         wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
                               MeshBasicMaterial(color=Color3(1.0, 0.3, 0.1),
                                                 wireframe=true);
@@ -1440,6 +1450,13 @@ end
                                    name="export_phong_normal_map")
         phong_normal_mapped.position = Vec3(-4.3, 0.75, 0.0)
         add!(scene, phong_normal_mapped)
+        toon_normal_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                  MeshToonMaterial(color=Color3(0.95, 0.72, 0.35),
+                                                   normal_map=Texture(normaldata; filter=:nearest),
+                                                   normal_scale=0.55);
+                                  name="export_toon_normal_map")
+        toon_normal_mapped.position = Vec3(-5.0, 0.75, 0.0)
+        add!(scene, toon_normal_mapped)
         envfaces = ntuple(i -> begin
             face = fill(Float64(i) / 6, 4, 4, 3)
             face[1, 1, 1] = min(1.0, face[1, 1, 1] + 0.125)
@@ -1754,6 +1771,9 @@ end
             NumberKeyframeTrack(textured, "material.map.matrixAutoUpdate", [0.0, 1.0], [1.0, 0.0]),
             NumberKeyframeTrack(alpha_mapped, "material.alphaTest", [0.0, 1.0], [0.4, 0.2]),
             NumberKeyframeTrack(normal_mapped, "material.normalScale", [0.0, 1.0], [0.35, 0.7]),
+            NumberKeyframeTrack(toon_normal_mapped, "material.normalScale", [0.0, 1.0], [0.55, 0.2]),
+            NumberKeyframeTrack(toon_ao_light_mapped, "material.aoMapIntensity", [0.0, 1.0], [0.35, 0.8]),
+            NumberKeyframeTrack(toon_ao_light_mapped, "material.lightMapIntensity", [0.0, 1.0], [0.65, 0.25]),
             NumberKeyframeTrack(depth_material_mesh, "material.near", [0.0, 1.0], [1.0, 2.0]),
             NumberKeyframeTrack(depth_material_mesh, "material.far", [0.0, 1.0], [8.0, 12.0]),
             NumberKeyframeTrack(toon_material_mesh, "material.gradientSteps", [0.0, 1.0], [4.0, 6.0]),
@@ -2169,6 +2189,7 @@ end
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"materialType\":\"toon\".*\"alphaTest\":0\.5", html)
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"texture\":\{\"width\":2,\"height\":2", html)
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin("\"name\":\"export_toon_ao_light_map\"", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_phong_wireframe\"", html)
@@ -2183,6 +2204,7 @@ end
         @test occursin("\"name\":\"export_phong_ao_light_map\"", html)
         @test occursin("\"name\":\"export_rough_metal_map\"", html)
         @test occursin("\"name\":\"export_normal_map\"", html)
+        @test occursin("\"name\":\"export_toon_normal_map\"", html)
         @test occursin("\"name\":\"export_env_map\"", html)
         @test occursin("\"name\":\"export_physical_extensions\"", html)
         @test occursin("\"name\":\"export_physical_anisotropy_map\"", html)
@@ -2291,6 +2313,16 @@ end
             @test occursin("\"aoIntensity\":0.29999999999999999", phong_ao_light_window)
             @test occursin("\"lightMapIntensity\":0.69999999999999996", phong_ao_light_window)
         end
+        toon_ao_light_range = findfirst("\"name\":\"export_toon_ao_light_map\"", html)
+        @test toon_ao_light_range !== nothing
+        if toon_ao_light_range !== nothing
+            toon_ao_light_window = html[first(toon_ao_light_range):min(lastindex(html), first(toon_ao_light_range) + 3000)]
+            @test occursin("\"materialType\":\"toon\"", toon_ao_light_window)
+            @test occursin("\"aoTexture\":{\"width\":2", toon_ao_light_window)
+            @test occursin("\"lightTexture\":{\"width\":2", toon_ao_light_window)
+            @test occursin("\"aoIntensity\":0.34999999999999998", toon_ao_light_window)
+            @test occursin(r"\"lightMapIntensity\":0\.65", toon_ao_light_window)
+        end
         @test occursin("uUseAoMap", html)
         @test occursin("uUseLightMap", html)
         @test occursin("uAoMap", html)
@@ -2322,6 +2354,15 @@ end
             @test occursin("\"normalTexture\":{\"width\":2", phong_normal_window)
             @test occursin("\"data\":[255,0,255,255", phong_normal_window)
             @test occursin("\"normalScale\":0.45000000000000001", phong_normal_window)
+        end
+        toon_normal_range = findfirst("\"name\":\"export_toon_normal_map\"", html)
+        @test toon_normal_range !== nothing
+        if toon_normal_range !== nothing
+            toon_normal_window = html[first(toon_normal_range):min(lastindex(html), first(toon_normal_range) + 3000)]
+            @test occursin("\"materialType\":\"toon\"", toon_normal_window)
+            @test occursin("\"normalTexture\":{\"width\":2", toon_normal_window)
+            @test occursin("\"data\":[255,0,255,255", toon_normal_window)
+            @test occursin(r"\"normalScale\":0\.55", toon_normal_window)
         end
         @test occursin("OES_standard_derivatives", html)
         @test occursin("uUseNormalMap", html)
@@ -2679,6 +2720,11 @@ end
         @test occursin("\"property\":\"depthWrite\"", html)
         @test occursin("\"property\":\"alphaTest\"", html)
         @test occursin("\"property\":\"normalScale\"", html)
+        @test occursin("\"property\":\"aoIntensity\"", html)
+        @test occursin("\"property\":\"lightMapIntensity\"", html)
+        @test occursin("\"target\":$(toon_normal_mapped.id),\"property\":\"normalScale\"", html)
+        @test occursin("\"target\":$(toon_ao_light_mapped.id),\"property\":\"aoIntensity\"", html)
+        @test occursin("\"target\":$(toon_ao_light_mapped.id),\"property\":\"lightMapIntensity\"", html)
         @test occursin("\"property\":\"depthNear\"", html)
         @test occursin("\"property\":\"depthFar\"", html)
         @test occursin("\"property\":\"toonSteps\"", html)
@@ -2716,6 +2762,7 @@ end
         @test occursin("assignComponent", html)
         @test occursin("baseRenderable", html)
         @test occursin("transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps", html)
+        @test occursin("aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity", html)
         @test occursin("clearcoatNormalScale:o.clearcoatNormalScale", html)
         @test occursin("linewidth:o.linewidth", html)
         @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
@@ -4194,6 +4241,12 @@ end
         @test phong_vc.light_map_intensity ≈ 0.55
         @test MeshToonMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshToonMaterial(emissive_intensity=1.6).emissive_intensity ≈ 1.6
+        @test MeshToonMaterial(normal_map=alpha_tex).normal_map === alpha_tex
+        @test MeshToonMaterial(normal_scale=0.35).normal_scale ≈ 0.35
+        @test MeshToonMaterial(ao_map=alpha_tex).ao_map === alpha_tex
+        @test MeshToonMaterial(light_map=alpha_tex).light_map === alpha_tex
+        @test MeshToonMaterial(ao_map_intensity=0.25).ao_map_intensity ≈ 0.25
+        @test MeshToonMaterial(light_map_intensity=0.45).light_map_intensity ≈ 0.45
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
         @test PointsMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test PointsMaterial().size_attenuation === true
@@ -4315,6 +4368,12 @@ end
                                        1.0, false, :front, true, true)
         @test legacy_toon.emissive_map === nothing
         @test legacy_toon.emissive_intensity == 1.0
+        @test legacy_toon.normal_map === nothing
+        @test legacy_toon.normal_scale == 1.0
+        @test legacy_toon.ao_map === nothing
+        @test legacy_toon.light_map === nothing
+        @test legacy_toon.ao_map_intensity == 1.0
+        @test legacy_toon.light_map_intensity == 1.0
         @test material_alpha_test(MeshToonMaterial(alpha_test=0.31)) ≈ 0.31
         @test material_alpha_test(SpriteMaterial()) ≈ 0.0
         @test material_depth_test(SpriteMaterial(depth_test=false)) == false
@@ -5532,6 +5591,25 @@ end
         @test lambert_material_mesh.material.normal_scale ≈ 0.6
         @test lambert_material_mesh.material.ao_map_intensity ≈ 0.7
         @test lambert_material_mesh.material.light_map_intensity ≈ 0.6
+        toon_map_material_mesh = Mesh(BoxGeometry(),
+                                      MeshToonMaterial(color=Color3(0.7, 0.6, 0.25),
+                                                       normal_scale=1.0))
+        toon_normal_scale =
+            NumberKeyframeTrack(toon_map_material_mesh, "material.normalScale",
+                                [0.0, 1.0], [1.0, 0.3])
+        toon_ao_intensity =
+            NumberKeyframeTrack(toon_map_material_mesh, "material.aoMapIntensity",
+                                [0.0, 1.0], [1.0, 0.5])
+        toon_light_intensity =
+            NumberKeyframeTrack(toon_map_material_mesh, "material.lightMapIntensity",
+                                [0.0, 1.0], [1.0, 0.1])
+        mixer_set_time!(AnimationMixer(AnimationClip("toon_map_scalars",
+                                                    [toon_normal_scale,
+                                                     toon_ao_intensity,
+                                                     toon_light_intensity])), 0.5)
+        @test toon_map_material_mesh.material.normal_scale ≈ 0.65
+        @test toon_map_material_mesh.material.ao_map_intensity ≈ 0.75
+        @test toon_map_material_mesh.material.light_map_intensity ≈ 0.55
 
         color = KeyframeTrack(material_mesh, :color, [0.0, 1.0],
                               [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
@@ -5719,6 +5797,17 @@ end
         @test abs(phong_tilt[1].r - phong_base[1].r) > 1e-3
         phong_zero_scale = shade_mesh_faces(geo, wm, mk_phong(tiltmap; scale=0.0), light, campos)
         @test phong_zero_scale[1].r ≈ phong_base[1].r atol=1e-9
+        mk_toon(nm; scale=1.0) = MeshToonMaterial(color=Color3(0.8,0.8,0.8),
+                                                   gradient_steps=8,
+                                                   normal_map=nm,
+                                                   normal_scale=scale)
+        toon_base = shade_mesh_faces(geo, wm, mk_toon(nothing), light, campos)
+        toon_same = shade_mesh_faces(geo, wm, mk_toon(flatmap), light, campos)
+        @test toon_same[1].r ≈ toon_base[1].r atol=1e-9
+        toon_tilt = shade_mesh_faces(geo, wm, mk_toon(tiltmap), light, campos)
+        @test abs(toon_tilt[1].r - toon_base[1].r) > 1e-3
+        toon_zero_scale = shade_mesh_faces(geo, wm, mk_toon(tiltmap; scale=0.0), light, campos)
+        @test toon_zero_scale[1].r ≈ toon_base[1].r atol=1e-9
         n0 = Vec3(0.0, 0.0, 1.0)
         n_half = Diff3D._apply_normal_map(n0, tiltmap, 0.5, 0.5,
                                          Vec3(-1.0,-1.0,0.0), Vec3(1.0,-1.0,0.0), Vec3(-1.0,1.0,0.0),
@@ -7451,6 +7540,18 @@ end
             phong_rt = RenderTarget(32, 32)
             render!(phong_rt, phong_scene, cam; shading=:smooth)
             @test isapprox(phong_rt.color[16, 16, 1], expected; atol=2e-2)
+
+            toon_mat = MeshToonMaterial(color=Color3(1.0,1.0,1.0),
+                                        map=color_tex, ao_map=data_tex,
+                                        light_map=data_tex,
+                                        ao_map_intensity=0.25,
+                                        light_map_intensity=0.5)
+            toon_scene = Scene()
+            add!(toon_scene, Mesh(PlaneGeometry(width=4.0, height=4.0), toon_mat))
+            add!(toon_scene, AmbientLight(intensity=1.0))
+            toon_rt = RenderTarget(32, 32)
+            render!(toon_rt, toon_scene, cam; shading=:smooth)
+            @test isapprox(toon_rt.color[16, 16, 1], expected; atol=2e-2)
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
             rough_map = Texture(rough_data; filter=:nearest, colorspace=:linear)

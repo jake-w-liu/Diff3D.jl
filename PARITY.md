@@ -31,7 +31,8 @@ replacement for three.js `WebGLRenderer`.
   `MeshBasicMaterial`, compact browser normal-color output for
   `MeshNormalMaterial`, and compact browser grayscale output for
   `MeshDepthMaterial` with basic/RGBA/RGB/RG depth packing, plus compact browser quantized diffuse output for
-  `MeshToonMaterial`, compact browser diffuse-only/specular-shininess output
+  `MeshToonMaterial` with shared albedo, alpha, normal, AO, light, and
+  emissive map fields, compact browser diffuse-only/specular-shininess output
   for `MeshLambertMaterial`/`MeshPhongMaterial`, and procedural or
   texture-backed compact output for `MeshMatcapMaterial`.
 - Lights: ambient, directional, point, spot, hemisphere, rectangular area
@@ -282,8 +283,11 @@ Parallel audits split the remaining work into five critical tracks:
   RGBA, RGB, and RG packing branches.
   Browser export now recognizes `MeshToonMaterial` and applies compact
   quantized diffuse light bands from `gradient_steps`, or samples serialized
-  `gradient_map` textures using the three.js toon irradiance coordinate. Full
-  three.js ShaderLib toon integration remains open.
+  `gradient_map` textures using the three.js toon irradiance coordinate. Toon
+  materials now also share normal-map perturbation, AO/light-map modulation,
+  emissive-map modulation, and related scalar animation bindings with the
+  compact lit material paths. Full three.js ShaderLib toon integration remains
+  open.
   Browser export now recognizes `MeshMatcapMaterial` and applies the same
   procedural fallback used by the CPU shading path, or samples a serialized
   `matcap` texture with view-space normal-derived matcap UVs when one is
@@ -550,6 +554,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add `emissive_map`/`emissive_intensity` field parity for
   `MeshLambertMaterial`, `MeshPhongMaterial`, and `MeshToonMaterial`, with CPU
   emissive-map modulation and compact browser serialization covered by tests.
+- Done: add `MeshToonMaterial.normal_map`, `normal_scale`, `ao_map`,
+  `light_map`, `ao_map_intensity`, and `light_map_intensity` parity through
+  the shared CPU flat/smooth map paths, compact browser `normalTexture`,
+  `aoTexture`, and `lightTexture` serialization, browser/runtime scalar
+  animation bindings, and legacy positional constructor defaults.
 - Done: serialize `LineBasicMaterial.linewidth` into browser export, restore it
   through renderable animation reset state, animate it with number tracks, and
   apply it with a WebGL `ALIASED_LINE_WIDTH_RANGE` clamp for line, line-loop, and

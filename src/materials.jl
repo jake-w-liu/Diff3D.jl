@@ -563,9 +563,15 @@ struct MeshToonMaterial <: AbstractMaterial
     gradient_steps::Int
     gradient_map::Any
     map::Any
+    normal_map::Any
+    normal_scale::Float64
     alpha_map::Any
+    ao_map::Any
+    light_map::Any
     emissive_map::Any
     emissive_intensity::Float64
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
     alpha_test::Float64
     opacity::Float64
     transparent::Bool
@@ -575,27 +581,61 @@ struct MeshToonMaterial <: AbstractMaterial
     clipping_planes::Vector{Plane{Float64}}
 
     function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
-                              gradient_map, map, alpha_map, emissive_map,
-                              emissive_intensity, alpha_test, opacity,
+                              gradient_map, map, normal_map, normal_scale,
+                              alpha_map, ao_map, light_map, emissive_map,
+                              emissive_intensity, ao_map_intensity,
+                              light_map_intensity, alpha_test, opacity,
                               transparent::Bool, side::Symbol, depth_test::Bool,
                               depth_write::Bool, clipping_planes)
         new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
-            map, alpha_map, emissive_map, Float64(emissive_intensity),
-            Float64(alpha_test), Float64(opacity), transparent, side, depth_test,
-            depth_write, _material_clipping_planes(clipping_planes))
+            map, normal_map, Float64(normal_scale), alpha_map, ao_map, light_map,
+            emissive_map, Float64(emissive_intensity), Float64(ao_map_intensity),
+            Float64(light_map_intensity), Float64(alpha_test), Float64(opacity),
+            transparent, side, depth_test, depth_write,
+            _material_clipping_planes(clipping_planes))
     end
 end
 
 function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
                            gradient_steps=3, gradient_map=nothing, map=nothing,
-                           alpha_map=nothing, emissive_map=nothing,
-                           emissive_intensity=1.0, alpha_test=0.0, opacity=1.0,
+                           normal_map=nothing, normal_scale=1.0,
+                           alpha_map=nothing, ao_map=nothing, light_map=nothing,
+                           emissive_map=nothing, emissive_intensity=1.0,
+                           ao_map_intensity=1.0, light_map_intensity=1.0,
+                           alpha_test=0.0, opacity=1.0,
                            transparent=false, side=:front,
                            depth_test=true, depth_write=true,
                            clipping_planes=Plane{Float64}[])
-    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, alpha_map,
-                     emissive_map, emissive_intensity, alpha_test, opacity,
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, normal_map,
+                     normal_scale, alpha_map, ao_map, light_map, emissive_map,
+                     emissive_intensity, ao_map_intensity, light_map_intensity,
+                     alpha_test, opacity, transparent, side, depth_test, depth_write,
+                     clipping_planes)
+end
+
+function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                          gradient_map, map, normal_map, normal_scale,
+                          alpha_map, ao_map, light_map, emissive_map,
+                          emissive_intensity, ao_map_intensity,
+                          light_map_intensity, alpha_test, opacity,
+                          transparent::Bool, side::Symbol, depth_test::Bool,
+                          depth_write::Bool)
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, normal_map,
+                     normal_scale, alpha_map, ao_map, light_map, emissive_map,
+                     emissive_intensity, ao_map_intensity, light_map_intensity,
+                     alpha_test, opacity, transparent, side, depth_test, depth_write,
+                     Plane{Float64}[])
+end
+
+function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
+                          gradient_map, map, alpha_map, emissive_map,
+                          emissive_intensity, alpha_test, opacity,
+                          transparent::Bool, side::Symbol, depth_test::Bool,
+                          depth_write::Bool, clipping_planes)
+    MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, nothing,
+                     1.0, alpha_map, nothing, nothing, emissive_map,
+                     emissive_intensity, 1.0, 1.0, alpha_test, opacity,
                      transparent, side, depth_test, depth_write, clipping_planes)
 end
 
