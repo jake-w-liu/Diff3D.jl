@@ -5304,6 +5304,34 @@ end
         @test arc_svg.paths[3].points == [Vec2(0.0, 0.0), Vec2(2.0, 0.0)]
         rm(arc_path)
 
+        transform_path = tempname() * ".svg"
+        write(transform_path, """
+        <svg>
+          <rect x="1" y="2" width="2" height="1" transform="translate(3,4) scale(2)"/>
+          <g transform="translate(10,0)">
+            <g transform="rotate(90)">
+              <polygon points="0,0 1,0 1,1"/>
+            </g>
+          </g>
+          <polyline points="0,0 1,0" transform="matrix(1 0 0 1 2 3)"/>
+          <rect x="2" y="1" width="1" height="1" transform="rotate(90 1 1)"/>
+        </svg>
+        """)
+        transformed = load_svg(transform_path)
+        @test length(transformed.paths) == 4
+        @test transformed.paths[1].points == [Vec2(5.0, 8.0), Vec2(9.0, 8.0),
+                                              Vec2(9.0, 10.0), Vec2(5.0, 10.0)]
+        @test transformed.paths[2].points[1].x ≈ 10.0
+        @test transformed.paths[2].points[1].y ≈ 0.0
+        @test transformed.paths[2].points[2].x ≈ 10.0
+        @test transformed.paths[2].points[2].y ≈ 1.0
+        @test transformed.paths[2].points[3].x ≈ 9.0
+        @test transformed.paths[2].points[3].y ≈ 1.0
+        @test transformed.paths[3].points == [Vec2(2.0, 3.0), Vec2(3.0, 3.0)]
+        @test transformed.paths[4].points[1].x ≈ 1.0
+        @test transformed.paths[4].points[1].y ≈ 2.0
+        rm(transform_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
@@ -5337,6 +5365,11 @@ end
         write(bad_arc_flag_path, "<svg><path d=\"M 0 0 A 1 1 0 2 1 2 2\"/></svg>")
         @test_throws "arc large-arc flag" load_svg(bad_arc_flag_path)
         rm(bad_arc_flag_path)
+
+        bad_transform_path = tempname() * ".svg"
+        write(bad_transform_path, "<svg><rect width=\"1\" height=\"1\" transform=\"project(1)\"/></svg>")
+        @test_throws "unsupported SVG transform" load_svg(bad_transform_path)
+        rm(bad_transform_path)
 
         bad_segments_path = tempname() * ".svg"
         write(bad_segments_path, "<svg><circle r=\"1\"/></svg>")

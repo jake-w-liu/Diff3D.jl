@@ -1450,6 +1450,98 @@ function _svg_ellipse_points(cx::Float64, cy::Float64, rx::Float64, ry::Float64,
                  cy + ry * sin(2π * i / segments)) for i in 0:segments-1]
 end
 
+_svg_identity_transform() = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+function _svg_compose_transform(a, b)
+    aa, ab, ac, ad, ae, af = a
+    ba, bb, bc, bd, be, bf = b
+    return (aa * ba + ac * bb,
+            ab * ba + ad * bb,
+            aa * bc + ac * bd,
+            ab * bc + ad * bd,
+            aa * be + ac * bf + ae,
+            ab * be + ad * bf + af)
+end
+
+function _svg_apply_transform(t, p::Vec2{Float64})
+    a, b, c, d, e, f = t
+    return Vec2(a * p.x + c * p.y + e, b * p.x + d * p.y + f)
+end
+
+function _svg_transform_path(path::SVGPath, t)
+    t == _svg_identity_transform() && return path
+    return SVGPath(path.tag, [_svg_apply_transform(t, p) for p in path.points],
+                   path.closed)
+end
+
+function _svg_transform_numbers(raw::AbstractString)
+    values = _svg_numbers(raw)
+    isempty(values) && error("SVG transform is missing numeric arguments")
+    return values
+end
+
+function _svg_transform_from_attrs(attrs::AbstractDict)
+    raw = get(attrs, "transform", nothing)
+    raw === nothing && return _svg_identity_transform()
+    s = String(raw)
+    transform = _svg_identity_transform()
+    pos = firstindex(s)
+    for m in eachmatch(r"([A-Za-z]+)\s*\(([^)]*)\)", s)
+        if pos < m.offset
+            gap = SubString(s, pos, prevind(s, m.offset))
+            occursin(r"[^\s,]", gap) &&
+                error("SVG transform list contains unsupported syntax near $(repr(String(gap)))")
+        end
+        name = lowercase(m.captures[1])
+        args = _svg_transform_numbers(m.captures[2])
+        local t
+        if name == "matrix"
+            length(args) == 6 || error("SVG matrix transform needs 6 arguments")
+            t = (args[1], args[2], args[3], args[4], args[5], args[6])
+        elseif name == "translate"
+            (length(args) == 1 || length(args) == 2) ||
+                error("SVG translate transform needs 1 or 2 arguments")
+            t = (1.0, 0.0, 0.0, 1.0, args[1], length(args) == 2 ? args[2] : 0.0)
+        elseif name == "scale"
+            (length(args) == 1 || length(args) == 2) ||
+                error("SVG scale transform needs 1 or 2 arguments")
+            sy = length(args) == 2 ? args[2] : args[1]
+            t = (args[1], 0.0, 0.0, sy, 0.0, 0.0)
+        elseif name == "rotate"
+            (length(args) == 1 || length(args) == 3) ||
+                error("SVG rotate transform needs 1 or 3 arguments")
+            θ = args[1] * π / 180.0
+            c = cos(θ)
+            sn = sin(θ)
+            r = (c, sn, -sn, c, 0.0, 0.0)
+            if length(args) == 3
+                cx, cy = args[2], args[3]
+                t = _svg_compose_transform(
+                    _svg_compose_transform((1.0, 0.0, 0.0, 1.0, cx, cy), r),
+                    (1.0, 0.0, 0.0, 1.0, -cx, -cy))
+            else
+                t = r
+            end
+        elseif name == "skewx"
+            length(args) == 1 || error("SVG skewX transform needs 1 argument")
+            t = (1.0, 0.0, tan(args[1] * π / 180.0), 1.0, 0.0, 0.0)
+        elseif name == "skewy"
+            length(args) == 1 || error("SVG skewY transform needs 1 argument")
+            t = (1.0, tan(args[1] * π / 180.0), 0.0, 1.0, 0.0, 0.0)
+        else
+            error("unsupported SVG transform $name")
+        end
+        transform = _svg_compose_transform(transform, t)
+        pos = nextind(s, m.offset, length(m.match))
+    end
+    if pos <= lastindex(s)
+        gap = SubString(s, pos, lastindex(s))
+        occursin(r"[^\s,]", gap) &&
+            error("SVG transform list contains unsupported syntax near $(repr(String(gap)))")
+    end
+    return transform
+end
+
 function _svg_arc_flag(value::Float64, name)
     value == 0.0 && return false
     value == 1.0 && return true
@@ -1691,37 +1783,59 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     root === nothing && error("SVG document is missing <svg> root")
     width, height = _svg_root_size(_svg_attrs(root.captures[1]))
     paths = SVGPath[]
+    transform_stack = [_svg_identity_transform()]
 
-    for m in eachmatch(r"(?is)<\s*(path|rect|circle|ellipse|polygon|polyline)\b([^>]*)/?>",
+    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
                        raw)
-        tag = lowercase(m.captures[1])
-        attrs = _svg_attrs(m.captures[2])
+        closing = m.captures[1] !== nothing
+        tag = lowercase(m.captures[2])
+        attrs = _svg_attrs(m.captures[3])
+        self_closing = occursin(r"/\s*>$", m.match)
+
+        if tag == "svg" || tag == "g"
+            if closing
+                length(transform_stack) > 1 && pop!(transform_stack)
+            elseif !self_closing
+                push!(transform_stack,
+                      _svg_compose_transform(transform_stack[end],
+                                             _svg_transform_from_attrs(attrs)))
+            end
+            continue
+        end
+        closing && continue
+
+        local_transform = _svg_transform_from_attrs(attrs)
+        total_transform = _svg_compose_transform(transform_stack[end],
+                                                 local_transform)
+        element_paths = SVGPath[]
         if tag == "path"
             d = get(attrs, "d", nothing)
             d === nothing && continue
-            append!(paths, _svg_path_points(d, segments))
+            append!(element_paths, _svg_path_points(d, segments))
         elseif tag == "rect"
             rect = _svg_rect(attrs)
-            rect !== nothing && push!(paths, rect)
+            rect !== nothing && push!(element_paths, rect)
         elseif tag == "circle"
             cx = _svg_length(attrs, "cx", 0.0)
             cy = _svg_length(attrs, "cy", 0.0)
             r = _svg_length(attrs, "r", 0.0)
             points = _svg_ellipse_points(cx, cy, r, r, circle_n)
-            !isempty(points) && push!(paths, SVGPath(:circle, points, true))
+            !isempty(points) && push!(element_paths, SVGPath(:circle, points, true))
         elseif tag == "ellipse"
             cx = _svg_length(attrs, "cx", 0.0)
             cy = _svg_length(attrs, "cy", 0.0)
             rx = _svg_length(attrs, "rx", 0.0)
             ry = _svg_length(attrs, "ry", 0.0)
             points = _svg_ellipse_points(cx, cy, rx, ry, circle_n)
-            !isempty(points) && push!(paths, SVGPath(:ellipse, points, true))
+            !isempty(points) && push!(element_paths, SVGPath(:ellipse, points, true))
         elseif tag == "polygon" || tag == "polyline"
             points_raw = get(attrs, "points", "")
             points = _svg_points(points_raw)
             length(points) >= 2 &&
-                push!(paths, SVGPath(Symbol(tag), points, tag == "polygon"))
+                push!(element_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
+        append!(paths, [_svg_transform_path(path, total_transform)
+                        for path in element_paths])
     end
 
     return SVGDocument(width, height, paths)
