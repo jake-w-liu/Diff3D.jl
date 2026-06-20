@@ -5069,6 +5069,80 @@ end
         @test Diff3D.sample_texture_channel(aptex, 0.5, 0.5, 4; default=1.0) < 1.0
     end
 
+    @testset "Audio WAV decode" begin
+        le16(n) = UInt8[n & 0xff, (n >> 8) & 0xff]
+        le32(n) = UInt8[n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]
+        i16_bytes(n) = le16(n < 0 ? n + 0x10000 : n)
+        function f32_bytes(x)
+            u = reinterpret(UInt32, Float32(x))
+            return le32(Int(u))
+        end
+        function wav_bytes(format_tag::Int, channels::Int, sample_rate::Int,
+                           bits::Int, data::Vector{UInt8}; junk::Bool=false)
+            block_align = channels * (bits ÷ 8)
+            byte_rate = sample_rate * block_align
+            fmt = UInt8[]
+            append!(fmt, le16(format_tag), le16(channels), le32(sample_rate),
+                    le32(byte_rate), le16(block_align), le16(bits))
+            chunks = Vector{UInt8}[]
+            if junk
+                push!(chunks, vcat(Vector{UInt8}(codeunits("JUNK")), le32(3),
+                                   UInt8[0xaa, 0xbb, 0xcc], UInt8[0x00]))
+            end
+            push!(chunks, vcat(Vector{UInt8}(codeunits("fmt ")), le32(length(fmt)), fmt))
+            push!(chunks, vcat(Vector{UInt8}(codeunits("data")), le32(length(data)), data))
+            body = UInt8[]
+            append!(body, codeunits("WAVE"))
+            for chunk in chunks
+                append!(body, chunk)
+            end
+            return vcat(Vector{UInt8}(codeunits("RIFF")), le32(length(body)), body)
+        end
+
+        pcm16 = UInt8[]
+        for v in (-32768, 0, 32767, -16384, 16384, 8192)
+            append!(pcm16, i16_bytes(v))
+        end
+        wav16_path = tempname() * ".wav"
+        write(wav16_path, wav_bytes(1, 2, 8000, 16, pcm16; junk=true))
+        a16 = load_wav(wav16_path)
+        @test a16 isa AudioBufferData
+        @test a16.sample_rate == 8000
+        @test a16.channels == 2
+        @test size(a16.samples) == (3, 2)
+        @test a16.samples[1, 1] == -1.0
+        @test a16.samples[1, 2] == 0.0
+        @test a16.samples[2, 1] ≈ 1.0
+        @test a16.samples[2, 2] ≈ -16384 / 32767
+        @test audio_duration(a16) ≈ 3 / 8000
+        @test load_audio(wav16_path).samples == a16.samples
+        @test AudioLoader(wav16_path).samples == a16.samples
+        rm(wav16_path)
+
+        wav8_path = tempname() * ".wav"
+        write(wav8_path, wav_bytes(1, 1, 11025, 8, UInt8[0x00, 0x80, 0xff]))
+        a8 = AudioLoader(wav8_path)
+        @test a8.sample_rate == 11025
+        @test a8.channels == 1
+        @test vec(a8.samples) ≈ [-1.0, 0.0, 127 / 128]
+        rm(wav8_path)
+
+        float_data = UInt8[]
+        append!(float_data, f32_bytes(-0.25), f32_bytes(0.5), f32_bytes(1.25))
+        float_path = tempname() * ".wav"
+        write(float_path, wav_bytes(3, 1, 48000, 32, float_data))
+        afloat = load_wav(float_path)
+        @test afloat.sample_rate == 48000
+        @test vec(afloat.samples) ≈ [-0.25, 0.5, 1.25]
+        rm(float_path)
+
+        bad_path = tempname() * ".wav"
+        write(bad_path, UInt8[0x52, 0x49, 0x46, 0x46, 0x00])
+        @test_throws ErrorException load_wav(bad_path)
+        @test_throws "unsupported audio format" load_audio(bad_path)
+        rm(bad_path)
+    end
+
     @testset "Radiance RGBE/HDR decode" begin
         function hdr_bytes(width, height, pixel_bytes; ysign="-", xsign="+")
             bytes = Vector{UInt8}(codeunits(

@@ -475,6 +475,157 @@ end
 """Load a PNG or JPEG/JPG image into a [`Texture`]."""
 TextureLoader(path::String; kwargs...) = Texture(load_image(path); kwargs...)
 
+# ========================== Audio decode ==========================
+
+"""Decoded audio buffer data, with samples stored as frames × channels."""
+struct AudioBufferData
+    sample_rate::Int
+    channels::Int
+    samples::Matrix{Float64}
+end
+
+audio_duration(a::AudioBufferData) = size(a.samples, 1) / a.sample_rate
+
+@inline function _le_u16(bytes::Vector{UInt8}, pos::Int)
+    pos + 1 <= length(bytes) || error("WAV chunk is truncated")
+    return Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8)
+end
+
+@inline function _le_u32(bytes::Vector{UInt8}, pos::Int)
+    pos + 3 <= length(bytes) || error("WAV chunk is truncated")
+    return Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8) |
+           (Int(bytes[pos + 2]) << 16) | (Int(bytes[pos + 3]) << 24)
+end
+
+@inline function _le_i16(bytes::Vector{UInt8}, pos::Int)
+    u = _le_u16(bytes, pos)
+    return u >= 0x8000 ? u - 0x10000 : u
+end
+
+@inline function _le_i24(bytes::Vector{UInt8}, pos::Int)
+    pos + 2 <= length(bytes) || error("WAV chunk is truncated")
+    u = Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8) | (Int(bytes[pos + 2]) << 16)
+    return u >= 0x800000 ? u - 0x1000000 : u
+end
+
+@inline function _le_i32(bytes::Vector{UInt8}, pos::Int)
+    u = _le_u32(bytes, pos)
+    return u >= 0x80000000 ? u - 0x100000000 : u
+end
+
+function _le_float32(bytes::Vector{UInt8}, pos::Int)
+    return reinterpret(Float32, UInt32(_le_u32(bytes, pos)))
+end
+
+function _le_float64(bytes::Vector{UInt8}, pos::Int)
+    pos + 7 <= length(bytes) || error("WAV chunk is truncated")
+    lo = UInt64(_le_u32(bytes, pos))
+    hi = UInt64(_le_u32(bytes, pos + 4))
+    return reinterpret(Float64, lo | (hi << 32))
+end
+
+function _wav_format_from_extensible(fmt::Vector{UInt8})
+    length(fmt) >= 40 || error("WAV extensible fmt chunk is truncated")
+    cb_size = _le_u16(fmt, 17)
+    cb_size >= 22 || error("WAV extensible fmt chunk is missing its subformat GUID")
+    guid = fmt[25:40]
+    tail = UInt8[0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71]
+    guid[5:16] == tail || error("unsupported WAV extensible subformat GUID")
+    return _le_u16(guid, 1)
+end
+
+function _decode_wav(bytes::Vector{UInt8})
+    length(bytes) >= 12 || error("WAV file is truncated")
+    String(bytes[1:4]) == "RIFF" || error("not a RIFF WAV file")
+    String(bytes[9:12]) == "WAVE" || error("RIFF file is not WAVE audio")
+    riff_size = _le_u32(bytes, 5)
+    riff_size + 8 <= length(bytes) || error("WAV RIFF size exceeds file length")
+    fmt = nothing
+    data_start = 0
+    data_len = 0
+    pos = 13
+    while pos + 7 <= min(length(bytes), riff_size + 8)
+        chunk_id = String(bytes[pos:pos + 3])
+        chunk_len = _le_u32(bytes, pos + 4)
+        chunk_start = pos + 8
+        chunk_end = chunk_start + chunk_len - 1
+        chunk_end <= length(bytes) || error("WAV chunk $chunk_id exceeds file length")
+        if chunk_id == "fmt "
+            fmt = bytes[chunk_start:chunk_end]
+        elseif chunk_id == "data"
+            data_start = chunk_start
+            data_len = chunk_len
+        end
+        pos = chunk_start + chunk_len + (isodd(chunk_len) ? 1 : 0)
+    end
+    fmt === nothing && error("WAV fmt chunk is missing")
+    data_len > 0 || error("WAV data chunk is missing or empty")
+    length(fmt) >= 16 || error("WAV fmt chunk is truncated")
+    format_tag = _le_u16(fmt, 1)
+    channels = _le_u16(fmt, 3)
+    sample_rate = _le_u32(fmt, 5)
+    block_align = _le_u16(fmt, 13)
+    bits_per_sample = _le_u16(fmt, 15)
+    format_tag == 0xfffe && (format_tag = _wav_format_from_extensible(fmt))
+    channels > 0 || error("WAV channel count must be positive")
+    sample_rate > 0 || error("WAV sample rate must be positive")
+    bytes_per_sample = bits_per_sample ÷ 8
+    bits_per_sample % 8 == 0 || error("WAV bits per sample must be byte-aligned")
+    bytes_per_sample > 0 || error("WAV bits per sample must be positive")
+    block_align == channels * bytes_per_sample ||
+        error("WAV blockAlign does not match channels and bits per sample")
+    data_len % block_align == 0 || error("WAV data chunk is not aligned to complete frames")
+    frames = data_len ÷ block_align
+    samples = Matrix{Float64}(undef, frames, channels)
+    @inbounds for frame in 1:frames, ch in 1:channels
+        p = data_start + (frame - 1) * block_align + (ch - 1) * bytes_per_sample
+        samples[frame, ch] = if format_tag == 1
+            if bits_per_sample == 8
+                (Float64(bytes[p]) - 128.0) / 128.0
+            elseif bits_per_sample == 16
+                max(-1.0, Float64(_le_i16(bytes, p)) / 32767.0)
+            elseif bits_per_sample == 24
+                max(-1.0, Float64(_le_i24(bytes, p)) / 8388607.0)
+            elseif bits_per_sample == 32
+                max(-1.0, Float64(_le_i32(bytes, p)) / 2147483647.0)
+            else
+                error("unsupported PCM WAV bit depth $bits_per_sample")
+            end
+        elseif format_tag == 3
+            if bits_per_sample == 32
+                Float64(_le_float32(bytes, p))
+            elseif bits_per_sample == 64
+                _le_float64(bytes, p)
+            else
+                error("unsupported IEEE float WAV bit depth $bits_per_sample")
+            end
+        else
+            error("unsupported WAV audio format tag $format_tag")
+        end
+    end
+    return AudioBufferData(sample_rate, channels, samples)
+end
+
+"""Decode RIFF/WAVE PCM or IEEE-float audio into [`AudioBufferData`](@ref)."""
+load_wav(path::String) = _decode_wav(read(path))
+
+"""
+    load_audio(path) -> AudioBufferData
+
+Decode audio bytes supported by Diff3D.jl's loader surface. Currently supports
+RIFF/WAVE PCM and IEEE-float WAV files; browser-specific compressed audio
+decode remains outside this native loader.
+"""
+function load_audio(path::String)
+    bytes = read(path)
+    length(bytes) >= 12 && String(bytes[1:4]) == "RIFF" &&
+        String(bytes[9:12]) == "WAVE" && return _decode_wav(bytes)
+    error("unsupported audio format for $path; AudioLoader currently supports WAV")
+end
+
+"""Load a RIFF/WAVE audio buffer from disk."""
+AudioLoader(path::String) = load_audio(path)
+
 # ========================== Radiance RGBE / HDR decode ==========================
 
 function _rgbe_read_line(bytes::Vector{UInt8}, pos::Int)

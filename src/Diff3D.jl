@@ -234,6 +234,7 @@ export
     compute_vertex_normals!, save_stl_binary, load_stl, load_obj,
     inflate, zlib_inflate, load_png, load_jpeg, load_image,
     load_rgbe, load_hdr, TextureLoader, RGBELoader,
+    AudioBufferData, audio_duration, load_wav, load_audio, AudioLoader,
     load_mtl, load_obj_groups, base64_decode, load_gltf,
     GLTFAsset, load_gltf_asset, parse_xyz, load_xyz,
 
