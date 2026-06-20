@@ -5375,6 +5375,40 @@ end
         @test length(svg_strokes(style_path)) == 2
         rm(style_path)
 
+        css_path = tempname() * ".svg"
+        write(css_path, """
+        <svg>
+          <style>
+            rect { fill: #00f; }
+            .warn { stroke: #0f0; stroke-width: 3; }
+            #hero { fill: rgb(255,0,0); fill-opacity: 0.5; }
+            polygon.warn { stroke-opacity: .25; }
+          </style>
+          <g class="warn" opacity="0.5">
+            <rect id="hero" class="warn" width="2" height="1" fill="#000"/>
+            <polygon class="warn" points="0,0 1,0 0,1"/>
+          </g>
+        </svg>
+        """)
+        css_svg = load_svg(css_path)
+        @test css_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test css_svg.paths[1].style.fill_opacity == 0.5
+        @test css_svg.paths[1].style.stroke == Color3(0.0, 1.0, 0.0)
+        @test css_svg.paths[1].style.stroke_width == 3.0
+        @test css_svg.paths[1].style.opacity == 0.5
+        @test css_svg.paths[2].style.fill == Color3(0.0, 0.0, 0.0)
+        @test css_svg.paths[2].style.stroke == Color3(0.0, 1.0, 0.0)
+        @test css_svg.paths[2].style.stroke_opacity == 0.25
+        css_meshes = svg_meshes(css_svg)
+        @test length(css_meshes) == 2
+        @test css_meshes[1].material.color == Color3(1.0, 0.0, 0.0)
+        @test css_meshes[1].material.opacity == 0.25
+        css_strokes = svg_strokes(css_svg)
+        @test length(css_strokes) == 2
+        @test css_strokes[1].material.linewidth == 3.0
+        @test css_strokes[2].material.opacity == 0.125
+        rm(css_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)

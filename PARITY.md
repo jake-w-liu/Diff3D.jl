@@ -783,7 +783,9 @@ Parallel audits split the remaining work into five critical tracks:
   `matrix`, `translate`, `scale`, `rotate`, `skewX`, and `skewY` transform
   lists. Basic inherited fill/stroke presentation attributes and inline
   `style` declarations now attach to `SVGPath`, with `svg_meshes` and
-  `svg_strokes` helpers creating styled fill meshes and stroke line objects.
+  `svg_strokes` helpers creating styled fill meshes and stroke line objects;
+  simple `<style>` stylesheet rules for tag, class, id, and combined
+  tag/class/id selectors now feed the same cascade. Descendant/attribute/pseudo
   CSS selectors, fill-rule holes, stroked outline triangulation, clipping, and
   DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
