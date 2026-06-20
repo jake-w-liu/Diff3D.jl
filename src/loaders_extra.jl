@@ -1450,6 +1450,68 @@ function _svg_ellipse_points(cx::Float64, cy::Float64, rx::Float64, ry::Float64,
                  cy + ry * sin(2π * i / segments)) for i in 0:segments-1]
 end
 
+function _svg_arc_flag(value::Float64, name)
+    value == 0.0 && return false
+    value == 1.0 && return true
+    error("SVG arc $name flag must be 0 or 1")
+end
+
+function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
+                         rotation_deg::Float64, large_arc::Bool, sweep::Bool,
+                         stop::Vec2{Float64}, segments::Int)
+    rx < 0.0 && error("SVG arc radius must be non-negative")
+    ry < 0.0 && error("SVG arc radius must be non-negative")
+    (start == stop) && return Vec2{Float64}[]
+    (rx == 0.0 || ry == 0.0) && return [stop]
+
+    φ = rotation_deg * π / 180.0
+    cosφ = cos(φ)
+    sinφ = sin(φ)
+    dx = (start.x - stop.x) / 2.0
+    dy = (start.y - stop.y) / 2.0
+    x1p = cosφ * dx + sinφ * dy
+    y1p = -sinφ * dx + cosφ * dy
+    rx = abs(rx)
+    ry = abs(ry)
+
+    λ = x1p^2 / rx^2 + y1p^2 / ry^2
+    if λ > 1.0
+        scale = sqrt(λ)
+        rx *= scale
+        ry *= scale
+    end
+
+    rx2 = rx^2
+    ry2 = ry^2
+    x1p2 = x1p^2
+    y1p2 = y1p^2
+    denom = rx2 * y1p2 + ry2 * x1p2
+    denom == 0.0 && return [stop]
+    numer = rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2
+    coef = (large_arc == sweep ? -1.0 : 1.0) *
+           sqrt(max(0.0, numer / denom))
+    cxp = coef * rx * y1p / ry
+    cyp = coef * -ry * x1p / rx
+    cx = cosφ * cxp - sinφ * cyp + (start.x + stop.x) / 2.0
+    cy = sinφ * cxp + cosφ * cyp + (start.y + stop.y) / 2.0
+
+    ux = (x1p - cxp) / rx
+    uy = (y1p - cyp) / ry
+    vx = (-x1p - cxp) / rx
+    vy = (-y1p - cyp) / ry
+    θ1 = atan(uy, ux)
+    Δθ = atan(ux * vy - uy * vx, ux * vx + uy * vy)
+    !sweep && Δθ > 0.0 && (Δθ -= 2π)
+    sweep && Δθ < 0.0 && (Δθ += 2π)
+
+    n = max(1, ceil(Int, abs(Δθ) / (π / 2.0)) * segments)
+    return [begin
+                θ = θ1 + Δθ * step / n
+                Vec2(cosφ * rx * cos(θ) - sinφ * ry * sin(θ) + cx,
+                     sinφ * rx * cos(θ) + cosφ * ry * sin(θ) + cy)
+            end for step in 1:n]
+end
+
 function _svg_path_points(raw::AbstractString, segments::Int)
     tokens = _svg_lex(raw, _SVG_PATH_TOKEN_RE, "SVG path data")
     paths = SVGPath[]
@@ -1592,6 +1654,21 @@ function _svg_path_points(raw::AbstractString, segments::Int)
                 current = stop
                 last_cubic_control = c2
             end
+            last_quadratic_control = nothing
+        elseif upper == 'A'
+            while next_is_number()
+                rx = read_number(cmd)
+                ry = read_number(cmd)
+                rotation = read_number(cmd)
+                large_arc = _svg_arc_flag(read_number(cmd), "large-arc")
+                sweep = _svg_arc_flag(read_number(cmd), "sweep")
+                stop = read_point(relative, cmd)
+                append!(active, _svg_arc_points(current, rx, ry, rotation,
+                                                large_arc, sweep, stop,
+                                                segments))
+                current = stop
+            end
+            last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'Z'
             finish!(true)

@@ -777,10 +777,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add a native basic SVG loader surface via `SVGDocument`, `SVGPath`,
   `load_svg`, `SVGLoader`, `svg_shapes`, and `svg_geometry`, covering standalone
   `path`, `rect`, `circle`, `ellipse`, `polygon`, and `polyline` elements, plus
-  `M`/`L`/`H`/`V`/`Q`/`T`/`C`/`S`/`Z` path commands with relative variants and
-  curve subdivision into `Vec2` loops/merged geometry. Arc commands, transforms,
-  nested groups, styles, fills/holes, strokes, clipping, and DOM-level SVG
-  parsing remain open.
+  `M`/`L`/`H`/`V`/`Q`/`T`/`C`/`S`/`A`/`Z` path commands with relative variants
+  and curve/elliptical-arc subdivision into `Vec2` loops/merged geometry. SVG
+  transforms, nested groups, styles, fills/holes, strokes, clipping, and
+  DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

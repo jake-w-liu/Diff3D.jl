@@ -5282,6 +5282,28 @@ end
         @test smooth_svg.paths[1].points[end] == Vec2(8.0, 1.0)
         rm(smooth_path)
 
+        arc_path = tempname() * ".svg"
+        write(arc_path, """
+        <svg>
+          <path d="M 0 0 A 1 1 0 0 1 2 0"/>
+          <path d="M 1 0 A 1 1 0 1 1 0 1"/>
+          <path d="M 0 0 a 0 1 0 0 1 2 0"/>
+        </svg>
+        """)
+        arc_svg = load_svg(arc_path; curve_segments=2)
+        @test length(arc_svg.paths) == 3
+        @test length(arc_svg.paths[1].points) == 5
+        @test arc_svg.paths[1].points[1] == Vec2(0.0, 0.0)
+        @test arc_svg.paths[1].points[end].x ≈ 2.0
+        @test arc_svg.paths[1].points[end].y ≈ 0.0 atol=1e-12
+        @test arc_svg.paths[1].points[3].x ≈ 1.0 atol=1e-12
+        @test abs(arc_svg.paths[1].points[3].y) ≈ 1.0 atol=1e-12
+        @test length(arc_svg.paths[2].points) == 7
+        @test arc_svg.paths[2].points[end].x ≈ 0.0 atol=1e-12
+        @test arc_svg.paths[2].points[end].y ≈ 1.0
+        @test arc_svg.paths[3].points == [Vec2(0.0, 0.0), Vec2(2.0, 0.0)]
+        rm(arc_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
@@ -5311,10 +5333,10 @@ end
         @test_throws "x/y pairs" load_svg(bad_points_path)
         rm(bad_points_path)
 
-        bad_arc_path = tempname() * ".svg"
-        write(bad_arc_path, "<svg><path d=\"M 0 0 A 1 1 0 0 1 2 2\"/></svg>")
-        @test_throws "unsupported SVG path command" load_svg(bad_arc_path)
-        rm(bad_arc_path)
+        bad_arc_flag_path = tempname() * ".svg"
+        write(bad_arc_flag_path, "<svg><path d=\"M 0 0 A 1 1 0 2 1 2 2\"/></svg>")
+        @test_throws "arc large-arc flag" load_svg(bad_arc_flag_path)
+        rm(bad_arc_flag_path)
 
         bad_segments_path = tempname() * ".svg"
         write(bad_segments_path, "<svg><circle r=\"1\"/></svg>")
