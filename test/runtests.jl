@@ -5200,8 +5200,24 @@ end
         @test text_shapes[1][1] == Vec2(0.0, 0.0)
         @test text_shapes[2][1] == Vec2(1.2, 0.0)
 
+        text_geo = TextGeometry(font, "AB"; curve_segments=4)
+        @test text_geo.n_vertices == 13
+        @test text_geo.n_faces == 9
+        @test get_vertex(text_geo, 5).x == 1.2
+        @test isempty(text_geo.groups)
+        @test TextGeometry("A", font; size=2.0).n_faces == 2
+
+        extruded_text = TextGeometry(font, "A"; depth=0.25)
+        @test extruded_text.n_faces == 12
+        text_box = compute_bounding_box(extruded_text)
+        @test text_box.min.z == 0.0
+        @test text_box.max.z == 0.25
+        @test TextGeometry(font, "Z").n_vertices == 0
+
         @test_throws "font has no glyph" font_glyph_shapes(font, "Z")
         @test_throws ArgumentError font_glyph_shapes(font, "A"; curve_segments=0)
+        @test_throws ArgumentError font_glyph_shapes(font, "A"; size=Inf)
+        @test_throws ArgumentError TextGeometry(font, "A"; depth=-0.1)
         rm(font_path)
 
         missing_path = tempname() * ".typeface.json"

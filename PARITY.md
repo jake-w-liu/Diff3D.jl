@@ -206,7 +206,7 @@ replacement for three.js `WebGLRenderer`.
   sampling parity.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
   KTX2Loader, EXR loaders, PMREM/UltraHDR environment-map infrastructure,
-  SVGLoader, full text layout/font-geometry parity, compressed/browser
+  SVGLoader, advanced text layout/font-geometry parity, compressed/browser
   AudioLoader parity, and other three.js examples infrastructure.
 - Full controls/event parity such as remaining OrbitControls browser/touch
   details, TransformControls, DragControls, PointerLockControls,
@@ -759,7 +759,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: expose native JPEG/JPG texture loading via `load_jpeg`, add
   byte-signature `load_image` dispatch for PNG and JPEG, and route
   `TextureLoader` through the shared PNG/JPEG path while preserving RGBE/HDR as
-  the explicit `RGBELoader` path. EXR, KTX2/Basis, SVG, full text geometry,
+  the explicit `RGBELoader` path. EXR, KTX2/Basis, SVG, advanced text geometry,
   audio, and broader loader ecosystem parity remain open.
 - Done: add a native WAV-backed audio loader surface via `AudioBufferData`,
   `load_wav`, `load_audio`, and `AudioLoader`, covering RIFF/WAVE PCM and
@@ -769,8 +769,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add a typeface JSON font loader via `FontData`, `FontGlyph`,
   `FontCommand`, `load_font`, and `FontLoader`, plus `font_glyph_shapes` and
   `font_text_shapes` outline flattening for `m`/`l`/`q`/`b` commands into
-  `Vec2` loops consumable by `ShapeGeometry`. Full three.js `TextGeometry`,
-  glyph holes, kerning, beveling, and browser font rendering remain open.
+  `Vec2` loops consumable by `ShapeGeometry`. `TextGeometry` now builds flat or
+  depth-extruded geometry from those simple glyph loops. Glyph holes, kerning,
+  beveling, and browser font rendering remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

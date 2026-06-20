@@ -1186,6 +1186,20 @@ function _font_push_scaled!(shape::Vector{Vec2{Float64}}, p::Vec2, scale::Float6
     push!(shape, Vec2(offset_x + p.x * scale, p.y * scale))
 end
 
+function _font_scale(font::FontData, size::Real)
+    scale = Float64(size) / font.resolution
+    isfinite(scale) && scale >= 0.0 ||
+        throw(ArgumentError("font size must be finite and non-negative"))
+    return scale
+end
+
+function _font_curve_segments(curve_segments::Integer)
+    curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
+    curve_segments <= typemax(Int) ||
+        throw(ArgumentError("curve_segments is too large"))
+    return Int(curve_segments)
+end
+
 """
     font_glyph_shapes(font, char; size=1.0, curve_segments=8, offset_x=0.0)
 
@@ -1198,9 +1212,10 @@ function font_glyph_shapes(font::FontData, char::AbstractString;
                            size::Real=1.0, curve_segments::Integer=8,
                            offset_x::Real=0.0)
     haskey(font.glyphs, String(char)) || error("font has no glyph for $(repr(String(char)))")
-    curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
-    scale = Float64(size) / font.resolution
+    segments = _font_curve_segments(curve_segments)
+    scale = _font_scale(font, size)
     xoff = Float64(offset_x)
+    isfinite(xoff) || throw(ArgumentError("offset_x must be finite"))
     glyph = font.glyphs[String(char)]
     shapes = Vector{Vec2{Float64}}[]
     current = Vec2(0.0, 0.0)
@@ -1217,16 +1232,16 @@ function font_glyph_shapes(font::FontData, char::AbstractString;
         elseif cmd.kind === :quadratic
             start = current
             control, stop = cmd.points
-            for step in 1:Int(curve_segments)
-                p = _font_quadratic(start, control, stop, step / Float64(curve_segments))
+            for step in 1:segments
+                p = _font_quadratic(start, control, stop, step / Float64(segments))
                 _font_push_scaled!(active, p, scale, xoff)
             end
             current = stop
         elseif cmd.kind === :bezier
             start = current
             c1, c2, stop = cmd.points
-            for step in 1:Int(curve_segments)
-                p = _font_bezier(start, c1, c2, stop, step / Float64(curve_segments))
+            for step in 1:segments
+                p = _font_bezier(start, c1, c2, stop, step / Float64(segments))
                 _font_push_scaled!(active, p, scale, xoff)
             end
             current = stop
@@ -1248,19 +1263,48 @@ function font_text_shapes(font::FontData, text::AbstractString;
                           size::Real=1.0, curve_segments::Integer=8)
     shapes = Vector{Vec2{Float64}}[]
     cursor = 0.0
-    scale = Float64(size) / font.resolution
+    segments = _font_curve_segments(curve_segments)
+    scale = _font_scale(font, size)
     for ch in text
         key = string(ch)
         glyph = get(font.glyphs, key, nothing)
         if glyph !== nothing
             append!(shapes, font_glyph_shapes(font, key; size=size,
-                                              curve_segments=curve_segments,
+                                              curve_segments=segments,
                                               offset_x=cursor))
             cursor += glyph.advance_width * scale
         end
     end
     return shapes
 end
+
+"""
+    TextGeometry(font, text; size=1.0, curve_segments=8, depth=0.0)
+
+Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
+Simple glyph loops are fan-triangulated through `ShapeGeometry`; when `depth` is
+positive each loop is routed through `ExtrudeGeometry`.
+"""
+function TextGeometry(font::FontData, text::AbstractString;
+                      size::Real=1.0, curve_segments::Integer=8,
+                      depth::Real=0.0)
+    zdepth = Float64(depth)
+    isfinite(zdepth) && zdepth >= 0.0 ||
+        throw(ArgumentError("depth must be finite and non-negative"))
+    geos = BufferGeometry[]
+    for shape in font_text_shapes(font, text; size=size,
+                                  curve_segments=curve_segments)
+        length(shape) >= 3 || continue
+        push!(geos, zdepth == 0.0 ? ShapeGeometry(shape) :
+                                      ExtrudeGeometry(shape; depth=zdepth))
+    end
+    isempty(geos) && return BufferGeometry()
+    return merge_geometries(geos; with_groups=false)
+end
+
+"""Alias accepting text first, matching three.js constructor order."""
+TextGeometry(text::AbstractString, font::FontData; kwargs...) =
+    TextGeometry(font, text; kwargs...)
 
 # ========================== base64 ==========================
 
