@@ -111,6 +111,42 @@ def smoke_html(path: Path) -> int:
                 [x, y],
             )
             page.wait_for_timeout(350)
+            before_native_touch = page.evaluate(
+                "() => ({dist: window.__diff3dDebug.orbitDistance(), target: window.__diff3dDebug.targetOffset()})"
+            )
+            page.evaluate(
+                """([x, y]) => {
+                    const c = document.querySelector('canvas');
+                    const touch = (id, cx, cy) => ({identifier: id, clientX: cx, clientY: cy});
+                    const fire = (type, touches, changedTouches) => {
+                        const ev = new Event(type, {bubbles: true, cancelable: true});
+                        ev.__diff3dForceTouchFallback = true;
+                        Object.defineProperty(ev, 'touches', {value: touches});
+                        Object.defineProperty(ev, 'targetTouches', {value: touches});
+                        Object.defineProperty(ev, 'changedTouches', {value: changedTouches});
+                        c.dispatchEvent(ev);
+                    };
+                    const a0 = touch(41, x - 70, y - 35), b0 = touch(42, x + 70, y + 35);
+                    const a1 = touch(41, x - 120, y - 70), b1 = touch(42, x + 130, y + 80);
+                    fire('touchstart', [a0, b0], [a0, b0]);
+                    fire('touchmove', [a1, b1], [a1, b1]);
+                    fire('touchend', [], [a1, b1]);
+                }""",
+                [x, y],
+            )
+            page.wait_for_timeout(350)
+            after_native_touch = page.evaluate(
+                "() => ({dist: window.__diff3dDebug.orbitDistance(), target: window.__diff3dDebug.targetOffset()})"
+            )
+            touch_pan_delta = sum(
+                (a - b) ** 2
+                for a, b in zip(after_native_touch["target"], before_native_touch["target"])
+            ) ** 0.5
+            if (
+                abs(after_native_touch["dist"] - before_native_touch["dist"]) < 1e-5
+                and touch_pan_delta < 1e-5
+            ):
+                errors.append(f"{path}: native touch fallback did not update orbit state in case {i}")
             draw_counts = page.evaluate(
                 """() => {
                     const views = window.__diff3dDebug.activeViewCount ? window.__diff3dDebug.activeViewCount() : 1;

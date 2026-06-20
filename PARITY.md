@@ -209,17 +209,18 @@ replacement for three.js `WebGLRenderer`.
   advanced SVG path/style parity, advanced text layout/font-geometry parity,
   compressed/browser AudioLoader parity, and other three.js examples
   infrastructure.
-- Full controls/event parity such as remaining OrbitControls browser/touch
+- Full controls/event parity such as remaining OrbitControls browser
   details, TransformControls, DragControls, PointerLockControls,
-  TrackballControls, keyboard/mouse/touch event interoperability, and DOM
-  integration. CPU `OrbitControls` now includes constraint, damping, save-state,
-  and reset behavior, and CPU `PointerLockControls` includes pointer speed,
-  zero-distance look fallback, and polar-angle limits. CPU `TransformControls`
-  now supports mode selection plus world/local translation space, CPU
-  `TrackballControls` covers programmatic rotate/pan/zoom/save/reset, and CPU
-  `DragControls` covers direct, recursive, transform-group, and raycast
-  selection. Browser DOM/gizmo/event parity is still intentionally tracked as
-  incomplete.
+  TrackballControls, keyboard/mouse event interoperability, and DOM integration.
+  CPU `OrbitControls` now includes constraint, damping, save-state, and reset
+  behavior, and CPU `PointerLockControls` includes pointer speed, zero-distance
+  look fallback, and polar-angle limits. CPU `TransformControls` now supports
+  mode selection plus world/local translation space, CPU `TrackballControls`
+  covers programmatic rotate/pan/zoom/save/reset, and CPU `DragControls` covers
+  direct, recursive, transform-group, and raycast picking through the existing
+  CPU raycaster. Browser exported orbit controls now handle pointer-event touch
+  and native `touch*` fallback orbit/pinch/pan gestures, while broader browser
+  DOM/gizmo/event parity is still intentionally tracked as incomplete.
 - Complete examples parity with the official three.js examples site.
   Individual examples should be ported only after the underlying features have
   tests and browser verification.
@@ -951,13 +952,16 @@ Parallel audits split the remaining work into five critical tracks:
   pan, zoom, save-state, reset, and enabled/no-op behavior; drag controls now
   support direct managed-object selection, recursive child selection,
   single-group transform selection, and NDC raycast picking through the existing
-  CPU raycaster. Browser DOM/touch/gizmo event semantics remain open.
+  CPU raycaster. Browser exported orbit controls now handle pointer-event touch
+  and native `touch*` fallback orbit/pinch/pan gestures in generated WebGL
+  output. Browser DOM/gizmo event semantics remain open.
 - Done: add `examples/browser_webgl_smoke.py`, a reusable Playwright browser
   smoke that opens generated HTML, switches cases, simulates pointer drag and
   wheel zoom, exercises keyboard pan/zoom, verifies middle-button dolly and
   ctrl-left target panning through runtime state, forces an underside orbit
-  view, exercises synthetic two-pointer pinch input, checks that every exported
-  object remains drawn, and checks that the WebGL canvas stays drawable.
+  view, exercises synthetic two-pointer pinch input plus native `touch*`
+  fallback gestures, checks that every exported object remains drawn, and checks
+  that the WebGL canvas stays drawable.
 
 ### Milestone 5: Official examples parity
 

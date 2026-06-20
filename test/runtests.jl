@@ -3104,6 +3104,12 @@ end
         @test occursin("pinchMode=true", html)
         @test occursin("pinchDist/nd", html)
         @test occursin("try{ canvas.setPointerCapture", html)
+        @test occursin("function touchStart(e)", html)
+        @test occursin("touchFallbackEnabled", html)
+        @test occursin("touchstart", html)
+        @test occursin("touchmove", html)
+        @test occursin("touchcancel", html)
+        @test occursin("__diff3dForceTouchFallback", html)
         pcamera = PerspectiveCamera(fov=0.7, aspect=1.25, near=0.3, far=77.0,
                                     zoom=1.4)
         pcamera.position = Vec3(1.0, 2.0, 9.0)
