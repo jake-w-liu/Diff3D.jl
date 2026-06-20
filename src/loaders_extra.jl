@@ -4209,6 +4209,7 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_sheen",
     "KHR_materials_iridescence",
     "KHR_materials_specular",
+    "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_dispersion",
     "KHR_materials_anisotropy",
     "EXT_mesh_gpu_instancing",
@@ -4412,15 +4413,50 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                   map=base_color_texture,
                                   alpha_test=alpha_test)
     end
-    metallic_roughness_texture = _gltf_texture(gltf, buffers, dir,
-                                               get(pbr, "metallicRoughnessTexture", nothing);
-                                               colorspace=:linear)
     normal_info = get(m, "normalTexture", nothing)
     normal_scale = normal_info isa AbstractDict ? Float64(get(normal_info, "scale", 1.0)) : 1.0
     occ = get(m, "occlusionTexture", nothing)
     emissive_strength = Float64(get(get(extensions, "KHR_materials_emissive_strength",
                                         Dict{String,Any}()), "emissiveStrength", 1.0))
     ao_strength = occ isa AbstractDict ? Float64(get(occ, "strength", 1.0)) : 1.0
+    if haskey(extensions, "KHR_materials_pbrSpecularGlossiness")
+        specgloss_ext = get(extensions, "KHR_materials_pbrSpecularGlossiness", Dict{String,Any}())
+        diffuse = get(specgloss_ext, "diffuseFactor", [1.0, 1.0, 1.0, 1.0])
+        specular = get(specgloss_ext, "specularFactor", [1.0, 1.0, 1.0])
+        glossiness = Float64(get(specgloss_ext, "glossinessFactor", 1.0))
+        diffuse_texture = _gltf_texture(gltf, buffers, dir,
+                                        get(specgloss_ext, "diffuseTexture", nothing);
+                                        colorspace=:srgb)
+        specgloss_texture = _gltf_texture(gltf, buffers, dir,
+                                          get(specgloss_ext, "specularGlossinessTexture", nothing);
+                                          colorspace=:srgb)
+        specgloss_opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ?
+                            Float64(diffuse[4]) : 1.0
+        return MeshPhongMaterial(color=Color3(diffuse[1], diffuse[2], diffuse[3]),
+                                 specular=Color3(specular[1], specular[2], specular[3]),
+                                 emissive=Color3(emissive[1], emissive[2], emissive[3]),
+                                 shininess=_phong_shininess_from_glossiness(glossiness),
+                                 glossiness=glossiness,
+                                 opacity=specgloss_opacity,
+                                 transparent=transparent,
+                                 alpha_test=alpha_test,
+                                 side=side,
+                                 map=diffuse_texture,
+                                 specular_map=specgloss_texture,
+                                 glossiness_map=specgloss_texture,
+                                 normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
+                                                          colorspace=:linear),
+                                 normal_scale=normal_scale,
+                                 ao_map=_gltf_texture(gltf, buffers, dir, occ;
+                                                      colorspace=:linear),
+                                 emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
+                                                            colorspace=:srgb),
+                                 emissive_intensity=emissive_strength,
+                                 ao_map_intensity=ao_strength)
+    end
+    metallic_roughness_texture = _gltf_texture(gltf, buffers, dir,
+                                               get(pbr, "metallicRoughnessTexture", nothing);
+                                               colorspace=:linear)
     physical_extension_keys = ("KHR_materials_clearcoat",
                                "KHR_materials_transmission",
                                "KHR_materials_ior",
@@ -4581,6 +4617,23 @@ function _gltf_enable_vertex_colors(m::MeshBasicMaterial)
     MeshBasicMaterial(color=m.color, opacity=m.opacity, transparent=m.transparent,
                       wireframe=m.wireframe, side=m.side, map=m.map, alpha_map=m.alpha_map,
                       vertex_colors=true, alpha_test=m.alpha_test,
+                      depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _gltf_enable_vertex_colors(m::MeshPhongMaterial)
+    MeshPhongMaterial(color=m.color, specular=m.specular, emissive=m.emissive,
+                      shininess=m.shininess, glossiness=m.glossiness,
+                      opacity=m.opacity, transparent=m.transparent,
+                      wireframe=m.wireframe, side=m.side, map=m.map,
+                      specular_map=m.specular_map,
+                      glossiness_map=m.glossiness_map,
+                      normal_map=m.normal_map, normal_scale=m.normal_scale,
+                      alpha_map=m.alpha_map, ao_map=m.ao_map,
+                      emissive_map=m.emissive_map, light_map=m.light_map,
+                      vertex_colors=true, alpha_test=m.alpha_test,
+                      clipping_planes=m.clipping_planes,
+                      emissive_intensity=m.emissive_intensity,
+                      ao_map_intensity=m.ao_map_intensity,
+                      light_map_intensity=m.light_map_intensity,
                       depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _gltf_enable_vertex_colors(m::MeshStandardMaterial)

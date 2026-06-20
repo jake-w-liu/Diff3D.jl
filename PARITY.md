@@ -55,6 +55,8 @@ replacement for three.js `WebGLRenderer`.
   browser paths with per-sampler transform uniforms, including mesh, point,
   and sprite texture sampling,
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, occlusion strength,
+  `KHR_materials_pbrSpecularGlossiness` diffuse/specular/glossiness factors
+  and packed specular-glossiness texture mapped into `MeshPhongMaterial`,
   scalar `KHR_materials_clearcoat`, `KHR_materials_transmission`,
   `KHR_materials_ior`, `KHR_materials_sheen`, and
   `KHR_materials_iridescence` fields and texture references plus
@@ -117,7 +119,10 @@ replacement for three.js `WebGLRenderer`.
   physical-material extensions now map to `MeshPhysicalMaterial` fields,
   including texture references for clearcoat, clearcoat normals, transmission,
   sheen, iridescence, specular, and inherited PBR maps, plus the scalar
-  `KHR_materials_dispersion` field. PNG glTF images, including palette/`tRNS`
+  `KHR_materials_dispersion` field. The legacy glTF
+  `KHR_materials_pbrSpecularGlossiness` extension now maps diffuse, specular,
+  glossiness, and packed specular-glossiness textures to `MeshPhongMaterial`
+  CPU and compact-browser paths. PNG glTF images, including palette/`tRNS`
   payloads and Adam7 interlaced grayscale, grayscale+alpha, RGB, and RGBA PNGs,
   load from URI, data URI, and bufferView sources with
   MIME/extension routing, and external buffer/image URI paths are resolved with
@@ -302,8 +307,9 @@ Parallel audits split the remaining work into five critical tracks:
   `normalScale` animation binding with the compact browser material paths.
   Browser export now recognizes `MeshLambertMaterial` and `MeshPhongMaterial`
   as explicit compact material modes; Lambert suppresses specular terms, and
-  Phong serializes `specular` plus `shininess` into the browser shader. Exact
-  three.js ShaderLib Lambert/Phong shader chunks remain open.
+  Phong serializes `specular`, `shininess`, `glossiness`, and packed
+  specular/glossiness textures into the browser shader. Exact three.js
+  ShaderLib Lambert/Phong shader chunks remain open.
   Browser export now carries per-vertex color attributes and scalar plus mapped
   `MeshPhysicalMaterial` clearcoat,
   transmission, IOR, dispersion, sheen, iridescence, specular, and anisotropy controls into
@@ -610,8 +616,8 @@ Parallel audits split the remaining work into five critical tracks:
   parsing, CPU transmission attenuation, green-channel thickness texture
   modulation, and compact browser attenuation.
 - Done: add compact browser `MeshLambertMaterial` and `MeshPhongMaterial`
-  support with material-mode branches plus Phong `specular`/`shininess`
-  serialization.
+  support with material-mode branches plus Phong `specular`, `shininess`,
+  `glossiness`, and packed specular/glossiness texture serialization.
 - Done: add `MeshPhongMaterial.wireframe` parity through the same CPU and
   compact browser wireframe paths as Basic/Lambert materials, while preserving
   legacy constructor defaults.
@@ -733,6 +739,14 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add glTF material texture loading and common PBR texture binding
   (`baseColorTexture`, `metallicRoughnessTexture` as roughness and metalness
   maps, `normalTexture`, `occlusionTexture`, and `emissiveTexture`).
+- Done: support glTF `KHR_materials_pbrSpecularGlossiness` as a required
+  extension by mapping diffuse/specular/glossiness factors to
+  `MeshPhongMaterial`, loading `diffuseTexture` and packed
+  `specularGlossinessTexture` as shared `specular_map`/`glossiness_map`,
+  applying RGB specular and alpha glossiness in CPU flat/smooth shading,
+  preserving vertex-color modulation, and exporting packed glossiness to the
+  compact browser Phong shader. Exact glTF spec-gloss BRDF parity remains part
+  of broader material-renderer parity.
 - Done: preserve `KHR_materials_clearcoat.clearcoatNormalTexture` with its
   normal scale and preserve the ratified `KHR_materials_dispersion.dispersion`
   scalar on `MeshPhysicalMaterial`. Browser export now serializes clearcoat
@@ -820,6 +834,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: parse basic glTF material extensions/properties:
   `KHR_materials_unlit`, `KHR_materials_emissive_strength`, and
   `occlusionTexture.strength`.
+- Done: parse glTF `KHR_materials_pbrSpecularGlossiness` into
+  `MeshPhongMaterial` diffuse/specular/glossiness state and compact
+  specular-glossiness texture sampling.
 - Done: parse scalar physical glTF material extensions into existing
   `MeshPhysicalMaterial` fields: `KHR_materials_clearcoat`,
   `KHR_materials_transmission`, `KHR_materials_ior`, `KHR_materials_sheen`,

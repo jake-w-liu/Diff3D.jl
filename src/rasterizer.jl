@@ -255,7 +255,8 @@ end
         s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
         s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
         material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
-        albedo_map, alpha_map, normal_map, roughness_map, metalness_map, physical_pbr_map, ao_map, emissive_map, light_map,
+        albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
+        specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true)
@@ -272,12 +273,15 @@ end
     has_normalmap = normal_map !== nothing
     has_roughness = roughness_map !== nothing
     has_metalness = metalness_map !== nothing
+    has_specular = specular_map !== nothing
+    has_glossiness = glossiness_map !== nothing
     has_physical_pbr = physical_pbr_map !== nothing
     has_ao = ao_map !== nothing
     has_emissive = emissive_map !== nothing
     has_lightmap = light_map !== nothing
-    has_uv_maps = has_albedo || has_alpha_map || has_normalmap || has_roughness || has_metalness || has_physical_pbr ||
-                  has_ao || has_emissive || has_lightmap
+    has_uv_maps = has_albedo || has_alpha_map || has_normalmap || has_roughness ||
+                  has_metalness || has_specular || has_glossiness ||
+                  has_physical_pbr || has_ao || has_emissive || has_lightmap
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
@@ -326,7 +330,10 @@ end
                                            normal_uvs[1], normal_uvs[2], normal_uvs[3],
                                            normal_scale)
                 end
-                if has_roughness || has_metalness || has_physical_pbr
+                if has_specular || has_glossiness
+                    eff_mat = _apply_phong_maps(material, specular_map, glossiness_map,
+                                                u, v, u2, v2)
+                elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2)
                 else
                     eff_mat = material
@@ -419,6 +426,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         normal_scale = _material_scalar(mat, :normal_scale, 1.0)
         roughness_map = has_uvs ? _material_field(mat, :roughness_map) : nothing
         metalness_map = has_uvs ? _material_field(mat, :metalness_map) : nothing
+        specular_map = has_uvs ? _material_field(mat, :specular_map) : nothing
+        glossiness_map = has_uvs ? _material_field(mat, :glossiness_map) : nothing
         physical_pbr_map = has_uvs ? _physical_pbr_map(mat) : nothing
         alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
         ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
@@ -482,7 +491,9 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                     sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
                     sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
                     sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
-                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map, normal_map, roughness_map, metalness_map, physical_pbr_map,
+                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map,
+                    normal_map, roughness_map, metalness_map, specular_map,
+                    glossiness_map, physical_pbr_map,
                     ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write)

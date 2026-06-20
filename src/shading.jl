@@ -267,8 +267,12 @@ end
 function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
     MeshPhongMaterial(color=_modulate(m.color, vc), specular=m.specular,
                       emissive=m.emissive, shininess=m.shininess,
+                      glossiness=m.glossiness,
                       opacity=m.opacity, transparent=m.transparent,
-                      wireframe=m.wireframe, side=m.side, map=m.map, alpha_map=m.alpha_map,
+                      wireframe=m.wireframe, side=m.side, map=m.map,
+                      specular_map=m.specular_map,
+                      glossiness_map=m.glossiness_map,
+                      alpha_map=m.alpha_map,
                       normal_map=m.normal_map, normal_scale=m.normal_scale,
                       ao_map=m.ao_map, emissive_map=m.emissive_map, light_map=m.light_map,
                       vertex_colors=m.vertex_colors,
@@ -293,6 +297,47 @@ function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
                          env_map_intensity=m.env_map_intensity,
                          depth_test=m.depth_test, depth_write=m.depth_write,
                          clipping_planes=m.clipping_planes)
+end
+
+function _phong_with_maps(m::MeshPhongMaterial, specular::Color3, glossiness)
+    g = clamp(Float64(glossiness), 0.0, 1.0)
+    MeshPhongMaterial(color=m.color, specular=specular, emissive=m.emissive,
+                      shininess=_phong_shininess_from_glossiness(g),
+                      glossiness=g, opacity=m.opacity,
+                      transparent=m.transparent, wireframe=m.wireframe,
+                      side=m.side, map=m.map, specular_map=m.specular_map,
+                      glossiness_map=m.glossiness_map, normal_map=m.normal_map,
+                      normal_scale=m.normal_scale, alpha_map=m.alpha_map,
+                      ao_map=m.ao_map, emissive_map=m.emissive_map,
+                      light_map=m.light_map, vertex_colors=m.vertex_colors,
+                      alpha_test=m.alpha_test,
+                      clipping_planes=m.clipping_planes,
+                      emissive_intensity=m.emissive_intensity,
+                      ao_map_intensity=m.ao_map_intensity,
+                      light_map_intensity=m.light_map_intensity,
+                      depth_test=m.depth_test, depth_write=m.depth_write)
+end
+
+function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u, v)
+    specular = specular_map === nothing ? m.specular : begin
+        s = sample_texture_linear(specular_map, u, v)
+        Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
+    end
+    glossiness = glossiness_map === nothing ? m.glossiness :
+                 m.glossiness * sample_texture_channel(glossiness_map, u, v, 4)
+    return _phong_with_maps(m, specular, glossiness)
+end
+
+function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u, v, u2, v2)
+    su, sv = specular_map === nothing ? (u, v) : _map_uv(specular_map, u, v, u2, v2)
+    gu, gv = glossiness_map === nothing ? (u, v) : _map_uv(glossiness_map, u, v, u2, v2)
+    specular = specular_map === nothing ? m.specular : begin
+        s = sample_texture_linear(specular_map, su, sv)
+        Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
+    end
+    glossiness = glossiness_map === nothing ? m.glossiness :
+                 m.glossiness * sample_texture_channel(glossiness_map, gu, gv, 4)
+    return _phong_with_maps(m, specular, glossiness)
 end
 function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
     MeshPhysicalMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
@@ -596,10 +641,13 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
     normal_scale = _material_scalar(material, :normal_scale, 1.0)
     roughness_map = _material_field(material, :roughness_map)
     metalness_map = _material_field(material, :metalness_map)
+    specular_map = _material_field(material, :specular_map)
+    glossiness_map = _material_field(material, :glossiness_map)
     physical_pbr_map = _physical_pbr_map(material)
     light_map = _material_field(material, :light_map)
     use_maps = has_uvs && (albedo_map !== nothing || ao_map !== nothing || emissive_map !== nothing ||
                            normal_map !== nothing || roughness_map !== nothing || metalness_map !== nothing ||
+                           specular_map !== nothing || glossiness_map !== nothing ||
                            physical_pbr_map !== nothing || light_map !== nothing)
     uv2_attr = _uv2_attribute(geo)
 
@@ -646,7 +694,9 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                            normal_uvs[1], normal_uvs[2], normal_uvs[3],
                                            normal_scale)
             end
-            if roughness_map !== nothing || metalness_map !== nothing || physical_pbr_map !== nothing
+            if specular_map !== nothing || glossiness_map !== nothing
+                eff_mat = _apply_phong_maps(material, specular_map, glossiness_map, u, v, u2, v2uv)
+            elseif roughness_map !== nothing || metalness_map !== nothing || physical_pbr_map !== nothing
                 eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2uv)
             end
         end

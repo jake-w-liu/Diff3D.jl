@@ -1276,13 +1276,21 @@ end
                                      name="export_lambert_material")
         lambert_material_mesh.position = Vec3(4.5, 1.25, 0.0)
         add!(scene, lambert_material_mesh)
+        specgloss_data = ones(Float64, 2, 2, 4)
+        specgloss_data[1, 1, :] .= (0.25, 0.5, 0.75, 0.4)
+        specgloss_data[1, 2, :] .= (0.5, 0.75, 1.0, 0.6)
+        specgloss_data[2, 1, :] .= (0.75, 1.0, 0.5, 0.8)
+        specgloss_data[2, 2, :] .= (1.0, 0.5, 0.25, 1.0)
+        specgloss_tex = Texture(specgloss_data; filter=:nearest, colorspace=:srgb)
         phong_material_mesh = Mesh(SphereGeometry(radius=0.35, width_segments=16, height_segments=8),
                                    MeshPhongMaterial(color=Color3(0.42, 0.7, 1.0),
                                                      specular=Color3(1.0, 0.92, 0.72),
                                                      emissive=Color3(0.03, 0.04, 0.05),
                                                      emissive_map=emissive_fixture,
                                                      emissive_intensity=1.45,
-                                                     shininess=72.0);
+                                                     glossiness=0.65,
+                                                     specular_map=specgloss_tex,
+                                                     glossiness_map=specgloss_tex);
                                    name="export_phong_material")
         phong_material_mesh.position = Vec3(5.4, 1.25, 0.0)
         add!(scene, phong_material_mesh)
@@ -2238,7 +2246,7 @@ end
         @test occursin("uMaterialMode==6", html)
         @test occursin("\"name\":\"export_phong_material\"", html)
         @test occursin("\"materialType\":\"phong\"", html)
-        @test occursin("\"shininess\":72", html)
+        @test occursin("glossinessFromShininess", html)
         @test occursin(r"\"name\":\"export_phong_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.45", html)
         @test occursin("\"name\":\"export_phong_local_clipping\"", html)
         @test occursin(r"\"name\":\"export_phong_local_clipping\".*\"materialType\":\"phong\".*\"clippingPlanes\":\[\[0,-1,0,0\.20000000000000001\]\]", html)
@@ -2250,7 +2258,13 @@ end
         @test occursin("\"property\":\"specularColor\",\"component\":2", html)
         @test occursin("uMaterialMode==7", html)
         @test occursin("uShininess", html)
+        @test occursin("uGlossiness", html)
+        @test occursin("uUseGlossinessMap", html)
+        @test occursin("phongShininess", html)
         @test occursin("o.materialType===\"phong\"?7", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"specularColorTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"glossiness\":0\.65", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"glossinessPacked\":true", html)
         @test occursin(r"\"name\":\"export_toon_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.25", html)
         @test occursin("\"name\":\"export_alpha_map\"", html)
         @test occursin("\"name\":\"export_basic_alpha_map\"", html)
@@ -4377,8 +4391,15 @@ end
         @test MeshPhongMaterial(wireframe=true).wireframe === true
         @test MeshPhongMaterial(normal_map=alpha_tex).normal_map === alpha_tex
         @test MeshPhongMaterial(normal_scale=0.45).normal_scale ≈ 0.45
+        @test MeshPhongMaterial(specular_map=alpha_tex).specular_map === alpha_tex
+        @test MeshPhongMaterial(glossiness_map=alpha_tex).glossiness_map === alpha_tex
+        @test MeshPhongMaterial(glossiness=0.4).shininess ≈
+              Diff3D._phong_shininess_from_glossiness(0.4)
+        @test MeshPhongMaterial(shininess=64.0).glossiness ≈
+              Diff3D._phong_glossiness_from_shininess(64.0)
         phong_vc = Diff3D._with_vertex_color(
             MeshPhongMaterial(color=Color3(0.8, 0.6, 0.4),
+                              specular_map=alpha_tex, glossiness_map=alpha_tex,
                               normal_map=alpha_tex, normal_scale=0.25,
                               ao_map=alpha_tex, ao_map_intensity=0.45,
                               light_map_intensity=0.55,
@@ -4390,6 +4411,8 @@ end
         @test phong_vc.color.b ≈ 0.1
         @test phong_vc.normal_map === alpha_tex
         @test phong_vc.normal_scale ≈ 0.25
+        @test phong_vc.specular_map === alpha_tex
+        @test phong_vc.glossiness_map === alpha_tex
         @test phong_vc.ao_map === alpha_tex
         @test phong_vc.ao_map_intensity ≈ 0.45
         @test phong_vc.light_map_intensity ≈ 0.55
@@ -4480,6 +4503,9 @@ end
         @test legacy_phong.ao_map === nothing
         @test legacy_phong.ao_map_intensity == 1.0
         @test legacy_phong.light_map_intensity == 1.0
+        @test legacy_phong.specular_map === nothing
+        @test legacy_phong.glossiness_map === nothing
+        @test legacy_phong.glossiness ≈ Diff3D._phong_glossiness_from_shininess(30.0)
         legacy_phong_alpha = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                Color3(0,0,0), 30.0, 1.0, false,
                                                :front, nothing, alpha_tex, nothing,
@@ -4507,6 +4533,8 @@ end
         @test legacy_phong_full.ao_map === nothing
         @test legacy_phong_full.ao_map_intensity == 1.0
         @test legacy_phong_full.light_map_intensity == 1.0
+        @test legacy_phong_full.specular_map === nothing
+        @test legacy_phong_full.glossiness_map === nothing
         legacy_phong_wire_full = MeshPhongMaterial(Color3(1,1,1), Color3(0,0,0),
                                                    Color3(0,0,0), 30.0, 1.0, false,
                                                    true, :front, nothing, nothing, alpha_tex,
@@ -7700,6 +7728,72 @@ end
                 @test vc.anisotropy ≈ mat.anisotropy
                 @test vc.anisotropy_rotation ≈ mat.anisotropy_rotation
                 @test vc.anisotropy_map === mat.anisotropy_map
+            end
+
+            let dir = mktempdir()
+                diffuse_path = joinpath(dir, "diffuse.png")
+                specgloss_path = joinpath(dir, "specgloss.png")
+                diffuse_rgba = ones(Float64, 1, 1, 4)
+                diffuse_rgba[1, 1, :] .= (0.8, 0.6, 0.4, 0.5)
+                specgloss_rgba = ones(Float64, 1, 1, 4)
+                specgloss_rgba[1, 1, :] .= (0.25, 0.5, 0.75, 0.4)
+                save_png_rgba(diffuse_path, diffuse_rgba)
+                save_png_rgba(specgloss_path, specgloss_rgba)
+                gltf = Dict{String,Any}(
+                    "extensionsRequired"=>Any["KHR_materials_pbrSpecularGlossiness"],
+                    "images"=>Any[
+                        Dict{String,Any}("uri"=>"diffuse.png"),
+                        Dict{String,Any}("uri"=>"specgloss.png")],
+                    "textures"=>Any[
+                        Dict{String,Any}("source"=>0.0),
+                        Dict{String,Any}("source"=>1.0)],
+                    "materials"=>Any[Dict{String,Any}(
+                        "alphaMode"=>"BLEND",
+                        "doubleSided"=>true,
+                        "emissiveFactor"=>Any[0.05, 0.1, 0.15],
+                        "pbrMetallicRoughness"=>Dict{String,Any}(
+                            "baseColorFactor"=>Any[0.1, 0.2, 0.3, 0.25],
+                            "metallicFactor"=>1.0,
+                            "roughnessFactor"=>0.0),
+                        "extensions"=>Dict{String,Any}(
+                            "KHR_materials_emissive_strength"=>Dict{String,Any}(
+                                "emissiveStrength"=>1.75),
+                            "KHR_materials_pbrSpecularGlossiness"=>Dict{String,Any}(
+                                "diffuseFactor"=>Any[0.2, 0.3, 0.4, 0.6],
+                                "diffuseTexture"=>Dict{String,Any}("index"=>0.0),
+                                "specularFactor"=>Any[0.7, 0.8, 0.9],
+                                "glossinessFactor"=>0.75,
+                                "specularGlossinessTexture"=>Dict{String,Any}(
+                                    "index"=>1.0, "texCoord"=>1.0))))])
+                Diff3D._gltf_check_required_extensions(gltf)
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat isa MeshPhongMaterial
+                @test mat.color == Color3(0.2, 0.3, 0.4)
+                @test mat.specular == Color3(0.7, 0.8, 0.9)
+                @test mat.emissive == Color3(0.05, 0.1, 0.15)
+                @test mat.opacity ≈ 0.6 && mat.transparent && mat.side === :double
+                @test mat.glossiness ≈ 0.75
+                @test mat.shininess ≈ Diff3D._phong_shininess_from_glossiness(0.75)
+                @test mat.map isa Texture && mat.map.colorspace === :srgb
+                @test size(mat.map.data) == (1, 1, 4)
+                @test mat.map.data[1, 1, 4] ≈ 0.5 atol=1 / 255
+                @test mat.specular_map isa Texture && mat.specular_map.colorspace === :srgb
+                @test mat.glossiness_map === mat.specular_map
+                @test mat.specular_map.tex_coord == 1
+                @test mat.specular_map.data[1, 1, 4] ≈ 0.4 atol=1 / 255
+                @test mat.emissive_intensity ≈ 1.75
+                vc = Diff3D._gltf_enable_vertex_colors(mat)
+                @test vc.vertex_colors
+                @test vc.specular_map === mat.specular_map
+                @test vc.glossiness_map === mat.glossiness_map
+
+                mapped = Diff3D._apply_phong_maps(mat, mat.specular_map,
+                                                   mat.glossiness_map, 0.5, 0.5)
+                @test mapped.specular.r ≈ mat.specular.r * srgb_to_linear(0.25) atol=1 / 255
+                @test mapped.specular.g ≈ mat.specular.g * srgb_to_linear(0.5) atol=1 / 255
+                @test mapped.specular.b ≈ mat.specular.b * srgb_to_linear(0.75) atol=1 / 255
+                @test mapped.glossiness ≈ 0.75 * 0.4 atol=1 / 255
+                @test mapped.shininess ≈ Diff3D._phong_shininess_from_glossiness(mapped.glossiness)
             end
         end
 
