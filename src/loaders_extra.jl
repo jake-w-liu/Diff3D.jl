@@ -1458,8 +1458,13 @@ function _svg_path_points(raw::AbstractString, segments::Int)
     current = Vec2(0.0, 0.0)
     start = Vec2(0.0, 0.0)
     active = Vec2{Float64}[]
+    last_cubic_control = nothing
+    last_quadratic_control = nothing
 
     next_is_number() = i <= length(tokens) && !_svg_is_command(tokens[i])
+
+    reflect_control(control::Vec2{Float64}) =
+        Vec2(2.0 * current.x - control.x, 2.0 * current.y - control.y)
 
     function read_number(context)
         i <= length(tokens) || error("SVG path command $context is missing numbers")
@@ -1500,28 +1505,38 @@ function _svg_path_points(raw::AbstractString, segments::Int)
             current = p
             start = p
             active = [p]
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
             cmd = relative ? 'l' : 'L'
             while next_is_number()
                 current = read_point(relative, cmd)
                 push!(active, current)
             end
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
         elseif upper == 'L'
             while next_is_number()
                 current = read_point(relative, cmd)
                 push!(active, current)
             end
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
         elseif upper == 'H'
             while next_is_number()
                 x = read_number(cmd)
                 current = Vec2(relative ? current.x + x : x, current.y)
                 push!(active, current)
             end
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
         elseif upper == 'V'
             while next_is_number()
                 y = read_number(cmd)
                 current = Vec2(current.x, relative ? current.y + y : y)
                 push!(active, current)
             end
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
         elseif upper == 'Q'
             while next_is_number()
                 control = read_point(relative, cmd)
@@ -1532,7 +1547,23 @@ function _svg_path_points(raw::AbstractString, segments::Int)
                                                   step / Float64(segments)))
                 end
                 current = stop
+                last_quadratic_control = control
             end
+            last_cubic_control = nothing
+        elseif upper == 'T'
+            while next_is_number()
+                control = last_quadratic_control === nothing ? current :
+                          reflect_control(last_quadratic_control)
+                stop = read_point(relative, cmd)
+                origin = current
+                for step in 1:segments
+                    push!(active, _font_quadratic(origin, control, stop,
+                                                  step / Float64(segments)))
+                end
+                current = stop
+                last_quadratic_control = control
+            end
+            last_cubic_control = nothing
         elseif upper == 'C'
             while next_is_number()
                 c1 = read_point(relative, cmd)
@@ -1544,10 +1575,29 @@ function _svg_path_points(raw::AbstractString, segments::Int)
                                                step / Float64(segments)))
                 end
                 current = stop
+                last_cubic_control = c2
             end
+            last_quadratic_control = nothing
+        elseif upper == 'S'
+            while next_is_number()
+                c1 = last_cubic_control === nothing ? current :
+                     reflect_control(last_cubic_control)
+                c2 = read_point(relative, cmd)
+                stop = read_point(relative, cmd)
+                origin = current
+                for step in 1:segments
+                    push!(active, _font_bezier(origin, c1, c2, stop,
+                                               step / Float64(segments)))
+                end
+                current = stop
+                last_cubic_control = c2
+            end
+            last_quadratic_control = nothing
         elseif upper == 'Z'
             finish!(true)
             current = start
+            last_cubic_control = nothing
+            last_quadratic_control = nothing
         else
             error("unsupported SVG path command $cmd")
         end

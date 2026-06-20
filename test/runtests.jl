@@ -5268,6 +5268,20 @@ end
         @test length(svg.paths[5].points) == 5
         @test svg.paths[5].points[end] == Vec2(6.0, 1.0)
 
+        smooth_path = tempname() * ".svg"
+        write(smooth_path, """
+        <svg>
+          <path d="M 0 0 C 1 0 1 1 2 1 S 3 2 4 1 Q 5 0 6 1 T 8 1 z"/>
+        </svg>
+        """)
+        smooth_svg = load_svg(smooth_path; curve_segments=2)
+        @test length(smooth_svg.paths) == 1
+        @test smooth_svg.paths[1].closed
+        @test length(smooth_svg.paths[1].points) == 9
+        @test smooth_svg.paths[1].points[5] == Vec2(4.0, 1.0)
+        @test smooth_svg.paths[1].points[end] == Vec2(8.0, 1.0)
+        rm(smooth_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
