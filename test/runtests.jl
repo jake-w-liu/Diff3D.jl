@@ -232,6 +232,7 @@ end
             "threejs_webgl_materials_variations_toon",
             "threejs_webgl_materials_variations_lambert",
             "threejs_webgl_materials_variations_phong",
+            "threejs_webgl_materials_variations_standard",
             "threejs_webgl_materials_matcap",
             "threejs_webgl_materials_physical_clearcoat",
             "threejs_webgl_materials_texture_rotation",
@@ -420,6 +421,17 @@ end
                     "SpotLight(color=Color3",
                 ],
                 prerequisites=["MeshPhongMaterial", "browser phong-material shader branch"],
+            ),
+            "threejs_webgl_materials_variations_standard" => (
+                source=[
+                    "function studio_environment(; width::Int=64, height::Int=32)",
+                    "equirectangular_to_cubemap(tex; size=16, generate_mipmaps=true)",
+                    "MeshStandardMaterial(color=color",
+                    "metalness=metalness, roughness=roughness",
+                    "envmap=env_map, env_map_intensity=0.85",
+                    "WebGLExportCase(\"materials-variations-standard\"",
+                ],
+                prerequisites=["MeshStandardMaterial", "equirectangular_to_cubemap", "browser environment-map export"],
             ),
             "threejs_webgl_materials_matcap" => (
                 source=[

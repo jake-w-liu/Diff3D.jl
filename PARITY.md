@@ -1064,6 +1064,13 @@ Parallel audits split the remaining work into five critical tracks:
   orbit interaction, texture-map coverage, and the compact browser Lambert and
   Phong material branches. Exact three.js ShaderLib internals and upstream
   object layouts remain documented deviations.
+- Added a standalone partial port for `webgl_materials_variations_standard` via
+  `examples/webgl_materials_variations_standard.jl`, using Diff3D.jl
+  `MeshStandardMaterial` roughness/metalness variants, a generated
+  equirectangular environment converted to `CubeTexture`, and browser
+  environment-map export. Exact three.js ShaderLib standard-material BRDF,
+  PMREM environment lighting, upstream assets, and `WebGLRenderer` internals
+  remain documented deviations.
 - Added a standalone partial port for `webgl_materials_physical_clearcoat` via
   `examples/webgl_materials_physical_clearcoat.jl`, using Diff3D.jl
   `MeshPhysicalMaterial`, scalar clearcoat controls, generated clearcoat and

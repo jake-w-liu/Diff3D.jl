@@ -189,6 +189,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_materials_variations_phong.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_materials_variations_phong.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_materials_variations_standard"
+upstream_url = "https://threejs.org/examples/#webgl_materials_variations_standard"
+local_script = "examples/webgl_materials_variations_standard.jl"
+status = "partial"
+prerequisites = ["MeshStandardMaterial", "metalness/roughness material fields", "equirectangular_to_cubemap", "browser environment-map export", "orbit interaction"]
+known_deviations = [
+  "Uses deterministic generated roughness/metalness spheres and a generated cubemap instead of the exact upstream assets and environment",
+  "Uses Diff3D.jl's compact StandardMaterial approximation rather than full three.js ShaderLib standard BRDF, PMREM environment lighting, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_materials_variations_standard.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_materials_variations_standard.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_materials_matcap"
 upstream_url = "https://threejs.org/examples/#webgl_materials_matcap"
 local_script = "examples/webgl_materials_matcap.jl"
