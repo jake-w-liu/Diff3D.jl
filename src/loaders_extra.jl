@@ -1339,6 +1339,7 @@ end
 
 struct _SVGStyleRule
     chain::Vector{_SVGSimpleSelector}
+    combinators::Vector{Symbol}
     declarations::Dict{String,String}
     specificity::Int
     order::Int
@@ -1476,7 +1477,7 @@ function _svg_unsupported_selector_syntax(raw::String)
         elseif ch == ']'
             bracket_depth == 0 && return true
             bracket_depth -= 1
-        elseif bracket_depth == 0 && (ch == '>' || ch == '+' || ch == '~' || ch == ':')
+        elseif bracket_depth == 0 && (ch == '+' || ch == '~' || ch == ':')
             return true
         end
     end
@@ -1485,9 +1486,24 @@ end
 
 function _svg_selector_parts(raw::String)
     parts = String[]
+    combinators = Symbol[]
     buf = IOBuffer()
     bracket_depth = 0
     active_quote = nothing
+
+    function push_part!(part::String)
+        isempty(part) && return true
+        if isempty(parts)
+            isempty(combinators) || return false
+        elseif length(combinators) == length(parts) - 1
+            push!(combinators, :descendant)
+        elseif length(combinators) != length(parts)
+            return false
+        end
+        push!(parts, part)
+        return true
+    end
+
     for ch in raw
         if active_quote !== nothing
             print(buf, ch)
@@ -1502,18 +1518,26 @@ function _svg_selector_parts(raw::String)
             bracket_depth == 0 && return nothing
             bracket_depth -= 1
             print(buf, ch)
+        elseif ch == '>' && bracket_depth == 0
+            part = String(strip(String(take!(buf))))
+            push_part!(part) || return nothing
+            isempty(parts) && return nothing
+            length(combinators) == length(parts) && return nothing
+            push!(combinators, :child)
         elseif isspace(ch) && bracket_depth == 0
-            part = String(take!(buf))
-            !isempty(strip(part)) && push!(parts, String(strip(part)))
+            part = String(strip(String(take!(buf))))
+            push_part!(part) || return nothing
         else
             print(buf, ch)
         end
     end
     active_quote === nothing || return nothing
     bracket_depth == 0 || return nothing
-    part = String(take!(buf))
-    !isempty(strip(part)) && push!(parts, String(strip(part)))
-    return parts
+    part = String(strip(String(take!(buf))))
+    push_part!(part) || return nothing
+    isempty(parts) && return nothing
+    length(combinators) == length(parts) - 1 || return nothing
+    return parts, combinators
 end
 
 function _svg_selector_bracket_close(rest::String)
@@ -1588,15 +1612,16 @@ function _svg_selector_chain(selector::AbstractString)
     isempty(raw) && return nothing
     _svg_unsupported_selector_syntax(raw) && return nothing
     chain = _SVGSimpleSelector[]
-    parts = _svg_selector_parts(raw)
-    parts === nothing && return nothing
+    parsed_parts = _svg_selector_parts(raw)
+    parsed_parts === nothing && return nothing
+    parts, combinators = parsed_parts
     for part in parts
         parsed = _svg_simple_selector(part)
         parsed === nothing && return nothing
         push!(chain, parsed)
     end
     isempty(chain) && return nothing
-    return chain
+    return chain, combinators
 end
 
 function _svg_css_rules(raw::AbstractString)
@@ -1613,11 +1638,12 @@ function _svg_css_rules(raw::AbstractString)
                                 if k in _SVG_STYLE_KEYS)
             isempty(declarations) && continue
             for selector in split(block.captures[1], ',')
-                chain = _svg_selector_chain(selector)
-                chain === nothing && continue
+                parsed = _svg_selector_chain(selector)
+                parsed === nothing && continue
+                chain, combinators = parsed
                 specificity = sum(sel.specificity for sel in chain)
                 order += 1
-                push!(rules, _SVGStyleRule(chain, declarations,
+                push!(rules, _SVGStyleRule(chain, combinators, declarations,
                                            specificity, order))
             end
         end
@@ -1674,18 +1700,30 @@ function _svg_rule_matches(rule::_SVGStyleRule, tag::String,
                            attrs::AbstractDict, ancestors::_SVGAncestorStack)
     _svg_simple_selector_matches(rule.chain[end], tag, attrs) || return false
     idx = length(ancestors)
-    for selector in Iterators.reverse(rule.chain[1:end-1])
-        found = false
-        while idx >= 1
+    for selector_idx in (length(rule.chain) - 1):-1:1
+        selector = rule.chain[selector_idx]
+        combinator = rule.combinators[selector_idx]
+        if combinator === :child
+            idx >= 1 || return false
             ancestor_tag, ancestor_attrs = ancestors[idx]
-            if _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs)
-                found = true
-                idx -= 1
-                break
-            end
+            _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs) ||
+                return false
             idx -= 1
+        elseif combinator === :descendant
+            found = false
+            while idx >= 1
+                ancestor_tag, ancestor_attrs = ancestors[idx]
+                if _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs)
+                    found = true
+                    idx -= 1
+                    break
+                end
+                idx -= 1
+            end
+            found || return false
+        else
+            return false
         end
-        found || return false
     end
     return true
 end
