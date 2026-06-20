@@ -238,6 +238,7 @@ export
     AudioBufferData, audio_duration, load_wav, load_audio, AudioLoader,
     FontCommand, FontGlyph, FontData, load_font, FontLoader,
     font_glyph_shapes, font_text_shapes,
+    SVGPath, SVGDocument, load_svg, SVGLoader, svg_shapes, svg_geometry,
     load_mtl, load_obj_groups, base64_decode, load_gltf,
     GLTFAsset, load_gltf_asset, parse_xyz, load_xyz,
 

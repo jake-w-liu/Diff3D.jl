@@ -1306,6 +1306,321 @@ end
 TextGeometry(text::AbstractString, font::FontData; kwargs...) =
     TextGeometry(font, text; kwargs...)
 
+# ========================== SVGLoader / basic SVG shapes ==========================
+
+"""One parsed SVG primitive or path subpath."""
+struct SVGPath
+    tag::Symbol
+    points::Vector{Vec2{Float64}}
+    closed::Bool
+end
+
+"""Decoded SVG document with common primitives converted to point paths."""
+struct SVGDocument
+    width::Float64
+    height::Float64
+    paths::Vector{SVGPath}
+end
+
+const _SVG_NUMBER_RE =
+    r"[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?"
+const _SVG_PATH_TOKEN_RE =
+    r"[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?"
+const _SVG_ATTR_RE =
+    r"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')"
+const _SVG_PATH_COMMANDS = Set("AaCcHhLlMmQqSsTtVvZz")
+
+_svg_is_command(token::AbstractString) =
+    ncodeunits(token) == 1 && token[1] in _SVG_PATH_COMMANDS
+
+function _svg_lex(raw::AbstractString, re::Regex, context::AbstractString)
+    s = String(raw)
+    tokens = String[]
+    pos = firstindex(s)
+    for m in eachmatch(re, s)
+        if pos < m.offset
+            gap = SubString(s, pos, prevind(s, m.offset))
+            occursin(r"[^\s,]", gap) &&
+                error("$context contains unsupported syntax near $(repr(String(gap)))")
+        end
+        push!(tokens, m.match)
+        pos = nextind(s, m.offset, length(m.match))
+    end
+    if pos <= lastindex(s)
+        gap = SubString(s, pos, lastindex(s))
+        occursin(r"[^\s,]", gap) &&
+            error("$context contains unsupported syntax near $(repr(String(gap)))")
+    end
+    return tokens
+end
+
+function _svg_unescape_attr(value::AbstractString)
+    return replace(String(value),
+                   "&quot;" => "\"",
+                   "&apos;" => "'",
+                   "&lt;" => "<",
+                   "&gt;" => ">",
+                   "&amp;" => "&")
+end
+
+function _svg_attrs(raw::AbstractString)
+    attrs = Dict{String,String}()
+    for m in eachmatch(_SVG_ATTR_RE, raw)
+        value = m.captures[2] === nothing ? m.captures[3] : m.captures[2]
+        attrs[lowercase(m.captures[1])] = _svg_unescape_attr(value)
+    end
+    return attrs
+end
+
+function _svg_numbers(raw::AbstractString)
+    values = Float64[]
+    for token in _svg_lex(raw, _SVG_NUMBER_RE, "SVG numeric list")
+        v = parse(Float64, token)
+        isfinite(v) || error("SVG numeric value must be finite")
+        push!(values, v)
+    end
+    return values
+end
+
+function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
+    raw = get(attrs, key, nothing)
+    raw === nothing && return Float64(default)
+    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px)?\s*$",
+              raw)
+    m === nothing && error("unsupported SVG length for $key")
+    v = parse(Float64, m.captures[1])
+    isfinite(v) || error("SVG length for $key must be finite")
+    return v
+end
+
+function _svg_root_size(root_attrs::AbstractDict)
+    view_box = get(root_attrs, "viewbox", nothing)
+    view_numbers = view_box === nothing ? Float64[] : _svg_numbers(view_box)
+    (!isempty(view_numbers) && length(view_numbers) != 4) &&
+        error("SVG viewBox must contain four numbers")
+    width = haskey(root_attrs, "width") ? _svg_length(root_attrs, "width") :
+            (length(view_numbers) == 4 ? view_numbers[3] : 0.0)
+    height = haskey(root_attrs, "height") ? _svg_length(root_attrs, "height") :
+             (length(view_numbers) == 4 ? view_numbers[4] : 0.0)
+    return width, height
+end
+
+function _svg_curve_segments(curve_segments::Integer)
+    curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
+    curve_segments <= typemax(Int) ||
+        throw(ArgumentError("curve_segments is too large"))
+    return Int(curve_segments)
+end
+
+function _svg_circle_segments(circle_segments::Integer)
+    circle_segments >= 3 || throw(ArgumentError("circle_segments must be at least 3"))
+    circle_segments <= typemax(Int) ||
+        throw(ArgumentError("circle_segments is too large"))
+    return Int(circle_segments)
+end
+
+function _svg_points(raw::AbstractString)
+    values = _svg_numbers(raw)
+    iseven(length(values)) || error("SVG points attribute must contain x/y pairs")
+    points = Vec2{Float64}[]
+    for i in 1:2:length(values)
+        push!(points, Vec2(values[i], values[i + 1]))
+    end
+    return points
+end
+
+function _svg_rect(attrs::AbstractDict)
+    x = _svg_length(attrs, "x", 0.0)
+    y = _svg_length(attrs, "y", 0.0)
+    w = _svg_length(attrs, "width", 0.0)
+    h = _svg_length(attrs, "height", 0.0)
+    w < 0.0 && error("SVG rect width must be non-negative")
+    h < 0.0 && error("SVG rect height must be non-negative")
+    (w == 0.0 || h == 0.0) && return nothing
+    return SVGPath(:rect, [Vec2(x, y), Vec2(x + w, y),
+                           Vec2(x + w, y + h), Vec2(x, y + h)], true)
+end
+
+function _svg_ellipse_points(cx::Float64, cy::Float64, rx::Float64, ry::Float64,
+                             segments::Int)
+    rx < 0.0 && error("SVG radius must be non-negative")
+    ry < 0.0 && error("SVG radius must be non-negative")
+    (rx == 0.0 || ry == 0.0) && return Vec2{Float64}[]
+    return [Vec2(cx + rx * cos(2π * i / segments),
+                 cy + ry * sin(2π * i / segments)) for i in 0:segments-1]
+end
+
+function _svg_path_points(raw::AbstractString, segments::Int)
+    tokens = _svg_lex(raw, _SVG_PATH_TOKEN_RE, "SVG path data")
+    paths = SVGPath[]
+    i = 1
+    cmd = '\0'
+    current = Vec2(0.0, 0.0)
+    start = Vec2(0.0, 0.0)
+    active = Vec2{Float64}[]
+
+    next_is_number() = i <= length(tokens) && !_svg_is_command(tokens[i])
+
+    function read_number(context)
+        i <= length(tokens) || error("SVG path command $context is missing numbers")
+        _svg_is_command(tokens[i]) &&
+            error("SVG path command $context is missing numbers")
+        v = parse(Float64, tokens[i])
+        isfinite(v) || error("SVG path number must be finite")
+        i += 1
+        return v
+    end
+
+    function read_point(relative::Bool, context)
+        p = Vec2(read_number(context), read_number(context))
+        return relative ? current + p : p
+    end
+
+    function finish!(closed::Bool)
+        if !isempty(active)
+            closed && length(active) > 1 && active[end] == active[1] && pop!(active)
+            length(active) >= 2 && push!(paths, SVGPath(:path, active, closed))
+            active = Vec2{Float64}[]
+        end
+    end
+
+    while i <= length(tokens)
+        if _svg_is_command(tokens[i])
+            cmd = tokens[i][1]
+            i += 1
+        elseif cmd == '\0'
+            error("SVG path data must start with a command")
+        end
+        upper = uppercase(cmd)
+        relative = islowercase(cmd)
+
+        if upper == 'M'
+            p = read_point(relative, cmd)
+            finish!(false)
+            current = p
+            start = p
+            active = [p]
+            cmd = relative ? 'l' : 'L'
+            while next_is_number()
+                current = read_point(relative, cmd)
+                push!(active, current)
+            end
+        elseif upper == 'L'
+            while next_is_number()
+                current = read_point(relative, cmd)
+                push!(active, current)
+            end
+        elseif upper == 'H'
+            while next_is_number()
+                x = read_number(cmd)
+                current = Vec2(relative ? current.x + x : x, current.y)
+                push!(active, current)
+            end
+        elseif upper == 'V'
+            while next_is_number()
+                y = read_number(cmd)
+                current = Vec2(current.x, relative ? current.y + y : y)
+                push!(active, current)
+            end
+        elseif upper == 'Q'
+            while next_is_number()
+                control = read_point(relative, cmd)
+                stop = read_point(relative, cmd)
+                origin = current
+                for step in 1:segments
+                    push!(active, _font_quadratic(origin, control, stop,
+                                                  step / Float64(segments)))
+                end
+                current = stop
+            end
+        elseif upper == 'C'
+            while next_is_number()
+                c1 = read_point(relative, cmd)
+                c2 = read_point(relative, cmd)
+                stop = read_point(relative, cmd)
+                origin = current
+                for step in 1:segments
+                    push!(active, _font_bezier(origin, c1, c2, stop,
+                                               step / Float64(segments)))
+                end
+                current = stop
+            end
+        elseif upper == 'Z'
+            finish!(true)
+            current = start
+        else
+            error("unsupported SVG path command $cmd")
+        end
+    end
+    finish!(false)
+    return paths
+end
+
+function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
+                    circle_segments::Integer=32)
+    segments = _svg_curve_segments(curve_segments)
+    circle_n = _svg_circle_segments(circle_segments)
+    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
+    root === nothing && error("SVG document is missing <svg> root")
+    width, height = _svg_root_size(_svg_attrs(root.captures[1]))
+    paths = SVGPath[]
+
+    for m in eachmatch(r"(?is)<\s*(path|rect|circle|ellipse|polygon|polyline)\b([^>]*)/?>",
+                       raw)
+        tag = lowercase(m.captures[1])
+        attrs = _svg_attrs(m.captures[2])
+        if tag == "path"
+            d = get(attrs, "d", nothing)
+            d === nothing && continue
+            append!(paths, _svg_path_points(d, segments))
+        elseif tag == "rect"
+            rect = _svg_rect(attrs)
+            rect !== nothing && push!(paths, rect)
+        elseif tag == "circle"
+            cx = _svg_length(attrs, "cx", 0.0)
+            cy = _svg_length(attrs, "cy", 0.0)
+            r = _svg_length(attrs, "r", 0.0)
+            points = _svg_ellipse_points(cx, cy, r, r, circle_n)
+            !isempty(points) && push!(paths, SVGPath(:circle, points, true))
+        elseif tag == "ellipse"
+            cx = _svg_length(attrs, "cx", 0.0)
+            cy = _svg_length(attrs, "cy", 0.0)
+            rx = _svg_length(attrs, "rx", 0.0)
+            ry = _svg_length(attrs, "ry", 0.0)
+            points = _svg_ellipse_points(cx, cy, rx, ry, circle_n)
+            !isempty(points) && push!(paths, SVGPath(:ellipse, points, true))
+        elseif tag == "polygon" || tag == "polyline"
+            points_raw = get(attrs, "points", "")
+            points = _svg_points(points_raw)
+            length(points) >= 2 &&
+                push!(paths, SVGPath(Symbol(tag), points, tag == "polygon"))
+        end
+    end
+
+    return SVGDocument(width, height, paths)
+end
+
+"""Load common SVG path and primitive geometry into an `SVGDocument`."""
+load_svg(path::String; kwargs...) = _svg_parse(read(path, String); kwargs...)
+
+"""Alias for [`load_svg`](@ref), matching three.js `SVGLoader` naming."""
+SVGLoader(path::String; kwargs...) = load_svg(path; kwargs...)
+
+"""Return closed SVG point loops that can be consumed by `ShapeGeometry`."""
+svg_shapes(svg::SVGDocument) =
+    [copy(path.points) for path in svg.paths if path.closed && length(path.points) >= 3]
+
+svg_shapes(path::String; kwargs...) = svg_shapes(load_svg(path; kwargs...))
+
+"""Triangulate closed SVG loops into a merged `BufferGeometry`."""
+function svg_geometry(svg::SVGDocument)
+    geos = [ShapeGeometry(shape) for shape in svg_shapes(svg)]
+    isempty(geos) && return BufferGeometry()
+    return merge_geometries(geos; with_groups=false)
+end
+
+svg_geometry(path::String; kwargs...) = svg_geometry(load_svg(path; kwargs...))
+
 # ========================== base64 ==========================
 
 const _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

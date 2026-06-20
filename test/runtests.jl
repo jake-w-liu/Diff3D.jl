@@ -5238,6 +5238,76 @@ end
         rm(bad_command_path)
     end
 
+    @testset "SVGLoader basic shapes" begin
+        svg_path = tempname() * ".svg"
+        write(svg_path, """
+        <svg width="20" height="10" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="2" width="4" height="3"/>
+          <polygon points="10,0 14,0 14,4 10,4"/>
+          <polyline points="0,0 1,1 2,0"/>
+          <path d="M 0 0 h 2 v 2 H 0 z m 3 0 c 1 0 1 2 2 2 q 1 0 1 -1"/>
+          <circle cx="5" cy="5" r="1"/>
+        </svg>
+        """)
+
+        svg = load_svg(svg_path; curve_segments=2, circle_segments=8)
+        @test svg isa SVGDocument
+        @test SVGLoader(svg_path; curve_segments=2, circle_segments=8).width == 20
+        @test svg.width == 20
+        @test svg.height == 10
+        @test length(svg.paths) == 6
+        @test svg.paths[1] isa SVGPath
+        @test svg.paths[1].tag == :rect
+        @test svg.paths[1].points == [Vec2(1.0, 2.0), Vec2(5.0, 2.0),
+                                      Vec2(5.0, 5.0), Vec2(1.0, 5.0)]
+        @test !svg.paths[3].closed
+        @test svg.paths[4].closed
+        @test svg.paths[4].points == [Vec2(0.0, 0.0), Vec2(2.0, 0.0),
+                                      Vec2(2.0, 2.0), Vec2(0.0, 2.0)]
+        @test !svg.paths[5].closed
+        @test length(svg.paths[5].points) == 5
+        @test svg.paths[5].points[end] == Vec2(6.0, 1.0)
+
+        shapes = svg_shapes(svg)
+        @test length(shapes) == 4
+        @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
+        @test length(shapes[end]) == 8
+        geo = svg_geometry(svg)
+        @test geo.n_vertices == 20
+        @test geo.n_faces == 12
+        @test isempty(geo.groups)
+        @test svg_geometry(svg_path; curve_segments=2, circle_segments=8).n_faces == 12
+        rm(svg_path)
+
+        view_path = tempname() * ".svg"
+        write(view_path, """<svg viewBox="0 0 7 9"><ellipse cx="1" cy="2" rx="3" ry="4"/></svg>""")
+        view_svg = load_svg(view_path; circle_segments=4)
+        @test view_svg.width == 7
+        @test view_svg.height == 9
+        @test length(svg_shapes(view_svg)[1]) == 4
+        rm(view_path)
+
+        bad_root_path = tempname() * ".svg"
+        write(bad_root_path, "<path d=\"M 0 0 L 1 1\"/>")
+        @test_throws "missing <svg> root" load_svg(bad_root_path)
+        rm(bad_root_path)
+
+        bad_points_path = tempname() * ".svg"
+        write(bad_points_path, "<svg><polygon points=\"0,0 1\"/></svg>")
+        @test_throws "x/y pairs" load_svg(bad_points_path)
+        rm(bad_points_path)
+
+        bad_arc_path = tempname() * ".svg"
+        write(bad_arc_path, "<svg><path d=\"M 0 0 A 1 1 0 0 1 2 2\"/></svg>")
+        @test_throws "unsupported SVG path command" load_svg(bad_arc_path)
+        rm(bad_arc_path)
+
+        bad_segments_path = tempname() * ".svg"
+        write(bad_segments_path, "<svg><circle r=\"1\"/></svg>")
+        @test_throws ArgumentError load_svg(bad_segments_path; circle_segments=2)
+        rm(bad_segments_path)
+    end
+
     @testset "Radiance RGBE/HDR decode" begin
         function hdr_bytes(width, height, pixel_bytes; ysign="-", xsign="+")
             bytes = Vector{UInt8}(codeunits(
