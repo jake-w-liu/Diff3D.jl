@@ -1333,25 +1333,204 @@ function font_text_shapes(font::FontData, text::AbstractString;
     return shapes
 end
 
+function _font_loop_points(shape::Vector{Vec2{Float64}})
+    points = Vec2{Float64}[]
+    for p in shape
+        if isempty(points) || hypot(points[end].x - p.x, points[end].y - p.y) > 1e-9
+            push!(points, p)
+        end
+    end
+    if length(points) > 1 && hypot(points[1].x - points[end].x,
+                                   points[1].y - points[end].y) <= 1e-9
+        pop!(points)
+    end
+    return points
+end
+
+function _font_polygon_area(shape::Vector{Vec2{Float64}})
+    area = 0.0
+    n = length(shape)
+    for i in 1:n
+        a = shape[i]
+        b = shape[i == n ? 1 : i + 1]
+        area += a.x * b.y - b.x * a.y
+    end
+    return area / 2.0
+end
+
+function _font_line_intersection(p1::Vec2{Float64}, d1, p2::Vec2{Float64}, d2)
+    denom = d1[1] * d2[2] - d1[2] * d2[1]
+    abs(denom) > 1e-12 || return nothing
+    qx = p2.x - p1.x
+    qy = p2.y - p1.y
+    t = (qx * d2[2] - qy * d2[1]) / denom
+    return Vec2(p1.x + d1[1] * t, p1.y + d1[2] * t)
+end
+
+function _font_inward_normal(a::Vec2{Float64}, b::Vec2{Float64}, ccw::Bool)
+    dx = b.x - a.x
+    dy = b.y - a.y
+    len = hypot(dx, dy)
+    len > 0.0 || return (0.0, 0.0)
+    return ccw ? (-dy / len, dx / len) : (dy / len, -dx / len)
+end
+
+function _font_offset_loop(shape::Vector{Vec2{Float64}}, amount::Float64)
+    amount <= 0.0 && return copy(shape)
+    n = length(shape)
+    n >= 3 || return copy(shape)
+    ccw = _font_polygon_area(shape) >= 0.0
+    out = Vec2{Float64}[]
+    for i in 1:n
+        prev = shape[i == 1 ? n : i - 1]
+        p = shape[i]
+        next = shape[i == n ? 1 : i + 1]
+        dprev = (p.x - prev.x, p.y - prev.y)
+        dnext = (next.x - p.x, next.y - p.y)
+        nprev = _font_inward_normal(prev, p, ccw)
+        nnext = _font_inward_normal(p, next, ccw)
+        l1 = Vec2(p.x + nprev[1] * amount, p.y + nprev[2] * amount)
+        l2 = Vec2(p.x + nnext[1] * amount, p.y + nnext[2] * amount)
+        hit = _font_line_intersection(l1, dprev, l2, dnext)
+        if hit === nothing || !isfinite(hit.x) || !isfinite(hit.y)
+            nx = nprev[1] + nnext[1]
+            ny = nprev[2] + nnext[2]
+            len = hypot(nx, ny)
+            hit = len > 0.0 ? Vec2(p.x + nx / len * amount,
+                                   p.y + ny / len * amount) : p
+        end
+        push!(out, hit)
+    end
+    return out
+end
+
+function _font_push_geo_vertex!(positions::Vector{Float64}, normals::Vector{Float64},
+                                uvs::Vector{Float64}, p::Vec2{Float64},
+                                z::Float64, normal::Vec3{Float64})
+    push!(positions, p.x, p.y, z)
+    push!(normals, normal.x, normal.y, normal.z)
+    push!(uvs, p.x, p.y)
+    return length(positions) ÷ 3
+end
+
+function _font_push_side_quad!(positions::Vector{Float64}, normals::Vector{Float64},
+                               uvs::Vector{Float64}, indices::Vector{Int},
+                               a::Vec2{Float64}, b::Vec2{Float64},
+                               c::Vec2{Float64}, d::Vec2{Float64},
+                               za::Float64, zb::Float64)
+    ux = b.x - a.x
+    uy = b.y - a.y
+    vx = d.x - a.x
+    vy = d.y - a.y
+    vz = zb - za
+    normal = normalize(Vec3(uy * vz, -ux * vz, ux * vy - uy * vx))
+    i1 = _font_push_geo_vertex!(positions, normals, uvs, a, za, normal)
+    i2 = _font_push_geo_vertex!(positions, normals, uvs, b, za, normal)
+    i3 = _font_push_geo_vertex!(positions, normals, uvs, c, zb, normal)
+    i4 = _font_push_geo_vertex!(positions, normals, uvs, d, zb, normal)
+    push!(indices, i1, i2, i3, i1, i3, i4)
+end
+
+function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
+                                        depth::Float64,
+                                        bevel_size::Float64,
+                                        bevel_thickness::Float64,
+                                        bevel_segments::Int)
+    base = _font_loop_points(shape)
+    length(base) >= 3 || return BufferGeometry()
+    depth > 0.0 || return ShapeGeometry(shape)
+    actual_thickness = min(bevel_thickness, depth / 2.0)
+    if bevel_size <= 0.0 || actual_thickness <= 0.0
+        return ExtrudeGeometry(shape; depth=depth)
+    end
+    rings = Vector{Vec2{Float64}}[]
+    zs = Float64[]
+    for step in 0:bevel_segments
+        t = step / Float64(bevel_segments)
+        push!(rings, _font_offset_loop(base, bevel_size * t))
+        push!(zs, actual_thickness * t)
+    end
+    if depth > 2actual_thickness + 1e-9
+        push!(rings, _font_offset_loop(base, bevel_size))
+        push!(zs, depth - actual_thickness)
+    end
+    for step in (bevel_segments - 1):-1:0
+        t = step / Float64(bevel_segments)
+        push!(rings, _font_offset_loop(base, bevel_size * t))
+        push!(zs, depth - actual_thickness * t)
+    end
+
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    bottom = Int[]
+    top = Int[]
+    for p in rings[1]
+        push!(bottom, _font_push_geo_vertex!(positions, normals, uvs, p, zs[1],
+                                             Vec3(0.0, 0.0, -1.0)))
+    end
+    for p in rings[end]
+        push!(top, _font_push_geo_vertex!(positions, normals, uvs, p, zs[end],
+                                          Vec3(0.0, 0.0, 1.0)))
+    end
+    n = length(base)
+    for k in 2:n-1
+        push!(indices, bottom[1], bottom[k + 1], bottom[k])
+        push!(indices, top[1], top[k], top[k + 1])
+    end
+    for ri in 1:(length(rings) - 1)
+        lo = rings[ri]
+        hi = rings[ri + 1]
+        for i in 1:n
+            j = i == n ? 1 : i + 1
+            _font_push_side_quad!(positions, normals, uvs, indices,
+                                  lo[i], lo[j], hi[j], hi[i], zs[ri],
+                                  zs[ri + 1])
+        end
+    end
+    return BufferGeometry(positions, normals, uvs, indices,
+                          length(positions) ÷ 3, length(indices) ÷ 3)
+end
+
 """
-    TextGeometry(font, text; size=1.0, curve_segments=8, depth=0.0)
+    TextGeometry(font, text; size=1.0, curve_segments=8, depth=0.0,
+                 bevel_enabled=false, bevel_size=0.0,
+                 bevel_thickness=bevel_size, bevel_segments=1)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
 Simple glyph loops are fan-triangulated through `ShapeGeometry`; when `depth` is
-positive each loop is routed through `ExtrudeGeometry`.
+positive each loop is routed through `ExtrudeGeometry`. With beveling enabled,
+simple closed loops are offset into bevel rings and extruded with chamfered side
+bands.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
-                      depth::Real=0.0)
+                      depth::Real=0.0, bevel_enabled::Bool=false,
+                      bevel_size::Real=0.0,
+                      bevel_thickness::Real=bevel_size,
+                      bevel_segments::Integer=1)
     zdepth = Float64(depth)
     isfinite(zdepth) && zdepth >= 0.0 ||
         throw(ArgumentError("depth must be finite and non-negative"))
+    bsize = Float64(bevel_size)
+    isfinite(bsize) && bsize >= 0.0 ||
+        throw(ArgumentError("bevel_size must be finite and non-negative"))
+    bthick = Float64(bevel_thickness)
+    isfinite(bthick) && bthick >= 0.0 ||
+        throw(ArgumentError("bevel_thickness must be finite and non-negative"))
+    bsegs = bevel_enabled ? _font_curve_segments(bevel_segments) : 1
     geos = BufferGeometry[]
     for shape in font_text_shapes(font, text; size=size,
                                   curve_segments=curve_segments)
         length(shape) >= 3 || continue
-        push!(geos, zdepth == 0.0 ? ShapeGeometry(shape) :
-                                      ExtrudeGeometry(shape; depth=zdepth))
+        push!(geos, bevel_enabled ?
+                    _font_beveled_extrude_geometry(shape; depth=zdepth,
+                                                   bevel_size=bsize,
+                                                   bevel_thickness=bthick,
+                                                   bevel_segments=bsegs) :
+                    (zdepth == 0.0 ? ShapeGeometry(shape) :
+                                      ExtrudeGeometry(shape; depth=zdepth)))
     end
     isempty(geos) && return BufferGeometry()
     return merge_geometries(geos; with_groups=false)

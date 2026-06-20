@@ -776,8 +776,9 @@ Parallel audits split the remaining work into five critical tracks:
   depth-extruded geometry from those simple glyph loops. Typeface JSON
   `kernings`/`kerning` maps now load into `FontData`, are exposed through
   `font_kerning`, and offset subsequent glyph loops in `font_text_shapes` and
-  `TextGeometry`. Glyph holes, beveling, and browser font rendering remain
-  open.
+  `TextGeometry`. `TextGeometry` now also supports bevel-enabled simple glyph
+  loops with configurable bevel size, thickness, and segment count. Glyph holes
+  and browser font rendering remain open.
 - Done: add a native basic SVG loader surface via `SVGDocument`, `SVGPath`,
   `load_svg`, `SVGLoader`, `svg_shapes`, and `svg_geometry`, covering standalone
   `path`, `rect`, `circle`, `ellipse`, `polygon`, and `polyline` elements, plus

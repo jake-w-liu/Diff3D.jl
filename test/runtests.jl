@@ -5230,12 +5230,30 @@ end
         text_box = compute_bounding_box(extruded_text)
         @test text_box.min.z == 0.0
         @test text_box.max.z == 0.25
+        beveled_text = TextGeometry(font, "A"; depth=0.4, bevel_enabled=true,
+                                    bevel_size=0.1, bevel_thickness=0.05,
+                                    bevel_segments=1)
+        @test beveled_text.n_vertices == 56
+        @test beveled_text.n_faces == 28
+        bevel_box = compute_bounding_box(beveled_text)
+        @test bevel_box.min.x == 0.0
+        @test bevel_box.max.x == 1.0
+        @test bevel_box.min.z == 0.0
+        @test bevel_box.max.z == 0.4
+        smooth_bevel = TextGeometry(font, "A"; depth=0.4, bevel_enabled=true,
+                                    bevel_size=0.1, bevel_thickness=0.05,
+                                    bevel_segments=2)
+        @test smooth_bevel.n_faces == 44
         @test TextGeometry(font, "Z").n_vertices == 0
 
         @test_throws "font has no glyph" font_glyph_shapes(font, "Z")
         @test_throws ArgumentError font_glyph_shapes(font, "A"; curve_segments=0)
         @test_throws ArgumentError font_glyph_shapes(font, "A"; size=Inf)
         @test_throws ArgumentError TextGeometry(font, "A"; depth=-0.1)
+        @test_throws ArgumentError TextGeometry(font, "A"; bevel_enabled=true,
+                                                bevel_size=-0.1)
+        @test_throws ArgumentError TextGeometry(font, "A"; bevel_enabled=true,
+                                                bevel_segments=0)
         rm(font_path)
 
         missing_path = tempname() * ".typeface.json"
