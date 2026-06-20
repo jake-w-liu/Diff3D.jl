@@ -1316,12 +1316,19 @@ struct SVGStyle
     opacity::Float64
     fill_opacity::Float64
     stroke_opacity::Float64
+    stroke_dasharray::Vector{Float64}
+    stroke_dashoffset::Float64
 end
+
+SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity, stroke_opacity) =
+    SVGStyle(fill, stroke, Float64(stroke_width), Float64(opacity),
+             Float64(fill_opacity), Float64(stroke_opacity), Float64[], 0.0)
 
 const _SVG_DEFAULT_STYLE =
     SVGStyle(Color3(0.0, 0.0, 0.0), nothing, 1.0, 1.0, 1.0, 1.0)
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
-                         "fill-opacity", "stroke-opacity")
+                         "fill-opacity", "stroke-opacity", "stroke-dasharray",
+                         "stroke-dashoffset")
 
 struct _SVGAttributeSelector
     key::String
@@ -2120,9 +2127,15 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
     stroke_opacity = haskey(local_attrs, "stroke-opacity") ?
                      _svg_unit_interval(local_attrs["stroke-opacity"], "stroke-opacity") :
                      parent.stroke_opacity
+    dasharray = haskey(local_attrs, "stroke-dasharray") ?
+                _svg_dasharray(local_attrs["stroke-dasharray"]) :
+                copy(parent.stroke_dasharray)
+    dashoffset = haskey(local_attrs, "stroke-dashoffset") ?
+                 _svg_length(local_attrs, "stroke-dashoffset") :
+                 parent.stroke_dashoffset
     stroke_width >= 0.0 || error("SVG stroke-width must be non-negative")
     return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
-                    stroke_opacity)
+                    stroke_opacity, dasharray, dashoffset)
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -2134,6 +2147,24 @@ function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
     v = parse(Float64, m.captures[1])
     isfinite(v) || error("SVG length for $key must be finite")
     return v
+end
+
+function _svg_dasharray(raw::AbstractString)
+    lowercase(strip(String(raw))) == "none" && return Float64[]
+    values = Float64[]
+    for token in _svg_lex(raw,
+                          r"[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?(?:px)?",
+                          "SVG stroke-dasharray")
+        value = endswith(token, "px") ? token[1:prevind(token, lastindex(token), 2)] : token
+        dash = parse(Float64, value)
+        isfinite(dash) || error("SVG stroke-dasharray values must be finite")
+        dash >= 0.0 || error("SVG stroke-dasharray values must be non-negative")
+        push!(values, dash)
+    end
+    isempty(values) && return Float64[]
+    all(iszero, values) && return Float64[]
+    isodd(length(values)) && append!(values, copy(values))
+    return values
 end
 
 function _svg_root_size(root_attrs::AbstractDict)
@@ -2638,6 +2669,116 @@ function _svg_line_geometry(points::Vector{Vec2{Float64}})
     return BufferGeometry(positions, Float64[], Float64[], Int[], length(points), 0)
 end
 
+function _svg_dash_phase(dasharray::Vector{Float64}, phase::Float64)
+    cursor = 0.0
+    for (idx, dash) in enumerate(dasharray)
+        next_cursor = cursor + dash
+        if phase < next_cursor
+            return isodd(idx), next_cursor - phase
+        end
+        cursor = next_cursor
+    end
+    cursor = 0.0
+    for (idx, dash) in enumerate(dasharray)
+        dash > 0.0 && return isodd(idx), dash
+        cursor += dash
+    end
+    return true, Inf
+end
+
+function _svg_dash_intervals(total::Float64, dasharray::Vector{Float64},
+                             dashoffset::Float64)
+    intervals = Tuple{Float64,Float64}[]
+    total > 0.0 || return intervals
+    isempty(dasharray) && return [(0.0, total)]
+    period = sum(dasharray)
+    period > 0.0 || return [(0.0, total)]
+    offset = mod(dashoffset, period)
+    cursor = 0.0
+    while cursor < total
+        visible, remain = _svg_dash_phase(dasharray, mod(cursor + offset, period))
+        step = min(remain, total - cursor)
+        step > 0.0 || break
+        visible && push!(intervals, (cursor, cursor + step))
+        cursor += step
+    end
+    return intervals
+end
+
+function _svg_path_segments(points::Vector{Vec2{Float64}}, closed::Bool)
+    segments = NamedTuple{(:a, :b, :s0, :s1),
+                          Tuple{Vec2{Float64},Vec2{Float64},Float64,Float64}}[]
+    closed_path = closed && length(points) >= 3
+    segment_count = closed_path ? length(points) : length(points) - 1
+    total = 0.0
+    for i in 1:segment_count
+        a = points[i]
+        b = points[i == length(points) ? 1 : i + 1]
+        len = hypot(b.x - a.x, b.y - a.y)
+        len > 0.0 || continue
+        push!(segments, (a=a, b=b, s0=total, s1=total + len))
+        total += len
+    end
+    return segments, total, closed_path
+end
+
+function _svg_segment_point(segment, distance::Float64)
+    t = (distance - segment.s0) / (segment.s1 - segment.s0)
+    return Vec2(segment.a.x + (segment.b.x - segment.a.x) * t,
+                segment.a.y + (segment.b.y - segment.a.y) * t)
+end
+
+function _svg_path_point_at(segments, distance::Float64)
+    isempty(segments) && return Vec2(0.0, 0.0)
+    distance <= segments[1].s0 && return segments[1].a
+    distance >= segments[end].s1 && return segments[end].b
+    for segment in segments
+        distance <= segment.s1 && return _svg_segment_point(segment, distance)
+    end
+    return segments[end].b
+end
+
+function _svg_push_unique_point!(points::Vector{Vec2{Float64}},
+                                 p::Vec2{Float64})
+    if isempty(points) || hypot(points[end].x - p.x, points[end].y - p.y) > 1e-9
+        push!(points, p)
+    end
+    return points
+end
+
+function _svg_interval_subpath(segments, start_distance::Float64,
+                               stop_distance::Float64)
+    points = Vec2{Float64}[]
+    stop_distance > start_distance || return points
+    _svg_push_unique_point!(points, _svg_path_point_at(segments, start_distance))
+    for segment in segments
+        if segment.s1 > start_distance + 1e-9 &&
+           segment.s1 < stop_distance - 1e-9
+            _svg_push_unique_point!(points, segment.b)
+        end
+    end
+    _svg_push_unique_point!(points, _svg_path_point_at(segments, stop_distance))
+    return points
+end
+
+function _svg_stroke_subpaths(points::Vector{Vec2{Float64}}, closed::Bool,
+                              dasharray::Vector{Float64}, dashoffset::Float64)
+    length(points) >= 2 || return Tuple{Vector{Vec2{Float64}},Bool}[]
+    segments, total, closed_path = _svg_path_segments(points, closed)
+    isempty(segments) && return Tuple{Vector{Vec2{Float64}},Bool}[]
+    intervals = _svg_dash_intervals(total, dasharray, dashoffset)
+    if length(intervals) == 1 && intervals[1][1] <= 1e-9 &&
+       intervals[1][2] >= total - 1e-9
+        return [(copy(points), closed_path)]
+    end
+    out = Tuple{Vector{Vec2{Float64}},Bool}[]
+    for (start_distance, stop_distance) in intervals
+        subpath = _svg_interval_subpath(segments, start_distance, stop_distance)
+        length(subpath) >= 2 && push!(out, (subpath, false))
+    end
+    return out
+end
+
 function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
                                       closed::Bool, stroke_width::Float64)
     positions = Float64[]
@@ -2693,9 +2834,10 @@ svg_meshes(path::String; kwargs...) = svg_meshes(load_svg(path; kwargs...))
 """Build triangle meshes for stroked SVG paths using parsed stroke styles.
 
 The outline tessellator emits a quad per non-degenerate path segment with butt
-caps. It is useful when a downstream renderer needs triangle meshes instead of
-native line primitives; advanced SVG line joins, caps, and dash patterns are not
-expanded by this helper.
+caps and expands `stroke-dasharray`/`stroke-dashoffset` into visible stroked
+subpaths. It is useful when a downstream renderer needs triangle meshes instead
+of native line primitives; advanced SVG line joins and caps are not expanded by
+this helper.
 """
 function svg_stroke_meshes(svg::SVGDocument)
     out = Mesh[]
@@ -2706,8 +2848,17 @@ function svg_stroke_meshes(svg::SVGDocument)
         path.style.stroke_width > 0.0 || continue
         opacity = path.style.opacity * path.style.stroke_opacity
         opacity > 0.0 || continue
-        geo = _svg_stroke_outline_geometry(copy(path.points), path.closed,
-                                           path.style.stroke_width)
+        geos = BufferGeometry[]
+        for (subpath, subpath_closed) in
+            _svg_stroke_subpaths(copy(path.points), path.closed,
+                                 path.style.stroke_dasharray,
+                                 path.style.stroke_dashoffset)
+            geo = _svg_stroke_outline_geometry(subpath, subpath_closed,
+                                               path.style.stroke_width)
+            geo.n_faces > 0 && push!(geos, geo)
+        end
+        isempty(geos) && continue
+        geo = length(geos) == 1 ? geos[1] : merge_geometries(geos; with_groups=false)
         geo.n_faces > 0 || continue
         mat = MeshBasicMaterial(color=stroke, opacity=opacity,
                                 transparent=opacity < 1.0, side=:double)
@@ -2730,9 +2881,14 @@ function svg_strokes(svg::SVGDocument)
         opacity > 0.0 || continue
         mat = LineBasicMaterial(color=stroke, linewidth=path.style.stroke_width,
                                 opacity=opacity)
-        geo = _svg_line_geometry(copy(path.points))
-        push!(out, path.closed ? LineLoop(geo, mat; name="SVGStroke") :
-                                  LineObject(geo, mat; name="SVGStroke"))
+        for (subpath, subpath_closed) in
+            _svg_stroke_subpaths(copy(path.points), path.closed,
+                                 path.style.stroke_dasharray,
+                                 path.style.stroke_dashoffset)
+            geo = _svg_line_geometry(subpath)
+            push!(out, subpath_closed ? LineLoop(geo, mat; name="SVGStroke") :
+                                        LineObject(geo, mat; name="SVGStroke"))
+        end
     end
     return out
 end

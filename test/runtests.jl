@@ -5403,6 +5403,57 @@ end
         @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
         rm(stroke_mesh_path)
 
+        stroke_dash_path = tempname() * ".svg"
+        write(stroke_dash_path, """
+        <svg>
+          <polyline points="0,0 6,0" fill="none" stroke="#0f0"
+                    stroke-width="2" stroke-dasharray="2 1"/>
+        </svg>
+        """)
+        stroke_dash_svg = load_svg(stroke_dash_path)
+        @test stroke_dash_svg.paths[1].style.stroke_dasharray == [2.0, 1.0]
+        @test stroke_dash_svg.paths[1].style.stroke_dashoffset == 0.0
+        stroke_dash_meshes = svg_stroke_meshes(stroke_dash_svg)
+        @test length(stroke_dash_meshes) == 1
+        @test stroke_dash_meshes[1].geometry.n_vertices == 8
+        @test stroke_dash_meshes[1].geometry.n_faces == 4
+        @test stroke_dash_meshes[1].geometry.positions ==
+              [0.0, 1.0, 0.0, 0.0, -1.0, 0.0,
+               2.0, -1.0, 0.0, 2.0, 1.0, 0.0,
+               3.0, 1.0, 0.0, 3.0, -1.0, 0.0,
+               5.0, -1.0, 0.0, 5.0, 1.0, 0.0]
+        @test stroke_dash_meshes[1].geometry.indices ==
+              [1, 2, 3, 1, 3, 4, 5, 6, 7, 5, 7, 8]
+        stroke_dash_lines = svg_strokes(stroke_dash_svg)
+        @test length(stroke_dash_lines) == 2
+        @test stroke_dash_lines[1] isa LineObject
+        @test stroke_dash_lines[1].geometry.positions ==
+              [0.0, 0.0, 0.0, 2.0, 0.0, 0.0]
+        @test stroke_dash_lines[2].geometry.positions ==
+              [3.0, 0.0, 0.0, 5.0, 0.0, 0.0]
+        rm(stroke_dash_path)
+
+        stroke_dash_cascade_path = tempname() * ".svg"
+        write(stroke_dash_cascade_path, """
+        <svg>
+          <style>
+            .sheet-dash { stroke-dasharray: 1 1; stroke-dashoffset: 1; }
+          </style>
+          <polyline class="sheet-dash" points="0,0 4,0" fill="none"
+                    stroke="#000" stroke-width="1"/>
+          <polyline points="0,1 4,1" fill="none" stroke="#000"
+                    stroke-width="1"
+                    style="stroke-dasharray: 2 2; stroke-dashoffset: 1"/>
+        </svg>
+        """)
+        stroke_dash_cascade = load_svg(stroke_dash_cascade_path)
+        @test stroke_dash_cascade.paths[1].style.stroke_dasharray == [1.0, 1.0]
+        @test stroke_dash_cascade.paths[1].style.stroke_dashoffset == 1.0
+        @test stroke_dash_cascade.paths[2].style.stroke_dasharray == [2.0, 2.0]
+        @test stroke_dash_cascade.paths[2].style.stroke_dashoffset == 1.0
+        @test length(svg_strokes(stroke_dash_cascade)) == 4
+        rm(stroke_dash_cascade_path)
+
         css_path = tempname() * ".svg"
         write(css_path, """
         <svg>
