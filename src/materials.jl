@@ -87,6 +87,8 @@ struct MeshLambertMaterial <: AbstractMaterial
     ao_map::Any
     emissive_map::Any
     emissive_intensity::Float64
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     light_map::Any        # baked indirect-lighting texture (multiplied in, like aoMap)
     alpha_test::Float64
@@ -101,13 +103,15 @@ function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               map=nothing, normal_map=nothing, normal_scale=1.0,
                               alpha_map=nothing, ao_map=nothing,
                               emissive_map=nothing, emissive_intensity=1.0,
+                              ao_map_intensity=1.0, light_map_intensity=1.0,
                               vertex_colors=false,
                               light_map=nothing, alpha_test=0.0,
                               depth_test=true, depth_write=true,
                               clipping_planes=Plane{Float64}[])
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
                         normal_map, Float64(normal_scale), alpha_map, ao_map,
-                        emissive_map, Float64(emissive_intensity), vertex_colors,
+                        emissive_map, Float64(emissive_intensity),
+                        Float64(ao_map_intensity), Float64(light_map_intensity), vertex_colors,
                         light_map, Float64(alpha_test), depth_test, depth_write,
                         _material_clipping_planes(clipping_planes))
 end
@@ -118,8 +122,8 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              light_map, alpha_test, depth_test::Bool, depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
                         nothing, 1.0, alpha_map, ao_map, emissive_map,
-                        emissive_intensity, vertex_colors, light_map, alpha_test,
-                        depth_test, depth_write)
+                        emissive_intensity, 1.0, 1.0, vertex_colors, light_map,
+                        alpha_test, depth_test, depth_write)
 end
 
 function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
@@ -129,7 +133,20 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              alpha_test, depth_test::Bool, depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
                         normal_map, Float64(normal_scale), alpha_map, ao_map,
-                        emissive_map, Float64(emissive_intensity), vertex_colors,
+                        emissive_map, Float64(emissive_intensity), 1.0, 1.0, vertex_colors,
+                        light_map, Float64(alpha_test), depth_test, depth_write)
+end
+
+function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
+                             wireframe::Bool, side::Symbol, map, normal_map,
+                             normal_scale, alpha_map, ao_map, emissive_map,
+                             emissive_intensity, ao_map_intensity, light_map_intensity,
+                             vertex_colors::Bool, light_map, alpha_test,
+                             depth_test::Bool, depth_write::Bool)
+    MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
+                        normal_map, Float64(normal_scale), alpha_map, ao_map,
+                        emissive_map, Float64(emissive_intensity),
+                        Float64(ao_map_intensity), Float64(light_map_intensity), vertex_colors,
                         light_map, Float64(alpha_test), depth_test, depth_write,
                         Plane{Float64}[])
 end
@@ -139,8 +156,9 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              emissive_map, vertex_colors::Bool, light_map, alpha_test,
                              depth_test::Bool, depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
-                        nothing, 1.0, alpha_map, ao_map, emissive_map, 1.0, vertex_colors,
-                        light_map, alpha_test, depth_test, depth_write)
+                        nothing, 1.0, alpha_map, ao_map, emissive_map, 1.0,
+                        1.0, 1.0, vertex_colors, light_map, alpha_test,
+                        depth_test, depth_write)
 end
 
 function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transparent::Bool,
@@ -148,8 +166,9 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              vertex_colors::Bool, light_map, depth_test::Bool,
                              depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
-                        nothing, 1.0, nothing, ao_map, emissive_map, 1.0, vertex_colors, light_map,
-                        0.0, depth_test, depth_write)
+                        nothing, 1.0, nothing, ao_map, emissive_map, 1.0,
+                        1.0, 1.0, vertex_colors, light_map, 0.0,
+                        depth_test, depth_write)
 end
 
 # ========================== MeshPhongMaterial ==========================

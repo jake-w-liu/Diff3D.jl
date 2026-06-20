@@ -1369,6 +1369,16 @@ end
         set_attribute!(ao_light_mapped.geometry, :uv2, fill(0.25, ao_light_mapped.geometry.n_vertices * 2), 2)
         ao_light_mapped.position = Vec3(-2.9, 0.0, 0.0)
         add!(scene, ao_light_mapped)
+        lambert_ao_light_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                       MeshLambertMaterial(color=Color3(0.75, 0.8, 0.6),
+                                                           ao_map=Texture(alphadata; filter=:nearest),
+                                                           light_map=Texture(texdata; filter=:nearest),
+                                                           ao_map_intensity=0.4,
+                                                           light_map_intensity=0.6);
+                                       name="export_lambert_ao_light_map")
+        set_attribute!(lambert_ao_light_mapped.geometry, :uv2, fill(0.25, lambert_ao_light_mapped.geometry.n_vertices * 2), 2)
+        lambert_ao_light_mapped.position = Vec3(-3.6, -0.8, 0.0)
+        add!(scene, lambert_ao_light_mapped)
         pbrdata = ones(Float64, 2, 2, 3)
         pbrdata[:, :, 2] .= [0.2 0.8; 0.4 1.0]
         pbrdata[:, :, 3] .= [1.0 0.3; 0.7 0.1]
@@ -2146,6 +2156,7 @@ end
         @test occursin("if(o.mode===\"lines\"||o.mode===\"line_loop\"||o.mode===\"line_strip\") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);", html)
         @test occursin("\"name\":\"export_emissive_map\"", html)
         @test occursin("\"name\":\"export_ao_light_map\"", html)
+        @test occursin("\"name\":\"export_lambert_ao_light_map\"", html)
         @test occursin("\"name\":\"export_rough_metal_map\"", html)
         @test occursin("\"name\":\"export_normal_map\"", html)
         @test occursin("\"name\":\"export_env_map\"", html)
@@ -2225,6 +2236,16 @@ end
         @test occursin("\"lightTexture\":", html)
         @test occursin("\"aoIntensity\":0.75", html)
         @test occursin("\"lightMapIntensity\":0.5", html)
+        lambert_ao_light_range = findfirst("\"name\":\"export_lambert_ao_light_map\"", html)
+        @test lambert_ao_light_range !== nothing
+        if lambert_ao_light_range !== nothing
+            lambert_ao_light_window = html[first(lambert_ao_light_range):min(lastindex(html), first(lambert_ao_light_range) + 3000)]
+            @test occursin("\"materialType\":\"lambert\"", lambert_ao_light_window)
+            @test occursin("\"aoTexture\":{\"width\":2", lambert_ao_light_window)
+            @test occursin("\"lightTexture\":{\"width\":2", lambert_ao_light_window)
+            @test occursin("\"aoIntensity\":0.40000000000000002", lambert_ao_light_window)
+            @test occursin("\"lightMapIntensity\":0.59999999999999998", lambert_ao_light_window)
+        end
         @test occursin("uUseAoMap", html)
         @test occursin("uUseLightMap", html)
         @test occursin("uAoMap", html)
@@ -4064,11 +4085,14 @@ end
         @test MeshLambertMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshLambertMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
         @test MeshLambertMaterial(emissive_intensity=1.7).emissive_intensity ≈ 1.7
+        @test MeshLambertMaterial(ao_map_intensity=0.35).ao_map_intensity ≈ 0.35
+        @test MeshLambertMaterial(light_map_intensity=0.45).light_map_intensity ≈ 0.45
         @test MeshLambertMaterial(normal_map=alpha_tex).normal_map === alpha_tex
         @test MeshLambertMaterial(normal_scale=0.35).normal_scale ≈ 0.35
         lambert_vc = Diff3D._with_vertex_color(
             MeshLambertMaterial(color=Color3(0.7, 0.5, 0.3),
                                 normal_map=alpha_tex, normal_scale=0.2,
+                                ao_map_intensity=0.55, light_map_intensity=0.65,
                                 vertex_colors=true),
             Color3(0.5, 1.0, 0.25),
         )
@@ -4077,6 +4101,8 @@ end
         @test lambert_vc.color.b ≈ 0.075
         @test lambert_vc.normal_map === alpha_tex
         @test lambert_vc.normal_scale ≈ 0.2
+        @test lambert_vc.ao_map_intensity ≈ 0.55
+        @test lambert_vc.light_map_intensity ≈ 0.65
         @test material_alpha_test(MeshPhongMaterial(alpha_test=0.27)) ≈ 0.27
         @test MeshPhongMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test MeshPhongMaterial(emissive_map=alpha_tex).emissive_map === alpha_tex
@@ -4191,6 +4217,8 @@ end
                                              nothing, nothing, nothing, false,
                                              nothing, true, true)
         @test legacy_lambert.emissive_intensity == 1.0
+        @test legacy_lambert.ao_map_intensity == 1.0
+        @test legacy_lambert.light_map_intensity == 1.0
         @test legacy_lambert.normal_map === nothing
         @test legacy_lambert.normal_scale == 1.0
         legacy_toon = MeshToonMaterial(Color3(1,1,1), Color3(0,0,0), 3,
@@ -5378,9 +5406,19 @@ end
         lambert_normal_scale =
             NumberKeyframeTrack(lambert_material_mesh, "material.normalScale",
                                 [0.0, 1.0], [1.0, 0.2])
+        lambert_ao_intensity =
+            NumberKeyframeTrack(lambert_material_mesh, "material.aoMapIntensity",
+                                [0.0, 1.0], [1.0, 0.4])
+        lambert_light_intensity =
+            NumberKeyframeTrack(lambert_material_mesh, "material.lightMapIntensity",
+                                [0.0, 1.0], [1.0, 0.2])
         mixer_set_time!(AnimationMixer(AnimationClip("lambert_normal_scale",
-                                                    [lambert_normal_scale])), 0.5)
+                                                    [lambert_normal_scale,
+                                                     lambert_ao_intensity,
+                                                     lambert_light_intensity])), 0.5)
         @test lambert_material_mesh.material.normal_scale ≈ 0.6
+        @test lambert_material_mesh.material.ao_map_intensity ≈ 0.7
+        @test lambert_material_mesh.material.light_map_intensity ≈ 0.6
 
         color = KeyframeTrack(material_mesh, :color, [0.0, 1.0],
                               [Vec3(0.2, 0.3, 0.4), Vec3(0.8, 0.7, 0.6)])
@@ -7261,7 +7299,9 @@ end
             data_tex = Texture(fill(0.5, 2, 2, 3); filter=:nearest, colorspace=:linear)
             mat = MeshLambertMaterial(color=Color3(1.0,1.0,1.0),
                                       map=color_tex, ao_map=data_tex,
-                                      light_map=data_tex, emissive_map=color_tex)
+                                      light_map=data_tex, emissive_map=color_tex,
+                                      ao_map_intensity=0.25,
+                                      light_map_intensity=0.5)
             scene = Scene()
             add!(scene, Mesh(PlaneGeometry(width=4.0, height=4.0), mat))
             add!(scene, AmbientLight(intensity=1.0))
@@ -7270,7 +7310,7 @@ end
             decoded = ((0.5 + 0.055) / 1.055)^2.4
             # emissive_map modulates material.emissive (three.js); the default
             # black emissive means the map adds nothing here.
-            expected = decoded * 0.5 * 0.5
+            expected = decoded * (1.0 + (0.5 - 1.0) * 0.25) * (0.5 * 0.5)
             @test isapprox(rt.color[16, 16, 1], expected; atol=2e-2)
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95

@@ -594,6 +594,10 @@ Parallel audits split the remaining work into five critical tracks:
   `normalScale` serialization, vertex-color-preserving material rewrites, and
   material `normalScale` animation binding while preserving legacy constructor
   defaults.
+- Done: add `MeshLambertMaterial.ao_map_intensity` and
+  `light_map_intensity` parity so Lambert AO/light maps use authored scalar
+  strengths in CPU flat/smooth shading, compact browser export/runtime, and
+  material animation binding while preserving legacy constructor defaults.
 - Done: add browser export for environment maps where matching Julia material
   fields already exist. The compact browser runtime serializes the six
   `CubeTexture` faces, samples them through a WebGL `samplerCube` when

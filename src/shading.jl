@@ -254,6 +254,8 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
                         alpha_map=m.alpha_map, ao_map=m.ao_map,
                         emissive_map=m.emissive_map,
                         emissive_intensity=m.emissive_intensity,
+                        ao_map_intensity=m.ao_map_intensity,
+                        light_map_intensity=m.light_map_intensity,
                         vertex_colors=m.vertex_colors, light_map=m.light_map,
                         alpha_test=m.alpha_test, depth_test=m.depth_test,
                         depth_write=m.depth_write,
