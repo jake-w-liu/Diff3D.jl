@@ -2638,6 +2638,40 @@ function _svg_line_geometry(points::Vector{Vec2{Float64}})
     return BufferGeometry(positions, Float64[], Float64[], Int[], length(points), 0)
 end
 
+function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
+                                      closed::Bool, stroke_width::Float64)
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    length(points) >= 2 && stroke_width > 0.0 || return BufferGeometry()
+    half_width = stroke_width / 2.0
+    segment_count = closed && length(points) >= 3 ? length(points) : length(points) - 1
+    vi = 0
+    for i in 1:segment_count
+        a = points[i]
+        b = points[i == length(points) ? 1 : i + 1]
+        dx = b.x - a.x
+        dy = b.y - a.y
+        len = hypot(dx, dy)
+        len > 0.0 || continue
+        nx = -dy / len * half_width
+        ny = dx / len * half_width
+        quad = (Vec2(a.x + nx, a.y + ny),
+                Vec2(a.x - nx, a.y - ny),
+                Vec2(b.x - nx, b.y - ny),
+                Vec2(b.x + nx, b.y + ny))
+        for (u, p) in zip((0.0, 0.0, 1.0, 1.0), quad)
+            push!(positions, p.x, p.y, 0.0)
+            push!(normals, 0.0, 0.0, 1.0)
+            push!(uvs, u, i == 1 ? 0.0 : 1.0)
+        end
+        push!(indices, vi + 1, vi + 2, vi + 3, vi + 1, vi + 3, vi + 4)
+        vi += 4
+    end
+    return BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+end
+
 """Build `Mesh` objects for filled, closed SVG paths using parsed fill styles."""
 function svg_meshes(svg::SVGDocument)
     out = Mesh[]
@@ -2655,6 +2689,34 @@ function svg_meshes(svg::SVGDocument)
 end
 
 svg_meshes(path::String; kwargs...) = svg_meshes(load_svg(path; kwargs...))
+
+"""Build triangle meshes for stroked SVG paths using parsed stroke styles.
+
+The outline tessellator emits a quad per non-degenerate path segment with butt
+caps. It is useful when a downstream renderer needs triangle meshes instead of
+native line primitives; advanced SVG line joins, caps, and dash patterns are not
+expanded by this helper.
+"""
+function svg_stroke_meshes(svg::SVGDocument)
+    out = Mesh[]
+    for path in svg.paths
+        stroke = path.style.stroke
+        stroke === nothing && continue
+        length(path.points) >= 2 || continue
+        path.style.stroke_width > 0.0 || continue
+        opacity = path.style.opacity * path.style.stroke_opacity
+        opacity > 0.0 || continue
+        geo = _svg_stroke_outline_geometry(copy(path.points), path.closed,
+                                           path.style.stroke_width)
+        geo.n_faces > 0 || continue
+        mat = MeshBasicMaterial(color=stroke, opacity=opacity,
+                                transparent=opacity < 1.0, side=:double)
+        push!(out, Mesh(geo, mat; name="SVGStrokeMesh"))
+    end
+    return out
+end
+
+svg_stroke_meshes(path::String; kwargs...) = svg_stroke_meshes(load_svg(path; kwargs...))
 
 """Build line objects for stroked SVG paths using parsed stroke styles."""
 function svg_strokes(svg::SVGDocument)

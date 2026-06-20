@@ -259,6 +259,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :svg_geometry => "Triangulate closed SVG point loops into merged geometry.",
     :svg_meshes => "Build mesh objects for filled SVG paths using parsed fill styles.",
     :svg_strokes => "Build line objects for stroked SVG paths using parsed stroke styles.",
+    :svg_stroke_meshes => "Build triangle mesh objects for stroked SVG path outlines.",
     :load_gltf => "Load a glTF 2.0 file into scene objects.",
     :load_gltf_asset => "Load a glTF 2.0 asset with scenes, nodes, animations, cameras, and lights.",
     :load_glb => "Load a binary GLB 2.0 file.",

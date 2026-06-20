@@ -5375,6 +5375,34 @@ end
         @test length(svg_strokes(style_path)) == 2
         rm(style_path)
 
+        stroke_mesh_path = tempname() * ".svg"
+        write(stroke_mesh_path, """
+        <svg>
+          <polyline points="0,0 2,0" fill="none" stroke="#00f"
+                    stroke-width="2" opacity="0.5" stroke-opacity="0.5"/>
+          <polygon points="0,0 1,0 0,1" fill="none" stroke="#f00"
+                   stroke-width="1"/>
+        </svg>
+        """)
+        stroke_mesh_svg = load_svg(stroke_mesh_path)
+        stroke_meshes = svg_stroke_meshes(stroke_mesh_svg)
+        @test length(stroke_meshes) == 2
+        @test stroke_meshes[1].name == "SVGStrokeMesh"
+        @test stroke_meshes[1].material.color == Color3(0.0, 0.0, 1.0)
+        @test stroke_meshes[1].material.opacity == 0.25
+        @test stroke_meshes[1].material.transparent
+        @test stroke_meshes[1].geometry.n_vertices == 4
+        @test stroke_meshes[1].geometry.n_faces == 2
+        @test stroke_meshes[1].geometry.positions ==
+              [0.0, 1.0, 0.0, 0.0, -1.0, 0.0,
+               2.0, -1.0, 0.0, 2.0, 1.0, 0.0]
+        @test stroke_meshes[1].geometry.indices == [1, 2, 3, 1, 3, 4]
+        @test stroke_meshes[2].material.color == Color3(1.0, 0.0, 0.0)
+        @test stroke_meshes[2].geometry.n_vertices == 12
+        @test stroke_meshes[2].geometry.n_faces == 6
+        @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
+        rm(stroke_mesh_path)
+
         css_path = tempname() * ".svg"
         write(css_path, """
         <svg>
