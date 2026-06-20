@@ -532,6 +532,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add `MeshBasicMaterial.alpha_map` so basic unlit materials participate
   in the same CPU rasterization and compact browser alpha-map paths as other
   mapped materials.
+- Done: add `MeshBasicMaterial.ao_map`, `light_map`, `ao_map_intensity`, and
+  `light_map_intensity` parity so Basic materials keep their unlit shading while
+  applying baked AO/light modulation in CPU flat/smooth rendering, compact
+  browser export/runtime, and material animation bindings.
 - Done: add `alpha_map` and `alpha_test` fields to `MeshLambertMaterial` and
   `MeshPhongMaterial`, with CPU flat/smooth raster discard and compact browser
   alpha-texture serialization covered by tests.

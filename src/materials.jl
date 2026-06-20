@@ -15,6 +15,10 @@ struct MeshBasicMaterial <: AbstractMaterial
     side::Symbol  # :front, :back, :double
     map::Any      # optional albedo Texture
     alpha_map::Any
+    ao_map::Any
+    light_map::Any
+    ao_map_intensity::Float64
+    light_map_intensity::Float64
     vertex_colors::Bool   # modulate by geometry :color attribute when true
     alpha_test::Float64
     depth_test::Bool
@@ -24,11 +28,15 @@ end
 
 function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                            transparent=false, wireframe=false, side=:front, map=nothing,
-                           alpha_map=nothing, vertex_colors=false, alpha_test=0.0,
+                           alpha_map=nothing, ao_map=nothing, light_map=nothing,
+                           ao_map_intensity=1.0, light_map_intensity=1.0,
+                           vertex_colors=false, alpha_test=0.0,
                            depth_test=true, depth_write=true,
                            clipping_planes=Plane{Float64}[])
-    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map, vertex_colors,
-                      Float64(alpha_test), depth_test, depth_write,
+    MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map,
+                      ao_map, light_map, Float64(ao_map_intensity),
+                      Float64(light_map_intensity), vertex_colors, Float64(alpha_test),
+                      depth_test, depth_write,
                       _material_clipping_planes(clipping_planes))
 end
 
@@ -36,9 +44,13 @@ function MeshBasicMaterial(color::Color3, opacity, transparent::Bool, wireframe:
                            side::Symbol, map, alpha_map, vertex_colors::Bool,
                            alpha_test, depth_test::Bool, depth_write::Bool)
     MeshBasicMaterial(color, opacity, transparent, wireframe, side, map, alpha_map,
-                      vertex_colors, alpha_test, depth_test, depth_write,
+                      nothing, nothing, 1.0, 1.0, vertex_colors, alpha_test,
+                      depth_test, depth_write,
                       Plane{Float64}[])
 end
+
+MeshBasicMaterial(args::Vararg{Any,15}) =
+    MeshBasicMaterial(args..., Plane{Float64}[])
 
 struct SpriteMaterial <: AbstractMaterial
     color::Color3{Float64}
