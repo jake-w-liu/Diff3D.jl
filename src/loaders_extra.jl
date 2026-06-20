@@ -1477,7 +1477,7 @@ function _svg_unsupported_selector_syntax(raw::String)
         elseif ch == ']'
             bracket_depth == 0 && return true
             bracket_depth -= 1
-        elseif bracket_depth == 0 && (ch == '+' || ch == '~' || ch == ':')
+        elseif bracket_depth == 0 && ch == ':'
             return true
         end
     end
@@ -1518,12 +1518,13 @@ function _svg_selector_parts(raw::String)
             bracket_depth == 0 && return nothing
             bracket_depth -= 1
             print(buf, ch)
-        elseif ch == '>' && bracket_depth == 0
+        elseif (ch == '>' || ch == '+' || ch == '~') && bracket_depth == 0
             part = String(strip(String(take!(buf))))
             push_part!(part) || return nothing
             isempty(parts) && return nothing
             length(combinators) == length(parts) && return nothing
-            push!(combinators, :child)
+            combinator = ch == '>' ? :child : (ch == '+' ? :adjacent : :sibling)
+            push!(combinators, combinator)
         elseif isspace(ch) && bracket_depth == 0
             part = String(strip(String(take!(buf))))
             push_part!(part) || return nothing
@@ -1694,31 +1695,62 @@ function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
     return true
 end
 
-const _SVGAncestorStack = Vector{Tuple{String,Dict{String,String}}}
+struct _SVGElementContext
+    tag::String
+    attrs::Dict{String,String}
+    ancestors::Vector{_SVGElementContext}
+    previous_siblings::Vector{_SVGElementContext}
+end
 
-function _svg_rule_matches(rule::_SVGStyleRule, tag::String,
-                           attrs::AbstractDict, ancestors::_SVGAncestorStack)
-    _svg_simple_selector_matches(rule.chain[end], tag, attrs) || return false
-    idx = length(ancestors)
+const _SVGAncestorStack = Vector{_SVGElementContext}
+const _SVGSiblingStack = Vector{Vector{_SVGElementContext}}
+
+function _svg_element_context(tag::String, attrs::AbstractDict,
+                              ancestors::_SVGAncestorStack,
+                              siblings::Vector{_SVGElementContext})
+    return _SVGElementContext(tag, Dict{String,String}(attrs),
+                              copy(ancestors), copy(siblings))
+end
+
+function _svg_context_matches(selector::_SVGSimpleSelector,
+                              context::_SVGElementContext)
+    return _svg_simple_selector_matches(selector, context.tag, context.attrs)
+end
+
+function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
+    _svg_context_matches(rule.chain[end], context) || return false
+    current = context
     for selector_idx in (length(rule.chain) - 1):-1:1
         selector = rule.chain[selector_idx]
         combinator = rule.combinators[selector_idx]
         if combinator === :child
-            idx >= 1 || return false
-            ancestor_tag, ancestor_attrs = ancestors[idx]
-            _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs) ||
-                return false
-            idx -= 1
+            isempty(current.ancestors) && return false
+            parent = current.ancestors[end]
+            _svg_context_matches(selector, parent) || return false
+            current = parent
         elseif combinator === :descendant
             found = false
-            while idx >= 1
-                ancestor_tag, ancestor_attrs = ancestors[idx]
-                if _svg_simple_selector_matches(selector, ancestor_tag, ancestor_attrs)
+            for ancestor in Iterators.reverse(current.ancestors)
+                if _svg_context_matches(selector, ancestor)
                     found = true
-                    idx -= 1
+                    current = ancestor
                     break
                 end
-                idx -= 1
+            end
+            found || return false
+        elseif combinator === :adjacent
+            isempty(current.previous_siblings) && return false
+            sibling = current.previous_siblings[end]
+            _svg_context_matches(selector, sibling) || return false
+            current = sibling
+        elseif combinator === :sibling
+            found = false
+            for sibling in Iterators.reverse(current.previous_siblings)
+                if _svg_context_matches(selector, sibling)
+                    found = true
+                    current = sibling
+                    break
+                end
             end
             found || return false
         else
@@ -1730,10 +1762,14 @@ end
 
 function _svg_css_attrs(tag::String, attrs::AbstractDict,
                         rules::Vector{_SVGStyleRule},
-                        ancestors::_SVGAncestorStack=_SVGAncestorStack())
+                        context::Union{Nothing,_SVGElementContext}=nothing)
+    match_context = context === nothing ?
+                    _svg_element_context(tag, attrs, _SVGAncestorStack(),
+                                         _SVGElementContext[]) :
+                    context
     out = Dict{String,String}()
     for rule in sort([rule for rule in rules
-                      if _svg_rule_matches(rule, tag, attrs, ancestors)];
+                      if _svg_rule_matches(rule, match_context)];
                      by=rule -> (rule.specificity, rule.order))
         for (key, value) in rule.declarations
             out[key] = value
@@ -1817,12 +1853,12 @@ end
 function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
                                css_rules::Vector{_SVGStyleRule}=_SVGStyleRule[],
                                tag::String="",
-                               ancestors::_SVGAncestorStack=_SVGAncestorStack())
+                               context::Union{Nothing,_SVGElementContext}=nothing)
     local_attrs = Dict{String,String}()
     for key in _SVG_STYLE_KEYS
         haskey(attrs, key) && (local_attrs[key] = attrs[key])
     end
-    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, ancestors)
+    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, context)
         local_attrs[key] = value
     end
     if haskey(attrs, "style")
@@ -2254,6 +2290,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     transform_stack = [_svg_identity_transform()]
     style_stack = [_SVG_DEFAULT_STYLE]
     ancestor_stack = _SVGAncestorStack()
+    sibling_stack = _SVGSiblingStack([_SVGElementContext[]])
     css_rules = _svg_css_rules(raw)
 
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
@@ -2268,29 +2305,37 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                 length(transform_stack) > 1 && pop!(transform_stack)
                 length(style_stack) > 1 && pop!(style_stack)
                 !isempty(ancestor_stack) && pop!(ancestor_stack)
-            elseif !self_closing
-                push!(transform_stack,
-                      _svg_compose_transform(transform_stack[end],
-                                             _svg_transform_from_attrs(attrs)))
-                push!(style_stack,
-                      _svg_style_from_attrs(style_stack[end], attrs, css_rules,
-                                            tag, ancestor_stack))
-                push!(ancestor_stack, (tag, attrs))
+                length(sibling_stack) > 1 && pop!(sibling_stack)
+            else
+                context = _svg_element_context(tag, attrs, ancestor_stack,
+                                               sibling_stack[end])
+                push!(sibling_stack[end], context)
+                if !self_closing
+                    push!(transform_stack,
+                          _svg_compose_transform(transform_stack[end],
+                                                 _svg_transform_from_attrs(attrs)))
+                    push!(style_stack,
+                          _svg_style_from_attrs(style_stack[end], attrs, css_rules,
+                                                tag, context))
+                    push!(ancestor_stack, context)
+                    push!(sibling_stack, _SVGElementContext[])
+                end
             end
             continue
         end
         closing && continue
 
+        context = _svg_element_context(tag, attrs, ancestor_stack,
+                                       sibling_stack[end])
         local_transform = _svg_transform_from_attrs(attrs)
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
         style = _svg_style_from_attrs(style_stack[end], attrs, css_rules, tag,
-                                      ancestor_stack)
+                                      context)
         element_paths = SVGPath[]
         if tag == "path"
             d = get(attrs, "d", nothing)
-            d === nothing && continue
-            append!(element_paths, _svg_path_points(d, segments))
+            d !== nothing && append!(element_paths, _svg_path_points(d, segments))
         elseif tag == "rect"
             rect = _svg_rect(attrs)
             rect !== nothing && push!(element_paths, rect)
@@ -2316,6 +2361,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         append!(paths, [_svg_transform_path(_svg_style_path(path, style),
                                             total_transform)
                         for path in element_paths])
+        push!(sibling_stack[end], context)
     end
 
     return SVGDocument(width, height, paths)

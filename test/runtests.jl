@@ -5488,6 +5488,38 @@ end
         @test svg_strokes(child_css_svg)[1].material.opacity == 0.4
         rm(child_css_path)
 
+        sibling_css_path = tempname() * ".svg"
+        write(sibling_css_path, """
+        <svg>
+          <style>
+            rect.first + rect.second { fill: #f00; fill-opacity: .5; }
+            rect.first + rect.third { fill: #0f0; }
+            rect.first ~ rect.third { stroke: #00f; stroke-opacity: .25; }
+            g.scope > rect.second + rect.third { fill-opacity: .4; }
+          </style>
+          <g class="scope">
+            <rect class="first" width="1" height="1"/>
+            <rect class="second" x="2" width="1" height="1"/>
+            <rect class="third" x="4" width="1" height="1"/>
+          </g>
+        </svg>
+        """)
+        sibling_css_svg = load_svg(sibling_css_path)
+        @test sibling_css_svg.paths[1].style.fill == Color3(0.0, 0.0, 0.0)
+        @test sibling_css_svg.paths[2].style.fill == Color3(1.0, 0.0, 0.0)
+        @test sibling_css_svg.paths[2].style.fill_opacity == 0.5
+        @test sibling_css_svg.paths[3].style.fill == Color3(0.0, 0.0, 0.0)
+        @test sibling_css_svg.paths[3].style.fill_opacity == 0.4
+        @test sibling_css_svg.paths[3].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test sibling_css_svg.paths[3].style.stroke_opacity == 0.25
+        sibling_meshes = svg_meshes(sibling_css_svg)
+        @test sibling_meshes[2].material.opacity == 0.5
+        @test sibling_meshes[3].material.opacity == 0.4
+        sibling_strokes = svg_strokes(sibling_css_svg)
+        @test length(sibling_strokes) == 1
+        @test sibling_strokes[1].material.opacity == 0.25
+        rm(sibling_css_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
