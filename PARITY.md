@@ -789,9 +789,11 @@ Parallel audits split the remaining work into five critical tracks:
   cascade, including basic `[attr]` and `[attr=value]` attribute selectors.
   Attribute selector operators `~=`, `|=`, `^=`, `$=`, and `*=` are also
   supported, as are direct child (`A > B`), adjacent sibling (`A + B`), and
-  general sibling (`A ~ B`) combinators. Pseudo CSS selectors, fill-rule holes,
-  stroked outline triangulation, clipping, and DOM-level SVG parsing remain
-  open.
+  general sibling (`A ~ B`) combinators. Forward-evaluable structural pseudo
+  classes `:root`, `:first-child`, `:nth-child()`, `:first-of-type`, and
+  `:nth-of-type()` are supported for parsed SVG elements. Other pseudo CSS
+  selectors, fill-rule holes, stroked outline triangulation, clipping, and
+  DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

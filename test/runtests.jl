@@ -5520,6 +5520,41 @@ end
         @test sibling_strokes[1].material.opacity == 0.25
         rm(sibling_css_path)
 
+        pseudo_css_path = tempname() * ".svg"
+        write(pseudo_css_path, """
+        <svg>
+          <style>
+            svg:root > g:first-child > rect:first-child { fill: #f00; }
+            circle:nth-child(2) { fill-opacity: .5; }
+            rect:nth-child(2n + 1) { stroke: #00f; stroke-opacity: .25; }
+            circle:nth-child(-n+2) { stroke: #f0f; }
+            rect:first-of-type { stroke-width: 3; }
+            circle:nth-of-type(2) { fill: #0f0; }
+            rect:hover { fill: #ff0; }
+          </style>
+          <g>
+            <rect width="1" height="1"/>
+            <circle cx="3" cy="1" r="1"/>
+            <rect x="5" width="1" height="1"/>
+            <circle cx="8" cy="1" r="1"/>
+          </g>
+        </svg>
+        """)
+        pseudo_css_svg = load_svg(pseudo_css_path)
+        @test pseudo_css_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test pseudo_css_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test pseudo_css_svg.paths[1].style.stroke_width == 3.0
+        @test pseudo_css_svg.paths[2].style.fill_opacity == 0.5
+        @test pseudo_css_svg.paths[2].style.stroke == Color3(1.0, 0.0, 1.0)
+        @test pseudo_css_svg.paths[3].style.fill == Color3(0.0, 0.0, 0.0)
+        @test pseudo_css_svg.paths[3].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test pseudo_css_svg.paths[3].style.stroke_width == 1.0
+        @test pseudo_css_svg.paths[4].style.fill == Color3(0.0, 1.0, 0.0)
+        @test pseudo_css_svg.paths[4].style.stroke === nothing
+        @test svg_meshes(pseudo_css_svg)[2].material.opacity == 0.5
+        @test length(svg_strokes(pseudo_css_svg)) == 3
+        rm(pseudo_css_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)

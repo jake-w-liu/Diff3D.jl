@@ -1329,11 +1329,18 @@ struct _SVGAttributeSelector
     value::String
 end
 
+struct _SVGPseudoSelector
+    name::Symbol
+    a::Int
+    b::Int
+end
+
 struct _SVGSimpleSelector
     tag::Union{Nothing,String}
     id::Union{Nothing,String}
     classes::Vector{String}
     attributes::Vector{_SVGAttributeSelector}
+    pseudos::Vector{_SVGPseudoSelector}
     specificity::Int
 end
 
@@ -1477,8 +1484,6 @@ function _svg_unsupported_selector_syntax(raw::String)
         elseif ch == ']'
             bracket_depth == 0 && return true
             bracket_depth -= 1
-        elseif bracket_depth == 0 && ch == ':'
-            return true
         end
     end
     return active_quote !== nothing || bracket_depth != 0
@@ -1489,6 +1494,7 @@ function _svg_selector_parts(raw::String)
     combinators = Symbol[]
     buf = IOBuffer()
     bracket_depth = 0
+    paren_depth = 0
     active_quote = nothing
 
     function push_part!(part::String)
@@ -1518,14 +1524,22 @@ function _svg_selector_parts(raw::String)
             bracket_depth == 0 && return nothing
             bracket_depth -= 1
             print(buf, ch)
-        elseif (ch == '>' || ch == '+' || ch == '~') && bracket_depth == 0
+        elseif ch == '(' && bracket_depth == 0
+            paren_depth += 1
+            print(buf, ch)
+        elseif ch == ')' && bracket_depth == 0
+            paren_depth == 0 && return nothing
+            paren_depth -= 1
+            print(buf, ch)
+        elseif (ch == '>' || ch == '+' || ch == '~') &&
+               bracket_depth == 0 && paren_depth == 0
             part = String(strip(String(take!(buf))))
             push_part!(part) || return nothing
             isempty(parts) && return nothing
             length(combinators) == length(parts) && return nothing
             combinator = ch == '>' ? :child : (ch == '+' ? :adjacent : :sibling)
             push!(combinators, combinator)
-        elseif isspace(ch) && bracket_depth == 0
+        elseif isspace(ch) && bracket_depth == 0 && paren_depth == 0
             part = String(strip(String(take!(buf))))
             push_part!(part) || return nothing
         else
@@ -1533,7 +1547,7 @@ function _svg_selector_parts(raw::String)
         end
     end
     active_quote === nothing || return nothing
-    bracket_depth == 0 || return nothing
+    bracket_depth == 0 && paren_depth == 0 || return nothing
     part = String(strip(String(take!(buf))))
     push_part!(part) || return nothing
     isempty(parts) && return nothing
@@ -1557,6 +1571,77 @@ function _svg_selector_bracket_close(rest::String)
     return nothing
 end
 
+function _svg_nth_formula(raw::AbstractString)
+    s = replace(lowercase(strip(String(raw))), r"\s+" => "")
+    isempty(s) && return nothing
+    s == "odd" && return (2, 1)
+    s == "even" && return (2, 0)
+    if !occursin('n', s)
+        m = match(r"^[+-]?\d+$", s)
+        m === nothing && return nothing
+        b = tryparse(Int, s)
+        b === nothing && return nothing
+        return (0, b)
+    end
+    count(==('n'), s) == 1 || return nothing
+    n_idx = findfirst(==('n'), s)
+    prefix = n_idx == firstindex(s) ? "" : s[firstindex(s):prevind(s, n_idx)]
+    suffix = n_idx == lastindex(s) ? "" : s[nextind(s, n_idx):lastindex(s)]
+    a = if prefix == "" || prefix == "+"
+        1
+    elseif prefix == "-"
+        -1
+    elseif match(r"^[+-]?\d+$", prefix) !== nothing
+        parsed = tryparse(Int, prefix)
+        parsed === nothing && return nothing
+        parsed
+    else
+        return nothing
+    end
+    b = if suffix == ""
+        0
+    elseif match(r"^[+-]\d+$", suffix) !== nothing
+        parsed = tryparse(Int, suffix)
+        parsed === nothing && return nothing
+        parsed
+    else
+        return nothing
+    end
+    return (a, b)
+end
+
+function _svg_pseudo_selector(rest::String)
+    m = match(r"^:([A-Za-z-]+)", rest)
+    m === nothing && return nothing
+    name = lowercase(m.captures[1])
+    after = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
+    if name == "root"
+        startswith(after, "(") && return nothing
+        return _SVGPseudoSelector(:root, 0, 0), after
+    elseif name == "first-child"
+        startswith(after, "(") && return nothing
+        return _SVGPseudoSelector(:first_child, 0, 0), after
+    elseif name == "first-of-type"
+        startswith(after, "(") && return nothing
+        return _SVGPseudoSelector(:first_of_type, 0, 0), after
+    elseif name == "nth-child" || name == "nth-of-type"
+        startswith(after, "(") || return nothing
+        close_idx = findnext(==(')'), after, nextind(after, firstindex(after)))
+        close_idx === nothing && return nothing
+        content_start = nextind(after, firstindex(after))
+        content = content_start == close_idx ? "" :
+                  after[content_start:prevind(after, close_idx)]
+        formula = _svg_nth_formula(content)
+        formula === nothing && return nothing
+        next_idx = nextind(after, close_idx)
+        remainder = next_idx > lastindex(after) ? "" : after[next_idx:end]
+        symbol = name == "nth-child" ? :nth_child : :nth_of_type
+        a, b = formula
+        return _SVGPseudoSelector(symbol, a, b), remainder
+    end
+    return nothing
+end
+
 function _svg_simple_selector(selector::AbstractString)
     raw = String(strip(String(selector)))
     isempty(raw) && return nothing
@@ -1567,10 +1652,11 @@ function _svg_simple_selector(selector::AbstractString)
     id = nothing
     classes = String[]
     attributes = _SVGAttributeSelector[]
+    pseudos = _SVGPseudoSelector[]
     if startswith(rest, "*")
         rest = _svg_drop_ascii_prefix(rest, 1)
     elseif !startswith(rest, ".") && !startswith(rest, "#") &&
-           !startswith(rest, "[")
+           !startswith(rest, "[") && !startswith(rest, ":")
         m = match(r"^[A-Za-z][A-Za-z0-9_-]*", rest)
         m === nothing && return nothing
         tag = lowercase(m.match)
@@ -1587,6 +1673,11 @@ function _svg_simple_selector(selector::AbstractString)
             attr === nothing && return nothing
             push!(attributes, attr)
             rest = _svg_drop_ascii_prefix(rest, close_idx)
+        elseif prefix == ':'
+            parsed = _svg_pseudo_selector(rest)
+            parsed === nothing && return nothing
+            pseudo, rest = parsed
+            push!(pseudos, pseudo)
         else
             (prefix == '.' || prefix == '#') || return nothing
             m = match(r"^[#.][A-Za-z_][A-Za-z0-9_-]*", rest)
@@ -1603,9 +1694,9 @@ function _svg_simple_selector(selector::AbstractString)
     end
 
     specificity = (id === nothing ? 0 : 100) + 10 * length(classes) +
-                  10 * length(attributes) +
+                  10 * length(attributes) + 10 * length(pseudos) +
                   (tag === nothing ? 0 : 1)
-    return _SVGSimpleSelector(tag, id, classes, attributes, specificity)
+    return _SVGSimpleSelector(tag, id, classes, attributes, pseudos, specificity)
 end
 
 function _svg_selector_chain(selector::AbstractString)
@@ -1714,7 +1805,37 @@ end
 
 function _svg_context_matches(selector::_SVGSimpleSelector,
                               context::_SVGElementContext)
-    return _svg_simple_selector_matches(selector, context.tag, context.attrs)
+    _svg_simple_selector_matches(selector, context.tag, context.attrs) ||
+        return false
+    return all(pseudo -> _svg_pseudo_selector_matches(pseudo, context),
+               selector.pseudos)
+end
+
+function _svg_nth_matches(index::Int, a::Int, b::Int)
+    index >= 1 || return false
+    a == 0 && return index == b
+    delta = index - b
+    rem(delta, a) == 0 || return false
+    return div(delta, a) >= 0
+end
+
+function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
+                                      context::_SVGElementContext)
+    child_index = length(context.previous_siblings) + 1
+    type_index = count(sibling -> sibling.tag == context.tag,
+                       context.previous_siblings) + 1
+    if pseudo.name === :root
+        return isempty(context.ancestors)
+    elseif pseudo.name === :first_child
+        return child_index == 1
+    elseif pseudo.name === :nth_child
+        return _svg_nth_matches(child_index, pseudo.a, pseudo.b)
+    elseif pseudo.name === :first_of_type
+        return type_index == 1
+    elseif pseudo.name === :nth_of_type
+        return _svg_nth_matches(type_index, pseudo.a, pseudo.b)
+    end
+    return false
 end
 
 function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
