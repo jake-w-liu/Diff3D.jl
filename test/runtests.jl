@@ -5332,6 +5332,49 @@ end
         @test transformed.paths[4].points[1].y ≈ 2.0
         rm(transform_path)
 
+        style_path = tempname() * ".svg"
+        write(style_path, """
+        <svg>
+          <g fill="#f00" stroke="#00f" stroke-width="2" opacity="0.5">
+            <rect x="0" y="0" width="2" height="1" style="fill:#0f0; fill-opacity:0.25"/>
+            <polygon points="0,0 1,0 0,1" stroke="none"/>
+            <polyline points="0,0 1,0 1,1" fill="none" stroke="rgb(255,0,0)" stroke-opacity="0.75"/>
+          </g>
+        </svg>
+        """)
+        styled = load_svg(style_path)
+        @test styled.paths[1].style isa SVGStyle
+        @test styled.paths[1].style.fill == Color3(0.0, 1.0, 0.0)
+        @test styled.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test styled.paths[1].style.stroke_width == 2.0
+        @test styled.paths[1].style.opacity == 0.5
+        @test styled.paths[1].style.fill_opacity == 0.25
+        @test styled.paths[2].style.fill == Color3(1.0, 0.0, 0.0)
+        @test styled.paths[2].style.stroke === nothing
+        @test styled.paths[3].style.fill === nothing
+        @test styled.paths[3].style.stroke == Color3(1.0, 0.0, 0.0)
+        @test styled.paths[3].style.stroke_opacity == 0.75
+
+        meshes = svg_meshes(styled)
+        @test length(meshes) == 2
+        @test meshes[1].material.color == Color3(0.0, 1.0, 0.0)
+        @test meshes[1].material.opacity == 0.125
+        @test meshes[1].material.transparent
+        @test meshes[2].material.color == Color3(1.0, 0.0, 0.0)
+
+        strokes = svg_strokes(styled)
+        @test length(strokes) == 2
+        @test strokes[1] isa LineLoop
+        @test strokes[1].material.color == Color3(0.0, 0.0, 1.0)
+        @test strokes[1].material.linewidth == 2.0
+        @test strokes[1].material.opacity == 0.5
+        @test strokes[2] isa LineObject
+        @test strokes[2].material.color == Color3(1.0, 0.0, 0.0)
+        @test strokes[2].material.opacity == 0.375
+        @test svg_meshes(style_path)[1].material.opacity == 0.125
+        @test length(svg_strokes(style_path)) == 2
+        rm(style_path)
+
         shapes = svg_shapes(svg)
         @test length(shapes) == 4
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
@@ -5370,6 +5413,19 @@ end
         write(bad_transform_path, "<svg><rect width=\"1\" height=\"1\" transform=\"project(1)\"/></svg>")
         @test_throws "unsupported SVG transform" load_svg(bad_transform_path)
         rm(bad_transform_path)
+
+        bad_color_path = tempname() * ".svg"
+        write(bad_color_path, "<svg><rect width=\"1\" height=\"1\" fill=\"notacolor\"/></svg>")
+        @test_throws "unsupported SVG color" load_svg(bad_color_path)
+        rm(bad_color_path)
+        bad_hex_color_path = tempname() * ".svg"
+        write(bad_hex_color_path, "<svg><rect width=\"1\" height=\"1\" fill=\"#ggg\"/></svg>")
+        @test_throws "unsupported SVG color" load_svg(bad_hex_color_path)
+        rm(bad_hex_color_path)
+        bad_rgb_color_path = tempname() * ".svg"
+        write(bad_rgb_color_path, "<svg><rect width=\"1\" height=\"1\" fill=\"rgb(nope,0,0)\"/></svg>")
+        @test_throws "unsupported SVG color" load_svg(bad_rgb_color_path)
+        rm(bad_rgb_color_path)
 
         bad_segments_path = tempname() * ".svg"
         write(bad_segments_path, "<svg><circle r=\"1\"/></svg>")

@@ -1308,11 +1308,30 @@ TextGeometry(text::AbstractString, font::FontData; kwargs...) =
 
 # ========================== SVGLoader / basic SVG shapes ==========================
 
+"""Inherited SVG fill/stroke presentation data for one parsed path."""
+struct SVGStyle
+    fill::Union{Nothing,Color3{Float64}}
+    stroke::Union{Nothing,Color3{Float64}}
+    stroke_width::Float64
+    opacity::Float64
+    fill_opacity::Float64
+    stroke_opacity::Float64
+end
+
+const _SVG_DEFAULT_STYLE =
+    SVGStyle(Color3(0.0, 0.0, 0.0), nothing, 1.0, 1.0, 1.0, 1.0)
+
 """One parsed SVG primitive or path subpath."""
 struct SVGPath
     tag::Symbol
     points::Vector{Vec2{Float64}}
     closed::Bool
+    style::SVGStyle
+
+    SVGPath(tag::Symbol, points::Vector{Vec2{Float64}}, closed::Bool,
+            style::SVGStyle) = new(tag, points, closed, style)
+    SVGPath(tag::Symbol, points::Vector{Vec2{Float64}}, closed::Bool) =
+        new(tag, points, closed, _SVG_DEFAULT_STYLE)
 end
 
 """Decoded SVG document with common primitives converted to point paths."""
@@ -1372,6 +1391,16 @@ function _svg_attrs(raw::AbstractString)
     return attrs
 end
 
+function _svg_style_declarations(raw::AbstractString)
+    attrs = Dict{String,String}()
+    for decl in split(raw, ';')
+        parts = split(decl, ':'; limit=2)
+        length(parts) == 2 || continue
+        attrs[lowercase(strip(parts[1]))] = strip(parts[2])
+    end
+    return attrs
+end
+
 function _svg_numbers(raw::AbstractString)
     values = Float64[]
     for token in _svg_lex(raw, _SVG_NUMBER_RE, "SVG numeric list")
@@ -1380,6 +1409,96 @@ function _svg_numbers(raw::AbstractString)
         push!(values, v)
     end
     return values
+end
+
+function _svg_unit_interval(raw::AbstractString, key::String)
+    value = _svg_length(Dict(key => raw), key)
+    0.0 <= value <= 1.0 || error("SVG $key must be between 0 and 1")
+    return value
+end
+
+function _svg_color(raw::AbstractString)
+    s = lowercase(strip(String(raw)))
+    s == "none" && return nothing
+    s == "transparent" && return nothing
+    named = Dict(
+        "black" => Color3(0.0, 0.0, 0.0),
+        "white" => Color3(1.0, 1.0, 1.0),
+        "red" => Color3(1.0, 0.0, 0.0),
+        "green" => Color3(0.0, 0.5019607843137255, 0.0),
+        "blue" => Color3(0.0, 0.0, 1.0),
+        "yellow" => Color3(1.0, 1.0, 0.0),
+        "cyan" => Color3(0.0, 1.0, 1.0),
+        "magenta" => Color3(1.0, 0.0, 1.0),
+        "gray" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
+        "grey" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
+    )
+    haskey(named, s) && return named[s]
+    if startswith(s, "#")
+        hex = s[2:end]
+        hex_channel(part) = begin
+            value = tryparse(Int, part; base=16)
+            value === nothing && error("unsupported SVG color $raw")
+            value / 255
+        end
+        if ncodeunits(hex) == 3
+            vals = [hex_channel(string(ch, ch)) for ch in hex]
+        elseif ncodeunits(hex) == 6
+            vals = [hex_channel(hex[i:i+1]) for i in (1, 3, 5)]
+        else
+            error("unsupported SVG color $raw")
+        end
+        return Color3(vals[1], vals[2], vals[3])
+    end
+    m = match(r"^rgb\((.*)\)$", s)
+    if m !== nothing
+        parts = strip.(split(m.captures[1], ','))
+        length(parts) == 3 || error("SVG rgb() color needs three channels")
+        values = Float64[]
+        for part in parts
+            if endswith(part, "%")
+                parsed = tryparse(Float64, part[1:prevind(part, lastindex(part))])
+                parsed === nothing && error("unsupported SVG color $raw")
+                v = parsed / 100
+            else
+                parsed = tryparse(Float64, part)
+                parsed === nothing && error("unsupported SVG color $raw")
+                v = parsed / 255
+            end
+            isfinite(v) || error("SVG rgb() channel must be finite")
+            push!(values, clamp(v, 0.0, 1.0))
+        end
+        return Color3(values[1], values[2], values[3])
+    end
+    error("unsupported SVG color $raw")
+end
+
+function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict)
+    local_attrs = Dict{String,String}()
+    for key in ("fill", "stroke", "stroke-width", "opacity",
+                "fill-opacity", "stroke-opacity")
+        haskey(attrs, key) && (local_attrs[key] = attrs[key])
+    end
+    if haskey(attrs, "style")
+        for (key, value) in _svg_style_declarations(attrs["style"])
+            local_attrs[key] = value
+        end
+    end
+    fill = haskey(local_attrs, "fill") ? _svg_color(local_attrs["fill"]) : parent.fill
+    stroke = haskey(local_attrs, "stroke") ? _svg_color(local_attrs["stroke"]) : parent.stroke
+    stroke_width = haskey(local_attrs, "stroke-width") ?
+                   _svg_length(local_attrs, "stroke-width") : parent.stroke_width
+    opacity = haskey(local_attrs, "opacity") ?
+              _svg_unit_interval(local_attrs["opacity"], "opacity") : parent.opacity
+    fill_opacity = haskey(local_attrs, "fill-opacity") ?
+                   _svg_unit_interval(local_attrs["fill-opacity"], "fill-opacity") :
+                   parent.fill_opacity
+    stroke_opacity = haskey(local_attrs, "stroke-opacity") ?
+                     _svg_unit_interval(local_attrs["stroke-opacity"], "stroke-opacity") :
+                     parent.stroke_opacity
+    stroke_width >= 0.0 || error("SVG stroke-width must be non-negative")
+    return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
+                    stroke_opacity)
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -1471,8 +1590,11 @@ end
 function _svg_transform_path(path::SVGPath, t)
     t == _svg_identity_transform() && return path
     return SVGPath(path.tag, [_svg_apply_transform(t, p) for p in path.points],
-                   path.closed)
+                   path.closed, path.style)
 end
+
+_svg_style_path(path::SVGPath, style::SVGStyle) =
+    SVGPath(path.tag, path.points, path.closed, style)
 
 function _svg_transform_numbers(raw::AbstractString)
     values = _svg_numbers(raw)
@@ -1784,6 +1906,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     width, height = _svg_root_size(_svg_attrs(root.captures[1]))
     paths = SVGPath[]
     transform_stack = [_svg_identity_transform()]
+    style_stack = [_SVG_DEFAULT_STYLE]
 
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
                        raw)
@@ -1795,10 +1918,12 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         if tag == "svg" || tag == "g"
             if closing
                 length(transform_stack) > 1 && pop!(transform_stack)
+                length(style_stack) > 1 && pop!(style_stack)
             elseif !self_closing
                 push!(transform_stack,
                       _svg_compose_transform(transform_stack[end],
                                              _svg_transform_from_attrs(attrs)))
+                push!(style_stack, _svg_style_from_attrs(style_stack[end], attrs))
             end
             continue
         end
@@ -1807,6 +1932,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         local_transform = _svg_transform_from_attrs(attrs)
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
+        style = _svg_style_from_attrs(style_stack[end], attrs)
         element_paths = SVGPath[]
         if tag == "path"
             d = get(attrs, "d", nothing)
@@ -1834,7 +1960,8 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             length(points) >= 2 &&
                 push!(element_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
-        append!(paths, [_svg_transform_path(path, total_transform)
+        append!(paths, [_svg_transform_path(_svg_style_path(path, style),
+                                            total_transform)
                         for path in element_paths])
     end
 
@@ -1861,6 +1988,53 @@ function svg_geometry(svg::SVGDocument)
 end
 
 svg_geometry(path::String; kwargs...) = svg_geometry(load_svg(path; kwargs...))
+
+function _svg_line_geometry(points::Vector{Vec2{Float64}})
+    positions = Float64[]
+    for p in points
+        push!(positions, p.x, p.y, 0.0)
+    end
+    return BufferGeometry(positions, Float64[], Float64[], Int[], length(points), 0)
+end
+
+"""Build `Mesh` objects for filled, closed SVG paths using parsed fill styles."""
+function svg_meshes(svg::SVGDocument)
+    out = Mesh[]
+    for path in svg.paths
+        fill = path.style.fill
+        fill === nothing && continue
+        path.closed && length(path.points) >= 3 || continue
+        opacity = path.style.opacity * path.style.fill_opacity
+        opacity > 0.0 || continue
+        mat = MeshBasicMaterial(color=fill, opacity=opacity,
+                                transparent=opacity < 1.0, side=:double)
+        push!(out, Mesh(ShapeGeometry(copy(path.points)), mat; name="SVGFill"))
+    end
+    return out
+end
+
+svg_meshes(path::String; kwargs...) = svg_meshes(load_svg(path; kwargs...))
+
+"""Build line objects for stroked SVG paths using parsed stroke styles."""
+function svg_strokes(svg::SVGDocument)
+    out = AbstractObject3D[]
+    for path in svg.paths
+        stroke = path.style.stroke
+        stroke === nothing && continue
+        length(path.points) >= 2 || continue
+        path.style.stroke_width > 0.0 || continue
+        opacity = path.style.opacity * path.style.stroke_opacity
+        opacity > 0.0 || continue
+        mat = LineBasicMaterial(color=stroke, linewidth=path.style.stroke_width,
+                                opacity=opacity)
+        geo = _svg_line_geometry(copy(path.points))
+        push!(out, path.closed ? LineLoop(geo, mat; name="SVGStroke") :
+                                  LineObject(geo, mat; name="SVGStroke"))
+    end
+    return out
+end
+
+svg_strokes(path::String; kwargs...) = svg_strokes(load_svg(path; kwargs...))
 
 # ========================== base64 ==========================
 

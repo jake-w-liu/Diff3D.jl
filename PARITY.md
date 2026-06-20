@@ -781,8 +781,11 @@ Parallel audits split the remaining work into five critical tracks:
   and curve/elliptical-arc subdivision into `Vec2` loops/merged geometry.
   Element transforms and simple nested group transform stacks now apply
   `matrix`, `translate`, `scale`, `rotate`, `skewX`, and `skewY` transform
-  lists. Style inheritance, fills/holes, strokes, clipping, and DOM-level SVG
-  parsing remain open.
+  lists. Basic inherited fill/stroke presentation attributes and inline
+  `style` declarations now attach to `SVGPath`, with `svg_meshes` and
+  `svg_strokes` helpers creating styled fill meshes and stroke line objects.
+  CSS selectors, fill-rule holes, stroked outline triangulation, clipping, and
+  DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.
