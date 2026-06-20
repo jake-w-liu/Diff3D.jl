@@ -1305,6 +1305,16 @@ end
                             name="export_alpha_map")
         alpha_mapped.position = Vec3(-1.5, 0.0, 0.0)
         add!(scene, alpha_mapped)
+        depth_alpha_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                  MeshDepthMaterial(near=1.0, far=8.0,
+                                                    map=Texture(texdata; filter=:nearest,
+                                                                colorspace=:linear),
+                                                    alpha_map=Texture(alphadata; filter=:nearest),
+                                                    alpha_test=0.45,
+                                                    side=:double);
+                                  name="export_depth_alpha_map")
+        depth_alpha_mapped.position = Vec3(-2.2, 0.75, 0.0)
+        add!(scene, depth_alpha_mapped)
         basic_alpha_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                   MeshBasicMaterial(color=Color3(0.9, 0.2, 0.2),
                                                     alpha_map=Texture(alphadata; filter=:nearest),
@@ -1377,6 +1387,11 @@ end
                                      name="export_matcap_wireframe")
         matcap_wireframe_mesh.position = Vec3(-3.6, 0.75, 0.0)
         add!(scene, matcap_wireframe_mesh)
+        depth_wireframe_mesh = Mesh(PlaneGeometry(width=0.6, height=0.6),
+                                    MeshDepthMaterial(wireframe=true);
+                                    name="export_depth_wireframe")
+        depth_wireframe_mesh.position = Vec3(-4.3, 1.5, 0.0)
+        add!(scene, depth_wireframe_mesh)
         emissive_mapped = Mesh(PlaneGeometry(width=0.6, height=0.6),
                                MeshStandardMaterial(color=Color3(0.1, 0.1, 0.1),
                                                     emissive=Color3(0.2, 0.4, 1.0),
@@ -2128,6 +2143,10 @@ end
         @test occursin("\"depthFar\":8", html)
         @test occursin("\"depthPacking\":\"rgba\"", html)
         @test occursin("\"depthPackingMode\":1", html)
+        @test occursin("\"name\":\"export_depth_alpha_map\"", html)
+        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"materialType\":\"depth\".*\"alphaTest\":0\.45000000000000001", html)
+        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"texture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
         @test occursin("uMaterialMode==2", html)
         @test occursin("uDepthNear", html)
         @test occursin("uDepthFar", html)
@@ -2142,6 +2161,9 @@ end
         @test occursin("uniform1i(p,\"uDepthOrthographic\",currentDrawCamera&&currentDrawCamera.type===\"orthographic\"?1:0)", html)
         @test occursin("varying float vViewZ", html)
         @test occursin("depthColor(vViewZ)", html)
+        @test occursin("vec4 depthTex=mix(vec4(1.0),colorTex(uMap,uv,uMapColorSpace),uUseMap)", html)
+        @test occursin("float depthAlpha=uOpacity*depthTex.a*depthAlphaTex", html)
+        @test occursin("if(depthAlpha<uAlphaTest) discard", html)
         @test !occursin("viewDistance-uDepthNear", html)
         @test occursin("\"name\":\"export_toon_material\"", html)
         @test occursin("\"materialType\":\"toon\"", html)
@@ -2225,6 +2247,8 @@ end
         @test occursin(r"\"name\":\"export_phong_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin("\"name\":\"export_matcap_wireframe\"", html)
         @test occursin(r"\"name\":\"export_matcap_wireframe\".*\"mode\":\"lines\"", html)
+        @test occursin("\"name\":\"export_depth_wireframe\"", html)
+        @test occursin(r"\"name\":\"export_depth_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
         @test occursin("const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1]", html)
         @test occursin("function webLineWidth(w)", html)
@@ -4212,6 +4236,25 @@ end
         @test MeshDepthMaterial(depth_packing=:rg).depth_packing === :rg
         @test_throws ArgumentError MeshDepthMaterial(depth_packing=:depth)
         @test_throws ArgumentError MeshDepthMaterial(depth_packing=1)
+        depth_tex = Texture(ones(Float64, 1, 1, 3); filter=:nearest)
+        mapped_depth = MeshDepthMaterial(map=depth_tex, alpha_map=depth_tex,
+                                         alpha_test=0.42, wireframe=true)
+        @test mapped_depth.map === depth_tex
+        @test mapped_depth.alpha_map === depth_tex
+        @test mapped_depth.alpha_test ≈ 0.42
+        @test mapped_depth.wireframe === true
+        @test material_alpha_test(mapped_depth) ≈ 0.42
+        @test material_wireframe(mapped_depth) === true
+        legacy_depth = MeshDepthMaterial(0.1, 100.0, 1.0, false, :front, true, true)
+        @test legacy_depth.map === nothing
+        @test legacy_depth.alpha_map === nothing
+        @test legacy_depth.alpha_test == 0.0
+        @test legacy_depth.wireframe === false
+        legacy_packed_depth = MeshDepthMaterial(0.1, 100.0, :rgba, 1.0,
+                                                false, :front, true, true)
+        @test legacy_packed_depth.depth_packing === :rgba
+        @test legacy_packed_depth.map === nothing
+        @test legacy_packed_depth.alpha_map === nothing
         @test Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:basic), 0.0) ==
               Color3(1.0, 1.0, 1.0)
         @test Diff3D._depth_material_color(MeshDepthMaterial(depth_packing=:basic), 1.0) ==
@@ -4331,6 +4374,10 @@ end
         @test MeshMatcapMaterial(normal_map=alpha_tex).normal_map === alpha_tex
         @test MeshMatcapMaterial(normal_scale=0.25).normal_scale ≈ 0.25
         @test MeshMatcapMaterial(wireframe=true).wireframe === true
+        @test MeshDepthMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
+        @test MeshDepthMaterial(map=alpha_tex).map === alpha_tex
+        @test MeshDepthMaterial(alpha_test=0.29).alpha_test ≈ 0.29
+        @test MeshDepthMaterial(wireframe=true).wireframe === true
         @test material_alpha_test(PointsMaterial(alpha_test=0.22)) ≈ 0.22
         @test PointsMaterial(alpha_map=alpha_tex).alpha_map === alpha_tex
         @test PointsMaterial().size_attenuation === true
@@ -4466,6 +4513,7 @@ end
         @test material_wireframe(MeshLambertMaterial(wireframe=true)) == true
         @test material_wireframe(MeshPhongMaterial(wireframe=true)) == true
         @test material_wireframe(MeshMatcapMaterial(wireframe=true)) == true
+        @test material_wireframe(MeshDepthMaterial(wireframe=true)) == true
         @test material_wireframe(MeshStandardMaterial()) == false
 
         rgba_alpha = ones(Float64, 2, 2, 4)
@@ -9813,6 +9861,9 @@ end
                     MeshMatcapMaterial(color=Color3(1.0, 0.0, 0.0),
                                        side=:double, alpha_test=0.5,
                                        alpha_map=alpha_map) :
+                    material === :depth ?
+                    MeshDepthMaterial(side=:double, alpha_test=0.5,
+                                       alpha_map=alpha_map) :
                     MeshStandardMaterial(color=Color3(1.0, 0.0, 0.0),
                                          roughness=1.0, metalness=0.0,
                                          side=:double, alpha_test=0.5,
@@ -9837,6 +9888,10 @@ end
             @test rt_basic_alpha_one.color[16, 16, 1] > 0.9
             rt_basic_alpha_zero_smooth = alpha_map_plane(alpha_zero; smooth=true, material=:basic)
             @test sum(@view rt_basic_alpha_zero_smooth.color[16, 16, :]) == 0.0
+            rt_depth_alpha_zero = alpha_map_plane(alpha_zero; material=:depth)
+            @test sum(@view rt_depth_alpha_zero.color[16, 16, :]) == 0.0
+            rt_depth_alpha_one = alpha_map_plane(alpha_one; material=:depth)
+            @test rt_depth_alpha_one.color[16, 16, 1] > 0.1
             for material in (:lambert, :phong, :toon, :matcap)
                 rt_alpha_zero = alpha_map_plane(alpha_zero; material=material)
                 @test sum(@view rt_alpha_zero.color[16, 16, :]) == 0.0

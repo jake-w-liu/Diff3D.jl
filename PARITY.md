@@ -281,7 +281,9 @@ Parallel audits split the remaining work into five critical tracks:
   solid color.
   Browser export now recognizes `MeshDepthMaterial` and emits compact
   view-space depth output using the material's near/far range, with basic,
-  RGBA, RGB, and RG packing branches.
+  RGBA, RGB, and RG packing branches. Depth materials now also share color-map
+  alpha, alpha-map discard, alpha-test state, and wireframe draw-mode handling
+  with the compact browser material paths.
   Browser export now recognizes `MeshToonMaterial` and applies compact
   quantized diffuse light bands from `gradient_steps`, or samples serialized
   `gradient_map` textures using the three.js toon irradiance coordinate. Toon
@@ -587,6 +589,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: make compact browser `MeshDepthMaterial` switch depth conversion for
   orthographic exported cameras instead of always using perspective view-Z
   math.
+- Done: add `MeshDepthMaterial.map`, `alpha_map`, `alpha_test`, and
+  `wireframe` field parity through CPU flat raster alpha discard, compact
+  browser depth map/alpha serialization, depth-branch fragment discard, generic
+  wireframe rendering, and legacy positional constructor defaults.
 - Done: add compact browser `MeshToonMaterial` support with `gradient_steps`
   serialization, quantized diffuse light bands, and optional `gradient_map`
   sampling.

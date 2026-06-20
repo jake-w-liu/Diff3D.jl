@@ -754,6 +754,10 @@ struct MeshDepthMaterial <: AbstractMaterial
     near::Float64
     far::Float64
     depth_packing::Symbol
+    map::Any
+    alpha_map::Any
+    alpha_test::Float64
+    wireframe::Bool
     opacity::Float64
     transparent::Bool
     side::Symbol
@@ -764,26 +768,33 @@ end
 
 function MeshDepthMaterial(near::Real, far::Real, opacity::Real, transparent::Bool,
                            side::Symbol, depth_test::Bool, depth_write::Bool)
-    MeshDepthMaterial(Float64(near), Float64(far), :basic, Float64(opacity),
-                      transparent, side, depth_test, depth_write, Plane{Float64}[])
+    MeshDepthMaterial(Float64(near), Float64(far), :basic, nothing, nothing, 0.0,
+                      false, Float64(opacity), transparent, side, depth_test,
+                      depth_write, Plane{Float64}[])
 end
 
 function MeshDepthMaterial(near::Real, far::Real, depth_packing, opacity::Real,
                            transparent::Bool, side::Symbol, depth_test::Bool,
                            depth_write::Bool)
     MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
-                      Float64(opacity), transparent, side, depth_test, depth_write,
-                      Plane{Float64}[])
+                      nothing, nothing, 0.0, false, Float64(opacity), transparent,
+                      side, depth_test, depth_write, Plane{Float64}[])
 end
 
 function MeshDepthMaterial(; near=0.1, far=100.0, depth_packing=:basic,
+                           map=nothing, alpha_map=nothing, alpha_test=0.0,
+                           wireframe=false,
                            opacity=1.0, transparent=false, side=:front,
                            depth_test=true, depth_write=true,
                            clipping_planes=Plane{Float64}[])
     MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
+                      map, alpha_map, Float64(alpha_test), wireframe,
                       Float64(opacity), transparent, side, depth_test, depth_write,
                       _material_clipping_planes(clipping_planes))
 end
+
+MeshDepthMaterial(args::Vararg{Any,12}) =
+    MeshDepthMaterial(args..., Plane{Float64}[])
 
 # ========================== ShaderMaterial ==========================
 # Placeholder for custom GLSL
