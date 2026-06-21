@@ -2012,7 +2012,8 @@ end
 
 struct _SVGMaskEntry
     loops::Vector{Vector{Vec2{Float64}}}
-    opacity::Float64
+    alpha::Float64
+    intensity::Float64
 end
 
 struct _SVGInsetValue
@@ -3801,10 +3802,13 @@ end
 _svg_mask_fill_luminance(color::Color3) =
     0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
 
+_svg_mask_path_alpha(path::SVGPath) =
+    clamp(path.style.opacity * path.style.fill_opacity, 0.0, 1.0)
+
 function _svg_mask_path_opacity(path::SVGPath, mask_type::Symbol)
     fill = path.style.fill
     fill === nothing && return 0.0
-    alpha = path.style.opacity * path.style.fill_opacity
+    alpha = _svg_mask_path_alpha(path)
     mask_type === :alpha && return clamp(alpha, 0.0, 1.0)
     mask_type === :luminance &&
         return clamp(alpha * _svg_mask_fill_luminance(fill), 0.0, 1.0)
@@ -3817,7 +3821,8 @@ function _svg_mask_definition_paths(paths::Vector{SVGPath}, mask_type::Symbol)
     out = SVGPath[]
     for path in paths
         path.closed && length(path.points) >= 3 || continue
-        _svg_mask_path_opacity(path, mask_type) > 1e-12 || continue
+        path.style.fill !== nothing || continue
+        _svg_mask_path_alpha(path) > 1e-12 || continue
         push!(out, path)
     end
     return out
@@ -4335,8 +4340,9 @@ function _svg_resolved_mask_entries(definitions::Dict{String,_SVGClipDefinition}
     isempty(definition.paths) && return nothing
     entries = _SVGMaskEntry[]
     for group in _svg_element_path_groups(definition.paths)
-        opacity = _svg_mask_path_opacity(group[1], definition.mask_type)
-        opacity > 1e-12 || continue
+        alpha = _svg_mask_path_alpha(group[1])
+        alpha > 1e-12 || continue
+        intensity = _svg_mask_path_opacity(group[1], definition.mask_type)
         loops = [_font_loop_points(path.points) for path in group]
         pieces = _svg_clip_area_loop_pieces(loops, group[1].style.fill_rule,
                                             "SVG mask #$mask_id")
@@ -4350,7 +4356,7 @@ function _svg_resolved_mask_entries(definitions::Dict{String,_SVGClipDefinition}
         elseif definition.units !== :userSpaceOnUse
             error("unsupported SVG maskContentUnits $(definition.units)")
         end
-        push!(entries, _SVGMaskEntry(pieces, opacity))
+        push!(entries, _SVGMaskEntry(pieces, alpha, intensity))
     end
     isempty(entries) && return nothing
     return entries
@@ -4742,6 +4748,78 @@ function _svg_clip_path_to_loops(path::SVGPath,
     return fragments
 end
 
+function _svg_mask_entry_covers(entry::_SVGMaskEntry, p::Vec2{Float64})
+    return any(loop -> _font_point_in_loop(p, loop), entry.loops)
+end
+
+function _svg_mask_source_over_intensity(entries::Vector{_SVGMaskEntry},
+                                         p::Vec2{Float64})
+    intensity = 0.0
+    for entry in entries
+        _svg_mask_entry_covers(entry, p) || continue
+        intensity = entry.intensity + intensity * (1.0 - entry.alpha)
+    end
+    return clamp(intensity, 0.0, 1.0)
+end
+
+function _svg_mask_closed_path_to_entries(path::SVGPath,
+                                          entries::Vector{_SVGMaskEntry})
+    subject = _font_loop_points(path.points)
+    length(subject) >= 3 && abs(_font_polygon_area(subject)) > 1e-12 ||
+        return SVGPath[]
+    loops = Vector{Vec2{Float64}}[subject]
+    for entry in entries
+        append!(loops, entry.loops)
+    end
+    xs = _svg_boolean_x_breaks(loops)
+    fragments = SVGPath[]
+    length(xs) >= 2 || return fragments
+    for i in 1:(length(xs) - 1)
+        x0 = xs[i]
+        x1 = xs[i + 1]
+        x1 - x0 > 1e-9 || continue
+        xm = (x0 + x1) / 2.0
+        crossings = _svg_slab_crossings(loops, x0, x1)
+        for j in 1:(length(crossings) - 1)
+            lower = crossings[j]
+            upper = crossings[j + 1]
+            upper.ym - lower.ym > 1e-9 || continue
+            sample = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            _font_point_in_loop(sample, subject) || continue
+            intensity = _svg_mask_source_over_intensity(entries, sample)
+            intensity > 1e-12 || continue
+            points = _font_loop_points([Vec2(x0, lower.y0),
+                                        Vec2(x1, lower.y1),
+                                        Vec2(x1, upper.y1),
+                                        Vec2(x0, upper.y0)])
+            length(points) >= 3 && abs(_font_polygon_area(points)) > 1e-12 ||
+                continue
+            push!(fragments,
+                  _svg_path_with_opacity_factor(
+                      _svg_path_with_points(path, _font_orient_loop(points, true),
+                                            true),
+                      intensity))
+        end
+    end
+    return fragments
+end
+
+function _svg_mask_path_to_entries(path::SVGPath,
+                                   entries::Vector{_SVGMaskEntry})
+    if path.closed
+        return _svg_mask_closed_path_to_entries(path, entries)
+    end
+    fragments = SVGPath[]
+    for entry in entries
+        entry.intensity > 1e-12 || continue
+        for fragment in _svg_clip_path_to_loops(path, entry.loops)
+            push!(fragments, _svg_path_with_opacity_factor(fragment,
+                                                           entry.intensity))
+        end
+    end
+    return fragments
+end
+
 function _svg_apply_clip_paths(paths::Vector{SVGPath},
                                clip_applications::Vector{_SVGClipApplication},
                                definitions::Dict{String,_SVGClipDefinition})
@@ -4767,7 +4845,8 @@ function _svg_apply_mask_paths(paths::Vector{SVGPath},
         entries = _svg_resolved_mask_entries(definitions, application, out)
         entries === nothing && return SVGPath[]
         masked = SVGPath[]
-        if all(entry -> entry.opacity >= 1.0 - 1e-12, entries)
+        if all(entry -> entry.intensity >= 1.0 - 1e-12 &&
+                        entry.alpha >= 1.0 - 1e-12, entries)
             loops = Vector{Vec2{Float64}}[]
             for entry in entries
                 append!(loops, entry.loops)
@@ -4776,12 +4855,8 @@ function _svg_apply_mask_paths(paths::Vector{SVGPath},
                 append!(masked, _svg_clip_path_to_loops(path, loops))
             end
         else
-            for path in out, entry in entries
-                fragments = _svg_clip_path_to_loops(path, entry.loops)
-                append!(masked,
-                        (_svg_path_with_opacity_factor(fragment,
-                                                       entry.opacity)
-                         for fragment in fragments))
+            for path in out
+                append!(masked, _svg_mask_path_to_entries(path, entries))
             end
         end
         out = masked
@@ -5518,6 +5593,29 @@ function _svg_fill_geometries(paths::Vector{SVGPath})
     return geos
 end
 
+function _svg_same_fill_mesh_style(a::SVGStyle, b::SVGStyle)
+    return a.fill == b.fill &&
+           a.opacity == b.opacity &&
+           a.fill_opacity == b.fill_opacity &&
+           a.fill_rule === b.fill_rule
+end
+
+function _svg_fill_mesh_path_groups(paths::Vector{SVGPath})
+    groups = Vector{SVGPath}[]
+    for path in paths
+        inserted = false
+        for group in groups
+            if _svg_same_fill_mesh_style(group[1].style, path.style)
+                push!(group, path)
+                inserted = true
+                break
+            end
+        end
+        inserted || push!(groups, SVGPath[path])
+    end
+    return groups
+end
+
 """Triangulate closed SVG loops into a merged `BufferGeometry`."""
 function svg_geometry(svg::SVGDocument)
     geos = BufferGeometry[]
@@ -5936,18 +6034,21 @@ end
 function svg_meshes(svg::SVGDocument)
     out = Mesh[]
     for paths in _svg_element_path_groups(svg.paths)
-        isempty(paths) && continue
-        style = paths[1].style
-        fill = style.fill
-        fill === nothing && continue
-        opacity = style.opacity * style.fill_opacity
-        opacity > 0.0 || continue
-        geos = _svg_fill_geometries(paths)
-        isempty(geos) && continue
-        geo = length(geos) == 1 ? geos[1] : merge_geometries(geos; with_groups=false)
-        mat = MeshBasicMaterial(color=fill, opacity=opacity,
-                                transparent=opacity < 1.0, side=:double)
-        push!(out, Mesh(geo, mat; name="SVGFill"))
+        for styled_paths in _svg_fill_mesh_path_groups(paths)
+            isempty(styled_paths) && continue
+            style = styled_paths[1].style
+            fill = style.fill
+            fill === nothing && continue
+            opacity = style.opacity * style.fill_opacity
+            opacity > 0.0 || continue
+            geos = _svg_fill_geometries(styled_paths)
+            isempty(geos) && continue
+            geo = length(geos) == 1 ? geos[1] :
+                  merge_geometries(geos; with_groups=false)
+            mat = MeshBasicMaterial(color=fill, opacity=opacity,
+                                    transparent=opacity < 1.0, side=:double)
+            push!(out, Mesh(geo, mat; name="SVGFill"))
+        end
     end
     return out
 end

@@ -6067,8 +6067,8 @@ end
           </style>
           <defs>
             <mask id="white-box">
-              <rect x="1" y="1" width="2" height="2" fill="white"/>
               <rect x="0" y="0" width="4" height="4" fill="black"/>
+              <rect x="1" y="1" width="2" height="2" fill="white"/>
             </mask>
             <mask id="css-box">
               <rect x="6" y="1" width="2" height="2" fill="white"/>
@@ -6110,8 +6110,8 @@ end
         @test length(mask_svg.paths) == 7
         @test length(mask_meshes) == 7
         @test svg_points_approx(mask_svg.paths[1].points,
-                                [Vec2(1.0, 3.0), Vec2(1.0, 1.0),
-                                 Vec2(3.0, 1.0), Vec2(3.0, 3.0)])
+                                [Vec2(1.0, 1.0), Vec2(3.0, 1.0),
+                                 Vec2(3.0, 3.0), Vec2(1.0, 3.0)])
         @test svg_points_approx(mask_svg.paths[2].points,
                                 [Vec2(6.0, 3.0), Vec2(6.0, 1.0),
                                  Vec2(8.0, 1.0), Vec2(8.0, 3.0)])
@@ -6125,11 +6125,11 @@ end
                                 [Vec2(5.0, 17.0), Vec2(5.0, 15.0),
                                  Vec2(7.0, 15.0), Vec2(7.0, 17.0)])
         @test svg_points_approx(mask_svg.paths[6].points,
-                                [Vec2(11.0, 3.0), Vec2(11.0, 1.0),
-                                 Vec2(13.0, 1.0), Vec2(13.0, 3.0)])
+                                [Vec2(11.0, 1.0), Vec2(13.0, 1.0),
+                                 Vec2(13.0, 3.0), Vec2(11.0, 3.0)])
         @test svg_points_approx(mask_svg.paths[7].points,
-                                [Vec2(16.0, 3.0), Vec2(16.0, 1.0),
-                                 Vec2(18.0, 1.0), Vec2(18.0, 3.0)])
+                                [Vec2(16.0, 1.0), Vec2(18.0, 1.0),
+                                 Vec2(18.0, 3.0), Vec2(16.0, 3.0)])
         @test svg_triangle_area_xy(mask_meshes[1].geometry) ≈ 4.0
         @test svg_triangle_area_xy(mask_meshes[2].geometry) ≈ 4.0
         @test svg_triangle_area_xy(mask_meshes[3].geometry) ≈ 8.0
@@ -6164,6 +6164,38 @@ end
         @test svg_triangle_area_xy(group_mask_meshes[1].geometry) ≈ 8.0
         @test svg_triangle_area_xy(group_mask_meshes[2].geometry) ≈ 8.0
         rm(group_mask_path)
+
+        composited_mask_path = tempname() * ".svg"
+        write(composited_mask_path, """
+        <svg>
+          <defs>
+            <mask id="overlap">
+              <rect x="0" y="0" width="3" height="4"
+                    fill="white" fill-opacity=".5"/>
+              <rect x="1" y="0" width="3" height="4"
+                    fill="white" fill-opacity=".5"/>
+            </mask>
+            <mask id="dark-over">
+              <rect x="5" y="0" width="4" height="4" fill="white"/>
+              <rect x="7" y="0" width="2" height="4"
+                    fill="black" opacity=".5"/>
+            </mask>
+          </defs>
+          <rect width="4" height="4" mask="url(#overlap)"/>
+          <rect x="5" width="4" height="4" mask="url(#dark-over)"/>
+        </svg>
+        """)
+        composited_mask_svg = load_svg(composited_mask_path)
+        composited_mask_meshes = svg_meshes(composited_mask_svg)
+        @test length(composited_mask_svg.paths) == 5
+        @test length(composited_mask_meshes) == 4
+        @test [p.style.opacity for p in composited_mask_svg.paths] ≈
+              [0.5, 0.75, 0.5, 1.0, 0.5]
+        @test [svg_triangle_area_xy(m.geometry) for m in composited_mask_meshes] ≈
+              [8.0, 8.0, 8.0, 8.0]
+        @test [m.material.opacity for m in composited_mask_meshes] ≈
+              [0.5, 0.75, 1.0, 0.5]
+        rm(composited_mask_path)
 
         bad_xywh_clip_path = tempname() * ".svg"
         write(bad_xywh_clip_path,
