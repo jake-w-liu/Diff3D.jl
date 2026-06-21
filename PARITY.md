@@ -20,8 +20,8 @@ replacement for three.js `WebGLRenderer`.
   `ArrayCamera` scissor-split export.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
-  capsules, convex hulls, lathes, and text-like/path helpers. Box geometry now
-  supports width/height/depth segment counts.
+  capsules, convex hulls, lathes, sampled path extrusions, and text-like/path
+  helpers. Box geometry now supports width/height/depth segment counts.
 - Objects: `Mesh`, `InstancedMesh`, `PointsObject`, `LineObject`,
   `LineSegments`, `LineLoop`, `Sprite`, `LOD`, `Bone`, `Skeleton`, and
   `SkinnedMesh` data structures.
@@ -787,6 +787,11 @@ Parallel audits split the remaining work into five critical tracks:
   point sets, deduplicating near-identical inputs, rejecting finite/coplanarity
   errors clearly, and emitting flat-shaded outward triangle faces for the
   convex hull.
+- Done: extend `ExtrudeGeometry` with sampled `extrude_path` support for
+  convex 2D shapes swept along finite 3D point paths, including open-path caps,
+  closed-path side bands, transported frames, and clear errors for degenerate
+  shapes or paths. Full three.js bevel, hole, and material-group parity remain
+  open for general `ExtrudeGeometry`.
 - Done: add a typeface JSON font loader via `FontData`, `FontGlyph`,
   `FontCommand`, `load_font`, and `FontLoader`, plus `font_glyph_shapes` and
   `font_text_shapes` outline flattening for `m`/`l`/`q`/`b` commands into
@@ -1082,6 +1087,13 @@ Parallel audits split the remaining work into five critical tracks:
   and browser mesh/line export. Upstream curved, holed, and complex
   `Shape` paths, exact `ShapeUtils` triangulation, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_extrude_shapes` via
+  `examples/webgl_geometry_extrude_shapes.jl`, using sampled Catmull-Rom paths,
+  native `ExtrudeGeometry(...; extrude_path=...)`, Lambert materials,
+  transparent wireframe overlays, and browser animation playback. Upstream
+  random path control points, `TrackballControls`, beveled static star
+  extrusion, material arrays, and `WebGLRenderer` internals remain documented
+  deviations.
 - Added a standalone partial port for `webgl_geometry_text` via
   `examples/webgl_geometry_text.jl`, using the upstream Optimer bold typeface
   asset, Diff3D.jl `FontLoader`, beveled mirrored `TextGeometry`, Phong text

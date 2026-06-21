@@ -62,6 +62,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_shapes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_shapes.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_extrude_shapes"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_extrude_shapes"
+local_script = "examples/webgl_geometry_extrude_shapes.jl"
+status = "partial"
+prerequisites = ["ExtrudeGeometry.extrude_path", "ShapeGeometry", "MeshLambertMaterial", "MeshBasicMaterial wireframe", "browser mesh export", "browser animation playback"]
+known_deviations = [
+  "Uses deterministic sampled Catmull-Rom paths instead of upstream MathUtils.randFloat path control points and TrackballControls",
+  "Uses Diff3D.jl convex path extrusion with wireframe overlays and a non-beveled static depth extrusion instead of upstream bevelEnabled shape extrusion, material arrays, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_geometry_extrude_shapes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_extrude_shapes.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_text"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_text"
 local_script = "examples/webgl_geometry_text.jl"

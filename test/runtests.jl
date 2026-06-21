@@ -222,6 +222,7 @@ end
             "threejs_webgl_geometry_colors",
             "threejs_webgl_geometry_colors_lookuptable",
             "threejs_webgl_geometry_shapes",
+            "threejs_webgl_geometry_extrude_shapes",
             "threejs_webgl_geometry_text",
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
@@ -323,6 +324,21 @@ end
                     "WebGLExportCase(\"geometry-shapes\"",
                 ],
                 prerequisites=["ShapeGeometry", "ExtrudeGeometry", "LineLoop", "MeshPhongMaterial.map"],
+            ),
+            "threejs_webgl_geometry_extrude_shapes" => (
+                source=[
+                    "function sampled_catmull_rom(points::Vector{<:Vec3}",
+                    "function regular_polygon_shape(count::Int, radius::Float64",
+                    "function star_shape(; points::Int=5",
+                    "ExtrudeGeometry(triangle; extrude_path=closed_spline_path())",
+                    "ExtrudeGeometry(star; extrude_path=deterministic_spline_path())",
+                    "ExtrudeGeometry(star, depth=0.42)",
+                    "MeshBasicMaterial(color=Color3(0.0, 0.0, 0.0)",
+                    "wireframe=true",
+                    "QuaternionKeyframeTrack(parent, :rotation",
+                    "WebGLExportCase(\"geometry-extrude-shapes\"",
+                ],
+                prerequisites=["ExtrudeGeometry.extrude_path", "MeshLambertMaterial", "MeshBasicMaterial wireframe", "browser animation playback"],
             ),
             "threejs_webgl_geometry_text" => (
                 source=[
@@ -4229,6 +4245,27 @@ end
         bb = compute_bounding_box(ex)
         @test bb.min.z ≈ 0.0 && bb.max.z ≈ 2.0
         @test bb.min.x ≈ 0.0 && bb.max.x ≈ 1.0
+
+        path_ex = ExtrudeGeometry(sq; extrude_path=[
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(0.0, 0.0, 2.0),
+        ])
+        @test path_ex.n_faces == 12
+        path_bb = compute_bounding_box(path_ex)
+        @test path_bb.min == Vec3(0.0, 0.0, 0.0)
+        @test path_bb.max == Vec3(1.0, 1.0, 2.0)
+
+        tri = [Vec2(0.0, 0.3), Vec2(-0.3, -0.3), Vec2(0.3, -0.3)]
+        closed_path = Vec3[
+            Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0),
+            Vec3(1.0, 0.0, 0.0), Vec3(0.0, -1.0, 0.0),
+            Vec3(-1.0, 0.0, 0.0),
+        ]
+        closed_ex = ExtrudeGeometry(tri; extrude_path=closed_path)
+        @test closed_ex.n_faces == 4 * 3 * 2
+        @test_throws ArgumentError ExtrudeGeometry(sq; extrude_path=[Vec3(0.0, 0.0, 0.0)])
+        @test_throws ArgumentError ExtrudeGeometry([Vec2(0.0, 0.0), Vec2(1.0, 0.0)];
+                                                   extrude_path=closed_path)
     end
 
     @testset "CapsuleGeometry" begin
