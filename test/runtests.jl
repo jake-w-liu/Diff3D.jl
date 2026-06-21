@@ -236,6 +236,7 @@ end
             "threejs_webgl_geometry_nurbs",
             "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
+            "threejs_webgl_camera_array",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
             "threejs_webgl_morphtargets",
@@ -542,6 +543,17 @@ end
                     "WebGLExportCase(\"camera-split\"",
                 ],
                 prerequisites=["PerspectiveCamera", "OrthographicCamera", "ArrayCamera", "CameraHelper", "explicit camera export", "browser scissor-split export"],
+            ),
+            "threejs_webgl_camera_array" => (
+                source=[
+                    "function build_array_camera(; amount::Int=4",
+                    "ArrayCamera(cameras, viewports)",
+                    "DirectionalLight(color=Color3(1.0, 0.96, 0.88)",
+                    "MeshPhongMaterial(color=Color3(1.0, 0.06, 0.035)",
+                    "QuaternionKeyframeTrack(cylinder, :rotation",
+                    "WebGLExportCase(\"camera-array\"",
+                ],
+                prerequisites=["ArrayCamera", "PerspectiveCamera", "MeshPhongMaterial", "browser scissor-split export"],
             ),
             "threejs_webgl_lod" => (
                 source=[

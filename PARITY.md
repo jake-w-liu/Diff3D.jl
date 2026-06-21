@@ -1057,8 +1057,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`,
-  `webgl_lines_colors`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`,
+  `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added partial `webgl_geometries` coverage through
@@ -1223,6 +1224,11 @@ Parallel audits split the remaining work into five critical tracks:
   `webgl_buffergeometry_drawrange` via `examples/webgl_buffergeometry_drawrange.jl`;
   upstream dynamic particle simulation, GUI controls, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_camera_array` via
+  `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
+  sub-cameras and browser scissor viewports. The upstream 6x6 layout, live
+  imperative rotation loop, `Stats`, and `WebGLRenderer` internals remain
+  documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.
