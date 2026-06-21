@@ -728,6 +728,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_fly.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_fly.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_controls_pointerlock"
+upstream_url = "https://threejs.org/examples/#misc_controls_pointerlock"
+local_script = "examples/misc_controls_pointerlock.jl"
+status = "partial"
+prerequisites = ["PointerLockControls", "Fog", "HemisphereLight", "PlaneGeometry", "BoxGeometry", "MeshBasicMaterial.vertex_colors", "MeshPhongMaterial.vertex_colors", "browser mesh export"]
+known_deviations = [
+  "Uses a deterministic first-person camera snapshot instead of live DOM pointer-lock, keyboard movement, and click-to-play overlay",
+  "Uses 180 deterministic boxes and a 20x20 perturbed floor instead of upstream Math.random floor displacement and 500 boxes",
+  "Applies one programmed pointer-lock yaw/pitch update plus a fixed walk delta, but does not simulate gravity, jumping, velocity decay, or collision raycasting",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer animation loop and resize handling"
+]
+verification = ["julia --project=. examples/misc_controls_pointerlock.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_pointerlock.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"
