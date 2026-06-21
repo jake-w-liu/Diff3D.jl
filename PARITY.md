@@ -1059,7 +1059,7 @@ Parallel audits split the remaining work into five critical tracks:
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lights_hemisphere`, `webgl_lights_spotlight`, `webgl_lights_spotlights`, `webgl_lights_rectarealight`, `webgl_lines_colors`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lights_hemisphere`, `webgl_lights_spotlight`, `webgl_lights_spotlights`, `webgl_lights_rectarealight`, `webgl_lights_physical`, `webgl_lines_colors`,
   `webgl_lightprobe`, `webgl_lightprobe_cubecamera`, `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1323,6 +1323,16 @@ Parallel audits split the remaining work into five critical tracks:
   orbit target. Upstream `RectAreaLightHelper`, `RectAreaLightUniformsLib`,
   DOM `CanvasTexture`, `Timer`, `Stats`, and exact `OrbitControls` runtime
   remain documented deviations.
+- Added a standalone partial port for `webgl_lights_physical` via
+  `examples/webgl_lights_physical.jl`, preserving the upstream physically
+  scaled bulb point light, decay=2 falloff, 400-lumen default bulb setting,
+  moonless-night hemisphere irradiance, 20x20 floor, 50 cm brick cubes, 50 cm
+  earth sphere, camera, Reinhard tone mapping, and bulb-height motion. The
+  local port uses deterministic generated hardwood/brick/earth textures,
+  converts lumens to point-light intensity with `lumens / 4π`, and uses
+  supported normal maps as bump-map proxies; upstream JPG assets, `PointLight`
+  `.power`, `bumpMap`, GUI controls, Stats, live shadow toggle, and imperative
+  `Date.now` animation remain documented deviations.
 - Added a standalone partial port for `webgl_lightprobe` via
   `examples/webgl_lightprobe.jl`, preserving the upstream camera, direction
   light intensity/position, white zero-roughness sphere, cubemap-backed

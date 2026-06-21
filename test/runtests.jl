@@ -257,6 +257,7 @@ end
             "threejs_webgl_lights_spotlight",
             "threejs_webgl_lights_spotlights",
             "threejs_webgl_lights_rectarealight",
+            "threejs_webgl_lights_physical",
             "threejs_webgl_lightprobe",
             "threejs_webgl_lightprobe_cubecamera",
             "threejs_webgl_loader_stl",
@@ -786,6 +787,25 @@ end
                     "WebGLExportCase(\"lights-rectarealight\"",
                 ],
                 prerequisites=["RectAreaLight", "MeshStandardMaterial.roughness_map", "BoxGeometry", "TorusKnotGeometry", "browser rect-area light export"],
+            ),
+            "threejs_webgl_lights_physical" => (
+                source=[
+                    "const PHYSICAL_BULB_LUMENS = 400.0",
+                    "lumens_to_point_intensity(lumens::Real) = Float64(lumens) / (4pi)",
+                    "function physical_hardwood_texture(kind::Symbol",
+                    "function physical_brick_texture(kind::Symbol",
+                    "function physical_earth_texture(kind::Symbol",
+                    "PointLight(color=Color3(1.0, 0.933, 0.533)",
+                    "intensity=lumens_to_point_intensity(PHYSICAL_BULB_LUMENS)",
+                    "HemisphereLight(color=Color3(0.867, 0.933, 1.0)",
+                    "normal_map=physical_hardwood_texture(:normal)",
+                    "roughness_map=physical_hardwood_texture(:roughness)",
+                    "metalness_map=physical_earth_texture(:metalness)",
+                    "NumberKeyframeTrack(bulb_light, \"position.y\"",
+                    "tone_mapping=:reinhard, tone_exposure=0.68^5",
+                    "WebGLExportCase(\"lights-physical\"",
+                ],
+                prerequisites=["PointLight", "HemisphereLight", "MeshStandardMaterial.map", "normal-map export", "browser animation playback"],
             ),
             "threejs_webgl_lightprobe" => (
                 source=[

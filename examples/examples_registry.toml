@@ -508,6 +508,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lights_rectarealight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_rectarealight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lights_physical"
+upstream_url = "https://threejs.org/examples/#webgl_lights_physical"
+local_script = "examples/webgl_lights_physical.jl"
+status = "partial"
+prerequisites = ["PointLight", "HemisphereLight", "MeshStandardMaterial.map", "MeshStandardMaterial.normal_map", "MeshStandardMaterial.roughness_map", "MeshStandardMaterial.metalness_map", "browser point-light export", "browser animation playback"]
+known_deviations = [
+  "Uses deterministic generated hardwood, brick, and earth textures instead of upstream JPG assets",
+  "Converts the upstream 400 lm bulb setting to PointLight intensity with lumens / 4π because Diff3D.jl PointLight does not expose a power property",
+  "Uses MeshStandardMaterial normal maps as supported bump proxies because Diff3D.jl materials do not expose three.js bumpMap",
+  "Exports a deterministic bulb-height keyframe loop instead of upstream Date.now animation, live GUI controls, Stats, and runtime shadow toggle"
+]
+verification = ["julia --project=. examples/webgl_lights_physical.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_physical.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_lightprobe"
 upstream_url = "https://threejs.org/examples/#webgl_lightprobe"
 local_script = "examples/webgl_lightprobe.jl"
