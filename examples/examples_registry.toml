@@ -598,6 +598,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_drawrange.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_drawrange.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_selective_draw"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_selective_draw"
+local_script = "examples/webgl_buffergeometry_selective_draw.jl"
+status = "partial"
+prerequisites = ["BufferGeometry color attributes", "custom visible attribute", "LineSegments", "browser line export"]
+known_deviations = [
+  "Uses deterministic pseudo-random line placement and culling instead of upstream Math.random",
+  "Exports static all-lines and culled-line cases instead of upstream ShaderMaterial discard logic and DOM buttons",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer animation loop and Stats"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_selective_draw.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_selective_draw.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_points_sprites"
 upstream_url = "https://threejs.org/examples/#webgl_points_sprites"
 local_script = "examples/webgl_points_sprites.jl"

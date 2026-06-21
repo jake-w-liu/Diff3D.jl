@@ -265,6 +265,7 @@ end
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
             "threejs_webgl_buffergeometry_drawrange",
+            "threejs_webgl_buffergeometry_selective_draw",
             "threejs_webgl_points_sprites",
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
@@ -842,6 +843,23 @@ end
                     "WebGLExportCase(\"buffergeometry-drawrange\"",
                 ],
                 prerequisites=["set_draw_range!", "PointsObject", "LineSegments", "browser draw range export"],
+            ),
+            "threejs_webgl_buffergeometry_selective_draw" => (
+                source=[
+                    "const SELECTIVE_NUM_LAT = 100",
+                    "const SELECTIVE_NUM_LNG = 200",
+                    "const SELECTIVE_TOTAL_LINES = SELECTIVE_NUM_LAT * SELECTIVE_NUM_LNG",
+                    "function hsl_to_rgb(h::Float64, s::Float64, l::Float64)",
+                    "selective_line_hidden(index::Int) = hash_noise(index, 0.75) > 0.75",
+                    "function selective_line_geometry(; radius::Float64=1.0, culled::Bool=false)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "set_attribute!(geo, :vertColor, colors, 3)",
+                    "set_attribute!(geo, :visible, visible, 1)",
+                    "LineSegments(selective_line_geometry(culled=culled)",
+                    "WebGLExportCase(id, title, description",
+                    "build_selective_draw_cases()",
+                ],
+                prerequisites=["BufferGeometry color attributes", "custom visible attribute", "LineSegments", "browser line export"],
             ),
             "threejs_webgl_points_sprites" => (
                 source=[

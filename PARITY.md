@@ -1059,7 +1059,7 @@ Parallel audits split the remaining work into five critical tracks:
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1225,6 +1225,12 @@ Parallel audits split the remaining work into five critical tracks:
   `webgl_buffergeometry_drawrange` via `examples/webgl_buffergeometry_drawrange.jl`;
   upstream dynamic particle simulation, GUI controls, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_buffergeometry_selective_draw` via
+  `examples/webgl_buffergeometry_selective_draw.jl`, preserving the upstream
+  `100 x 200` line-field scale plus per-vertex `:vertColor` and `:visible`
+  attributes, and exporting separate all-lines and culled-lines cases. Upstream
+  custom `ShaderMaterial` discard logic, DOM buttons, Stats, and imperative
+  animation-loop rotation remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live
