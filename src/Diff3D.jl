@@ -36,6 +36,7 @@ include("cameras.jl")
 # ========================== Geometries ==========================
 include("geometries.jl")
 include("geometries_extra.jl")
+include("teapot_geometry.jl")
 
 # ========================== Materials ==========================
 include("materials.jl")
@@ -153,6 +154,7 @@ export
     CatmullRomCurve, catmull_rom_point, catmull_rom_points, CatmullRomCurveGeometry,
     NURBSCurve, NURBSSurface, NURBSVolume, nurbs_point,
     NURBSCurveGeometry, NURBSSurfaceGeometry, ParametricGeometry,
+    TeapotGeometry,
     CapsuleGeometry,
     wireframe_geometry, edges_geometry,
     get_vertex, get_normal, get_face, compute_face_normal,

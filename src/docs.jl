@@ -138,6 +138,7 @@ const _API_TYPE_DOCS = Dict{Symbol,String}(
     :NURBSCurve => "Rational B-spline curve with weighted `Vec4` control points.",
     :NURBSSurface => "Tensor-product rational B-spline surface.",
     :NURBSVolume => "Tensor-product rational B-spline volume evaluator.",
+    :TeapotGeometry => "Utah teapot geometry generated from three.js-style Bezier patch data.",
     :ShapeGeometry => "Flat polygon geometry with optional holes.",
     :ExtrudeGeometry => "Extruded polygon geometry with side faces, including sampled path extrusion.",
     :TextGeometry => "Flat, extruded, or beveled text geometry, including simple glyph holes, generated from a loaded typeface JSON font.",

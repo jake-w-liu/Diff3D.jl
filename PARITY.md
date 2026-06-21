@@ -1151,6 +1151,13 @@ Parallel audits split the remaining work into five critical tracks:
   centripetal, and chordal Catmull-Rom spline lines. Upstream browser pointer
   editing, add/remove/export GUI buttons, `Stats`, shadows, and
   `WebGLRenderer` internals remain documented deviations.
+- Added bounded `TeapotGeometry` coverage from the three.js Bezier patch table
+  plus a standalone partial port for `webgl_geometry_teapot` via
+  `examples/webgl_geometry_teapot.jl`. The port renders textured, reflective,
+  and body/lid/bottom option variants with generated UV-grid and cubemap
+  textures. Upstream texture assets, lil-gui runtime tessellation/material/part
+  switching, `MeshPhongMaterial.envMap`, OrbitControls change rendering, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added bounded `NURBSCurve`, `NURBSSurface`, `NURBSVolume`, `nurbs_point`,
   `NURBSCurveGeometry`, `NURBSSurfaceGeometry`, and `ParametricGeometry`
   coverage plus a standalone partial port for `webgl_geometry_nurbs` via

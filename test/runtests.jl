@@ -231,6 +231,7 @@ end
             "threejs_webgl_geometry_terrain",
             "threejs_webgl_geometry_terrain_raycast",
             "threejs_webgl_geometry_spline_editor",
+            "threejs_webgl_geometry_teapot",
             "threejs_webgl_geometry_nurbs",
             "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
@@ -476,6 +477,23 @@ end
                     "WebGLExportCase(\"geometry-spline-editor\"",
                 ],
                 prerequisites=["CatmullRomCurve", "CatmullRomCurveGeometry", "TransformControls", "DragControls", "GridHelper"],
+            ),
+            "threejs_webgl_geometry_teapot" => (
+                source=[
+                    "function teapot_uv_grid_texture(; n::Int=96)",
+                    "function teapot_environment(; width::Int=48, height::Int=24)",
+                    "return equirectangular_to_cubemap(tex; size=16, generate_mipmaps=true)",
+                    "full_geometry = TeapotGeometry(2.0, 12; bottom=true, lid=true, body=true",
+                    "reflective_geometry = TeapotGeometry(1.15, 10; bottom=true, lid=true",
+                    "body_geometry = TeapotGeometry(0.82, 7; bottom=false, lid=false, body=true)",
+                    "lid_geometry = TeapotGeometry(0.82, 7; bottom=false, lid=true, body=false",
+                    "bottom_geometry = TeapotGeometry(0.82, 7; bottom=true, lid=false, body=false)",
+                    "MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "MeshStandardMaterial(color=Color3(0.78, 0.80, 0.84)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"geometry-teapot\"",
+                ],
+                prerequisites=["TeapotGeometry", "MeshPhongMaterial.map", "MeshStandardMaterial.envmap", "CubeTexture", "browser animation playback"],
             ),
             "threejs_webgl_geometry_minecraft" => (
                 source=[
@@ -4375,6 +4393,47 @@ end
         @test_throws ArgumentError CatmullRomCurve(Vec3[Vec3(0.0, 0.0, 0.0)])
         @test_throws ArgumentError CatmullRomCurve(points; curve_type=:bezier)
         @test_throws ArgumentError CatmullRomCurveGeometry(curve; segments=0)
+    end
+
+    @testset "TeapotGeometry — three.js Bezier patch options" begin
+        teapot = TeapotGeometry(2.0, 2)
+        @test teapot.n_vertices == 32 * (2 + 1)^2
+        @test teapot.n_faces == (8 * 2 - 4) * 2 + (16 * 2 - 4) * 2 + 40 * 2^2
+        @test length(teapot.normals) == 3 * teapot.n_vertices
+        @test length(teapot.uvs) == 2 * teapot.n_vertices
+        bb = compute_bounding_box(teapot)
+        @test bb.min.y ≈ -2.0 atol=1e-10
+        @test bb.max.y ≈ 2.0 atol=1e-10
+        for vi in 1:17:teapot.n_vertices
+            n = get_normal(teapot, vi)
+            @test all(isfinite, (n.x, n.y, n.z))
+            @test norm(n) ≈ 1.0 atol=1e-8
+        end
+
+        @test TeapotGeometry(2.0, 1).n_faces == teapot.n_faces
+        @test TeapotGeometry(2.0, 2.9).n_faces == teapot.n_faces
+        @test TeapotGeometry(2.0, 2; bottom=false, body=false, lid=true).n_faces ==
+              (16 * 2 - 4) * 2
+        @test TeapotGeometry(2.0, 2; bottom=false, lid=false, body=true).n_faces ==
+              40 * 2^2
+        @test TeapotGeometry(2.0, 2; bottom=true, lid=false, body=false).n_faces ==
+              (8 * 2 - 4) * 2
+        empty_teapot = TeapotGeometry(2.0, 2; bottom=false, lid=false, body=false)
+        @test empty_teapot.n_vertices == 0
+        @test empty_teapot.n_faces == 0
+
+        lid_fit = compute_bounding_box(TeapotGeometry(2.0, 3; bottom=false,
+                                                      body=false, lid=true,
+                                                      fit_lid=true))
+        lid_loose = compute_bounding_box(TeapotGeometry(2.0, 3; bottom=false,
+                                                        body=false, lid=true,
+                                                        fit_lid=false))
+        @test lid_fit.max.x > lid_loose.max.x
+        original_scale = compute_bounding_box(TeapotGeometry(2.0, 3; blinn=false))
+        blinn_scale = compute_bounding_box(TeapotGeometry(2.0, 3; blinn=true))
+        @test original_scale.max.x < blinn_scale.max.x
+        @test_throws ArgumentError TeapotGeometry(-1.0, 2)
+        @test_throws ArgumentError TeapotGeometry(1.0, Inf)
     end
 
     @testset "NURBS and ParametricGeometry" begin
