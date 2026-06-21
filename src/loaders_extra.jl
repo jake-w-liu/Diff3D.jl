@@ -1947,6 +1947,15 @@ const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "stroke-linejoin", "stroke-miterlimit", "fill-rule",
                          "display", "visibility", "clip-path", "mask", "mask-type")
 
+const _SVG_STATEFUL_PSEUDO_CLASSES = (
+    "active", "autofill", "checked", "current", "default", "disabled",
+    "enabled", "focus", "focus-visible", "focus-within", "fullscreen",
+    "hover", "in-range", "indeterminate", "invalid", "modal", "optional",
+    "out-of-range", "past", "paused", "placeholder-shown", "playing",
+    "popover-open", "read-only", "read-write", "required", "target",
+    "target-within", "user-invalid", "user-valid", "valid", "visited",
+)
+
 struct _SVGAttributeSelector
     key::String
     op::Symbol
@@ -2444,6 +2453,9 @@ function _svg_pseudo_selector(rest::String)
         symbol = name == "is" ? :is : (name == "not" ? :not : :where)
         return _SVGPseudoSelector(symbol, 0, 0, String(argument),
                                   symbol === :where ? 0 : specificity), remainder
+    elseif name in _SVG_STATEFUL_PSEUDO_CLASSES
+        startswith(after, "(") && return nothing
+        return _SVGPseudoSelector(:stateful, 0, 0, name, 10), after
     end
     return nothing
 end
@@ -2661,6 +2673,8 @@ function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
         return _svg_selector_list_matches(pseudo.argument, context)
     elseif pseudo.name === :not
         return !_svg_selector_list_matches(pseudo.argument, context)
+    elseif pseudo.name === :stateful
+        return false
     end
     return false
 end

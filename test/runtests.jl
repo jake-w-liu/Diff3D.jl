@@ -6553,6 +6553,39 @@ end
         @test length(svg_strokes(functional_pseudo_css_svg)) == 2
         rm(functional_pseudo_css_path)
 
+        stateful_pseudo_css_path = tempname() * ".svg"
+        write(stateful_pseudo_css_path, """
+        <svg>
+          <style>
+            rect:hover { fill: #ff0; }
+            rect:active { stroke: #f00; }
+            rect:checked { opacity: .2; }
+            rect:not(:hover) { fill: #0f0; }
+            :is(rect:hover, rect.keep) { stroke: #00f; stroke-width: 3; }
+            :where(rect:focus, rect.keep) { fill-opacity: .5; }
+            rect:not(:is(:active, .skip)) { stroke-opacity: .25; }
+          </style>
+          <rect class="keep" width="1" height="1"/>
+          <rect class="skip" x="2" width="1" height="1"/>
+        </svg>
+        """)
+        stateful_pseudo_css_svg = load_svg(stateful_pseudo_css_path)
+        @test stateful_pseudo_css_svg.paths[1].style.fill == Color3(0.0, 1.0, 0.0)
+        @test stateful_pseudo_css_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test stateful_pseudo_css_svg.paths[1].style.stroke_width == 3.0
+        @test stateful_pseudo_css_svg.paths[1].style.fill_opacity == 0.5
+        @test stateful_pseudo_css_svg.paths[1].style.stroke_opacity == 0.25
+        @test stateful_pseudo_css_svg.paths[1].style.opacity == 1.0
+        @test stateful_pseudo_css_svg.paths[2].style.fill == Color3(0.0, 1.0, 0.0)
+        @test stateful_pseudo_css_svg.paths[2].style.stroke === nothing
+        @test stateful_pseudo_css_svg.paths[2].style.stroke_width == 1.0
+        @test stateful_pseudo_css_svg.paths[2].style.fill_opacity == 1.0
+        @test stateful_pseudo_css_svg.paths[2].style.stroke_opacity == 1.0
+        @test stateful_pseudo_css_svg.paths[2].style.opacity == 1.0
+        @test svg_meshes(stateful_pseudo_css_svg)[1].material.opacity == 0.5
+        @test length(svg_strokes(stateful_pseudo_css_svg)) == 1
+        rm(stateful_pseudo_css_path)
+
         fill_rule_path = tempname() * ".svg"
         write(fill_rule_path, """
         <svg>

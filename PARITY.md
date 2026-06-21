@@ -818,8 +818,11 @@ Parallel audits split the remaining work into five critical tracks:
   general sibling (`A ~ B`) combinators. Forward-evaluable structural pseudo
   classes `:root`, `:first-child`, `:nth-child()`, `:first-of-type`, and
   `:nth-of-type()` plus static functional pseudo classes `:is()`, `:where()`,
-  and `:not()` are supported for parsed SVG elements. Dynamic/stateful pseudo
-  CSS selectors remain open. Basic stroked outline triangle meshes are available
+  and `:not()` are supported for parsed SVG elements. Browser-state pseudo
+  classes such as `:hover`, `:active`, `:focus`, `:visited`, and `:target` are
+  parsed as static non-matches so they do not invalidate selector lists or
+  `:not()` logic during offline SVG loading; DOM/runtime stateful selector
+  evaluation remains open. Basic stroked outline triangle meshes are available
   through `svg_stroke_meshes` using parsed stroke styles and butt-cap
   per-segment quads. `stroke-dasharray` and `stroke-dashoffset` now cascade
   from attributes, inline styles, and parsed stylesheets, then split
