@@ -1057,7 +1057,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
+  `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
@@ -1265,6 +1265,13 @@ Parallel audits split the remaining work into five critical tracks:
   pointer-lock UI, keyboard movement loop, gravity/jump physics, collision
   raycasting, random 500-box placement, and resize handling remain documented
   deviations.
+- Added a standalone partial port for `misc_controls_transform` via
+  `examples/misc_controls_transform.jl`, exporting perspective and orthographic
+  camera cases with grid/lights, a generated crate-like texture, and deterministic
+  snapped translate/rotate/scale snapshots from local `TransformControls`.
+  Upstream live gizmo DOM events, keyboard mode/space/axis/size toggles, camera
+  randomization, reset behavior, and the exact `textures/crate.gif` asset remain
+  documented deviations.
 - Added a standalone partial port for `misc_controls_orbit` via
   `examples/misc_controls_orbit.jl`, using deterministic `InstancedMesh`
   cone placement, `FogExp2`, Phong lighting, and local `OrbitControls`

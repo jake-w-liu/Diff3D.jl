@@ -742,6 +742,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_pointerlock.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_pointerlock.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_controls_transform"
+upstream_url = "https://threejs.org/examples/#misc_controls_transform"
+local_script = "examples/misc_controls_transform.jl"
+status = "partial"
+prerequisites = ["TransformControls", "OrbitControls", "PerspectiveCamera", "OrthographicCamera", "GridHelper", "BoxGeometry", "MeshLambertMaterial.map", "browser mesh export"]
+known_deviations = [
+  "Serializes deterministic translate, rotate, and scale snapshots instead of live keyboard-driven TransformControls gizmo interaction",
+  "Uses a generated crate-like texture instead of upstream textures/crate.gif",
+  "Includes perspective and orthographic export cases, but local TransformControls are applied with a perspective camera only",
+  "Omits upstream DOM event handling for mode, space, size, axis visibility, snapping toggles, camera randomization, and reset"
+]
+verification = ["julia --project=. examples/misc_controls_transform.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_transform.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"
