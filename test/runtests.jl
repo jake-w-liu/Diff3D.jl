@@ -273,6 +273,7 @@ end
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
             "threejs_misc_boxselection",
+            "threejs_misc_controls_drag",
             "threejs_misc_animation_keys",
             "threejs_misc_animation_groups",
             "threejs_misc_controls_orbit",
@@ -926,6 +927,24 @@ end
                     "WebGLExportCase(\"misc-boxselection\"",
                 ],
                 prerequisites=["BoxGeometry", "MeshLambertMaterial.emissive", "PerspectiveCamera", "SpotLight", "browser mesh export"],
+            ),
+            "threejs_misc_controls_drag" => (
+                source=[
+                    "const BOX_COUNT = 200",
+                    "const SELECTED_INDICES = (17, 63, 104, 149)",
+                    "const GROUP_DRAG_DELTA = Vec3(1.5, 0.75, -0.5)",
+                    "function build_drag_box(i::Int, geometry::BufferGeometry)",
+                    "MeshLambertMaterial(color=deterministic_color(i)",
+                    "cast_shadow=true, receive_shadow=true",
+                    "function simulate_group_drag!(camera::PerspectiveCamera, group::Group",
+                    "DragControls(AbstractObject3D[group], camera; transform_group=true)",
+                    "drag_start!(controls, first(selected_boxes))",
+                    "drag_move!(controls, GROUP_DRAG_DELTA)",
+                    "Group(name=\"drag_controls_selection_group\")",
+                    "SpotLight(color=Color3(1.0, 1.0, 1.0), intensity=10000.0",
+                    "WebGLExportCase(\"misc-controls-drag\"",
+                ],
+                prerequisites=["DragControls", "Group", "BoxGeometry", "MeshLambertMaterial.emissive", "browser mesh export"],
             ),
             "threejs_misc_animation_keys" => (
                 source=[

@@ -700,6 +700,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_boxselection.jl", "python examples/browser_webgl_smoke.py examples/output/misc_boxselection.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_controls_drag"
+upstream_url = "https://threejs.org/examples/#misc_controls_drag"
+local_script = "examples/misc_controls_drag.jl"
+status = "partial"
+prerequisites = ["DragControls", "Group", "BoxGeometry", "MeshLambertMaterial.emissive", "SpotLight", "AmbientLight", "browser mesh export"]
+known_deviations = [
+  "Uses deterministic box placement and a fixed selected-index set instead of upstream Math.random placement and Shift+Click raycaster selection",
+  "Serializes one transform-group drag snapshot instead of live DOM pointer events or touch rotate/pan toggles",
+  "Highlights selected boxes through exported emissive material state and moves their parent group through Diff3D.jl DragControls",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer and PCF shadow-map configuration"
+]
+verification = ["julia --project=. examples/misc_controls_drag.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_drag.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"
