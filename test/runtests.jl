@@ -231,6 +231,7 @@ end
             "threejs_webgl_geometry_terrain",
             "threejs_webgl_geometry_terrain_raycast",
             "threejs_webgl_geometry_spline_editor",
+            "threejs_webgl_geometry_csg",
             "threejs_webgl_geometry_teapot",
             "threejs_webgl_geometry_nurbs",
             "threejs_webgl_geometry_minecraft",
@@ -477,6 +478,21 @@ end
                     "WebGLExportCase(\"geometry-spline-editor\"",
                 ],
                 prerequisites=["CatmullRomCurve", "CatmullRomCurveGeometry", "TransformControls", "DragControls", "GridHelper"],
+            ),
+            "threejs_webgl_geometry_csg" => (
+                source=[
+                    "function csg_brush_pair()",
+                    "base = IcosahedronGeometry(radius=1.25, detail=1)",
+                    "cylinder = CylinderGeometry(radius_top=0.58, radius_bottom=0.58",
+                    "return base, transform_geometry(cylinder, brush_matrix)",
+                    "subtraction = csg_subtract(base, brush)",
+                    "intersection = csg_intersect(base, brush)",
+                    "addition = csg_union(base, brush)",
+                    "MeshBasicMaterial(color=Color3(0.02, 0.05, 0.05)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"geometry-csg\"",
+                ],
+                prerequisites=["csg_subtract", "csg_intersect", "csg_union", "transform_geometry", "MeshBasicMaterial.wireframe"],
             ),
             "threejs_webgl_geometry_teapot" => (
                 source=[
@@ -4434,6 +4450,33 @@ end
         @test original_scale.max.x < blinn_scale.max.x
         @test_throws ArgumentError TeapotGeometry(-1.0, 2)
         @test_throws ArgumentError TeapotGeometry(1.0, Inf)
+    end
+
+    @testset "CSG boolean geometry operations" begin
+        cube = BoxGeometry(width=2.0, height=2.0, depth=2.0)
+        shifted = transform_geometry(BoxGeometry(width=2.0, height=2.0, depth=2.0),
+                                     mat4_translation(0.7, 0.0, 0.0))
+        shifted_box = compute_bounding_box(shifted)
+        @test shifted_box.min.x ≈ -0.3 atol=1e-12
+        @test shifted_box.max.x ≈ 1.7 atol=1e-12
+
+        union_geo = csg_union(cube, shifted)
+        subtract_geo = csg_subtract(cube, shifted)
+        intersect_geo = csg_intersect(cube, shifted)
+        @test union_geo.n_faces == 24
+        @test subtract_geo.n_faces == 16
+        @test intersect_geo.n_faces == 16
+        for geo in (union_geo, subtract_geo, intersect_geo)
+            @test geo.n_vertices == 3 * geo.n_faces
+            @test length(geo.normals) == 3 * geo.n_vertices
+            @test length(geo.uvs) == 2 * geo.n_vertices
+            @test all(isfinite, geo.positions)
+            @test all(isfinite, geo.normals)
+        end
+        @test csg_evaluate(cube, shifted, :addition).n_faces == union_geo.n_faces
+        @test csg_evaluate(cube, shifted, :subtraction).n_faces == subtract_geo.n_faces
+        @test csg_evaluate(cube, shifted, :intersection).n_faces == intersect_geo.n_faces
+        @test_throws ArgumentError csg_evaluate(cube, shifted, :xor)
     end
 
     @testset "NURBS and ParametricGeometry" begin

@@ -1151,6 +1151,14 @@ Parallel audits split the remaining work into five critical tracks:
   centripetal, and chordal Catmull-Rom spline lines. Upstream browser pointer
   editing, add/remove/export GUI buttons, `Stats`, shadows, and
   `WebGLRenderer` internals remain documented deviations.
+- Added BSP-based `csg_union`, `csg_subtract`, `csg_intersect`,
+  `csg_evaluate`, and `transform_geometry` coverage plus a standalone partial
+  port for `webgl_geometry_csg` via `examples/webgl_geometry_csg.jl`. The port
+  renders fixed subtraction, intersection, and addition results over an
+  icosahedron brush and cylinder cutter with wireframe overlays. Upstream
+  `three-bvh-csg` acceleration internals, live lil-gui operation/useGroups
+  controls, per-frame CSG recomputation, `Stats`, PCF shadow maps, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added bounded `TeapotGeometry` coverage from the three.js Bezier patch table
   plus a standalone partial port for `webgl_geometry_teapot` via
   `examples/webgl_geometry_teapot.jl`. The port renders textured, reflective,

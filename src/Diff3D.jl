@@ -37,6 +37,7 @@ include("cameras.jl")
 include("geometries.jl")
 include("geometries_extra.jl")
 include("teapot_geometry.jl")
+include("csg.jl")
 
 # ========================== Materials ==========================
 include("materials.jl")
@@ -161,6 +162,7 @@ export
     count_triangles, merge_geometries,
     set_attribute!, get_attribute, has_attribute,
     compute_bounding_box, compute_bounding_sphere,
+    csg_union, csg_subtract, csg_intersect, csg_evaluate, transform_geometry,
 
     # Materials
     AbstractMaterial,
