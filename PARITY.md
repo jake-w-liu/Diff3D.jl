@@ -1057,8 +1057,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `misc_animation_keys`, `misc_controls_orbit`, `webgl_camera_array`,
-  `webgl_buffergeometry_drawrange`,
+  `misc_animation_keys`, `misc_controls_orbit`, `misc_controls_trackball`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`,
   `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
@@ -1241,6 +1241,13 @@ Parallel audits split the remaining work into five critical tracks:
   damping/distance/polar-angle settings. Upstream random placement,
   `listenToKeyEvents`, `screenSpacePanning`, cursor style, and exact browser
   control constraints remain documented deviations.
+- Added a standalone partial port for `misc_controls_trackball` via
+  `examples/misc_controls_trackball.jl`, using deterministic `InstancedMesh`
+  cone placement, `FogExp2`, Phong lighting, local perspective
+  `TrackballControls`, and separate perspective/orthographic export cases.
+  Upstream random placement, lil-gui camera switching, orthographic
+  `TrackballControls`, speed/key bindings, and exact browser control behavior
+  remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.

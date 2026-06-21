@@ -711,6 +711,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_orbit.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_orbit.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_controls_trackball"
+upstream_url = "https://threejs.org/examples/#misc_controls_trackball"
+local_script = "examples/misc_controls_trackball.jl"
+status = "partial"
+prerequisites = ["TrackballControls", "PerspectiveCamera", "OrthographicCamera", "ConeGeometry", "InstancedMesh", "MeshPhongMaterial", "FogExp2", "browser instanced draw", "browser orbit interaction"]
+known_deviations = [
+  "Uses deterministic cone placement instead of upstream Math.random placement",
+  "Exports separate perspective and orthographic cases instead of the upstream lil-gui runtime camera switch",
+  "Local TrackballControls currently binds PerspectiveCamera only; the orthographic case is exported as a static camera counterpart",
+  "The generated browser page uses Diff3D.jl's generic orbit interaction and does not export upstream TrackballControls rotateSpeed, zoomSpeed, panSpeed, key bindings, or handleResize behavior"
+]
+verification = ["julia --project=. examples/misc_controls_trackball.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_trackball.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_animation_keyframes"
 upstream_url = "https://threejs.org/examples/#webgl_animation_keyframes"
 local_script = "examples/webgl_animation_keyframes.jl"

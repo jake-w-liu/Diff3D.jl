@@ -274,6 +274,7 @@ end
             "threejs_webgl_helpers",
             "threejs_misc_animation_keys",
             "threejs_misc_controls_orbit",
+            "threejs_misc_controls_trackball",
             "threejs_webgl_animation_keyframes",
         ])
         ids = String[e["upstream_id"] for e in examples]
@@ -935,6 +936,24 @@ end
                     "WebGLExportCase(\"misc-controls-orbit\"",
                 ],
                 prerequisites=["OrbitControls", "InstancedMesh", "ConeGeometry", "browser orbit interaction"],
+            ),
+            "threejs_misc_controls_trackball" => (
+                source=[
+                    "const INSTANCE_COUNT = 500",
+                    "const FRUSTUM_SIZE = 400.0",
+                    "function configure_trackball_controls(camera::PerspectiveCamera)",
+                    "TrackballControls(camera)",
+                    "trackball_save_state!(controls)",
+                    "trackball_rotate!(controls, 0.0, 0.0)",
+                    "trackball_reset!(controls)",
+                    "ConeGeometry(radius=10.0, height=30.0",
+                    "InstancedMesh(geometry, material, INSTANCE_COUNT",
+                    "set_instance_matrix!(inst, i, mat4_translation(x, y, z))",
+                    "OrthographicCamera(left=-FRUSTUM_SIZE * ASPECT / 2",
+                    "WebGLExportCase(\"misc-controls-trackball-perspective\"",
+                    "WebGLExportCase(\"misc-controls-trackball-orthographic\"",
+                ],
+                prerequisites=["TrackballControls", "PerspectiveCamera", "OrthographicCamera", "InstancedMesh", "browser orbit interaction"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[
