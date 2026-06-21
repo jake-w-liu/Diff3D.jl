@@ -20,8 +20,8 @@ replacement for three.js `WebGLRenderer`.
   `ArrayCamera` scissor-split export.
 - Geometry: buffer geometry plus common primitives including boxes, planes,
   spheres, cylinders, torus, torus knots, icosahedra, circles, rings, cones,
-  capsules, lathes, and text-like/path helpers. Box geometry now supports
-  width/height/depth segment counts.
+  capsules, convex hulls, lathes, and text-like/path helpers. Box geometry now
+  supports width/height/depth segment counts.
 - Objects: `Mesh`, `InstancedMesh`, `PointsObject`, `LineObject`,
   `LineSegments`, `LineLoop`, `Sprite`, `LOD`, `Bone`, `Skeleton`, and
   `SkinnedMesh` data structures.
@@ -783,6 +783,10 @@ Parallel audits split the remaining work into five critical tracks:
   IEEE-float samples with chunk skipping, alignment validation, normalized
   frame/channel storage, and duration reporting. Browser `AudioLoader`
   compressed-format decode and WebAudio graph integration remain open.
+- Done: add native `ConvexGeometry(points)` support for non-coplanar `Vec3`
+  point sets, deduplicating near-identical inputs, rejecting finite/coplanarity
+  errors clearly, and emitting flat-shaded outward triangle faces for the
+  convex hull.
 - Done: add a typeface JSON font loader via `FontData`, `FontGlyph`,
   `FontCommand`, `load_font`, and `FontLoader`, plus `font_glyph_shapes` and
   `font_text_shapes` outline flattening for `m`/`l`/`q`/`b` commands into
@@ -1091,6 +1095,13 @@ Parallel audits split the remaining work into five critical tracks:
   `CurveExtras`, live geometry GUI controls, camera-on-path view, closed tube
   runtime toggles, `Stats`, and `WebGLRenderer` internals remain documented
   deviations.
+- Added a standalone partial port for `webgl_geometry_convex` via
+  `examples/webgl_geometry_convex.jl`, using native `ConvexGeometry` over
+  unique `DodecahedronGeometry` vertices, a generated point-sprite disc
+  texture, translucent `MeshLambertMaterial` hull rendering, exported points,
+  and browser animation playback. Upstream `textures/sprites/disc.png`,
+  `BufferGeometryUtils.mergeVertices`, `OrbitControls` limit settings, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and

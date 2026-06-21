@@ -224,6 +224,7 @@ end
             "threejs_webgl_geometry_shapes",
             "threejs_webgl_geometry_text",
             "threejs_webgl_geometry_extrude_splines",
+            "threejs_webgl_geometry_convex",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -350,6 +351,20 @@ end
                     "WebGLExportCase(\"geometry-extrude-splines\"",
                 ],
                 prerequisites=["TubeGeometry", "MeshLambertMaterial", "MeshBasicMaterial wireframe", "browser animation playback"],
+            ),
+            "threejs_webgl_geometry_convex" => (
+                source=[
+                    "function disc_texture(; n::Int=48)",
+                    "source = DodecahedronGeometry(radius=10.0)",
+                    "vertices = unique_vertices(source)",
+                    "hull = ConvexGeometry(vertices)",
+                    "PointsObject(points_geometry(vertices)",
+                    "PointsMaterial(color=Color3(0.0, 0.5, 1.0)",
+                    "MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"geometry-convex\"",
+                ],
+                prerequisites=["ConvexGeometry", "DodecahedronGeometry", "PointsMaterial.map", "MeshLambertMaterial"],
             ),
             "threejs_webgl_camera" => (
                 source=[
@@ -4139,6 +4154,51 @@ end
                 @test dot(fn, sn) > 0
             end
         end
+    end
+
+    @testset "ConvexGeometry hulls" begin
+        cube_points = [Vec3(x, y, z) for x in (-1.0, 1.0),
+                                      y in (-1.0, 1.0),
+                                      z in (-1.0, 1.0)][:]
+        cube_hull = ConvexGeometry(cube_points)
+        @test cube_hull.n_faces == 12
+        @test cube_hull.n_vertices == 36
+        cube_box = compute_bounding_box(cube_hull)
+        @test cube_box.min == Vec3(-1.0, -1.0, -1.0)
+        @test cube_box.max == Vec3(1.0, 1.0, 1.0)
+        for fi in 1:cube_hull.n_faces
+            i1, i2, i3 = get_face(cube_hull, fi)
+            v1 = get_vertex(cube_hull, i1)
+            v2 = get_vertex(cube_hull, i2)
+            v3 = get_vertex(cube_hull, i3)
+            fn = cross(v2 - v1, v3 - v1)
+            tri_center = (v1 + v2 + v3) * (1 / 3)
+            normal_sum = get_normal(cube_hull, i1) + get_normal(cube_hull, i2) +
+                         get_normal(cube_hull, i3)
+            @test dot(fn, tri_center) > 0
+            @test dot(fn, normal_sum) > 0
+        end
+
+        dodeca = DodecahedronGeometry(radius=2.0)
+        unique_points = Dict{Tuple{Float64,Float64,Float64},Vec3{Float64}}()
+        for vi in 1:dodeca.n_vertices
+            p = get_vertex(dodeca, vi)
+            unique_points[(round(p.x, digits=12),
+                           round(p.y, digits=12),
+                           round(p.z, digits=12))] = p
+        end
+        dodeca_hull = ConvexGeometry(collect(values(unique_points)))
+        @test dodeca_hull.n_faces == 36
+        @test all(1 <= i <= dodeca_hull.n_vertices for i in dodeca_hull.indices)
+        @test_throws ArgumentError ConvexGeometry(Vec3{Float64}[])
+        @test_throws ArgumentError ConvexGeometry(Vec3[
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0),
+            Vec3(0.0, 1.0, 0.0), Vec3(1.0, 1.0, 0.0),
+        ])
+        @test_throws ArgumentError ConvexGeometry(Vec3[
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0),
+            Vec3(0.0, 1.0, Inf), Vec3(0.0, 0.0, 1.0),
+        ])
     end
 
     @testset "LatheGeometry — vertical profile is a cylinder" begin

@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # Additional geometry generators mirroring three.js: the platonic-solid family
-# via a subdividing PolyhedronGeometry, surfaces of revolution / sweeps
-# (Lathe, Tube), profile extrusion (Shape/Extrude), Capsule, and the
+# via a subdividing PolyhedronGeometry, convex hulls, surfaces of revolution /
+# sweeps (Lathe, Tube), profile extrusion (Shape/Extrude), Capsule, and the
 # Edges/Wireframe line geometries.
 # --------------------------------------------------------------------------
 
@@ -64,6 +64,179 @@ function DodecahedronGeometry(; radius=1.0, detail=0)
           (19,4,17),(1,12,14),(1,14,5),(1,5,9)]
     f = NTuple{3,Int}[(a+1, b+1, c+1) for (a, b, c) in f0]
     PolyhedronGeometry(v, f; radius=radius, detail=detail)
+end
+
+# ========================== ConvexGeometry ==========================
+# Triangulate the boundary of the convex hull of a 3D point set. Faces are
+# emitted non-indexed so each hull triangle keeps a flat outward normal.
+
+function _convex_clean_points(points::AbstractVector{<:Vec3})
+    raw = Vec3{Float64}[]
+    for p in points
+        q = Vec3(Float64(p.x), Float64(p.y), Float64(p.z))
+        isfinite(q.x) && isfinite(q.y) && isfinite(q.z) ||
+            throw(ArgumentError("ConvexGeometry points must be finite"))
+        push!(raw, q)
+    end
+    isempty(raw) && throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
+    scale = max(1.0, maximum(max(abs(p.x), abs(p.y), abs(p.z)) for p in raw))
+    eps = 1e-9 * scale
+    deduped = Vec3{Float64}[]
+    for p in raw
+        any(q -> norm(p - q) <= eps, deduped) || push!(deduped, p)
+    end
+    length(deduped) >= 4 ||
+        throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
+    return deduped, eps
+end
+
+function _convex_has_volume(points::Vector{Vec3{Float64}}, eps::Float64)
+    n = length(points)
+    threshold = eps^3
+    for i in 1:(n - 3), j in (i + 1):(n - 2), k in (j + 1):(n - 1)
+        nrm = cross(points[j] - points[i], points[k] - points[i])
+        norm(nrm) > eps || continue
+        for l in (k + 1):n
+            abs(dot(nrm, points[l] - points[i])) > threshold && return true
+        end
+    end
+    return false
+end
+
+function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
+    n = length(points)
+    faces = Tuple{Vector{Int},Vec3{Float64}}[]
+    seen = Set{Tuple{Vararg{Int}}}()
+    plane_eps = 64 * eps
+    for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
+        normal = cross(points[j] - points[i], points[k] - points[i])
+        len = norm(normal)
+        len > plane_eps || continue
+        normal = normal * (1 / len)
+        pos = false
+        neg = false
+        for p in points
+            side = dot(normal, p - points[i])
+            pos |= side > plane_eps
+            neg |= side < -plane_eps
+            pos && neg && break
+        end
+        pos && neg && continue
+        pos && (normal = -normal)
+        coplanar = Int[]
+        for idx in eachindex(points)
+            abs(dot(normal, points[idx] - points[i])) <= plane_eps &&
+                push!(coplanar, idx)
+        end
+        key = Tuple(coplanar)
+        if !(key in seen)
+            push!(seen, key)
+            push!(faces, (coplanar, normal))
+        end
+    end
+    return faces
+end
+
+function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{Int},
+                           normal::Vec3{Float64}, eps::Float64)
+    center = Vec3(0.0, 0.0, 0.0)
+    for idx in face_indices
+        center += points[idx]
+    end
+    center *= 1 / length(face_indices)
+
+    u = Vec3(0.0, 0.0, 0.0)
+    for idx in face_indices
+        candidate = points[idx] - center
+        if norm(candidate) > eps
+            u = normalize(candidate)
+            break
+        end
+    end
+    norm(u) > eps || return Int[]
+    v = cross(normal, u)
+
+    projected = Tuple{Float64,Float64,Int}[]
+    for idx in face_indices
+        d = points[idx] - center
+        push!(projected, (dot(d, u), dot(d, v), idx))
+    end
+    sort!(projected, by=t -> (t[1], t[2], t[3]))
+
+    filtered = Tuple{Float64,Float64,Int}[]
+    for p in projected
+        if isempty(filtered) ||
+           hypot(p[1] - filtered[end][1], p[2] - filtered[end][2]) > eps
+            push!(filtered, p)
+        end
+    end
+
+    cross2(o, a, b) = (a[1] - o[1]) * (b[2] - o[2]) -
+                      (a[2] - o[2]) * (b[1] - o[1])
+    lower = Tuple{Float64,Float64,Int}[]
+    for p in filtered
+        while length(lower) >= 2 &&
+              cross2(lower[end - 1], lower[end], p) <= eps
+            pop!(lower)
+        end
+        push!(lower, p)
+    end
+    upper = Tuple{Float64,Float64,Int}[]
+    for p in Iterators.reverse(filtered)
+        while length(upper) >= 2 &&
+              cross2(upper[end - 1], upper[end], p) <= eps
+            pop!(upper)
+        end
+        push!(upper, p)
+    end
+    hull = [p[3] for p in vcat(lower[1:end - 1], upper[1:end - 1])]
+    length(hull) >= 3 || return Int[]
+    face_normal = cross(points[hull[2]] - points[hull[1]],
+                        points[hull[3]] - points[hull[1]])
+    dot(face_normal, normal) < 0.0 && reverse!(hull)
+    return hull
+end
+
+"""
+    ConvexGeometry(points)
+
+Build a flat-shaded triangle `BufferGeometry` for the convex hull of a
+non-coplanar 3D point set.
+"""
+function ConvexGeometry(points::AbstractVector{<:Vec3})
+    clean, eps = _convex_clean_points(points)
+    _convex_has_volume(clean, eps) ||
+        throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
+    support_faces = _convex_support_faces(clean, eps)
+    isempty(support_faces) &&
+        throw(ArgumentError("ConvexGeometry could not find hull support faces"))
+
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    vi = 0
+    for (face_indices, normal) in support_faces
+        hull = _convex_face_hull(clean, face_indices, normal, eps)
+        length(hull) >= 3 || continue
+        origin = clean[hull[1]]
+        for k in 2:(length(hull) - 1)
+            tri = (origin, clean[hull[k]], clean[hull[k + 1]])
+            face_normal = normalize(cross(tri[2] - tri[1], tri[3] - tri[1]))
+            dot(face_normal, normal) < 0.0 &&
+                (tri = (tri[1], tri[3], tri[2]); face_normal = -face_normal)
+            for p in tri
+                push!(positions, p.x, p.y, p.z)
+                push!(normals, face_normal.x, face_normal.y, face_normal.z)
+                push!(uvs, p.x, p.y)
+                vi += 1
+                push!(indices, vi)
+            end
+        end
+    end
+    length(indices) >= 12 ||
+        throw(ArgumentError("ConvexGeometry produced no non-degenerate hull volume"))
+    return BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
 end
 
 # ========================== LatheGeometry ==========================

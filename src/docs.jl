@@ -131,6 +131,7 @@ const _API_TYPE_DOCS = Dict{Symbol,String}(
     :OctahedronGeometry => "Octahedron-derived polyhedron geometry.",
     :TetrahedronGeometry => "Tetrahedron-derived polyhedron geometry.",
     :DodecahedronGeometry => "Dodecahedron-derived polyhedron geometry.",
+    :ConvexGeometry => "Flat-shaded triangle geometry for the convex hull of a 3D point set.",
     :LatheGeometry => "Surface of revolution generated from a 2D profile.",
     :TubeGeometry => "Tube swept along a path of `Vec3` points.",
     :ShapeGeometry => "Flat polygon geometry with optional holes.",
