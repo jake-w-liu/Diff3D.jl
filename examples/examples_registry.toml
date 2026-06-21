@@ -770,6 +770,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_exporter_stl.jl", "python examples/browser_webgl_smoke.py examples/output/misc_exporter_stl.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_exporter_ply"
+upstream_url = "https://threejs.org/examples/#misc_exporter_ply"
+local_script = "examples/misc_exporter_ply.jl"
+status = "partial"
+prerequisites = ["load_ply", "ASCII PLY", "binary_little_endian PLY", "BoxGeometry", "MeshPhongMaterial.vertex_colors", "PerspectiveCamera", "OrbitControls", "browser vertex-color export"]
+known_deviations = [
+  "Uses deterministic example-local ASCII and binary little-endian PLY writers plus load_ply round trips instead of upstream browser PLYExporter downloads",
+  "Does not provide upstream GUI buttons, Blob download links, or binary big-endian PLY export",
+  "Renders separate ASCII and binary round-tripped boxes side by side instead of one mutable export target",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer shadow-map and resize handling"
+]
+verification = ["julia --project=. examples/misc_exporter_ply.jl", "python examples/browser_webgl_smoke.py examples/output/misc_exporter_ply.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"
