@@ -257,6 +257,7 @@ end
             "threejs_webgl_lights_spotlight",
             "threejs_webgl_lights_spotlights",
             "threejs_webgl_lights_rectarealight",
+            "threejs_webgl_lightprobe",
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
@@ -784,6 +785,22 @@ end
                     "WebGLExportCase(\"lights-rectarealight\"",
                 ],
                 prerequisites=["RectAreaLight", "MeshStandardMaterial.roughness_map", "BoxGeometry", "TorusKnotGeometry", "browser rect-area light export"],
+            ),
+            "threejs_webgl_lightprobe" => (
+                source=[
+                    "const LIGHTPROBE_CUBE_SIZE = 32",
+                    "function lightprobe_environment_color(dir::Vec3)",
+                    "function lightprobe_cube_texture(; size::Int=LIGHTPROBE_CUBE_SIZE)",
+                    "function lightprobe_coefficients(env::CubeTexture)",
+                    "LightProbe(coeffs=lightprobe_coefficients(env_map)",
+                    "DirectionalLight(color=Color3(1.0, 1.0, 1.0), intensity=0.6",
+                    "MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "envmap=env_map, env_map_intensity=1.0",
+                    "LineSegments(lightprobe_helper_geometry(radius=1.0)",
+                    "NumberKeyframeTrack(sphere, \"material.envMapIntensity\"",
+                    "WebGLExportCase(\"lightprobe\"",
+                ],
+                prerequisites=["LightProbe", "CubeTexture", "MeshStandardMaterial.envmap", "LineSegments", "browser light-probe export"],
             ),
             "threejs_webgl_materials_cubemap_mipmaps" => (
                 source=[
@@ -13979,10 +13996,14 @@ end
             set_draw_range!(draw_geo, 2, 2)
             draw_points = PointsObject(draw_geo, PointsMaterial(size=4.0);
                                        name="regress_draw_range_points")
+            probe = LightProbe(coeffs=(Color3(0.2, 0.3, 0.4), Color3(0.1, 0.0, 0.0),
+                                       Color3(0.0, 0.1, 0.0), Color3(0.0, 0.0, 0.1)),
+                               intensity=0.75, name="regress_probe")
             scene = Scene()
             add!(scene, tex_mesh)
             add!(scene, sp)
             add!(scene, draw_points)
+            add!(scene, probe)
             clip = AnimationClip("spin", [NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1])])
             f = tempname() * ".html"
             save_webgl_html(f, [WebGLExportCase("regress", "Regress", "web export fixes", scene;
@@ -14011,6 +14032,13 @@ end
             @test occursin("o.drawStart=Math.max(0,Math.min(Math.floor(Number(o.drawStart)||0),o.indices.length))", html)
             @test occursin("function drawOffset(o){ return o.drawStart*(o.indexType===gl.UNSIGNED_INT?4:2); }", html)
             @test occursin("const offset=drawOffset(o);", html)
+            # 6. LightProbe exports first-order SH coefficients and the runtime binds them.
+            @test occursin("\"type\":\"lightProbe\",\"id\":$(probe.id),\"name\":\"regress_probe\"", html)
+            @test occursin("\"coeffs\":[[0.20000000000000001,0.29999999999999999,0.40000000000000002],[0.10000000000000001,0,0],[0,0.10000000000000001,0],[0,0,0.10000000000000001]]", html)
+            @test occursin("\"intensity\":0.75", html)
+            @test occursin("uProbeCoeff[4]", html)
+            @test occursin("probeCoeffs:probe.flat()", html)
+            @test occursin("uniform3v(p,\"uProbeCoeff[0]\",light.probeCoeffs", html)
 
             shader_scene = Scene()
             add!(shader_scene, Mesh(BoxGeometry(), ShaderMaterial(); name="regress_shader_material"))

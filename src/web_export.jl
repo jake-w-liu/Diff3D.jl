@@ -651,6 +651,24 @@ function _web_light_json(light::RectAreaLight;
            "}"
 end
 
+function _web_light_json(light::LightProbe;
+                         visibility_target_ids::AbstractVector{Int}=Int[],
+                         visibility_values::AbstractVector{Bool}=Bool[],
+                         shadow_mode::Symbol=:static,
+                         clipping_planes=_NO_PLANES)
+    coeffs = "[" * join((_js_color(c) for c in light.coeffs), ",") * "]"
+    return "{" *
+           "\"type\":\"lightProbe\"" *
+           ",\"id\":" * string(light.id) *
+           ",\"name\":" * _js_str(light.name) *
+           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
+           ",\"position\":" * _js_vec(get_position(light)) *
+           ",\"coeffs\":" * coeffs *
+           ",\"intensity\":" * _js_num(light.intensity) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           "}"
+end
+
 _web_light_json(light::AbstractLight; kwargs...) = nothing
 _web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json(light; kwargs...)
 
@@ -2132,7 +2150,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const shadowTextureSlots=shadowTextureUnits.filter(u=>maxTextureUnits>u&&maxCombinedTextureUnits>u);
   const shadowTexturesEnabled=shadowTextureSlots.length>0;
   function cloneAnimValue(v){ return Array.isArray(v)?v.slice():v; }
-  function captureLightBase(l){ const b={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; for(const k of ["position","target","direction","angle","penumbra","coneCos","penumbraCos","forward","u","v","width","height"]) if(l[k]!==undefined) b[k]=cloneAnimValue(l[k]); return b; }
+  function captureLightBase(l){ const b={visible:l.visible!==false,color:(l.color||[1,1,1]).slice(),groundColor:(l.groundColor||[0,0,0]).slice(),intensity:l.intensity||0,distance:l.distance||0,decay:l.decay==null?2:l.decay}; for(const k of ["position","target","direction","angle","penumbra","coneCos","penumbraCos","forward","u","v","width","height","coeffs"]) if(l[k]!==undefined) b[k]=cloneAnimValue(l[k]); return b; }
   function refreshLightDerived(l){ if(l.type==="directional"&&l.position&&l.target) l.direction=norm(sub(l.position,l.target)); else if(l.type==="spot"){ if(l.position&&l.target) l.direction=norm(sub(l.target,l.position)); const fallback=l.coneCos==null?Math.cos(Math.PI/3):Math.max(-1,Math.min(1,l.coneCos)); const angle=Math.max(0,Math.min(Math.PI,l.angle==null?Math.acos(fallback):l.angle)); const pen=Math.max(0,Math.min(1,l.penumbra==null?0:l.penumbra)); l.coneCos=Math.cos(angle); l.penumbraCos=Math.cos(angle*(1-pen)); } else if(l.type==="rectArea"&&l.position&&l.target){ const f=norm(sub(l.target,l.position)), ref=Math.abs(f[1])<.95?[0,1,0]:[1,0,0]; l.forward=f; l.u=norm(cross(ref,f)); l.v=cross(f,l.u); } }
   function isDynamicShadow(s){ return !!s&&(s.type==="directionalDynamic"||s.type==="spotDynamic"||s.type==="pointDynamic"); }
   function buildLight(l){ if(l.shadow) l.shadowTexture=(shadowTexturesEnabled&&!isDynamicShadow(l.shadow))?makeShadowTexture(l.shadow):null; l.visibilityStates=(l.visibilityStates&&l.visibilityStates.length)?l.visibilityStates:[{id:l.id,visible:l.visible!==false}]; for(const s of l.visibilityStates) s.baseVisible=s.visible!==false; l.baseLight=captureLightBase(l); refreshLightDerived(l); return l; }
@@ -2560,6 +2578,24 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
 </html>
 """
     return replace(html,
+        "uniform vec3 uColor,uCamera,uAmbientColor;" =>
+            "uniform vec3 uColor,uCamera,uAmbientColor,uProbeCoeff[4];",
+        "uniform vec3 uColor,uCamera,uAmbientColor,uEmissive,uFogColor;" =>
+            "uniform vec3 uColor,uCamera,uAmbientColor,uProbeCoeff[4],uEmissive,uFogColor;",
+        "vec3 diffuse=uAmbientColor; vec3 specular=vec3(0.0);" =>
+            "vec3 diffuse=uAmbientColor; diffuse+=max(uProbeCoeff[0]+uProbeCoeff[1]*n.x+uProbeCoeff[2]*n.y+uProbeCoeff[3]*n.z,vec3(0.0)); vec3 specular=vec3(0.0);",
+        "const amb=[0.18,0.18,0.18], dirs=[], points=[], spots=[], hemis=[], rects=[], shadows=[];" =>
+            "const amb=[0.18,0.18,0.18], probe=[[0,0,0],[0,0,0],[0,0,0],[0,0,0]], dirs=[], points=[], spots=[], hemis=[], rects=[], shadows=[];",
+        "const addShadow=(kind,index,l)=>{" =>
+            "const addProbe=(coeffs,intensity)=>{ if(!coeffs) return; for(let i=0;i<4;i++){ const c=coeffs[i]||[0,0,0]; probe[i][0]+=c[0]*(intensity||0); probe[i][1]+=c[1]*(intensity||0); probe[i][2]+=c[2]*(intensity||0); } }; const addShadow=(kind,index,l)=>{",
+        "const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)];" =>
+            "const color=l.color||[1,1,1], scaled=[color[0]*(l.intensity||0),color[1]*(l.intensity||0),color[2]*(l.intensity||0)];",
+        "} else if(l.type===\"directional\" && dirs.length<MAX_DIR){" =>
+            "} else if(l.type===\"lightProbe\"){ addProbe(l.coeffs,l.intensity||0); } else if(l.type===\"directional\" && dirs.length<MAX_DIR){",
+        "return {ambient:amb,dirCount:" =>
+            "return {ambient:amb,probeCoeffs:probe.flat(),dirCount:",
+        "gl.uniform3fv(gl.getUniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient));" =>
+            "gl.uniform3fv(gl.getUniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient)); uniform3v(p,\"uProbeCoeff[0]\",light.probeCoeffs||new Array(12).fill(0));",
         "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; const int MAX_RECT=4;" =>
             "const int MAX_DIR=$max_dir; const int MAX_POINT=$max_point; const int MAX_SPOT=$max_spot; const int MAX_HEMI=$max_hemi; const int MAX_RECT=$max_rect;",
         "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4;" =>
