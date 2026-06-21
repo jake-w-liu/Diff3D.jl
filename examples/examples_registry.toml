@@ -481,6 +481,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lights_spotlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_spotlight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lights_spotlights"
+upstream_url = "https://threejs.org/examples/#webgl_lights_spotlights"
+local_script = "examples/webgl_lights_spotlights.jl"
+status = "partial"
+prerequisites = ["SpotLight", "SpotLightHelper", "AmbientLight", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "shadow-casting spot lights", "browser animation playback"]
+known_deviations = [
+  "Uses deterministic keyframed spotlight position, angle, and penumbra tracks instead of upstream random TWEEN animations",
+  "Uses static SpotLightHelper geometry snapshots instead of helper updates during animation",
+  "Uses compact Diff3D.jl WebGL export rather than upstream WebGLRenderer, OrbitControls, TWEEN, resize, and PCF shadow-map runtime internals"
+]
+verification = ["julia --project=. examples/webgl_lights_spotlights.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_spotlights.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_lights_rectarealight"
 upstream_url = "https://threejs.org/examples/#webgl_lights_rectarealight"
 local_script = "examples/webgl_lights_rectarealight.jl"
