@@ -637,6 +637,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_selective_draw.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_selective_draw.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_custom_attributes_particles"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_custom_attributes_particles"
+local_script = "examples/webgl_buffergeometry_custom_attributes_particles.jl"
+status = "partial"
+prerequisites = ["BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"]
+known_deviations = [
+  "Stores upstream-style size and sizePhase attributes, but renders with Diff3D.jl's built-in PointsMaterial rather than upstream ShaderMaterial per-point gl_PointSize animation",
+  "Uses deterministic Julia hash noise instead of upstream Math.random",
+  "Uses a generated spark texture and keyframed rotation instead of upstream texture asset, Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_custom_attributes_particles.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_custom_attributes_particles.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_custom_attributes_points"
 upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_points"
 local_script = "examples/webgl_custom_attributes_points.jl"
