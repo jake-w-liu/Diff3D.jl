@@ -1142,6 +1142,15 @@ Parallel audits split the remaining work into five critical tracks:
   `ConeGeometry` helper, and explicit camera export. Upstream browser
   pointermove raycasting, `ImprovedNoise`, `Stats`, `OrbitControls` runtime
   details, and `WebGLRenderer` internals remain documented deviations.
+- Added bounded `CatmullRomCurve`, `catmull_rom_point`,
+  `catmull_rom_points`, and `CatmullRomCurveGeometry` coverage plus a
+  standalone partial port for `webgl_geometry_spline_editor` via
+  `examples/webgl_geometry_spline_editor.jl`. The port renders the upstream
+  saved control points with deterministic programmatic `TransformControls` and
+  `DragControls` edits, helper cubes, a control polygon, and uniform,
+  centripetal, and chordal Catmull-Rom spline lines. Upstream browser pointer
+  editing, add/remove/export GUI buttons, `Stats`, shadows, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added bounded `NURBSCurve`, `NURBSSurface`, `NURBSVolume`, `nurbs_point`,
   `NURBSCurveGeometry`, `NURBSSurfaceGeometry`, and `ParametricGeometry`
   coverage plus a standalone partial port for `webgl_geometry_nurbs` via

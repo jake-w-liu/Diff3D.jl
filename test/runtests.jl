@@ -230,6 +230,7 @@ end
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
             "threejs_webgl_geometry_terrain_raycast",
+            "threejs_webgl_geometry_spline_editor",
             "threejs_webgl_geometry_nurbs",
             "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
@@ -460,6 +461,21 @@ end
                     "WebGLExportCase(\"geometry-nurbs\"",
                 ],
                 prerequisites=["NURBSCurve", "NURBSSurface", "NURBSVolume", "ParametricGeometry", "browser animation playback"],
+            ),
+            "threejs_webgl_geometry_spline_editor" => (
+                source=[
+                    "function spline_editor_seed_points()",
+                    "TransformControls(camera; mode=:translate, space=:world",
+                    "transform_attach!(transform_controls, helpers[2])",
+                    "transform_apply!(transform_controls, Vec3(0.0, 0.18, 0.0))",
+                    "DragControls(helpers, camera; recursive=false)",
+                    "drag_move!(drag_controls, Vec3(0.16, 0.0, 0.0))",
+                    "CatmullRomCurve(points; curve_type=curve_type, tension=0.5)",
+                    "CatmullRomCurveGeometry(curve; segments=200)",
+                    "LineObject(polyline_geometry(points)",
+                    "WebGLExportCase(\"geometry-spline-editor\"",
+                ],
+                prerequisites=["CatmullRomCurve", "CatmullRomCurveGeometry", "TransformControls", "DragControls", "GridHelper"],
             ),
             "threejs_webgl_geometry_minecraft" => (
                 source=[
@@ -4326,6 +4342,39 @@ end
             v = get_vertex(tub, vi)
             @test sqrt(v.x^2 + v.y^2) ≈ 0.5 atol=1e-9     # distance from the z-axis
         end
+    end
+
+    @testset "CatmullRomCurve and CatmullRomCurveGeometry" begin
+        points = Vec3[
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0, 1.0, 0.0),
+            Vec3(2.0, 0.0, 0.0),
+            Vec3(3.0, 1.0, 0.0),
+        ]
+        curve = CatmullRomCurve(points; curve_type=:catmullrom, tension=0.5)
+        @test catmull_rom_point(curve, -1.0) == Vec3(0.0, 0.0, 0.0)
+        @test catmull_rom_point(curve, 1.5) == Vec3(3.0, 1.0, 0.0)
+        mid = catmull_rom_point(curve, 1 / 3)
+        @test mid.x ≈ 1.0 atol=1e-12
+        @test mid.y ≈ 1.0 atol=1e-12
+        sampled = catmull_rom_points(curve; segments=9)
+        @test length(sampled) == 10
+        geo = CatmullRomCurveGeometry(curve; segments=9)
+        @test geo.n_vertices == 10
+        @test geo.n_faces == 0
+        @test get_vertex(geo, 1) == Vec3(0.0, 0.0, 0.0)
+        @test get_vertex(geo, 10) == Vec3(3.0, 1.0, 0.0)
+
+        for mode in (:centripetal, :chordal)
+            mode_curve = CatmullRomCurve(points; curve_type=mode)
+            p = catmull_rom_point(mode_curve, 0.45)
+            @test all(isfinite, (p.x, p.y, p.z))
+        end
+        closed = CatmullRomCurve(points; closed=true)
+        @test catmull_rom_point(closed, 0.0) == catmull_rom_point(closed, 1.0)
+        @test_throws ArgumentError CatmullRomCurve(Vec3[Vec3(0.0, 0.0, 0.0)])
+        @test_throws ArgumentError CatmullRomCurve(points; curve_type=:bezier)
+        @test_throws ArgumentError CatmullRomCurveGeometry(curve; segments=0)
     end
 
     @testset "NURBS and ParametricGeometry" begin

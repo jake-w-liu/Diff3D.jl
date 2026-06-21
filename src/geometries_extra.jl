@@ -307,6 +307,125 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     BufferGeometry(positions, normals, uvs, indices, n*rs1, length(indices) ÷ 3)
 end
 
+# ========================== CatmullRomCurve ==========================
+
+struct CatmullRomCurve
+    points::Vector{Vec3{Float64}}
+    curve_type::Symbol
+    closed::Bool
+    tension::Float64
+end
+
+const _CATMULL_ROM_CURVE_TYPES = (:catmullrom, :centripetal, :chordal)
+
+function _catmull_rom_control_point(point::Vec3)
+    p = Vec3(Float64(point.x), Float64(point.y), Float64(point.z))
+    isfinite(p.x) && isfinite(p.y) && isfinite(p.z) ||
+        throw(ArgumentError("CatmullRomCurve control points must be finite"))
+    return p
+end
+
+function CatmullRomCurve(points::AbstractVector{<:Vec3};
+                         curve_type::Symbol=:centripetal,
+                         closed::Bool=false,
+                         tension::Real=0.5)
+    length(points) >= 2 ||
+        throw(ArgumentError("CatmullRomCurve needs at least two control points"))
+    curve_type in _CATMULL_ROM_CURVE_TYPES ||
+        throw(ArgumentError("unsupported CatmullRomCurve curve_type: $curve_type"))
+    tf = Float64(tension)
+    isfinite(tf) || throw(ArgumentError("CatmullRomCurve tension must be finite"))
+    return CatmullRomCurve([_catmull_rom_control_point(p) for p in points],
+                           curve_type, Bool(closed), tf)
+end
+
+function _catmull_rom_uniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
+                              t::Float64, tension::Float64)
+    t2 = t * t
+    t3 = t2 * t
+    m1 = (p2 - p0) * tension
+    m2 = (p3 - p1) * tension
+    return (p1 * (2t3 - 3t2 + 1.0) +
+            m1 * (t3 - 2t2 + t) +
+            p2 * (-2t3 + 3t2) +
+            m2 * (t3 - t2))
+end
+
+function _catmull_rom_param_lerp(a::Vec3, b::Vec3, t0::Float64,
+                                 t1::Float64, t::Float64)
+    denom = t1 - t0
+    denom > 0.0 || return a
+    return a * ((t1 - t) / denom) + b * ((t - t0) / denom)
+end
+
+function _catmull_rom_interval(a::Vec3, b::Vec3, alpha::Float64)
+    return max(norm(b - a)^alpha, eps(Float64))
+end
+
+function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
+                                 u::Float64, alpha::Float64)
+    t0 = 0.0
+    t1 = t0 + _catmull_rom_interval(p0, p1, alpha)
+    t2 = t1 + _catmull_rom_interval(p1, p2, alpha)
+    t3 = t2 + _catmull_rom_interval(p2, p3, alpha)
+    t = t1 + u * (t2 - t1)
+
+    a1 = _catmull_rom_param_lerp(p0, p1, t0, t1, t)
+    a2 = _catmull_rom_param_lerp(p1, p2, t1, t2, t)
+    a3 = _catmull_rom_param_lerp(p2, p3, t2, t3, t)
+    b1 = _catmull_rom_param_lerp(a1, a2, t0, t2, t)
+    b2 = _catmull_rom_param_lerp(a2, a3, t1, t3, t)
+    return _catmull_rom_param_lerp(b1, b2, t1, t2, t)
+end
+
+function _catmull_rom_segment(curve::CatmullRomCurve, t::Real)
+    n = length(curve.points)
+    segments = curve.closed ? n : n - 1
+    tf = clamp(Float64(t), 0.0, 1.0)
+    scaled = tf * segments
+    if scaled >= segments
+        return segments, 1.0
+    end
+    index = floor(Int, scaled) + 1
+    return index, scaled - (index - 1)
+end
+
+function catmull_rom_point(curve::CatmullRomCurve, t::Real)
+    points = curve.points
+    n = length(points)
+    segment, local_t = _catmull_rom_segment(curve, t)
+    if curve.closed
+        p0 = points[mod1(segment - 1, n)]
+        p1 = points[mod1(segment, n)]
+        p2 = points[mod1(segment + 1, n)]
+        p3 = points[mod1(segment + 2, n)]
+    else
+        p0 = points[max(segment - 1, 1)]
+        p1 = points[segment]
+        p2 = points[segment + 1]
+        p3 = points[min(segment + 2, n)]
+    end
+    curve.curve_type === :catmullrom &&
+        return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
+    alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
+    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+end
+
+function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
+    segs = Int(segments)
+    segs >= 1 || throw(ArgumentError("catmull_rom_points segments must be positive"))
+    return [catmull_rom_point(curve, i / segs) for i in 0:segs]
+end
+
+function CatmullRomCurveGeometry(curve::CatmullRomCurve; segments::Integer=200)
+    pts = catmull_rom_points(curve; segments=segments)
+    positions = Float64[]
+    for p in pts
+        push!(positions, p.x, p.y, p.z)
+    end
+    return BufferGeometry(positions, Float64[], Float64[], Int[], length(pts), 0)
+end
+
 # ========================== NURBS / Parametric Geometry ==========================
 
 struct NURBSCurve

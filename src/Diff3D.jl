@@ -150,6 +150,7 @@ export
     CircleGeometry, IcosahedronGeometry,
     PolyhedronGeometry, OctahedronGeometry, TetrahedronGeometry, DodecahedronGeometry,
     ConvexGeometry, LatheGeometry, TubeGeometry, ShapeGeometry, ExtrudeGeometry, TextGeometry,
+    CatmullRomCurve, catmull_rom_point, catmull_rom_points, CatmullRomCurveGeometry,
     NURBSCurve, NURBSSurface, NURBSVolume, nurbs_point,
     NURBSCurveGeometry, NURBSSurfaceGeometry, ParametricGeometry,
     CapsuleGeometry,

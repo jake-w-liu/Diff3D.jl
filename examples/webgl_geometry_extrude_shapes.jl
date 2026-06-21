@@ -9,34 +9,14 @@ using Diff3D
 const OUT = joinpath(@__DIR__, "output")
 isdir(OUT) || mkpath(OUT)
 
-function catmull_rom_point(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3, t::Float64)
-    t2 = t * t
-    t3 = t2 * t
-    return (p1 * 2.0 +
-            (p2 - p0) * t +
-            (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 +
-            (-p0 + p1 * 3.0 - p2 * 3.0 + p3) * t3) * 0.5
-end
-
 function sampled_catmull_rom(points::Vector{<:Vec3};
                              samples_per_segment::Int=12, closed::Bool=false)
     length(points) >= 2 || throw(ArgumentError("Catmull-Rom path needs at least two points"))
     samples_per_segment > 0 || throw(ArgumentError("samples_per_segment must be positive"))
-    out = Vec3{Float64}[]
-    n = length(points)
-    segments = closed ? n : n - 1
-    for i in 1:segments
-        p0 = closed ? points[mod1(i - 1, n)] : points[max(i - 1, 1)]
-        p1 = points[i]
-        p2 = points[mod1(i + 1, n)]
-        p3 = closed ? points[mod1(i + 2, n)] : points[min(i + 2, n)]
-        for step in 0:(samples_per_segment - 1)
-            push!(out, catmull_rom_point(p0, p1, p2, p3,
-                                         step / Float64(samples_per_segment)))
-        end
-    end
-    push!(out, closed ? out[1] : points[end])
-    return out
+    segment_count = closed ? length(points) : length(points) - 1
+    curve = CatmullRomCurve(points; curve_type=:catmullrom, closed=closed,
+                            tension=0.5)
+    return catmull_rom_points(curve; segments=segment_count * samples_per_segment)
 end
 
 function regular_polygon_shape(count::Int, radius::Float64; rotation::Float64=0.0)

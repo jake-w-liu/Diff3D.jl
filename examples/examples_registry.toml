@@ -161,6 +161,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_terrain_raycast.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain_raycast.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_spline_editor"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_spline_editor"
+local_script = "examples/webgl_geometry_spline_editor.jl"
+status = "partial"
+prerequisites = ["CatmullRomCurve", "CatmullRomCurveGeometry", "LineObject", "TransformControls", "DragControls", "GridHelper", "BoxGeometry", "browser mesh and line export"]
+known_deviations = [
+  "Uses the upstream saved control points with deterministic programmatic transform and drag operations instead of browser pointer editing with TransformControls and lil-gui",
+  "Renders the uniform, centripetal, and chordal Catmull-Rom curves without upstream add/remove/export GUI buttons",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer, shadows, Stats, and OrbitControls runtime details"
+]
+verification = ["julia --project=. examples/webgl_geometry_spline_editor.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_spline_editor.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_nurbs"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_nurbs"
 local_script = "examples/webgl_geometry_nurbs.jl"
