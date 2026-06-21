@@ -1059,7 +1059,7 @@ Parallel audits split the remaining work into five critical tracks:
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_custom_attributes_points`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1243,6 +1243,12 @@ Parallel audits split the remaining work into five critical tracks:
   into explicit non-indexed `BufferGeometry` attributes. Upstream no-attribute
   `RawShaderMaterial`, exact GLSL hashing, `Stats`, and the imperative animation
   loop remain documented deviations.
+- Added a standalone partial port for `webgl_buffergeometry_attributes_integer`
+  via `examples/webgl_buffergeometry_attributes_integer.jl`, preserving the
+  upstream 10,000-triangle scale, UVs, and per-vertex `Int16` `:textureIndex`
+  attribute. Upstream GLSL3 `ShaderMaterial` sampler arrays, integer
+  `vertexAttribIPointer` shader input, exact texture assets, `Stats`, and the
+  imperative animation loop remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live

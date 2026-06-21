@@ -561,6 +561,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_attributes_none.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_attributes_none.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_attributes_integer"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_attributes_integer"
+local_script = "examples/webgl_buffergeometry_attributes_integer.jl"
+status = "partial"
+prerequisites = ["BufferGeometry.uvs", "BufferGeometry integer custom attributes", "MeshBasicMaterial.vertex_colors", "browser animation playback"]
+known_deviations = [
+  "Stores upstream-style Int16 textureIndex attributes, but renders with deterministic vertex colors because Diff3D.jl WebGL export does not support GLSL3 ShaderMaterial sampler arrays or integer vertexAttribIPointer shader inputs",
+  "Uses deterministic Julia hash noise instead of upstream Math.random",
+  "Uses Diff3D.jl keyframe animation and compact WebGL exporter rather than upstream Date.now loop and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_attributes_integer.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_attributes_integer.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_buffergeometry_lines"
 upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_lines"
 local_script = "examples/webgl_buffergeometry_lines.jl"

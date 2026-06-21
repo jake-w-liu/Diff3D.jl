@@ -262,6 +262,7 @@ end
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
             "threejs_webgl_buffergeometry_attributes_none",
+            "threejs_webgl_buffergeometry_attributes_integer",
             "threejs_webgl_buffergeometry_lines",
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
@@ -820,6 +821,23 @@ end
                     "WebGLExportCase(\"buffergeometry-attributes-none\"",
                 ],
                 prerequisites=["BufferGeometry", "MeshBasicMaterial.vertex_colors", "non-indexed triangle buffers", "browser animation playback"],
+            ),
+            "threejs_webgl_buffergeometry_attributes_integer" => (
+                source=[
+                    "const INTEGER_ATTR_TRIANGLES = 10_000",
+                    "const INTEGER_ATTR_VERTEX_COUNT = 3 * INTEGER_ATTR_TRIANGLES",
+                    "const INTEGER_ATTR_SPREAD = 800.0",
+                    "const INTEGER_ATTR_TRIANGLE_SIZE = 50.0",
+                    "texture_indices = Vector{Int16}(undef, 0)",
+                    "texture_index = Int16(triangle_id % 3)",
+                    "push!(uvs, u, v)",
+                    "set_attribute!(geo, :textureIndex, texture_indices, 1)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), vertex_colors=true",
+                    "QuaternionKeyframeTrack(mesh, :rotation",
+                    "WebGLExportCase(\"buffergeometry-attributes-integer\"",
+                ],
+                prerequisites=["BufferGeometry.uvs", "BufferGeometry integer custom attributes", "MeshBasicMaterial.vertex_colors", "browser animation playback"],
             ),
             "threejs_webgl_buffergeometry_lines" => (
                 source=[
