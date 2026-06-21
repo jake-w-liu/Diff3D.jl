@@ -161,6 +161,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_terrain_raycast.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain_raycast.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_interactive_buffergeometry"
+upstream_url = "https://threejs.org/examples/#webgl_interactive_buffergeometry"
+local_script = "examples/webgl_interactive_buffergeometry.jl"
+status = "partial"
+prerequisites = ["BufferGeometry normals", "BufferGeometry color attributes", "MeshPhongMaterial.vertex_colors", "Raycaster", "LineObject", "browser animation playback"]
+known_deviations = [
+  "Exports a deterministic CPU Raycaster-selected face outline snapshot instead of upstream pointermove-driven browser raycasting",
+  "Uses an explicit sequential index buffer so Diff3D.jl's current Raycaster mesh path can pick the upstream-style triangle cloud",
+  "Uses deterministic Julia hash noise instead of upstream Math.random",
+  "Uses Diff3D.jl keyframe animation and compact WebGL exporter rather than upstream Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_interactive_buffergeometry.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_interactive_buffergeometry.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_spline_editor"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_spline_editor"
 local_script = "examples/webgl_geometry_spline_editor.jl"

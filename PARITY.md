@@ -1060,7 +1060,7 @@ Parallel audits split the remaining work into five critical tracks:
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
-  `webgl_custom_attributes_points`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added partial `webgl_geometries` coverage through
@@ -1146,6 +1146,12 @@ Parallel audits split the remaining work into five critical tracks:
   `ConeGeometry` helper, and explicit camera export. Upstream browser
   pointermove raycasting, `ImprovedNoise`, `Stats`, `OrbitControls` runtime
   details, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_interactive_buffergeometry` via
+  `examples/webgl_interactive_buffergeometry.jl`, preserving the upstream
+  5,000-triangle cloud scale, flat normals, vertex colors, Phong material, and a
+  `Raycaster`-computed selected-face outline snapshot. Upstream non-indexed
+  geometry, live pointer picking, `Stats`, and the imperative animation loop
+  remain documented deviations.
 - Added bounded `CatmullRomCurve`, `catmull_rom_point`,
   `catmull_rom_points`, and `CatmullRomCurveGeometry` coverage plus a
   standalone partial port for `webgl_geometry_spline_editor` via
