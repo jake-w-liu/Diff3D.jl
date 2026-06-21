@@ -1057,7 +1057,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`,
+  `misc_animation_keys`, `webgl_camera_array`, `webgl_buffergeometry_drawrange`,
   `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
@@ -1229,6 +1229,11 @@ Parallel audits split the remaining work into five critical tracks:
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live
   imperative rotation loop, `Stats`, and `WebGLRenderer` internals remain
   documented deviations.
+- Added a standalone partial port for `misc_animation_keys` via
+  `examples/misc_animation_keys.jl`, mirroring the upstream single-box scene
+  with position, scale, quaternion, discrete material color, and opacity
+  keyframe tracks. Upstream `Stats`, `Timer`, and direct browser-side
+  `AnimationMixer` construction remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.

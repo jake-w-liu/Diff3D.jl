@@ -686,6 +686,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_helpers.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_helpers.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_animation_keys"
+upstream_url = "https://threejs.org/examples/#misc_animation_keys"
+local_script = "examples/misc_animation_keys.jl"
+status = "partial"
+prerequisites = ["BoxGeometry", "MeshBasicMaterial.transparent", "AxesHelper", "vector keyframe tracks", "quaternion keyframe tracks", "material color animation", "material opacity animation", "browser animation playback"]
+known_deviations = [
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer, Stats, and Timer",
+  "Exports the keyframed scene as a standalone generated page instead of constructing three.js AnimationMixer state imperatively in browser code"
+]
+verification = ["julia --project=. examples/misc_animation_keys.jl", "python examples/browser_webgl_smoke.py examples/output/misc_animation_keys.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_animation_keyframes"
 upstream_url = "https://threejs.org/examples/#webgl_animation_keyframes"
 local_script = "examples/webgl_animation_keyframes.jl"

@@ -272,6 +272,7 @@ end
             "threejs_webgl_lines_colors",
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
+            "threejs_misc_animation_keys",
             "threejs_webgl_animation_keyframes",
         ])
         ids = String[e["upstream_id"] for e in examples]
@@ -901,6 +902,21 @@ end
                     "CameraHelper(cam",
                 ],
                 prerequisites=["CameraHelper", "PolarGridHelper", "HemisphereLightHelper", "PlaneHelper", "light helpers"],
+            ),
+            "threejs_misc_animation_keys" => (
+                source=[
+                    "BoxGeometry(width=5.0, height=5.0, depth=5.0)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "AxesHelper(10.0)",
+                    "KeyframeTrack(mesh, :position",
+                    "KeyframeTrack(mesh, :scale",
+                    "QuaternionKeyframeTrack(mesh, \"quaternion\"",
+                    "KeyframeTrack(mesh, \"material.color\"",
+                    "interpolation=:step",
+                    "NumberKeyframeTrack(mesh, \"material.opacity\"",
+                    "AnimationClip(\"Action\", 3.0, tracks)",
+                ],
+                prerequisites=["BoxGeometry", "MeshBasicMaterial.transparent", "material color animation", "material opacity animation"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[
