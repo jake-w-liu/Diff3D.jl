@@ -1135,6 +1135,13 @@ Parallel audits split the remaining work into five critical tracks:
   `MeshBasicMaterial.map`, `FogExp2`, and explicit camera export. Upstream
   `ImprovedNoise`, seeded `Math.random`, `FirstPersonControls`, `Stats`,
   `Timer`, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_terrain_raycast` via
+  `examples/webgl_geometry_terrain_raycast.jl`, using deterministic heightfield
+  `BufferGeometry`, generated `CanvasTexture` terrain shading, `Raycaster`,
+  `set_from_camera!`, mesh intersection sorting, a normal-colored
+  `ConeGeometry` helper, and explicit camera export. Upstream browser
+  pointermove raycasting, `ImprovedNoise`, `Stats`, `OrbitControls` runtime
+  details, and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_geometry_minecraft` via
   `examples/webgl_geometry_minecraft.jl`, using deterministic voxel terrain
   `BufferGeometry`, a generated nearest-filter atlas texture,

@@ -148,6 +148,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_terrain.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_terrain_raycast"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_terrain_raycast"
+local_script = "examples/webgl_geometry_terrain_raycast.jl"
+status = "partial"
+prerequisites = ["BufferGeometry heightfields", "CanvasTexture", "Raycaster", "set_from_camera!", "raycast mesh intersections", "ConeGeometry", "MeshNormalMaterial", "explicit camera export", "browser mesh export"]
+known_deviations = [
+  "Uses deterministic Julia terrain heights instead of upstream ImprovedNoise and Math.random",
+  "Computes a deterministic center-screen Raycaster hit during export instead of upstream pointermove-driven browser raycasting",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer, Stats, and OrbitControls runtime details"
+]
+verification = ["julia --project=. examples/webgl_geometry_terrain_raycast.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain_raycast.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_minecraft"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_minecraft"
 local_script = "examples/webgl_geometry_minecraft.jl"

@@ -229,6 +229,7 @@ end
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
+            "threejs_webgl_geometry_terrain_raycast",
             "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
@@ -428,6 +429,21 @@ end
                     "WebGLExportCase(\"geometry-terrain\"",
                 ],
                 prerequisites=["BufferGeometry heightfields", "CanvasTexture", "MeshBasicMaterial.map", "FogExp2", "explicit camera export"],
+            ),
+            "threejs_webgl_geometry_terrain_raycast" => (
+                source=[
+                    "function terrain_raycast_height(width::Int, depth::Int)",
+                    "function terrain_raycast_texture(data::Matrix{Float64}; scale::Int=4)",
+                    "function terrain_raycast_geometry(data::Matrix{Float64}; width::Float64=7.5",
+                    "function terrain_hit_helper_geometry(hit::Intersection)",
+                    "function raycast_terrain_hit(terrain::Mesh, camera::PerspectiveCamera)",
+                    "set_from_camera!(rc, camera, 0.0, 0.0)",
+                    "hits = raycast(rc, terrain; recursive=false)",
+                    "ConeGeometry(radius=0.12, height=0.48, radial_segments=3)",
+                    "MeshNormalMaterial(side=:double)",
+                    "WebGLExportCase(\"geometry-terrain-raycast\"",
+                ],
+                prerequisites=["BufferGeometry heightfields", "CanvasTexture", "Raycaster", "set_from_camera!", "MeshNormalMaterial"],
             ),
             "threejs_webgl_geometry_minecraft" => (
                 source=[
