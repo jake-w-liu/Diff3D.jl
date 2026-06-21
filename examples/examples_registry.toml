@@ -453,6 +453,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_materials_texture_canvas.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_materials_texture_canvas.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lights_hemisphere"
+upstream_url = "https://threejs.org/examples/#webgl_lights_hemisphere"
+local_script = "examples/webgl_lights_hemisphere.jl"
+status = "partial"
+prerequisites = ["HemisphereLight", "DirectionalLight", "HemisphereLightHelper", "DirectionalLightHelper", "Fog", "SphereGeometry vertex colors", "MeshLambertMaterial", "MeshPhongMaterial", "browser light export", "browser animation playback"]
+known_deviations = [
+  "Uses a procedural animated flamingo proxy instead of loading upstream models/gltf/Flamingo.glb and AnimationMixer clip data",
+  "Bakes the upstream sky ShaderMaterial gradient into SphereGeometry vertex colors because Diff3D.jl WebGL export does not support custom ShaderMaterial",
+  "Uses Diff3D.jl helper line geometry and explicit keyframe wing animation instead of upstream GUI toggles, Timer, Stats, and runtime mixer updates",
+  "Uses compact Diff3D.jl WebGL export rather than upstream WebGLRenderer shadow-map internals"
+]
+verification = ["julia --project=. examples/webgl_lights_hemisphere.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_hemisphere.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_loader_stl"
 upstream_url = "https://threejs.org/examples/#webgl_loader_stl"
 local_script = "examples/webgl_loader_stl.jl"
