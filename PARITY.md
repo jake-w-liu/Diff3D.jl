@@ -1347,6 +1347,22 @@ Parallel audits split the remaining work into five critical tracks:
   keyframes instead of relying on animated `PointLight` children, and exports
   sampled `AnimationClip` tracks over a `20pi`-second period instead of upstream `performance.now`,
   `WebGLRenderer`, `OrbitControls`, and Stats runtime internals.
+- Added a standalone partial port for `webgl_shadowmap_performance` via
+  `examples/webgl_shadowmap_performance.jl`, preserving the upstream
+  23-degree camera, near/far planes, background/fog color, ambient light,
+  intensity-3 directional light, `shadow.bias=0.0001`, 100x100 ground scaled
+  to 10000x10000 at `FLOOR=-250`, the two shadow-casting Phong blocks, red
+  beveled `THREE.JS` text, 601 horse lanes from z=-600 to z=600, horse speed
+  550, and the upstream `ANIMATION_GROUPS=25` mass-animation structure. The
+  local port uses vendored Optimer text and deterministic three-box instanced
+  horse proxies instead of upstream Helvetiker text, `Horse.glb`,
+  morph targets, and `AnimationObjectGroup` mixer actions; the 25 groups use
+  sampled wrap keyframes over the `3000 / 550`-second sweep period. To keep
+  the compact SwiftShader browser smoke tractable, five deterministic horse
+  groups cast dynamic shadows while all 601 proxies remain visible and receive
+  shadows. Upstream randomized starts/resets, all-horse dynamic shadow casting,
+  FirstPersonControls, Stats, exact PCF shadow-map internals, and renderer
+  `autoClear=false` behavior remain documented deviations.
 - Added a standalone partial port for `webgl_shadow_contact` via
   `examples/webgl_shadow_contact.jl`, preserving the upstream 50-degree
   camera, white scene background, 2.5x2.5 contact plane, 0.3-unit shadow-camera

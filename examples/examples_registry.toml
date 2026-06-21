@@ -536,6 +536,21 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_pointlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_pointlight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap_performance"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap_performance"
+local_script = "examples/webgl_shadowmap_performance.jl"
+status = "partial"
+prerequisites = ["DirectionalLight", "dynamic shadow maps", "InstancedMesh", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"]
+known_deviations = [
+  "Uses the vendored Optimer bold typeface asset instead of upstream helvetiker_bold.typeface.json",
+  "Uses deterministic three-box InstancedMesh horse proxy bands instead of upstream Horse.glb clones, morph targets, and AnimationObjectGroup clip playback",
+  "Keeps the upstream 601-horse density and 25 animation-group structure but animates group wrap tracks instead of per-horse Timer delta updates and randomized resets",
+  "Limits dynamic shadow casting to five deterministic horse animation groups while all 601 horse proxies remain visible and receive shadows, keeping the compact SwiftShader browser smoke tractable",
+  "Uses compact exported orbit controls and dynamic directional shadows instead of upstream FirstPersonControls, WebGLRenderer PCFShadowMap internals, Stats, and renderer.autoClear behavior"
+]
+verification = ["julia --project=. examples/webgl_shadowmap_performance.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_performance.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadow_contact"
 upstream_url = "https://threejs.org/examples/#webgl_shadow_contact"
 local_script = "examples/webgl_shadow_contact.jl"
