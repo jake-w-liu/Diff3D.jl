@@ -266,6 +266,7 @@ end
             "threejs_webgl_buffergeometry_points",
             "threejs_webgl_buffergeometry_drawrange",
             "threejs_webgl_buffergeometry_selective_draw",
+            "threejs_webgl_custom_attributes_points",
             "threejs_webgl_points_sprites",
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
@@ -860,6 +861,24 @@ end
                     "build_selective_draw_cases()",
                 ],
                 prerequisites=["BufferGeometry color attributes", "custom visible attribute", "LineSegments", "browser line export"],
+            ),
+            "threejs_webgl_custom_attributes_points" => (
+                source=[
+                    "const CUSTOM_POINTS_AMOUNT = 100_000",
+                    "const CUSTOM_POINTS_RADIUS = 200.0",
+                    "function spark_texture(; n::Int=32)",
+                    "function custom_attribute_points_geometry()",
+                    "positions = Vector{Float64}(undef, 3CUSTOM_POINTS_AMOUNT)",
+                    "sizes = Vector{Float64}(undef, CUSTOM_POINTS_AMOUNT)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "set_attribute!(geo, :customColor, colors, 3)",
+                    "set_attribute!(geo, :size, sizes, 1)",
+                    "PointsObject(custom_attribute_points_geometry()",
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "QuaternionKeyframeTrack(points, :rotation",
+                    "WebGLExportCase(\"custom-attributes-points\"",
+                ],
+                prerequisites=["BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"],
             ),
             "threejs_webgl_points_sprites" => (
                 source=[
