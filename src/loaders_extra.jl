@@ -2010,6 +2010,11 @@ struct _SVGClipDefinition
     mask_type::Symbol
 end
 
+struct _SVGMaskEntry
+    loops::Vector{Vector{Vec2{Float64}}}
+    opacity::Float64
+end
+
 struct _SVGInsetValue
     value::Float64
     percent::Bool
@@ -3718,6 +3723,21 @@ function _svg_path_with_points(path::SVGPath, points::Vector{Vec2{Float64}},
     return SVGPath(path.tag, points, closed, path.style, path.element_id)
 end
 
+function _svg_style_with_opacity_factor(style::SVGStyle, factor::Float64)
+    opacity = clamp(style.opacity * factor, 0.0, 1.0)
+    return SVGStyle(style.fill, style.stroke, style.stroke_width, opacity,
+                    style.fill_opacity, style.stroke_opacity,
+                    copy(style.stroke_dasharray), style.stroke_dashoffset,
+                    style.stroke_linecap, style.stroke_linejoin,
+                    style.stroke_miterlimit, style.fill_rule)
+end
+
+function _svg_path_with_opacity_factor(path::SVGPath, factor::Float64)
+    return SVGPath(path.tag, path.points, path.closed,
+                   _svg_style_with_opacity_factor(path.style, factor),
+                   path.element_id)
+end
+
 function _svg_is_convex_clip_loop(loop::Vector{Vec2{Float64}})
     length(loop) >= 3 || return false
     area = _font_polygon_area(loop)
@@ -3781,16 +3801,23 @@ end
 _svg_mask_fill_luminance(color::Color3) =
     0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
 
+function _svg_mask_path_opacity(path::SVGPath, mask_type::Symbol)
+    fill = path.style.fill
+    fill === nothing && return 0.0
+    alpha = path.style.opacity * path.style.fill_opacity
+    mask_type === :alpha && return clamp(alpha, 0.0, 1.0)
+    mask_type === :luminance &&
+        return clamp(alpha * _svg_mask_fill_luminance(fill), 0.0, 1.0)
+    error("unsupported SVG mask-type $(mask_type)")
+end
+
 function _svg_mask_definition_paths(paths::Vector{SVGPath}, mask_type::Symbol)
     mask_type === :luminance || mask_type === :alpha ||
         error("unsupported SVG mask-type $(mask_type)")
     out = SVGPath[]
     for path in paths
         path.closed && length(path.points) >= 3 || continue
-        fill = path.style.fill
-        fill === nothing && continue
-        path.style.opacity * path.style.fill_opacity > 0.0 || continue
-        mask_type === :alpha || _svg_mask_fill_luminance(fill) > 1e-12 || continue
+        _svg_mask_path_opacity(path, mask_type) > 1e-12 || continue
         push!(out, path)
     end
     return out
@@ -4296,6 +4323,39 @@ function _svg_resolved_clip_loops(definitions::Dict{String,_SVGClipDefinition},
     end
 end
 
+function _svg_resolved_mask_entries(definitions::Dict{String,_SVGClipDefinition},
+                                    application::_SVGClipApplication,
+                                    paths::Vector{SVGPath})
+    spec = application.spec
+    spec.kind === :url || error("unsupported SVG mask kind $(spec.kind)")
+    mask_id = spec.id::String
+    haskey(definitions, mask_id) ||
+        error("SVG mask references unknown id $mask_id")
+    definition = definitions[mask_id]
+    isempty(definition.paths) && return nothing
+    entries = _SVGMaskEntry[]
+    for group in _svg_element_path_groups(definition.paths)
+        opacity = _svg_mask_path_opacity(group[1], definition.mask_type)
+        opacity > 1e-12 || continue
+        loops = [_font_loop_points(path.points) for path in group]
+        pieces = _svg_clip_area_loop_pieces(loops, group[1].style.fill_rule,
+                                            "SVG mask #$mask_id")
+        pieces === nothing && continue
+        if definition.units === :objectBoundingBox
+            (application.scope === :local || application.scope === :container_bbox) ||
+                error("SVG objectBoundingBox mask requires local or deferred container bounds")
+            mapped = _svg_object_bbox_clip_loops(pieces, paths)
+            mapped === nothing && continue
+            pieces = mapped
+        elseif definition.units !== :userSpaceOnUse
+            error("unsupported SVG maskContentUnits $(definition.units)")
+        end
+        push!(entries, _SVGMaskEntry(pieces, opacity))
+    end
+    isempty(entries) && return nothing
+    return entries
+end
+
 function _svg_clip_signed_distance(p::Vec2{Float64}, a::Vec2{Float64},
                                    b::Vec2{Float64}, ccw::Bool)
     cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
@@ -4699,6 +4759,37 @@ function _svg_apply_clip_paths(paths::Vector{SVGPath},
     return out
 end
 
+function _svg_apply_mask_paths(paths::Vector{SVGPath},
+                               mask_applications::Vector{_SVGClipApplication},
+                               definitions::Dict{String,_SVGClipDefinition})
+    out = paths
+    for application in mask_applications
+        entries = _svg_resolved_mask_entries(definitions, application, out)
+        entries === nothing && return SVGPath[]
+        masked = SVGPath[]
+        if all(entry -> entry.opacity >= 1.0 - 1e-12, entries)
+            loops = Vector{Vec2{Float64}}[]
+            for entry in entries
+                append!(loops, entry.loops)
+            end
+            for path in out
+                append!(masked, _svg_clip_path_to_loops(path, loops))
+            end
+        else
+            for path in out, entry in entries
+                fragments = _svg_clip_path_to_loops(path, entry.loops)
+                append!(masked,
+                        (_svg_path_with_opacity_factor(fragment,
+                                                       entry.opacity)
+                         for fragment in fragments))
+            end
+        end
+        out = masked
+        isempty(out) && break
+    end
+    return out
+end
+
 function _svg_transform_numbers(raw::AbstractString)
     values = _svg_numbers(raw)
     isempty(values) && error("SVG transform is missing numeric arguments")
@@ -5062,12 +5153,12 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                             rendered_paths = paths[(definition.render_start + 1):end]
                             deleteat!(paths, (definition.render_start + 1):length(paths))
                             append!(paths,
-                                    _svg_apply_clip_paths(rendered_paths,
+                                    _svg_apply_mask_paths(rendered_paths,
                                                           [definition.bbox_mask],
                                                           mask_definitions))
                         end
                         collected_paths =
-                            _svg_apply_clip_paths(collected_paths,
+                            _svg_apply_mask_paths(collected_paths,
                                                   [definition.bbox_mask],
                                                   mask_definitions)
                     end
@@ -5290,7 +5381,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                                                    clip_applications,
                                                    clip_definitions))
         !isempty(mask_applications) &&
-            (element_paths = _svg_apply_clip_paths(element_paths,
+            (element_paths = _svg_apply_mask_paths(element_paths,
                                                    mask_applications,
                                                    mask_definitions))
         if !isempty(element_paths)

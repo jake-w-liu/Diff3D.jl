@@ -6085,6 +6085,14 @@ end
             <mask id="css-alpha-mask">
               <rect x="5" y="15" width="2" height="2" fill="black"/>
             </mask>
+            <mask id="luma-opacity">
+              <rect x="11" y="1" width="2" height="2"
+                    fill="white" fill-opacity=".4"/>
+            </mask>
+            <mask id="alpha-opacity" mask-type="alpha">
+              <rect x="16" y="1" width="2" height="2"
+                    fill="black" opacity=".35"/>
+            </mask>
           </defs>
           <rect x="0" y="0" width="4" height="4" mask="url(#white-box)"/>
           <rect class="css-mask" x="5" y="0" width="4" height="4"/>
@@ -6092,12 +6100,15 @@ end
           <rect x="0" y="10" width="4" height="4" mask="url(#empty-mask)"/>
           <rect x="0" y="15" width="4" height="4" mask="url(#alpha-mask)"/>
           <rect x="5" y="15" width="4" height="4" mask="url(#css-alpha-mask)"/>
+          <rect x="10" y="0" width="4" height="4" fill-opacity=".5"
+                mask="url(#luma-opacity)"/>
+          <rect x="15" y="0" width="4" height="4" mask="url(#alpha-opacity)"/>
         </svg>
         """)
         mask_svg = load_svg(mask_path)
         mask_meshes = svg_meshes(mask_svg)
-        @test length(mask_svg.paths) == 5
-        @test length(mask_meshes) == 5
+        @test length(mask_svg.paths) == 7
+        @test length(mask_meshes) == 7
         @test svg_points_approx(mask_svg.paths[1].points,
                                 [Vec2(1.0, 3.0), Vec2(1.0, 1.0),
                                  Vec2(3.0, 1.0), Vec2(3.0, 3.0)])
@@ -6113,11 +6124,24 @@ end
         @test svg_points_approx(mask_svg.paths[5].points,
                                 [Vec2(5.0, 17.0), Vec2(5.0, 15.0),
                                  Vec2(7.0, 15.0), Vec2(7.0, 17.0)])
+        @test svg_points_approx(mask_svg.paths[6].points,
+                                [Vec2(11.0, 3.0), Vec2(11.0, 1.0),
+                                 Vec2(13.0, 1.0), Vec2(13.0, 3.0)])
+        @test svg_points_approx(mask_svg.paths[7].points,
+                                [Vec2(16.0, 3.0), Vec2(16.0, 1.0),
+                                 Vec2(18.0, 1.0), Vec2(18.0, 3.0)])
         @test svg_triangle_area_xy(mask_meshes[1].geometry) ≈ 4.0
         @test svg_triangle_area_xy(mask_meshes[2].geometry) ≈ 4.0
         @test svg_triangle_area_xy(mask_meshes[3].geometry) ≈ 8.0
         @test svg_triangle_area_xy(mask_meshes[4].geometry) ≈ 4.0
         @test svg_triangle_area_xy(mask_meshes[5].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(mask_meshes[6].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(mask_meshes[7].geometry) ≈ 4.0
+        @test mask_svg.paths[6].style.opacity ≈ 0.4
+        @test mask_svg.paths[6].style.fill_opacity ≈ 0.5
+        @test mask_meshes[6].material.opacity ≈ 0.2
+        @test mask_svg.paths[7].style.opacity ≈ 0.35
+        @test mask_meshes[7].material.opacity ≈ 0.35
         rm(mask_path)
 
         group_mask_path = tempname() * ".svg"

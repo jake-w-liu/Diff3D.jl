@@ -858,12 +858,13 @@ Parallel audits split the remaining work into five critical tracks:
   filled vector mask shapes, stylesheet/attribute cascade, empty/black masks,
   and `maskContentUnits="objectBoundingBox"` mapping for element-local and
   deferred container masks, with `mask-type="alpha"`/`mask-type: alpha`
-  selecting alpha coverage instead of luminance coverage. Full SVG
-  clipping/masking semantics
+  selecting alpha coverage instead of luminance coverage. Filled vector mask
+  sources now multiply clipped path opacity by their computed luminance or alpha
+  intensity for simple vector masks. Full SVG clipping/masking semantics
   (complex multi-shape clip unions beyond simple vector loop unions, complete
   CSS basic-shape grammar for browser CSS layout boxes, self-intersecting clip
-  paths, luminance or alpha mask intensity rendering, raster/gradient masks)
-  and DOM-level SVG parsing remain open.
+  paths, overlapping multi-shape mask intensity compositing, raster/gradient
+  masks) and DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.
