@@ -225,6 +225,7 @@ end
             "threejs_webgl_geometry_extrude_shapes",
             "threejs_webgl_geometry_text",
             "threejs_webgl_geometry_text_shapes",
+            "threejs_webgl_geometry_text_stroke",
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
@@ -371,6 +372,21 @@ end
                     "WebGLExportCase(\"geometry-text-shapes\"",
                 ],
                 prerequisites=["FontLoader", "font_text_shapes", "TextGeometry", "LineLoop", "explicit camera export"],
+            ),
+            "threejs_webgl_geometry_text_stroke" => (
+                source=[
+                    "const STROKE_MESSAGE = [\"   Three.js\", \"Stroke text.\"]",
+                    "return FontLoader(FONT_PATH)",
+                    "function add_stroke_text!(group::Group, font::FontData)",
+                    "TextGeometry(font, text_line; size=1.0, curve_segments=8)",
+                    "font_text_shapes(font, text_line; size=1.0, curve_segments=8)",
+                    "points_to_stroke_geometry(shape; closed=true",
+                    "stroke_width=0.065",
+                    "linejoin=:round",
+                    "merge_geometries(stroke_geometries; with_groups=false)",
+                    "WebGLExportCase(\"geometry-text-stroke\"",
+                ],
+                prerequisites=["FontLoader", "font_text_shapes", "TextGeometry", "points_to_stroke_geometry"],
             ),
             "threejs_webgl_geometry_extrude_splines" => (
                 source=[
@@ -6504,6 +6520,20 @@ end
         @test stroke_meshes[2].geometry.n_vertices == 21
         @test stroke_meshes[2].geometry.n_faces == 9
         @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
+        direct_stroke = points_to_stroke_geometry([Vec2(0.0, 0.0), Vec2(2.0, 0.0)];
+                                                  stroke_width=2.0)
+        @test direct_stroke.positions == stroke_meshes[1].geometry.positions
+        @test direct_stroke.indices == stroke_meshes[1].geometry.indices
+        closed_stroke = points_to_stroke_geometry([Vec2(0.0, 0.0), Vec2(1.0, 0.0),
+                                                   Vec2(0.0, 1.0)];
+                                                  closed=true, stroke_width=1.0,
+                                                  linejoin=:round)
+        @test closed_stroke.n_faces > 0
+        @test_throws ArgumentError points_to_stroke_geometry([Vec2(0.0, 0.0),
+                                                              Vec2(Inf, 0.0)])
+        @test_throws ArgumentError points_to_stroke_geometry([Vec2(0.0, 0.0),
+                                                              Vec2(1.0, 0.0)];
+                                                             stroke_width=-1.0)
         rm(stroke_mesh_path)
 
         stroke_dash_path = tempname() * ".svg"

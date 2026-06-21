@@ -239,7 +239,8 @@ export
     FontCommand, FontGlyph, FontData, load_font, FontLoader,
     font_glyph_shapes, font_text_shapes, font_kerning,
     SVGStyle, SVGPath, SVGDocument, load_svg, SVGLoader, svg_shapes,
-    svg_geometry, svg_meshes, svg_strokes, svg_stroke_meshes,
+    svg_geometry, points_to_stroke_geometry,
+    svg_meshes, svg_strokes, svg_stroke_meshes,
     load_mtl, load_obj_groups, base64_decode, load_gltf,
     GLTFAsset, load_gltf_asset, parse_xyz, load_xyz,
 

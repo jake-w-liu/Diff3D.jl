@@ -259,6 +259,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :load_svg => "Load common SVG paths, primitives, bounded URL/basic-shape clip-paths, and vector URL masks into an SVG document.",
     :svg_shapes => "Return closed SVG point loops suitable for ShapeGeometry.",
     :svg_geometry => "Triangulate closed SVG point loops, including element-scoped fill-rule holes, into merged geometry.",
+    :points_to_stroke_geometry => "Build triangle stroke geometry from 2D polyline points, similar to SVGLoader.pointsToStroke.",
     :svg_meshes => "Build mesh objects for filled SVG paths using parsed fill styles and fill-rule holes.",
     :svg_strokes => "Build line objects for stroked SVG paths using parsed stroke styles.",
     :svg_stroke_meshes => "Build triangle mesh objects for stroked SVG path outlines.",

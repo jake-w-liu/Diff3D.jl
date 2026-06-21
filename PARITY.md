@@ -1107,6 +1107,14 @@ Parallel audits split the remaining work into five critical tracks:
   Helvetiker font asset, runtime `ShapeGeometry` translation, `OrbitControls`
   change-only rendering, and `WebGLRenderer` internals remain documented
   deviations.
+- Added public `points_to_stroke_geometry` coverage and a standalone partial
+  port for `webgl_geometry_text_stroke` via
+  `examples/webgl_geometry_text_stroke.jl`, using `FontLoader`,
+  `font_text_shapes`, `TextGeometry`, translucent fill meshes, and
+  mesh-based stroked glyph contours. Upstream MPLUSRounded1c multilingual font
+  layout, runtime `SVGLoader.pointsToStroke` calls, `OrbitControls`
+  change-only rendering, and `WebGLRenderer` internals remain documented
+  deviations.
 - Added a standalone partial port for `webgl_geometry_extrude_splines` via
   `examples/webgl_geometry_extrude_splines.jl`, using sampled Catmull-Rom and
   parametric paths with Diff3D.jl `TubeGeometry`, Lambert tube materials,

@@ -99,6 +99,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_text_shapes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_text_shapes.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_text_stroke"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_text_stroke"
+local_script = "examples/webgl_geometry_text_stroke.jl"
+status = "partial"
+prerequisites = ["FontLoader", "font_text_shapes", "TextGeometry", "points_to_stroke_geometry", "MeshBasicMaterial transparent fill", "browser mesh export", "explicit camera export"]
+known_deviations = [
+  "Uses the vendored Optimer bold typeface asset and Latin text instead of upstream MPLUSRounded1c with English, Hebrew, and Chinese examples",
+  "Uses Diff3D.jl points_to_stroke_geometry over flattened font loops instead of upstream SVGLoader.pointsToStroke runtime calls",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer and OrbitControls change-only rendering"
+]
+verification = ["julia --project=. examples/webgl_geometry_text_stroke.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_text_stroke.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_extrude_splines"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_extrude_splines"
 local_script = "examples/webgl_geometry_extrude_splines.jl"

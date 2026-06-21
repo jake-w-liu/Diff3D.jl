@@ -6112,6 +6112,40 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
                           length(indices) ÷ 3)
 end
 
+"""
+    points_to_stroke_geometry(points; closed=false, stroke_width=1.0,
+                              linecap=:butt, linejoin=:miter,
+                              miterlimit=4.0)
+
+Build triangle geometry for a stroked 2D point loop or polyline, similar to
+three.js `SVGLoader.pointsToStroke`. The tessellator expands each
+non-degenerate segment into quads and supports square/round caps plus
+miter/bevel/round joins.
+"""
+function points_to_stroke_geometry(points::AbstractVector{<:Vec2};
+                                   closed::Bool=false,
+                                   stroke_width::Real=1.0,
+                                   linecap::Symbol=:butt,
+                                   linejoin::Symbol=:miter,
+                                   miterlimit::Real=4.0)
+    width = Float64(stroke_width)
+    isfinite(width) && width >= 0.0 ||
+        throw(ArgumentError("stroke_width must be finite and non-negative"))
+    limit = Float64(miterlimit)
+    isfinite(limit) && limit >= 1.0 ||
+        throw(ArgumentError("miterlimit must be finite and at least 1"))
+    clean = Vec2{Float64}[]
+    for point in points
+        x = Float64(point.x)
+        y = Float64(point.y)
+        isfinite(x) && isfinite(y) ||
+            throw(ArgumentError("stroke points must have finite coordinates"))
+        push!(clean, Vec2(x, y))
+    end
+    return _svg_stroke_outline_geometry(clean, closed, width, linecap, linejoin,
+                                        limit)
+end
+
 """Build `Mesh` objects for filled, closed SVG paths using parsed fill styles."""
 function svg_meshes(svg::SVGDocument)
     out = Mesh[]
