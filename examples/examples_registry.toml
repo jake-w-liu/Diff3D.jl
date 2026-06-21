@@ -739,6 +739,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_trackball.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_trackball.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_raycaster_helper"
+upstream_url = "https://threejs.org/examples/#misc_raycaster_helper"
+local_script = "examples/misc_raycaster_helper.jl"
+status = "partial"
+prerequisites = ["Raycaster", "raycast mesh intersections", "CapsuleGeometry", "MeshNormalMaterial", "LineSegments", "LineBasicMaterial", "SphereGeometry", "browser normal-material shader branch", "browser line export"]
+known_deviations = [
+  "Uses a deterministic time-zero snapshot instead of upstream requestAnimationFrame capsule motion",
+  "Represents the external RaycasterHelper package with an exported line segment and CPU-computed hit markers",
+  "Uses Diff3D.jl's compact WebGL exporter and WebGL path rather than upstream WebGPURenderer",
+  "The generated browser page does not recompute raycaster intersections each frame"
+]
+verification = ["julia --project=. examples/misc_raycaster_helper.jl", "python examples/browser_webgl_smoke.py examples/output/misc_raycaster_helper.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_animation_keyframes"
 upstream_url = "https://threejs.org/examples/#webgl_animation_keyframes"
 local_script = "examples/webgl_animation_keyframes.jl"

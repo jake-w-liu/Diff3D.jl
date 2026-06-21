@@ -276,6 +276,7 @@ end
             "threejs_misc_controls_orbit",
             "threejs_misc_controls_map",
             "threejs_misc_controls_trackball",
+            "threejs_misc_raycaster_helper",
             "threejs_webgl_animation_keyframes",
         ])
         ids = String[e["upstream_id"] for e in examples]
@@ -972,6 +973,21 @@ end
                     "WebGLExportCase(\"misc-controls-trackball-orthographic\"",
                 ],
                 prerequisites=["TrackballControls", "PerspectiveCamera", "OrthographicCamera", "InstancedMesh", "browser orbit interaction"],
+            ),
+            "threejs_misc_raycaster_helper" => (
+                source=[
+                    "const SNAPSHOT_TIME = 0.0",
+                    "function ray_segment_geometry(raycaster::Raycaster)",
+                    "CapsuleGeometry(radius=0.5, length=0.5",
+                    "MeshNormalMaterial(side=:double)",
+                    "Raycaster(Vec3(-4.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0);",
+                    "near=1.0, far=8.0",
+                    "hits = raycast(raycaster, scene; recursive=true)",
+                    "LineSegments(ray_segment_geometry(raycaster)",
+                    "SphereGeometry(radius=0.12, width_segments=16, height_segments=8)",
+                    "WebGLExportCase(\"misc-raycaster-helper\"",
+                ],
+                prerequisites=["Raycaster", "CapsuleGeometry", "MeshNormalMaterial", "LineSegments", "browser line export"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[

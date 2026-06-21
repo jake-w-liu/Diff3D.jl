@@ -1058,8 +1058,8 @@ Parallel audits split the remaining work into five critical tracks:
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_animation_keys`, `misc_controls_orbit`, `misc_controls_map`,
-  `misc_controls_trackball`, `webgl_camera_array`, `webgl_buffergeometry_drawrange`,
-  `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `misc_controls_trackball`, `misc_raycaster_helper`, `webgl_camera_array`,
+  `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1253,6 +1253,12 @@ Parallel audits split the remaining work into five critical tracks:
   `TrackballControls`, and separate perspective/orthographic export cases.
   Upstream random placement, lil-gui camera switching, orthographic
   `TrackballControls`, speed/key bindings, and exact browser control behavior
+  remain documented deviations.
+- Added a standalone partial port for `misc_raycaster_helper` via
+  `examples/misc_raycaster_helper.jl`, using `CapsuleGeometry`,
+  `MeshNormalMaterial`, a CPU `Raycaster`, an exported ray segment, and visible
+  hit markers. Upstream WebGPU rendering, the external `RaycasterHelper`
+  package, per-frame capsule animation, and live browser-side raycast updates
   remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
