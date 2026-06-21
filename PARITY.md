@@ -1058,8 +1058,8 @@ Parallel audits split the remaining work into five critical tracks:
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_animation_keys`, `misc_controls_orbit`, `misc_controls_map`,
-  `misc_controls_trackball`, `misc_raycaster_helper`, `webgl_camera_array`,
-  `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1260,6 +1260,11 @@ Parallel audits split the remaining work into five critical tracks:
   hit markers. Upstream WebGPU rendering, the external `RaycasterHelper`
   package, per-frame capsule animation, and live browser-side raycast updates
   remain documented deviations.
+- Added a standalone partial port for `misc_uv_tests` via
+  `examples/misc_uv_tests.jl`, deriving UV triangle-edge line projections from
+  the actual `BufferGeometry.uvs` of the upstream-listed primitive geometry
+  constructors. Upstream `UVsDebug` canvas output, face labels, DOM headings,
+  and exact canvas styling remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.

@@ -277,6 +277,7 @@ end
             "threejs_misc_controls_map",
             "threejs_misc_controls_trackball",
             "threejs_misc_raycaster_helper",
+            "threejs_misc_uv_tests",
             "threejs_webgl_animation_keyframes",
         ])
         ids = String[e["upstream_id"] for e in examples]
@@ -988,6 +989,25 @@ end
                     "WebGLExportCase(\"misc-raycaster-helper\"",
                 ],
                 prerequisites=["Raycaster", "CapsuleGeometry", "MeshNormalMaterial", "LineSegments", "browser line export"],
+            ),
+            "threejs_misc_uv_tests" => (
+                source=[
+                    "function uv_point(geo::BufferGeometry, vertex_index::Int)",
+                    "function uv_edges_geometry(geo::BufferGeometry)",
+                    "a, b, c = get_face(geo, fi)",
+                    "PlaneGeometry(width=100.0, height=100.0",
+                    "SphereGeometry(radius=75.0, width_segments=12, height_segments=6)",
+                    "IcosahedronGeometry(radius=30.0, detail=1)",
+                    "OctahedronGeometry(radius=30.0, detail=2)",
+                    "CylinderGeometry(radius_top=25.0, radius_bottom=75.0",
+                    "BoxGeometry(width=100.0, height=100.0, depth=100.0",
+                    "LatheGeometry(lathe_points(); segments=8)",
+                    "TorusGeometry(radius=50.0, tube=20.0",
+                    "TorusKnotGeometry(radius=50.0, tube=10.0",
+                    "LineSegments(uv_edges_geometry(geometry)",
+                    "WebGLExportCase(id, title, \"UV triangle-edge projection",
+                ],
+                prerequisites=["BufferGeometry.uvs", "LineSegments", "primitive geometry generators", "browser line export"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[

@@ -753,6 +753,19 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_raycaster_helper.jl", "python examples/browser_webgl_smoke.py examples/output/misc_raycaster_helper.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_uv_tests"
+upstream_url = "https://threejs.org/examples/#misc_uv_tests"
+local_script = "examples/misc_uv_tests.jl"
+status = "partial"
+prerequisites = ["BufferGeometry.uvs", "PlaneGeometry", "SphereGeometry", "IcosahedronGeometry", "OctahedronGeometry", "CylinderGeometry", "BoxGeometry", "LatheGeometry", "TorusGeometry", "TorusKnotGeometry", "LineSegments", "browser line export"]
+known_deviations = [
+  "Exports WebGL line-segment UV projections instead of upstream UVsDebug canvas elements",
+  "Shows triangle UV edges and a unit-square reference grid but not upstream face index labels or per-geometry DOM headings",
+  "Uses Diff3D.jl's compact WebGL exporter rather than the upstream DOM-only canvas utility"
+]
+verification = ["julia --project=. examples/misc_uv_tests.jl", "python examples/browser_webgl_smoke.py examples/output/misc_uv_tests.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_animation_keyframes"
 upstream_url = "https://threejs.org/examples/#webgl_animation_keyframes"
 local_script = "examples/webgl_animation_keyframes.jl"
