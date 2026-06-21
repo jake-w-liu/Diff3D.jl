@@ -259,7 +259,8 @@ export
     SpotLightHelper, HemisphereLightHelper, SkeletonHelper, PlaneHelper, PolarGridHelper,
     object_layers,
     sample_texture_linear, sample_texture_auto,
-    add_group!, get_groups, clear_groups!, apply_morph_targets,
+    add_group!, get_groups, clear_groups!, set_draw_range!, get_draw_range,
+    clear_draw_range!, apply_morph_targets,
     apply_morph_normals, apply_morph_tangents,
     render_sprites!,
 

@@ -24,20 +24,30 @@ mutable struct BufferGeometry
     # NOTE: three.js measures start/count in index-buffer entries; here they are
     # expressed in faces (triangles), which is this engine's natural draw unit.
     groups::Vector{NTuple{3,Int}}
+    # Draw range (three.js BufferGeometry.drawRange) as (start, count), where
+    # start is a 1-based draw-entry index and count is the number of entries.
+    # Draw entries are the exported/rendered index list, or vertices for
+    # unindexed line/point geometry.
+    draw_range::Union{Nothing,NTuple{2,Int}}
 
     # Inner constructors keep every existing positional/0-arg/6-arg call working
-    # by defaulting `attributes` and `groups`. The field is added LAST so prior
+    # by defaulting `attributes`, `groups`, and `draw_range`. New fields are LAST so prior
     # callers that pass 6 or 7 positional arguments are unaffected.
     BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces) =
         new(positions, normals, uvs, indices, n_vertices, n_faces,
-            Dict{Symbol, BufferAttribute}(), NTuple{3,Int}[])
+            Dict{Symbol, BufferAttribute}(), NTuple{3,Int}[], nothing)
 
     BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces, attributes) =
         new(positions, normals, uvs, indices, n_vertices, n_faces,
-            attributes, NTuple{3,Int}[])
+            attributes, NTuple{3,Int}[], nothing)
 
     BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces, attributes, groups) =
-        new(positions, normals, uvs, indices, n_vertices, n_faces, attributes, groups)
+        new(positions, normals, uvs, indices, n_vertices, n_faces, attributes, groups, nothing)
+
+    BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces,
+                   attributes, groups, draw_range) =
+        new(positions, normals, uvs, indices, n_vertices, n_faces,
+            attributes, groups, draw_range)
 end
 
 function BufferGeometry()
@@ -63,6 +73,56 @@ get_groups(g::BufferGeometry) = g.groups
 function clear_groups!(g::BufferGeometry)
     empty!(g.groups)
     return g
+end
+
+"""
+    set_draw_range!(geo, start, count)
+
+Set the geometry draw range (three.js `BufferGeometry.setDrawRange`). `start` is
+the 1-based index of the first draw entry, and `count` is the number of entries.
+Draw entries are triangle/line/point index-buffer entries, or vertices for
+unindexed line/point geometry. Returns `geo`.
+"""
+function set_draw_range!(g::BufferGeometry, start::Integer, count::Integer)
+    start_i = Int(start)
+    count_i = Int(count)
+    start_i >= 1 || throw(ArgumentError("draw range start must be at least 1"))
+    count_i >= 0 || throw(ArgumentError("draw range count must be non-negative"))
+    g.draw_range = (start_i, count_i)
+    return g
+end
+
+"""Draw range of `geo` as `(start, count)`, or `nothing` when the whole geometry is drawn."""
+get_draw_range(g::BufferGeometry) = g.draw_range
+
+"""Clear the geometry draw range so the whole geometry is drawn."""
+function clear_draw_range!(g::BufferGeometry)
+    g.draw_range = nothing
+    return g
+end
+
+@inline _draw_entry_count(g::BufferGeometry) = isempty(g.indices) ? g.n_vertices : length(g.indices)
+
+function _draw_entry_range(g::BufferGeometry)
+    total = _draw_entry_count(g)
+    total <= 0 && return 1:0
+    g.draw_range === nothing && return 1:total
+    start, count = g.draw_range
+    first_entry = clamp(start, 1, total + 1)
+    clamped_count = min(count, max(total - first_entry + 1, 0))
+    return first_entry:(first_entry + clamped_count - 1)
+end
+
+@inline _draw_vertex_index(g::BufferGeometry, entry::Int) =
+    isempty(g.indices) ? entry : g.indices[entry]
+
+function _draw_face_range(g::BufferGeometry)
+    g.n_faces <= 0 && return 1:0
+    entries = _draw_entry_range(g)
+    isempty(entries) && return 1:0
+    first_face = max(1, cld(first(entries) + 2, 3))
+    last_face = min(g.n_faces, fld(last(entries), 3))
+    return first_face:last_face
 end
 
 """Attach a generic named vertex attribute (three.js `setAttribute`)."""

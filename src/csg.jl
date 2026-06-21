@@ -308,5 +308,5 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     end
     return BufferGeometry(positions, normals, copy(geo.uvs), copy(geo.indices),
                           geo.n_vertices, geo.n_faces,
-                          copy(geo.attributes), copy(geo.groups))
+                          copy(geo.attributes), copy(geo.groups), geo.draw_range)
 end

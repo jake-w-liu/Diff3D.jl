@@ -302,20 +302,27 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
         depth_test = material_depth_test(material)
         depth_write = material_depth_write(material)
         stride = line_mode === :lines ? 2 : 1
-        nv = geo.n_vertices
-        i = 1
-        while i + 1 <= nv
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i+1))
+        entries = _draw_entry_range(geo)
+        isempty(entries) && return nothing
+        first_entry = first(entries)
+        last_entry = last(entries)
+        i = first_entry
+        while i + 1 <= last_entry
+            i1 = _draw_vertex_index(geo, i)
+            i2 = _draw_vertex_index(geo, i + 1)
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
                                         stamp, stamp_id)
             i += stride
         end
-        if line_mode === :line_loop && nv > 2
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, nv))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, 1))
+        if line_mode === :line_loop && last_entry - first_entry + 1 > 2
+            i1 = _draw_vertex_index(geo, last_entry)
+            i2 = _draw_vertex_index(geo, first_entry)
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -557,7 +564,8 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
         size_attenuation === nothing && (size_attenuation = true)
         reference_depth = camera isa PerspectiveCamera ?
             max(norm(camera.position - camera.target), near) : 1.0
-        for vi in 1:geo.n_vertices
+        for entry in _draw_entry_range(geo)
+            vi = _draw_vertex_index(geo, entry)
             pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
             pv.z <= -near || continue      # near-plane cull, matching the mesh path
             (px, py, pz, ok) = _project(proj, pv, W, H)

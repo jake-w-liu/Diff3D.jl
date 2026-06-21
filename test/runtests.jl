@@ -263,6 +263,7 @@ end
             "threejs_webgl_buffergeometry_lines",
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
+            "threejs_webgl_buffergeometry_drawrange",
             "threejs_webgl_points_sprites",
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
@@ -803,6 +804,17 @@ end
                     "n = 2600",
                 ],
                 prerequisites=["PointsObject", "browser point sprites"],
+            ),
+            "threejs_webgl_buffergeometry_drawrange" => (
+                source=[
+                    "set_draw_range!(geo, 1, VISIBLE_PARTICLE_COUNT)",
+                    "set_draw_range!(geo, 1, vertex_count)",
+                    "LineSegments(drawrange_lines_geometry(points)",
+                    "PointsObject(drawrange_particles_geometry(points)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"buffergeometry-drawrange\"",
+                ],
+                prerequisites=["set_draw_range!", "PointsObject", "LineSegments", "browser draw range export"],
             ),
             "threejs_webgl_points_sprites" => (
                 source=[
@@ -9860,6 +9872,41 @@ end
             @test mg2[2] == (nb + 1, ns, 2)         # material_index tracks original 0-based position
         end
 
+        # [GEO:geometry-drawrange] BufferGeometry draw range (three.js setDrawRange parity)
+        @testset "BufferGeometry draw range (three.js parity)" begin
+            using Diff3D
+            g = BufferGeometry([0.0,0,0, 1.0,0,0, 1.0,1,0, 0.0,1,0, -1.0,1,0],
+                               Float64[], Float64[],
+                               Int[1,2,3, 1,3,4, 1,4,5], 5, 3)
+            @test get_draw_range(g) === nothing
+            @test collect(Diff3D._draw_entry_range(g)) == collect(1:9)
+            @test collect(Diff3D._draw_face_range(g)) == collect(1:3)
+
+            @test set_draw_range!(g, 4, 3) === g
+            @test get_draw_range(g) == (4, 3)
+            @test collect(Diff3D._draw_entry_range(g)) == collect(4:6)
+            @test collect(Diff3D._draw_face_range(g)) == [2]
+
+            set_draw_range!(g, 2, 4)
+            @test collect(Diff3D._draw_entry_range(g)) == collect(2:5)
+            @test isempty(Diff3D._draw_face_range(g))
+
+            set_draw_range!(g, 8, 20)
+            @test collect(Diff3D._draw_entry_range(g)) == collect(8:9)
+            @test isempty(Diff3D._draw_face_range(g))
+
+            point_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 2.0,0,0, 3.0,0,0],
+                                       Float64[], Float64[], Int[], 4, 0)
+            set_draw_range!(point_geo, 2, 2)
+            @test collect(Diff3D._draw_entry_range(point_geo)) == [2, 3]
+            @test [Diff3D._draw_vertex_index(point_geo, i) for i in Diff3D._draw_entry_range(point_geo)] == [2, 3]
+
+            @test clear_draw_range!(g) === g
+            @test get_draw_range(g) === nothing
+            @test_throws ArgumentError set_draw_range!(g, 0, 1)
+            @test_throws ArgumentError set_draw_range!(g, 1, -1)
+        end
+
         # [MAT:materials+shading] Per-vertex colors (vertexColors)
         @testset "per-vertex colors" begin
             geo = BoxGeometry(width=1.0, height=1.0, depth=1.0)
@@ -13309,9 +13356,15 @@ end
             tex = Texture(texdata)
             tex_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(map=tex); name="regress_texture_mesh")
             sp = Sprite(SpriteMaterial(rotation=0.3); name="regress_sprite")
+            draw_geo = BufferGeometry([0.0,0,0, 1.0,0,0, 2.0,0,0, 3.0,0,0],
+                                      Float64[], Float64[], Int[], 4, 0)
+            set_draw_range!(draw_geo, 2, 2)
+            draw_points = PointsObject(draw_geo, PointsMaterial(size=4.0);
+                                       name="regress_draw_range_points")
             scene = Scene()
             add!(scene, tex_mesh)
             add!(scene, sp)
+            add!(scene, draw_points)
             clip = AnimationClip("spin", [NumberKeyframeTrack(sp, "material.rotation", [0.0, 1.0], [0.3, 1.1])])
             f = tempname() * ".html"
             save_webgl_html(f, [WebGLExportCase("regress", "Regress", "web export fixes", scene;
@@ -13335,6 +13388,11 @@ end
             # 4. initial camera pitch is derived from the exported case height
             @test occursin("\"height\":0.5", html)
             @test occursin("active.height==null?3.0:active.height", html)
+            # 5. BufferGeometry draw range serializes to WebGL drawElements offset/count
+            @test occursin(r"\"name\":\"regress_draw_range_points\".*\"drawStart\":1,\"drawCount\":2", html)
+            @test occursin("o.drawStart=Math.max(0,Math.min(Math.floor(Number(o.drawStart)||0),o.indices.length))", html)
+            @test occursin("function drawOffset(o){ return o.drawStart*(o.indexType===gl.UNSIGNED_INT?4:2); }", html)
+            @test occursin("const offset=drawOffset(o);", html)
 
             shader_scene = Scene()
             add!(shader_scene, Mesh(BoxGeometry(), ShaderMaterial(); name="regress_shader_material"))

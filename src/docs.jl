@@ -116,7 +116,8 @@ const _API_TYPE_DOCS = Dict{Symbol,String}(
         BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces)
 
     Indexed triangle geometry stored in flat arrays. Positions, normals, and UVs
-    use one-based Julia indexing; indices are one-based triangle indices.
+    use one-based Julia indexing; indices are one-based triangle indices. Use
+    `set_draw_range!` to restrict rendering to a one-based draw-entry range.
     """,
     :BoxGeometry => "Axis-aligned box geometry with per-face normals and UVs.",
     :SphereGeometry => "UV sphere geometry with configurable width and height segments.",
@@ -287,6 +288,9 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :add_group! => "Append a draw group to geometry.",
     :get_groups => "Return geometry draw groups.",
     :clear_groups! => "Remove all geometry draw groups.",
+    :set_draw_range! => "Set the geometry draw-entry range for rendering/export.",
+    :get_draw_range => "Return the geometry draw-entry range, or `nothing`.",
+    :clear_draw_range! => "Clear the geometry draw-entry range.",
     :apply_morph_targets => "Apply morph-position target attributes to geometry vertices.",
     :apply_morph_normals => "Apply morph-normal target attributes to geometry normals.",
     :apply_morph_tangents => "Apply morph-tangent target attributes to geometry tangents.",

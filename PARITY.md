@@ -74,6 +74,7 @@ replacement for three.js `WebGLRenderer`.
   roughness, metalness, normal texture maps, and exported cube-texture
   environment maps with face-color fallback,
   per-vertex `:color` attributes for meshes, lines, and points,
+  BufferGeometry draw ranges for CPU rasterization, raycasting, and browser export,
   texture offset/repeat/rotation/center transforms, opacity/alpha blending,
   material side flags, transparent-object sorting, scene-level linear/exp2 fog,
   ambient, directional, point, spot, hemisphere scene lights,
@@ -1056,8 +1057,8 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
-  `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`,
+  `webgl_lines_colors`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added partial `webgl_geometries` coverage through
@@ -1215,6 +1216,12 @@ Parallel audits split the remaining work into five critical tracks:
   per-instance color setters/getters and browser `aInstanceColor` export.
   Upstream raw shader time deformation, offset/orientation instanced
   attributes, randomized 50000-instance data, GUI controls, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
+- Added BufferGeometry draw ranges via `set_draw_range!`, `get_draw_range`,
+  and `clear_draw_range!`, with CPU rasterization, raycasting, and browser
+  `drawElements` byte-offset/count support. Added a standalone partial port for
+  `webgl_buffergeometry_drawrange` via `examples/webgl_buffergeometry_drawrange.jl`;
+  upstream dynamic particle simulation, GUI controls, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`

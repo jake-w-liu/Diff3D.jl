@@ -153,7 +153,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         geo = obj.geometry
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = material_side(obj.material)
-        @inbounds for fi in 1:geo.n_faces
+        @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
             a = mat4_transform_point(wm, get_vertex(geo, i1))
             b = mat4_transform_point(wm, get_vertex(geo, i2))
@@ -168,7 +168,8 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         geo = obj.geometry
         morphed_positions = _object_morph_positions(obj, geo)
         thr = rc.point_threshold
-        @inbounds for vi in 1:geo.n_vertices
+        @inbounds for entry in _draw_entry_range(geo)
+            vi = _draw_vertex_index(geo, entry)
             p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
             t, dist = _ray_point_distance(o, d, p)
             if dist < thr && rc.near <= t <= rc.far
@@ -184,22 +185,29 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         # LineSegments: disjoint pairs. LineObject: consecutive vertices.
         # LineLoop closes the final vertex back to the first, matching three.js.
         step = obj isa LineSegments ? 2 : 1
-        nv = geo.n_vertices
-        @inbounds for vi in 1:step:(nv - 1)
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi + 1))
+        entries = _draw_entry_range(geo)
+        isempty(entries) && return hits
+        first_entry = first(entries)
+        last_entry = last(entries)
+        @inbounds for entry in first_entry:step:(last_entry - 1)
+            vi1 = _draw_vertex_index(geo, entry)
+            vi2 = _draw_vertex_index(geo, entry + 1)
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
             t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
             if dist < thr && rc.near <= t <= rc.far
                 # face_index = the segment's start vertex index (three.js index).
-                push!(hits, Intersection(t, seg_pt, obj, vi))
+                push!(hits, Intersection(t, seg_pt, obj, vi1))
             end
         end
-        if obj isa LineLoop && nv > 2
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, nv))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, 1))
+        if obj isa LineLoop && last_entry - first_entry + 1 > 2
+            vi1 = _draw_vertex_index(geo, last_entry)
+            vi2 = _draw_vertex_index(geo, first_entry)
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
             t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
             if dist < thr && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, seg_pt, obj, nv))
+                push!(hits, Intersection(t, seg_pt, obj, vi1))
             end
         end
     end

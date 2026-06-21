@@ -571,7 +571,8 @@ function _skinned_render_geometry(sm::SkinnedMesh)
     end
     BufferGeometry(positions, _skin_normal_buffer(sm, mats), copy(geo.uvs),
                    copy(geo.indices), geo.n_vertices, geo.n_faces,
-                   _copy_skinned_attributes(sm, mats), copy(geo.groups))
+                   _copy_skinned_attributes(sm, mats), copy(geo.groups),
+                   geo.draw_range)
 end
 
 function _skinned_render_mesh(sm::SkinnedMesh)

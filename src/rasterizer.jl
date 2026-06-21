@@ -950,7 +950,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     view_inv = has_clip ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
-    for fi in 1:geo.n_faces
+    for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         # Back-face culling (skipped for double-sided materials).

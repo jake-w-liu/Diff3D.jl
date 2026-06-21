@@ -829,6 +829,12 @@ function _web_line_distance_data(geo::BufferGeometry)
     return zeros(Float64, geo.n_vertices)
 end
 
+function _web_draw_range_values(geo::BufferGeometry)
+    total = _draw_entry_count(geo)
+    entries = _draw_entry_range(geo)
+    return (clamp(first(entries) - 1, 0, total), length(entries))
+end
+
 function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
                          use_vertex_colors::Bool=true)
     normals = length(geo.normals) == length(geo.positions) ? geo.normals : zeros(Float64, length(geo.positions))
@@ -844,6 +850,7 @@ function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=
     colors = _web_color_data(geo, use_vertex_colors)
     line_distances = _web_line_distance_data(geo)
     indices = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    draw_start, draw_count = _web_draw_range_values(geo)
     return "\"positions\":" * _js_array(positions) *
            ",\"normals\":" * _js_array(normals) *
            ",\"tangents\":" * _js_array(tangents) *
@@ -852,7 +859,9 @@ function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=
            ",\"uv2s\":" * _js_array(uv2s) *
            ",\"colors\":" * _js_array(colors) *
            ",\"lineDistances\":" * _js_array(line_distances) *
-           ",\"indices\":" * _js_array(indices .- 1)
+           ",\"indices\":" * _js_array(indices .- 1) *
+           ",\"drawStart\":" * string(draw_start) *
+           ",\"drawCount\":" * string(draw_count)
 end
 
 function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractVector{Bool})
@@ -2115,7 +2124,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     if(o.indexType===gl.UNSIGNED_INT && !gl.getExtension("OES_element_index_uint")) throw new Error("OES_element_index_uint is required for this exported geometry");
     o.idxBuf=buf(o.indices,gl.ELEMENT_ARRAY_BUFFER,o.indexType===gl.UNSIGNED_INT ? Uint32Array : Uint16Array);
     o.instanceBuf=o.instanceMatrices?buf(o.instanceMatrices.flat()):null; o.instanceColorBuf=o.instanceColors?buf(o.instanceColors.flat()):null; o.instanceCount=o.instanceMatrices?o.instanceMatrices.length:1;
-    o.count=o.indices.length; return o;
+    o.drawStart=Math.max(0,Math.min(Math.floor(Number(o.drawStart)||0),o.indices.length)); const remaining=Math.max(0,o.indices.length-o.drawStart), requested=o.drawCount==null?remaining:Math.max(0,Math.floor(Number(o.drawCount)||0)); o.count=Math.min(requested,remaining); return o;
   }
   for(const c of DATA.cases) c.camera=buildCamera(c.camera);
   for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
@@ -2135,6 +2144,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); } for(const c of DATA.cases) for(const l of c.lights||[]) for(const s of (l.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); }
   const nodeById = new Map(); for(const c of DATA.cases) for(const n of c.nodes||[]){ if(!nodeById.has(n.id)) nodeById.set(n.id,[]); nodeById.get(n.id).push(n); } for(const c of DATA.cases) for(const o of c.objects) if(o.skin) for(const b of o.skin.bones){ if(!nodeById.has(b.id)) nodeById.set(b.id,[]); nodeById.get(b.id).push(b); }
   function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
+  function drawOffset(o){ return o.drawStart*(o.indexType===gl.UNSIGNED_INT?4:2); }
   function instanceAttribs(p,o){
     if(!(instancingExt&&o.instanceBuf&&o.instanceCount>0)) return false;
     const names=["aInstanceMatrix0","aInstanceMatrix1","aInstanceMatrix2","aInstanceMatrix3"], stride=64;
@@ -2235,8 +2245,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function pointShadowMatrices(pos,far){ const near=Math.max(Math.min(far*0.01,0.1),1e-4), proj=M4.perspective(Math.PI/2,1,near,far); return pointShadowFaces.map(f=>M4.mul(proj,M4.lookAt(pos,add(pos,f.dir),f.up))); }
   function ensureDynamicPointShadowTarget(l){ if(!l.dynamicShadowTarget){ const size=Math.max(1,l.shadow&&l.shadow.size?l.shadow.size:64); l.dynamicShadowTarget=makeDynamicShadowTarget(size*4,size*2); l.dynamicShadowTarget.faceSize=size; } l.shadowTexture=l.dynamicShadowTarget.texture; return l.dynamicShadowTarget; }
   function bindShadowMaterialState(p,o,clip){ attrib(p,"aUv",o.uvBuf,2); attrib(p,"aUv2",o.uv2Buf,2); const objClip=objectClipping(o,clip||{count:0,planes:new Array(16).fill(0)}); uniform1i(p,"uShadowClipCount",objClip.count); uniform4v(p,"uShadowClipPlane[0]",objClip.planes); uniform1f(p,"uShadowAlphaTest",o.alphaTest||0); uniform1f(p,"uShadowOpacity",o.opacity==null?1:o.opacity); uniform1i(p,"uShadowMapTexCoord",texCoord(o.texture,0)); uniform1i(p,"uShadowAlphaTexCoord",texCoord(o.alphaTexture,0)); uniformTexMatrix(p,"uShadowMapMatrix",o.texture); uniformTexMatrix(p,"uShadowAlphaMatrix",o.alphaTexture); uniform1f(p,"uShadowUseMap",o.tex?1:0); uniform1f(p,"uShadowUseAlphaMap",o.alphaTex?1:0); uniform1i(p,"uShadowColorMap",0); uniform1i(p,"uShadowAlphaMap",1); if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); } if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); } }
-  function drawShadowCaster(o,viewProj,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?depthBoneProgram:depthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,0,o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } }
-  function drawPointShadowCaster(o,viewProj,pos,far,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?pointDepthBoneProgram:pointDepthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); gl.uniform3fv(gl.getUniformLocation(p,"uPointShadowPos"),new Float32Array(pos)); gl.uniform1f(gl.getUniformLocation(p,"uPointShadowFar"),far); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,0,o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,0); } }
+  function drawShadowCaster(o,viewProj,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?depthBoneProgram:depthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
+  function drawPointShadowCaster(o,viewProj,pos,far,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?pointDepthBoneProgram:pointDepthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); gl.uniform3fv(gl.getUniformLocation(p,"uPointShadowPos"),new Float32Array(pos)); gl.uniform1f(gl.getUniformLocation(p,"uPointShadowFar"),far); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
   function renderDynamicDirectionalShadow(l,visible,clip){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=directionalShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m,clip); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
   function renderDynamicSpotShadow(l,visible,clip){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=spotShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m,clip); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
   function renderDynamicPointShadow(l,visible,clip){ const target=ensureDynamicPointShadowTarget(l), b=shadowBounds(visible), pos=l.position||[0,0,0], far=pointShadowFar(l,b.center,b.radius), matrices=pointShadowMatrices(pos,far); l.shadow.matrix=M4.ident(); l.shadow.matrices=matrices; l.shadow.far=far; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.width,target.height); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(let i=0;i<6;i++){ const f=pointShadowFaces[i]; gl.viewport(f.cell[0]*target.faceSize,f.cell[1]*target.faceSize,target.faceSize,target.faceSize); for(const o of visible) drawPointShadowCaster(o,matrices[i],pos,far,clip); } gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
@@ -2472,8 +2482,9 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
       gl.uniform1f(gl.getUniformLocation(p,"uDashScale"),Math.max(0.0001,o.dashScale||1));
     }
     const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
+    const offset=drawOffset(o);
     if(gpuInstanced){
-      instancingExt.drawElementsInstancedANGLE(mode,o.count,o.indexType,0,o.instanceCount);
+      instancingExt.drawElementsInstancedANGLE(mode,o.count,o.indexType,offset,o.instanceCount);
       clearInstanceAttribs(p);
     } else if(o.instanceMatrices&&o.instanceMatrices.length){
       const base=o.matrix.slice(), modelLoc=gl.getUniformLocation(p,"uModel"), normalLoc=o.mode==="triangles"?gl.getUniformLocation(p,"uNormalMat"):null;
@@ -2481,12 +2492,12 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
         const model=M4.mul(base,im);
         gl.uniformMatrix4fv(modelLoc,false,new Float32Array(model));
         if(normalLoc!==null) gl.uniformMatrix3fv(normalLoc,false,new Float32Array(M4.normal3(model)));
-        gl.drawElements(mode,o.count,o.indexType,0);
+        gl.drawElements(mode,o.count,o.indexType,offset);
       }
       gl.uniformMatrix4fv(modelLoc,false,new Float32Array(base));
       if(normalLoc!==null) gl.uniformMatrix3fv(normalLoc,false,new Float32Array(M4.normal3(base)));
     } else {
-      gl.drawElements(mode,o.count,o.indexType,0);
+      gl.drawElements(mode,o.count,o.indexType,offset);
     }
   }
   const nav=document.getElementById("cases"), titleEl=document.getElementById("title"), subEl=document.getElementById("subtitle"), stats=document.getElementById("stats"), speedEl=document.getElementById("speed"), speedValue=document.getElementById("speedValue"), playToggle=document.getElementById("playToggle");
