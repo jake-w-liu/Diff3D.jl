@@ -98,7 +98,8 @@ replacement for three.js `WebGLRenderer`.
   or sRGB browser output encoding, and sRGB-to-linear decode for exported color
   texture samplers. It still lacks shader chunks, render lists,
   render targets, full WebGL renderer tone-output/color-management parity,
-  WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
+  WebGL state parity, full dynamic shadow-map parity, full contact-shadow
+  render-target blur passes, full LTC rect-area lighting,
   full three.js skeleton lifecycle and renderer-program parity beyond compact
   uniform/float bone-texture skinning plus attached/detached bind matrices,
   ShadowMesh stencil-plane projection and runtime light-mode toggles,
@@ -1346,6 +1347,16 @@ Parallel audits split the remaining work into five critical tracks:
   keyframes instead of relying on animated `PointLight` children, and exports
   sampled `AnimationClip` tracks over a `20pi`-second period instead of upstream `performance.now`,
   `WebGLRenderer`, `OrbitControls`, and Stats runtime internals.
+- Added a standalone partial port for `webgl_shadow_contact` via
+  `examples/webgl_shadow_contact.jl`, preserving the upstream 50-degree
+  camera, white scene background, 2.5x2.5 contact plane, 0.3-unit shadow-camera
+  height, default blur/darkness/opacity values, normal-material box,
+  icosahedron, and 1:3 torus knot positions, plus frame-step rotation behavior.
+  Diff3D.jl uses a deterministic generated alpha-map contact texture on a
+  transparent black plane instead of upstream `WebGLRenderTarget` depth capture,
+  `MeshDepthMaterial.onBeforeCompile`, and horizontal/vertical blur shader
+  passes; lil-gui controls, Stats, and exact render-target state remain
+  documented deviations.
 - Added a standalone partial port for `webgl_shadowmap_vsm` via
   `examples/webgl_shadowmap_vsm.jl`, preserving the upstream camera, fog and
   background color, ambient light, red intensity-400 `SpotLight`, blue

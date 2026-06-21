@@ -536,6 +536,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_pointlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_pointlight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadow_contact"
+upstream_url = "https://threejs.org/examples/#webgl_shadow_contact"
+local_script = "examples/webgl_shadow_contact.jl"
+status = "partial"
+prerequisites = ["MeshNormalMaterial", "MeshBasicMaterial.alpha_map", "BoxGeometry", "IcosahedronGeometry", "TorusKnotGeometry", "OrthographicCamera", "CameraHelper", "browser animation playback"]
+known_deviations = [
+  "Uses a deterministic generated alpha-map contact shadow texture instead of upstream WebGLRenderTarget depth capture plus horizontal and vertical blur shader passes",
+  "Exports the upstream default GUI state with blur=3.5, darkness=1, shadow opacity=1, white fill plane, and hidden wireframe helper; lil-gui controls are not interactive",
+  "Interprets upstream frame-step rotations at a nominal 60 FPS and exports sampled Diff3D.jl AnimationClip tracks over the shared 10π/3-second period",
+  "Uses compact Diff3D.jl WebGL export rather than upstream WebGLRenderer render-target state, OrbitControls, Stats, and shader override internals"
+]
+verification = ["julia --project=. examples/webgl_shadow_contact.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadow_contact.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadowmap_vsm"
 upstream_url = "https://threejs.org/examples/#webgl_shadowmap_vsm"
 local_script = "examples/webgl_shadowmap_vsm.jl"
