@@ -467,6 +467,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lights_hemisphere.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_hemisphere.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lights_spotlight"
+upstream_url = "https://threejs.org/examples/#webgl_lights_spotlight"
+local_script = "examples/webgl_lights_spotlight.jl"
+status = "partial"
+prerequisites = ["SpotLight", "SpotLightHelper", "HemisphereLight", "PlaneGeometry", "TorusKnotGeometry", "MeshLambertMaterial", "shadow-casting spot lights", "browser animation playback"]
+known_deviations = [
+  "Uses a procedural TorusKnot Lucy proxy instead of upstream PLYLoader and models/ply/binary/Lucy100k.ply",
+  "Does not implement upstream SpotLight.map texture projection or GUI controls for live light parameter edits",
+  "Uses Diff3D.jl keyframe spotlight orbit instead of the upstream performance.now animation loop",
+  "Uses compact Diff3D.jl WebGL export rather than upstream WebGLRenderer tone mapping, PCF shadow-map controls, and OrbitControls setup"
+]
+verification = ["julia --project=. examples/webgl_lights_spotlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_spotlight.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_loader_stl"
 upstream_url = "https://threejs.org/examples/#webgl_loader_stl"
 local_script = "examples/webgl_loader_stl.jl"

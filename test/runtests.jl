@@ -254,6 +254,7 @@ end
             "threejs_webgl_materials_texture_rotation",
             "threejs_webgl_materials_texture_canvas",
             "threejs_webgl_lights_hemisphere",
+            "threejs_webgl_lights_spotlight",
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
@@ -722,6 +723,25 @@ end
                     "WebGLExportCase(\"lights-hemisphere\"",
                 ],
                 prerequisites=["HemisphereLight", "DirectionalLight", "HemisphereLightHelper", "DirectionalLightHelper", "Fog", "browser light export"],
+            ),
+            "threejs_webgl_lights_spotlight" => (
+                source=[
+                    "const SPOTLIGHT_ORBIT_RADIUS = 2.5",
+                    "const SPOTLIGHT_HEIGHT = 5.0",
+                    "const SPOTLIGHT_GROUND_SIZE = 10.0",
+                    "const SPOTLIGHT_CAMERA_POSITION = Vec3(7.0, 4.0, 1.0)",
+                    "function spotlight_position(theta::Float64)",
+                    "PlaneGeometry(width=SPOTLIGHT_GROUND_SIZE",
+                    "function build_lucy_proxy()",
+                    "TorusKnotGeometry(radius=0.62, tube=0.16",
+                    "HemisphereLight(color=Color3(1.0, 1.0, 1.0)",
+                    "SpotLight(color=Color3(1.0, 1.0, 1.0), intensity=100.0",
+                    "angle=pi / 6, penumbra=1.0, decay=2.0",
+                    "SpotLightHelper(spot",
+                    "KeyframeTrack(spot, :position",
+                    "WebGLExportCase(\"lights-spotlight\"",
+                ],
+                prerequisites=["SpotLight", "SpotLightHelper", "HemisphereLight", "PlaneGeometry", "TorusKnotGeometry", "browser animation playback"],
             ),
             "threejs_webgl_materials_cubemap_mipmaps" => (
                 source=[
