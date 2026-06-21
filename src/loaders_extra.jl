@@ -1944,7 +1944,8 @@ const _SVG_DEFAULT_STYLE =
 const _SVG_STYLE_KEYS = ("fill", "stroke", "stroke-width", "opacity",
                          "fill-opacity", "stroke-opacity", "stroke-dasharray",
                          "stroke-dashoffset", "stroke-linecap",
-                         "stroke-linejoin", "stroke-miterlimit", "fill-rule")
+                         "stroke-linejoin", "stroke-miterlimit", "fill-rule",
+                         "display", "visibility", "clip-path", "mask", "mask-type")
 
 struct _SVGAttributeSelector
     key::String
@@ -1994,7 +1995,85 @@ struct SVGPath
         new(tag, points, closed, _SVG_DEFAULT_STYLE, 0)
 end
 
-"""Decoded SVG document with common primitives converted to point paths."""
+struct _SVGClipDefinition
+    paths::Vector{SVGPath}
+    units::Symbol
+    mask_type::Symbol
+end
+
+struct _SVGInsetValue
+    value::Float64
+    percent::Bool
+end
+
+struct _SVGShapeRadius
+    kind::Symbol
+    value::_SVGInsetValue
+end
+
+struct _SVGRectEdge
+    value::_SVGInsetValue
+    auto::Bool
+end
+
+struct _SVGCornerRadii
+    x::_SVGInsetValue
+    y::_SVGInsetValue
+end
+
+struct _SVGClipSpec
+    kind::Symbol
+    id::Union{Nothing,String}
+    inset::NTuple{4,_SVGInsetValue}
+    rect::NTuple{4,_SVGRectEdge}
+    xywh::NTuple{4,_SVGInsetValue}
+    corners::NTuple{4,_SVGCornerRadii}
+    radius::_SVGShapeRadius
+    radii::NTuple{2,_SVGShapeRadius}
+    position::NTuple{2,_SVGInsetValue}
+    points::Vector{NTuple{2,_SVGInsetValue}}
+    polygon_round::Float64
+    path_loops::Vector{Vector{Vec2{Float64}}}
+    path_fill_rule::Symbol
+    reference_box::Symbol
+    segments::Int
+end
+
+const _SVG_ZERO_INSET_VALUE = _SVGInsetValue(0.0, false)
+const _SVG_ZERO_INSET = (_SVG_ZERO_INSET_VALUE, _SVG_ZERO_INSET_VALUE,
+                         _SVG_ZERO_INSET_VALUE, _SVG_ZERO_INSET_VALUE)
+const _SVG_CENTER_VALUE = _SVGInsetValue(50.0, true)
+const _SVG_DEFAULT_POSITION = (_SVG_CENTER_VALUE, _SVG_CENTER_VALUE)
+const _SVG_CLOSEST_SIDE_RADIUS = _SVGShapeRadius(:closest_side,
+                                                 _SVG_ZERO_INSET_VALUE)
+const _SVG_AUTO_RECT_EDGE = _SVGRectEdge(_SVG_ZERO_INSET_VALUE, true)
+const _SVG_ZERO_RECT = (_SVG_AUTO_RECT_EDGE, _SVG_AUTO_RECT_EDGE,
+                       _SVG_AUTO_RECT_EDGE, _SVG_AUTO_RECT_EDGE)
+const _SVG_ZERO_CORNER_RADII = _SVGCornerRadii(_SVG_ZERO_INSET_VALUE,
+                                               _SVG_ZERO_INSET_VALUE)
+const _SVG_ZERO_CORNERS = (_SVG_ZERO_CORNER_RADII, _SVG_ZERO_CORNER_RADII,
+                           _SVG_ZERO_CORNER_RADII, _SVG_ZERO_CORNER_RADII)
+
+struct _SVGClipApplication
+    spec::_SVGClipSpec
+    scope::Symbol
+    reference_bbox::Union{Nothing,NTuple{4,Float64}}
+end
+
+_SVGClipApplication(spec::_SVGClipSpec, scope::Symbol) =
+    _SVGClipApplication(spec, scope, nothing)
+
+struct _SVGContainerDefinition
+    kind::Symbol
+    id::Union{Nothing,String}
+    units::Symbol
+    bbox_clip::Union{Nothing,_SVGClipApplication}
+    bbox_mask::Union{Nothing,_SVGClipApplication}
+    mask_type::Symbol
+    render_start::Int
+end
+
+"""Decoded SVG document with common path, shape, line, bounded URL/basic-shape clipped, and vector-masked primitives converted to point paths."""
 struct SVGDocument
     width::Float64
     height::Float64
@@ -2719,22 +2798,32 @@ function _svg_color(raw::AbstractString)
     error("unsupported SVG color $raw")
 end
 
+function _svg_cascaded_style_attrs(attrs::AbstractDict,
+                                   css_rules::Vector{_SVGStyleRule},
+                                   tag::String,
+                                   context::Union{Nothing,_SVGElementContext},
+                                   keys)
+    local_attrs = Dict{String,String}()
+    for key in keys
+        haskey(attrs, key) && (local_attrs[key] = attrs[key])
+    end
+    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, context)
+        key in keys && (local_attrs[key] = value)
+    end
+    if haskey(attrs, "style")
+        for (key, value) in _svg_style_declarations(attrs["style"])
+            key in keys && (local_attrs[key] = value)
+        end
+    end
+    return local_attrs
+end
+
 function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
                                css_rules::Vector{_SVGStyleRule}=_SVGStyleRule[],
                                tag::String="",
                                context::Union{Nothing,_SVGElementContext}=nothing)
-    local_attrs = Dict{String,String}()
-    for key in _SVG_STYLE_KEYS
-        haskey(attrs, key) && (local_attrs[key] = attrs[key])
-    end
-    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, context)
-        local_attrs[key] = value
-    end
-    if haskey(attrs, "style")
-        for (key, value) in _svg_style_declarations(attrs["style"])
-            key in _SVG_STYLE_KEYS && (local_attrs[key] = value)
-        end
-    end
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
+                                            _SVG_STYLE_KEYS)
     fill = haskey(local_attrs, "fill") ? _svg_color(local_attrs["fill"]) : parent.fill
     stroke = haskey(local_attrs, "stroke") ? _svg_color(local_attrs["stroke"]) : parent.stroke
     stroke_width = haskey(local_attrs, "stroke-width") ?
@@ -2769,6 +2858,31 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
     return SVGStyle(fill, stroke, stroke_width, opacity, fill_opacity,
                     stroke_opacity, dasharray, dashoffset, linecap, linejoin,
                     miterlimit, fill_rule)
+end
+
+function _svg_display_visibility(parent_display::Bool, parent_visibility::Symbol,
+                                 attrs::AbstractDict,
+                                 css_rules::Vector{_SVGStyleRule},
+                                 tag::String,
+                                 context::Union{Nothing,_SVGElementContext})
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
+                                            ("display", "visibility"))
+    display = lowercase(strip(get(local_attrs, "display", "")))
+    display_ok = parent_display && display != "none"
+    visibility = parent_visibility
+    if haskey(local_attrs, "visibility")
+        raw = lowercase(strip(local_attrs["visibility"]))
+        if raw == "hidden" || raw == "collapse"
+            visibility = :hidden
+        elseif raw == "visible"
+            visibility = :visible
+        elseif raw == "inherit" || raw == ""
+            visibility = parent_visibility
+        else
+            error("unsupported SVG visibility $raw")
+        end
+    end
+    return display_ok, visibility
 end
 
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
@@ -2841,6 +2955,20 @@ function _svg_root_size(root_attrs::AbstractDict)
     return width, height
 end
 
+function _svg_root_reference_bbox(root_attrs::AbstractDict, width::Float64,
+                                  height::Float64)
+    view_box = get(root_attrs, "viewbox", nothing)
+    if view_box !== nothing
+        values = _svg_numbers(view_box)
+        length(values) == 4 || error("SVG viewBox must contain four numbers")
+        values[3] > 0.0 && values[4] > 0.0 ||
+            error("SVG viewBox width/height must be positive")
+        return (values[1], values[2], values[1] + values[3],
+                values[2] + values[4])
+    end
+    return (0.0, 0.0, width, height)
+end
+
 function _svg_curve_segments(curve_segments::Integer)
     curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
     curve_segments <= typemax(Int) ||
@@ -2865,7 +2993,7 @@ function _svg_points(raw::AbstractString)
     return points
 end
 
-function _svg_rect(attrs::AbstractDict)
+function _svg_rect(attrs::AbstractDict, segments::Int)
     x = _svg_length(attrs, "x", 0.0)
     y = _svg_length(attrs, "y", 0.0)
     w = _svg_length(attrs, "width", 0.0)
@@ -2873,8 +3001,61 @@ function _svg_rect(attrs::AbstractDict)
     w < 0.0 && error("SVG rect width must be non-negative")
     h < 0.0 && error("SVG rect height must be non-negative")
     (w == 0.0 || h == 0.0) && return nothing
+    has_rx = haskey(attrs, "rx")
+    has_ry = haskey(attrs, "ry")
+    rx = has_rx ? _svg_length(attrs, "rx") :
+         (has_ry ? _svg_length(attrs, "ry") : 0.0)
+    ry = has_ry ? _svg_length(attrs, "ry") : rx
+    rx < 0.0 && error("SVG rect radius must be non-negative")
+    ry < 0.0 && error("SVG rect radius must be non-negative")
+    rx = min(rx, w / 2.0)
+    ry = min(ry, h / 2.0)
+    if rx > 0.0 && ry > 0.0
+        points = Vec2{Float64}[]
+        function push_point!(p::Vec2{Float64})
+            if isempty(points) ||
+               hypot(points[end].x - p.x, points[end].y - p.y) > 1e-9
+                push!(points, p)
+            end
+            return nothing
+        end
+        function push_arc!(cx::Float64, cy::Float64, start_angle, stop_angle)
+            for step in 1:segments
+                t = step / Float64(segments)
+                θ = start_angle + (stop_angle - start_angle) * t
+                push_point!(Vec2(cx + rx * cos(θ), cy + ry * sin(θ)))
+            end
+            return nothing
+        end
+        push_point!(Vec2(x + rx, y))
+        push_point!(Vec2(x + w - rx, y))
+        push_arc!(x + w - rx, y + ry, -π / 2.0, 0.0)
+        push_point!(Vec2(x + w, y + h - ry))
+        push_arc!(x + w - rx, y + h - ry, 0.0, π / 2.0)
+        push_point!(Vec2(x + rx, y + h))
+        push_arc!(x + rx, y + h - ry, π / 2.0, π)
+        push_point!(Vec2(x, y + ry))
+        push_arc!(x + rx, y + ry, π, 3π / 2.0)
+        if length(points) > 1 &&
+           hypot(points[end].x - points[1].x,
+                 points[end].y - points[1].y) <= 1e-9
+            pop!(points)
+        end
+        return SVGPath(:rect, points, true)
+    end
     return SVGPath(:rect, [Vec2(x, y), Vec2(x + w, y),
                            Vec2(x + w, y + h), Vec2(x, y + h)], true)
+end
+
+function _svg_line(attrs::AbstractDict)
+    x1 = _svg_length(attrs, "x1", 0.0)
+    y1 = _svg_length(attrs, "y1", 0.0)
+    x2 = _svg_length(attrs, "x2", 0.0)
+    y2 = _svg_length(attrs, "y2", 0.0)
+    a = Vec2(x1, y1)
+    b = Vec2(x2, y2)
+    a == b && return nothing
+    return SVGPath(:line, [a, b], false)
 end
 
 function _svg_ellipse_points(cx::Float64, cy::Float64, rx::Float64, ry::Float64,
@@ -2915,6 +3096,1594 @@ _svg_style_path(path::SVGPath, style::SVGStyle) =
 
 _svg_element_path(path::SVGPath, element_id::Int) =
     SVGPath(path.tag, path.points, path.closed, path.style, element_id)
+
+function _svg_local_href_id(attrs::AbstractDict)
+    raw = get(attrs, "href", get(attrs, "xlink:href", nothing))
+    raw === nothing && return nothing
+    value = strip(String(raw))
+    isempty(value) && return nothing
+    startswith(value, "#") && return value[nextind(value, firstindex(value)):end]
+    error("unsupported SVG use reference $value")
+end
+
+function _svg_clip_path_units(attrs::AbstractDict)
+    raw = lowercase(strip(get(attrs, "clippathunits", "userSpaceOnUse")))
+    raw == "userspaceonuse" && return :userSpaceOnUse
+    raw == "objectboundingbox" && return :objectBoundingBox
+    error("unsupported SVG clipPathUnits $raw")
+end
+
+function _svg_mask_content_units(attrs::AbstractDict)
+    raw = lowercase(strip(get(attrs, "maskcontentunits", "userSpaceOnUse")))
+    raw == "userspaceonuse" && return :userSpaceOnUse
+    raw == "objectboundingbox" && return :objectBoundingBox
+    error("unsupported SVG maskContentUnits $raw")
+end
+
+function _svg_mask_type(attrs::AbstractDict,
+                        css_rules::Vector{_SVGStyleRule},
+                        tag::String,
+                        context::Union{Nothing,_SVGElementContext})
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
+                                            ("mask-type",))
+    raw = lowercase(strip(get(local_attrs, "mask-type", "luminance")))
+    raw == "luminance" && return :luminance
+    raw == "alpha" && return :alpha
+    error("unsupported SVG mask-type $raw")
+end
+
+function _svg_clip_spec(kind::Symbol; id::Union{Nothing,AbstractString}=nothing,
+                        inset::NTuple{4,_SVGInsetValue}=_SVG_ZERO_INSET,
+                        rect::NTuple{4,_SVGRectEdge}=_SVG_ZERO_RECT,
+                        xywh::NTuple{4,_SVGInsetValue}=_SVG_ZERO_INSET,
+                        corners::NTuple{4,_SVGCornerRadii}=_SVG_ZERO_CORNERS,
+                        radius::_SVGShapeRadius=_SVG_CLOSEST_SIDE_RADIUS,
+                        radii::NTuple{2,_SVGShapeRadius}=(_SVG_CLOSEST_SIDE_RADIUS,
+                                                          _SVG_CLOSEST_SIDE_RADIUS),
+                        position::NTuple{2,_SVGInsetValue}=_SVG_DEFAULT_POSITION,
+                        points::Vector{NTuple{2,_SVGInsetValue}}=NTuple{2,_SVGInsetValue}[],
+                        polygon_round::Float64=0.0,
+                        path_loops::Vector{Vector{Vec2{Float64}}}=Vector{Vec2{Float64}}[],
+                        path_fill_rule::Symbol=:nonzero,
+                        reference_box::Symbol=:fillBox,
+                        segments::Int=32)
+    return _SVGClipSpec(kind, id === nothing ? nothing : String(id), inset,
+                        rect, xywh, corners, radius, radii, position, points,
+                        polygon_round, path_loops, path_fill_rule, reference_box,
+                        segments)
+end
+
+function _svg_clip_spec_reference_box(spec::_SVGClipSpec, reference_box::Symbol)
+    return _SVGClipSpec(spec.kind, spec.id, spec.inset, spec.rect, spec.xywh,
+                        spec.corners, spec.radius, spec.radii, spec.position,
+                        spec.points, spec.polygon_round, spec.path_loops,
+                        spec.path_fill_rule, reference_box, spec.segments)
+end
+
+_svg_url_clip_spec(id::AbstractString, circle_segments::Int) =
+    _svg_clip_spec(:url; id, segments=circle_segments)
+_svg_inset_clip_spec(inset::NTuple{4,_SVGInsetValue},
+                     corners::NTuple{4,_SVGCornerRadii},
+                     circle_segments::Int) =
+    _svg_clip_spec(:inset; inset, corners, segments=circle_segments)
+_svg_rect_clip_spec(rect::NTuple{4,_SVGRectEdge},
+                    corners::NTuple{4,_SVGCornerRadii},
+                    circle_segments::Int) =
+    _svg_clip_spec(:rect; rect, corners, segments=circle_segments)
+_svg_xywh_clip_spec(xywh::NTuple{4,_SVGInsetValue},
+                    corners::NTuple{4,_SVGCornerRadii},
+                    circle_segments::Int) =
+    _svg_clip_spec(:xywh; xywh, corners, segments=circle_segments)
+_svg_circle_clip_spec(radius::_SVGShapeRadius,
+                      position::NTuple{2,_SVGInsetValue},
+                      circle_segments::Int) =
+    _svg_clip_spec(:circle; radius, position, segments=circle_segments)
+_svg_ellipse_clip_spec(radii::NTuple{2,_SVGShapeRadius},
+                       position::NTuple{2,_SVGInsetValue},
+                       circle_segments::Int) =
+    _svg_clip_spec(:ellipse; radii, position, segments=circle_segments)
+_svg_polygon_clip_spec(points::Vector{NTuple{2,_SVGInsetValue}},
+                       polygon_round::Float64,
+                       circle_segments::Int) =
+    _svg_clip_spec(:polygon; points, polygon_round, segments=circle_segments)
+_svg_path_clip_spec(path_loops::Vector{Vector{Vec2{Float64}}},
+                    fill_rule::Symbol,
+                    circle_segments::Int) =
+    _svg_clip_spec(:path; path_loops, path_fill_rule=fill_rule,
+                   segments=circle_segments)
+
+const _SVG_LENGTH_PERCENT_RE =
+    r"^([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)(%|px)?$"
+
+function _svg_length_percentage_value(raw::AbstractString,
+                                      context::AbstractString;
+                                      nonnegative::Bool=false)
+    value = strip(String(raw))
+    m = match(_SVG_LENGTH_PERCENT_RE, value)
+    m === nothing && error("unsupported $context $raw")
+    amount = parse(Float64, m.captures[1])
+    isfinite(amount) || error("$context must be finite")
+    nonnegative && amount < 0.0 && error("$context must be non-negative")
+    return _SVGInsetValue(amount, m.captures[2] == "%")
+end
+
+_svg_inset_value(raw::AbstractString) =
+    _svg_length_percentage_value(raw, "SVG clip-path inset value")
+
+function _svg_basic_shape_value_tokens(raw::AbstractString)
+    return split(replace(replace(strip(String(raw)), "," => " "), "/" => " / "))
+end
+
+function _svg_rectangular_round_tokens(raw::AbstractString,
+                                       context::AbstractString)
+    tokens = _svg_basic_shape_value_tokens(raw)
+    round_indexes = findall(token -> lowercase(String(token)) == "round", tokens)
+    length(round_indexes) > 1 && error("$context contains multiple round keywords")
+    isempty(round_indexes) && return tokens, _SVG_ZERO_CORNERS
+    round_index = only(round_indexes)
+    round_index == length(tokens) && error("$context round corners are missing")
+    main = tokens[1:(round_index - 1)]
+    corners = _svg_corner_radii(tokens[(round_index + 1):end], context)
+    return main, corners
+end
+
+function _svg_radius_values(tokens::Vector{SubString{String}},
+                            context::AbstractString)
+    1 <= length(tokens) <= 4 || error("$context needs one to four radius values")
+    values = [_svg_length_percentage_value(token, "$context radius";
+                                           nonnegative=true)
+              for token in tokens]
+    top_left = values[1]
+    top_right = length(values) >= 2 ? values[2] : values[1]
+    bottom_right = length(values) >= 3 ? values[3] : values[1]
+    bottom_left = length(values) >= 4 ? values[4] : top_right
+    return (top_left, top_right, bottom_right, bottom_left)
+end
+
+function _svg_corner_radii(tokens::Vector{SubString{String}},
+                           context::AbstractString)
+    slash_indexes = findall(token -> String(token) == "/", tokens)
+    length(slash_indexes) > 1 && error("$context round corners contain multiple slashes")
+    if isempty(slash_indexes)
+        x_values = _svg_radius_values(tokens, context)
+        y_values = x_values
+    else
+        slash_index = only(slash_indexes)
+        (slash_index > 1 && slash_index < length(tokens)) ||
+            error("$context round corners need radii on both sides of /")
+        x_values = _svg_radius_values(tokens[1:(slash_index - 1)], context)
+        y_values = _svg_radius_values(tokens[(slash_index + 1):end], context)
+    end
+    return (_SVGCornerRadii(x_values[1], y_values[1]),
+            _SVGCornerRadii(x_values[2], y_values[2]),
+            _SVGCornerRadii(x_values[3], y_values[3]),
+            _SVGCornerRadii(x_values[4], y_values[4]))
+end
+
+function _svg_inset_values(raw::AbstractString)
+    tokens, corners = _svg_rectangular_round_tokens(raw, "SVG clip-path inset")
+    1 <= length(tokens) <= 4 || error("SVG clip-path inset needs 1 to 4 values")
+    values = [_svg_inset_value(token) for token in tokens]
+    top = values[1]
+    right = length(values) >= 2 ? values[2] : values[1]
+    bottom = length(values) >= 3 ? values[3] : values[1]
+    left = length(values) >= 4 ? values[4] : right
+    return (top, right, bottom, left), corners
+end
+
+function _svg_rect_edge_value(raw::AbstractString)
+    value = lowercase(strip(String(raw)))
+    value == "auto" && return _SVG_AUTO_RECT_EDGE
+    return _SVGRectEdge(_svg_length_percentage_value(raw,
+                                                     "SVG clip-path rect value"),
+                        false)
+end
+
+function _svg_rect_clip_spec(raw::AbstractString, circle_segments::Int)
+    tokens, corners = _svg_rectangular_round_tokens(raw, "SVG clip-path rect")
+    length(tokens) == 4 || error("SVG clip-path rect needs four values")
+    rect = (_svg_rect_edge_value(tokens[1]), _svg_rect_edge_value(tokens[2]),
+            _svg_rect_edge_value(tokens[3]), _svg_rect_edge_value(tokens[4]))
+    return _svg_rect_clip_spec(rect, corners, circle_segments)
+end
+
+function _svg_xywh_clip_spec(raw::AbstractString, circle_segments::Int)
+    tokens, corners = _svg_rectangular_round_tokens(raw, "SVG clip-path xywh")
+    length(tokens) == 4 || error("SVG clip-path xywh needs four values")
+    x = _svg_length_percentage_value(tokens[1], "SVG clip-path xywh x value")
+    y = _svg_length_percentage_value(tokens[2], "SVG clip-path xywh y value")
+    width = _svg_length_percentage_value(tokens[3],
+                                         "SVG clip-path xywh width";
+                                         nonnegative=true)
+    height = _svg_length_percentage_value(tokens[4],
+                                          "SVG clip-path xywh height";
+                                          nonnegative=true)
+    return _svg_xywh_clip_spec((x, y, width, height), corners, circle_segments)
+end
+
+function _svg_shape_radius(raw::AbstractString, context::AbstractString)
+    value = lowercase(strip(String(raw)))
+    value == "closest-side" && return _SVGShapeRadius(:closest_side,
+                                                      _SVG_ZERO_INSET_VALUE)
+    value == "farthest-side" && return _SVGShapeRadius(:farthest_side,
+                                                       _SVG_ZERO_INSET_VALUE)
+    return _SVGShapeRadius(:length,
+                           _svg_length_percentage_value(raw, context;
+                                                        nonnegative=true))
+end
+
+function _svg_basic_shape_tokens(raw::AbstractString, context::AbstractString)
+    value = strip(String(raw))
+    isempty(value) && return String[]
+    occursin(',', value) && error("$context contains unsupported comma syntax")
+    return String.(split(value))
+end
+
+function _svg_split_basic_shape_at(tokens::Vector{String},
+                                   context::AbstractString)
+    at_positions = findall(token -> lowercase(token) == "at", tokens)
+    length(at_positions) > 1 && error("$context contains multiple at keywords")
+    if isempty(at_positions)
+        return tokens, String[]
+    end
+    at_index = only(at_positions)
+    at_index == length(tokens) && error("$context position is missing")
+    return tokens[1:(at_index - 1)], tokens[(at_index + 1):end]
+end
+
+function _svg_position_axis(token::AbstractString)
+    value = lowercase(strip(String(token)))
+    value in ("left", "x-start") && return :x
+    value in ("right", "x-end") && return :x
+    value in ("top", "y-start") && return :y
+    value in ("bottom", "y-end") && return :y
+    value == "center" && return :both
+    match(_SVG_LENGTH_PERCENT_RE, value) !== nothing && return :length
+    return nothing
+end
+
+function _svg_position_value(token::AbstractString, axis::Symbol)
+    value = lowercase(strip(String(token)))
+    if axis === :x
+        (value == "left" || value == "x-start") &&
+            return _SVGInsetValue(0.0, true)
+        (value == "right" || value == "x-end") &&
+            return _SVGInsetValue(100.0, true)
+    elseif axis === :y
+        (value == "top" || value == "y-start") &&
+            return _SVGInsetValue(0.0, true)
+        (value == "bottom" || value == "y-end") &&
+            return _SVGInsetValue(100.0, true)
+    end
+    value == "center" && return _SVG_CENTER_VALUE
+    return _svg_length_percentage_value(token,
+                                        "SVG clip-path basic-shape position value")
+end
+
+function _svg_basic_shape_position(tokens::Vector{String},
+                                   context::AbstractString)
+    isempty(tokens) && return _SVG_DEFAULT_POSITION
+    length(tokens) <= 2 ||
+        error("$context supports one- or two-value positions")
+    axes = [_svg_position_axis(token) for token in tokens]
+    any(axis -> axis === nothing, axes) &&
+        error("unsupported SVG clip-path basic-shape position $(join(tokens, " "))")
+    if length(tokens) == 1
+        axis = axes[1]
+        if axis === :y
+            return (_SVG_CENTER_VALUE, _svg_position_value(tokens[1], :y))
+        else
+            return (_svg_position_value(tokens[1], :x), _SVG_CENTER_VALUE)
+        end
+    end
+
+    a1, a2 = axes
+    if (a1 === :x || a1 === :both) && (a2 === :y || a2 === :both)
+        return (_svg_position_value(tokens[1], :x),
+                _svg_position_value(tokens[2], :y))
+    elseif a1 === :y && (a2 === :x || a2 === :both)
+        return (_svg_position_value(tokens[2], :x),
+                _svg_position_value(tokens[1], :y))
+    elseif a1 === :length && (a2 === :length || a2 === :y || a2 === :both)
+        return (_svg_position_value(tokens[1], :x),
+                _svg_position_value(tokens[2], :y))
+    elseif (a1 === :x || a1 === :both) && a2 === :length
+        return (_svg_position_value(tokens[1], :x),
+                _svg_position_value(tokens[2], :y))
+    elseif a1 === :y && a2 === :length
+        return (_svg_position_value(tokens[2], :x),
+                _svg_position_value(tokens[1], :y))
+    end
+    error("unsupported SVG clip-path basic-shape position $(join(tokens, " "))")
+end
+
+function _svg_circle_clip_spec(raw::AbstractString, circle_segments::Int)
+    tokens = _svg_basic_shape_tokens(raw, "SVG clip-path circle")
+    radius_tokens, position_tokens = _svg_split_basic_shape_at(tokens,
+                                                               "SVG clip-path circle")
+    length(radius_tokens) <= 1 ||
+        error("SVG clip-path circle needs zero or one radius")
+    radius = isempty(radius_tokens) ? _SVG_CLOSEST_SIDE_RADIUS :
+             _svg_shape_radius(radius_tokens[1],
+                               "SVG clip-path circle radius")
+    position = _svg_basic_shape_position(position_tokens,
+                                         "SVG clip-path circle")
+    return _svg_circle_clip_spec(radius, position, circle_segments)
+end
+
+function _svg_ellipse_clip_spec(raw::AbstractString, circle_segments::Int)
+    tokens = _svg_basic_shape_tokens(raw, "SVG clip-path ellipse")
+    radius_tokens, position_tokens = _svg_split_basic_shape_at(tokens,
+                                                               "SVG clip-path ellipse")
+    radii = if isempty(radius_tokens)
+        (_SVG_CLOSEST_SIDE_RADIUS, _SVG_CLOSEST_SIDE_RADIUS)
+    elseif length(radius_tokens) == 1
+        radius = _svg_shape_radius(radius_tokens[1],
+                                   "SVG clip-path ellipse radius")
+        radius.kind === :length &&
+            error("SVG clip-path ellipse needs zero, one keyword, or two radii")
+        (radius, radius)
+    elseif length(radius_tokens) == 2
+        (_svg_shape_radius(radius_tokens[1],
+                           "SVG clip-path ellipse x radius"),
+         _svg_shape_radius(radius_tokens[2],
+                           "SVG clip-path ellipse y radius"))
+    else
+        error("SVG clip-path ellipse needs zero, one keyword, or two radii")
+    end
+    position = _svg_basic_shape_position(position_tokens,
+                                         "SVG clip-path ellipse")
+    return _svg_ellipse_clip_spec(radii, position, circle_segments)
+end
+
+function _svg_polygon_round_value(raw::AbstractString)
+    radius = _svg_length_percentage_value(raw, "SVG clip-path polygon round radius";
+                                          nonnegative=true)
+    radius.percent &&
+        error("SVG clip-path polygon round radius must be a length")
+    return radius.value
+end
+
+function _svg_polygon_header!(raw_points::Vector{String})
+    isempty(raw_points) && error("SVG clip-path polygon needs at least three points")
+    tokens = _svg_basic_shape_value_tokens(raw_points[1])
+    isempty(tokens) && error("SVG clip-path polygon contains an empty component")
+    head = lowercase(String(tokens[1]))
+    is_header = head == "nonzero" || head == "evenodd" || head == "round"
+    is_header || return 0.0
+
+    index = 1
+    if head == "nonzero" || head == "evenodd"
+        index += 1
+    end
+    polygon_round = 0.0
+    if index <= length(tokens) && lowercase(String(tokens[index])) == "round"
+        index += 1
+        index <= length(tokens) ||
+            error("SVG clip-path polygon round radius is missing")
+        polygon_round = _svg_polygon_round_value(tokens[index])
+        index += 1
+    end
+    index > length(tokens) ||
+        error("unsupported SVG clip-path polygon header $(raw_points[1])")
+    popfirst!(raw_points)
+    return polygon_round
+end
+
+function _svg_polygon_clip_spec(raw::AbstractString, circle_segments::Int)
+    value = strip(String(raw))
+    raw_points = String.(strip.(split(value, ",")))
+    filter!(!isempty, raw_points)
+    isempty(raw_points) && error("SVG clip-path polygon needs at least three points")
+    polygon_round = _svg_polygon_header!(raw_points)
+    length(raw_points) >= 3 ||
+        error("SVG clip-path polygon needs at least three points")
+    points = NTuple{2,_SVGInsetValue}[]
+    for raw_point in raw_points
+        tokens = _svg_basic_shape_tokens(raw_point,
+                                         "SVG clip-path polygon point")
+        length(tokens) == 2 ||
+            error("SVG clip-path polygon points need x/y pairs")
+        push!(points, (_svg_length_percentage_value(tokens[1],
+                                                    "SVG clip-path polygon point value"),
+                       _svg_length_percentage_value(tokens[2],
+                                                    "SVG clip-path polygon point value")))
+    end
+    return _svg_polygon_clip_spec(points, polygon_round, circle_segments)
+end
+
+function _svg_split_css_function_args(raw::AbstractString, context::AbstractString)
+    args = String[]
+    buf = IOBuffer()
+    active_quote = nothing
+    escaped = false
+
+    function push_arg!()
+        arg = String(strip(String(take!(buf))))
+        isempty(arg) && error("$context contains an empty argument")
+        push!(args, arg)
+        return nothing
+    end
+
+    for ch in String(raw)
+        if active_quote !== nothing
+            print(buf, ch)
+            if escaped
+                escaped = false
+            elseif ch == '\\'
+                escaped = true
+            elseif ch == active_quote
+                active_quote = nothing
+            end
+        elseif ch == '"' || ch == '\''
+            active_quote = ch
+            print(buf, ch)
+        elseif ch == ','
+            push_arg!()
+        else
+            print(buf, ch)
+        end
+    end
+    active_quote === nothing || error("$context contains an unterminated string")
+    escaped && error("$context contains an unterminated escape")
+    push_arg!()
+    return args
+end
+
+function _svg_css_string(raw::AbstractString, context::AbstractString)
+    value = strip(String(raw))
+    ncodeunits(value) >= 2 || error("$context needs a quoted path string")
+    quote_char = value[firstindex(value)]
+    (quote_char == '"' || quote_char == '\'') || error("$context needs a quoted path string")
+    value[lastindex(value)] == quote_char || error("$context contains an unterminated string")
+    buf = IOBuffer()
+    escaped = false
+    lo = nextind(value, firstindex(value))
+    hi = prevind(value, lastindex(value))
+    lo > hi && return ""
+    for ch in value[lo:hi]
+        if escaped
+            print(buf, ch)
+            escaped = false
+        elseif ch == '\\'
+            escaped = true
+        else
+            print(buf, ch)
+        end
+    end
+    escaped && error("$context contains an unterminated escape")
+    return String(take!(buf))
+end
+
+function _svg_path_clip_spec(raw::AbstractString, curve_segments::Int,
+                             circle_segments::Int)
+    args = _svg_split_css_function_args(raw, "SVG clip-path path")
+    length(args) <= 2 || error("SVG clip-path path needs a string or fill-rule and string")
+    fill_rule = :nonzero
+    path_arg = if length(args) == 1
+        args[1]
+    else
+        raw_fill_rule = lowercase(strip(args[1]))
+        (raw_fill_rule == "nonzero" || raw_fill_rule == "evenodd") ||
+            error("unsupported SVG clip-path path fill-rule $(args[1])")
+        fill_rule = Symbol(raw_fill_rule)
+        args[2]
+    end
+    path_data = _svg_css_string(path_arg, "SVG clip-path path")
+    raw_paths = _svg_path_points(path_data, curve_segments)
+    isempty(raw_paths) && error("SVG clip-path path must define a non-empty path")
+    loops = Vector{Vec2{Float64}}[]
+    for path in raw_paths
+        length(path.points) >= 3 ||
+            error("SVG clip-path path must contain closed areas")
+        loop = _font_loop_points(path.points)
+        length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12 ||
+            error("SVG clip-path path must define a non-empty path")
+        push!(loops, loop)
+    end
+    return _svg_path_clip_spec(loops, fill_rule, circle_segments)
+end
+
+const _SVG_SHAPE_BOX_MAP = Dict(
+    "content-box" => :cssLayoutBox,
+    "fill-box" => :fillBox,
+    "padding-box" => :cssLayoutBox,
+    "border-box" => :cssLayoutBox,
+    "margin-box" => :cssLayoutBox,
+    "stroke-box" => :strokeBox,
+    "view-box" => :viewBox,
+)
+
+function _svg_parse_shape_box(raw::AbstractString)
+    token = lowercase(strip(String(raw)))
+    haskey(_SVG_SHAPE_BOX_MAP, token) && return _SVG_SHAPE_BOX_MAP[token]
+    return nothing
+end
+
+function _svg_clip_shape_and_box(raw::AbstractString)
+    value = strip(String(raw))
+    m = match(r"(?is)^([A-Za-z-]+)\s+(.+)$", value)
+    if m !== nothing
+        box = _svg_parse_shape_box(m.captures[1])
+        box !== nothing && return strip(m.captures[2]), box
+    end
+    m = match(r"(?is)^(.+)\s+([A-Za-z-]+)$", value)
+    if m !== nothing
+        box = _svg_parse_shape_box(m.captures[2])
+        box !== nothing && return strip(m.captures[1]), box
+    end
+    return value, :fillBox
+end
+
+function _svg_clip_spec_from_raw(raw::AbstractString, curve_segments::Int,
+                                 circle_segments::Int)
+    value = strip(String(raw))
+    isempty(value) && return nothing
+    lowercase(value) == "none" && return nothing
+    m = match(r"^url\(\s*(['\"]?)#([^'\"\)\s]+)\1\s*\)$", value)
+    m !== nothing && return _svg_url_clip_spec(m.captures[2], circle_segments)
+    shape_value, reference_box = _svg_clip_shape_and_box(value)
+    spec = nothing
+    m = match(r"(?is)^inset\((.*)\)$", shape_value)
+    if m !== nothing
+        inset, corners = _svg_inset_values(m.captures[1])
+        spec = _svg_inset_clip_spec(inset, corners, circle_segments)
+    end
+    if spec === nothing
+        m = match(r"(?is)^rect\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_rect_clip_spec(m.captures[1],
+                                                     circle_segments))
+    end
+    if spec === nothing
+        m = match(r"(?is)^xywh\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_xywh_clip_spec(m.captures[1],
+                                                     circle_segments))
+    end
+    if spec === nothing
+        m = match(r"(?is)^circle\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_circle_clip_spec(m.captures[1],
+                                                       circle_segments))
+    end
+    if spec === nothing
+        m = match(r"(?is)^ellipse\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_ellipse_clip_spec(m.captures[1],
+                                                        circle_segments))
+    end
+    if spec === nothing
+        m = match(r"(?is)^polygon\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_polygon_clip_spec(m.captures[1],
+                                                        circle_segments))
+    end
+    if spec === nothing
+        m = match(r"(?is)^path\((.*)\)$", shape_value)
+        m !== nothing && (spec = _svg_path_clip_spec(m.captures[1],
+                                                     curve_segments,
+                                                     circle_segments))
+    end
+    spec !== nothing && return _svg_clip_spec_reference_box(spec, reference_box)
+    error("unsupported SVG clip-path $value")
+end
+
+function _svg_clip_spec_from_attrs(attrs::AbstractDict,
+                                   css_rules::Vector{_SVGStyleRule},
+                                   tag::String,
+                                   context::Union{Nothing,_SVGElementContext},
+                                   curve_segments::Int,
+                                   circle_segments::Int)
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
+                                            ("clip-path",))
+    haskey(local_attrs, "clip-path") || return nothing
+    return _svg_clip_spec_from_raw(local_attrs["clip-path"], curve_segments,
+                                   circle_segments)
+end
+
+function _svg_url_reference_id(raw::AbstractString, context::AbstractString)
+    value = strip(String(raw))
+    isempty(value) && return nothing
+    lowercase(value) == "none" && return nothing
+    m = match(r"^url\(\s*(['\"]?)#([^'\"\)\s]+)\1\s*\)$", value)
+    m !== nothing && return m.captures[2]
+    error("unsupported $context $value")
+end
+
+function _svg_mask_spec_from_attrs(attrs::AbstractDict,
+                                   css_rules::Vector{_SVGStyleRule},
+                                   tag::String,
+                                   context::Union{Nothing,_SVGElementContext},
+                                   circle_segments::Int)
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
+                                            ("mask",))
+    haskey(local_attrs, "mask") || return nothing
+    id = _svg_url_reference_id(local_attrs["mask"], "SVG mask")
+    id === nothing && return nothing
+    return _svg_clip_spec(:url; id, segments=circle_segments)
+end
+
+function _svg_path_with_points(path::SVGPath, points::Vector{Vec2{Float64}},
+                               closed::Bool)
+    return SVGPath(path.tag, points, closed, path.style, path.element_id)
+end
+
+function _svg_is_convex_clip_loop(loop::Vector{Vec2{Float64}})
+    length(loop) >= 3 || return false
+    area = _font_polygon_area(loop)
+    abs(area) > 1e-12 || return false
+    sign = area >= 0.0 ? 1.0 : -1.0
+    for i in eachindex(loop)
+        a = loop[i == 1 ? end : i - 1]
+        b = loop[i]
+        c = loop[i == length(loop) ? 1 : i + 1]
+        cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+        cross * sign >= -1e-9 || return false
+    end
+    return true
+end
+
+function _svg_clip_loop_pieces(loop::Vector{Vec2{Float64}},
+                               context::AbstractString)
+    clean = _font_loop_points(loop)
+    length(clean) >= 3 && abs(_font_polygon_area(clean)) > 1e-12 ||
+        error("$context must define a non-empty clip loop")
+    _svg_is_convex_clip_loop(clean) && return [clean]
+    points, tris = try
+        _font_triangulate_simple(clean)
+    catch err
+        err isa ErrorException || rethrow()
+        error("$context must be a simple non-convex clip loop")
+    end
+    pieces = Vector{Vec2{Float64}}[]
+    for (a, b, c) in tris
+        tri = [points[a], points[b], points[c]]
+        abs(_font_polygon_area(tri)) > 1e-12 && push!(pieces, tri)
+    end
+    isempty(pieces) && error("$context must be a simple non-convex clip loop")
+    return pieces
+end
+
+function _svg_clip_area_loop_pieces(loops::Vector{Vector{Vec2{Float64}}},
+                                    fill_rule::Symbol,
+                                    context::AbstractString)
+    pieces = Vector{Vec2{Float64}}[]
+    for group in _svg_fill_loop_groups(loops, fill_rule)
+        if isempty(group.holes) && _svg_is_convex_clip_loop(group.outer)
+            push!(pieces, group.outer)
+            continue
+        end
+        points, tris = try
+            _font_triangulate_group(group.outer, group.holes)
+        catch err
+            err isa ErrorException || rethrow()
+            error("$context must contain simple clip loops")
+        end
+        for (a, b, c) in tris
+            tri = [points[a], points[b], points[c]]
+            abs(_font_polygon_area(tri)) > 1e-12 && push!(pieces, tri)
+        end
+    end
+    isempty(pieces) && return nothing
+    return pieces
+end
+
+_svg_mask_fill_luminance(color::Color3) =
+    0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+
+function _svg_mask_definition_paths(paths::Vector{SVGPath}, mask_type::Symbol)
+    mask_type === :luminance || mask_type === :alpha ||
+        error("unsupported SVG mask-type $(mask_type)")
+    out = SVGPath[]
+    for path in paths
+        path.closed && length(path.points) >= 3 || continue
+        fill = path.style.fill
+        fill === nothing && continue
+        path.style.opacity * path.style.fill_opacity > 0.0 || continue
+        mask_type === :alpha || _svg_mask_fill_luminance(fill) > 1e-12 || continue
+        push!(out, path)
+    end
+    return out
+end
+
+function _svg_clip_loops(definitions::Dict{String,_SVGClipDefinition},
+                         clip_id::String)
+    haskey(definitions, clip_id) ||
+        error("SVG clip-path references unknown id $clip_id")
+    definition = definitions[clip_id]
+    isempty(definition.paths) && return nothing
+    closed = [path for path in definition.paths
+              if path.closed && length(path.points) >= 3]
+    length(closed) == length(definition.paths) ||
+        error("SVG clipPath #$clip_id must contain only closed clipping paths")
+    pieces = Vector{Vec2{Float64}}[]
+    for group in _svg_element_path_groups(closed)
+        fill_rule = group[1].style.fill_rule
+        loops = [_font_loop_points(path.points) for path in group]
+        group_pieces = _svg_clip_area_loop_pieces(loops, fill_rule,
+                                                  "SVG clipPath #$clip_id")
+        group_pieces === nothing || append!(pieces, group_pieces)
+    end
+    return pieces
+end
+
+function _svg_paths_bbox(paths::Vector{SVGPath})
+    found = false
+    minx = Inf
+    miny = Inf
+    maxx = -Inf
+    maxy = -Inf
+    for path in paths, p in path.points
+        found = true
+        minx = min(minx, p.x)
+        miny = min(miny, p.y)
+        maxx = max(maxx, p.x)
+        maxy = max(maxy, p.y)
+    end
+    found || return nothing
+    return minx, miny, maxx, maxy
+end
+
+function _svg_include_xy_bbox(bbox::Union{Nothing,NTuple{4,Float64}},
+                              x::Float64, y::Float64)
+    bbox === nothing && return (x, y, x, y)
+    minx, miny, maxx, maxy = bbox
+    return min(minx, x), min(miny, y), max(maxx, x), max(maxy, y)
+end
+
+function _svg_include_geometry_bbox(bbox::Union{Nothing,NTuple{4,Float64}},
+                                    geo::BufferGeometry)
+    @inbounds for i in 1:3:length(geo.positions)
+        bbox = _svg_include_xy_bbox(bbox, geo.positions[i], geo.positions[i + 1])
+    end
+    return bbox
+end
+
+function _svg_paths_stroke_bbox(paths::Vector{SVGPath})
+    bbox = nothing
+    for path in paths
+        for p in path.points
+            bbox = _svg_include_xy_bbox(bbox, p.x, p.y)
+        end
+        style = path.style
+        style.stroke === nothing && continue
+        length(path.points) >= 2 || continue
+        style.stroke_width > 0.0 || continue
+        style.opacity * style.stroke_opacity > 0.0 || continue
+        for (subpath, subpath_closed) in
+            _svg_stroke_subpaths(copy(path.points), path.closed,
+                                 style.stroke_dasharray, style.stroke_dashoffset)
+            geo = _svg_stroke_outline_geometry(subpath, subpath_closed,
+                                               style.stroke_width,
+                                               style.stroke_linecap,
+                                               style.stroke_linejoin,
+                                               style.stroke_miterlimit)
+            bbox = _svg_include_geometry_bbox(bbox, geo)
+        end
+    end
+    return bbox
+end
+
+function _svg_bbox_rect_path(bbox::NTuple{4,Float64})
+    minx, miny, maxx, maxy = bbox
+    return SVGPath(:rect, [Vec2(minx, miny), Vec2(maxx, miny),
+                           Vec2(maxx, maxy), Vec2(minx, maxy)], true)
+end
+
+function _svg_reference_box_paths(application::_SVGClipApplication,
+                                  paths::Vector{SVGPath})
+    spec = application.spec
+    (spec.reference_box === :fillBox || spec.reference_box === :cssLayoutBox) &&
+        return paths
+    if spec.reference_box === :strokeBox
+        bbox = _svg_paths_stroke_bbox(paths)
+        bbox === nothing && return SVGPath[]
+        return [_svg_bbox_rect_path(bbox)]
+    end
+    if spec.reference_box === :viewBox
+        bbox = application.reference_bbox
+        bbox === nothing &&
+            error("SVG view-box clip-path requires root viewBox or viewport bounds")
+        return [_svg_bbox_rect_path(bbox)]
+    end
+    error("unsupported SVG clip-path shape box $(spec.reference_box)")
+end
+
+function _svg_object_bbox_clip_loops(loops::Vector{Vector{Vec2{Float64}}},
+                                     paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    mapped_loops = Vector{Vec2{Float64}}[]
+    for loop in loops
+        mapped = [Vec2(minx + p.x * width, miny + p.y * height) for p in loop]
+        _svg_is_convex_clip_loop(mapped) || return nothing
+        push!(mapped_loops, mapped)
+    end
+    return mapped_loops
+end
+
+function _svg_inset_amount(value::_SVGInsetValue, extent::Float64)
+    return value.percent ? extent * value.value / 100.0 : value.value
+end
+
+function _svg_inset_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    top, right, bottom, left = spec.inset
+    x0 = minx + _svg_inset_amount(left, width)
+    x1 = maxx - _svg_inset_amount(right, width)
+    y0 = miny + _svg_inset_amount(top, height)
+    y1 = maxy - _svg_inset_amount(bottom, height)
+    loop = _svg_rect_loop(x0, y0, x1, y1, spec.corners, spec.segments)
+    loop === nothing && return nothing
+    return [loop]
+end
+
+_svg_clip_spec_uses_bbox(spec::_SVGClipSpec) =
+    spec.kind === :inset || spec.kind === :rect || spec.kind === :xywh ||
+    spec.kind === :circle ||
+    spec.kind === :ellipse || spec.kind === :polygon || spec.kind === :path
+
+function _svg_position_amount(value::_SVGInsetValue, origin::Float64,
+                              extent::Float64)
+    return origin + _svg_inset_amount(value, extent)
+end
+
+function _svg_rect_edge_amount(edge::_SVGRectEdge, fallback::Float64,
+                               origin::Float64, extent::Float64)
+    return edge.auto ? fallback : _svg_position_amount(edge.value, origin, extent)
+end
+
+function _svg_resolved_corner_radii(corners::NTuple{4,_SVGCornerRadii},
+                                    width::Float64, height::Float64)
+    radii = [(max(0.0, _svg_inset_amount(corner.x, width)),
+              max(0.0, _svg_inset_amount(corner.y, height)))
+             for corner in corners]
+    scale = 1.0
+    for (sum_r, extent) in ((radii[1][1] + radii[2][1], width),
+                            (radii[4][1] + radii[3][1], width),
+                            (radii[1][2] + radii[4][2], height),
+                            (radii[2][2] + radii[3][2], height))
+        sum_r > 0.0 && (scale = min(scale, extent / sum_r))
+    end
+    scale = min(scale, 1.0)
+    return [(rx * scale, ry * scale) for (rx, ry) in radii]
+end
+
+function _svg_rect_loop(x0::Float64, y0::Float64, x1::Float64, y1::Float64,
+                        corners::NTuple{4,_SVGCornerRadii}, segments::Int)
+    (x1 > x0 && y1 > y0) || return nothing
+    width = x1 - x0
+    height = y1 - y0
+    radii = _svg_resolved_corner_radii(corners, width, height)
+    all(((rx, ry),) -> rx <= 1e-12 || ry <= 1e-12, radii) &&
+        return [Vec2(x0, y0), Vec2(x1, y0), Vec2(x1, y1), Vec2(x0, y1)]
+
+    points = Vec2{Float64}[]
+    arc_segments = max(1, segments)
+
+    function push_corner!(rx::Float64, ry::Float64, cx::Float64, cy::Float64,
+                          start_angle, stop_angle,
+                          square_point::Vec2{Float64})
+        if rx <= 1e-12 || ry <= 1e-12
+            _svg_push_unique_point!(points, square_point)
+        else
+            for step in 1:arc_segments
+                t = step / Float64(arc_segments)
+                θ = start_angle + (stop_angle - start_angle) * t
+                _svg_push_unique_point!(points,
+                                        Vec2(cx + rx * cos(θ),
+                                             cy + ry * sin(θ)))
+            end
+        end
+        return nothing
+    end
+
+    tl, tr, br, bl = radii
+    tl_rx, tl_ry = tl
+    tr_rx, tr_ry = tr
+    br_rx, br_ry = br
+    bl_rx, bl_ry = bl
+
+    _svg_push_unique_point!(points, Vec2(x0 + tl_rx, y0))
+    _svg_push_unique_point!(points, Vec2(x1 - tr_rx, y0))
+    push_corner!(tr_rx, tr_ry, x1 - tr_rx, y0 + tr_ry,
+                 -π / 2.0, 0.0, Vec2(x1, y0))
+    _svg_push_unique_point!(points, Vec2(x1, y1 - br_ry))
+    push_corner!(br_rx, br_ry, x1 - br_rx, y1 - br_ry,
+                 0.0, π / 2.0, Vec2(x1, y1))
+    _svg_push_unique_point!(points, Vec2(x0 + bl_rx, y1))
+    push_corner!(bl_rx, bl_ry, x0 + bl_rx, y1 - bl_ry,
+                 π / 2.0, π, Vec2(x0, y1))
+    _svg_push_unique_point!(points, Vec2(x0, y0 + tl_ry))
+    push_corner!(tl_rx, tl_ry, x0 + tl_rx, y0 + tl_ry,
+                 π, 3π / 2.0, Vec2(x0, y0))
+
+    if length(points) > 1 && _font_same_point(points[end], points[1])
+        pop!(points)
+    end
+    length(points) >= 3 || return nothing
+    return points
+end
+
+function _svg_rect_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    top, right, bottom, left = spec.rect
+    y0 = _svg_rect_edge_amount(top, miny, miny, height)
+    x1 = _svg_rect_edge_amount(right, maxx, minx, width)
+    y1 = _svg_rect_edge_amount(bottom, maxy, miny, height)
+    x0 = _svg_rect_edge_amount(left, minx, minx, width)
+    loop = _svg_rect_loop(x0, y0, x1, y1, spec.corners, spec.segments)
+    loop === nothing && return nothing
+    return [loop]
+end
+
+function _svg_xywh_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    x, y, w, h = spec.xywh
+    x0 = _svg_position_amount(x, minx, width)
+    y0 = _svg_position_amount(y, miny, height)
+    x1 = x0 + _svg_inset_amount(w, width)
+    y1 = y0 + _svg_inset_amount(h, height)
+    loop = _svg_rect_loop(x0, y0, x1, y1, spec.corners, spec.segments)
+    loop === nothing && return nothing
+    return [loop]
+end
+
+function _svg_resolve_shape_radius(radius::_SVGShapeRadius, axis::Symbol,
+                                   minx::Float64, miny::Float64,
+                                   maxx::Float64, maxy::Float64,
+                                   cx::Float64, cy::Float64)
+    width = maxx - minx
+    height = maxy - miny
+    if radius.kind === :length
+        extent = axis === :circle ? hypot(width, height) / sqrt(2.0) :
+                 (axis === :x ? width : height)
+        return _svg_inset_amount(radius.value, extent)
+    elseif radius.kind === :closest_side
+        if axis === :circle
+            return min(abs(cx - minx), abs(maxx - cx),
+                       abs(cy - miny), abs(maxy - cy))
+        elseif axis === :x
+            return min(abs(cx - minx), abs(maxx - cx))
+        elseif axis === :y
+            return min(abs(cy - miny), abs(maxy - cy))
+        end
+    elseif radius.kind === :farthest_side
+        if axis === :circle
+            return max(abs(cx - minx), abs(maxx - cx),
+                       abs(cy - miny), abs(maxy - cy))
+        elseif axis === :x
+            return max(abs(cx - minx), abs(maxx - cx))
+        elseif axis === :y
+            return max(abs(cy - miny), abs(maxy - cy))
+        end
+    end
+    error("unsupported SVG clip-path radius kind $(radius.kind)")
+end
+
+function _svg_bbox_shape_center(spec::_SVGClipSpec,
+                                bbox::NTuple{4,Float64})
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    x = _svg_position_amount(spec.position[1], minx, width)
+    y = _svg_position_amount(spec.position[2], miny, height)
+    return x, y
+end
+
+function _svg_circle_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    cx, cy = _svg_bbox_shape_center(spec, bbox)
+    r = _svg_resolve_shape_radius(spec.radius, :circle,
+                                  minx, miny, maxx, maxy, cx, cy)
+    r > 0.0 || return nothing
+    points = _svg_ellipse_points(cx, cy, r, r, spec.segments)
+    isempty(points) && return nothing
+    return [points]
+end
+
+function _svg_ellipse_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    cx, cy = _svg_bbox_shape_center(spec, bbox)
+    rx = _svg_resolve_shape_radius(spec.radii[1], :x,
+                                   minx, miny, maxx, maxy, cx, cy)
+    ry = _svg_resolve_shape_radius(spec.radii[2], :y,
+                                   minx, miny, maxx, maxy, cx, cy)
+    (rx > 0.0 && ry > 0.0) || return nothing
+    points = _svg_ellipse_points(cx, cy, rx, ry, spec.segments)
+    isempty(points) && return nothing
+    return [points]
+end
+
+function _svg_shortest_angle_delta(from::Float64, to::Float64)
+    delta = mod(to - from + π, 2π) - π
+    delta <= -π && (delta += 2π)
+    return delta
+end
+
+function _svg_rounded_polygon_loop(loop::Vector{Vec2{Float64}},
+                                   radius::Float64, segments::Int)
+    radius > 0.0 || return loop
+    rounded = Vec2{Float64}[]
+    arc_segments = max(1, segments)
+    n = length(loop)
+    for i in eachindex(loop)
+        prev = loop[i == 1 ? n : i - 1]
+        vertex = loop[i]
+        next = loop[i == n ? 1 : i + 1]
+        to_prev = prev - vertex
+        to_next = next - vertex
+        len_prev = hypot(to_prev.x, to_prev.y)
+        len_next = hypot(to_next.x, to_next.y)
+        if len_prev <= 1e-12 || len_next <= 1e-12
+            _svg_push_unique_point!(rounded, vertex)
+            continue
+        end
+        v_prev = Vec2(to_prev.x / len_prev, to_prev.y / len_prev)
+        v_next = Vec2(to_next.x / len_next, to_next.y / len_next)
+        dotv = clamp(v_prev.x * v_next.x + v_prev.y * v_next.y, -1.0, 1.0)
+        angle = acos(dotv)
+        if angle <= 1e-12 || abs(π - angle) <= 1e-12
+            _svg_push_unique_point!(rounded, vertex)
+            continue
+        end
+        tan_half = tan(angle / 2.0)
+        max_radius = tan_half * min(len_prev, len_next) / 2.0
+        local_radius = min(radius, max_radius)
+        if local_radius <= 1e-12
+            _svg_push_unique_point!(rounded, vertex)
+            continue
+        end
+        distance = local_radius / tan_half
+        start_point = vertex + v_prev * distance
+        stop_point = vertex + v_next * distance
+        bisector = v_prev + v_next
+        bisector_len = hypot(bisector.x, bisector.y)
+        if bisector_len <= 1e-12
+            _svg_push_unique_point!(rounded, vertex)
+            continue
+        end
+        center_distance = local_radius / sin(angle / 2.0)
+        center = vertex + Vec2(bisector.x / bisector_len,
+                               bisector.y / bisector_len) * center_distance
+        start_angle = atan(start_point.y - center.y, start_point.x - center.x)
+        stop_angle = atan(stop_point.y - center.y, stop_point.x - center.x)
+        delta = _svg_shortest_angle_delta(start_angle, stop_angle)
+
+        _svg_push_unique_point!(rounded, start_point)
+        for step in 1:arc_segments
+            t = step / Float64(arc_segments)
+            θ = start_angle + delta * t
+            _svg_push_unique_point!(rounded,
+                                    Vec2(center.x + local_radius * cos(θ),
+                                         center.y + local_radius * sin(θ)))
+        end
+    end
+    if length(rounded) > 1 && _font_same_point(rounded[end], rounded[1])
+        pop!(rounded)
+    end
+    length(rounded) >= 3 || return loop
+    return rounded
+end
+
+function _svg_polygon_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    loop = [Vec2(_svg_position_amount(p[1], minx, width),
+                 _svg_position_amount(p[2], miny, height))
+            for p in spec.points]
+    loop = _font_loop_points(loop)
+    length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12 || return nothing
+    if spec.polygon_round > 0.0
+        _svg_is_convex_clip_loop(loop) ||
+            error("SVG clip-path rounded polygon must be convex")
+        loop = _svg_rounded_polygon_loop(loop, spec.polygon_round, spec.segments)
+        _svg_is_convex_clip_loop(loop) ||
+            error("SVG clip-path rounded polygon must be convex")
+        return [loop]
+    end
+    return _svg_clip_loop_pieces(loop, "SVG clip-path polygon")
+end
+
+function _svg_path_clip_loops(spec::_SVGClipSpec, paths::Vector{SVGPath})
+    bbox = _svg_paths_bbox(paths)
+    bbox === nothing && return nothing
+    minx, miny, maxx, maxy = bbox
+    width = maxx - minx
+    height = maxy - miny
+    (width > 0.0 && height > 0.0) || return nothing
+    loops = [[Vec2(minx + p.x, miny + p.y) for p in loop]
+             for loop in spec.path_loops]
+    return _svg_clip_area_loop_pieces(loops, spec.path_fill_rule,
+                                      "SVG clip-path path")
+end
+
+function _svg_resolved_clip_loops(definitions::Dict{String,_SVGClipDefinition},
+                                  application::_SVGClipApplication,
+                                  paths::Vector{SVGPath})
+    spec = application.spec
+    reference_paths =
+        spec.kind === :url ? paths : _svg_reference_box_paths(application, paths)
+    if spec.kind === :inset
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG inset clip-path requires local or deferred container bounds")
+        return _svg_inset_clip_loops(spec, reference_paths)
+    elseif spec.kind === :rect
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG rect clip-path requires local or deferred container bounds")
+        return _svg_rect_clip_loops(spec, reference_paths)
+    elseif spec.kind === :xywh
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG xywh clip-path requires local or deferred container bounds")
+        return _svg_xywh_clip_loops(spec, reference_paths)
+    elseif spec.kind === :circle
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG circle clip-path requires local or deferred container bounds")
+        return _svg_circle_clip_loops(spec, reference_paths)
+    elseif spec.kind === :ellipse
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG ellipse clip-path requires local or deferred container bounds")
+        return _svg_ellipse_clip_loops(spec, reference_paths)
+    elseif spec.kind === :polygon
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG polygon clip-path requires local or deferred container bounds")
+        return _svg_polygon_clip_loops(spec, reference_paths)
+    elseif spec.kind === :path
+        (application.scope === :local || application.scope === :container_bbox) ||
+            error("SVG path clip-path requires local or deferred container bounds")
+        return _svg_path_clip_loops(spec, reference_paths)
+    elseif spec.kind === :url
+        clip_id = spec.id::String
+        haskey(definitions, clip_id) ||
+            error("SVG clip-path references unknown id $clip_id")
+        definition = definitions[clip_id]
+        loops = _svg_clip_loops(definitions, clip_id)
+        loops === nothing && return nothing
+        if definition.units === :userSpaceOnUse
+            return loops
+        elseif definition.units === :objectBoundingBox
+            (application.scope === :local || application.scope === :container_bbox) ||
+                error("SVG objectBoundingBox clipPath requires local or deferred container bounds")
+            return _svg_object_bbox_clip_loops(loops, paths)
+        else
+            error("unsupported SVG clipPathUnits $(definition.units)")
+        end
+    else
+        error("unsupported SVG clip-path kind $(spec.kind)")
+    end
+end
+
+function _svg_clip_signed_distance(p::Vec2{Float64}, a::Vec2{Float64},
+                                   b::Vec2{Float64}, ccw::Bool)
+    cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    return ccw ? cross : -cross
+end
+
+function _svg_clip_edge_intersection(s::Vec2{Float64}, e::Vec2{Float64},
+                                     ds::Float64, de::Float64)
+    denom = ds - de
+    abs(denom) > 1e-15 || return e
+    t = ds / denom
+    return Vec2(s.x + (e.x - s.x) * t, s.y + (e.y - s.y) * t)
+end
+
+function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
+                                   clip_loop::Vector{Vec2{Float64}})
+    out = _font_loop_points(subject)
+    length(out) >= 3 || return Vec2{Float64}[]
+    ccw = _font_polygon_area(clip_loop) >= 0.0
+    for i in eachindex(clip_loop)
+        a = clip_loop[i]
+        b = clip_loop[i == length(clip_loop) ? 1 : i + 1]
+        input = out
+        out = Vec2{Float64}[]
+        isempty(input) && break
+        s = input[end]
+        ds = _svg_clip_signed_distance(s, a, b, ccw)
+        s_inside = ds >= -1e-9
+        for e in input
+            de = _svg_clip_signed_distance(e, a, b, ccw)
+            e_inside = de >= -1e-9
+            if e_inside
+                !s_inside &&
+                    _svg_push_unique_point!(out,
+                                            _svg_clip_edge_intersection(s, e,
+                                                                        ds, de))
+                _svg_push_unique_point!(out, e)
+            elseif s_inside
+                _svg_push_unique_point!(out,
+                                        _svg_clip_edge_intersection(s, e,
+                                                                    ds, de))
+            end
+            s = e
+            ds = de
+            s_inside = e_inside
+        end
+        out = _font_loop_points(out)
+    end
+    length(out) >= 3 && abs(_font_polygon_area(out)) > 1e-12 || return Vec2{Float64}[]
+    return out
+end
+
+function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
+                                   clip_loop::Vector{Vec2{Float64}})
+    p0 = a
+    p1 = b
+    ccw = _font_polygon_area(clip_loop) >= 0.0
+    for i in eachindex(clip_loop)
+        c = clip_loop[i]
+        d = clip_loop[i == length(clip_loop) ? 1 : i + 1]
+        d0 = _svg_clip_signed_distance(p0, c, d, ccw)
+        d1 = _svg_clip_signed_distance(p1, c, d, ccw)
+        in0 = d0 >= -1e-9
+        in1 = d1 >= -1e-9
+        in0 && in1 && continue
+        (!in0 && !in1) && return nothing
+        hit = _svg_clip_edge_intersection(p0, p1, d0, d1)
+        if in0
+            p1 = hit
+        else
+            p0 = hit
+        end
+    end
+    _font_same_point(p0, p1) && return nothing
+    return p0, p1
+end
+
+function _svg_clip_open_path_to_loop(path::SVGPath,
+                                     clip_loop::Vector{Vec2{Float64}})
+    fragments = SVGPath[]
+    current = Vec2{Float64}[]
+    function flush_current!()
+        if length(current) >= 2
+            push!(fragments, _svg_path_with_points(path, copy(current), false))
+        end
+        empty!(current)
+        return nothing
+    end
+
+    for i in 1:(length(path.points) - 1)
+        clipped = _svg_clip_segment_to_loop(path.points[i], path.points[i + 1],
+                                            clip_loop)
+        if clipped === nothing
+            flush_current!()
+            continue
+        end
+        a, b = clipped
+        if isempty(current)
+            push!(current, a)
+            push!(current, b)
+        elseif _font_same_point(current[end], a)
+            _svg_push_unique_point!(current, b)
+        else
+            flush_current!()
+            push!(current, a)
+            push!(current, b)
+        end
+    end
+    flush_current!()
+    return fragments
+end
+
+function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
+    return Vec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+end
+
+function _svg_clip_segment_interval_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
+                                            clip_loop::Vector{Vec2{Float64}})
+    t0 = 0.0
+    t1 = 1.0
+    ccw = _font_polygon_area(clip_loop) >= 0.0
+    for i in eachindex(clip_loop)
+        c = clip_loop[i]
+        d = clip_loop[i == length(clip_loop) ? 1 : i + 1]
+        da = _svg_clip_signed_distance(a, c, d, ccw)
+        db = _svg_clip_signed_distance(b, c, d, ccw)
+        ina = da >= -1e-9
+        inb = db >= -1e-9
+        ina && inb && continue
+        (!ina && !inb) && return nothing
+        denom = da - db
+        abs(denom) > 1e-15 || return nothing
+        t = clamp(da / denom, 0.0, 1.0)
+        if ina
+            t1 = min(t1, t)
+        else
+            t0 = max(t0, t)
+        end
+        t1 - t0 > 1e-12 || return nothing
+    end
+    return t0, t1
+end
+
+function _svg_merge_intervals(intervals::Vector{NTuple{2,Float64}})
+    isempty(intervals) && return intervals
+    sort!(intervals, by=first)
+    merged = NTuple{2,Float64}[]
+    lo, hi = intervals[1]
+    for i in 2:length(intervals)
+        next_lo, next_hi = intervals[i]
+        if next_lo <= hi + 1e-9
+            hi = max(hi, next_hi)
+        else
+            hi - lo > 1e-12 && push!(merged, (lo, hi))
+            lo, hi = next_lo, next_hi
+        end
+    end
+    hi - lo > 1e-12 && push!(merged, (lo, hi))
+    return merged
+end
+
+function _svg_clip_open_path_to_union(path::SVGPath,
+                                      clip_loops::Vector{Vector{Vec2{Float64}}})
+    fragments = SVGPath[]
+    current = Vec2{Float64}[]
+    function flush_current!()
+        if length(current) >= 2
+            push!(fragments, _svg_path_with_points(path, copy(current), false))
+        end
+        empty!(current)
+        return nothing
+    end
+
+    for i in 1:(length(path.points) - 1)
+        a = path.points[i]
+        b = path.points[i + 1]
+        _font_same_point(a, b) && continue
+        intervals = NTuple{2,Float64}[]
+        for clip_loop in clip_loops
+            interval = _svg_clip_segment_interval_to_loop(a, b, clip_loop)
+            interval === nothing || push!(intervals, interval)
+        end
+        for (lo, hi) in _svg_merge_intervals(intervals)
+            p0 = _svg_lerp_point(a, b, lo)
+            p1 = _svg_lerp_point(a, b, hi)
+            if isempty(current)
+                push!(current, p0)
+                push!(current, p1)
+            elseif _font_same_point(current[end], p0)
+                _svg_push_unique_point!(current, p1)
+            else
+                flush_current!()
+                push!(current, p0)
+                push!(current, p1)
+            end
+        end
+        isempty(intervals) && flush_current!()
+    end
+    flush_current!()
+    return fragments
+end
+
+function _svg_segment_intersection_point(a::Vec2{Float64}, b::Vec2{Float64},
+                                         c::Vec2{Float64}, d::Vec2{Float64})
+    rx = b.x - a.x
+    ry = b.y - a.y
+    sx = d.x - c.x
+    sy = d.y - c.y
+    denom = rx * sy - ry * sx
+    abs(denom) > 1e-12 || return nothing
+    qx = c.x - a.x
+    qy = c.y - a.y
+    t = (qx * sy - qy * sx) / denom
+    u = (qx * ry - qy * rx) / denom
+    -1e-9 <= t <= 1.0 + 1e-9 || return nothing
+    -1e-9 <= u <= 1.0 + 1e-9 || return nothing
+    t = clamp(t, 0.0, 1.0)
+    return Vec2(a.x + rx * t, a.y + ry * t)
+end
+
+function _svg_loop_edges(loops::Vector{Vector{Vec2{Float64}}})
+    edges = NTuple{2,Vec2{Float64}}[]
+    for loop in loops
+        for i in eachindex(loop)
+            push!(edges, (loop[i], loop[i == length(loop) ? 1 : i + 1]))
+        end
+    end
+    return edges
+end
+
+function _svg_unique_sorted_values(values::Vector{Float64})
+    sort!(filter!(isfinite, values))
+    out = Float64[]
+    for value in values
+        if isempty(out) || abs(value - out[end]) > 1e-9
+            push!(out, value)
+        end
+    end
+    return out
+end
+
+function _svg_boolean_x_breaks(loops::Vector{Vector{Vec2{Float64}}})
+    xs = Float64[]
+    for loop in loops, p in loop
+        push!(xs, p.x)
+    end
+    edges = _svg_loop_edges(loops)
+    for i in 1:length(edges)
+        a, b = edges[i]
+        for j in (i + 1):length(edges)
+            c, d = edges[j]
+            hit = _svg_segment_intersection_point(a, b, c, d)
+            hit === nothing || push!(xs, hit.x)
+        end
+    end
+    return _svg_unique_sorted_values(xs)
+end
+
+function _svg_edge_y_at_x(a::Vec2{Float64}, b::Vec2{Float64},
+                          x::Float64; strict::Bool)
+    dx = b.x - a.x
+    abs(dx) > 1e-12 || return nothing
+    xmin = min(a.x, b.x)
+    xmax = max(a.x, b.x)
+    if strict
+        xmin + 1e-10 < x < xmax - 1e-10 || return nothing
+    else
+        xmin - 1e-9 <= x <= xmax + 1e-9 || return nothing
+    end
+    t = clamp((x - a.x) / dx, 0.0, 1.0)
+    return a.y + (b.y - a.y) * t
+end
+
+function _svg_slab_crossings(loops::Vector{Vector{Vec2{Float64}}},
+                             x0::Float64, x1::Float64)
+    xm = (x0 + x1) / 2.0
+    crossings = NamedTuple{(:y0, :y1, :ym),Tuple{Float64,Float64,Float64}}[]
+    for (a, b) in _svg_loop_edges(loops)
+        ym = _svg_edge_y_at_x(a, b, xm; strict=true)
+        ym === nothing && continue
+        y0 = _svg_edge_y_at_x(a, b, x0; strict=false)
+        y1 = _svg_edge_y_at_x(a, b, x1; strict=false)
+        (y0 === nothing || y1 === nothing) && continue
+        push!(crossings, (y0=y0, y1=y1, ym=ym))
+    end
+    sort!(crossings, by=c -> c.ym)
+    return crossings
+end
+
+function _svg_loops_overlap_positive(a::Vector{Vec2{Float64}},
+                                     b::Vector{Vec2{Float64}})
+    loops = [_font_loop_points(a), _font_loop_points(b)]
+    any(length(loop) < 3 || abs(_font_polygon_area(loop)) <= 1e-12 for loop in loops) &&
+        return false
+    xs = _svg_boolean_x_breaks(loops)
+    length(xs) >= 2 || return false
+    for i in 1:(length(xs) - 1)
+        x0 = xs[i]
+        x1 = xs[i + 1]
+        x1 - x0 > 1e-9 || continue
+        xm = (x0 + x1) / 2.0
+        crossings = _svg_slab_crossings(loops, x0, x1)
+        for j in 1:(length(crossings) - 1)
+            lower = crossings[j]
+            upper = crossings[j + 1]
+            upper.ym - lower.ym > 1e-9 || continue
+            p = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            if _font_point_in_loop(p, loops[1]) && _font_point_in_loop(p, loops[2])
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function _svg_fragments_overlap_positive(fragments::Vector{SVGPath})
+    for i in 1:length(fragments)
+        for j in (i + 1):length(fragments)
+            _svg_loops_overlap_positive(fragments[i].points,
+                                        fragments[j].points) && return true
+        end
+    end
+    return false
+end
+
+function _svg_clip_closed_path_to_union(path::SVGPath,
+                                        clip_loops::Vector{Vector{Vec2{Float64}}})
+    subject = _font_loop_points(path.points)
+    length(subject) >= 3 && abs(_font_polygon_area(subject)) > 1e-12 ||
+        return SVGPath[]
+    clean_clips = Vector{Vec2{Float64}}[]
+    for clip_loop in clip_loops
+        loop = _font_loop_points(clip_loop)
+        length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12 &&
+            push!(clean_clips, loop)
+    end
+    isempty(clean_clips) && return SVGPath[]
+    loops = Vector{Vec2{Float64}}[subject]
+    append!(loops, clean_clips)
+    xs = _svg_boolean_x_breaks(loops)
+    fragments = SVGPath[]
+    length(xs) >= 2 || return fragments
+    for i in 1:(length(xs) - 1)
+        x0 = xs[i]
+        x1 = xs[i + 1]
+        x1 - x0 > 1e-9 || continue
+        xm = (x0 + x1) / 2.0
+        crossings = _svg_slab_crossings(loops, x0, x1)
+        for j in 1:(length(crossings) - 1)
+            lower = crossings[j]
+            upper = crossings[j + 1]
+            upper.ym - lower.ym > 1e-9 || continue
+            sample = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            _font_point_in_loop(sample, subject) || continue
+            any(loop -> _font_point_in_loop(sample, loop), clean_clips) || continue
+            points = _font_loop_points([Vec2(x0, lower.y0),
+                                        Vec2(x1, lower.y1),
+                                        Vec2(x1, upper.y1),
+                                        Vec2(x0, upper.y0)])
+            length(points) >= 3 && abs(_font_polygon_area(points)) > 1e-12 ||
+                continue
+            push!(fragments,
+                  _svg_path_with_points(path, _font_orient_loop(points, true),
+                                        true))
+        end
+    end
+    return fragments
+end
+
+function _svg_clip_path_to_loops(path::SVGPath,
+                                 clip_loops::Vector{Vector{Vec2{Float64}}})
+    fragments = SVGPath[]
+    if path.closed
+        for clip_loop in clip_loops
+            points = _svg_clip_polygon_to_loop(path.points, clip_loop)
+            isempty(points) ||
+                push!(fragments, _svg_path_with_points(path, points, true))
+        end
+        length(fragments) > 1 && _svg_fragments_overlap_positive(fragments) &&
+            return _svg_clip_closed_path_to_union(path, clip_loops)
+    else
+        return _svg_clip_open_path_to_union(path, clip_loops)
+    end
+    return fragments
+end
+
+function _svg_apply_clip_paths(paths::Vector{SVGPath},
+                               clip_applications::Vector{_SVGClipApplication},
+                               definitions::Dict{String,_SVGClipDefinition})
+    out = paths
+    for application in clip_applications
+        loops = _svg_resolved_clip_loops(definitions, application, out)
+        loops === nothing && return SVGPath[]
+        clipped = SVGPath[]
+        for path in out
+            append!(clipped, _svg_clip_path_to_loops(path, loops))
+        end
+        out = clipped
+        isempty(out) && break
+    end
+    return out
+end
 
 function _svg_transform_numbers(raw::AbstractString)
     values = _svg_numbers(raw)
@@ -3223,41 +4992,200 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     circle_n = _svg_circle_segments(circle_segments)
     root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
     root === nothing && error("SVG document is missing <svg> root")
-    width, height = _svg_root_size(_svg_attrs(root.captures[1]))
+    root_attrs = _svg_attrs(root.captures[1])
+    width, height = _svg_root_size(root_attrs)
+    root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
     paths = SVGPath[]
     transform_stack = [_svg_identity_transform()]
     style_stack = [_SVG_DEFAULT_STYLE]
+    display_stack = [true]
+    visibility_stack = [:visible]
+    clip_stack = [_SVGClipApplication[]]
+    mask_stack = [_SVGClipApplication[]]
     ancestor_stack = _SVGAncestorStack()
     sibling_stack = _SVGSiblingStack([_SVGElementContext[]])
     css_rules = _svg_css_rules(raw)
+    definitions = Dict{String,Vector{SVGPath}}()
+    clip_definitions = Dict{String,_SVGClipDefinition}()
+    mask_definitions = Dict{String,_SVGClipDefinition}()
+    container_definition_stack = Union{Nothing,_SVGContainerDefinition}[nothing]
+    container_paths_stack = [SVGPath[]]
     next_element_id = 0
 
-    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|path|rect|circle|ellipse|polygon|polyline)\b([^>]*)>",
+    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
                        raw)
         closing = m.captures[1] !== nothing
         tag = lowercase(m.captures[2])
         attrs = _svg_attrs(m.captures[3])
         self_closing = occursin(r"/\s*>$", m.match)
 
-        if tag == "svg" || tag == "g"
+        if tag == "svg" || tag == "g" || tag == "defs" ||
+           tag == "clippath" || tag == "mask"
             if closing
+                if length(container_paths_stack) > 1
+                    collected_paths = pop!(container_paths_stack)
+                    definition = pop!(container_definition_stack)
+                    if definition !== nothing && definition.bbox_clip !== nothing
+                        if definition.kind === :element &&
+                           display_stack[end] && visibility_stack[end] === :visible &&
+                           length(paths) > definition.render_start
+                            rendered_paths = paths[(definition.render_start + 1):end]
+                            deleteat!(paths, (definition.render_start + 1):length(paths))
+                            append!(paths,
+                                    _svg_apply_clip_paths(rendered_paths,
+                                                          [definition.bbox_clip],
+                                                          clip_definitions))
+                        end
+                        collected_paths =
+                            _svg_apply_clip_paths(collected_paths,
+                                                  [definition.bbox_clip],
+                                                  clip_definitions)
+                    end
+                    if definition !== nothing && definition.bbox_mask !== nothing
+                        if definition.kind === :element &&
+                           display_stack[end] && visibility_stack[end] === :visible &&
+                           length(paths) > definition.render_start
+                            rendered_paths = paths[(definition.render_start + 1):end]
+                            deleteat!(paths, (definition.render_start + 1):length(paths))
+                            append!(paths,
+                                    _svg_apply_clip_paths(rendered_paths,
+                                                          [definition.bbox_mask],
+                                                          mask_definitions))
+                        end
+                        collected_paths =
+                            _svg_apply_clip_paths(collected_paths,
+                                                  [definition.bbox_mask],
+                                                  mask_definitions)
+                    end
+                    if definition !== nothing && definition.kind === :clip
+                        definition.id !== nothing &&
+                            (clip_definitions[definition.id] =
+                                _SVGClipDefinition(copy(collected_paths),
+                                                   definition.units,
+                                                   :luminance))
+                    elseif definition !== nothing && definition.kind === :mask
+                        definition.id !== nothing &&
+                            (mask_definitions[definition.id] =
+                                _SVGClipDefinition(_svg_mask_definition_paths(collected_paths,
+                                                                              definition.mask_type),
+                                                   definition.units,
+                                                   definition.mask_type))
+                    elseif definition !== nothing && !isempty(collected_paths)
+                        definition.id !== nothing &&
+                            (definitions[definition.id] = copy(collected_paths))
+                        append!(container_paths_stack[end], collected_paths)
+                    elseif definition === nothing || definition.kind !== :clip
+                        append!(container_paths_stack[end], collected_paths)
+                    end
+                end
                 length(transform_stack) > 1 && pop!(transform_stack)
                 length(style_stack) > 1 && pop!(style_stack)
+                length(display_stack) > 1 && pop!(display_stack)
+                length(visibility_stack) > 1 && pop!(visibility_stack)
+                length(clip_stack) > 1 && pop!(clip_stack)
+                length(mask_stack) > 1 && pop!(mask_stack)
                 !isempty(ancestor_stack) && pop!(ancestor_stack)
                 length(sibling_stack) > 1 && pop!(sibling_stack)
             else
                 context = _svg_element_context(tag, attrs, ancestor_stack,
                                                sibling_stack[end])
                 push!(sibling_stack[end], context)
+                if self_closing && tag == "clippath" && haskey(attrs, "id")
+                    clip_definitions[attrs["id"]] =
+                        _SVGClipDefinition(SVGPath[],
+                                           _svg_clip_path_units(attrs),
+                                           :luminance)
+                end
+                if self_closing && tag == "mask" && haskey(attrs, "id")
+                    mask_definitions[attrs["id"]] =
+                        _SVGClipDefinition(SVGPath[],
+                                           _svg_mask_content_units(attrs),
+                                           _svg_mask_type(attrs, css_rules, tag,
+                                                          context))
+                end
                 if !self_closing
+                    display_ok, visibility =
+                        (tag == "defs" || tag == "clippath" || tag == "mask") ?
+                        (false, visibility_stack[end]) :
+                        _svg_display_visibility(display_stack[end],
+                                                visibility_stack[end], attrs,
+                                                css_rules, tag, context)
+                    local_clip_spec =
+                        tag == "defs" ? nothing :
+                        _svg_clip_spec_from_attrs(attrs, css_rules, tag,
+                                                  context, segments, circle_n)
+                    local_mask_spec =
+                        tag == "defs" ? nothing :
+                        _svg_mask_spec_from_attrs(attrs, css_rules, tag,
+                                                  context, circle_n)
+                    child_clip_ids = copy(clip_stack[end])
+                    child_mask_ids = copy(mask_stack[end])
+                    local_bbox_clip = nothing
+                    local_bbox_mask = nothing
+                    if local_clip_spec !== nothing
+                        if _svg_clip_spec_uses_bbox(local_clip_spec)
+                            local_bbox_clip =
+                                _SVGClipApplication(local_clip_spec,
+                                                    :container_bbox,
+                                                    root_reference_bbox)
+                        elseif haskey(clip_definitions, local_clip_spec.id) &&
+                              clip_definitions[local_clip_spec.id].units === :objectBoundingBox
+                            local_bbox_clip =
+                                _SVGClipApplication(local_clip_spec,
+                                                    :container_bbox,
+                                                    root_reference_bbox)
+                        else
+                            push!(child_clip_ids,
+                                  _SVGClipApplication(local_clip_spec, :container,
+                                                      root_reference_bbox))
+                        end
+                    end
+                    if local_mask_spec !== nothing
+                        if haskey(mask_definitions, local_mask_spec.id) &&
+                           mask_definitions[local_mask_spec.id].units === :objectBoundingBox
+                            local_bbox_mask =
+                                _SVGClipApplication(local_mask_spec,
+                                                    :container_bbox,
+                                                    root_reference_bbox)
+                        else
+                            push!(child_mask_ids,
+                                  _SVGClipApplication(local_mask_spec, :container,
+                                                      root_reference_bbox))
+                        end
+                    end
                     push!(transform_stack,
                           _svg_compose_transform(transform_stack[end],
                                                  _svg_transform_from_attrs(attrs)))
                     push!(style_stack,
                           _svg_style_from_attrs(style_stack[end], attrs, css_rules,
                                                 tag, context))
+                    push!(display_stack, display_ok)
+                    push!(visibility_stack, visibility)
+                    push!(clip_stack, child_clip_ids)
+                    push!(mask_stack, child_mask_ids)
                     push!(ancestor_stack, context)
                     push!(sibling_stack, _SVGElementContext[])
+                    definition = if tag == "clippath"
+                        _SVGContainerDefinition(:clip, get(attrs, "id", nothing),
+                                                _svg_clip_path_units(attrs),
+                                                local_bbox_clip, local_bbox_mask,
+                                                :luminance, length(paths))
+                    elseif tag == "mask"
+                        _SVGContainerDefinition(:mask, get(attrs, "id", nothing),
+                                                _svg_mask_content_units(attrs),
+                                                local_bbox_clip, local_bbox_mask,
+                                                _svg_mask_type(attrs, css_rules, tag,
+                                                               context),
+                                                length(paths))
+                    else
+                        _SVGContainerDefinition(:element,
+                                                get(attrs, "id", nothing),
+                                                :userSpaceOnUse,
+                                                local_bbox_clip, local_bbox_mask,
+                                                :luminance, length(paths))
+                    end
+                    push!(container_definition_stack, definition)
+                    push!(container_paths_stack, SVGPath[])
                 end
             end
             continue
@@ -3271,45 +5199,107 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                                                  local_transform)
         style = _svg_style_from_attrs(style_stack[end], attrs, css_rules, tag,
                                       context)
-        element_paths = SVGPath[]
-        if tag == "path"
+        display_ok, visibility =
+            _svg_display_visibility(display_stack[end], visibility_stack[end],
+                                    attrs, css_rules, tag, context)
+        if tag == "use" && (!display_ok || visibility !== :visible)
+            push!(sibling_stack[end], context)
+            continue
+        end
+        clip_applications = copy(clip_stack[end])
+        mask_applications = copy(mask_stack[end])
+        local_clip_spec = _svg_clip_spec_from_attrs(attrs, css_rules, tag,
+                                                    context, segments, circle_n)
+        local_clip_spec !== nothing &&
+            push!(clip_applications,
+                  _SVGClipApplication(local_clip_spec, :local,
+                                      root_reference_bbox))
+        local_mask_spec = _svg_mask_spec_from_attrs(attrs, css_rules, tag,
+                                                    context, circle_n)
+        local_mask_spec !== nothing &&
+            push!(mask_applications,
+                  _SVGClipApplication(local_mask_spec, :local,
+                                      root_reference_bbox))
+        raw_paths = SVGPath[]
+        if tag == "use"
+            href_id = _svg_local_href_id(attrs)
+            if href_id !== nothing
+                haskey(definitions, href_id) ||
+                    error("SVG use references unknown id $href_id")
+                x = _svg_length(attrs, "x", 0.0)
+                y = _svg_length(attrs, "y", 0.0)
+                use_transform = _svg_compose_transform(
+                    total_transform, (1.0, 0.0, 0.0, 1.0, x, y))
+                for template in definitions[href_id]
+                    use_style = _svg_style_from_attrs(template.style, attrs,
+                                                      css_rules, tag, context)
+                    push!(raw_paths,
+                          _svg_transform_path(_svg_style_path(template,
+                                                              use_style),
+                                              use_transform))
+                end
+            end
+        elseif tag == "path"
             d = get(attrs, "d", nothing)
-            d !== nothing && append!(element_paths, _svg_path_points(d, segments))
+            d !== nothing && append!(raw_paths, _svg_path_points(d, segments))
         elseif tag == "rect"
-            rect = _svg_rect(attrs)
-            rect !== nothing && push!(element_paths, rect)
+            rect = _svg_rect(attrs, segments)
+            rect !== nothing && push!(raw_paths, rect)
+        elseif tag == "line"
+            line = _svg_line(attrs)
+            line !== nothing && push!(raw_paths, line)
         elseif tag == "circle"
             cx = _svg_length(attrs, "cx", 0.0)
             cy = _svg_length(attrs, "cy", 0.0)
             r = _svg_length(attrs, "r", 0.0)
             points = _svg_ellipse_points(cx, cy, r, r, circle_n)
-            !isempty(points) && push!(element_paths, SVGPath(:circle, points, true))
+            !isempty(points) && push!(raw_paths, SVGPath(:circle, points, true))
         elseif tag == "ellipse"
             cx = _svg_length(attrs, "cx", 0.0)
             cy = _svg_length(attrs, "cy", 0.0)
             rx = _svg_length(attrs, "rx", 0.0)
             ry = _svg_length(attrs, "ry", 0.0)
             points = _svg_ellipse_points(cx, cy, rx, ry, circle_n)
-            !isempty(points) && push!(element_paths, SVGPath(:ellipse, points, true))
+            !isempty(points) && push!(raw_paths, SVGPath(:ellipse, points, true))
         elseif tag == "polygon" || tag == "polyline"
             points_raw = get(attrs, "points", "")
             points = _svg_points(points_raw)
             length(points) >= 2 &&
-                push!(element_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
+                push!(raw_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
-        next_element_id += 1
-        append!(paths, [_svg_element_path(
-                            _svg_transform_path(_svg_style_path(path, style),
-                                                total_transform),
-                            next_element_id)
-                        for path in element_paths])
+        element_paths = tag == "use" ? raw_paths :
+                        [_svg_transform_path(_svg_style_path(path, style),
+                                             total_transform)
+                         for path in raw_paths]
+        !isempty(clip_applications) &&
+            (element_paths = _svg_apply_clip_paths(element_paths,
+                                                   clip_applications,
+                                                   clip_definitions))
+        !isempty(mask_applications) &&
+            (element_paths = _svg_apply_clip_paths(element_paths,
+                                                   mask_applications,
+                                                   mask_definitions))
+        if !isempty(element_paths)
+            next_element_id += 1
+            element_paths = [_svg_element_path(path, next_element_id)
+                             for path in element_paths]
+        end
+        if tag != "use" && haskey(attrs, "id") && !isempty(element_paths)
+            definitions[attrs["id"]] = copy(element_paths)
+        end
+        append!(container_paths_stack[end], element_paths)
+        if !display_ok || visibility !== :visible
+            push!(sibling_stack[end], context)
+            continue
+        end
+        append!(paths, element_paths)
         push!(sibling_stack[end], context)
     end
 
     return SVGDocument(width, height, paths)
 end
 
-"""Load common SVG path and primitive geometry into an `SVGDocument`."""
+"""Load common SVG path, primitive, bounded URL/basic-shape clip-path, and vector URL mask geometry into an `SVGDocument`."""
 load_svg(path::String; kwargs...) = _svg_parse(read(path, String); kwargs...)
 
 """Alias for [`load_svg`](@ref), matching three.js `SVGLoader` naming."""

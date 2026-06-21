@@ -796,7 +796,8 @@ Parallel audits split the remaining work into five critical tracks:
   segment count. Browser font rendering remains open.
 - Done: add a native basic SVG loader surface via `SVGDocument`, `SVGPath`,
   `load_svg`, `SVGLoader`, `svg_shapes`, and `svg_geometry`, covering standalone
-  `path`, `rect`, `circle`, `ellipse`, `polygon`, and `polyline` elements, plus
+  `path`, `rect` including `rx`/`ry` rounded corners, `line`, `circle`,
+  `ellipse`, `polygon`, and `polyline` elements, plus
   `M`/`L`/`H`/`V`/`Q`/`T`/`C`/`S`/`A`/`Z` path commands with relative variants
   and curve/elliptical-arc subdivision into `Vec2` loops/merged geometry.
   Element transforms and simple nested group transform stacks now apply
@@ -807,6 +808,11 @@ Parallel audits split the remaining work into five critical tracks:
   simple `<style>` stylesheet rules for tag, class, id, and combined
   tag/class/id selectors plus whitespace descendant selectors now feed the same
   cascade, including basic `[attr]` and `[attr=value]` attribute selectors.
+  Non-rendering `<defs>` containers and cascaded `display:none` /
+  `visibility:hidden` or `collapse` now suppress parsed paths.
+  Local `<use href="#id">` / `xlink:href` references can instantiate previously
+  parsed path, primitive, and grouped definitions with `x`/`y`, transforms, and
+  use-local style overrides.
   Attribute selector operators `~=`, `|=`, `^=`, `$=`, and `*=` are also
   supported, as are direct child (`A > B`), adjacent sibling (`A + B`), and
   general sibling (`A ~ B`) combinators. Forward-evaluable structural pseudo
@@ -825,7 +831,36 @@ Parallel audits split the remaining work into five critical tracks:
   `fill-rule` now cascades from attributes, inline styles, and parsed
   stylesheets; filled meshes and merged SVG geometry group same-element
   compound paths with `nonzero` or `evenodd` hole semantics while preserving
-  separate element fills. Clipping and DOM-level SVG parsing remain open.
+  separate element fills. Bounded local `clip-path:url(#id)` references now
+  apply non-rendering `<clipPath>` definitions with one or more user-space
+  convex closed clip loops, element-local
+  `clipPathUnits="objectBoundingBox"` mapping, deferred container-level
+  `objectBoundingBox` clipping against the collected subtree bounds,
+  stylesheet/attribute cascade, empty clip paths, container user-space clip
+  stacks, bounded CSS `inset(...)`, `rect(...)`, `xywh(...)`, `circle(...)`,
+  `ellipse(...)`, simple `polygon(...)`, and simple `path(...)` basic-shape
+  clip paths with px/percent coordinates, `rect()` auto edges, non-negative
+  `xywh()` sizes, one-/two-value positions, closest/farthest-side radii,
+  optional `path()` fill-rule prefixes, fill-rule holes for CSS `path()` and
+  same-element URL clip loops, implicit `path()` close for clipping, rounded
+  rectangular basic-shape corners via border-radius shorthand, and rounded
+  convex `polygon()` vertices via length radii, basic-shape `fill-box`,
+  parsed-stroke `stroke-box`, and root `view-box` references, plus centerline
+  clipping for open line/polyline paths, triangulated simple non-convex URL
+  clip loops, and non-duplicating overlapping URL clip-loop unions for closed
+  fills and open path centerlines. CSS layout shape boxes (`content-box`,
+  `padding-box`,
+  `border-box`, `margin-box`) are accepted as geometry fill-bounds fallbacks for
+  parsed SVG elements. Bounded SVG `mask:url(#id)` references now apply positive
+  filled vector mask shapes, stylesheet/attribute cascade, empty/black masks,
+  and `maskContentUnits="objectBoundingBox"` mapping for element-local and
+  deferred container masks, with `mask-type="alpha"`/`mask-type: alpha`
+  selecting alpha coverage instead of luminance coverage. Full SVG
+  clipping/masking semantics
+  (complex multi-shape clip unions beyond simple vector loop unions, complete
+  CSS basic-shape grammar for browser CSS layout boxes, self-intersecting clip
+  paths, luminance or alpha mask intensity rendering, raster/gradient masks)
+  and DOM-level SVG parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

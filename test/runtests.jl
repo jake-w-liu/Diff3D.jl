@@ -5354,6 +5354,13 @@ end
             return area
         end
 
+        function svg_points_approx(actual, expected; atol=1e-8)
+            length(actual) == length(expected) || return false
+            return all(isapprox(actual[i].x, expected[i].x; atol=atol) &&
+                       isapprox(actual[i].y, expected[i].y; atol=atol)
+                       for i in eachindex(actual))
+        end
+
         svg_path = tempname() * ".svg"
         write(svg_path, """
         <svg width="20" height="10" xmlns="http://www.w3.org/2000/svg">
@@ -5382,6 +5389,73 @@ end
         @test !svg.paths[5].closed
         @test length(svg.paths[5].points) == 5
         @test svg.paths[5].points[end] == Vec2(6.0, 1.0)
+
+        rounded_path = tempname() * ".svg"
+        write(rounded_path, """
+        <svg>
+          <rect x="0" y="0" width="4" height="2" rx="1" ry=".5"/>
+          <rect x="0" y="3" width="2" height="2" rx="5"/>
+          <rect x="0" y="6" width="2" height="1" ry=".25"/>
+        </svg>
+        """)
+        rounded_svg = load_svg(rounded_path; curve_segments=2)
+        @test length(rounded_svg.paths) == 3
+        @test all(path -> path.tag == :rect && path.closed, rounded_svg.paths)
+        @test length(rounded_svg.paths[1].points) == 12
+        @test rounded_svg.paths[1].points[1] == Vec2(1.0, 0.0)
+        @test rounded_svg.paths[1].points[2] == Vec2(3.0, 0.0)
+        @test rounded_svg.paths[1].points[4].x ≈ 4.0
+        @test rounded_svg.paths[1].points[4].y ≈ 0.5
+        @test rounded_svg.paths[1].points[7].x ≈ 3.0
+        @test rounded_svg.paths[1].points[7].y ≈ 2.0
+        @test rounded_svg.paths[2].points[1] == Vec2(1.0, 3.0)
+        @test all(p -> 0.0 <= p.x <= 2.0 && 3.0 <= p.y <= 5.0,
+                  rounded_svg.paths[2].points)
+        @test rounded_svg.paths[3].points[1] == Vec2(0.25, 6.0)
+        @test any(p -> isapprox(p.x, 2.0; atol=1e-12) &&
+                       isapprox(p.y, 6.25; atol=1e-12),
+                  rounded_svg.paths[3].points)
+        @test svg_geometry(rounded_svg).n_faces > 0
+        rm(rounded_path)
+
+        bad_rounded_path = tempname() * ".svg"
+        write(bad_rounded_path,
+              """<svg><rect width="1" height="1" rx="-1"/></svg>""")
+        @test_throws "SVG rect radius must be non-negative" load_svg(bad_rounded_path)
+        rm(bad_rounded_path)
+
+        line_path = tempname() * ".svg"
+        write(line_path, """
+        <svg>
+          <style>
+            line.primary { stroke: #00f; stroke-width: 2; stroke-opacity: .5; stroke-linecap: square; }
+          </style>
+          <g transform="translate(1,2)">
+            <line class="primary" x1="0" y1="0" x2="3" y2="4"/>
+            <line x1="1" y1="1" x2="1" y2="1" stroke="#f00"/>
+          </g>
+        </svg>
+        """)
+        line_svg = load_svg(line_path)
+        @test length(line_svg.paths) == 1
+        @test line_svg.paths[1].tag == :line
+        @test !line_svg.paths[1].closed
+        @test line_svg.paths[1].points == [Vec2(1.0, 2.0), Vec2(4.0, 6.0)]
+        @test line_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+        @test line_svg.paths[1].style.stroke_width ≈ 2.0
+        @test line_svg.paths[1].style.stroke_opacity ≈ 0.5
+        @test line_svg.paths[1].style.stroke_linecap === :square
+        line_strokes = svg_strokes(line_svg)
+        @test length(line_strokes) == 1
+        @test line_strokes[1] isa LineObject
+        @test line_strokes[1].geometry.n_vertices == 2
+        @test line_strokes[1].material.linewidth ≈ 2.0
+        @test line_strokes[1].material.opacity ≈ 0.5
+        line_stroke_meshes = svg_stroke_meshes(line_svg)
+        @test length(line_stroke_meshes) == 1
+        @test line_stroke_meshes[1].geometry.n_faces >= 2
+        @test line_stroke_meshes[1].material.opacity ≈ 0.5
+        rm(line_path)
 
         smooth_path = tempname() * ".svg"
         write(smooth_path, """
@@ -5489,6 +5563,637 @@ end
         @test svg_meshes(style_path)[1].material.opacity == 0.125
         @test length(svg_strokes(style_path)) == 2
         rm(style_path)
+
+        visibility_path = tempname() * ".svg"
+        write(visibility_path, """
+        <svg>
+          <style>
+            .css-hidden { display: none; }
+            #sheet-hidden { visibility: hidden; }
+          </style>
+          <defs>
+            <rect id="template" x="0" y="0" width="10" height="10"/>
+            <circle cx="5" cy="5" r="2"/>
+          </defs>
+          <rect id="sheet-hidden" x="0" y="0" width="1" height="1"/>
+          <rect class="css-hidden" x="1" y="0" width="1" height="1"/>
+          <g display="none">
+            <rect x="2" y="0" width="1" height="1" visibility="visible"/>
+            <use href="icons.svg#missing"/>
+          </g>
+          <g visibility="hidden">
+            <rect x="3" y="0" width="1" height="1"/>
+            <rect id="visible-child" x="4" y="0" width="1" height="1"
+                  visibility="visible"/>
+          </g>
+          <line x1="0" y1="2" x2="2" y2="2" stroke="#00f"/>
+          <rect id="visible" x="0" y="3" width="1" height="1"/>
+        </svg>
+        """)
+        visibility_svg = load_svg(visibility_path)
+        @test length(visibility_svg.paths) == 3
+        @test [path.tag for path in visibility_svg.paths] == [:rect, :line, :rect]
+        @test visibility_svg.paths[1].points[1] == Vec2(4.0, 0.0)
+        @test visibility_svg.paths[2].points == [Vec2(0.0, 2.0), Vec2(2.0, 2.0)]
+        @test visibility_svg.paths[3].points[1] == Vec2(0.0, 3.0)
+        rm(visibility_path)
+
+        bad_visibility_path = tempname() * ".svg"
+        write(bad_visibility_path,
+              """<svg><rect width="1" height="1" visibility="maybe"/></svg>""")
+        @test_throws "unsupported SVG visibility" load_svg(bad_visibility_path)
+        rm(bad_visibility_path)
+
+        use_path = tempname() * ".svg"
+        write(use_path, """
+        <svg>
+          <defs>
+            <rect id="tile" x="1" y="2" width="2" height="1" fill="#00f"/>
+            <line id="rule" x1="0" y1="0" x2="2" y2="0" stroke="#000"/>
+            <path id="donut" fill-rule="evenodd"
+                  d="M 0 0 L 4 0 L 4 4 L 0 4 Z
+                     M 1 1 L 3 1 L 3 3 L 1 3 Z"/>
+            <g id="badge" transform="translate(2,1)" fill="#00f">
+              <rect width="1" height="1"/>
+              <line x1="0" y1="2" x2="1" y2="2" stroke="#000"/>
+            </g>
+          </defs>
+          <use href="#tile" x="4" y="5" fill="#f00"/>
+          <use xlink:href="#rule" x="1" y="7" stroke="#0f0"
+               stroke-width="2"/>
+          <use href="#tile" transform="translate(10,0)"/>
+          <use href="#donut" x="20"/>
+          <use href="#badge" x="30" y="2" fill="#0f0" stroke="#f00"
+               stroke-width="3"/>
+        </svg>
+        """)
+        use_svg = load_svg(use_path)
+        @test length(use_svg.paths) == 7
+        @test [path.tag for path in use_svg.paths] ==
+              [:rect, :line, :rect, :path, :path, :rect, :line]
+        @test use_svg.paths[1].points[1] == Vec2(5.0, 7.0)
+        @test use_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test use_svg.paths[2].points == [Vec2(1.0, 7.0), Vec2(3.0, 7.0)]
+        @test use_svg.paths[2].style.stroke == Color3(0.0, 1.0, 0.0)
+        @test use_svg.paths[2].style.stroke_width == 2.0
+        @test use_svg.paths[3].points[1] == Vec2(11.0, 2.0)
+        @test use_svg.paths[3].style.fill == Color3(0.0, 0.0, 1.0)
+        @test use_svg.paths[4].points[1] == Vec2(20.0, 0.0)
+        @test use_svg.paths[4].element_id == use_svg.paths[5].element_id
+        @test use_svg.paths[6].points[1] == Vec2(32.0, 3.0)
+        @test use_svg.paths[6].style.fill == Color3(0.0, 1.0, 0.0)
+        @test use_svg.paths[6].style.stroke == Color3(1.0, 0.0, 0.0)
+        @test use_svg.paths[7].points == [Vec2(32.0, 5.0), Vec2(33.0, 5.0)]
+        @test use_svg.paths[7].style.stroke == Color3(1.0, 0.0, 0.0)
+        @test use_svg.paths[7].style.stroke_width == 3.0
+        use_meshes = svg_meshes(use_svg)
+        @test length(use_meshes) == 4
+        @test svg_triangle_area_xy(use_meshes[3].geometry) ≈ 12.0
+        @test use_meshes[end].material.color == Color3(0.0, 1.0, 0.0)
+        @test svg_geometry(use_svg).n_faces > 0
+        @test length(svg_strokes(use_svg)) == 3
+        rm(use_path)
+
+        missing_use_path = tempname() * ".svg"
+        write(missing_use_path, """<svg><use href="#missing"/></svg>""")
+        @test_throws "SVG use references unknown id" load_svg(missing_use_path)
+        rm(missing_use_path)
+
+        external_use_path = tempname() * ".svg"
+        write(external_use_path,
+              """<svg><use href="icons.svg#tile"/></svg>""")
+        @test_throws "unsupported SVG use reference" load_svg(external_use_path)
+        rm(external_use_path)
+
+        clip_path = tempname() * ".svg"
+        write(clip_path, """
+        <svg>
+          <defs>
+            <clipPath id="crop">
+              <rect x="1" y="1" width="2" height="2"/>
+            </clipPath>
+            <clipPath id="empty"/>
+          </defs>
+          <style>
+            .sheet-crop { clip-path: url("#crop"); }
+          </style>
+          <rect x="0" y="0" width="4" height="4" clip-path="url(#crop)"/>
+          <polyline points="0,2 4,2" fill="none" stroke="#00f"
+                    clip-path="url(#crop)"/>
+          <g clip-path="url(#crop)">
+            <rect x="2" y="2" width="3" height="3"/>
+          </g>
+          <rect class="sheet-crop" x="-1" y="-1" width="3" height="3"/>
+          <rect x="0" y="0" width="1" height="1" clip-path="url(#empty)"/>
+        </svg>
+        """)
+        clipped_svg = load_svg(clip_path)
+        @test length(clipped_svg.paths) == 4
+        @test clipped_svg.paths[1].points == [Vec2(1.0, 3.0), Vec2(1.0, 1.0),
+                                              Vec2(3.0, 1.0), Vec2(3.0, 3.0)]
+        @test clipped_svg.paths[2].points == [Vec2(1.0, 2.0), Vec2(3.0, 2.0)]
+        @test clipped_svg.paths[3].points == [Vec2(2.0, 3.0), Vec2(2.0, 2.0),
+                                              Vec2(3.0, 2.0), Vec2(3.0, 3.0)]
+        @test clipped_svg.paths[4].points == [Vec2(1.0, 1.0), Vec2(2.0, 1.0),
+                                              Vec2(2.0, 2.0), Vec2(1.0, 2.0)]
+        clipped_meshes = svg_meshes(clipped_svg)
+        @test length(clipped_meshes) == 3
+        @test svg_triangle_area_xy(clipped_meshes[1].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(clipped_meshes[2].geometry) ≈ 1.0
+        @test svg_triangle_area_xy(clipped_meshes[3].geometry) ≈ 1.0
+        clipped_strokes = svg_strokes(clipped_svg)
+        @test length(clipped_strokes) == 1
+        @test clipped_strokes[1].geometry.positions ==
+              [1.0, 2.0, 0.0, 3.0, 2.0, 0.0]
+        rm(clip_path)
+
+        multi_clip_path = tempname() * ".svg"
+        write(multi_clip_path, """
+        <svg>
+          <clipPath id="slots">
+            <rect x="0" y="0" width="1" height="1"/>
+            <rect x="3" y="0" width="1" height="1"/>
+          </clipPath>
+          <rect x="-1" y="-1" width="6" height="3"
+                clip-path="url(#slots)"/>
+          <polyline points="-1,.5 5,.5" fill="none" stroke="#00f"
+                    clip-path="url(#slots)"/>
+        </svg>
+        """)
+        multi_clip_svg = load_svg(multi_clip_path)
+        @test length(multi_clip_svg.paths) == 4
+        @test multi_clip_svg.paths[1].points ==
+              [Vec2(0.0, 1.0), Vec2(0.0, 0.0),
+               Vec2(1.0, 0.0), Vec2(1.0, 1.0)]
+        @test multi_clip_svg.paths[2].points ==
+              [Vec2(3.0, 1.0), Vec2(3.0, 0.0),
+               Vec2(4.0, 0.0), Vec2(4.0, 1.0)]
+        @test multi_clip_svg.paths[3].points ==
+              [Vec2(0.0, 0.5), Vec2(1.0, 0.5)]
+        @test multi_clip_svg.paths[4].points ==
+              [Vec2(3.0, 0.5), Vec2(4.0, 0.5)]
+        multi_clip_meshes = svg_meshes(multi_clip_svg)
+        @test length(multi_clip_meshes) == 1
+        @test svg_triangle_area_xy(multi_clip_meshes[1].geometry) ≈ 2.0
+        multi_clip_strokes = svg_strokes(multi_clip_svg)
+        @test length(multi_clip_strokes) == 2
+        @test multi_clip_strokes[1].geometry.positions ==
+              [0.0, 0.5, 0.0, 1.0, 0.5, 0.0]
+        @test multi_clip_strokes[2].geometry.positions ==
+              [3.0, 0.5, 0.0, 4.0, 0.5, 0.0]
+        rm(multi_clip_path)
+
+        overlap_clip_path = tempname() * ".svg"
+        write(overlap_clip_path, """
+        <svg>
+          <clipPath id="overlap">
+            <rect x="0" y="0" width="3" height="3"/>
+            <rect x="1" y="1" width="3" height="3"/>
+          </clipPath>
+          <rect x="0" y="0" width="4" height="4"
+                clip-path="url(#overlap)"/>
+          <polyline points="-1,2 5,2" fill="none" stroke="#00f"
+                    clip-path="url(#overlap)"/>
+        </svg>
+        """)
+        overlap_clip_svg = load_svg(overlap_clip_path)
+        @test length(overlap_clip_svg.paths) == 6
+        @test count(path -> path.closed, overlap_clip_svg.paths) == 5
+        overlap_clip_meshes = svg_meshes(overlap_clip_svg)
+        @test length(overlap_clip_meshes) == 1
+        @test overlap_clip_meshes[1].geometry.n_faces == 10
+        @test svg_triangle_area_xy(overlap_clip_meshes[1].geometry) ≈ 14.0
+        overlap_clip_strokes = svg_strokes(overlap_clip_svg)
+        @test length(overlap_clip_strokes) == 1
+        @test overlap_clip_strokes[1].geometry.positions ==
+              [0.0, 2.0, 0.0, 4.0, 2.0, 0.0]
+        rm(overlap_clip_path)
+
+        missing_clip_path = tempname() * ".svg"
+        write(missing_clip_path,
+              """<svg><rect width="1" height="1" clip-path="url(#missing)"/></svg>""")
+        @test_throws "SVG clip-path references unknown id" load_svg(missing_clip_path)
+        rm(missing_clip_path)
+
+        external_clip_path = tempname() * ".svg"
+        write(external_clip_path,
+              """<svg><rect width="1" height="1" clip-path="url(icons.svg#crop)"/></svg>""")
+        @test_throws "unsupported SVG clip-path" load_svg(external_clip_path)
+        rm(external_clip_path)
+
+        bbox_clip_path = tempname() * ".svg"
+        write(bbox_clip_path, """
+        <svg>
+          <clipPath id="bbox" clipPathUnits="objectBoundingBox">
+            <rect x=".25" y=".25" width=".5" height=".5"/>
+          </clipPath>
+          <rect x="10" y="20" width="8" height="4" clip-path="url(#bbox)"/>
+        </svg>
+        """)
+        bbox_clip_svg = load_svg(bbox_clip_path)
+        @test length(bbox_clip_svg.paths) == 1
+        @test bbox_clip_svg.paths[1].points ==
+              [Vec2(12.0, 23.0), Vec2(12.0, 21.0),
+               Vec2(16.0, 21.0), Vec2(16.0, 23.0)]
+        @test svg_triangle_area_xy(svg_meshes(bbox_clip_svg)[1].geometry) ≈ 8.0
+        rm(bbox_clip_path)
+
+        bbox_container_clip_path = tempname() * ".svg"
+        write(bbox_container_clip_path, """
+        <svg>
+          <clipPath id="bbox" clipPathUnits="objectBoundingBox">
+            <rect x=".25" y=".25" width=".5" height=".5"/>
+          </clipPath>
+          <g clip-path="url(#bbox)">
+            <rect x="10" y="20" width="8" height="4"/>
+            <polyline points="8,22 20,22" fill="none" stroke="#00f"/>
+          </g>
+        </svg>
+        """)
+        bbox_container_svg = load_svg(bbox_container_clip_path)
+        @test length(bbox_container_svg.paths) == 2
+        @test bbox_container_svg.paths[1].points ==
+              [Vec2(11.0, 23.0), Vec2(11.0, 21.0),
+               Vec2(17.0, 21.0), Vec2(17.0, 23.0)]
+        @test bbox_container_svg.paths[2].points ==
+              [Vec2(11.0, 22.0), Vec2(17.0, 22.0)]
+        @test svg_triangle_area_xy(svg_meshes(bbox_container_svg)[1].geometry) ≈ 12.0
+        @test svg_strokes(bbox_container_svg)[1].geometry.positions ==
+              [11.0, 22.0, 0.0, 17.0, 22.0, 0.0]
+        rm(bbox_container_clip_path)
+
+        inset_clip_path = tempname() * ".svg"
+        write(inset_clip_path, """
+        <svg>
+          <style>
+            .css-inset { clip-path: inset(25% 25%); }
+          </style>
+          <rect x="10" y="20" width="8" height="4"
+                clip-path="inset(25% 2px 1px 25%)"/>
+          <g class="css-inset">
+            <rect x="0" y="0" width="10" height="8"/>
+            <polyline points="-1,4 11,4" fill="none" stroke="#00f"/>
+          </g>
+        </svg>
+        """)
+        inset_clip_svg = load_svg(inset_clip_path)
+        @test length(inset_clip_svg.paths) == 3
+        @test inset_clip_svg.paths[1].points ==
+              [Vec2(12.0, 23.0), Vec2(12.0, 21.0),
+               Vec2(16.0, 21.0), Vec2(16.0, 23.0)]
+        @test inset_clip_svg.paths[2].points ==
+              [Vec2(2.0, 6.0), Vec2(2.0, 2.0),
+               Vec2(8.0, 2.0), Vec2(8.0, 6.0)]
+        @test inset_clip_svg.paths[3].points ==
+              [Vec2(2.0, 4.0), Vec2(8.0, 4.0)]
+        @test length(svg_meshes(inset_clip_svg)) == 2
+        @test svg_triangle_area_xy(svg_meshes(inset_clip_svg)[1].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(svg_meshes(inset_clip_svg)[2].geometry) ≈ 24.0
+        @test svg_strokes(inset_clip_svg)[1].geometry.positions ==
+              [2.0, 4.0, 0.0, 8.0, 4.0, 0.0]
+        rm(inset_clip_path)
+
+        bad_round_clip_path = tempname() * ".svg"
+        write(bad_round_clip_path,
+              """<svg><rect width="1" height="1" clip-path="inset(1 round)"/></svg>""")
+        @test_throws "SVG clip-path inset round corners are missing" load_svg(bad_round_clip_path)
+        rm(bad_round_clip_path)
+
+        basic_shape_clip_path = tempname() * ".svg"
+        write(basic_shape_clip_path, """
+        <svg>
+          <style>
+            .circle-crop { clip-path: circle(25% at center); }
+          </style>
+          <rect class="circle-crop" x="0" y="0" width="8" height="8"/>
+          <rect x="10" y="0" width="8" height="4"
+                clip-path="ellipse(25% 50% at 50% 50%)"/>
+          <rect x="0" y="10" width="8" height="4"
+                clip-path="polygon(25% 25%, 75% 25%, 75% 75%, 25% 75%)"/>
+          <rect x="20" y="0" width="8" height="4"
+                clip-path="ellipse(closest-side at center)"/>
+          <rect x="30" y="0" width="8" height="4"
+                clip-path="rect(auto 75% auto 25%)"/>
+          <rect x="40" y="0" width="10" height="6"
+                clip-path="xywh(2px 25% 50% 3px)"/>
+          <rect x="50" y="0" width="10" height="6"
+                clip-path="path('M 2 1 L 8 1 L 8 5 L 2 5')"/>
+          <rect x="0" y="20" width="10" height="6"
+                clip-path="path(evenodd, 'M 1 1 H 9 V 5 H 1')"/>
+          <rect x="0" y="30" width="8" height="4"
+                clip-path="inset(0 round 1px)"/>
+          <rect x="10" y="30" width="8" height="4"
+                clip-path="rect(auto 100% auto 0 round 25% / 50%)"/>
+          <rect x="20" y="30" width="8" height="4"
+                clip-path="xywh(0 0 8px 4px round 1px 2px / 1px)"/>
+          <rect x="60" y="0" width="8" height="8"
+                clip-path="polygon(round 1px, 0 0, 100% 0, 100% 100%, 0 100%)"/>
+          <rect x="70" y="0" width="8" height="8"
+                clip-path="polygon(evenodd round 1px, 0 0, 100% 0, 100% 100%, 0 100%)"/>
+        </svg>
+        """)
+        basic_shape_svg = load_svg(basic_shape_clip_path; circle_segments=4)
+        @test length(basic_shape_svg.paths) == 13
+        @test svg_points_approx(basic_shape_svg.paths[1].points,
+                                [Vec2(2.0, 4.0), Vec2(4.0, 2.0),
+                                 Vec2(6.0, 4.0), Vec2(4.0, 6.0)])
+        @test svg_points_approx(basic_shape_svg.paths[2].points,
+                                [Vec2(12.0, 2.0), Vec2(14.0, 0.0),
+                                 Vec2(16.0, 2.0), Vec2(14.0, 4.0)])
+        @test svg_points_approx(basic_shape_svg.paths[3].points,
+                                [Vec2(2.0, 13.0), Vec2(2.0, 11.0),
+                                 Vec2(6.0, 11.0), Vec2(6.0, 13.0)])
+        @test svg_points_approx(basic_shape_svg.paths[4].points,
+                                [Vec2(20.0, 2.0), Vec2(24.0, 0.0),
+                                 Vec2(28.0, 2.0), Vec2(24.0, 4.0)])
+        @test svg_points_approx(basic_shape_svg.paths[5].points,
+                                [Vec2(32.0, 0.0), Vec2(36.0, 0.0),
+                                 Vec2(36.0, 4.0), Vec2(32.0, 4.0)])
+        @test svg_points_approx(basic_shape_svg.paths[6].points,
+                                [Vec2(42.0, 4.5), Vec2(42.0, 1.5),
+                                 Vec2(47.0, 1.5), Vec2(47.0, 4.5)])
+        @test svg_points_approx(basic_shape_svg.paths[7].points,
+                                [Vec2(52.0, 5.0), Vec2(52.0, 1.0),
+                                 Vec2(58.0, 1.0), Vec2(58.0, 5.0)])
+        @test svg_points_approx(basic_shape_svg.paths[8].points,
+                                [Vec2(1.0, 25.0), Vec2(1.0, 21.0),
+                                 Vec2(9.0, 21.0), Vec2(9.0, 25.0)])
+        @test length(basic_shape_svg.paths[9].points) == 20
+        @test basic_shape_svg.paths[9].points[1].x ≈ 0.6173165676349079
+        @test basic_shape_svg.paths[9].points[1].y ≈ 33.923879532511286
+        @test length(basic_shape_svg.paths[10].points) == 18
+        @test basic_shape_svg.paths[10].points[1].x ≈ 11.234633135269823
+        @test basic_shape_svg.paths[10].points[1].y ≈ 33.84775906502257
+        @test length(basic_shape_svg.paths[11].points) == 20
+        @test basic_shape_svg.paths[11].points[1].x ≈ 21.234633135269817
+        @test basic_shape_svg.paths[11].points[1].y ≈ 33.923879532511286
+        @test length(basic_shape_svg.paths[12].points) == 20
+        @test basic_shape_svg.paths[12].points[1].x ≈ 60.61731656763491
+        @test basic_shape_svg.paths[12].points[1].y ≈ 7.923879532511287
+        @test length(basic_shape_svg.paths[13].points) == 20
+        @test basic_shape_svg.paths[13].points[1].x ≈ 70.61731656763492
+        @test basic_shape_svg.paths[13].points[1].y ≈ 7.923879532511287
+        @test length(svg_meshes(basic_shape_svg)) == 13
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[1].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[2].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[3].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[4].geometry) ≈ 16.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[5].geometry) ≈ 16.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[6].geometry) ≈ 15.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[7].geometry) ≈ 24.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[8].geometry) ≈ 32.0
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[9].geometry) ≈
+              31.06146745892071
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[10].geometry) ≈
+              28.245869835682868
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[11].geometry) ≈
+              30.592201188381075
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[12].geometry) ≈
+              63.06146745892072
+        @test svg_triangle_area_xy(svg_meshes(basic_shape_svg)[13].geometry) ≈
+              63.06146745892072
+        rm(basic_shape_clip_path)
+
+        shape_box_clip_path = tempname() * ".svg"
+        write(shape_box_clip_path, """
+        <svg width="20" height="20" viewBox="0 0 20 20">
+          <rect x="10" y="10" width="4" height="4"
+                clip-path="inset(25%) fill-box"/>
+          <rect x="10" y="10" width="4" height="4"
+                clip-path="inset(25%) view-box"/>
+          <rect x="10" y="10" width="4" height="4"
+                clip-path="view-box inset(25%)"/>
+          <rect x="10" y="10" width="4" height="4" stroke="#000"
+                stroke-width="4" clip-path="inset(25%) stroke-box"/>
+          <rect x="0" y="0" width="4" height="4"
+                clip-path="inset(25%) content-box"/>
+          <rect x="5" y="0" width="4" height="4"
+                clip-path="inset(25%) padding-box"/>
+          <rect x="10" y="0" width="4" height="4"
+                clip-path="inset(25%) border-box"/>
+          <rect x="15" y="0" width="4" height="4"
+                clip-path="inset(25%) margin-box"/>
+        </svg>
+        """)
+        shape_box_svg = load_svg(shape_box_clip_path)
+        @test length(shape_box_svg.paths) == 8
+        @test svg_points_approx(shape_box_svg.paths[1].points,
+                                [Vec2(11.0, 13.0), Vec2(11.0, 11.0),
+                                 Vec2(13.0, 11.0), Vec2(13.0, 13.0)])
+        @test svg_points_approx(shape_box_svg.paths[2].points,
+                                [Vec2(10.0, 10.0), Vec2(14.0, 10.0),
+                                 Vec2(14.0, 14.0), Vec2(10.0, 14.0)])
+        @test svg_points_approx(shape_box_svg.paths[3].points,
+                                [Vec2(10.0, 10.0), Vec2(14.0, 10.0),
+                                 Vec2(14.0, 14.0), Vec2(10.0, 14.0)])
+        @test svg_points_approx(shape_box_svg.paths[4].points,
+                                [Vec2(10.0, 10.0), Vec2(14.0, 10.0),
+                                 Vec2(14.0, 14.0), Vec2(10.0, 14.0)])
+        @test svg_points_approx(shape_box_svg.paths[5].points,
+                                [Vec2(1.0, 3.0), Vec2(1.0, 1.0),
+                                 Vec2(3.0, 1.0), Vec2(3.0, 3.0)])
+        @test svg_points_approx(shape_box_svg.paths[6].points,
+                                [Vec2(6.0, 3.0), Vec2(6.0, 1.0),
+                                 Vec2(8.0, 1.0), Vec2(8.0, 3.0)])
+        @test svg_points_approx(shape_box_svg.paths[7].points,
+                                [Vec2(11.0, 3.0), Vec2(11.0, 1.0),
+                                 Vec2(13.0, 1.0), Vec2(13.0, 3.0)])
+        @test svg_points_approx(shape_box_svg.paths[8].points,
+                                [Vec2(16.0, 3.0), Vec2(16.0, 1.0),
+                                 Vec2(18.0, 1.0), Vec2(18.0, 3.0)])
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[1].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[2].geometry) ≈ 16.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[3].geometry) ≈ 16.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[4].geometry) ≈ 16.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[5].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[6].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[7].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(svg_meshes(shape_box_svg)[8].geometry) ≈ 4.0
+        rm(shape_box_clip_path)
+
+        nonconvex_clip_path = tempname() * ".svg"
+        write(nonconvex_clip_path, """
+        <svg width="40" height="10">
+          <defs>
+            <clipPath id="nonconvex-url">
+              <polygon points="20,0 24,0 24,2 22,2 22,4 20,4"/>
+            </clipPath>
+          </defs>
+          <rect x="0" y="0" width="4" height="4"
+                clip-path="polygon(0 0, 100% 0, 100% 50%, 50% 50%, 50% 100%, 0 100%)"/>
+          <rect x="10" y="0" width="4" height="4"
+                clip-path="path('M 0 0 H 4 V 2 H 2 V 4 H 0 Z')"/>
+          <rect x="20" y="0" width="4" height="4"
+                clip-path="url(#nonconvex-url)"/>
+        </svg>
+        """)
+        nonconvex_svg = load_svg(nonconvex_clip_path)
+        nonconvex_meshes = svg_meshes(nonconvex_svg)
+        @test length(nonconvex_svg.paths) == 12
+        @test length(nonconvex_meshes) == 3
+        @test svg_triangle_area_xy(nonconvex_meshes[1].geometry) ≈ 12.0
+        @test svg_triangle_area_xy(nonconvex_meshes[2].geometry) ≈ 12.0
+        @test svg_triangle_area_xy(nonconvex_meshes[3].geometry) ≈ 12.0
+        rm(nonconvex_clip_path)
+
+        clip_hole_path = tempname() * ".svg"
+        write(clip_hole_path, """
+        <svg width="20" height="10">
+          <defs>
+            <clipPath id="hole">
+              <path fill-rule="evenodd"
+                    d="M 10 0 H 14 V 4 H 10 Z M 11 1 H 13 V 3 H 11 Z"/>
+            </clipPath>
+          </defs>
+          <rect x="0" y="0" width="4" height="4"
+                clip-path="path(evenodd, 'M 0 0 H 4 V 4 H 0 Z M 1 1 H 3 V 3 H 1 Z')"/>
+          <rect x="10" y="0" width="4" height="4" clip-path="url(#hole)"/>
+        </svg>
+        """)
+        clip_hole_svg = load_svg(clip_hole_path)
+        clip_hole_meshes = svg_meshes(clip_hole_svg)
+        @test length(clip_hole_svg.paths) == 18
+        @test length(clip_hole_meshes) == 2
+        @test svg_triangle_area_xy(clip_hole_meshes[1].geometry) ≈ 12.0
+        @test svg_triangle_area_xy(clip_hole_meshes[2].geometry) ≈ 12.0
+        rm(clip_hole_path)
+
+        mask_path = tempname() * ".svg"
+        write(mask_path, """
+        <svg width="20" height="30">
+          <style>
+            .css-mask { mask: url(#css-box); }
+            #css-alpha-mask { mask-type: alpha; }
+          </style>
+          <defs>
+            <mask id="white-box">
+              <rect x="1" y="1" width="2" height="2" fill="white"/>
+              <rect x="0" y="0" width="4" height="4" fill="black"/>
+            </mask>
+            <mask id="css-box">
+              <rect x="6" y="1" width="2" height="2" fill="white"/>
+            </mask>
+            <mask id="bbox-mask" maskContentUnits="objectBoundingBox">
+              <rect x="0.25" y="0.25" width="0.5" height="0.5" fill="white"/>
+            </mask>
+            <mask id="empty-mask">
+              <rect x="0" y="0" width="4" height="4" fill="black"/>
+            </mask>
+            <mask id="alpha-mask" mask-type="alpha">
+              <rect x="0" y="15" width="2" height="2" fill="black"/>
+            </mask>
+            <mask id="css-alpha-mask">
+              <rect x="5" y="15" width="2" height="2" fill="black"/>
+            </mask>
+          </defs>
+          <rect x="0" y="0" width="4" height="4" mask="url(#white-box)"/>
+          <rect class="css-mask" x="5" y="0" width="4" height="4"/>
+          <rect x="10" y="20" width="8" height="4" mask="url(#bbox-mask)"/>
+          <rect x="0" y="10" width="4" height="4" mask="url(#empty-mask)"/>
+          <rect x="0" y="15" width="4" height="4" mask="url(#alpha-mask)"/>
+          <rect x="5" y="15" width="4" height="4" mask="url(#css-alpha-mask)"/>
+        </svg>
+        """)
+        mask_svg = load_svg(mask_path)
+        mask_meshes = svg_meshes(mask_svg)
+        @test length(mask_svg.paths) == 5
+        @test length(mask_meshes) == 5
+        @test svg_points_approx(mask_svg.paths[1].points,
+                                [Vec2(1.0, 3.0), Vec2(1.0, 1.0),
+                                 Vec2(3.0, 1.0), Vec2(3.0, 3.0)])
+        @test svg_points_approx(mask_svg.paths[2].points,
+                                [Vec2(6.0, 3.0), Vec2(6.0, 1.0),
+                                 Vec2(8.0, 1.0), Vec2(8.0, 3.0)])
+        @test svg_points_approx(mask_svg.paths[3].points,
+                                [Vec2(12.0, 23.0), Vec2(12.0, 21.0),
+                                 Vec2(16.0, 21.0), Vec2(16.0, 23.0)])
+        @test svg_points_approx(mask_svg.paths[4].points,
+                                [Vec2(0.0, 17.0), Vec2(0.0, 15.0),
+                                 Vec2(2.0, 15.0), Vec2(2.0, 17.0)])
+        @test svg_points_approx(mask_svg.paths[5].points,
+                                [Vec2(5.0, 17.0), Vec2(5.0, 15.0),
+                                 Vec2(7.0, 15.0), Vec2(7.0, 17.0)])
+        @test svg_triangle_area_xy(mask_meshes[1].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(mask_meshes[2].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(mask_meshes[3].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(mask_meshes[4].geometry) ≈ 4.0
+        @test svg_triangle_area_xy(mask_meshes[5].geometry) ≈ 4.0
+        rm(mask_path)
+
+        group_mask_path = tempname() * ".svg"
+        write(group_mask_path, """
+        <svg>
+          <defs>
+            <mask id="group-mask" maskContentUnits="objectBoundingBox">
+              <rect x="0.25" y="0" width="0.5" height="1" fill="white"/>
+            </mask>
+          </defs>
+          <g mask="url(#group-mask)">
+            <rect x="0" y="0" width="4" height="4"/>
+            <rect x="4" y="0" width="4" height="4"/>
+          </g>
+        </svg>
+        """)
+        group_mask_svg = load_svg(group_mask_path)
+        group_mask_meshes = svg_meshes(group_mask_svg)
+        @test length(group_mask_svg.paths) == 2
+        @test svg_triangle_area_xy(group_mask_meshes[1].geometry) ≈ 8.0
+        @test svg_triangle_area_xy(group_mask_meshes[2].geometry) ≈ 8.0
+        rm(group_mask_path)
+
+        bad_xywh_clip_path = tempname() * ".svg"
+        write(bad_xywh_clip_path,
+              """<svg><rect width="1" height="1" clip-path="xywh(0 0 -1 1)"/></svg>""")
+        @test_throws "SVG clip-path xywh width must be non-negative" load_svg(bad_xywh_clip_path)
+        rm(bad_xywh_clip_path)
+
+        bad_polygon_round_clip_path = tempname() * ".svg"
+        write(bad_polygon_round_clip_path, """
+        <svg>
+          <rect width="8" height="8"
+                clip-path="polygon(round 10%, 0 0, 100% 0, 100% 100%, 0 100%)"/>
+        </svg>
+        """)
+        @test_throws "SVG clip-path polygon round radius must be a length" load_svg(bad_polygon_round_clip_path)
+        rm(bad_polygon_round_clip_path)
+
+        concave_path_clip_path = tempname() * ".svg"
+        write(concave_path_clip_path, """
+        <svg>
+          <rect width="10" height="10"
+                clip-path="path('M 0 0 L 10 0 L 5 5 L 10 10 L 0 10')"/>
+        </svg>
+        """)
+        concave_path_svg = load_svg(concave_path_clip_path)
+        @test length(concave_path_svg.paths) == 3
+        @test svg_triangle_area_xy(svg_meshes(concave_path_svg)[1].geometry) ≈ 75.0
+        rm(concave_path_clip_path)
+
+        concave_polygon_clip_path = tempname() * ".svg"
+        write(concave_polygon_clip_path, """
+        <svg>
+          <rect width="10" height="10"
+                clip-path="polygon(0 0, 100% 0, 50% 50%, 100% 100%, 0 100%)"/>
+        </svg>
+        """)
+        concave_polygon_svg = load_svg(concave_polygon_clip_path)
+        @test length(concave_polygon_svg.paths) == 3
+        @test svg_triangle_area_xy(svg_meshes(concave_polygon_svg)[1].geometry) ≈ 75.0
+        rm(concave_polygon_clip_path)
+
+        concave_clip_path = tempname() * ".svg"
+        write(concave_clip_path, """
+        <svg>
+          <clipPath id="concave">
+            <polygon points="0,0 2,0 1,1 2,2 0,2"/>
+          </clipPath>
+          <rect width="2" height="2" clip-path="url(#concave)"/>
+        </svg>
+        """)
+        concave_svg = load_svg(concave_clip_path)
+        @test length(concave_svg.paths) == 3
+        @test svg_triangle_area_xy(svg_meshes(concave_svg)[1].geometry) ≈ 3.0
+        rm(concave_clip_path)
 
         stroke_mesh_path = tempname() * ".svg"
         write(stroke_mesh_path, """
