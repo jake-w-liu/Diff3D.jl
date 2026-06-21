@@ -267,6 +267,7 @@ end
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
             "threejs_webgl_lines_colors",
+            "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
             "threejs_webgl_animation_keyframes",
         ])
@@ -842,6 +843,17 @@ end
                 ],
                 prerequisites=["BufferGeometry color attributes", "LineLoop"],
             ),
+            "threejs_webgl_lines_dashed" => (
+                source=[
+                    "function hilbert3d_points",
+                    "LineDashedMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "compute_line_distances!(geo; mode=:line_strip)",
+                    "compute_line_distances!(geo; mode=:lines)",
+                    "LineSegments(box_line_segments_geometry",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                ],
+                prerequisites=["LineDashedMaterial", "compute_line_distances!", "LineObject", "LineSegments"],
+            ),
             "threejs_webgl_helpers" => (
                 source=[
                     "PolarGridHelper(3.8, 16, 6",
@@ -1158,6 +1170,42 @@ end
         @test m5.anisotropy ≈ 0.0
         @test m5.anisotropy_rotation ≈ 0.0
         @test m5.anisotropy_map === nothing
+
+        dashed = LineDashedMaterial(color=Color3(0.2, 0.4, 0.8),
+                                    linewidth=2.0, scale=0.5,
+                                    dash_size=1.25, gap_size=0.75,
+                                    opacity=0.8, depth_write=false)
+        @test dashed.color == Color3(0.2, 0.4, 0.8)
+        @test dashed.linewidth ≈ 2.0
+        @test dashed.scale ≈ 0.5
+        @test dashed.dash_size ≈ 1.25
+        @test dashed.gap_size ≈ 0.75
+        @test dashed.opacity ≈ 0.8
+        @test dashed.depth_write == false
+        alias_dashed = LineDashedMaterial(dashSize=2.0, gapSize=0.5)
+        @test alias_dashed.dash_size ≈ 2.0
+        @test alias_dashed.gap_size ≈ 0.5
+        @test_throws ArgumentError LineDashedMaterial(dash_size=-1.0)
+        @test_throws ArgumentError LineDashedMaterial(dash_size=0.0, gap_size=0.0)
+    end
+
+    @testset "Dashed line distances" begin
+        strip = BufferGeometry(Float64[0,0,0, 3,0,0, 3,4,0],
+                               Float64[], Float64[], Int[], 3, 0)
+        @test compute_line_distances!(strip; mode=:line_strip) === strip
+        strip_attr = get_attribute(strip, :lineDistance)
+        @test strip_attr.item_size == 1
+        @test strip_attr.data ≈ [0.0, 3.0, 7.0]
+
+        segments = BufferGeometry(Float64[0,0,0, 0,0,5, 1,1,1, 4,5,1],
+                                  Float64[], Float64[], Int[], 4, 0)
+        compute_line_distances!(segments; mode=:lines)
+        @test get_attribute(segments, :lineDistance).data ≈ [0.0, 5.0, 0.0, 5.0]
+
+        indexed = BufferGeometry(Float64[0,0,0, 1,0,0, 2,0,0],
+                                 Float64[], Float64[], Int[1, 2, 2, 3], 3, 0)
+        @test_throws ArgumentError compute_line_distances!(indexed; mode=:lines)
+        @test_throws ArgumentError compute_line_distances!(strip; mode=:bad)
     end
 
     @testset "Shading — Lambert" begin
@@ -1828,6 +1876,15 @@ end
                                                linewidth=2.5);
                              name="export_loop")
         add!(scene, line_loop)
+        dashed_geo = BufferGeometry([0.0,0,0, 0.4,0.5,0, 0.9,0.0,0],
+                                    Float64[], Float64[], Int[], 3, 0)
+        compute_line_distances!(dashed_geo; mode=:line_strip)
+        dashed_line = LineObject(dashed_geo,
+                                 LineDashedMaterial(color=Color3(0.9, 0.9, 0.2),
+                                                    dash_size=0.2, gap_size=0.1,
+                                                    scale=1.5);
+                                 name="export_dashed_line")
+        add!(scene, dashed_line)
         sp = Sprite(SpriteMaterial(color=Color3(1.0, 0.8, 0.2),
                                    map=Texture(texdata; filter=:nearest),
                                    alpha_map=Texture(alphadata; filter=:nearest,
@@ -2509,6 +2566,12 @@ end
         @test occursin("\"name\":\"export_depth_wireframe\"", html)
         @test occursin(r"\"name\":\"export_depth_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
+        @test occursin(r"\"name\":\"export_dashed_line\".*\"lineDashed\":true.*\"dashSize\":0.20000000000000001.*\"gapSize\":0.10000000000000001.*\"dashScale\":1.5", html)
+        @test occursin(r"\"name\":\"export_dashed_line\".*\"lineDistances\":\[0.0,0.6403124237432849,1.3474192049298325\]", html)
+        @test occursin("attribute float aLineDistance", html)
+        @test occursin("o.lineDistanceBuf=buf(o.lineDistances||new Array(vertexCount).fill(0));", html)
+        @test occursin("uLineDashed", html)
+        @test occursin("if(mod(vLineDistance*max(uDashScale,0.0001),total)>uDashSize) discard;", html)
         @test occursin("const lineWidthRange=gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)||[1,1]", html)
         @test occursin("function webLineWidth(w)", html)
         @test occursin("if(o.mode===\"lines\"||o.mode===\"line_loop\"||o.mode===\"line_strip\") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);", html)
@@ -3080,6 +3143,7 @@ end
         @test occursin("aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity", html)
         @test occursin("clearcoatNormalScale:o.clearcoatNormalScale", html)
         @test occursin("linewidth:o.linewidth", html)
+        @test occursin("lineDashed:o.lineDashed,dashSize:o.dashSize,gapSize:o.gapSize,dashScale:o.dashScale", html)
         @test occursin("anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation", html)
         @test occursin("dispersion:o.dispersion", html)
         @test occursin("typeof o[prop]===\"boolean\"", html)

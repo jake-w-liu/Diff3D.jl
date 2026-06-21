@@ -74,6 +74,69 @@ end
 get_attribute(g::BufferGeometry, name::Symbol) = g.attributes[name]
 has_attribute(g::BufferGeometry, name::Symbol) = haskey(g.attributes, name)
 
+function _line_distance_write!(distances::Vector{Float64}, seen::Vector{Bool},
+                               vertex_index::Int, value::Float64)
+    if seen[vertex_index]
+        isapprox(distances[vertex_index], value; atol=1e-8, rtol=1e-8) ||
+            throw(ArgumentError("indexed dashed lines require one lineDistance per vertex; duplicate vertex $(vertex_index) needs conflicting distances"))
+    else
+        distances[vertex_index] = value
+        seen[vertex_index] = true
+    end
+    return nothing
+end
+
+"""
+    compute_line_distances!(geo; mode=:line_strip)
+
+Compute and attach the `:lineDistance` attribute used by dashed line rendering.
+Use `mode=:line_strip` for `LineObject`, `mode=:lines` for `LineSegments`, and
+`mode=:line_loop` for `LineLoop`. Returns `geo`.
+"""
+function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
+    mode in (:line_strip, :line_loop, :lines) ||
+        throw(ArgumentError("mode must be :line_strip, :line_loop, or :lines"))
+    length(geo.positions) == 3 * geo.n_vertices ||
+        throw(ArgumentError("geometry positions length must equal 3 * n_vertices"))
+
+    order = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    any(i -> i < 1 || i > geo.n_vertices, order) &&
+        throw(ArgumentError("geometry indices must be within 1:n_vertices"))
+
+    draw_distances = zeros(Float64, length(order))
+    if mode === :lines
+        iseven(length(order)) ||
+            throw(ArgumentError("LineSegments distance computation requires an even vertex count"))
+        i = 1
+        while i <= length(order)
+            draw_distances[i] = 0.0
+            draw_distances[i + 1] = distance(get_vertex(geo, order[i]),
+                                             get_vertex(geo, order[i + 1]))
+            i += 2
+        end
+    elseif !isempty(order)
+        total = 0.0
+        draw_distances[1] = 0.0
+        for i in 2:length(order)
+            total += distance(get_vertex(geo, order[i - 1]), get_vertex(geo, order[i]))
+            draw_distances[i] = total
+        end
+    end
+
+    if isempty(geo.indices)
+        set_attribute!(geo, :lineDistance, draw_distances, 1)
+        return geo
+    end
+
+    distances = zeros(Float64, geo.n_vertices)
+    seen = fill(false, geo.n_vertices)
+    for (idx, value) in zip(order, draw_distances)
+        _line_distance_write!(distances, seen, idx, value)
+    end
+    set_attribute!(geo, :lineDistance, distances, 1)
+    return geo
+end
+
 function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
     out = [get_vertex(g, vi) for vi in 1:g.n_vertices]
     for (ti, weight) in enumerate(influences)

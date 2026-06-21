@@ -452,6 +452,56 @@ function LineBasicMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0, opacity
     LineBasicMaterial(color, linewidth, opacity, depth_test, depth_write)
 end
 
+function _line_material_positive(name::Symbol, value)
+    x = Float64(value)
+    isfinite(x) && x > 0.0 ||
+        throw(ArgumentError("$(name) must be a finite positive value"))
+    return x
+end
+
+function _line_material_nonnegative(name::Symbol, value)
+    x = Float64(value)
+    isfinite(x) && x >= 0.0 ||
+        throw(ArgumentError("$(name) must be a finite non-negative value"))
+    return x
+end
+
+function _line_material_alias(primary, alias, default, primary_name::Symbol, alias_name::Symbol)
+    if primary !== nothing && alias !== nothing
+        throw(ArgumentError("pass only one of $(primary_name) or $(alias_name)"))
+    end
+    return primary !== nothing ? primary : alias !== nothing ? alias : default
+end
+
+# ========================== LineDashedMaterial ==========================
+
+struct LineDashedMaterial <: AbstractMaterial
+    color::Color3{Float64}
+    linewidth::Float64
+    scale::Float64
+    dash_size::Float64
+    gap_size::Float64
+    opacity::Float64
+    depth_test::Bool
+    depth_write::Bool
+end
+
+function LineDashedMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0,
+                            scale=1.0, dash_size=nothing, gap_size=nothing,
+                            dashSize=nothing, gapSize=nothing, opacity=1.0,
+                            depth_test=true, depth_write=true)
+    dash = _line_material_nonnegative(:dash_size,
+        _line_material_alias(dash_size, dashSize, 3.0, :dash_size, :dashSize))
+    gap = _line_material_nonnegative(:gap_size,
+        _line_material_alias(gap_size, gapSize, 1.0, :gap_size, :gapSize))
+    dash + gap > 0.0 ||
+        throw(ArgumentError("dash_size and gap_size cannot both be zero"))
+    LineDashedMaterial(convert(Color3{Float64}, color),
+                       _line_material_positive(:linewidth, linewidth),
+                       _line_material_positive(:scale, scale),
+                       dash, gap, Float64(opacity), depth_test, depth_write)
+end
+
 # ========================== PointsMaterial ==========================
 
 struct PointsMaterial <: AbstractMaterial

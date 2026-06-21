@@ -161,6 +161,7 @@ export
     get_vertex, get_normal, get_face, compute_face_normal,
     count_triangles, merge_geometries,
     set_attribute!, get_attribute, has_attribute,
+    compute_line_distances!,
     compute_bounding_box, compute_bounding_sphere,
     csg_union, csg_subtract, csg_intersect, csg_evaluate, transform_geometry,
 
@@ -170,7 +171,7 @@ export
     MeshStandardMaterial, MeshNormalMaterial,
     MeshPhysicalMaterial, MeshToonMaterial, MeshMatcapMaterial, MeshDepthMaterial,
     SpriteMaterial,
-    LineBasicMaterial, PointsMaterial, ShaderMaterial,
+    LineBasicMaterial, LineDashedMaterial, PointsMaterial, ShaderMaterial,
     material_opacity, material_transparent, is_transparent_material,
     material_depth_test, material_depth_write, material_alpha_test, material_wireframe,
 

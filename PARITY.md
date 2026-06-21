@@ -1056,9 +1056,9 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `webgl_lines_colors`, and `webgl_helpers` now have either direct standalone
-  pages or explicit multi-case showcase coverage tracked in the examples
-  registry.
+  `webgl_lines_colors`, `webgl_lines_dashed`, and `webgl_helpers` now have
+  either direct standalone pages or explicit multi-case showcase coverage
+  tracked in the examples registry.
 - Added partial `webgl_geometries` coverage through
   `examples/live_webgl_showcase.jl`, using the compact WebGL showcase cases for
   primitive geometry/material/orbit coverage. Exact upstream scene layout and
@@ -1212,6 +1212,11 @@ Parallel audits split the remaining work into five critical tracks:
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.
+- Added a standalone partial port for `webgl_lines_dashed` via
+  `examples/webgl_lines_dashed.jl`, using `LineDashedMaterial`,
+  `compute_line_distances!`, and browser fragment discards from exported
+  `lineDistance` attributes. Exact upstream Hilbert path dimensions, `Stats`,
+  and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_helpers` via
   `examples/webgl_helpers.jl`, covering Diff3D.jl axes, grid, polar grid, box,
   camera, plane, and light helpers in the browser exporter. Exact upstream
