@@ -101,6 +101,7 @@ replacement for three.js `WebGLRenderer`.
   WebGL state parity, full dynamic shadow-map parity, full LTC rect-area lighting,
   full three.js skeleton lifecycle and renderer-program parity beyond compact
   uniform/float bone-texture skinning plus attached/detached bind matrices,
+  ShadowMesh stencil-plane projection and runtime light-mode toggles,
   PMREM/prefiltered environment lighting, and most material
   shader variants.
 - glTF support parses common mesh and transform animation data, maps point,
