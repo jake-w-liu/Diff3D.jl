@@ -1333,6 +1333,18 @@ Parallel audits split the remaining work into five critical tracks:
   supported normal maps as bump-map proxies; upstream JPG assets, `PointLight`
   `.power`, `bumpMap`, GUI controls, Stats, live shadow toggle, and imperative
   `Date.now` animation remain documented deviations.
+- Added a standalone partial port for `webgl_shadowmap_pointlight` via
+  `examples/webgl_shadowmap_pointlight.jl`, preserving the upstream 45-degree
+  camera, 0x111122 ambient light at intensity 3, two colored intensity-200
+  distance-20 shadow-casting `PointLight`s, -0.005 shadow bias, alpha-tested
+  double-sided Phong shells with repeat 1x4.5 canvas alpha stripes, 30x30x30
+  back-sided Phong room, orbit target, and sine-driven two-light motion with
+  the upstream second-light +10000 phase. The local port clamps upstream
+  `shadow.radius=10` to the compact WebGL exporter maximum
+  `shadow_pcf_radius=4`, drives visual shell groups with matching explicit
+  keyframes instead of relying on animated `PointLight` children, and exports
+  sampled `AnimationClip` tracks over a `20pi`-second period instead of upstream `performance.now`,
+  `WebGLRenderer`, `OrbitControls`, and Stats runtime internals.
 - Added a standalone partial port for `webgl_lightprobe` via
   `examples/webgl_lightprobe.jl`, preserving the upstream camera, direction
   light intensity/position, white zero-roughness sphere, cubemap-backed
