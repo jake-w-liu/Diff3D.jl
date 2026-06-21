@@ -550,6 +550,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadow_contact.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadow_contact.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap"
+local_script = "examples/webgl_shadowmap.jl"
+status = "partial"
+prerequisites = ["DirectionalLight", "dynamic shadow maps", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"]
+known_deviations = [
+  "Uses the vendored Optimer bold typeface asset instead of upstream helvetiker_bold.typeface.json",
+  "Uses deterministic procedural horse and bird proxy groups instead of upstream GLB Horse, Flamingo, Stork, and Parrot assets with AnimationMixer clips",
+  "Exports deterministic sampled wrap and gait/wing AnimationClip tracks over a 60-second loop instead of upstream Timer delta motion, random starts, and reset randomness",
+  "Uses Diff3D.jl compact WebGL dynamic directional shadows instead of exact upstream 2048x1024 PCFShadowMap internals and the screen-space ShadowMapViewer HUD toggle"
+]
+verification = ["julia --project=. examples/webgl_shadowmap.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadowmap_vsm"
 upstream_url = "https://threejs.org/examples/#webgl_shadowmap_vsm"
 local_script = "examples/webgl_shadowmap_vsm.jl"

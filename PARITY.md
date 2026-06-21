@@ -1357,6 +1357,20 @@ Parallel audits split the remaining work into five critical tracks:
   `MeshDepthMaterial.onBeforeCompile`, and horizontal/vertical blur shader
   passes; lil-gui controls, Stats, and exact render-target state remain
   documented deviations.
+- Added a standalone partial port for `webgl_shadowmap` via
+  `examples/webgl_shadowmap.jl`, preserving the upstream 23-degree camera,
+  target, near/far planes, background/fog color, ambient light, intensity-3
+  directional light at `(0, 1500, 1000)`, `shadow.bias=0.0001`, 100x100
+  ground scaled to 10000x10000 at `FLOOR=-250`, two shadow-casting Phong
+  blocks, red beveled `THREE.JS` text, six horses, and three birds with
+  upstream-matching speeds and heights. The local port uses the vendored
+  Optimer bold typeface instead of upstream Helvetiker and deterministic
+  procedural horse/bird proxy groups instead of upstream GLB assets and
+  `AnimationMixer` clips; motion is exported as sampled wrap, leg, and wing
+  `AnimationClip` tracks over a 60-second loop. Exact 2048x1024
+  `PCFShadowMap` internals, random spawn/reset phases, `ShadowMapViewer`
+  keyboard HUD toggling, Stats, and `OrbitControls` runtime details remain
+  documented deviations.
 - Added a standalone partial port for `webgl_shadowmap_vsm` via
   `examples/webgl_shadowmap_vsm.jl`, preserving the upstream camera, fog and
   background color, ambient light, red intensity-400 `SpotLight`, blue
