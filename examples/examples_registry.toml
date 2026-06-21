@@ -714,6 +714,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_drag.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_drag.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_controls_fly"
+upstream_url = "https://threejs.org/examples/#misc_controls_fly"
+local_script = "examples/misc_controls_fly.jl"
+status = "partial"
+prerequisites = ["FlyControls", "SphereGeometry", "MeshPhongMaterial", "MeshLambertMaterial.transparent", "PointsObject", "FogExp2", "DirectionalLight", "browser points export"]
+known_deviations = [
+  "Uses procedural planet, cloud, moon, and star materials instead of upstream texture/normal/specular planet assets",
+  "Serializes a programmed FlyControls camera snapshot instead of live keyboard, mouse, roll, and resize handling",
+  "Uses WebGL export and quaternion animation clips instead of upstream WebGPU renderer, RenderPipeline, film postprocessing, Timer, and Stats",
+  "Keeps the upstream Earth/moon/star spatial structure but uses deterministic star placement instead of Math.random"
+]
+verification = ["julia --project=. examples/misc_controls_fly.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_fly.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"

@@ -1057,7 +1057,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `misc_boxselection`, `misc_controls_drag`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
+  `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
@@ -1252,6 +1252,12 @@ Parallel audits split the remaining work into five critical tracks:
   highlights, and a programmatic `DragControls` transform-group move. Upstream
   Shift+Click raycaster grouping, live pointer/touch events, random placement,
   and PCF shadow-map details remain documented deviations.
+- Added a standalone partial port for `misc_controls_fly` via
+  `examples/misc_controls_fly.jl`, using a procedural Earth/cloud/moon/star
+  scene, `FogExp2`, directional lighting, repeated rotation animation data, and
+  a programmed `FlyControls` camera snapshot. Upstream texture/normal/specular
+  planet assets, WebGPU `RenderPipeline`, film postprocessing, live keyboard
+  controls, `Timer`, and `Stats` remain documented deviations.
 - Added a standalone partial port for `misc_controls_orbit` via
   `examples/misc_controls_orbit.jl`, using deterministic `InstancedMesh`
   cone placement, `FogExp2`, Phong lighting, and local `OrbitControls`
