@@ -522,6 +522,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lightprobe.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lightprobe.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lightprobe_cubecamera"
+upstream_url = "https://threejs.org/examples/#webgl_lightprobe_cubecamera"
+local_script = "examples/webgl_lightprobe_cubecamera.jl"
+status = "partial"
+prerequisites = ["CubeCamera", "LightProbe", "CubeTexture", "MeshStandardMaterial", "browser light-probe export", "browser texture-map export"]
+known_deviations = [
+  "Uses a deterministic procedural Pisa-style environment sampled through Diff3D.jl CubeCamera face cameras instead of upstream CubeTextureLoader plus WebGLCubeRenderTarget",
+  "Derives Diff3D.jl first-order SH probe coefficients from the captured CubeTexture instead of using three.js LightProbeGenerator.fromCubeRenderTarget",
+  "Adds a small probe-response sphere and six textured backdrop planes so the compact WebGL export has visible captured environment content",
+  "Uses compact Diff3D.jl WebGL export rather than upstream WebGLRenderer render-target capture, LightProbeHelper internals, and OrbitControls change-only rendering"
+]
+verification = ["julia --project=. examples/webgl_lightprobe_cubecamera.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lightprobe_cubecamera.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_loader_stl"
 upstream_url = "https://threejs.org/examples/#webgl_loader_stl"
 local_script = "examples/webgl_loader_stl.jl"

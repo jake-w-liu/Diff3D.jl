@@ -1060,7 +1060,7 @@ Parallel audits split the remaining work into five critical tracks:
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lights_hemisphere`, `webgl_lights_spotlight`, `webgl_lights_spotlights`, `webgl_lights_rectarealight`, `webgl_lines_colors`,
-  `webgl_lightprobe`, `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  `webgl_lightprobe`, `webgl_lightprobe_cubecamera`, `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added partial `webgl_geometries` coverage through
@@ -1333,6 +1333,15 @@ Parallel audits split the remaining work into five critical tracks:
   `LightProbeGenerator`'s full basis. Upstream `LightProbeHelper`, `GUI`,
   `CubeTextureLoader`, and change-only `OrbitControls` rendering remain
   documented deviations.
+- Added a standalone partial port for `webgl_lightprobe_cubecamera` via
+  `examples/webgl_lightprobe_cubecamera.jl`, preserving the upstream camera,
+  `CubeCamera` near/far settings, cube-camera face order, `LightProbe` fill,
+  and size-5 helper visualization. The local port samples a deterministic
+  Pisa-style environment through Diff3D.jl's six `CubeCamera` face cameras and
+  derives first-order SH coefficients from that captured `CubeTexture`; upstream
+  `WebGLCubeRenderTarget`, `LightProbeGenerator.fromCubeRenderTarget`,
+  `CubeTextureLoader`, `LightProbeHelper`, and change-only `OrbitControls`
+  runtime capture remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live

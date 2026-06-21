@@ -258,6 +258,7 @@ end
             "threejs_webgl_lights_spotlights",
             "threejs_webgl_lights_rectarealight",
             "threejs_webgl_lightprobe",
+            "threejs_webgl_lightprobe_cubecamera",
             "threejs_webgl_loader_stl",
             "threejs_webgl_loader_obj",
             "threejs_webgl_loader_ply",
@@ -801,6 +802,22 @@ end
                     "WebGLExportCase(\"lightprobe\"",
                 ],
                 prerequisites=["LightProbe", "CubeTexture", "MeshStandardMaterial.envmap", "LineSegments", "browser light-probe export"],
+            ),
+            "threejs_webgl_lightprobe_cubecamera" => (
+                source=[
+                    "const CUBE_CAMERA_CAPTURE_SIZE = 32",
+                    "function cubecamera_face_direction(camera::PerspectiveCamera",
+                    "function cubecamera_capture_texture(camera::CubeCamera",
+                    "throw(ArgumentError(\"CubeCamera capture requires exactly six face cameras\"))",
+                    "function cubecamera_lightprobe_coefficients(cube_camera::CubeCamera",
+                    "cube_camera = CubeCamera(near=1.0, far=1000.0",
+                    "LightProbe(coeffs=cubecamera_lightprobe_coefficients(cube_camera, env_map)",
+                    "add_captured_backdrop!(scene, env_map)",
+                    "MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "LineSegments(cubecamera_helper_geometry(radius=CUBE_CAMERA_HELPER_RADIUS)",
+                    "WebGLExportCase(\"lightprobe-cubecamera\"",
+                ],
+                prerequisites=["CubeCamera", "LightProbe", "CubeTexture", "MeshStandardMaterial", "LineSegments", "browser light-probe export"],
             ),
             "threejs_webgl_materials_cubemap_mipmaps" => (
                 source=[
