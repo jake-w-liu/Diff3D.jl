@@ -245,6 +245,7 @@ end
             "threejs_webgl_loader_ply",
             "threejs_webgl_loader_gltf",
             "threejs_webgl_loader_xyz",
+            "threejs_webgl_loader_svg",
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
@@ -560,6 +561,19 @@ end
                     "QuaternionKeyframeTrack(group, :rotation",
                 ],
                 prerequisites=["load_xyz", "XYZRGB point colors"],
+            ),
+            "threejs_webgl_loader_svg" => (
+                source=[
+                    "function svg_loader_asset()",
+                    "<clipPath id=\"diagonal-clip\">",
+                    "<use href=\"#bolt-mark\"",
+                    "document = SVGLoader(path; curve_segments=6, circle_segments=24)",
+                    "fill_meshes = svg_meshes(document)",
+                    "stroke_meshes = svg_stroke_meshes(document)",
+                    "name=\"svg_loader_stroke_$i\"",
+                    "WebGLExportCase(\"loader-svg\"",
+                ],
+                prerequisites=["SVGLoader", "svg_meshes", "svg_stroke_meshes", "SVG clipPath", "SVG use references"],
             ),
             "threejs_webgl_buffergeometry" => (
                 source=[

@@ -1278,6 +1278,14 @@ Parallel audits split the remaining work into five critical tracks:
   XYZ/XYZRGB layouts instead of silently ignoring or accepting those cases like
   the current three.js parser. The exact upstream `helix_201.xyz` asset,
   `Timer` loop, and WebGLRenderer internals remain documented deviations.
+- Added a standalone partial port for `webgl_loader_svg` via
+  `examples/webgl_loader_svg.jl`, generating a deterministic styled SVG with
+  `<defs>`, `<use>`, `clipPath`, rounded rectangles, filled primitives, and
+  stroked paths, loading it through Diff3D.jl `SVGLoader`, and exporting
+  `svg_meshes` plus `svg_stroke_meshes` to the compact browser renderer.
+  The upstream selectable SVG asset catalogue, live GUI toggles, render-order
+  controls, change-only OrbitControls render loop, and `WebGLRenderer` internals
+  remain documented deviations.
 
 ## Next implementation targets
 

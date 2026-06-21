@@ -348,6 +348,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_loader_xyz.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_loader_xyz.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_loader_svg"
+upstream_url = "https://threejs.org/examples/#webgl_loader_svg"
+local_script = "examples/webgl_loader_svg.jl"
+status = "partial"
+prerequisites = ["SVGLoader", "svg_meshes", "svg_stroke_meshes", "SVG stylesheet cascade", "SVG clipPath", "SVG use references", "browser mesh export"]
+known_deviations = [
+  "Uses a deterministic generated SVG asset instead of the upstream tiger.svg and selectable SVG asset catalogue",
+  "Exports fill and stroke-outline meshes from Diff3D.jl SVGLoader instead of upstream live GUI toggles, renderOrder updates, OrbitControls change-only rendering, and three.js WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_loader_svg.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_loader_svg.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_buffergeometry"
 upstream_url = "https://threejs.org/examples/#webgl_buffergeometry"
 local_script = "examples/webgl_buffergeometry.jl"
