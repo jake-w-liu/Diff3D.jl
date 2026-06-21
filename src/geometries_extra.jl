@@ -307,6 +307,320 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     BufferGeometry(positions, normals, uvs, indices, n*rs1, length(indices) ÷ 3)
 end
 
+# ========================== NURBS / Parametric Geometry ==========================
+
+struct NURBSCurve
+    degree::Int
+    knots::Vector{Float64}
+    control_points::Vector{Vec4{Float64}}
+end
+
+struct NURBSSurface
+    degree_u::Int
+    degree_v::Int
+    knots_u::Vector{Float64}
+    knots_v::Vector{Float64}
+    control_points::Vector{Vector{Vec4{Float64}}}
+end
+
+struct NURBSVolume
+    degree_u::Int
+    degree_v::Int
+    degree_w::Int
+    knots_u::Vector{Float64}
+    knots_v::Vector{Float64}
+    knots_w::Vector{Float64}
+    control_points::Vector{Vector{Vector{Vec4{Float64}}}}
+end
+
+function _nurbs_degree(degree::Integer)
+    degree >= 1 || throw(ArgumentError("NURBS degree must be positive"))
+    degree <= typemax(Int) || throw(ArgumentError("NURBS degree is too large"))
+    return Int(degree)
+end
+
+function _nurbs_knots(knots, degree::Int, npoints::Int, label::String)
+    npoints >= degree + 1 ||
+        throw(ArgumentError("$label needs at least degree + 1 control points"))
+    length(knots) == npoints + degree + 1 ||
+        throw(ArgumentError("$label knot count must equal control point count + degree + 1"))
+    out = Float64[Float64(k) for k in knots]
+    all(isfinite, out) || throw(ArgumentError("$label knots must be finite"))
+    for i in 2:length(out)
+        out[i] >= out[i - 1] ||
+            throw(ArgumentError("$label knots must be nondecreasing"))
+    end
+    out[degree + 1] < out[npoints + 1] ||
+        throw(ArgumentError("$label knot domain has zero length"))
+    return out
+end
+
+function _nurbs_control_point(point::Vec4)
+    x = Float64(point.x)
+    y = Float64(point.y)
+    z = Float64(point.z)
+    w = Float64(point.w)
+    isfinite(x) && isfinite(y) && isfinite(z) && isfinite(w) ||
+        throw(ArgumentError("NURBS control points must be finite"))
+    w > 0.0 || throw(ArgumentError("NURBS control point weights must be positive"))
+    return Vec4(x, y, z, w)
+end
+
+function NURBSCurve(degree::Integer, knots, control_points::AbstractVector{<:Vec4})
+    p = _nurbs_degree(degree)
+    cps = [_nurbs_control_point(cp) for cp in control_points]
+    return NURBSCurve(p, _nurbs_knots(knots, p, length(cps), "NURBSCurve"), cps)
+end
+
+function _nurbs_surface_points(control_points)
+    rows = length(control_points)
+    rows > 0 || throw(ArgumentError("NURBSSurface needs control points"))
+    cols = length(control_points[1])
+    cols > 0 || throw(ArgumentError("NURBSSurface needs control points"))
+    out = Vector{Vec4{Float64}}[]
+    for row in control_points
+        length(row) == cols ||
+            throw(ArgumentError("NURBSSurface control point rows must be rectangular"))
+        push!(out, [_nurbs_control_point(cp) for cp in row])
+    end
+    return out
+end
+
+function NURBSSurface(degree_u::Integer, degree_v::Integer,
+                      knots_u, knots_v, control_points)
+    p = _nurbs_degree(degree_u)
+    q = _nurbs_degree(degree_v)
+    cps = _nurbs_surface_points(control_points)
+    ku = _nurbs_knots(knots_u, p, length(cps), "NURBSSurface u")
+    kv = _nurbs_knots(knots_v, q, length(cps[1]), "NURBSSurface v")
+    return NURBSSurface(p, q, ku, kv, cps)
+end
+
+function _nurbs_volume_points(control_points)
+    nu = length(control_points)
+    nu > 0 || throw(ArgumentError("NURBSVolume needs control points"))
+    nv = length(control_points[1])
+    nv > 0 || throw(ArgumentError("NURBSVolume needs control points"))
+    nw = length(control_points[1][1])
+    nw > 0 || throw(ArgumentError("NURBSVolume needs control points"))
+    out = Vector{Vector{Vec4{Float64}}}[]
+    for slab in control_points
+        length(slab) == nv ||
+            throw(ArgumentError("NURBSVolume control point slabs must be rectangular"))
+        out_slab = Vector{Vec4{Float64}}[]
+        for row in slab
+            length(row) == nw ||
+                throw(ArgumentError("NURBSVolume control point rows must be rectangular"))
+            push!(out_slab, [_nurbs_control_point(cp) for cp in row])
+        end
+        push!(out, out_slab)
+    end
+    return out
+end
+
+function NURBSVolume(degree_u::Integer, degree_v::Integer, degree_w::Integer,
+                     knots_u, knots_v, knots_w, control_points)
+    p = _nurbs_degree(degree_u)
+    q = _nurbs_degree(degree_v)
+    r = _nurbs_degree(degree_w)
+    cps = _nurbs_volume_points(control_points)
+    ku = _nurbs_knots(knots_u, p, length(cps), "NURBSVolume u")
+    kv = _nurbs_knots(knots_v, q, length(cps[1]), "NURBSVolume v")
+    kw = _nurbs_knots(knots_w, r, length(cps[1][1]), "NURBSVolume w")
+    return NURBSVolume(p, q, r, ku, kv, kw, cps)
+end
+
+function _nurbs_span(degree::Int, knots::Vector{Float64}, npoints::Int, u::Float64)
+    if u >= knots[npoints + 1]
+        return npoints - 1
+    elseif u <= knots[degree + 1]
+        return degree
+    end
+    low = degree
+    high = npoints
+    mid = (low + high) ÷ 2
+    while u < knots[mid + 1] || u >= knots[mid + 2]
+        if u < knots[mid + 1]
+            high = mid
+        else
+            low = mid
+        end
+        mid = (low + high) ÷ 2
+    end
+    return mid
+end
+
+function _nurbs_basis(span::Int, u::Float64, degree::Int, knots::Vector{Float64})
+    basis = zeros(Float64, degree + 1)
+    left = zeros(Float64, degree + 1)
+    right = zeros(Float64, degree + 1)
+    basis[1] = 1.0
+    for j in 1:degree
+        left[j + 1] = u - knots[span - j + 2]
+        right[j + 1] = knots[span + j + 1] - u
+        saved = 0.0
+        for r in 0:(j - 1)
+            denom = right[r + 2] + left[j - r + 1]
+            temp = abs(denom) > eps(Float64) ? basis[r + 1] / denom : 0.0
+            basis[r + 1] = saved + right[r + 2] * temp
+            saved = left[j - r + 1] * temp
+        end
+        basis[j + 1] = saved
+    end
+    return basis
+end
+
+function _nurbs_parameter(t, knots::Vector{Float64}, degree::Int, npoints::Int)
+    tf = clamp(Float64(t), 0.0, 1.0)
+    u0 = knots[degree + 1]
+    u1 = knots[npoints + 1]
+    return u0 + tf * (u1 - u0)
+end
+
+function _nurbs_finish_point(x::Float64, y::Float64, z::Float64, w::Float64)
+    abs(w) > eps(Float64) ||
+        throw(ArgumentError("NURBS evaluation produced zero homogeneous weight"))
+    return Vec3(x / w, y / w, z / w)
+end
+
+function nurbs_point(curve::NURBSCurve, t::Real)
+    npoints = length(curve.control_points)
+    u = _nurbs_parameter(t, curve.knots, curve.degree, npoints)
+    span = _nurbs_span(curve.degree, curve.knots, npoints, u)
+    basis = _nurbs_basis(span, u, curve.degree, curve.knots)
+    x = 0.0; y = 0.0; z = 0.0; w = 0.0
+    for j in 0:curve.degree
+        cp = curve.control_points[span - curve.degree + j + 1]
+        coeff = basis[j + 1] * cp.w
+        x += cp.x * coeff
+        y += cp.y * coeff
+        z += cp.z * coeff
+        w += coeff
+    end
+    return _nurbs_finish_point(x, y, z, w)
+end
+
+function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
+    nu = length(surface.control_points)
+    nv = length(surface.control_points[1])
+    uu = _nurbs_parameter(u, surface.knots_u, surface.degree_u, nu)
+    vv = _nurbs_parameter(v, surface.knots_v, surface.degree_v, nv)
+    span_u = _nurbs_span(surface.degree_u, surface.knots_u, nu, uu)
+    span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
+    basis_u = _nurbs_basis(span_u, uu, surface.degree_u, surface.knots_u)
+    basis_v = _nurbs_basis(span_v, vv, surface.degree_v, surface.knots_v)
+    x = 0.0; y = 0.0; z = 0.0; w = 0.0
+    for i in 0:surface.degree_u, j in 0:surface.degree_v
+        cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
+        coeff = basis_u[i + 1] * basis_v[j + 1] * cp.w
+        x += cp.x * coeff
+        y += cp.y * coeff
+        z += cp.z * coeff
+        w += coeff
+    end
+    return _nurbs_finish_point(x, y, z, w)
+end
+
+function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
+    nu = length(volume.control_points)
+    nv = length(volume.control_points[1])
+    nw = length(volume.control_points[1][1])
+    uu = _nurbs_parameter(u, volume.knots_u, volume.degree_u, nu)
+    vv = _nurbs_parameter(v, volume.knots_v, volume.degree_v, nv)
+    ww = _nurbs_parameter(wparam, volume.knots_w, volume.degree_w, nw)
+    span_u = _nurbs_span(volume.degree_u, volume.knots_u, nu, uu)
+    span_v = _nurbs_span(volume.degree_v, volume.knots_v, nv, vv)
+    span_w = _nurbs_span(volume.degree_w, volume.knots_w, nw, ww)
+    basis_u = _nurbs_basis(span_u, uu, volume.degree_u, volume.knots_u)
+    basis_v = _nurbs_basis(span_v, vv, volume.degree_v, volume.knots_v)
+    basis_w = _nurbs_basis(span_w, ww, volume.degree_w, volume.knots_w)
+    x = 0.0; y = 0.0; z = 0.0; weight = 0.0
+    for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
+        cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
+        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] * cp.w
+        x += cp.x * coeff
+        y += cp.y * coeff
+        z += cp.z * coeff
+        weight += coeff
+    end
+    return _nurbs_finish_point(x, y, z, weight)
+end
+
+function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
+    segs = Int(segments)
+    segs >= 1 || throw(ArgumentError("NURBSCurveGeometry segments must be positive"))
+    positions = Float64[]
+    for i in 0:segs
+        p = nurbs_point(curve, i / segs)
+        push!(positions, p.x, p.y, p.z)
+    end
+    return BufferGeometry(positions, Float64[], Float64[], Int[], segs + 1, 0)
+end
+
+function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, nvertices::Int)
+    normals = zeros(Float64, 3 * nvertices)
+    for fi in 1:(length(indices) ÷ 3)
+        i1 = indices[3fi - 2]
+        i2 = indices[3fi - 1]
+        i3 = indices[3fi]
+        p1 = Vec3(positions[3i1 - 2], positions[3i1 - 1], positions[3i1])
+        p2 = Vec3(positions[3i2 - 2], positions[3i2 - 1], positions[3i2])
+        p3 = Vec3(positions[3i3 - 2], positions[3i3 - 1], positions[3i3])
+        fn = cross(p2 - p1, p3 - p1)
+        for idx in (i1, i2, i3)
+            base = 3idx - 2
+            normals[base] += fn.x
+            normals[base + 1] += fn.y
+            normals[base + 2] += fn.z
+        end
+    end
+    for vi in 1:nvertices
+        base = 3vi - 2
+        n = normalize(Vec3(normals[base], normals[base + 1], normals[base + 2]))
+        normals[base] = n.x
+        normals[base + 1] = n.y
+        normals[base + 2] = n.z
+    end
+    return normals
+end
+
+function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20)
+    us = Int(slices)
+    vs = Int(stacks)
+    us >= 1 && vs >= 1 ||
+        throw(ArgumentError("ParametricGeometry slices and stacks must be positive"))
+    positions = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    for j in 0:vs, i in 0:us
+        u = i / us
+        v = j / vs
+        p = fn(u, v)
+        p isa Vec3 || throw(ArgumentError("ParametricGeometry callback must return Vec3"))
+        all(isfinite, (Float64(p.x), Float64(p.y), Float64(p.z))) ||
+            throw(ArgumentError("ParametricGeometry callback returned a non-finite point"))
+        push!(positions, Float64(p.x), Float64(p.y), Float64(p.z))
+        push!(uvs, u, 1.0 - v)
+    end
+    row = us + 1
+    for j in 0:(vs - 1), i in 0:(us - 1)
+        a = j * row + i + 1
+        b = a + 1
+        c = a + row
+        d = c + 1
+        push!(indices, a, b, d, a, d, c)
+    end
+    nvertices = row * (vs + 1)
+    normals = _parametric_normals(positions, indices, nvertices)
+    return BufferGeometry(positions, normals, uvs, indices, nvertices,
+                          length(indices) ÷ 3)
+end
+
+function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
+                              stacks::Integer=20)
+    ParametricGeometry((u, v) -> nurbs_point(surface, u, v), slices, stacks)
+end
+
 # ========================== Shape / Extrude ==========================
 # A Shape is a simple polygon in the xy-plane (Vector{Vec2}). ShapeGeometry
 # fills it; ExtrudeGeometry sweeps it to depth along +z, or along a sampled 3D

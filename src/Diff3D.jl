@@ -150,6 +150,8 @@ export
     CircleGeometry, IcosahedronGeometry,
     PolyhedronGeometry, OctahedronGeometry, TetrahedronGeometry, DodecahedronGeometry,
     ConvexGeometry, LatheGeometry, TubeGeometry, ShapeGeometry, ExtrudeGeometry, TextGeometry,
+    NURBSCurve, NURBSSurface, NURBSVolume, nurbs_point,
+    NURBSCurveGeometry, NURBSSurfaceGeometry, ParametricGeometry,
     CapsuleGeometry,
     wireframe_geometry, edges_geometry,
     get_vertex, get_normal, get_face, compute_face_normal,

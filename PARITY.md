@@ -1142,6 +1142,14 @@ Parallel audits split the remaining work into five critical tracks:
   `ConeGeometry` helper, and explicit camera export. Upstream browser
   pointermove raycasting, `ImprovedNoise`, `Stats`, `OrbitControls` runtime
   details, and `WebGLRenderer` internals remain documented deviations.
+- Added bounded `NURBSCurve`, `NURBSSurface`, `NURBSVolume`, `nurbs_point`,
+  `NURBSCurveGeometry`, `NURBSSurfaceGeometry`, and `ParametricGeometry`
+  coverage plus a standalone partial port for `webgl_geometry_nurbs` via
+  `examples/webgl_geometry_nurbs.jl`. The port renders a deterministic NURBS
+  curve/control polygon, a NURBS surface, NURBS volume slices, generated UV-grid
+  texture mapping, and browser animation playback. Upstream random curve
+  points, texture asset, pointer-drag target rotation, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_geometry_minecraft` via
   `examples/webgl_geometry_minecraft.jl`, using deterministic voxel terrain
   `BufferGeometry`, a generated nearest-filter atlas texture,

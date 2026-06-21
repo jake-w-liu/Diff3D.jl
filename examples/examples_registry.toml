@@ -161,6 +161,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_terrain_raycast.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain_raycast.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_nurbs"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_nurbs"
+local_script = "examples/webgl_geometry_nurbs.jl"
+status = "partial"
+prerequisites = ["NURBSCurve", "NURBSSurface", "NURBSVolume", "nurbs_point", "NURBSCurveGeometry", "NURBSSurfaceGeometry", "ParametricGeometry", "LineObject", "MeshLambertMaterial.map", "browser mesh and line export", "browser animation playback"]
+known_deviations = [
+  "Uses deterministic Julia NURBS control points and a generated UV-grid texture instead of upstream random curve points and textures/uv_grid_opengl.jpg",
+  "Exports fixed curve/surface/volume-slice cases with keyframe rotation instead of upstream pointer-drag target rotation and Stats",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_geometry_nurbs.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_nurbs.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_minecraft"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_minecraft"
 local_script = "examples/webgl_geometry_minecraft.jl"

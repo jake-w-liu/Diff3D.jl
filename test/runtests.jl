@@ -230,6 +230,7 @@ end
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
             "threejs_webgl_geometry_terrain_raycast",
+            "threejs_webgl_geometry_nurbs",
             "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
@@ -444,6 +445,21 @@ end
                     "WebGLExportCase(\"geometry-terrain-raycast\"",
                 ],
                 prerequisites=["BufferGeometry heightfields", "CanvasTexture", "Raycaster", "set_from_camera!", "MeshNormalMaterial"],
+            ),
+            "threejs_webgl_geometry_nurbs" => (
+                source=[
+                    "function example_curve()",
+                    "return NURBSCurve(degree, nurbs_example_knots(degree, count), control_points)",
+                    "LineObject(NURBSCurveGeometry(curve; segments=200)",
+                    "NURBSSurfaceGeometry(example_surface(); slices=24, stacks=24)",
+                    "return NURBSVolume(2, 3, 1",
+                    "ParametricGeometry(fn, 18, 18)",
+                    "nurbs_point(volume, u, v, 0.5)",
+                    "MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"geometry-nurbs\"",
+                ],
+                prerequisites=["NURBSCurve", "NURBSSurface", "NURBSVolume", "ParametricGeometry", "browser animation playback"],
             ),
             "threejs_webgl_geometry_minecraft" => (
                 source=[
@@ -4310,6 +4326,55 @@ end
             v = get_vertex(tub, vi)
             @test sqrt(v.x^2 + v.y^2) ≈ 0.5 atol=1e-9     # distance from the z-axis
         end
+    end
+
+    @testset "NURBS and ParametricGeometry" begin
+        line_curve = NURBSCurve(1, [0.0, 0.0, 1.0, 1.0],
+                                [Vec4(0.0, 0.0, 0.0, 1.0),
+                                 Vec4(2.0, 0.0, 0.0, 1.0)])
+        @test nurbs_point(line_curve, 0.25) == Vec3(0.5, 0.0, 0.0)
+        @test nurbs_point(line_curve, -1.0) == Vec3(0.0, 0.0, 0.0)
+        @test nurbs_point(line_curve, 2.0) == Vec3(2.0, 0.0, 0.0)
+        curve_geo = NURBSCurveGeometry(line_curve; segments=4)
+        @test curve_geo.n_vertices == 5
+        @test curve_geo.n_faces == 0
+        @test get_vertex(curve_geo, 3) == Vec3(1.0, 0.0, 0.0)
+
+        surface = NURBSSurface(1, 1, [0.0, 0.0, 1.0, 1.0],
+                               [0.0, 0.0, 1.0, 1.0],
+                               [[Vec4(0.0, 0.0, 0.0, 1.0),
+                                 Vec4(0.0, 1.0, 0.0, 1.0)],
+                                [Vec4(1.0, 0.0, 0.0, 1.0),
+                                 Vec4(1.0, 1.0, 0.0, 1.0)]])
+        @test nurbs_point(surface, 0.25, 0.75) == Vec3(0.25, 0.75, 0.0)
+        surf_geo = NURBSSurfaceGeometry(surface; slices=4, stacks=2)
+        @test surf_geo.n_vertices == 15
+        @test surf_geo.n_faces == 16
+        @test length(surf_geo.normals) == 45
+
+        volume = NURBSVolume(1, 1, 1, [0.0, 0.0, 1.0, 1.0],
+                             [0.0, 0.0, 1.0, 1.0],
+                             [0.0, 0.0, 1.0, 1.0],
+                             [[[Vec4(0.0, 0.0, 0.0, 1.0),
+                                Vec4(0.0, 0.0, 1.0, 1.0)],
+                               [Vec4(0.0, 1.0, 0.0, 1.0),
+                                Vec4(0.0, 1.0, 1.0, 1.0)]],
+                              [[Vec4(1.0, 0.0, 0.0, 1.0),
+                                Vec4(1.0, 0.0, 1.0, 1.0)],
+                               [Vec4(1.0, 1.0, 0.0, 1.0),
+                                Vec4(1.0, 1.0, 1.0, 1.0)]]])
+        @test nurbs_point(volume, 0.25, 0.5, 0.75) == Vec3(0.25, 0.5, 0.75)
+
+        param = ParametricGeometry((u, v) -> Vec3(u, v, u + v), 3, 2)
+        @test param.n_vertices == 12
+        @test param.n_faces == 12
+        @test length(param.uvs) == 24
+        @test_throws ArgumentError NURBSCurve(2, [0.0, 0.0, 1.0, 1.0],
+                                             [Vec4(0.0, 0.0, 0.0, 1.0)])
+        @test_throws ArgumentError NURBSCurve(1, [0.0, 1.0, 0.0, 1.0],
+                                             [Vec4(0.0, 0.0, 0.0, 1.0),
+                                              Vec4(1.0, 0.0, 0.0, 1.0)])
+        @test_throws ArgumentError ParametricGeometry((u, v) -> Vec3(u, v, Inf), 1, 1)
     end
 
     @testset "Shape + Extrude" begin
