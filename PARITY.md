@@ -862,11 +862,14 @@ Parallel audits split the remaining work into five critical tracks:
   sources now multiply clipped path opacity by their computed luminance or alpha
   intensity for simple vector masks, and closed filled targets split across
   overlapping vector-mask regions using source-over mask intensity composition.
+  Open path centerlines used by `svg_strokes` and `svg_stroke_meshes` now split
+  at vector mask edges and apply the same source-over mask intensity per
+  visible segment.
   Full SVG clipping/masking semantics
   (complex multi-shape clip unions beyond simple vector loop unions, complete
   CSS basic-shape grammar for browser CSS layout boxes, self-intersecting clip
-  paths, open-path/stroke mask intensity compositing, raster/gradient masks) and
-  DOM-level SVG parsing remain open.
+  paths, stroke-outline mask coverage, raster/gradient masks) and DOM-level SVG
+  parsing remain open.
 - Done: add `equirectangular_to_cubemap` so loaded HDR/RGBE equirectangular
   textures can feed existing `CubeTexture` environment-map shading and browser
   export paths, with optional generated mip chains for roughness-aware sampling.

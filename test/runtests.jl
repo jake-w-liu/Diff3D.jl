@@ -6197,6 +6197,47 @@ end
               [0.5, 0.75, 1.0, 0.5]
         rm(composited_mask_path)
 
+        open_mask_path = tempname() * ".svg"
+        write(open_mask_path, """
+        <svg>
+          <defs>
+            <mask id="line-overlap">
+              <rect x="0" y="0" width="3" height="4"
+                    fill="white" fill-opacity=".5"/>
+              <rect x="1" y="0" width="3" height="4"
+                    fill="white" fill-opacity=".5"/>
+            </mask>
+            <mask id="line-dark-over">
+              <rect x="5" y="0" width="4" height="4" fill="white"/>
+              <rect x="7" y="0" width="2" height="4"
+                    fill="black" opacity=".5"/>
+            </mask>
+          </defs>
+          <polyline points="0,2 4,2" fill="none" stroke="#000"
+                    mask="url(#line-overlap)"/>
+          <polyline points="5,2 9,2" fill="none" stroke="#000"
+                    mask="url(#line-dark-over)"/>
+        </svg>
+        """)
+        open_mask_svg = load_svg(open_mask_path)
+        open_mask_strokes = svg_strokes(open_mask_svg)
+        @test length(open_mask_svg.paths) == 5
+        @test [p.style.opacity for p in open_mask_svg.paths] ≈
+              [0.5, 0.75, 0.5, 1.0, 0.5]
+        @test [stroke.material.opacity for stroke in open_mask_strokes] ≈
+              [0.5, 0.75, 0.5, 1.0, 0.5]
+        @test open_mask_strokes[1].geometry.positions == [0.0, 2.0, 0.0,
+                                                          1.0, 2.0, 0.0]
+        @test open_mask_strokes[2].geometry.positions == [1.0, 2.0, 0.0,
+                                                          3.0, 2.0, 0.0]
+        @test open_mask_strokes[3].geometry.positions == [3.0, 2.0, 0.0,
+                                                          4.0, 2.0, 0.0]
+        @test open_mask_strokes[4].geometry.positions == [5.0, 2.0, 0.0,
+                                                          7.0, 2.0, 0.0]
+        @test open_mask_strokes[5].geometry.positions == [7.0, 2.0, 0.0,
+                                                          9.0, 2.0, 0.0]
+        rm(open_mask_path)
+
         bad_xywh_clip_path = tempname() * ".svg"
         write(bad_xywh_clip_path,
               """<svg><rect width="1" height="1" clip-path="xywh(0 0 -1 1)"/></svg>""")

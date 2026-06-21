@@ -4804,20 +4804,102 @@ function _svg_mask_closed_path_to_entries(path::SVGPath,
     return fragments
 end
 
+function _svg_push_segment_mask_breaks!(breaks::Vector{Float64},
+                                        a::Vec2{Float64}, b::Vec2{Float64},
+                                        loop::Vector{Vec2{Float64}})
+    rx = b.x - a.x
+    ry = b.y - a.y
+    len2 = rx * rx + ry * ry
+    len2 > 1e-24 || return breaks
+    for (c, d) in _svg_loop_edges(Vector{Vec2{Float64}}[loop])
+        sx = d.x - c.x
+        sy = d.y - c.y
+        qx = c.x - a.x
+        qy = c.y - a.y
+        denom = rx * sy - ry * sx
+        if abs(denom) <= 1e-12
+            abs(qx * ry - qy * rx) <= 1e-12 || continue
+            t0 = ((c.x - a.x) * rx + (c.y - a.y) * ry) / len2
+            t1 = ((d.x - a.x) * rx + (d.y - a.y) * ry) / len2
+            lo = max(0.0, min(t0, t1))
+            hi = min(1.0, max(t0, t1))
+            hi >= lo - 1e-12 || continue
+            push!(breaks, clamp(lo, 0.0, 1.0), clamp(hi, 0.0, 1.0))
+            continue
+        end
+        t = (qx * sy - qy * sx) / denom
+        u = (qx * ry - qy * rx) / denom
+        if -1e-9 <= t <= 1.0 + 1e-9 && -1e-9 <= u <= 1.0 + 1e-9
+            push!(breaks, clamp(t, 0.0, 1.0))
+        end
+    end
+    return breaks
+end
+
+function _svg_segment_mask_breaks(a::Vec2{Float64}, b::Vec2{Float64},
+                                  entries::Vector{_SVGMaskEntry})
+    breaks = [0.0, 1.0]
+    for entry in entries, loop in entry.loops
+        _svg_push_segment_mask_breaks!(breaks, a, b, loop)
+    end
+    return _svg_unique_sorted_values(breaks)
+end
+
+function _svg_mask_open_path_to_entries(path::SVGPath,
+                                        entries::Vector{_SVGMaskEntry})
+    fragments = SVGPath[]
+    current = Vec2{Float64}[]
+    current_intensity = 0.0
+
+    function flush_current!()
+        if length(current) >= 2
+            fragment = _svg_path_with_points(path, copy(current), false)
+            push!(fragments, _svg_path_with_opacity_factor(fragment,
+                                                           current_intensity))
+        end
+        empty!(current)
+        current_intensity = 0.0
+        return nothing
+    end
+
+    for i in 1:(length(path.points) - 1)
+        a = path.points[i]
+        b = path.points[i + 1]
+        _font_same_point(a, b) && continue
+        breaks = _svg_segment_mask_breaks(a, b, entries)
+        for j in 1:(length(breaks) - 1)
+            t0 = breaks[j]
+            t1 = breaks[j + 1]
+            t1 - t0 > 1e-12 || continue
+            mid = _svg_lerp_point(a, b, (t0 + t1) / 2.0)
+            intensity = _svg_mask_source_over_intensity(entries, mid)
+            if intensity <= 1e-12
+                flush_current!()
+                continue
+            end
+            p0 = _svg_lerp_point(a, b, t0)
+            p1 = _svg_lerp_point(a, b, t1)
+            if isempty(current) ||
+               abs(current_intensity - intensity) > 1e-9 ||
+               !_font_same_point(current[end], p0)
+                flush_current!()
+                push!(current, p0, p1)
+                current_intensity = intensity
+            else
+                _svg_push_unique_point!(current, p1)
+            end
+        end
+    end
+    flush_current!()
+    return fragments
+end
+
 function _svg_mask_path_to_entries(path::SVGPath,
                                    entries::Vector{_SVGMaskEntry})
     if path.closed
         return _svg_mask_closed_path_to_entries(path, entries)
     end
-    fragments = SVGPath[]
-    for entry in entries
-        entry.intensity > 1e-12 || continue
-        for fragment in _svg_clip_path_to_loops(path, entry.loops)
-            push!(fragments, _svg_path_with_opacity_factor(fragment,
-                                                           entry.intensity))
-        end
-    end
-    return fragments
+    return _svg_mask_open_path_to_entries(path, entries)
 end
 
 function _svg_apply_clip_paths(paths::Vector{SVGPath},
