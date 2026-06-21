@@ -227,6 +227,7 @@ end
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
+            "threejs_webgl_geometry_minecraft",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -395,6 +396,20 @@ end
                     "WebGLExportCase(\"geometry-terrain\"",
                 ],
                 prerequisites=["BufferGeometry heightfields", "CanvasTexture", "MeshBasicMaterial.map", "FogExp2", "explicit camera export"],
+            ),
+            "threejs_webgl_geometry_minecraft" => (
+                source=[
+                    "function minecraft_height(width::Int, depth::Int)",
+                    "function minecraft_atlas_texture(; tile::Int=32)",
+                    "function minecraft_geometry(data::Matrix{Int}; block::Float64=0.16)",
+                    "height_at(data, x + 1, z)",
+                    "MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "map=minecraft_atlas_texture()",
+                    "DirectionalLight(color=Color3(1.0, 1.0, 1.0)",
+                    "PerspectiveCamera(fov=pi / 3",
+                    "WebGLExportCase(\"geometry-minecraft\"",
+                ],
+                prerequisites=["BufferGeometry voxel terrain", "Texture atlas map", "MeshLambertMaterial.map", "explicit camera export"],
             ),
             "threejs_webgl_camera" => (
                 source=[

@@ -1120,6 +1120,13 @@ Parallel audits split the remaining work into five critical tracks:
   `MeshBasicMaterial.map`, `FogExp2`, and explicit camera export. Upstream
   `ImprovedNoise`, seeded `Math.random`, `FirstPersonControls`, `Stats`,
   `Timer`, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_minecraft` via
+  `examples/webgl_geometry_minecraft.jl`, using deterministic voxel terrain
+  `BufferGeometry`, a generated nearest-filter atlas texture,
+  `MeshLambertMaterial.map`, ambient/directional lighting, and explicit camera
+  export. Upstream `ImprovedNoise`, `textures/minecraft/atlas.png`,
+  `FirstPersonControls`, `Stats`, `Timer`, and `WebGLRenderer` internals remain
+  documented deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and

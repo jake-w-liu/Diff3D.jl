@@ -122,6 +122,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_terrain.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_minecraft"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_minecraft"
+local_script = "examples/webgl_geometry_minecraft.jl"
+status = "partial"
+prerequisites = ["BufferGeometry voxel terrain", "Texture atlas map", "MeshLambertMaterial.map", "AmbientLight", "DirectionalLight", "explicit camera export", "browser mesh export"]
+known_deviations = [
+  "Uses deterministic Julia terrain heights and a generated texture atlas instead of upstream ImprovedNoise and textures/minecraft/atlas.png",
+  "Uses compact exported orbit camera metadata instead of upstream FirstPersonControls, Stats, Timer loop, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_geometry_minecraft.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_minecraft.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_camera"
 upstream_url = "https://threejs.org/examples/#webgl_camera"
 local_script = "examples/webgl_camera.jl"
