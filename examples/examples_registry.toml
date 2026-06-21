@@ -110,6 +110,18 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_convex.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_convex.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_terrain"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_terrain"
+local_script = "examples/webgl_geometry_terrain.jl"
+status = "partial"
+prerequisites = ["BufferGeometry heightfields", "CanvasTexture", "MeshBasicMaterial.map", "FogExp2", "explicit camera export", "browser mesh export"]
+known_deviations = [
+  "Uses a deterministic Julia height function instead of upstream ImprovedNoise and seeded Math.random",
+  "Uses a generated CanvasTexture and compact exported orbit camera instead of upstream FirstPersonControls, Stats, Timer loop, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_geometry_terrain.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_terrain.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_camera"
 upstream_url = "https://threejs.org/examples/#webgl_camera"
 local_script = "examples/webgl_camera.jl"

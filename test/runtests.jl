@@ -226,6 +226,7 @@ end
             "threejs_webgl_geometry_text",
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
+            "threejs_webgl_geometry_terrain",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -381,6 +382,19 @@ end
                     "WebGLExportCase(\"geometry-convex\"",
                 ],
                 prerequisites=["ConvexGeometry", "DodecahedronGeometry", "PointsMaterial.map", "MeshLambertMaterial"],
+            ),
+            "threejs_webgl_geometry_terrain" => (
+                source=[
+                    "function terrain_height(width::Int, depth::Int)",
+                    "function terrain_texture(data::Matrix{Float64}; scale::Int=4)",
+                    "function terrain_geometry(data::Matrix{Float64}; width::Float64=7.5",
+                    "CanvasTexture(tex; filter=:linear",
+                    "FogExp2(color=Color3(0.937, 0.820, 0.710), density=0.18)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "PerspectiveCamera(fov=pi / 3",
+                    "WebGLExportCase(\"geometry-terrain\"",
+                ],
+                prerequisites=["BufferGeometry heightfields", "CanvasTexture", "MeshBasicMaterial.map", "FogExp2", "explicit camera export"],
             ),
             "threejs_webgl_camera" => (
                 source=[

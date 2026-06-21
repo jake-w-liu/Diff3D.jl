@@ -1114,6 +1114,12 @@ Parallel audits split the remaining work into five critical tracks:
   and browser animation playback. Upstream `textures/sprites/disc.png`,
   `BufferGeometryUtils.mergeVertices`, `OrbitControls` limit settings, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_terrain` via
+  `examples/webgl_geometry_terrain.jl`, using a deterministic heightfield
+  `BufferGeometry`, generated `CanvasTexture` terrain shading,
+  `MeshBasicMaterial.map`, `FogExp2`, and explicit camera export. Upstream
+  `ImprovedNoise`, seeded `Math.random`, `FirstPersonControls`, `Stats`,
+  `Timer`, and `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and
