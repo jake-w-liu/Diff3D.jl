@@ -1355,6 +1355,15 @@ Parallel audits split the remaining work into five critical tracks:
   `shadow_pcf_radius=4` rather than upstream `VSMShadowMap`, blur samples,
   and GUI controls; the directional light's parent-group yaw and z sine are
   baked into world-position keyframes over the shared `40pi`-second period.
+- Added a standalone partial port for `webgl_shadowmap_viewer` via
+  `examples/webgl_shadowmap_viewer.jl`, preserving the upstream camera, orbit
+  target, ambient light, white intensity-500 `SpotLight`, white intensity-3
+  `DirectionalLight`, shadow-camera helper frustums, red Phong torus knot and
+  cube, gray Phong ground box, cast/receive shadow flags, and torus/cube
+  rotation rates. Diff3D.jl represents upstream `ShadowMapViewer` HUD overlays
+  with generated in-scene grayscale viewer panels and explicit shadow-camera
+  proxies because the compact exporter does not expose screen-space shadow-map
+  viewer passes or light-owned shadow camera objects.
 - Added a standalone partial port for `webgl_lightprobe` via
   `examples/webgl_lightprobe.jl`, preserving the upstream camera, direction
   light intensity/position, white zero-roughness sphere, cubemap-backed

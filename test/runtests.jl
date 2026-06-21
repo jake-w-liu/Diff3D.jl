@@ -851,6 +851,28 @@ end
                 ],
                 prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "TorusKnotGeometry", "CylinderGeometry", "Fog", "browser animation playback"],
             ),
+            "threejs_webgl_shadowmap_viewer" => (
+                source=[
+                    "const SHADOWMAP_VIEWER_DURATION = 8pi",
+                    "function shadowmap_viewer_texture(kind::Symbol",
+                    "function shadowmap_viewer_panel(name::String, texture::Texture",
+                    "function shadowmap_viewer_spot_shadow_camera(spot::SpotLight)",
+                    "function shadowmap_viewer_directional_shadow_camera(dir::DirectionalLight)",
+                    "SpotLight(color=Color3(1.0, 1.0, 1.0), intensity=500.0",
+                    "shadow_pcf_radius=0, name=\"Spot Light\"",
+                    "DirectionalLight(color=Color3(1.0, 1.0, 1.0), intensity=3.0",
+                    "shadow_pcf_radius=0, name=\"Dir. Light\"",
+                    "CameraHelper(shadowmap_viewer_spot_shadow_camera(spot)",
+                    "CameraHelper(shadowmap_viewer_directional_shadow_camera(dir)",
+                    "TorusKnotGeometry(radius=25.0, tube=8.0",
+                    "BoxGeometry(width=3.0, height=3.0, depth=3.0)",
+                    "BoxGeometry(width=10.0, height=0.15, depth=10.0)",
+                    "shadowmap_viewer_panel(\"shadowmap_viewer_directional_panel\"",
+                    "AnimationClip(\"shadowmap_viewer_motion\"",
+                    "WebGLExportCase(\"shadowmap-viewer\"",
+                ],
+                prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "CameraHelper", "MeshBasicMaterial.map", "TorusKnotGeometry", "browser animation playback"],
+            ),
             "threejs_webgl_lightprobe" => (
                 source=[
                     "const LIGHTPROBE_CUBE_SIZE = 32",
