@@ -278,6 +278,7 @@ end
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
             "threejs_webgl_buffergeometry_instancing",
+            "threejs_webgl_buffergeometry_instancing_billboards",
             "threejs_webgl_lines_colors",
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
@@ -1059,6 +1060,23 @@ end
                     "WebGLExportCase(\"buffergeometry-instancing\"",
                 ],
                 prerequisites=["InstancedMesh", "set_instance_color!", "browser per-instance color export"],
+            ),
+            "threejs_webgl_buffergeometry_instancing_billboards" => (
+                source=[
+                    "const BILLBOARD_INSTANCE_COUNT = 75_000",
+                    "const BILLBOARD_WORLD_SCALE = 500.0",
+                    "const BILLBOARD_BASE_RADIUS = 1.0",
+                    "const BILLBOARD_SEGMENTS = 6",
+                    "function billboard_shader_scale(t::Vec3{Float64}; time::Float64=0.0)",
+                    "function billboard_instance_color(t::Vec3{Float64})",
+                    "function build_billboard_instanced_mesh()",
+                    "InstancedMesh(CircleGeometry(radius=BILLBOARD_BASE_RADIUS",
+                    "set_instance_matrix!(inst, i,",
+                    "set_instance_color!(inst, i, billboard_instance_color(t))",
+                    "QuaternionKeyframeTrack(mesh, :rotation",
+                    "WebGLExportCase(\"buffergeometry-instancing-billboards\"",
+                ],
+                prerequisites=["InstancedMesh", "CircleGeometry", "set_instance_color!", "browser per-instance color export"],
             ),
             "threejs_webgl_lines_colors" => (
                 source=[
