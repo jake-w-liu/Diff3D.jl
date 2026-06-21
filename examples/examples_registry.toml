@@ -86,6 +86,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_geometry_text.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_text.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_geometry_text_shapes"
+upstream_url = "https://threejs.org/examples/#webgl_geometry_text_shapes"
+local_script = "examples/webgl_geometry_text_shapes.jl"
+status = "partial"
+prerequisites = ["FontLoader", "font_text_shapes", "TextGeometry", "MeshBasicMaterial transparent fill", "LineLoop", "browser mesh and line export", "explicit camera export"]
+known_deviations = [
+  "Uses the vendored Optimer bold typeface asset instead of upstream helvetiker_regular.typeface.json",
+  "Splits newline text in Julia and centers each line by object transform instead of upstream ShapeGeometry translation",
+  "Uses Diff3D.jl's compact WebGL exporter rather than three.js WebGLRenderer and OrbitControls change-only rendering"
+]
+verification = ["julia --project=. examples/webgl_geometry_text_shapes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_geometry_text_shapes.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_geometry_extrude_splines"
 upstream_url = "https://threejs.org/examples/#webgl_geometry_extrude_splines"
 local_script = "examples/webgl_geometry_extrude_splines.jl"

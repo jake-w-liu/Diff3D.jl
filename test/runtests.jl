@@ -224,6 +224,7 @@ end
             "threejs_webgl_geometry_shapes",
             "threejs_webgl_geometry_extrude_shapes",
             "threejs_webgl_geometry_text",
+            "threejs_webgl_geometry_text_shapes",
             "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_geometry_convex",
             "threejs_webgl_geometry_terrain",
@@ -355,6 +356,21 @@ end
                     "WebGLExportCase(\"geometry-text\"",
                 ],
                 prerequisites=["FontLoader", "TextGeometry", "beveled text geometry", "browser animation playback"],
+            ),
+            "threejs_webgl_geometry_text_shapes" => (
+                source=[
+                    "const TEXT_SHAPES_MESSAGE = [\"   Three.js\", \"Simple text.\"]",
+                    "return FontLoader(FONT_PATH)",
+                    "function add_text_shapes!(group::Group, font::FontData)",
+                    "TextGeometry(font, text_line; size=1.0, curve_segments=6)",
+                    "font_text_shapes(font, text_line;",
+                    "MeshBasicMaterial(color=Color3(0.0, 0.40, 0.60)",
+                    "opacity=0.4, transparent=true",
+                    "LineLoop(line_loop_geometry(shape), line_material",
+                    "PerspectiveCamera(fov=pi / 4",
+                    "WebGLExportCase(\"geometry-text-shapes\"",
+                ],
+                prerequisites=["FontLoader", "font_text_shapes", "TextGeometry", "LineLoop", "explicit camera export"],
             ),
             "threejs_webgl_geometry_extrude_splines" => (
                 source=[

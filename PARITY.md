@@ -1100,6 +1100,13 @@ Parallel audits split the remaining work into five critical tracks:
   materials, and browser animation playback. Upstream DOM text editing,
   pointer-drag text rotation, font/weight/bevel GUI controls, front/side
   material slots, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_text_shapes` via
+  `examples/webgl_geometry_text_shapes.jl`, using Diff3D.jl `FontLoader`,
+  `TextGeometry`, `font_text_shapes`, translucent `MeshBasicMaterial` fills,
+  `LineLoop` glyph/hole outlines, and explicit camera export. Upstream
+  Helvetiker font asset, runtime `ShapeGeometry` translation, `OrbitControls`
+  change-only rendering, and `WebGLRenderer` internals remain documented
+  deviations.
 - Added a standalone partial port for `webgl_geometry_extrude_splines` via
   `examples/webgl_geometry_extrude_splines.jl`, using sampled Catmull-Rom and
   parametric paths with Diff3D.jl `TubeGeometry`, Lambert tube materials,
