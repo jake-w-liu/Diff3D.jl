@@ -264,6 +264,7 @@ end
             "threejs_webgl_buffergeometry_uint",
             "threejs_webgl_buffergeometry_attributes_none",
             "threejs_webgl_buffergeometry_attributes_integer",
+            "threejs_webgl_buffergeometry_rawshader",
             "threejs_webgl_buffergeometry_lines",
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
@@ -862,6 +863,25 @@ end
                     "WebGLExportCase(\"buffergeometry-attributes-integer\"",
                 ],
                 prerequisites=["BufferGeometry.uvs", "BufferGeometry integer custom attributes", "MeshBasicMaterial.vertex_colors", "browser animation playback"],
+            ),
+            "threejs_webgl_buffergeometry_rawshader" => (
+                source=[
+                    "const RAWSHADER_TRIANGLES = 200",
+                    "const RAWSHADER_VERTEX_COUNT = 3 * RAWSHADER_TRIANGLES",
+                    "const RAWSHADER_SNAPSHOT_TIME = 1.0",
+                    "function rawshader_snapshot_rgb(p::Vec3{Float64}, rgba::NTuple{4,Int}",
+                    "function rawshader_geometry()",
+                    "raw_bytes = Vector{UInt8}(undef, 4 * RAWSHADER_VERTEX_COUNT)",
+                    "set_attribute!(geo, :color, snapshot_colors, 3)",
+                    "set_attribute!(geo, :rawColorRGBA, colors, 4)",
+                    "set_attribute!(geo, :rawColorBytes, raw_bytes, 4)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "vertex_colors=true",
+                    "transparent=true",
+                    "QuaternionKeyframeTrack(mesh, :rotation",
+                    "WebGLExportCase(\"buffergeometry-rawshader\"",
+                ],
+                prerequisites=["BufferGeometry color attributes", "MeshBasicMaterial.vertex_colors", "MeshBasicMaterial.transparent", "browser animation playback"],
             ),
             "threejs_webgl_buffergeometry_lines" => (
                 source=[

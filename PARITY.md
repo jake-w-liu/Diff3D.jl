@@ -1060,7 +1060,7 @@ Parallel audits split the remaining work into five critical tracks:
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
-  `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
 - Added partial `webgl_geometries` coverage through
@@ -1262,6 +1262,12 @@ Parallel audits split the remaining work into five critical tracks:
   attribute. Upstream GLSL3 `ShaderMaterial` sampler arrays, integer
   `vertexAttribIPointer` shader input, exact texture assets, `Stats`, and the
   imperative animation loop remain documented deviations.
+- Added a standalone partial port for `webgl_buffergeometry_rawshader` via
+  `examples/webgl_buffergeometry_rawshader.jl`, preserving the upstream
+  200-triangle raw position buffer and normalized `Uint8` RGBA color attribute
+  data while materializing the shader-time red-channel modulation into browser
+  vertex colors. Upstream `RawShaderMaterial`, live `time` uniform updates,
+  `Stats`, and the imperative animation loop remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live
