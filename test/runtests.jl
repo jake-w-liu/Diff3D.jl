@@ -266,6 +266,7 @@ end
             "threejs_webgl_points_sprites",
             "threejs_webgl_points_billboards",
             "threejs_webgl_instancing_dynamic",
+            "threejs_webgl_buffergeometry_instancing",
             "threejs_webgl_lines_colors",
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
@@ -834,6 +835,17 @@ end
                     "KeyframeTrack(inst, :scale",
                 ],
                 prerequisites=["InstancedMesh", "quaternion animation playback"],
+            ),
+            "threejs_webgl_buffergeometry_instancing" => (
+                source=[
+                    "function instanced_triangle_geometry()",
+                    "InstancedMesh(instanced_triangle_geometry()",
+                    "set_instance_matrix!(inst, k,",
+                    "set_instance_color!(inst, k,",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"buffergeometry-instancing\"",
+                ],
+                prerequisites=["InstancedMesh", "set_instance_color!", "browser per-instance color export"],
             ),
             "threejs_webgl_lines_colors" => (
                 source=[
@@ -2077,6 +2089,8 @@ end
         instanced_motion.position = Vec3(5.6, 0.0, 0.0)
         set_instance_matrix!(instanced_motion, 1, mat4_translation(-0.6, 0.0, 0.0))
         set_instance_matrix!(instanced_motion, 2, mat4_translation(0.6, 0.0, 0.0))
+        set_instance_color!(instanced_motion, 1, Color3(1.0, 0.25, 0.1))
+        set_instance_color!(instanced_motion, 2, Color3(0.1, 0.45, 1.0))
         add!(scene, instanced_motion)
         clip = AnimationClip("move", AbstractKeyframeTrack[
             KeyframeTrack(mesh, :position, [0.0, 0.5, 1.0],
@@ -3046,11 +3060,16 @@ end
         @test occursin("\"name\":\"export_group_motion_child\"", html)
         @test occursin("\"name\":\"export_instanced_motion\"", html)
         @test occursin("\"instanceMatrices\":[[1,0,0,0,0,1,0,0,0,0,1,0,-0.59999999999999998,0,0,1],[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]]", html)
+        @test occursin("\"instanceColors\":[[1,0.25,0.10000000000000001],[0.10000000000000001,0.45000000000000001,1]]", html)
         @test occursin("ANGLE_instanced_arrays", html)
         @test occursin("function instanceAttribs", html)
+        @test occursin("attribute vec3 aInstanceColor", html)
+        @test occursin("o.instanceColorBuf=o.instanceColors?buf(o.instanceColors.flat()):null", html)
+        @test occursin("gl.vertexAttribPointer(colorLoc,3,gl.FLOAT,false,0,0)", html)
         @test occursin("vertexAttribDivisorANGLE", html)
         @test occursin("drawElementsInstancedANGLE", html)
         @test occursin("uUseInstancing", html)
+        @test occursin("uUseInstanceColor", html)
         @test occursin("const model=M4.mul(base,im)", html)
         @test occursin("M4.normal3(model)", html)
         @test occursin("\"nodes\":[", html)
@@ -4227,6 +4246,10 @@ end
                                                 draw_mode=:triangle_fan)
         set_instance_matrix!(im, 1, mat4_translation(-2.0, 0.0, 0.0))
         set_instance_matrix!(im, 2, mat4_translation( 2.0, 0.0, 0.0))
+        set_instance_color!(im, 1, Color3(1.0, 0.0, 0.0))
+        set_instance_color!(im, 2, Color3(0.0, 1.0, 0.0))
+        @test get_instance_color(im, 1) == Color3(1.0, 0.0, 0.0)
+        @test get_instance_color(im, 2) == Color3(0.0, 1.0, 0.0)
         add!(scene, im)
         cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
         cam.position = Vec3(0.0, 0.0, 8.0)
@@ -4235,7 +4258,7 @@ end
         # Two separated boxes ⇒ lit pixels in both the left and right halves,
         # with a dark gap straddling the centre column.
         left  = count(>(0.5), @view rt.color[:, 1:24, 1])
-        right = count(>(0.5), @view rt.color[:, 41:64, 1])
+        right = count(>(0.5), @view rt.color[:, 41:64, 2])
         center = count(>(0.5), @view rt.color[:, 30:35, 1])
         @test left > 20 && right > 20
         @test center == 0

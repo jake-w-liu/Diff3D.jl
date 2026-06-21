@@ -697,16 +697,17 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue
         base = compute_world_matrix(im)
-        for M in im.instance_matrices
+        for (instance_index, M) in enumerate(im.instance_matrices)
             world = base * M
+            instance_material = _with_vertex_color(im.material, im.instance_colors[instance_index])
             if material_wireframe(im.material)
-                _render_wireframe_mesh!(rt, im.geometry, im.material, world, proj, view, near;
+                _render_wireframe_mesh!(rt, im.geometry, instance_material, world, proj, view, near;
                                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
             else
                 mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
                 mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                                 material_clipping_planes(im.material))
-                _rasterize_geo_flat!(rt, im.geometry, world, im.material,
+                                                                 material_clipping_planes(instance_material))
+                _rasterize_geo_flat!(rt, im.geometry, world, instance_material,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
                                      shadow_fn=mesh_shadow_fn, clipping_planes=mesh_clipping_planes,
                                      colorbuf=colorbuf,

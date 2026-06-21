@@ -236,6 +236,23 @@ end
 
 @inline _modulate(c::Color3, v::Color3) = Color3(c.r * v.r, c.g * v.g, c.b * v.b)
 @inline _with_vertex_color(m::AbstractMaterial, vc::Color3) = m
+function _with_vertex_color(m::LineBasicMaterial, vc::Color3)
+    LineBasicMaterial(color=_modulate(m.color, vc), linewidth=m.linewidth,
+                      opacity=m.opacity, depth_test=m.depth_test,
+                      depth_write=m.depth_write)
+end
+function _with_vertex_color(m::LineDashedMaterial, vc::Color3)
+    LineDashedMaterial(color=_modulate(m.color, vc), linewidth=m.linewidth,
+                       scale=m.scale, dash_size=m.dash_size,
+                       gap_size=m.gap_size, opacity=m.opacity,
+                       depth_test=m.depth_test, depth_write=m.depth_write)
+end
+function _with_vertex_color(m::PointsMaterial, vc::Color3)
+    PointsMaterial(color=_modulate(m.color, vc), size=m.size, opacity=m.opacity,
+                   transparent=m.transparent, map=m.map, alpha_map=m.alpha_map,
+                   alpha_test=m.alpha_test, size_attenuation=m.size_attenuation,
+                   depth_test=m.depth_test, depth_write=m.depth_write)
+end
 function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
     MeshBasicMaterial(color=_modulate(m.color, vc), opacity=m.opacity,
                       transparent=m.transparent, wireframe=m.wireframe,

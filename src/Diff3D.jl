@@ -128,6 +128,7 @@ export
 
     # Objects (§2 breadth)
     InstancedMesh, instanced_count, set_instance_matrix!, get_instance_matrix,
+    set_instance_color!, get_instance_color,
     collect_instanced,
     LineSegments, LineLoop, Sprite, sprite_world_matrix,
     LOD, add_lod_level!, lod_select, lod_update!,

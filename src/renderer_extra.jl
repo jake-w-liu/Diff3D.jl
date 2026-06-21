@@ -335,8 +335,11 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                                 morphed_positions)
         elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
             base = compute_world_matrix(obj)
-            for M in obj.instance_matrices
-                draw_line_geometry!(obj.geometry, obj.material, base * M, obj.draw_mode)
+            for (instance_index, M) in enumerate(obj.instance_matrices)
+                draw_line_geometry!(obj.geometry,
+                                    _with_vertex_color(obj.material,
+                                                       obj.instance_colors[instance_index]),
+                                    base * M, obj.draw_mode)
             end
         end
     end)
@@ -596,8 +599,11 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
                                   _object_morph_positions(obj, geo))
         elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
             base = compute_world_matrix(obj)
-            for M in obj.instance_matrices
-                draw_points_geometry!(obj.geometry, obj.material, base * M)
+            for (instance_index, M) in enumerate(obj.instance_matrices)
+                draw_points_geometry!(obj.geometry,
+                                      _with_vertex_color(obj.material,
+                                                         obj.instance_colors[instance_index]),
+                                      base * M)
             end
         end
     end)

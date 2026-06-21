@@ -46,6 +46,7 @@ mutable struct InstancedMesh <: AbstractObject3D
     cast_shadow::Bool
     receive_shadow::Bool
     instance_matrices::Vector{Mat4{Float64}}
+    instance_colors::Vector{Color3{Float64}}
     draw_mode::Symbol
 
     function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
@@ -56,10 +57,13 @@ mutable struct InstancedMesh <: AbstractObject3D
                            geometry, material, cast_shadow::Bool,
                            receive_shadow::Bool,
                            instance_matrices::Vector{Mat4{Float64}},
+                           instance_colors::Vector{Color3{Float64}},
                            draw_mode::Symbol)
+        length(instance_colors) == length(instance_matrices) ||
+            throw(ArgumentError("instance_colors length must match instance_matrices length"))
         new(position, rotation, scale, parent, children, visible, name, id,
             geometry, material, cast_shadow, receive_shadow, instance_matrices,
-            _validate_instanced_draw_mode(draw_mode))
+            instance_colors, _validate_instanced_draw_mode(draw_mode))
     end
 end
 
@@ -68,9 +72,10 @@ function InstancedMesh(geometry, material, count::Int; name="InstancedMesh",
                        draw_mode::Symbol=:triangles)
     count >= 0 || throw(ArgumentError("InstancedMesh count must be non-negative"))
     mats = [Mat4{Float64}() for _ in 1:count]
+    colors = [Color3(1.0, 1.0, 1.0) for _ in 1:count]
     InstancedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                   true, name, _next_id(), geometry, material,
-                  cast_shadow, receive_shadow, mats, draw_mode)
+                  cast_shadow, receive_shadow, mats, colors, draw_mode)
 end
 
 function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
@@ -83,7 +88,25 @@ function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
                        instance_matrices::Vector{Mat4{Float64}})
     InstancedMesh(position, rotation, scale, parent, children, visible, name, id,
                   geometry, material, cast_shadow, receive_shadow,
-                  instance_matrices, :triangles)
+                  instance_matrices,
+                  [Color3(1.0, 1.0, 1.0) for _ in instance_matrices],
+                  :triangles)
+end
+
+function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
+                       scale::Vec3{Float64},
+                       parent::Union{Nothing, AbstractObject3D},
+                       children::Vector{AbstractObject3D},
+                       visible::Bool, name::String, id::Int,
+                       geometry, material, cast_shadow::Bool,
+                       receive_shadow::Bool,
+                       instance_matrices::Vector{Mat4{Float64}},
+                       draw_mode::Symbol)
+    InstancedMesh(position, rotation, scale, parent, children, visible, name, id,
+                  geometry, material, cast_shadow, receive_shadow,
+                  instance_matrices,
+                  [Color3(1.0, 1.0, 1.0) for _ in instance_matrices],
+                  draw_mode)
 end
 
 get_position(o::InstancedMesh) = o.position
@@ -97,6 +120,9 @@ set_parent!(o::InstancedMesh, p) = (o.parent = p)
 instanced_count(o::InstancedMesh) = length(o.instance_matrices)
 set_instance_matrix!(o::InstancedMesh, i::Int, m::Mat4) = (o.instance_matrices[i] = m)
 get_instance_matrix(o::InstancedMesh, i::Int) = o.instance_matrices[i]
+set_instance_color!(o::InstancedMesh, i::Int, color::Color3) =
+    (o.instance_colors[i] = convert(Color3{Float64}, color))
+get_instance_color(o::InstancedMesh, i::Int) = o.instance_colors[i]
 _instanced_triangle_drawable(o::InstancedMesh) = o.draw_mode === :triangles
 _instanced_point_drawable(o::InstancedMesh) = o.draw_mode === :points
 _instanced_line_drawable(o::InstancedMesh) =

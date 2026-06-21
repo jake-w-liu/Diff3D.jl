@@ -1056,9 +1056,10 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `webgl_lines_colors`, `webgl_lines_dashed`, and `webgl_helpers` now have
-  either direct standalone pages or explicit multi-case showcase coverage
-  tracked in the examples registry.
+  `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
+  `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
+  pages or explicit multi-case showcase coverage tracked in the examples
+  registry.
 - Added partial `webgl_geometries` coverage through
   `examples/live_webgl_showcase.jl`, using the compact WebGL showcase cases for
   primitive geometry/material/orbit coverage. Exact upstream scene layout and
@@ -1209,6 +1210,12 @@ Parallel audits split the remaining work into five critical tracks:
   `examples/webgl_animation_keyframes.jl`, using procedural Diff3D.jl geometry
   with vector, scale, and quaternion keyframe tracks. Exact upstream glTF asset
   loading/layout remains a documented deviation.
+- Added a standalone partial port for `webgl_buffergeometry_instancing` via
+  `examples/webgl_buffergeometry_instancing.jl`, plus `InstancedMesh`
+  per-instance color setters/getters and browser `aInstanceColor` export.
+  Upstream raw shader time deformation, offset/orientation instanced
+  attributes, randomized 50000-instance data, GUI controls, `Stats`, and
+  `WebGLRenderer` internals remain documented deviations.
 - Added a standalone partial port for `webgl_lines_colors` via
   `examples/webgl_lines_colors.jl`, driven by exported BufferGeometry `:color`
   attributes. Exact upstream path data remains a documented deviation.
