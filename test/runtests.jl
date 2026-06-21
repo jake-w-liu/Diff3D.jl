@@ -223,6 +223,7 @@ end
             "threejs_webgl_geometry_colors_lookuptable",
             "threejs_webgl_geometry_shapes",
             "threejs_webgl_geometry_text",
+            "threejs_webgl_geometry_extrude_splines",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -334,6 +335,20 @@ end
                     "WebGLExportCase(\"geometry-text\"",
                 ],
                 prerequisites=["FontLoader", "TextGeometry", "beveled text geometry", "browser animation playback"],
+            ),
+            "threejs_webgl_geometry_extrude_splines" => (
+                source=[
+                    "function sampled_catmull_rom(points::Vector{<:Vec3}",
+                    "function pipe_spline_path()",
+                    "function trefoil_knot_path(; samples::Int=150)",
+                    "function helix_path(; samples::Int=130, turns::Int=4)",
+                    "TubeGeometry(path; radius=radius, radial_segments=radial_segments)",
+                    "MeshBasicMaterial(color=Color3(0.0, 0.0, 0.0)",
+                    "wireframe=true",
+                    "QuaternionKeyframeTrack(parent, :rotation",
+                    "WebGLExportCase(\"geometry-extrude-splines\"",
+                ],
+                prerequisites=["TubeGeometry", "MeshLambertMaterial", "MeshBasicMaterial wireframe", "browser animation playback"],
             ),
             "threejs_webgl_camera" => (
                 source=[

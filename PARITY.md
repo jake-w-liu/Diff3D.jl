@@ -1078,6 +1078,19 @@ Parallel audits split the remaining work into five critical tracks:
   and browser mesh/line export. Upstream curved, holed, and complex
   `Shape` paths, exact `ShapeUtils` triangulation, `Stats`, and
   `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_text` via
+  `examples/webgl_geometry_text.jl`, using the upstream Optimer bold typeface
+  asset, Diff3D.jl `FontLoader`, beveled mirrored `TextGeometry`, Phong text
+  materials, and browser animation playback. Upstream DOM text editing,
+  pointer-drag text rotation, font/weight/bevel GUI controls, front/side
+  material slots, and `WebGLRenderer` internals remain documented deviations.
+- Added a standalone partial port for `webgl_geometry_extrude_splines` via
+  `examples/webgl_geometry_extrude_splines.jl`, using sampled Catmull-Rom and
+  parametric paths with Diff3D.jl `TubeGeometry`, Lambert tube materials,
+  transparent wireframe overlays, and browser animation playback. Upstream
+  `CurveExtras`, live geometry GUI controls, camera-on-path view, closed tube
+  runtime toggles, `Stats`, and `WebGLRenderer` internals remain documented
+  deviations.
 - Added a standalone partial port for `webgl_camera` via
   `examples/webgl_camera.jl`, using Diff3D.jl `PerspectiveCamera`,
   `OrthographicCamera`, `CameraHelper`, point-cloud background data, and
