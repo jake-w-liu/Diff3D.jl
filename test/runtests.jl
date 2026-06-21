@@ -273,6 +273,7 @@ end
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
             "threejs_misc_animation_keys",
+            "threejs_misc_controls_orbit",
             "threejs_webgl_animation_keyframes",
         ])
         ids = String[e["upstream_id"] for e in examples]
@@ -917,6 +918,23 @@ end
                     "AnimationClip(\"Action\", 3.0, tracks)",
                 ],
                 prerequisites=["BoxGeometry", "MeshBasicMaterial.transparent", "material color animation", "material opacity animation"],
+            ),
+            "threejs_misc_controls_orbit" => (
+                source=[
+                    "const INSTANCE_COUNT = 500",
+                    "function configure_orbit_controls(camera::PerspectiveCamera)",
+                    "OrbitControls(camera;",
+                    "enable_damping=true",
+                    "min_distance=100.0",
+                    "max_distance=500.0",
+                    "max_polar_angle=pi / 2",
+                    "ConeGeometry(radius=10.0, height=30.0",
+                    "InstancedMesh(geometry, material, INSTANCE_COUNT",
+                    "set_instance_matrix!(inst, i, mat4_translation(x, 0.0, z))",
+                    "FogExp2(color=Color3(0.8, 0.8, 0.8), density=0.002)",
+                    "WebGLExportCase(\"misc-controls-orbit\"",
+                ],
+                prerequisites=["OrbitControls", "InstancedMesh", "ConeGeometry", "browser orbit interaction"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[
