@@ -274,6 +274,7 @@ end
             "threejs_webgl_helpers",
             "threejs_misc_animation_keys",
             "threejs_misc_controls_orbit",
+            "threejs_misc_controls_map",
             "threejs_misc_controls_trackball",
             "threejs_webgl_animation_keyframes",
         ])
@@ -936,6 +937,23 @@ end
                     "WebGLExportCase(\"misc-controls-orbit\"",
                 ],
                 prerequisites=["OrbitControls", "InstancedMesh", "ConeGeometry", "browser orbit interaction"],
+            ),
+            "threejs_misc_controls_map" => (
+                source=[
+                    "const INSTANCE_COUNT = 500",
+                    "function configure_map_controls(camera::PerspectiveCamera)",
+                    "OrbitControls(camera;",
+                    "enable_damping=true",
+                    "min_distance=100.0",
+                    "max_distance=500.0",
+                    "max_polar_angle=pi / 2",
+                    "BoxGeometry(width=1.0, height=1.0, depth=1.0)",
+                    "InstancedMesh(geometry, material, INSTANCE_COUNT",
+                    "mat4_scaling(20.0, h, 20.0)",
+                    "FogExp2(color=Color3(0.8, 0.8, 0.8), density=0.002)",
+                    "WebGLExportCase(\"misc-controls-map\"",
+                ],
+                prerequisites=["OrbitControls", "InstancedMesh", "BoxGeometry", "browser orbit interaction"],
             ),
             "threejs_misc_controls_trackball" => (
                 source=[
