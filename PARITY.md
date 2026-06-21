@@ -1059,7 +1059,7 @@ Parallel audits split the remaining work into five critical tracks:
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_lines_colors`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lines_colors`,
   `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1287,6 +1287,14 @@ Parallel audits split the remaining work into five critical tracks:
   colors. Upstream `InstancedBufferGeometry` translate attributes,
   `RawShaderMaterial`, live `time` uniform scaling, sprite alpha discard,
   `Stats`, and the imperative animation loop remain documented deviations.
+- Added a standalone partial port for `webgl_buffergeometry_instancing_interleaved`
+  via `examples/webgl_buffergeometry_instancing_interleaved.jl`, preserving the
+  upstream 5,000-instance count, 24-vertex indexed box, 8-float interleaved
+  vertex-buffer layout, UVs, and crate-like mapped material as deterministic
+  `InstancedMesh` matrices. Upstream shared `InterleavedBuffer` attribute
+  storage, exact `textures/crate.gif`, random instance generation, per-frame
+  instance-matrix quaternion mutation, `Stats`, and `WebGLRenderer` internals
+  remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live

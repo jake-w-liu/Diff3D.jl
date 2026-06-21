@@ -783,6 +783,21 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_instancing_billboards.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_instancing_billboards.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_instancing_interleaved"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_instancing_interleaved"
+local_script = "examples/webgl_buffergeometry_instancing_interleaved.jl"
+status = "partial"
+prerequisites = ["InstancedMesh", "BufferGeometry custom attributes", "MeshBasicMaterial.map", "browser instanced draw", "browser animation playback"]
+known_deviations = [
+  "Materializes upstream InterleavedBuffer position and UV attributes into ordinary BufferGeometry positions and uvs while preserving the raw interleaved buffer as metadata",
+  "Uses deterministic Julia hash noise instead of upstream Math.random instance offsets and orientations",
+  "Uses a generated crate-like texture instead of the exact upstream textures/crate.gif asset",
+  "Uses Diff3D.jl keyframe mesh rotation and a static instance-matrix snapshot instead of per-frame instanceMatrix quaternion mutation",
+  "Uses explicit Diff3D.jl camera framing and compact WebGL export rather than upstream WebGLRenderer defaults and Stats"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_instancing_interleaved.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_instancing_interleaved.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_lines_colors"
 upstream_url = "https://threejs.org/examples/#webgl_lines_colors"
 local_script = "examples/webgl_lines_colors.jl"
