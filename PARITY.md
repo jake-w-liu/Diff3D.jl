@@ -1059,7 +1059,7 @@ Parallel audits split the remaining work into five critical tracks:
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
   `misc_boxselection`, `misc_controls_drag`, `misc_controls_fly`, `misc_controls_pointerlock`, `misc_controls_transform`, `misc_exporter_stl`, `misc_exporter_ply`, `misc_exporter_obj`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
-  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lights_hemisphere`, `webgl_lights_spotlight`, `webgl_lines_colors`,
+  `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_selective_draw`, `webgl_buffergeometry_custom_attributes_particles`, `webgl_buffergeometry_attributes_none`, `webgl_buffergeometry_attributes_integer`, `webgl_buffergeometry_glbufferattribute`, `webgl_buffergeometry_points_interleaved`, `webgl_buffergeometry_instancing`, `webgl_buffergeometry_instancing_billboards`, `webgl_buffergeometry_instancing_interleaved`, `webgl_lights_hemisphere`, `webgl_lights_spotlight`, `webgl_lights_rectarealight`, `webgl_lines_colors`,
   `webgl_buffergeometry_rawshader`, `webgl_custom_attributes_points`, `webgl_interactive_buffergeometry`, `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
   pages or explicit multi-case showcase coverage tracked in the examples
   registry.
@@ -1309,6 +1309,13 @@ Parallel audits split the remaining work into five critical tracks:
   shadow-casting subject. Upstream `Lucy100k.ply`, `PLYLoader`,
   `SpotLight.map` texture projection, GUI controls, exact tone/shadow-map
   settings, and `OrbitControls` setup remain documented deviations.
+- Added a standalone partial port for `webgl_lights_rectarealight` via
+  `examples/webgl_lights_rectarealight.jl`, preserving the upstream three RGB
+  `RectAreaLight`s, 4x10 light dimensions, intensity, positions, animated
+  orientations, 2000-unit checker-rough floor, white torus knot, camera, and
+  orbit target. Upstream `RectAreaLightHelper`, `RectAreaLightUniformsLib`,
+  DOM `CanvasTexture`, `Timer`, `Stats`, and exact `OrbitControls` runtime
+  remain documented deviations.
 - Added a standalone partial port for `webgl_camera_array` via
   `examples/webgl_camera_array.jl`, exercising a compact grid of `ArrayCamera`
   sub-cameras and browser scissor viewports. The upstream 6x6 layout, live

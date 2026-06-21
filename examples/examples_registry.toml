@@ -481,6 +481,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lights_spotlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_spotlight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_lights_rectarealight"
+upstream_url = "https://threejs.org/examples/#webgl_lights_rectarealight"
+local_script = "examples/webgl_lights_rectarealight.jl"
+status = "partial"
+prerequisites = ["RectAreaLight", "MeshStandardMaterial.roughness_map", "BoxGeometry", "TorusKnotGeometry", "browser rect-area light export", "browser animation playback"]
+known_deviations = [
+  "Uses Diff3D.jl target keyframes to animate RectAreaLight orientation instead of upstream Object3D rotation fields",
+  "Uses static helper panel meshes instead of upstream RectAreaLightHelper runtime helper objects",
+  "Uses a Diff3D.jl generated Texture checker for the floor roughness map instead of a DOM CanvasTexture",
+  "Uses compact Diff3D.jl WebGL export rather than upstream RectAreaLightUniformsLib, WebGLRenderer, OrbitControls, Timer, and Stats internals"
+]
+verification = ["julia --project=. examples/webgl_lights_rectarealight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_rectarealight.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_loader_stl"
 upstream_url = "https://threejs.org/examples/#webgl_loader_stl"
 local_script = "examples/webgl_loader_stl.jl"
