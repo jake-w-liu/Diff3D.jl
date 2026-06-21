@@ -261,6 +261,7 @@ end
             "threejs_webgl_buffergeometry",
             "threejs_webgl_buffergeometry_indexed",
             "threejs_webgl_buffergeometry_uint",
+            "threejs_webgl_buffergeometry_attributes_none",
             "threejs_webgl_buffergeometry_lines",
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
@@ -804,6 +805,21 @@ end
                     "name=\"uint32_index_triangle\"",
                 ],
                 prerequisites=["indexed BufferGeometry", "Uint32 element buffers"],
+            ),
+            "threejs_webgl_buffergeometry_attributes_none" => (
+                source=[
+                    "const ATTR_NONE_TRIANGLE_COUNT = 10_000",
+                    "const ATTR_NONE_VERTEX_COUNT = 3 * ATTR_NONE_TRIANGLE_COUNT",
+                    "const ATTR_NONE_JITTER_SCALE = 1 / 64",
+                    "function pseudo_random_vec3(lower::Float64, upper::Float64, index::Int)",
+                    "function attributes_none_geometry()",
+                    "pseudo_random_vec3(-1.0, 1.0, triangle_id)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), vertex_colors=true",
+                    "QuaternionKeyframeTrack(mesh, :rotation",
+                    "WebGLExportCase(\"buffergeometry-attributes-none\"",
+                ],
+                prerequisites=["BufferGeometry", "MeshBasicMaterial.vertex_colors", "non-indexed triangle buffers", "browser animation playback"],
             ),
             "threejs_webgl_buffergeometry_lines" => (
                 source=[

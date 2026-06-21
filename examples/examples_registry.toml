@@ -548,6 +548,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_uint.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_uint.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_attributes_none"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_attributes_none"
+local_script = "examples/webgl_buffergeometry_attributes_none.jl"
+status = "partial"
+prerequisites = ["BufferGeometry", "MeshBasicMaterial.vertex_colors", "non-indexed triangle buffers", "browser animation playback"]
+known_deviations = [
+  "Materializes upstream gl_VertexID RawShaderMaterial positions and colors into explicit BufferGeometry attributes because Diff3D.jl WebGL export does not support RawShaderMaterial or no-attribute draw calls",
+  "Uses deterministic Julia hash noise instead of the exact GLSL floatBitsToUint hash implementation",
+  "Uses Diff3D.jl keyframe animation and compact WebGL exporter rather than upstream Date.now loop and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_attributes_none.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_attributes_none.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_buffergeometry_lines"
 upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_lines"
 local_script = "examples/webgl_buffergeometry_lines.jl"
