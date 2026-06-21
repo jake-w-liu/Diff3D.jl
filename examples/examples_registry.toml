@@ -652,6 +652,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_points.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_points.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_buffergeometry_points_interleaved"
+upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_points_interleaved"
+local_script = "examples/webgl_buffergeometry_points_interleaved.jl"
+status = "partial"
+prerequisites = ["BufferGeometry custom attributes", "PointsObject", "PointsMaterial", "browser point-color export", "browser animation playback"]
+known_deviations = [
+  "Stores upstream-style raw RGBA color bytes but materializes positions and normalized colors into separated Diff3D.jl attributes because Diff3D.jl BufferGeometry does not support shared InterleavedBuffer storage",
+  "Uses deterministic Julia hash noise instead of upstream Math.random",
+  "Uses Diff3D.jl keyframe animation and compact WebGL exporter rather than upstream Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_buffergeometry_points_interleaved.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_points_interleaved.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_buffergeometry_drawrange"
 upstream_url = "https://threejs.org/examples/#webgl_buffergeometry_drawrange"
 local_script = "examples/webgl_buffergeometry_drawrange.jl"

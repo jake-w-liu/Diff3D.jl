@@ -269,6 +269,7 @@ end
             "threejs_webgl_buffergeometry_lines",
             "threejs_webgl_buffergeometry_lines_indexed",
             "threejs_webgl_buffergeometry_points",
+            "threejs_webgl_buffergeometry_points_interleaved",
             "threejs_webgl_buffergeometry_drawrange",
             "threejs_webgl_buffergeometry_selective_draw",
             "threejs_webgl_buffergeometry_custom_attributes_particles",
@@ -932,6 +933,23 @@ end
                     "n = 2600",
                 ],
                 prerequisites=["PointsObject", "browser point sprites"],
+            ),
+            "threejs_webgl_buffergeometry_points_interleaved" => (
+                source=[
+                    "const INTERLEAVED_POINTS_PARTICLES = 500_000",
+                    "const INTERLEAVED_POINTS_STRIDE_BYTES = 16",
+                    "const INTERLEAVED_POINTS_COLOR_OFFSET_BYTES = 12",
+                    "const INTERLEAVED_POINTS_SPREAD = 1000.0",
+                    "function interleaved_points_geometry()",
+                    "color_bytes = Vector{UInt8}(undef, 4 * INTERLEAVED_POINTS_PARTICLES)",
+                    "set_attribute!(geo, :color, colors, 3)",
+                    "set_attribute!(geo, :interleavedColorBytes, color_bytes, 4)",
+                    "PointsObject(interleaved_points_geometry()",
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=15.0)",
+                    "QuaternionKeyframeTrack(points, :rotation",
+                    "WebGLExportCase(\"buffergeometry-points-interleaved\"",
+                ],
+                prerequisites=["BufferGeometry custom attributes", "PointsObject", "PointsMaterial", "browser point-color export", "browser animation playback"],
             ),
             "threejs_webgl_buffergeometry_drawrange" => (
                 source=[
