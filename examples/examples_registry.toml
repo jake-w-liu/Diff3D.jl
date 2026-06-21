@@ -686,6 +686,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_helpers.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_helpers.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_boxselection"
+upstream_url = "https://threejs.org/examples/#misc_boxselection"
+local_script = "examples/misc_boxselection.jl"
+status = "partial"
+prerequisites = ["BoxGeometry", "MeshLambertMaterial.emissive", "PerspectiveCamera", "projection_matrix", "view_matrix", "SpotLight", "AmbientLight", "browser mesh export"]
+known_deviations = [
+  "Uses deterministic box placement and a fixed NDC selection rectangle instead of upstream Math.random placement and pointer-driven SelectionHelper interaction",
+  "Computes a selection snapshot from projected box centers rather than using three.js SelectionBox frustum volume tests",
+  "Highlights selected boxes through exported emissive material state but does not provide an in-browser drag selection overlay",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer, Stats, and PCF shadow-map configuration"
+]
+verification = ["julia --project=. examples/misc_boxselection.jl", "python examples/browser_webgl_smoke.py examples/output/misc_boxselection.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"

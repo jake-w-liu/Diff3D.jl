@@ -272,6 +272,7 @@ end
             "threejs_webgl_lines_colors",
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
+            "threejs_misc_boxselection",
             "threejs_misc_animation_keys",
             "threejs_misc_animation_groups",
             "threejs_misc_controls_orbit",
@@ -908,6 +909,23 @@ end
                     "CameraHelper(cam",
                 ],
                 prerequisites=["CameraHelper", "PolarGridHelper", "HemisphereLightHelper", "PlaneHelper", "light helpers"],
+            ),
+            "threejs_misc_boxselection" => (
+                source=[
+                    "const BOX_COUNT = 200",
+                    "const SELECT_RECT = (-0.35, 0.35, -0.25, 0.25)",
+                    "function build_box(i::Int, geometry::BufferGeometry)",
+                    "MeshLambertMaterial(color=deterministic_color(i)",
+                    "cast_shadow=true, receive_shadow=true",
+                    "function projected_center(camera::PerspectiveCamera, box::Mesh)",
+                    "projection_matrix(camera) * view_matrix(camera)",
+                    "function box_is_selected(camera::PerspectiveCamera, box::Mesh)",
+                    "function highlight_selected!(camera::PerspectiveCamera, boxes::Vector{Mesh})",
+                    "emissive=Color3(1.0, 1.0, 1.0)",
+                    "SpotLight(color=Color3(1.0, 1.0, 1.0), intensity=10000.0",
+                    "WebGLExportCase(\"misc-boxselection\"",
+                ],
+                prerequisites=["BoxGeometry", "MeshLambertMaterial.emissive", "PerspectiveCamera", "SpotLight", "browser mesh export"],
             ),
             "threejs_misc_animation_keys" => (
                 source=[

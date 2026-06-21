@@ -1057,7 +1057,7 @@ Parallel audits split the remaining work into five critical tracks:
 - Continue porting official examples one by one beyond the current registry in
   `examples/examples_registry.toml`; keep that registry as the authoritative
   list of upstream IDs, generated scripts, smoke commands, and known deviations.
-  `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
+  `misc_boxselection`, `misc_animation_keys`, `misc_animation_groups`, `misc_controls_orbit`,
   `misc_controls_map`, `misc_controls_trackball`, `misc_raycaster_helper`, `misc_uv_tests`,
   `webgl_camera_array`, `webgl_buffergeometry_drawrange`, `webgl_buffergeometry_instancing`, `webgl_lines_colors`,
   `webgl_lines_dashed`, and `webgl_helpers` now have either direct standalone
@@ -1240,6 +1240,12 @@ Parallel audits split the remaining work into five critical tracks:
   with equivalent quaternion, discrete material color, and opacity keyframes
   applied to each box. Upstream `AnimationObjectGroup`, `Stats`, and `Timer`
   remain documented deviations.
+- Added a standalone partial port for `misc_boxselection` via
+  `examples/misc_boxselection.jl`, using 200 deterministic Lambert boxes,
+  upstream-style ambient/spot lighting, and a fixed projected selection
+  rectangle that emissive-highlights selected boxes. Upstream pointer-driven
+  `SelectionBox`/`SelectionHelper`, DOM selection overlay, random placement,
+  and PCF shadow-map details remain documented deviations.
 - Added a standalone partial port for `misc_controls_orbit` via
   `examples/misc_controls_orbit.jl`, using deterministic `InstancedMesh`
   cone placement, `FogExp2`, Phong lighting, and local `OrbitControls`
