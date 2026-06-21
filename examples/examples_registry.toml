@@ -784,6 +784,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_exporter_ply.jl", "python examples/browser_webgl_smoke.py examples/output/misc_exporter_ply.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_exporter_obj"
+upstream_url = "https://threejs.org/examples/#misc_exporter_obj"
+local_script = "examples/misc_exporter_obj.jl"
+status = "partial"
+prerequisites = ["load_obj", "OBJ mesh records", "OBJ point records", "BoxGeometry", "CylinderGeometry", "MeshLambertMaterial", "PointsObject", "PerspectiveCamera", "OrbitControls", "browser mesh and point export"]
+known_deviations = [
+  "Uses a deterministic example-local OBJ writer plus load_obj mesh round trip instead of upstream browser OBJExporter downloads",
+  "Exports one combined transformed scene instead of upstream GUI-switched Triangle, Cube, Cylinder, Multiple objects, Transformed objects, and Point Cloud modes",
+  "Writes OBJ point records and renders the source point cloud because Diff3D.jl load_obj intentionally loads mesh faces only",
+  "Does not provide upstream lil-gui controls, Blob download links, or WebGLRenderer resize/animation-loop internals"
+]
+verification = ["julia --project=. examples/misc_exporter_obj.jl", "python examples/browser_webgl_smoke.py examples/output/misc_exporter_obj.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"
