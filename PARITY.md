@@ -793,7 +793,11 @@ Parallel audits split the remaining work into five critical tracks:
   `font_kerning`, and offset subsequent glyph loops in `font_text_shapes` and
   `TextGeometry`. `TextGeometry` now also supports bevel-enabled glyph contour
   groups, including simple holes, with configurable bevel size, thickness, and
-  segment count. Browser font rendering remains open.
+  segment count. The `webgl_geometry_text` official-example port now vendors
+  the upstream Optimer bold typeface asset, loads it through `FontLoader`, and
+  exports beveled mirrored `TextGeometry` to the compact browser renderer.
+  Browser DOM text editing, font switching, GUI controls, and renderer-level
+  front/side material slot parity remain open.
 - Done: add a native basic SVG loader surface via `SVGDocument`, `SVGPath`,
   `load_svg`, `SVGLoader`, `svg_shapes`, and `svg_geometry`, covering standalone
   `path`, `rect` including `rx`/`ry` rounded corners, `line`, `circle`,

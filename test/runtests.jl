@@ -222,6 +222,7 @@ end
             "threejs_webgl_geometry_colors",
             "threejs_webgl_geometry_colors_lookuptable",
             "threejs_webgl_geometry_shapes",
+            "threejs_webgl_geometry_text",
             "threejs_webgl_camera",
             "threejs_webgl_lod",
             "threejs_webgl_clipping",
@@ -319,6 +320,20 @@ end
                     "WebGLExportCase(\"geometry-shapes\"",
                 ],
                 prerequisites=["ShapeGeometry", "ExtrudeGeometry", "LineLoop", "MeshPhongMaterial.map"],
+            ),
+            "threejs_webgl_geometry_text" => (
+                source=[
+                    "const FONT_PATH = joinpath(@__DIR__, \"assets\", \"fonts\", \"optimer_bold.typeface.json\")",
+                    "return FontLoader(FONT_PATH)",
+                    "TextGeometry(font, text; size=1.0, depth=0.28",
+                    "bevel_enabled=true",
+                    "function text_center_offset(geo)",
+                    "MeshPhongMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "name=\"geometry_text_mirror\"",
+                    "QuaternionKeyframeTrack(group, :rotation",
+                    "WebGLExportCase(\"geometry-text\"",
+                ],
+                prerequisites=["FontLoader", "TextGeometry", "beveled text geometry", "browser animation playback"],
             ),
             "threejs_webgl_camera" => (
                 source=[
