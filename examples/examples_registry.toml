@@ -756,6 +756,20 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_controls_transform.jl", "python examples/browser_webgl_smoke.py examples/output/misc_controls_transform.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_exporter_stl"
+upstream_url = "https://threejs.org/examples/#misc_exporter_stl"
+local_script = "examples/misc_exporter_stl.jl"
+status = "partial"
+prerequisites = ["save_stl_binary", "load_stl", "BoxGeometry", "transform_geometry", "PerspectiveCamera", "OrbitControls", "GridHelper", "browser mesh export"]
+known_deviations = [
+  "Uses Diff3D.jl save_stl_binary and load_stl for a deterministic binary STL round trip instead of upstream browser STLExporter downloads",
+  "Does not provide upstream GUI buttons, Blob download links, or ASCII STL export",
+  "Exports transformed geometry before writing the STL rather than invoking a scene-object exporter on a Mesh",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer shadow-map and resize handling"
+]
+verification = ["julia --project=. examples/misc_exporter_stl.jl", "python examples/browser_webgl_smoke.py examples/output/misc_exporter_stl.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_animation_keys"
 upstream_url = "https://threejs.org/examples/#misc_animation_keys"
 local_script = "examples/misc_animation_keys.jl"

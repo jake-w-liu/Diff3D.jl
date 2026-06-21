@@ -277,6 +277,7 @@ end
             "threejs_misc_controls_fly",
             "threejs_misc_controls_pointerlock",
             "threejs_misc_controls_transform",
+            "threejs_misc_exporter_stl",
             "threejs_misc_animation_keys",
             "threejs_misc_animation_groups",
             "threejs_misc_controls_orbit",
@@ -1019,6 +1020,25 @@ end
                     "WebGLExportCase(\"misc-controls-transform-orthographic\"",
                 ],
                 prerequisites=["TransformControls", "OrbitControls", "PerspectiveCamera", "OrthographicCamera", "GridHelper", "browser mesh export"],
+            ),
+            "threejs_misc_exporter_stl" => (
+                source=[
+                    "const STL_BOX_FACE_COUNT = 12",
+                    "const STL_BINARY_SIZE = 84 + 50 * STL_BOX_FACE_COUNT",
+                    "const EXPORTED_MESH_OFFSET = Vec3(0.0, 0.5, 0.0)",
+                    "const EXPORTED_STL_PATH = joinpath(OUT, \"misc_exporter_stl_box.stl\")",
+                    "function exported_box_geometry()",
+                    "source = transform_geometry(BoxGeometry()",
+                    "save_stl_binary(EXPORTED_STL_PATH, source)",
+                    "filesize(EXPORTED_STL_PATH) == STL_BINARY_SIZE",
+                    "loaded = load_stl(EXPORTED_STL_PATH)",
+                    "loaded.n_faces == STL_BOX_FACE_COUNT",
+                    "compute_vertex_normals!(loaded)",
+                    "GridHelper(40.0, 20; color=Color3(0.0, 0.0, 0.0))",
+                    "OrbitControls(camera, camera.target)",
+                    "WebGLExportCase(\"misc-exporter-stl\"",
+                ],
+                prerequisites=["save_stl_binary", "load_stl", "BoxGeometry", "transform_geometry", "OrbitControls", "browser mesh export"],
             ),
             "threejs_misc_animation_keys" => (
                 source=[
