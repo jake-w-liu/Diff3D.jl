@@ -698,6 +698,18 @@ known_deviations = [
 verification = ["julia --project=. examples/misc_animation_keys.jl", "python examples/browser_webgl_smoke.py examples/output/misc_animation_keys.html"]
 
 [[examples]]
+upstream_id = "threejs_misc_animation_groups"
+upstream_url = "https://threejs.org/examples/#misc_animation_groups"
+local_script = "examples/misc_animation_groups.jl"
+status = "partial"
+prerequisites = ["BoxGeometry", "MeshBasicMaterial.transparent", "quaternion keyframe tracks", "material color animation", "material opacity animation", "browser animation playback"]
+known_deviations = [
+  "Diff3D.jl does not expose three.js AnimationObjectGroup, so the generated clip applies equivalent tracks to each box instead of binding one shared animation root",
+  "Uses Diff3D.jl's compact WebGL exporter rather than upstream WebGLRenderer, Stats, and Timer"
+]
+verification = ["julia --project=. examples/misc_animation_groups.jl", "python examples/browser_webgl_smoke.py examples/output/misc_animation_groups.html"]
+
+[[examples]]
 upstream_id = "threejs_misc_controls_orbit"
 upstream_url = "https://threejs.org/examples/#misc_controls_orbit"
 local_script = "examples/misc_controls_orbit.jl"

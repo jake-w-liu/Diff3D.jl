@@ -273,6 +273,7 @@ end
             "threejs_webgl_lines_dashed",
             "threejs_webgl_helpers",
             "threejs_misc_animation_keys",
+            "threejs_misc_animation_groups",
             "threejs_misc_controls_orbit",
             "threejs_misc_controls_map",
             "threejs_misc_controls_trackball",
@@ -922,6 +923,24 @@ end
                     "AnimationClip(\"Action\", 3.0, tracks)",
                 ],
                 prerequisites=["BoxGeometry", "MeshBasicMaterial.transparent", "material color animation", "material opacity animation"],
+            ),
+            "threejs_misc_animation_groups" => (
+                source=[
+                    "const GRID_SIZE = 5",
+                    "const BOX_SIZE = 5.0",
+                    "const GRID_SPACING = 16.0",
+                    "function build_animation_grid!()",
+                    "BoxGeometry(width=BOX_SIZE, height=BOX_SIZE, depth=BOX_SIZE)",
+                    "MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)",
+                    "transparent=true, opacity=1.0",
+                    "QuaternionKeyframeTrack(mesh, \"quaternion\", KEY_TIMES",
+                    "KeyframeTrack(mesh, \"material.color\", KEY_TIMES",
+                    "interpolation=:step",
+                    "NumberKeyframeTrack(mesh, \"material.opacity\", KEY_TIMES",
+                    "AnimationClip(\"default\", 3.0, tracks)",
+                    "WebGLExportCase(\"misc-animation-groups\"",
+                ],
+                prerequisites=["BoxGeometry", "MeshBasicMaterial.transparent", "quaternion keyframe tracks", "material opacity animation"],
             ),
             "threejs_misc_controls_orbit" => (
                 source=[
