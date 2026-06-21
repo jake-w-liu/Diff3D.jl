@@ -1345,6 +1345,16 @@ Parallel audits split the remaining work into five critical tracks:
   keyframes instead of relying on animated `PointLight` children, and exports
   sampled `AnimationClip` tracks over a `20pi`-second period instead of upstream `performance.now`,
   `WebGLRenderer`, `OrbitControls`, and Stats runtime internals.
+- Added a standalone partial port for `webgl_shadowmap_vsm` via
+  `examples/webgl_shadowmap_vsm.jl`, preserving the upstream camera, fog and
+  background color, ambient light, red intensity-400 `SpotLight`, blue
+  intensity-3 `DirectionalLight`, shadow biases, radius-4 shadow settings,
+  zero-shininess Phong materials, torus knot, four pillars, 600x600 ground
+  plane, orbit target, torus rotation rates, and directional-light motion.
+  Diff3D.jl exports supported dynamic spot and directional shadow maps with
+  `shadow_pcf_radius=4` rather than upstream `VSMShadowMap`, blur samples,
+  and GUI controls; the directional light's parent-group yaw and z sine are
+  baked into world-position keyframes over the shared `40pi`-second period.
 - Added a standalone partial port for `webgl_lightprobe` via
   `examples/webgl_lightprobe.jl`, preserving the upstream camera, direction
   light intensity/position, white zero-roughness sphere, cubemap-backed

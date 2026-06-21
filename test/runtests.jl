@@ -831,6 +831,26 @@ end
                 ],
                 prerequisites=["PointLight.cast_shadow", "dynamic point-light shadows", "MeshPhongMaterial.alpha_map", "MeshPhongMaterial.alpha_test", "browser animation playback"],
             ),
+            "threejs_webgl_shadowmap_vsm" => (
+                source=[
+                    "const SHADOWMAP_VSM_BACKGROUND = Color3(0.133, 0.133, 0.267)",
+                    "const SHADOWMAP_VSM_SHADOW_RADIUS = 4",
+                    "const SHADOWMAP_VSM_DURATION = 40pi",
+                    "function shadowmap_vsm_directional_position(t::Real)",
+                    "Fog(color=SHADOWMAP_VSM_BACKGROUND, near=50.0, far=100.0)",
+                    "SpotLight(color=Color3(1.0, 0.533, 0.533), intensity=400.0",
+                    "shadow_bias=-0.002",
+                    "DirectionalLight(color=Color3(0.533, 0.533, 1.0), intensity=3.0",
+                    "shadow_bias=-0.0005",
+                    "TorusKnotGeometry(radius=25.0, tube=8.0",
+                    "CylinderGeometry(radius_top=0.75, radius_bottom=0.75",
+                    "PlaneGeometry(width=600.0, height=600.0)",
+                    "AnimationClip(\"shadowmap_vsm_motion\"",
+                    "KeyframeTrack(dir, :position",
+                    "WebGLExportCase(\"shadowmap-vsm\"",
+                ],
+                prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "TorusKnotGeometry", "CylinderGeometry", "Fog", "browser animation playback"],
+            ),
             "threejs_webgl_lightprobe" => (
                 source=[
                     "const LIGHTPROBE_CUBE_SIZE = 32",

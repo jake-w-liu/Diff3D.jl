@@ -536,6 +536,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_pointlight.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_pointlight.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap_vsm"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap_vsm"
+local_script = "examples/webgl_shadowmap_vsm.jl"
+status = "partial"
+prerequisites = ["SpotLight", "DirectionalLight", "dynamic shadow maps", "TorusKnotGeometry", "CylinderGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"]
+known_deviations = [
+  "Uses Diff3D.jl compact WebGL dynamic shadow maps with shadow_pcf_radius=4 instead of upstream VSMShadowMap, blurSamples, and lil-gui radius/sample controls",
+  "Animates the directional light with baked world-position keyframes matching the upstream parent group yaw and z sine instead of exporting a runtime parent light group",
+  "Uses sampled Diff3D.jl AnimationClip tracks over the shared 40pi-second motion period instead of upstream Timer delta updates, WebGLRenderer VSM internals, OrbitControls, and Stats"
+]
+verification = ["julia --project=. examples/webgl_shadowmap_vsm.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_vsm.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_lightprobe"
 upstream_url = "https://threejs.org/examples/#webgl_lightprobe"
 local_script = "examples/webgl_lightprobe.jl"
