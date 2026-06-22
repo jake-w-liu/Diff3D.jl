@@ -1548,6 +1548,28 @@ end
                 ],
                 prerequisites=["BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"],
             ),
+            "threejs_webgl_custom_attributes_points2" => (
+                source=[
+                    "const CUSTOM_POINTS2_RADIUS = 100.0",
+                    "const CUSTOM_POINTS2_SPHERE_SEGMENTS = 68",
+                    "const CUSTOM_POINTS2_SPHERE_RINGS = 38",
+                    "const CUSTOM_POINTS2_BOX_SCALE = 0.8",
+                    "const CUSTOM_POINTS2_BOX_SEGMENTS = 10",
+                    "function custom_points2_unique_positions(geo::BufferGeometry)",
+                    "function custom_points2_disc_texture(; n::Int=32)",
+                    "SphereGeometry(radius=CUSTOM_POINTS2_RADIUS",
+                    "BoxGeometry(width=box_size, height=box_size, depth=box_size",
+                    "function custom_points2_depth_sorted_indices(positions::Vector{Float64})",
+                    "set_attribute!(geo, :ca, colors, 3)",
+                    "set_attribute!(geo, :size, sizes, 1)",
+                    "PointsObject(custom_attributes_points2_geometry()",
+                    "PointsMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "QuaternionKeyframeTrack(points, :rotation, [0.0, 10.0, 20.0]",
+                    "PerspectiveCamera(fov=45pi / 180",
+                    "WebGLExportCase(\"custom-attributes-points2\"",
+                ],
+                prerequisites=["SphereGeometry", "BoxGeometry", "BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"],
+            ),
             "threejs_webgl_points_sprites" => (
                 source=[
                     "PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=7.0,\n                                            transparent=true, map=sprite_map)",

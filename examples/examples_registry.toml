@@ -1052,6 +1052,19 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_custom_attributes_points.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes_points.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_custom_attributes_points2"
+upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_points2"
+local_script = "examples/webgl_custom_attributes_points2.jl"
+status = "partial"
+prerequisites = ["SphereGeometry", "BoxGeometry", "BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"]
+known_deviations = [
+  "Stores upstream-style size and ca attributes on merged sphere and box vertices, but renders with Diff3D.jl's built-in PointsMaterial rather than upstream ShaderMaterial per-point gl_PointSize animation",
+  "Uses position-only deduplication and a static initial-camera depth sort instead of BufferGeometryUtils.mergeVertices plus per-frame sortPoints",
+  "Uses a generated repeat-wrapped disc texture and keyframed rotation instead of upstream textures/sprites/disc.png, Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_custom_attributes_points2.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes_points2.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_points_sprites"
 upstream_url = "https://threejs.org/examples/#webgl_points_sprites"
 local_script = "examples/webgl_points_sprites.jl"

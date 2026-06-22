@@ -1305,6 +1305,15 @@ Parallel audits split the remaining work into five critical tracks:
   text geometry and the vendored Optimer font; upstream helvetiker font,
   additive custom `ShaderMaterial`, per-frame displacement jitter, animated HSL
   uniform tint, Stats, and WebGLRenderer internals remain documented deviations.
+- Added a standalone partial port for `webgl_custom_attributes_points2` via
+  `examples/webgl_custom_attributes_points2.jl`, preserving the upstream merged
+  sphere-plus-box billboard point concept, `SphereGeometry(100, 68, 38)`,
+  `BoxGeometry(80, 80, 80, 10, 10, 10)`, 45-degree camera at `z=300`, `:ca`
+  color and `:size` custom attributes, repeat-wrapped disc point texture, and
+  rotating point cloud. Diff3D exports a static initial-camera depth order and
+  built-in `PointsMaterial`; upstream ShaderMaterial `gl_PointSize` animation,
+  per-frame `sortPoints`, `textures/sprites/disc.png`, Stats, and WebGLRenderer
+  internals remain documented deviations.
 - Added a standalone partial port for `webgl_buffergeometry_attributes_none` via
   `examples/webgl_buffergeometry_attributes_none.jl`, preserving the upstream
   10,000-triangle scale by materializing `gl_VertexID` shader positions and colors
