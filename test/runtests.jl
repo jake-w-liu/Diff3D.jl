@@ -1492,6 +1492,25 @@ end
                 ],
                 prerequisites=["BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "browser point-color export", "browser animation playback"],
             ),
+            "threejs_webgl_custom_attributes" => (
+                source=[
+                    "const CUSTOM_ATTRIBUTES_RADIUS = 50.0",
+                    "const CUSTOM_ATTRIBUTES_SEGMENTS = 128",
+                    "const CUSTOM_ATTRIBUTES_RINGS = 64",
+                    "const CUSTOM_ATTRIBUTES_AMPLITUDE = 1.0",
+                    "function custom_attributes_displacement(index::Int)",
+                    "function custom_attributes_water_texture(; n::Int=64)",
+                    "SphereGeometry(radius=CUSTOM_ATTRIBUTES_RADIUS",
+                    "set_attribute!(geo, :displacement, displacements, 1)",
+                    "compute_vertex_normals!(geo)",
+                    "MeshPhongMaterial(color=Color3(1.0, 34 / 255, 0.0)",
+                    "map=custom_attributes_water_texture())",
+                    "QuaternionKeyframeTrack(sphere, :rotation, [0.0, 6.0, 12.0]",
+                    "PerspectiveCamera(fov=30pi / 180",
+                    "WebGLExportCase(\"custom-attributes\"",
+                ],
+                prerequisites=["SphereGeometry", "BufferGeometry custom attributes", "MeshPhongMaterial.map", "Texture", "browser animation playback"],
+            ),
             "threejs_webgl_custom_attributes_points" => (
                 source=[
                     "const CUSTOM_POINTS_AMOUNT = 100_000",

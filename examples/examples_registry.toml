@@ -1011,6 +1011,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_buffergeometry_custom_attributes_particles.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_buffergeometry_custom_attributes_particles.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_custom_attributes"
+upstream_url = "https://threejs.org/examples/#webgl_custom_attributes"
+local_script = "examples/webgl_custom_attributes.jl"
+status = "partial"
+prerequisites = ["SphereGeometry", "BufferGeometry custom attributes", "MeshPhongMaterial.map", "Texture", "browser animation playback"]
+known_deviations = [
+  "Stores the upstream displacement attribute and exports a deterministic displaced-geometry snapshot instead of mutating ShaderMaterial displacement on every frame",
+  "Uses a generated repeatable water-like texture rather than loading textures/water.jpg",
+  "Uses MeshPhongMaterial with a fixed orange tint instead of upstream custom vertex/fragment ShaderMaterial, animated HSL offset, and grayscale shader mixing",
+  "Uses Diff3D.jl keyframe rotation and compact WebGL export instead of upstream Date.now mutation, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_custom_attributes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_custom_attributes_points"
 upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_points"
 local_script = "examples/webgl_custom_attributes_points.jl"

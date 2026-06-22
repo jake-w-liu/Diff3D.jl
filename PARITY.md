@@ -1289,6 +1289,14 @@ Parallel audits split the remaining work into five critical tracks:
   `:size`, and `:sizePhase` attributes. Upstream `ShaderMaterial` per-point
   `gl_PointSize` animation, the exact sprite asset, `Stats`, and the imperative
   animation loop remain documented deviations.
+- Added a standalone partial port for `webgl_custom_attributes` via
+  `examples/webgl_custom_attributes.jl`, preserving the upstream
+  `SphereGeometry(50, 128, 64)`, `:displacement` custom attribute, 30-degree
+  camera at `z=300`, dark background, water-textured orange material, and
+  rotating sphere. The local port exports a deterministic displaced-geometry
+  snapshot with recomputed normals; upstream per-frame `ShaderMaterial`
+  displacement mutation, `textures/water.jpg`, animated HSL tint, grayscale
+  shader mix, Stats, and WebGLRenderer internals remain documented deviations.
 - Added a standalone partial port for `webgl_buffergeometry_attributes_none` via
   `examples/webgl_buffergeometry_attributes_none.jl`, preserving the upstream
   10,000-triangle scale by materializing `gl_VertexID` shader positions and colors
