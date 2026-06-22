@@ -1363,6 +1363,18 @@ Parallel audits split the remaining work into five critical tracks:
   shadows. Upstream randomized starts/resets, all-horse dynamic shadow casting,
   FirstPersonControls, Stats, exact PCF shadow-map internals, and renderer
   `autoClear=false` behavior remain documented deviations.
+- Added a standalone partial port for `webgl_shadowmap_pcss` via
+  `examples/webgl_shadowmap_pcss.jl`, preserving the upstream camera position
+  and 30-degree FOV, fog color/range, intensity-3 ambient light, intensity-4.5
+  directional light at `(2, 8, 4)`, 1024 shadow-map-size constant,
+  20-unit shadow-helper far plane, PCSS shader constants, camera helper, 20 animated
+  shadow-casting/receiving spheres, 20000x20000 segmented ground plane, and
+  central 1x4x1 shadow-casting column. Diff3D.jl exports deterministic sphere
+  positions, colors, and phase offsets as sampled `position.y` keyframes, and
+  uses compact PCF shadow filtering with `shadow_pcf_radius=4` instead of
+  upstream `ShaderChunk.shadowmap_pars_fragment` PCSS replacement and
+  `BasicShadowMap` raw-depth sampling. Stats, exact WebGLRenderer shader state,
+  and random browser-time placement remain documented deviations.
 - Added a standalone partial port for `webgl_shadow_contact` via
   `examples/webgl_shadow_contact.jl`, preserving the upstream 50-degree
   camera, white scene background, 2.5x2.5 contact plane, 0.3-unit shadow-camera

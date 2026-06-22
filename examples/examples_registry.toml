@@ -551,6 +551,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_performance.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_performance.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap_pcss"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap_pcss"
+local_script = "examples/webgl_shadowmap_pcss.jl"
+status = "partial"
+prerequisites = ["DirectionalLight", "dynamic shadow maps", "CameraHelper", "SphereGeometry", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"]
+known_deviations = [
+  "Preserves the upstream PCSS shader constants as Julia constants but uses Diff3D.jl compact PCF shadow filtering because the exporter does not support replacing three.js ShaderChunk shadowmap code",
+  "Uses deterministic sphere positions, colors, and phases instead of upstream Math.random placement and userData phases",
+  "Exports sampled position.y keyframes for bouncing spheres instead of upstream performance.now animation and group traversal",
+  "Uses compact WebGL orbit controls and dynamic directional shadows instead of upstream BasicShadowMap raw-depth PCSS shader internals, Stats, and exact WebGLRenderer state"
+]
+verification = ["julia --project=. examples/webgl_shadowmap_pcss.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_pcss.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadow_contact"
 upstream_url = "https://threejs.org/examples/#webgl_shadow_contact"
 local_script = "examples/webgl_shadow_contact.jl"
