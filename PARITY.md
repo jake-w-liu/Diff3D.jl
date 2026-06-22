@@ -1200,6 +1200,16 @@ Parallel audits split the remaining work into five critical tracks:
   `ArrayCamera` scissor-split cases. Upstream O/P keyboard switching, live
   projection mutation, `Stats`, and `WebGLRenderer` internals remain documented
   deviations.
+- Added a standalone partial port for `webgl_camera_logarithmicdepthbuffer`
+  via `examples/webgl_camera_logarithmicdepthbuffer.jl`, preserving the
+  upstream `NEAR=1e-6`, `FAR=1e27`, 25/75 renderer split constant, zoom-speed
+  constants, ambient/directional lights, 15 scale-label dataset, TextGeometry
+  labels, sphere dots, and side-by-side normal/logarithmic comparison shape
+  through an `ArrayCamera` split view. Diff3D.jl compresses the physical scale
+  distances into a renderable visual z range and uses vendored Optimer text
+  with ASCII `1um`; true `WebGLRenderer.logarithmicDepthBuffer`, two live DOM
+  renderers, draggable split bar, mouse-wheel dolly, pointer orbit, and Stats
+  remain documented deviations.
 - Added a standalone partial port for `webgl_lod` via
   `examples/webgl_lod.jl`, using Diff3D.jl `LOD`, `add_lod_level!`,
   `IcosahedronGeometry`, Lambert wireframe rendering, fog, and browser-side LOD

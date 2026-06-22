@@ -251,6 +251,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_camera.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_camera.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_camera_logarithmicdepthbuffer"
+upstream_url = "https://threejs.org/examples/#webgl_camera_logarithmicdepthbuffer"
+local_script = "examples/webgl_camera_logarithmicdepthbuffer.jl"
+status = "partial"
+prerequisites = ["PerspectiveCamera.near/far", "ArrayCamera", "TextGeometry", "SphereGeometry", "MeshPhongMaterial", "browser scissor-split export"]
+known_deviations = [
+  "Preserves the upstream NEAR=1e-6 and FAR=1e27 constants plus the full scale-label dataset, but compresses physical distances into a renderable visual z range because Diff3D.jl does not implement WebGLRenderer.logarithmicDepthBuffer",
+  "Uses a 25/75 ArrayCamera split view to exercise the upstream normal/logarithmic comparison layout instead of two separate WebGLRenderer DOM canvases and a draggable split bar",
+  "Uses the vendored Optimer bold font and ASCII '1um' label text instead of upstream helvetiker_regular.typeface.json and the micro sign",
+  "Exports a static camera/scale comparison scene instead of upstream mouse-wheel dolly, pointer-driven camera orbit, live renderer resizing, and Stats"
+]
+verification = ["julia --project=. examples/webgl_camera_logarithmicdepthbuffer.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_camera_logarithmicdepthbuffer.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_camera_array"
 upstream_url = "https://threejs.org/examples/#webgl_camera_array"
 local_script = "examples/webgl_camera_array.jl"

@@ -599,6 +599,27 @@ end
                 ],
                 prerequisites=["PerspectiveCamera", "OrthographicCamera", "ArrayCamera", "CameraHelper", "explicit camera export", "browser scissor-split export"],
             ),
+            "threejs_webgl_camera_logarithmicdepthbuffer" => (
+                source=[
+                    "const LOGDEPTH_NEAR = 1e-6",
+                    "const LOGDEPTH_FAR = 1e27",
+                    "const LOGDEPTH_INITIAL_SPLIT = 0.25",
+                    "const LOGDEPTH_MIN_ZOOM_SPEED = 0.015",
+                    "const LOGDEPTH_ZOOM_POS = -100.0",
+                    "const LOGDEPTH_LABEL_DATA = [",
+                    "label=\"mind boggling (1000 light years)\"",
+                    "function logdepth_visual_z(entry)",
+                    "function logdepth_text_geometry(font::FontData, label::String)",
+                    "TextGeometry(font, label; size=0.55, depth=0.055",
+                    "SphereGeometry(radius=0.5, width_segments=24, height_segments=12)",
+                    "DirectionalLight(color=Color3(1.0, 1.0, 1.0)",
+                    "PerspectiveCamera(fov=50pi / 180, aspect=left_aspect",
+                    "PerspectiveCamera(fov=50pi / 180, aspect=right_aspect",
+                    "ArrayCamera([normal, logz]",
+                    "WebGLExportCase(\"camera-logarithmicdepthbuffer\"",
+                ],
+                prerequisites=["PerspectiveCamera.near/far", "ArrayCamera", "TextGeometry", "SphereGeometry", "MeshPhongMaterial", "browser scissor-split export"],
+            ),
             "threejs_webgl_camera_array" => (
                 source=[
                     "function build_array_camera(; amount::Int=4",
