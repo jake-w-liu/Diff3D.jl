@@ -522,6 +522,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_lights_physical.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_lights_physical.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap_csm"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap_csm"
+local_script = "examples/webgl_shadowmap_csm.jl"
+status = "partial"
+prerequisites = ["DirectionalLight", "dynamic shadow maps", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "browser orbit controls"]
+known_deviations = [
+  "Preserves upstream CSM parameters as Julia constants and ports the visible floor and cube-row scene, but uses one Diff3D.jl dynamic directional shadow light because the exporter does not support three.js CSM, CSMHelper, or CSM material shader setup",
+  "Uses deterministic cube height scales in the upstream 6-to-8 range instead of upstream Math.random heights",
+  "Keeps the upstream default perspective camera state; upstream GUI controls for orthographic camera mode, cascade fade, shadow toggles, split mode, light margin, light near/far, and CSMHelper display are not interactive",
+  "Uses compact exported orbit controls and dynamic directional shadows instead of upstream WebGLRenderer PCFShadowMap internals and per-frame CSM.update/csmHelper.update calls"
+]
+verification = ["julia --project=. examples/webgl_shadowmap_csm.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_csm.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadowmap_pointlight"
 upstream_url = "https://threejs.org/examples/#webgl_shadowmap_pointlight"
 local_script = "examples/webgl_shadowmap_pointlight.jl"

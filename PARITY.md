@@ -1335,6 +1335,18 @@ Parallel audits split the remaining work into five critical tracks:
   supported normal maps as bump-map proxies; upstream JPG assets, `PointLight`
   `.power`, `bumpMap`, GUI controls, Stats, live shadow toggle, and imperative
   `Date.now` animation remain documented deviations.
+- Added a standalone partial port for `webgl_shadowmap_csm` via
+  `examples/webgl_shadowmap_csm.jl`, preserving the upstream 70-degree
+  perspective camera, `#454e61` background, intensity-1.5 white ambient light,
+  dark-blue intensity-1.5 fill directional light, default CSM parameters
+  (`cascades=4`, `maxFar=1000`, `mode="practical"`, 1024 shadow map, light
+  direction `(-1, -1, -1)`, margin 100, near 1, far 5000), 10000x10000
+  segmented floor, and 80 shadow-casting/receiving 10x10x10 boxes in the two
+  upstream rows. Diff3D.jl uses deterministic 6-to-8 cube height scales and a
+  single supported dynamic directional shadow light as the visible shadow
+  fallback; upstream `CSM`, `CSMHelper`, cascade split/fade material shader
+  setup, GUI controls, and per-frame `csm.update()` behavior remain documented
+  deviations.
 - Added a standalone partial port for `webgl_shadowmap_pointlight` via
   `examples/webgl_shadowmap_pointlight.jl`, preserving the upstream 45-degree
   camera, 0x111122 ambient light at intensity 3, two colored intensity-200
