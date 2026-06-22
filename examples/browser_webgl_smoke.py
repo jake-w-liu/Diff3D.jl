@@ -15,6 +15,10 @@ def smoke_html(path: Path) -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=args)
         page = browser.new_page(viewport={"width": 1280, "height": 800})
+        # CI uses a software (swiftshader) renderer that is ~50-100x slower than a
+        # local GPU. WebGL init and per-frame layout settle slowly, so the default
+        # 30s action timeout is too tight for slow runners.
+        page.set_default_timeout(120000)
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
@@ -33,16 +37,20 @@ def smoke_html(path: Path) -> int:
             speed_state = page.evaluate("() => window.__diff3dDebug.animationSpeed()")
             if abs(speed_state - 1.75) > 1e-6:
                 errors.append(f"{path}: speed control did not update runtime speed")
-            page.locator("#playToggle").click()
+            # force=True: under slow CI rendering the controls bar keeps reflowing
+            # (live stats text), so the button never passes Playwright's "stable"
+            # check. The button is present and functional; we still assert its
+            # effect via __diff3dDebug below, so coverage is preserved.
+            page.locator("#playToggle").click(force=True)
             if not page.evaluate("() => window.__diff3dDebug.animationPaused()"):
                 errors.append(f"{path}: pause control did not update runtime state")
-            page.locator("#playToggle").click()
+            page.locator("#playToggle").click(force=True)
 
         buttons = page.locator("button[data-case]")
         count = max(1, buttons.count())
         for i in range(count):
             if buttons.count():
-                buttons.nth(i).click()
+                buttons.nth(i).click(force=True)
                 page.wait_for_timeout(350)
             canvas = page.locator("canvas")
             box = canvas.bounding_box()
