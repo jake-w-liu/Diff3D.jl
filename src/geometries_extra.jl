@@ -432,6 +432,15 @@ struct NURBSCurve
     degree::Int
     knots::Vector{Float64}
     control_points::Vector{Vec4{Float64}}
+
+    # Inner constructor so validation can't be bypassed: the auto-generated
+    # field constructor would otherwise shadow the validating one for exact
+    # (Int, Vector{Float64}, Vector{Vec4{Float64}}) arguments.
+    function NURBSCurve(degree::Integer, knots, control_points::AbstractVector{<:Vec4})
+        p = _nurbs_degree(degree)
+        cps = [_nurbs_control_point(cp) for cp in control_points]
+        return new(p, _nurbs_knots(knots, p, length(cps), "NURBSCurve"), cps)
+    end
 end
 
 struct NURBSSurface
@@ -483,12 +492,6 @@ function _nurbs_control_point(point::Vec4)
         throw(ArgumentError("NURBS control points must be finite"))
     w > 0.0 || throw(ArgumentError("NURBS control point weights must be positive"))
     return Vec4(x, y, z, w)
-end
-
-function NURBSCurve(degree::Integer, knots, control_points::AbstractVector{<:Vec4})
-    p = _nurbs_degree(degree)
-    cps = [_nurbs_control_point(cp) for cp in control_points]
-    return NURBSCurve(p, _nurbs_knots(knots, p, length(cps), "NURBSCurve"), cps)
 end
 
 function _nurbs_surface_points(control_points)

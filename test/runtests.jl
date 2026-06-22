@@ -306,6 +306,25 @@ end
             "threejs_misc_raycaster_helper",
             "threejs_misc_uv_tests",
             "threejs_webgl_animation_keyframes",
+            "threejs_webgl_custom_attributes",
+            "threejs_webgl_custom_attributes_lines",
+            "threejs_webgl_custom_attributes_points2",
+            "threejs_webgl_custom_attributes_points3",
+            "threejs_webgl_clipping_intersection",
+            "threejs_webgl_clipping_advanced",
+            "threejs_webgl_clipping_stencil",
+            "threejs_webgl_camera_logarithmicdepthbuffer",
+            "threejs_webgl_shadowmap",
+            "threejs_webgl_shadowmap_pointlight",
+            "threejs_webgl_shadowmap_performance",
+            "threejs_webgl_shadowmap_pcss",
+            "threejs_webgl_shadowmap_csm",
+            "threejs_webgl_shadowmap_vsm",
+            "threejs_webgl_shadowmap_viewer",
+            "threejs_webgl_shadowmap_progressive",
+            "threejs_webgl_tsl_shadowmap",
+            "threejs_webgl_shadow_contact",
+            "threejs_webgl_shadowmesh",
         ])
         ids = String[e["upstream_id"] for e in examples]
         @test Set(ids) == expected_ids
@@ -818,7 +837,7 @@ end
                     "const SPOTLIGHT_HEIGHT = 5.0",
                     "const SPOTLIGHT_GROUND_SIZE = 10.0",
                     "const SPOTLIGHT_CAMERA_POSITION = Vec3(7.0, 4.0, 1.0)",
-                    "function spotlight_position(theta::Float64)",
+                    "spotlight_position(theta::Float64) =",
                     "PlaneGeometry(width=SPOTLIGHT_GROUND_SIZE",
                     "function build_lucy_proxy()",
                     "TorusKnotGeometry(radius=0.62, tube=0.16",
@@ -888,7 +907,7 @@ end
                     "tone_mapping=:reinhard, tone_exposure=0.68^5",
                     "WebGLExportCase(\"lights-physical\"",
                 ],
-                prerequisites=["PointLight", "HemisphereLight", "MeshStandardMaterial.map", "normal-map export", "browser animation playback"],
+                prerequisites=["PointLight", "HemisphereLight", "MeshStandardMaterial.map", "MeshStandardMaterial.normal_map", "browser animation playback"],
             ),
             "threejs_webgl_shadowmap_csm" => (
                 source=[
@@ -911,7 +930,7 @@ end
                     "shadow_pcf_radius=1",
                     "WebGLExportCase(\"shadowmap-csm\"",
                 ],
-                prerequisites=["DirectionalLight.cast_shadow", "dynamic shadow maps", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "browser orbit controls"],
+                prerequisites=["DirectionalLight", "dynamic shadow maps", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "browser orbit controls"],
             ),
             "threejs_webgl_shadowmap_pointlight" => (
                 source=[
@@ -965,7 +984,7 @@ end
                     "AnimationClip(\"shadowmap_performance_group_motion\"",
                     "WebGLExportCase(\"shadowmap-performance\"",
                 ],
-                prerequisites=["DirectionalLight.cast_shadow", "InstancedMesh", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
+                prerequisites=["DirectionalLight", "InstancedMesh", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_shadowmap_pcss" => (
                 source=[
@@ -990,7 +1009,7 @@ end
                     "AnimationClip(\"pcss_bouncing_spheres\"",
                     "WebGLExportCase(\"shadowmap-pcss\"",
                 ],
-                prerequisites=["DirectionalLight.cast_shadow", "CameraHelper", "SphereGeometry", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
+                prerequisites=["DirectionalLight", "CameraHelper", "SphereGeometry", "PlaneGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_shadowmap_progressive" => (
                 source=[
@@ -1015,7 +1034,7 @@ end
                     "KeyframeTrack(light, :position",
                     "WebGLExportCase(\"shadowmap-progressive\"",
                 ],
-                prerequisites=["DirectionalLight.cast_shadow", "dynamic shadow maps", "PlaneGeometry", "IcosahedronGeometry", "CylinderGeometry", "MeshPhongMaterial.light_map", "TransformControls", "Fog", "browser animation playback"],
+                prerequisites=["DirectionalLight", "dynamic shadow maps", "PlaneGeometry", "IcosahedronGeometry", "CylinderGeometry", "MeshPhongMaterial.light_map", "TransformControls", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_shadow_contact" => (
                 source=[
@@ -1065,7 +1084,7 @@ end
                     "AnimationClip(\"shadowmap_morph_motion\"",
                     "WebGLExportCase(\"shadowmap\"",
                 ],
-                prerequisites=["DirectionalLight.cast_shadow", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
+                prerequisites=["DirectionalLight", "FontLoader", "TextGeometry", "BoxGeometry", "MeshPhongMaterial", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_shadowmap_vsm" => (
                 source=[
@@ -1085,7 +1104,7 @@ end
                     "KeyframeTrack(dir, :position",
                     "WebGLExportCase(\"shadowmap-vsm\"",
                 ],
-                prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "TorusKnotGeometry", "CylinderGeometry", "Fog", "browser animation playback"],
+                prerequisites=["SpotLight", "DirectionalLight", "TorusKnotGeometry", "CylinderGeometry", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_tsl_shadowmap" => (
                 source=[
@@ -1112,7 +1131,7 @@ end
                     "tone_mapping=:aces",
                     "WebGLExportCase(\"tsl-shadowmap\"",
                 ],
-                prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "TorusKnotGeometry", "CylinderGeometry", "PlaneGeometry", "MeshPhongMaterial.alpha_map", "texture map export", "Fog", "browser animation playback"],
+                prerequisites=["SpotLight", "DirectionalLight", "TorusKnotGeometry", "CylinderGeometry", "PlaneGeometry", "MeshPhongMaterial.alpha_map", "texture map export", "Fog", "browser animation playback"],
             ),
             "threejs_webgl_shadowmap_viewer" => (
                 source=[
@@ -1134,7 +1153,7 @@ end
                     "AnimationClip(\"shadowmap_viewer_motion\"",
                     "WebGLExportCase(\"shadowmap-viewer\"",
                 ],
-                prerequisites=["SpotLight.cast_shadow", "DirectionalLight.cast_shadow", "CameraHelper", "MeshBasicMaterial.map", "TorusKnotGeometry", "browser animation playback"],
+                prerequisites=["SpotLight", "DirectionalLight", "CameraHelper", "texture map export", "TorusKnotGeometry", "browser animation playback"],
             ),
             "threejs_webgl_shadowmesh" => (
                 source=[
@@ -1175,7 +1194,7 @@ end
                     "NumberKeyframeTrack(sphere, \"material.envMapIntensity\"",
                     "WebGLExportCase(\"lightprobe\"",
                 ],
-                prerequisites=["LightProbe", "CubeTexture", "MeshStandardMaterial.envmap", "LineSegments", "browser light-probe export"],
+                prerequisites=["LightProbe", "CubeTexture", "MeshStandardMaterial.envmap", "browser cubemap reflection export", "browser light-probe export"],
             ),
             "threejs_webgl_lightprobe_cubecamera" => (
                 source=[
@@ -1191,7 +1210,7 @@ end
                     "LineSegments(cubecamera_helper_geometry(radius=CUBE_CAMERA_HELPER_RADIUS)",
                     "WebGLExportCase(\"lightprobe-cubecamera\"",
                 ],
-                prerequisites=["CubeCamera", "LightProbe", "CubeTexture", "MeshStandardMaterial", "LineSegments", "browser light-probe export"],
+                prerequisites=["CubeCamera", "LightProbe", "CubeTexture", "MeshStandardMaterial", "browser texture-map export", "browser light-probe export"],
             ),
             "threejs_webgl_materials_cubemap_mipmaps" => (
                 source=[
@@ -1298,7 +1317,7 @@ end
                     "document = SVGLoader(path; curve_segments=6, circle_segments=24)",
                     "fill_meshes = svg_meshes(document)",
                     "stroke_meshes = svg_stroke_meshes(document)",
-                    "name=\"svg_loader_stroke_$i\"",
+                    "svg_loader_stroke_\$i",
                     "WebGLExportCase(\"loader-svg\"",
                 ],
                 prerequisites=["SVGLoader", "svg_meshes", "svg_stroke_meshes", "SVG clipPath", "SVG use references"],
@@ -1870,9 +1889,9 @@ end
                     "transform_geometry(triangle_geometry()",
                     "function write_obj_mesh!(io::IO, name::String, geo::BufferGeometry",
                     "println(io, \"usemtl green_lambert\")",
-                    "println(io, \"f $f1 $f2 $f3\")",
+                    "println(io, \"f \$f1 \$f2 \$f3\")",
                     "function write_obj_points!(io::IO, name::String, geo::BufferGeometry",
-                    "println(io, \"p $point_indices\")",
+                    "println(io, \"p \$point_indices\")",
                     "write_obj_scene!(OBJ_PATH)",
                     "loaded = load_obj(OBJ_PATH)",
                     "loaded.n_faces == OBJ_MESH_FACE_COUNT",
@@ -1998,7 +2017,7 @@ end
                     "LineSegments(uv_edges_geometry(geometry)",
                     "WebGLExportCase(id, title, \"UV triangle-edge projection",
                 ],
-                prerequisites=["BufferGeometry.uvs", "LineSegments", "primitive geometry generators", "browser line export"],
+                prerequisites=["BufferGeometry.uvs", "LineSegments", "PlaneGeometry", "browser line export"],
             ),
             "threejs_webgl_animation_keyframes" => (
                 source=[
@@ -3703,7 +3722,7 @@ end
         @test occursin(r"\"name\":\"export_depth_wireframe\".*\"mode\":\"lines\"", html)
         @test occursin(r"\"name\":\"export_loop\".*\"linewidth\":2.5", html)
         @test occursin(r"\"name\":\"export_dashed_line\".*\"lineDashed\":true.*\"dashSize\":0.20000000000000001.*\"gapSize\":0.10000000000000001.*\"dashScale\":1.5", html)
-        @test occursin(r"\"name\":\"export_dashed_line\".*\"lineDistances\":\[0.0,0.6403124237432849,1.3474192049298325\]", html)
+        @test occursin(r"\"name\":\"export_dashed_line\".*\"lineDistances\":\[0,0.6403124237432849,1.3474192049298326\]", html)
         @test occursin("attribute float aLineDistance", html)
         @test occursin("o.lineDistanceBuf=buf(o.lineDistances||new Array(vertexCount).fill(0));", html)
         @test occursin("uLineDashed", html)
