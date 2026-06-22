@@ -1065,6 +1065,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_custom_attributes_points2.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes_points2.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_custom_attributes_points3"
+upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_points3"
+local_script = "examples/webgl_custom_attributes_points3.jl"
+status = "partial"
+prerequisites = ["BoxGeometry", "BufferGeometry custom attributes", "PointsObject", "PointsMaterial.map", "PointsMaterial.alpha_test", "Fog", "browser point-color export", "browser animation playback"]
+known_deviations = [
+  "Uses deterministic hash sampling for the 100000-attempt outer shell instead of upstream Math.random",
+  "Stores upstream-style ca, size, and sizePhase attributes on one PointsObject, but renders with Diff3D.jl's built-in PointsMaterial instead of upstream ShaderMaterial per-point gl_PointSize animation",
+  "Uses generated alpha-tested ball texture and Diff3D fog export instead of upstream textures/sprites/ball.png and shader-local fog code",
+  "Uses keyframed rotation and compact WebGL export instead of upstream Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_custom_attributes_points3.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes_points3.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_points_sprites"
 upstream_url = "https://threejs.org/examples/#webgl_points_sprites"
 local_script = "examples/webgl_points_sprites.jl"

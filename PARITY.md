@@ -1314,6 +1314,15 @@ Parallel audits split the remaining work into five critical tracks:
   built-in `PointsMaterial`; upstream ShaderMaterial `gl_PointSize` animation,
   per-frame `sortPoints`, `textures/sprites/disc.png`, Stats, and WebGLRenderer
   internals remain documented deviations.
+- Added a standalone partial port for `webgl_custom_attributes_points3` via
+  `examples/webgl_custom_attributes_points3.jl`, preserving the upstream
+  100,000-attempt outer-shell rejection rule, segmented box-frame billboard point
+  concept, 40-degree camera at `z=500`, `:ca`, `:size`, and `:sizePhase`
+  attributes, alpha-tested repeat-wrapped ball texture, black fog band, and
+  rotating point cloud. The local port uses deterministic hash sampling and
+  Diff3D's built-in `PointsMaterial`; upstream ShaderMaterial `gl_PointSize`
+  mutation, exact `textures/sprites/ball.png`, shader-local fog, Stats, and
+  WebGLRenderer internals remain documented deviations.
 - Added a standalone partial port for `webgl_buffergeometry_attributes_none` via
   `examples/webgl_buffergeometry_attributes_none.jl`, preserving the upstream
   10,000-triangle scale by materializing `gl_VertexID` shader positions and colors
