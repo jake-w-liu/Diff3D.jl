@@ -674,6 +674,28 @@ end
                 ],
                 prerequisites=["MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SphereGeometry", "HemisphereLight", "browser clipping"],
             ),
+            "threejs_webgl_clipping_advanced" => (
+                source=[
+                    "const CLIPPING_ADVANCED_BOX_COUNT = 5 * 5 * 5",
+                    "const CLIPPING_ADVANCED_BOX_SIZE = 0.18",
+                    "const CLIPPING_ADVANCED_INITIAL_BOUNCY_SCALE = 1.2",
+                    "const CLIPPING_ADVANCED_VERTICES = Vec3{Float64}[",
+                    "const CLIPPING_ADVANCED_INDICES = (",
+                    "function clipping_advanced_plane_from_points(a::Vec3, b::Vec3, c::Vec3)",
+                    "function clipping_advanced_cylindrical_planes(n::Integer, inner_radius::Real)",
+                    "const CLIPPING_ADVANCED_GLOBAL_PLANES = clipping_advanced_cylindrical_planes(5, 2.5)",
+                    "MeshPhongMaterial(color=Color3(238 / 255, 10 / 255, 16 / 255)",
+                    "clipping_planes=CLIPPING_ADVANCED_LOCAL_PLANES",
+                    "InstancedMesh(BoxGeometry(width=CLIPPING_ADVANCED_BOX_SIZE",
+                    "set_instance_matrix!(boxes, slot, mat4_translation(x / 5, y / 5, z / 5))",
+                    "PlaneHelper(plane, 3.0; color=colors[index])",
+                    "group.visible = false",
+                    "SpotLight(color=Color3(1.0, 1.0, 1.0), intensity=60.0",
+                    "PerspectiveCamera(fov=36pi / 180",
+                    "WebGLExportCase(\"clipping-advanced\"",
+                ],
+                prerequisites=["InstancedMesh", "BoxGeometry", "MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SpotLight", "DirectionalLight", "browser clipping"],
+            ),
             "threejs_webgl_morphtargets" => (
                 source=[
                     "function morph_cube_geometry(; segments::Int=24)",

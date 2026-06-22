@@ -1231,6 +1231,15 @@ Parallel audits split the remaining work into five critical tracks:
   GUI mutation, `material.clipIntersection`, `alphaToCoverage`, helper
   visibility toggling, and change-only `OrbitControls` rendering remain
   documented deviations.
+- Added a standalone partial port for `webgl_clipping_advanced` via
+  `examples/webgl_clipping_advanced.jl`, preserving the upstream 36-degree
+  camera at `(0, 1.5, 3)`, OrbitControls target `(0, 1, 0)`, ambient/spot/
+  directional light setup, 125 `InstancedMesh` boxes on the `-2:2` lattice,
+  the regular-tetrahedron local clipping volume, and hidden volume helper
+  group. The local port exports the initial-frame transformed material
+  clipping planes; upstream per-frame material-plane mutation, five-plane
+  global clipping toggle, GUI controls, `clipShadows`, Stats, and detailed
+  WebGLRenderer shadow internals remain documented deviations.
 - Added a standalone partial port for `webgl_morphtargets` via
   `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
   attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and

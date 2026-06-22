@@ -316,6 +316,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_clipping_intersection.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping_intersection.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_clipping_advanced"
+upstream_url = "https://threejs.org/examples/#webgl_clipping_advanced"
+local_script = "examples/webgl_clipping_advanced.jl"
+status = "partial"
+prerequisites = ["InstancedMesh", "BoxGeometry", "MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SpotLight", "DirectionalLight", "browser clipping"]
+known_deviations = [
+  "Exports the upstream initial-frame tetrahedral local clipping planes instead of mutating material clipping planes every animation frame",
+  "Preserves the hidden volume-visualization planes as a hidden Julia PlaneHelper group; statically hidden helpers are not emitted by the compact browser exporter",
+  "Documents the upstream five-plane global clipping setup but does not enable it because Diff3D.jl's compact browser clipping shader supports four combined planes",
+  "Uses compact exported orbit controls instead of upstream GUI toggles, Stats, clipShadows, dynamic shadow-camera settings, and WebGLRenderer internals"
+]
+verification = ["julia --project=. examples/webgl_clipping_advanced.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping_advanced.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_morphtargets"
 upstream_url = "https://threejs.org/examples/#webgl_morphtargets"
 local_script = "examples/webgl_morphtargets.jl"
