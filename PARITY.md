@@ -1240,6 +1240,15 @@ Parallel audits split the remaining work into five critical tracks:
   clipping planes; upstream per-frame material-plane mutation, five-plane
   global clipping toggle, GUI controls, `clipShadows`, Stats, and detailed
   WebGLRenderer shadow internals remain documented deviations.
+- Added a standalone partial port for `webgl_clipping_stencil` via
+  `examples/webgl_clipping_stencil.jl`, preserving the upstream 36-degree
+  camera at `(2, 2, 2)`, three default negative-axis clipping planes, hidden
+  white plane helpers, gold clipped `TorusKnotGeometry(0.4, 0.15, 220, 60)`,
+  three pink cap-plane proxies, ambient/directional lights, shadow-ground
+  approximation, and animated object rotation. The local port uses static
+  clipped cap planes instead of upstream stencil increment/decrement render
+  passes; GUI plane mutation, `renderer.clearStencil`, `ShadowMaterial`, Stats,
+  and WebGLRenderer stencil/shadow internals remain documented deviations.
 - Added a standalone partial port for `webgl_morphtargets` via
   `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
   attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and

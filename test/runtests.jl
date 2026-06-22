@@ -696,6 +696,26 @@ end
                 ],
                 prerequisites=["InstancedMesh", "BoxGeometry", "MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SpotLight", "DirectionalLight", "browser clipping"],
             ),
+            "threejs_webgl_clipping_stencil" => (
+                source=[
+                    "const CLIPPING_STENCIL_PLANES = Plane{Float64}[",
+                    "Plane(Vec3(-1.0, 0.0, 0.0), 0.0)",
+                    "Plane(Vec3(0.0, -1.0, 0.0), 0.0)",
+                    "Plane(Vec3(0.0, 0.0, -1.0), 0.0)",
+                    "function clipping_stencil_cap_rotation(index::Integer)",
+                    "PlaneHelper(plane, 2.0; color=Color3(1.0, 1.0, 1.0))",
+                    "MeshStandardMaterial(color=Color3(233 / 255, 30 / 255, 99 / 255)",
+                    "clipping_planes=[p for p in CLIPPING_STENCIL_PLANES",
+                    "TorusKnotGeometry(radius=0.4, tube=0.15",
+                    "MeshStandardMaterial(color=Color3(255 / 255, 193 / 255, 7 / 255)",
+                    "clipping_planes=CLIPPING_STENCIL_PLANES",
+                    "QuaternionKeyframeTrack(object, :rotation, [0.0, 5.0, 10.0]",
+                    "DirectionalLight(color=Color3(1.0, 1.0, 1.0), intensity=3.0",
+                    "PerspectiveCamera(fov=36pi / 180",
+                    "WebGLExportCase(\"clipping-stencil\"",
+                ],
+                prerequisites=["TorusKnotGeometry", "MeshStandardMaterial.clipping_planes", "Plane", "PlaneHelper", "PlaneGeometry", "DirectionalLight", "browser clipping", "browser animation playback"],
+            ),
             "threejs_webgl_morphtargets" => (
                 source=[
                     "function morph_cube_geometry(; segments::Int=24)",

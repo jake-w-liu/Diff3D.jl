@@ -330,6 +330,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_clipping_advanced.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping_advanced.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_clipping_stencil"
+upstream_url = "https://threejs.org/examples/#webgl_clipping_stencil"
+local_script = "examples/webgl_clipping_stencil.jl"
+status = "partial"
+prerequisites = ["TorusKnotGeometry", "MeshStandardMaterial.clipping_planes", "Plane", "PlaneHelper", "PlaneGeometry", "DirectionalLight", "browser clipping", "browser animation playback"]
+known_deviations = [
+  "Uses static pink cap-plane meshes clipped by the other planes instead of upstream WebGL stencil increment/decrement cap filling",
+  "Preserves the upstream three default clipping planes, hidden PlaneHelper group, gold clipped TorusKnotGeometry, camera, lights, and animated object rotation",
+  "Uses MeshBasicMaterial for the shadow-ground approximation because Diff3D.jl does not expose three.js ShadowMaterial in browser export",
+  "Omits upstream GUI plane mutation, stencil buffer renderOrder passes, renderer.clearStencil, Stats, and WebGLRenderer stencil/shadow internals"
+]
+verification = ["julia --project=. examples/webgl_clipping_stencil.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping_stencil.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_morphtargets"
 upstream_url = "https://threejs.org/examples/#webgl_morphtargets"
 local_script = "examples/webgl_morphtargets.jl"
