@@ -579,6 +579,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_pcss.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_pcss.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_shadowmap_progressive"
+upstream_url = "https://threejs.org/examples/#webgl_shadowmap_progressive"
+local_script = "examples/webgl_shadowmap_progressive.jl"
+status = "partial"
+prerequisites = ["DirectionalLight", "dynamic shadow maps", "PlaneGeometry", "IcosahedronGeometry", "CylinderGeometry", "MeshPhongMaterial.light_map", "TransformControls", "Fog", "browser animation playback"]
+known_deviations = [
+  "Preserves upstream progressive lightmap constants and scene layout but uses deterministic generated light-map textures because the exporter does not support three.js ProgressiveLightMap accumulation or debug lightmap display",
+  "Uses an explicit Icosahedron/Cylinder proxy group for ShadowmappableMesh.glb because the upstream GLB asset is not vendored in this repository",
+  "Exports deterministic sampled directional-light position keyframes instead of upstream per-frame Math.random sampling and keeps only the first of eight directional lights shadow-casting to keep compact browser smoke tractable",
+  "Instantiates Diff3D.jl TransformControls for the light origin and model proxy, but upstream TransformControls helper meshes, GUI settings, GLTFLoader flow, OrbitControls damping, and renderer accumulation state are not interactive"
+]
+verification = ["julia --project=. examples/webgl_shadowmap_progressive.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_progressive.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadow_contact"
 upstream_url = "https://threejs.org/examples/#webgl_shadow_contact"
 local_script = "examples/webgl_shadow_contact.jl"

@@ -1387,6 +1387,19 @@ Parallel audits split the remaining work into five critical tracks:
   upstream `ShaderChunk.shadowmap_pars_fragment` PCSS replacement and
   `BasicShadowMap` raw-depth sampling. Stats, exact WebGLRenderer shader state,
   and random browser-time placement remain documented deviations.
+- Added a standalone partial port for `webgl_shadowmap_progressive` via
+  `examples/webgl_shadowmap_progressive.jl`, preserving the upstream 70-degree
+  camera at `(0, 100, 200)`, `0x949494` background/fog, 600x600 ground at
+  `y=-0.1`, 512 shadow-map and 1024 light-map constants, eight directional
+  lights at intensity `pi / 8`, light origin `(60, 150, 100)`, blend window
+  200, light radius 50, ambient weight 0.5, and TransformControls attachment
+  points. Diff3D.jl uses deterministic generated baked-lightmap textures and
+  an Icosahedron/Cylinder proxy group for upstream `ShadowmappableMesh.glb`,
+  exports sampled directional-light positions instead of per-frame
+  `Math.random()` sampling, and keeps only the first directional light
+  shadow-casting for browser-smoke cost. Upstream `ProgressiveLightMap`
+  accumulation/debug display, GLTFLoader model flow, TransformControls helper
+  meshes, GUI controls, and OrbitControls damping remain documented deviations.
 - Added a standalone partial port for `webgl_shadow_contact` via
   `examples/webgl_shadow_contact.jl`, preserving the upstream 50-degree
   camera, white scene background, 2.5x2.5 contact plane, 0.3-unit shadow-camera
