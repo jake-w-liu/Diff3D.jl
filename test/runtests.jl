@@ -654,6 +654,26 @@ end
                 ],
                 prerequisites=["case-level clipping planes", "MeshPhongMaterial.clipping_planes", "Plane", "browser clipping"],
             ),
+            "threejs_webgl_clipping_intersection" => (
+                source=[
+                    "const CLIP_INTERSECTION_PLANE_CONSTANT = 0.0",
+                    "const CLIP_INTERSECTION_SPHERE_COUNT = 15",
+                    "const CLIP_INTERSECTION_PLANES = Plane{Float64}[",
+                    "Plane(Vec3(1.0, 0.0, 0.0), CLIP_INTERSECTION_PLANE_CONSTANT)",
+                    "Plane(Vec3(0.0, -1.0, 0.0), CLIP_INTERSECTION_PLANE_CONSTANT)",
+                    "Plane(Vec3(0.0, 0.0, -1.0), CLIP_INTERSECTION_PLANE_CONSTANT)",
+                    "function clip_intersection_sphere_radius(index::Integer)",
+                    "MeshPhongMaterial(color=clip_intersection_color(index)",
+                    "clipping_planes=CLIP_INTERSECTION_PLANES",
+                    "SphereGeometry(radius=clip_intersection_sphere_radius(index)",
+                    "PlaneHelper(plane, 2.0; color=colors[index])",
+                    "helpers.visible = false",
+                    "HemisphereLight(color=Color3(1.0, 1.0, 1.0)",
+                    "PerspectiveCamera(fov=40pi / 180",
+                    "WebGLExportCase(\"clipping-intersection\"",
+                ],
+                prerequisites=["MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SphereGeometry", "HemisphereLight", "browser clipping"],
+            ),
             "threejs_webgl_morphtargets" => (
                 source=[
                     "function morph_cube_geometry(; segments::Int=24)",

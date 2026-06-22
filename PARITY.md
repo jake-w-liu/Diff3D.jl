@@ -1222,6 +1222,15 @@ Parallel audits split the remaining work into five critical tracks:
   Upstream GUI mutation, full `localClippingEnabled` renderer semantics,
   `clipShadows`, `alphaToCoverage`, `Stats`, and `WebGLRenderer` internals
   remain documented deviations.
+- Added a standalone partial port for `webgl_clipping_intersection` via
+  `examples/webgl_clipping_intersection.jl`, preserving the upstream 40-degree
+  camera at `(-1.5, 2.5, 3)`, white/dark HemisphereLight at intensity 4.5,
+  three default clipping planes, 15 odd-radius nested `SphereGeometry` meshes,
+  double-sided Phong materials, and hidden plane-helper group. Diff3D.jl uses
+  deterministic colors and fixed local material clipping planes; upstream
+  GUI mutation, `material.clipIntersection`, `alphaToCoverage`, helper
+  visibility toggling, and change-only `OrbitControls` rendering remain
+  documented deviations.
 - Added a standalone partial port for `webgl_morphtargets` via
   `examples/webgl_morphtargets.jl`, using Diff3D.jl `BufferGeometry` morph
   attributes, `Mesh.morph_target_influences`, `MorphWeightsKeyframeTrack`, and

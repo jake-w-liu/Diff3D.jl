@@ -302,6 +302,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_clipping.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_clipping_intersection"
+upstream_url = "https://threejs.org/examples/#webgl_clipping_intersection"
+local_script = "examples/webgl_clipping_intersection.jl"
+status = "partial"
+prerequisites = ["MeshPhongMaterial.clipping_planes", "Plane", "PlaneHelper", "SphereGeometry", "HemisphereLight", "browser clipping"]
+known_deviations = [
+  "Uses fixed Diff3D.jl local material clipping planes matching the upstream default plane constants instead of live GUI mutation",
+  "Preserves the hidden PlaneHelper group in the Julia scene, but statically hidden helpers are not emitted by the compact browser exporter",
+  "Diff3D.jl clipping keeps fragments against all configured material planes and does not expose three.js material.clipIntersection or alphaToCoverage toggles",
+  "Uses deterministic colors instead of upstream Math.random HSL colors and compact exported orbit controls instead of OrbitControls change-only rendering"
+]
+verification = ["julia --project=. examples/webgl_clipping_intersection.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_clipping_intersection.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_morphtargets"
 upstream_url = "https://threejs.org/examples/#webgl_morphtargets"
 local_script = "examples/webgl_morphtargets.jl"
