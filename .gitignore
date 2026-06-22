@@ -2,3 +2,7 @@
 examples/output/
 docs/build/
 docs/src/assets/gallery/*.html
+
+# Python bytecode from the examples verifier / browser smoke scripts.
+__pycache__/
+*.pyc

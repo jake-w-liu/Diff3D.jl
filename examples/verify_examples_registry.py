@@ -54,7 +54,29 @@ def parse_args() -> argparse.Namespace:
         default=sys.executable,
         help="Python executable to use for browser smoke.",
     )
+    parser.add_argument(
+        "--shard",
+        default=None,
+        metavar="N/M",
+        help="Run shard N of M (1-indexed), splitting the examples round-robin "
+             "across M parallel runners. Without this, all examples run.",
+    )
     return parser.parse_args()
+
+
+def apply_shard(examples: list[dict], shard: str | None) -> list[dict]:
+    if not shard:
+        return examples
+    try:
+        n_str, m_str = shard.split("/")
+        n, m = int(n_str), int(m_str)
+    except ValueError:
+        raise RuntimeError(f"--shard must look like N/M, got {shard!r}")
+    if not (1 <= n <= m):
+        raise RuntimeError(f"--shard out of range: {shard!r} (need 1 <= N <= M)")
+    # Round-robin so expensive examples (text/font, csg, terrain) spread evenly
+    # across shards rather than clustering in one.
+    return [e for i, e in enumerate(examples) if i % m == (n - 1)]
 
 
 def load_examples(registry_path: Path) -> list[dict]:
@@ -118,6 +140,7 @@ def main() -> int:
         return 2
 
     examples = selected_examples(load_examples(args.registry), args.only)
+    examples = apply_shard(examples, args.shard)
     generated = 0
     smoked = 0
     for entry in examples:
