@@ -620,6 +620,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_shadowmap_vsm.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_shadowmap_vsm.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_tsl_shadowmap"
+upstream_url = "https://threejs.org/examples/#webgl_tsl_shadowmap"
+local_script = "examples/webgl_tsl_shadowmap.jl"
+status = "partial"
+prerequisites = ["SpotLight", "DirectionalLight", "dynamic shadow maps", "TorusKnotGeometry", "CylinderGeometry", "PlaneGeometry", "MeshPhongMaterial.alpha_map", "texture map export", "Fog", "browser animation playback"]
+known_deviations = [
+  "Uses supported MeshPhongMaterial plus deterministic generated alpha and ground textures instead of upstream WebGPU MeshPhongNodeMaterial, TSL noise mask/color nodes, and WebGLNodesHandler",
+  "Preserves upstream shadow radius and 2048 shadow-map-size constants but uses Diff3D.jl compact PCF dynamic shadows because the exporter does not expose spot or directional shadow camera bounds or map-size controls",
+  "Animates the directional light with baked world-position keyframes matching the upstream parent group yaw and z sine instead of exporting a runtime parent light group",
+  "Uses sampled Diff3D.jl AnimationClip tracks over the shared 40pi-second motion period instead of upstream Timer delta updates, WebGPU/WebGL renderer node internals, and exact OrbitControls runtime state"
+]
+verification = ["julia --project=. examples/webgl_tsl_shadowmap.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_tsl_shadowmap.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_shadowmap_viewer"
 upstream_url = "https://threejs.org/examples/#webgl_shadowmap_viewer"
 local_script = "examples/webgl_shadowmap_viewer.jl"

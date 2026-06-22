@@ -1421,6 +1421,18 @@ Parallel audits split the remaining work into five critical tracks:
   `shadow_pcf_radius=4` rather than upstream `VSMShadowMap`, blur samples,
   and GUI controls; the directional light's parent-group yaw and z sine are
   baked into world-position keyframes over the shared `40pi`-second period.
+- Added a standalone partial port for `webgl_tsl_shadowmap` via
+  `examples/webgl_tsl_shadowmap.jl`, preserving the upstream 45-degree camera,
+  `0x222244` background/fog, intensity-2 ambient light, red intensity-400
+  `SpotLight`, blue intensity-3 `DirectionalLight`, radius-4 and 2048
+  shadow-map constants, zero-shininess Phong material settings, torus knot,
+  four pillars, 200x200 ground scaled to 600x600, ACES tone mapping, orbit
+  target, torus rotation rates, and directional-light motion. Diff3D.jl uses
+  generated alpha and ground textures as deterministic proxies for upstream
+  TSL noise mask/color nodes and exports sampled `AnimationClip` tracks over
+  the shared `40pi`-second period; upstream WebGPU `MeshPhongNodeMaterial`,
+  `WebGLNodesHandler`, exact shadow-camera bounds, and renderer node internals
+  remain documented deviations.
 - Added a standalone partial port for `webgl_shadowmap_viewer` via
   `examples/webgl_shadowmap_viewer.jl`, preserving the upstream camera, orbit
   target, ambient light, white intensity-500 `SpotLight`, white intensity-3
