@@ -1297,6 +1297,14 @@ Parallel audits split the remaining work into five critical tracks:
   snapshot with recomputed normals; upstream per-frame `ShaderMaterial`
   displacement mutation, `textures/water.jpg`, animated HSL tint, grayscale
   shader mix, Stats, and WebGLRenderer internals remain documented deviations.
+- Added a standalone partial port for `webgl_custom_attributes_lines` via
+  `examples/webgl_custom_attributes_lines.jl`, preserving the upstream
+  `"three.js"` beveled text line-strip concept, 30-degree camera at `z=400`,
+  `:customColor` and `:displacement` attributes, translucent white line
+  material, and animated rotation. The local port uses deterministic displaced
+  text geometry and the vendored Optimer font; upstream helvetiker font,
+  additive custom `ShaderMaterial`, per-frame displacement jitter, animated HSL
+  uniform tint, Stats, and WebGLRenderer internals remain documented deviations.
 - Added a standalone partial port for `webgl_buffergeometry_attributes_none` via
   `examples/webgl_buffergeometry_attributes_none.jl`, preserving the upstream
   10,000-triangle scale by materializing `gl_VertexID` shader positions and colors

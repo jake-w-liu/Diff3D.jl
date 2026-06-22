@@ -1511,6 +1511,25 @@ end
                 ],
                 prerequisites=["SphereGeometry", "BufferGeometry custom attributes", "MeshPhongMaterial.map", "Texture", "browser animation playback"],
             ),
+            "threejs_webgl_custom_attributes_lines" => (
+                source=[
+                    "const CUSTOM_LINES_TEXT = \"three.js\"",
+                    "const CUSTOM_LINES_AMPLITUDE = 5.0",
+                    "function custom_lines_hsl_to_rgb(h::Float64, s::Float64, l::Float64)",
+                    "function custom_lines_displacement(index::Int)",
+                    "function custom_lines_center_geometry!(geo::BufferGeometry)",
+                    "TextGeometry(font, CUSTOM_LINES_TEXT; size=50.0, depth=15.0",
+                    "bevel_thickness=5.0, bevel_size=1.5",
+                    "set_attribute!(geo, :customColor, colors, 3)",
+                    "set_attribute!(geo, :displacement, displacements, 3)",
+                    "LineObject(custom_attributes_line_geometry()",
+                    "LineBasicMaterial(color=Color3(1.0, 1.0, 1.0)",
+                    "QuaternionKeyframeTrack(line, :rotation, [0.0, 6.0, 12.0]",
+                    "PerspectiveCamera(fov=30pi / 180",
+                    "WebGLExportCase(\"custom-attributes-lines\"",
+                ],
+                prerequisites=["FontLoader", "TextGeometry", "BufferGeometry custom attributes", "LineObject", "LineBasicMaterial", "browser vertex-color export", "browser animation playback"],
+            ),
             "threejs_webgl_custom_attributes_points" => (
                 source=[
                     "const CUSTOM_POINTS_AMOUNT = 100_000",

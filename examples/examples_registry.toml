@@ -1025,6 +1025,20 @@ known_deviations = [
 verification = ["julia --project=. examples/webgl_custom_attributes.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes.html"]
 
 [[examples]]
+upstream_id = "threejs_webgl_custom_attributes_lines"
+upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_lines"
+local_script = "examples/webgl_custom_attributes_lines.jl"
+status = "partial"
+prerequisites = ["FontLoader", "TextGeometry", "BufferGeometry custom attributes", "LineObject", "LineBasicMaterial", "browser vertex-color export", "browser animation playback"]
+known_deviations = [
+  "Stores upstream-style customColor and displacement attributes and exports a deterministic displaced TextGeometry line strip instead of mutating ShaderMaterial displacement every frame",
+  "Uses the vendored Optimer bold font rather than upstream helvetiker_bold.typeface.json",
+  "Uses Diff3D.jl LineBasicMaterial vertex-color export instead of upstream additive ShaderMaterial blending and animated HSL uniform offset",
+  "Uses keyframed rotation and compact WebGL export instead of upstream Date.now loop, WebGLRenderer internals, and Stats"
+]
+verification = ["julia --project=. examples/webgl_custom_attributes_lines.jl", "python examples/browser_webgl_smoke.py examples/output/webgl_custom_attributes_lines.html"]
+
+[[examples]]
 upstream_id = "threejs_webgl_custom_attributes_points"
 upstream_url = "https://threejs.org/examples/#webgl_custom_attributes_points"
 local_script = "examples/webgl_custom_attributes_points.jl"
