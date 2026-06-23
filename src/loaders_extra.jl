@@ -1626,6 +1626,13 @@ function _decode_exr(bytes::Vector{UInt8})
     width = xmax - xmin + 1
     height = ymax - ymin + 1
     (width > 0 && height > 0) || error("EXR data window is empty")
+    # Reject an implausibly large data window from a corrupt/crafted file before
+    # allocating the image: even maximally compressed pixel data cannot expand to
+    # more than ~1e5x the file size, so cap width*height accordingly (overflow-safe).
+    pixel_bytes = sum(_exr_chan_size(pt) for (_, pt) in channels)
+    maxpix = (length(bytes) * 100000) ÷ max(1, pixel_bytes)
+    (width <= maxpix && height <= maxpix && width <= maxpix ÷ height) ||
+        error("EXR data window $(width)x$(height) is implausibly large for a $(length(bytes))-byte file")
     lineorder in (0, 1) || error("EXR random-order scanlines are not supported")
 
     lines_per_block = compression == 0 ? 1 :        # NONE

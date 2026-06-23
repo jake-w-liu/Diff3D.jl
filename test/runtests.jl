@@ -8897,6 +8897,17 @@ end
                 ooff = Ref(0)
                 @test Diff3D._piz_getcode!(7, 7, r, zeros(Int, 10), ooff, 10) !== nothing  # no BoundsError
             end
+            # An implausibly large data window must error, not trigger an unbounded
+            # allocation (corrupt files can declare a huge width/height).
+            huge_dw = vcat(le32i(20000630), le32i(2),
+                vcat(cstr2("channels"), cstr2("chlist"),
+                     le32i(length(vcat(chan("B"), chan("G"), chan("R"), UInt8[0x00]))),
+                     vcat(chan("B"), chan("G"), chan("R"), UInt8[0x00])),
+                vcat(cstr2("compression"), cstr2("compression"), le32i(1), UInt8[0]),
+                vcat(cstr2("dataWindow"), cstr2("box2i"), le32i(16),
+                     le32i(0), le32i(0), le32i(200000000), le32i(0)),   # width = 200,000,001
+                vcat(cstr2("lineOrder"), cstr2("lineOrder"), le32i(1), UInt8[0]), UInt8[0x00])
+            @test_throws ErrorException Diff3D._decode_exr(vcat(huge_dw, fill(0x00, 8)))
         end
         # KTX2: a huge level-0 byteOffset must not overflow the bounds check (clear error).
         let le(x) = UInt8[x & 0xff, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff],
