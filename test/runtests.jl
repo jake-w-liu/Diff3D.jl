@@ -8934,6 +8934,20 @@ end
                 Diff3D._piz_hufdecode!(hcode, hdec, r, L, 40, 50, out, ooff)
                 @test out[1] == 39 && ooff[] == 1
             end
+            # A corrupt DEFLATE stream (back-reference distance past the output) must
+            # raise a clear error, not a BoundsError (reachable via ZIP/PXR24 EXR).
+            @test_throws ErrorException Diff3D.zlib_inflate(UInt8[0x78, 0x01, 0x73, 0x04, 0x52])
+            # B44 shift count is masked to 5 bits (JS/OpenEXR 32-bit shift) so a
+            # corrupt shift>=32 stays consistent with the parity reference, no crash.
+            let b = zeros(UInt8, 14)
+                b[1] = 0x12; b[2] = 0x34; b[3] = 0x80; b[4] = 0xf0   # shift byte 0x80 -> shift 32
+                out = Diff3D._exr_b44_decode(b, 4, [("Y", 1)], [0], 4, false)
+                s4 = UInt16(out[9]) | (UInt16(out[10]) << 8)
+                q = ((UInt32(0x80) << 4) | (UInt32(0xf0) >> 4)) & 0x3f
+                ord = (0x1234 + q * 1 - 0x20) & 0xffff           # shamt=0, bias=0x20
+                ref = (ord & 0x8000) != 0 ? UInt16(ord & 0x7fff) : UInt16((~ord) & 0xffff)
+                @test s4 == ref
+            end
         end
         # KTX2: a huge level-0 byteOffset must not overflow the bounds check (clear error).
         let le(x) = UInt8[x & 0xff, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff],

@@ -135,6 +135,7 @@ function _read_dynamic(br::_BitReader)
         if sym < 16
             push!(all_lengths, sym)
         elseif sym == 16
+            isempty(all_lengths) && error("corrupt DEFLATE dynamic Huffman (repeat code with no previous length)")
             rep = _getbits(br, 2) + 3; prev = all_lengths[end]
             append!(all_lengths, fill(prev, rep))
         elseif sym == 17
@@ -161,6 +162,7 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist)
             dsym = _decode_sym(br, dist)
             d = _DIST_BASE[dsym + 1] + _getbits(br, _DIST_EXTRA[dsym + 1])
             start = length(out) - d
+            start >= 0 || error("DEFLATE back-reference distance exceeds output (corrupt stream)")
             for k in 1:len
                 push!(out, out[start + k])
             end
@@ -1107,9 +1109,11 @@ function _exr_b44_decode(src::Vector{UInt8}, nlines::Int, channels, plinear,
                 fill!(block, h); so += 3
             else
                 (so + 13 <= n) || error("EXR B44 block is truncated")
-                shift = src[so + 2] >> 2
-                bias = UInt32(0x20) << shift
-                d(a, q) = (a + (UInt32(q) & 0x3f) * (UInt32(1) << shift) - bias) & 0xffff
+                # shift is 0..63; JS/OpenEXR apply a 32-bit shift (count mod 32),
+                # so mask to 5 bits to match the parity reference on (corrupt) data.
+                shamt = (src[so + 2] >> 2) & 31
+                bias = UInt32(0x20) << shamt
+                d(a, q) = (a + (UInt32(q) & 0x3f) * (UInt32(1) << shamt) - bias) & 0xffff
                 b = so - 1                         # so src[b+1] == three.js src[srcOffset+0]
                 s = Vector{UInt32}(undef, 16)
                 s[1]  = (UInt32(src[b+1]) << 8) | UInt32(src[b+2])
