@@ -16,6 +16,7 @@ _BitReader(d::Vector{UInt8}) = _BitReader(d, 1, UInt32(0), 0)
 
 @inline function _getbit(br::_BitReader)
     if br.bitcnt == 0
+        br.pos <= length(br.data) || error("DEFLATE stream is truncated")
         br.bitbuf = UInt32(br.data[br.pos]); br.pos += 1; br.bitcnt = 8
     end
     b = br.bitbuf & 0x1
@@ -174,8 +175,10 @@ function inflate(data::Vector{UInt8})
         bfinal = _getbit(br); btype = _getbits(br, 2)
         if btype == 0
             br.bitcnt = 0                       # align to byte boundary
+            br.pos + 3 <= length(br.data) || error("DEFLATE stored block is truncated")
             len = Int(br.data[br.pos]) | (Int(br.data[br.pos + 1]) << 8)
             br.pos += 4                         # skip LEN(2) + NLEN(2)
+            br.pos + len - 1 <= length(br.data) || error("DEFLATE stored block is truncated")
             for _ in 1:len
                 push!(out, br.data[br.pos]); br.pos += 1
             end
@@ -568,7 +571,9 @@ function _decode_ktx2(bytes::Vector{UInt8})
     # to the top-first layout used by the PNG/JPEG decoders. 'd' or absent keeps
     # rows as stored (glTF mandates "rd", which toktx also writes).
     orient = _ktx2_orientation(bytes, kvdOffset, kvdLength)
-    flip = length(orient) >= 2 && orient[2] == 'u'
+    # Index by byte (codeunit), not codepoint: a multibyte first char would make
+    # `orient[2]` a StringIndexError. Orientation values are ASCII ("rd"/"ru").
+    flip = ncodeunits(orient) >= 2 && codeunit(orient, 2) == UInt8('u')
 
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
     @inbounds for y in 1:pixelHeight
@@ -933,8 +938,10 @@ const _EXR_MAGIC = 20000630                      # 0x01312f76
 @inline _rd_le16(b, i) = UInt16(b[i]) | (UInt16(b[i + 1]) << 8)
 
 @inline function _rd_i32(b, i)                   # signed little-endian int32
-    v = _rd_le32(b, i)
-    return v >= 0x80000000 ? v - 0x100000000 : v
+    v = _rd_le32(b, i)                            # Int in [0, 2^32)
+    # Decimal literals stay Int (not UInt64), so the subtraction yields a
+    # negative Int instead of underflowing modularly.
+    return v >= 2147483648 ? v - 4294967296 : v
 end
 
 @inline _rd_f32(b, i) = reinterpret(Float32, UInt32(_rd_le32(b, i)))
@@ -1188,10 +1195,16 @@ end
     return Int((r.c >> r.lc) & UInt32((1 << nbits) - 1))
 end
 
-@inline _piz_ru16le(r::_PizBR) = (v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8); r.off += 2; v)
-@inline _piz_ru32le(r::_PizBR) = (v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8) |
-                                      (Int(r.data[r.off + 3]) << 16) | (Int(r.data[r.off + 4]) << 24);
-                                  r.off += 4; v)
+@inline function _piz_ru16le(r::_PizBR)
+    r.off + 2 <= length(r.data) || error("EXR PIZ block is truncated")
+    v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8); r.off += 2; v
+end
+@inline function _piz_ru32le(r::_PizBR)
+    r.off + 4 <= length(r.data) || error("EXR PIZ block is truncated")
+    v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8) |
+        (Int(r.data[r.off + 3]) << 16) | (Int(r.data[r.off + 4]) << 24)
+    r.off += 4; v
+end
 
 @inline _piz_u16(v::Int) = v & 0xffff
 @inline _piz_i16(v::Int) = (rr = v & 0xffff; rr > 0x7fff ? rr - 0x10000 : rr)
@@ -1432,6 +1445,7 @@ function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width:
     maxNZ >= _PIZ_BITMAP_SIZE && error("EXR PIZ bitmap size")
     bitmap = zeros(UInt8, _PIZ_BITMAP_SIZE)
     if minNZ <= maxNZ
+        r.off + (maxNZ - minNZ + 1) <= length(r.data) || error("EXR PIZ block is truncated")
         for i in 0:(maxNZ - minNZ)
             bitmap[minNZ + i + 1] = r.data[r.off + 1]; r.off += 1
         end
@@ -1483,22 +1497,31 @@ function _exr_decode_block(blockbytes::Vector{UInt8}, nlines::Int, width::Int,
                           compression::Int, channels, plinear)
     uncompressed = nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels)
     dsize = length(blockbytes)
-    if compression == 4                                   # PIZ
-        return _exr_piz_decode(blockbytes, nlines, channels, width)
+    # A block is stored uncompressed (per OpenEXR) whenever its compressed size
+    # would be >= the uncompressed size — common for small/incompressible data
+    # and trailing partial blocks. This must be checked BEFORE the codec
+    # branches, for every compression mode, or a raw block reaches a codec.
+    raw = if compression == 0 || dsize >= uncompressed
+        blockbytes
+    elseif compression == 4                               # PIZ
+        _exr_piz_decode(blockbytes, nlines, channels, width)
     elseif compression == 6 || compression == 7          # B44 / B44A
-        return _exr_b44_decode(blockbytes, nlines, channels, plinear, width, compression == 7)
-    elseif compression == 0 || dsize >= uncompressed      # NONE or stored-raw fallback
-        return blockbytes
+        _exr_b44_decode(blockbytes, nlines, channels, plinear, width, compression == 7)
     elseif compression == 1                               # RLE
-        return _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(blockbytes, uncompressed)))
+        _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(blockbytes, uncompressed)))
     elseif compression == 5                               # PXR24
-        return _exr_pxr24_decode(zlib_inflate(blockbytes), nlines, channels, width)
+        dsize >= 2 || error("EXR PXR24 block is truncated (too short for a zlib stream)")
+        _exr_pxr24_decode(zlib_inflate(blockbytes), nlines, channels, width)
     else                                                  # ZIP / ZIPS
+        dsize >= 2 || error("EXR ZIP block is truncated (too short for a zlib stream)")
         inflated = zlib_inflate(blockbytes)
         length(inflated) == uncompressed ||
             error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
-        return _exr_deinterleave(_exr_unpredict!(inflated))
+        _exr_deinterleave(_exr_unpredict!(inflated))
     end
+    length(raw) >= uncompressed ||
+        error("EXR block decoded to $(length(raw)) bytes, expected at least $uncompressed")
+    return raw
 end
 
 # Place a decoded block's pixels into the output image at (startX, startY).

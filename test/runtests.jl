@@ -8861,6 +8861,22 @@ end
         end
         @test piz_mismatch == 0    # all 65536 half values (incl. subnormals/Inf/NaN)
 
+        # Regression tests for audit-found bugs.
+        # _rd_i32 must sign-extend negative int32 (negative dataWindow coords).
+        @test Diff3D._rd_i32(UInt8[0xFF, 0xFF, 0xFF, 0xFF], 1) === -1
+        @test Diff3D._rd_i32(UInt8[0x00, 0x00, 0x00, 0x80], 1) === -2147483648
+        # A stored-raw block must be returned raw even when the nominal compression
+        # is a codec (OpenEXR stores blocks raw when compression doesn't shrink them).
+        let chreg = [("R", 1), ("G", 1), ("B", 1)],
+            raw6 = UInt8[0x00, 0x3C, 0x00, 0x40, 0x00, 0x42]   # uncompressed = 1*1*2*3 = 6
+            @test Diff3D._exr_decode_block(raw6, 1, 1, 4, chreg, Int[]) == raw6   # PIZ branch
+            @test Diff3D._exr_decode_block(raw6, 1, 1, 6, chreg, Int[]) == raw6   # B44 branch
+            # Truncated/short blocks fail clearly (not a raw BoundsError).
+            @test_throws ErrorException Diff3D._exr_decode_block(UInt8[1, 2], 1, 1, 0, chreg, Int[])
+            @test_throws ErrorException Diff3D._exr_decode_block(UInt8[0x78, 0x01], 1, 1, 3, chreg, Int[])
+            @test_throws ErrorException Diff3D._exr_piz_decode(UInt8[1, 2, 3], 1, chreg, 1)
+        end
+
         # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile
         # placement exactly — each tile's value must land in its own quadrant.
         function build_exr_tiled(W, H, tx, ty, tilevals)  # tilevals[(tileX,tileY)] => half
