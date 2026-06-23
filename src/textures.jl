@@ -562,6 +562,121 @@ function equirectangular_to_cubemap(tex::Texture; size::Integer=max(1, min(Base.
     return CubeTexture(faces)
 end
 
+# ========================== PMREM (prefiltered environment) ==========================
+
+"""
+Prefiltered radiance environment map: a sequence of [`CubeTexture`](@ref) levels
+where level `i` (0-based) holds the source convolved with a GGX specular lobe of
+roughness `i / (levels-1)`. Level 0 is the mirror (roughness 0) reflection.
+Build one with [`generate_pmrem`](@ref) and sample it with [`sample_pmrem`](@ref).
+"""
+struct PMREM
+    levels::Vector{CubeTexture}
+end
+
+# Van der Corput radical inverse in base 2 — deterministic low-discrepancy
+# sequence (no RNG), matching three.js' Hammersley-based prefilter.
+@inline function _radical_inverse_vdc(bits::UInt32)
+    bits = (bits << 16) | (bits >> 16)
+    bits = ((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >> 1)
+    bits = ((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >> 2)
+    bits = ((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >> 4)
+    bits = ((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >> 8)
+    return Float64(bits) * 2.3283064365386963e-10        # bits / 2^32
+end
+
+# GGX importance sample direction in world space around normal `N`.
+function _importance_sample_ggx(xi1::Float64, xi2::Float64, N::Vec3, roughness::Float64)
+    a = roughness * roughness
+    phi = 2pi * xi1
+    cos_t = sqrt((1.0 - xi2) / (1.0 + (a * a - 1.0) * xi2))
+    sin_t = sqrt(max(0.0, 1.0 - cos_t * cos_t))
+    hx = sin_t * cos(phi); hy = sin_t * sin(phi); hz = cos_t
+    up = abs(N.z) < 0.999 ? Vec3(0.0, 0.0, 1.0) : Vec3(1.0, 0.0, 0.0)
+    tangent = normalize(cross(up, N))
+    bitangent = cross(N, tangent)
+    return normalize(tangent * hx + bitangent * hy + N * hz)
+end
+
+# Convolve the source cube map around direction `N` for the given roughness.
+function _pmrem_prefilter(ct::CubeTexture, N::Vec3, roughness::Float64, samples::Int)
+    roughness <= 0.0 && return sample_cube(ct, N)        # exact mirror reflection
+    V = N                                                # split-sum assumes V = N = R
+    total = Color3(0.0, 0.0, 0.0)
+    weight = 0.0
+    @inbounds for i in 0:(samples - 1)
+        xi1 = i / samples
+        xi2 = _radical_inverse_vdc(UInt32(i))
+        H = _importance_sample_ggx(xi1, xi2, N, roughness)
+        L = normalize(2.0 * dot(V, H) * H - V)           # reflect V about H
+        ndl = dot(N, L)
+        if ndl > 0.0
+            total += sample_cube(ct, L) * ndl
+            weight += ndl
+        end
+    end
+    return weight > 0.0 ? total * (1.0 / weight) : sample_cube(ct, N)
+end
+
+"""
+    generate_pmrem(ct; levels=5, samples=64, base_size=face size) -> PMREM
+
+Prefilter a [`CubeTexture`](@ref) into a roughness mip chain, mirroring three.js'
+`PMREMGenerator`. Level `i` is convolved with a GGX lobe of roughness
+`i / (levels-1)` using a deterministic Hammersley sequence (no RNG), and each
+level's face resolution halves so rougher levels are cheaper. HDR/linear values
+are preserved. Sample the result with [`sample_pmrem`](@ref).
+"""
+function generate_pmrem(ct::CubeTexture; levels::Integer=5, samples::Integer=64,
+                        base_size::Integer=Base.size(ct.faces[1].data, 1))
+    levels >= 1 || throw(ArgumentError("PMREM needs at least one level"))
+    samples >= 1 || throw(ArgumentError("PMREM needs at least one sample"))
+    base_size >= 1 || throw(ArgumentError("PMREM base_size must be positive"))
+    nlev = Int(levels); nsamp = Int(samples)
+    out = Vector{CubeTexture}(undef, nlev)
+    for l in 0:(nlev - 1)
+        roughness = nlev == 1 ? 0.0 : l / (nlev - 1)
+        sz = max(1, Int(base_size) >> l)
+        faces = ntuple(face -> begin
+            data = Array{Float64}(undef, sz, sz, 3)
+            @inbounds for row in 1:sz, col in 1:sz
+                u = (col - 0.5) / sz
+                v = 1.0 - (row - 0.5) / sz
+                N = _cube_face_direction(face, u, v)
+                c = _pmrem_prefilter(ct, N, roughness, nsamp)
+                data[row, col, 1] = c.r
+                data[row, col, 2] = c.g
+                data[row, col, 3] = c.b
+            end
+            Texture(data; wrap_s=:clamp, wrap_t=:clamp, filter=:bilinear,
+                    colorspace=ct.faces[face].colorspace)
+        end, 6)
+        out[l + 1] = CubeTexture(faces)
+    end
+    return PMREM(out)
+end
+
+"""
+    sample_pmrem(pmrem, dir, roughness) -> Color3
+
+Sample a [`PMREM`](@ref) along `dir` at a perceptual `roughness` in `[0, 1]`,
+linearly blending between the two neighboring prefiltered levels.
+"""
+function sample_pmrem(pmrem::PMREM, dir::Vec3, roughness)
+    n = length(pmrem.levels)
+    n >= 1 || throw(ArgumentError("PMREM has no levels"))
+    n == 1 && return sample_cube(pmrem.levels[1], dir)
+    r = Float64(roughness)
+    isfinite(r) || throw(ArgumentError("PMREM roughness must be finite"))
+    lod = clamp(r, 0.0, 1.0) * (n - 1)
+    l0 = floor(Int, lod)
+    frac = lod - l0
+    c0 = sample_cube(pmrem.levels[l0 + 1], dir)
+    frac <= 0.0 && return c0
+    c1 = sample_cube(pmrem.levels[min(l0 + 1, n - 1) + 1], dir)
+    return c0 * (1.0 - frac) + c1 * frac
+end
+
 # ========================== Procedural textures ==========================
 
 """`n`×`n`-cell checkerboard texture (each cell `cell` pixels) as an H×W×3 Texture."""

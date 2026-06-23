@@ -459,17 +459,158 @@ end
 """Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""
 load_jpeg(path::String) = _decode_jpeg(read(path); label="JPEG image")
 
+# ===== KTX2 (Khronos texture container) — uncompressed decode =====
+# Basis Universal (vkFormat 0) and supercompressed payloads need a transcoder
+# and fail clearly rather than being silently approximated.
+const _KTX2_IDENTIFIER = UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB,
+                               0x0D, 0x0A, 0x1A, 0x0A]
+
+# Supported uncompressed Vulkan formats -> (channel count, component kind).
+# 8-bit UNORM/SRGB decode to [0,1]; 16/32-bit SFLOAT decode to linear unclamped
+# HDR values (used by KTX2 environment maps), reusing the EXR float helpers.
+const _KTX2_VKFORMATS = Dict{Int,Tuple{Int,Symbol}}(
+    9 => (1, :unorm8), 15 => (1, :unorm8),    # VK_FORMAT_R8_UNORM / _SRGB
+    16 => (2, :unorm8), 22 => (2, :unorm8),   # R8G8
+    23 => (3, :unorm8), 29 => (3, :unorm8),   # R8G8B8
+    37 => (4, :unorm8), 43 => (4, :unorm8),   # R8G8B8A8
+    76 => (1, :sfloat16), 83 => (2, :sfloat16),   # R16 / R16G16 SFLOAT
+    90 => (3, :sfloat16), 97 => (4, :sfloat16),   # R16G16B16(A16) SFLOAT
+    100 => (1, :sfloat32), 103 => (2, :sfloat32), # R32 / R32G32 SFLOAT
+    106 => (3, :sfloat32), 109 => (4, :sfloat32), # R32G32B32(A32) SFLOAT
+)
+
+_ktx2_comp_bytes(kind::Symbol) = kind === :unorm8 ? 1 : kind === :sfloat16 ? 2 : 4
+
+# Little-endian u64 from two u32 reads (`_rd_le32` is defined later in-module).
+@inline _rd_le64(b, i) = _rd_le32(b, i) | (_rd_le32(b, i + 4) << 32)
+
+@inline function _is_ktx2_bytes(bytes::Vector{UInt8})
+    length(bytes) >= 12 && (@views bytes[1:12]) == _KTX2_IDENTIFIER
+end
+
+# Read the KTXorientation value string from the key/value data section.
+# KVD entries are: keyAndValueByteLength (u32), NUL-terminated key, value bytes,
+# then 0-3 bytes of padding to a 4-byte boundary.
+function _ktx2_orientation(bytes::Vector{UInt8}, kvd_off::Int, kvd_len::Int)
+    (kvd_len > 0 && kvd_off >= 0 && kvd_off + kvd_len <= length(bytes)) || return ""
+    key = b"KTXorientation"
+    pos = kvd_off + 1                              # 1-based start of KVD
+    stop = kvd_off + kvd_len                       # 1-based last KVD byte
+    while pos + 3 <= stop
+        n = _rd_le32(bytes, pos)                   # keyAndValueByteLength
+        pos += 4
+        (n >= 1 && pos + n - 1 <= stop) || break
+        kstart = pos; kstop = pos + n - 1
+        knul = kstart
+        while knul <= kstop && bytes[knul] != 0x00
+            knul += 1
+        end
+        if knul <= kstop && (knul - kstart) == length(key) &&
+           (@views bytes[kstart:(knul - 1)]) == key
+            vstart = knul + 1
+            vstop = vstart
+            while vstop <= kstop && bytes[vstop] != 0x00
+                vstop += 1
+            end
+            return String(@view bytes[vstart:(vstop - 1)])
+        end
+        pos = kstart + n
+        pos += (4 - (n % 4)) % 4                    # 4-byte value padding
+    end
+    return ""
+end
+
+function _decode_ktx2(bytes::Vector{UInt8})
+    length(bytes) >= 80 ||
+        error("KTX2 image is truncated: a valid header needs at least 80 bytes, got $(length(bytes))")
+    _is_ktx2_bytes(bytes) ||
+        error("KTX2 identifier mismatch; data is not a KTX2 file")
+    vkFormat    = _rd_le32(bytes, 13)
+    pixelWidth  = _rd_le32(bytes, 21)
+    pixelHeight = _rd_le32(bytes, 25)
+    pixelDepth  = _rd_le32(bytes, 29)
+    layerCount  = _rd_le32(bytes, 33)
+    faceCount   = _rd_le32(bytes, 37)
+    superScheme = _rd_le32(bytes, 45)
+    kvdOffset   = _rd_le32(bytes, 57)
+    kvdLength   = _rd_le32(bytes, 61)
+
+    superScheme == 0 ||
+        error("KTX2 supercompression scheme $superScheme is not supported; only uncompressed KTX2 is implemented (Basis/Zstd/Zlib need a transcoder)")
+    vkFormat != 0 ||
+        error("KTX2 vkFormat 0 (Basis Universal) is not supported; Basis transcoding is not implemented")
+    haskey(_KTX2_VKFORMATS, vkFormat) ||
+        error("KTX2 vkFormat $vkFormat is not supported; only uncompressed 8-bit UNORM/SRGB and 16/32-bit SFLOAT R/RG/RGB/RGBA formats are implemented")
+    (pixelWidth > 0 && pixelHeight > 0) ||
+        error("KTX2 image has non-positive dimensions $(pixelWidth)x$(pixelHeight)")
+    pixelDepth <= 1 ||
+        error("KTX2 3D textures (pixelDepth=$pixelDepth) are not supported")
+    faceCount == 1 ||
+        error("KTX2 cube maps (faceCount=$faceCount) are not supported")
+    layerCount <= 1 ||
+        error("KTX2 texture arrays (layerCount=$layerCount) are not supported")
+
+    channels, kind = _KTX2_VKFORMATS[vkFormat]
+    cbytes = _ktx2_comp_bytes(kind)
+    pixel_bytes = channels * cbytes
+    length(bytes) >= 104 ||                         # 80-byte header + one level entry
+        error("KTX2 level index is truncated")
+    byteOffset = _rd_le64(bytes, 81)                # level 0 = full resolution
+    byteLength = _rd_le64(bytes, 89)
+
+    expected = pixelWidth * pixelHeight * pixel_bytes
+    byteLength == expected ||
+        error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
+    (byteOffset >= 0 && byteOffset + byteLength <= length(bytes)) ||
+        error("KTX2 level 0 data range exceeds the file length $(length(bytes))")
+
+    # KTXorientation second axis: 'u' (up) stores the bottom row first, so flip
+    # to the top-first layout used by the PNG/JPEG decoders. 'd' or absent keeps
+    # rows as stored (glTF mandates "rd", which toktx also writes).
+    orient = _ktx2_orientation(bytes, kvdOffset, kvdLength)
+    flip = length(orient) >= 2 && orient[2] == 'u'
+
+    img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
+    @inbounds for y in 1:pixelHeight
+        srow = flip ? (pixelHeight - y + 1) : y
+        rowbase = byteOffset + (srow - 1) * pixelWidth * pixel_bytes   # 0-based
+        for x in 1:pixelWidth
+            px = rowbase + (x - 1) * pixel_bytes                       # 0-based pixel start
+            for c in 1:channels
+                b1 = px + (c - 1) * cbytes + 1                         # 1-based component byte
+                img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
+                               kind === :sfloat16 ? _half_to_float(_rd_le16(bytes, b1)) :
+                               Float64(_rd_f32(bytes, b1))
+            end
+        end
+    end
+    return img
+end
+
+"""
+    load_ktx2(path) -> Array{Float64,3}
+
+Decode an uncompressed KTX2 (Khronos texture) file into an `H×W×C` image,
+matching the layout produced by [`load_png`](@ref). Supports single-level
+8-bit R/RG/RGB/RGBA `UNORM`/`SRGB` formats (decoded to `[0, 1]`) and 16/32-bit
+`SFLOAT` formats (decoded to linear unclamped HDR values), and honors the
+`KTXorientation` metadata. Basis Universal (`vkFormat` 0) and supercompressed
+payloads require a transcoder and raise a clear error instead of guessing.
+"""
+load_ktx2(path::String) = _decode_ktx2(read(path))
+
 """
     load_image(path) -> Array{Float64,3}
 
-Decode a PNG or JPEG/JPG image by inspecting the file bytes. Use
-[`load_rgbe`](@ref) / [`RGBELoader`](@ref) for Radiance HDR files.
+Decode a PNG, JPEG/JPG, or uncompressed KTX2 image by inspecting the file bytes.
+Use [`load_rgbe`](@ref) / [`RGBELoader`](@ref) for Radiance HDR files.
 """
 function load_image(path::String)
     bytes = read(path)
     _is_png_bytes(bytes) && return _decode_png(bytes)
     _is_jpeg_bytes(bytes) && return _decode_jpeg(bytes; label="JPEG image")
-    error("unsupported image format for $path; TextureLoader supports PNG and JPEG/JPG")
+    _is_ktx2_bytes(bytes) && return _decode_ktx2(bytes)
+    error("unsupported image format for $path; TextureLoader supports PNG, JPEG/JPG, and uncompressed KTX2")
 end
 
 """Load a PNG or JPEG/JPG image into a [`Texture`]."""
@@ -782,6 +923,360 @@ load_hdr(path::String) = load_rgbe(path)
 """Load a Radiance RGBE/HDR image into a linear [`Texture`]."""
 RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
     Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
+
+# ========================== OpenEXR (scanline) ==========================
+# Supports scanline images with NONE/ZIP/ZIPS compression and HALF/FLOAT/UINT
+# pixels. Tiled, deep, multi-part, and PIZ/PXR24/B44/DWA payloads fail clearly.
+
+const _EXR_MAGIC = 20000630                      # 0x01312f76
+
+@inline _rd_le16(b, i) = UInt16(b[i]) | (UInt16(b[i + 1]) << 8)
+
+@inline function _rd_i32(b, i)                   # signed little-endian int32
+    v = _rd_le32(b, i)
+    return v >= 0x80000000 ? v - 0x100000000 : v
+end
+
+@inline _rd_f32(b, i) = reinterpret(Float32, UInt32(_rd_le32(b, i)))
+
+# IEEE-754 binary16 (half) -> Float64.
+@inline function _half_to_float(h::UInt16)
+    s = (h >> 15) & 0x0001
+    e = (h >> 10) & 0x001f
+    m = h & 0x03ff
+    if e == 0x0000
+        val = m == 0x0000 ? 0.0 : ldexp(Float64(m), -24)        # subnormal: m * 2^-24
+    elseif e == 0x001f
+        val = m == 0x0000 ? Inf : NaN
+    else
+        val = ldexp(Float64(Int(m) + 1024), Int(e) - 25)        # (1024+m) * 2^(e-25)
+    end
+    return s == 0x0001 ? -val : val
+end
+
+# Read a NUL-terminated string at 1-based `pos`; return (string, next_pos).
+function _exr_str(bytes, pos::Int, stop::Int)
+    s = pos
+    while pos <= stop && bytes[pos] != 0x00
+        pos += 1
+    end
+    pos <= stop || error("EXR string is not NUL-terminated")
+    return String(@view bytes[s:(pos - 1)]), pos + 1
+end
+
+# Reverse the ZIP/ZIPS post-process (verified against OpenEXR ImfZip.cpp):
+# predictor delta reconstruction, then deinterleave of the two halves.
+function _exr_unpredict!(buf::Vector{UInt8})
+    @inbounds for i in 2:length(buf)
+        buf[i] = UInt8((Int(buf[i - 1]) + Int(buf[i]) - 128) & 0xff)
+    end
+    return buf
+end
+
+function _exr_deinterleave(src::Vector{UInt8})
+    n = length(src)
+    out = Vector{UInt8}(undef, n)
+    half = (n + 1) >> 1
+    t1 = 1; t2 = half + 1; s = 1
+    @inbounds while s <= n
+        out[s] = src[t1]; t1 += 1; s += 1
+        s <= n || break
+        out[s] = src[t2]; t2 += 1; s += 1
+    end
+    return out
+end
+
+# EXR RLE (PackBits-style) decode, verified against OpenEXR internal_rle.c:
+# a non-negative control byte c repeats the next byte c+1 times; a negative
+# control byte (c >= 0x80 as signed) copies -c literal bytes.
+function _exr_rle_decompress(data::Vector{UInt8}, outsize::Int)
+    out = Vector{UInt8}(undef, outsize)
+    di = 1; p = 1; n = length(data)
+    while di <= outsize
+        p <= n || error("EXR RLE stream is truncated")
+        c = data[p]; p += 1
+        if c >= 0x80                                  # signed-negative -> literal run
+            count = 256 - Int(c)
+            (p + count - 1 <= n) || error("EXR RLE literal run is truncated")
+            (di + count - 1 <= outsize) || error("EXR RLE literal run overflows output")
+            @inbounds for k in 0:(count - 1)
+                out[di + k] = data[p + k]
+            end
+            di += count; p += count
+        else                                          # non-negative -> repeated run
+            count = Int(c) + 1
+            p <= n || error("EXR RLE repeat run is truncated")
+            b = data[p]; p += 1
+            (di + count - 1 <= outsize) || error("EXR RLE repeat run overflows output")
+            @inbounds for k in 0:(count - 1)
+                out[di + k] = b
+            end
+            di += count
+        end
+    end
+    return out
+end
+
+# PXR24 reconstruction, matching three.js EXRLoader `uncompressPXR`: the
+# zlib-inflated data holds, per scanline and channel, MSB-first byte planes
+# carrying left-neighbour deltas. HALF keeps 2 bytes; FLOAT keeps the top 3
+# bytes of the 32-bit value (the dropped low byte is PXR24's lossy precision).
+# UINT is unsupported (three.js does not handle it either).
+function _exr_pxr24_decode(raw::Vector{UInt8}, nlines::Int, channels, width::Int)
+    out = UInt8[]
+    n = length(raw)
+    cur = 1                                       # 1-based plane base cursor
+    for _ in 1:nlines
+        for (_, pt) in channels
+            pixel = UInt32(0)
+            if pt == 1                            # HALF: 2 planes -> u16
+                p0 = cur; p1 = cur + width; cur = p1 + width
+                (cur - 1 <= n) || error("EXR PXR24 HALF plane is truncated")
+                for j in 0:(width - 1)
+                    diff = (UInt32(raw[p0 + j]) << 8) | UInt32(raw[p1 + j])
+                    pixel = (pixel + diff) & 0xffff
+                    push!(out, UInt8(pixel & 0xff), UInt8((pixel >> 8) & 0xff))
+                end
+            elseif pt == 2                        # FLOAT: 3 planes -> u32 (low byte 0)
+                p0 = cur; p1 = cur + width; p2 = cur + 2width; cur = p2 + width
+                (cur - 1 <= n) || error("EXR PXR24 FLOAT plane is truncated")
+                for j in 0:(width - 1)
+                    diff = (UInt32(raw[p0 + j]) << 24) | (UInt32(raw[p1 + j]) << 16) |
+                           (UInt32(raw[p2 + j]) << 8)
+                    pixel = pixel + diff           # UInt32 wraps mod 2^32
+                    push!(out, UInt8(pixel & 0xff), UInt8((pixel >> 8) & 0xff),
+                          UInt8((pixel >> 16) & 0xff), UInt8((pixel >> 24) & 0xff))
+                end
+            else
+                error("EXR PXR24 does not support UINT channels")
+            end
+        end
+    end
+    return out
+end
+
+# B44/B44A 4x4-block HALF decompression, transcribed from three.js EXRLoader
+# `uncompressB44`. HALF channels use 14-byte blocks (or 3-byte flat blocks for
+# B44A); other pixel types are stored raw. pLinear channels (rare) are
+# unsupported and error clearly. Returns the standard scanline block layout.
+function _exr_b44_decode(src::Vector{UInt8}, nlines::Int, channels, plinear,
+                         width::Int, isB44A::Bool)
+    row_bytes = sum(width * _exr_chan_size(pt) for (_, pt) in channels)
+    out = zeros(UInt8, nlines * row_bytes)
+    n = length(src)
+    so = 1                                        # 1-based read cursor
+    cbyte = 0                                     # channel byte offset in a scanline
+    for (ci, (_, pt)) in enumerate(channels)
+        psize = _exr_chan_size(pt)
+        if pt != 1                                # non-HALF: raw scanlines
+            for y in 0:(nlines - 1)
+                cnt = width * psize
+                (so + cnt - 1 <= n) || error("EXR B44 raw channel is truncated")
+                base = y * row_bytes + cbyte * width
+                @inbounds for k in 0:(cnt - 1)
+                    out[base + k + 1] = src[so + k]
+                end
+                so += cnt
+            end
+            cbyte += psize
+            continue
+        end
+        plinear[ci] == 0 || error("EXR B44 pLinear channels are not supported")
+        nbx = cld(width, 4); nby = cld(nlines, 4)
+        block = Vector{UInt16}(undef, 16)
+        for by in 0:(nby - 1), bx in 0:(nbx - 1)
+            if isB44A && (so + 2 <= n) && src[so + 2] >= 0x34   # 3-byte flat block
+                t = (UInt16(src[so]) << 8) | UInt16(src[so + 1])
+                h = (t & 0x8000) != 0 ? (t & 0x7fff) : ((~t) & 0xffff)
+                fill!(block, h); so += 3
+            else
+                (so + 13 <= n) || error("EXR B44 block is truncated")
+                shift = src[so + 2] >> 2
+                bias = UInt32(0x20) << shift
+                d(a, q) = (a + (UInt32(q) & 0x3f) * (UInt32(1) << shift) - bias) & 0xffff
+                b = so - 1                         # so src[b+1] == three.js src[srcOffset+0]
+                s = Vector{UInt32}(undef, 16)
+                s[1]  = (UInt32(src[b+1]) << 8) | UInt32(src[b+2])
+                s[5]  = d(s[1],  (UInt32(src[b+3]) << 4) | (UInt32(src[b+4]) >> 4))
+                s[9]  = d(s[5],  (UInt32(src[b+4]) << 2) | (UInt32(src[b+5]) >> 6))
+                s[13] = d(s[9],  src[b+5])
+                s[2]  = d(s[1],  UInt32(src[b+6]) >> 2)
+                s[6]  = d(s[5],  (UInt32(src[b+6]) << 4) | (UInt32(src[b+7]) >> 4))
+                s[10] = d(s[9],  (UInt32(src[b+7]) << 2) | (UInt32(src[b+8]) >> 6))
+                s[14] = d(s[13], src[b+8])
+                s[3]  = d(s[2],  UInt32(src[b+9]) >> 2)
+                s[7]  = d(s[6],  (UInt32(src[b+9]) << 4) | (UInt32(src[b+10]) >> 4))
+                s[11] = d(s[10], (UInt32(src[b+10]) << 2) | (UInt32(src[b+11]) >> 6))
+                s[15] = d(s[14], src[b+11])
+                s[4]  = d(s[3],  UInt32(src[b+12]) >> 2)
+                s[8]  = d(s[7],  (UInt32(src[b+12]) << 4) | (UInt32(src[b+13]) >> 4))
+                s[12] = d(s[11], (UInt32(src[b+13]) << 2) | (UInt32(src[b+14]) >> 6))
+                s[16] = d(s[15], src[b+14])
+                @inbounds for i in 1:16
+                    ti = s[i] & 0xffff
+                    block[i] = (ti & 0x8000) != 0 ? UInt16(ti & 0x7fff) : UInt16((~ti) & 0xffff)
+                end
+                so += 14
+            end
+            @inbounds for py in 0:3
+                cy = by * 4 + py
+                cy >= nlines && continue
+                for px in 0:3
+                    cx = bx * 4 + px
+                    cx >= width && continue
+                    val = block[py * 4 + px + 1]
+                    oi = cy * row_bytes + cbyte * width + cx * 2
+                    out[oi + 1] = UInt8(val & 0xff)
+                    out[oi + 2] = UInt8((val >> 8) & 0xff)
+                end
+            end
+        end
+        cbyte += 2
+    end
+    return out
+end
+
+_exr_chan_size(pt::Int) = pt == 1 ? 2 : 4        # HALF=2; UINT/FLOAT=4
+
+function _decode_exr(bytes::Vector{UInt8})
+    length(bytes) >= 8 || error("EXR file is truncated")
+    _rd_le32(bytes, 1) == _EXR_MAGIC || error("not an OpenEXR file (bad magic number)")
+    version = _rd_le32(bytes, 5)
+    (version & 0xff) == 2 || error("unsupported EXR version $(version & 0xff); only version 2 is supported")
+    (version & 0x200) == 0 || error("tiled EXR files are not supported")
+    (version & 0x800) == 0 || error("deep EXR files are not supported")
+    (version & 0x1000) == 0 || error("multi-part EXR files are not supported")
+
+    n = length(bytes)
+    pos = 9
+    channels = Tuple{String,Int}[]               # (name, pixelType) in stored order
+    plinear = Int[]                              # per-channel pLinear flag (B44)
+    compression = -1
+    xmin = ymin = xmax = ymax = 0
+    have_dw = false
+    lineorder = 0
+
+    while pos <= n
+        bytes[pos] == 0x00 && (pos += 1; break)  # empty name -> end of header
+        name, pos = _exr_str(bytes, pos, n)
+        _atype, pos = _exr_str(bytes, pos, n)
+        asize = _rd_i32(bytes, pos); pos += 4
+        asize >= 0 || error("EXR attribute '$name' has negative size")
+        vstart = pos; vstop = pos + asize - 1
+        vstop <= n || error("EXR attribute '$name' exceeds the file length")
+        if name == "channels"
+            cp = vstart
+            while cp <= vstop && bytes[cp] != 0x00
+                cname, cp = _exr_str(bytes, cp, vstop)
+                ptype = _rd_i32(bytes, cp); cp += 4
+                pl = Int(bytes[cp]); cp += 4       # pLinear (1) + reserved (3)
+                xs = _rd_i32(bytes, cp); cp += 4
+                ys = _rd_i32(bytes, cp); cp += 4
+                (xs == 1 && ys == 1) || error("EXR subsampled channels are not supported")
+                ptype in (0, 1, 2) || error("EXR channel '$cname' has unknown pixel type $ptype")
+                push!(channels, (cname, ptype))
+                push!(plinear, pl)
+            end
+        elseif name == "compression"
+            compression = Int(bytes[vstart])
+        elseif name == "dataWindow"
+            xmin = _rd_i32(bytes, vstart);     ymin = _rd_i32(bytes, vstart + 4)
+            xmax = _rd_i32(bytes, vstart + 8); ymax = _rd_i32(bytes, vstart + 12)
+            have_dw = true
+        elseif name == "lineOrder"
+            lineorder = Int(bytes[vstart])
+        end
+        pos = vstop + 1
+    end
+
+    have_dw || error("EXR dataWindow attribute is required")
+    compression >= 0 || error("EXR compression attribute is required")
+    isempty(channels) && error("EXR channels attribute is required")
+    width = xmax - xmin + 1
+    height = ymax - ymin + 1
+    (width > 0 && height > 0) || error("EXR data window is empty")
+    lineorder in (0, 1) || error("EXR random-order scanlines are not supported")
+
+    lines_per_block = compression == 0 ? 1 :        # NONE
+                      compression == 1 ? 1 :        # RLE
+                      compression == 2 ? 1 :        # ZIPS
+                      compression == 3 ? 16 :       # ZIP
+                      compression == 5 ? 16 :       # PXR24
+                      compression == 6 ? 32 :       # B44
+                      compression == 7 ? 32 :       # B44A
+                      error("EXR compression mode $compression is not supported; only NONE, RLE, ZIP, ZIPS, PXR24, and B44/B44A are implemented")
+
+    cnames = first.(channels)
+    found = join(cnames, ", ")
+    (("R" in cnames) && ("G" in cnames) && ("B" in cnames)) ||
+        error("EXR image must contain R, G, and B channels; found $found")
+    row_bytes = sum(width * _exr_chan_size(pt) for (_, pt) in channels)
+
+    nblocks = cld(height, lines_per_block)
+    pos + nblocks * 8 - 1 <= n || error("EXR scanline offset table is truncated")
+    offsets = (Int(_rd_le64(bytes, pos + 8 * (i - 1))) for i in 1:nblocks)
+
+    img = zeros(Float64, height, width, 3)
+    for off in offsets
+        bp = off + 1
+        bp + 7 <= n || error("EXR scanline block header is truncated")
+        y0 = _rd_i32(bytes, bp); bp += 4
+        dsize = _rd_i32(bytes, bp); bp += 4
+        (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
+        (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
+        nlines = min(lines_per_block, ymax - y0 + 1)
+        uncompressed = nlines * row_bytes
+        raw = if compression == 6 || compression == 7  # B44 / B44A (raw-packed, not zlib)
+            _exr_b44_decode(bytes[bp:(bp + dsize - 1)], nlines, channels, plinear, width, compression == 7)
+        elseif compression == 0 || dsize >= uncompressed
+            bytes[bp:(bp + dsize - 1)]
+        elseif compression == 1
+            _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(bytes[bp:(bp + dsize - 1)], uncompressed)))
+        elseif compression == 5                       # PXR24
+            _exr_pxr24_decode(zlib_inflate(bytes[bp:(bp + dsize - 1)]), nlines, channels, width)
+        else                                          # ZIP / ZIPS
+            inflated = zlib_inflate(bytes[bp:(bp + dsize - 1)])
+            length(inflated) == uncompressed ||
+                error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
+            _exr_deinterleave(_exr_unpredict!(inflated))
+        end
+        length(raw) >= uncompressed || error("EXR scanline block is shorter than its declared pixels")
+        rp = 1
+        for ln in 0:(nlines - 1)
+            yrow = (y0 + ln) - ymin + 1
+            for (cname, pt) in channels
+                csz = _exr_chan_size(pt)
+                outc = cname == "R" ? 1 : cname == "G" ? 2 : cname == "B" ? 3 : 0
+                if outc != 0
+                    @inbounds for x in 1:width
+                        base = rp + (x - 1) * csz
+                        img[yrow, x, outc] =
+                            pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
+                            pt == 2 ? Float64(_rd_f32(raw, base)) :
+                                      Float64(_rd_le32(raw, base))      # UINT
+                    end
+                end
+                rp += width * csz
+            end
+        end
+    end
+    return img
+end
+
+"""
+    load_exr(path) -> Array{Float64,3}
+
+Decode an OpenEXR scanline image into a linear, unclamped `H×W×3` RGB array.
+Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PXR24`, and `B44`/`B44A` compression and
+`HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover HALF/FLOAT, matching
+three.js). Tiled, deep, multi-part, subsampled, `pLinear`-B44, and `PIZ`/`DWA`
+payloads raise a clear error rather than being approximated.
+"""
+load_exr(path::String) = _decode_exr(read(path))
+
+"""Load an OpenEXR scanline image into a linear [`Texture`]."""
+EXRLoader(path::String; colorspace::Symbol=:linear, kwargs...) =
+    Texture(load_exr(path); colorspace=colorspace, kwargs...)
 
 # ========================== OBJ .mtl materials ==========================
 
@@ -6613,7 +7108,7 @@ function _gltf_decode_image(bytes::Vector{UInt8}, mime::AbstractString)
     elseif image_mime == "image/jpeg" || image_mime == "image/jpg"
         return _decode_jpeg(bytes)
     elseif image_mime == "image/ktx2"
-        error("glTF image MIME image/ktx2 is not supported; KTX2/Basis texture loading is not implemented")
+        return _decode_ktx2(bytes)
     end
     error("glTF image MIME $image_mime is not supported; image/png and image/jpeg are supported")
 end

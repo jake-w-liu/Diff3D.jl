@@ -103,7 +103,8 @@ replacement for three.js `WebGLRenderer`.
   full three.js skeleton lifecycle and renderer-program parity beyond compact
   uniform/float bone-texture skinning plus attached/detached bind matrices,
   ShadowMesh stencil-plane projection and runtime light-mode toggles,
-  PMREM/prefiltered environment lighting, and most material
+  browser/renderer-integrated PMREM (CPU `generate_pmrem`/`sample_pmrem`
+  prefiltering now exists), and most material
   shader variants.
 - glTF support parses common mesh and transform animation data, maps point,
   line, loop, strip, triangle, triangle-strip, and triangle-fan primitive modes
@@ -132,8 +133,11 @@ replacement for three.js `WebGLRenderer`.
   percent-decoding and clear
   unsupported-scheme errors. glTF data URI resources are validated with strict
   base64 and clear malformed-data errors; JPEG images now decode through
-  JpegTurbo, while `.ktx2`/`KHR_texture_basisu` image references fail clearly
-  until compressed-texture loading exists. Renderer shading of every physical
+  JpegTurbo. Uncompressed KTX2 images (single-level 8-bit R/RG/RGB/RGBA
+  UNORM/SRGB and 16/32-bit SFLOAT HDR formats) now decode via `load_ktx2`/the
+  `image/ktx2` path with `KTXorientation` handling, while Basis Universal (`vkFormat` 0),
+  supercompressed payloads, and `KHR_texture_basisu` references still fail
+  clearly until a Basis transcoder exists. Renderer shading of every physical
   extension remains partial. glTF `CUBICSPLINE` morph-weight tracks
   now bind to CPU playback and browser weight serialization. Static skinned poses and
   animated bone tracks export to browser shader-side uniform skinning for small
@@ -213,7 +217,10 @@ replacement for three.js `WebGLRenderer`.
   logarithmic depth, full tone-output/color-management parity, and texture
   sampling parity.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
-  KTX2Loader, EXR loaders, PMREM/UltraHDR environment-map infrastructure,
+  KTX2Loader Basis transcoding, full EXR compression coverage (scanline
+  NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A now load via `load_exr`/`EXRLoader`; tiled,
+  deep, and PIZ/DWA remain open), UltraHDR environment-map infrastructure
+  (CPU PMREM prefiltering now exists via `generate_pmrem`/`sample_pmrem`),
   advanced SVG path/style parity, advanced text layout/font-geometry parity,
   compressed/browser AudioLoader parity, and other three.js examples
   infrastructure.
@@ -282,8 +289,11 @@ Parallel audits split the remaining work into five critical tracks:
   `env_map_intensity`). Browser export now handles alpha, emissive, AO, light,
   roughness, metalness, normal maps, and a compact environment-map path that
   uploads exported `CubeTexture` faces as a WebGL cube map when fragment
-  texture units allow it, retaining average face colors as a fallback. A
-  prefiltered reflection mip chain remains open.
+  texture units allow it, retaining average face colors as a fallback. CPU-side
+  PMREM prefiltering is now available via `generate_pmrem`/`sample_pmrem`
+  (deterministic Hammersley + GGX roughness convolution of a `CubeTexture`);
+  wiring the prefiltered mip chain into browser export and the material
+  reflection path remains open.
   Browser export now recognizes `MeshBasicMaterial` as an explicit unlit
   material mode that applies color, vertex color, texture, opacity, alpha map,
   tone mapping, output color space, and fog while bypassing scene lights.
@@ -761,9 +771,13 @@ Parallel audits split the remaining work into five critical tracks:
   extension, including `image/png` bufferView images, palette/`tRNS` PNGs,
   Adam7 interlaced grayscale/grayscale+alpha/RGB/RGBA PNG payloads, and
   `image/jpeg`/`.jpg`/`.jpeg` URI, data URI, and bufferView
-  payloads through JpegTurbo. Unsupported `.ktx2` and extension-only
+  payloads through JpegTurbo. Uncompressed `.ktx2`/`image/ktx2` payloads
+  (single-level 8-bit R/RG/RGB/RGBA UNORM/SRGB and 16/32-bit SFLOAT HDR
+  formats, with `KTXorientation` flip)
+  now decode through `load_ktx2` and the glTF image path, while Basis
+  Universal (`vkFormat` 0), supercompressed, and extension-only
   `KHR_texture_basisu` references still fail with an explicit
-  compressed-texture loader error.
+  Basis-transcoder-required error.
 - Done: resolve local external glTF buffer and image URI paths with
   percent-decoding, query/fragment stripping, `file:` URI support, and clear
   errors for unsupported external schemes.
@@ -773,8 +787,17 @@ Parallel audits split the remaining work into five critical tracks:
 - Done: add Radiance RGBE/HDR texture loading via `load_rgbe`, `load_hdr`, and
   `RGBELoader`, covering flat and standard per-channel RLE scanlines,
   orientation signs, RGBE-to-linear floating-point conversion, and clear errors
-  for malformed headers/truncated payloads. EXR, KTX2/Basis, PMREM generation,
-  and broader environment-map loader parity remain open.
+  for malformed headers/truncated payloads.
+- Done: add OpenEXR scanline loading via `load_exr`/`EXRLoader` for
+  NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A compression and HALF/FLOAT/UINT channels,
+  decoding to linear unclamped RGB with clear errors for tiled, deep,
+  multi-part, subsampled, pLinear-B44, and PIZ/DWA payloads. The ZIP/RLE
+  predictor+deinterleave and RLE entropy steps are verified against OpenEXR
+  `ImfZip.cpp`/`internal_rle.c`; the PXR24 byte-plane/delta and B44 4×4-block
+  decodes match three.js `EXRLoader` (the parity reference).
+- Done: add CPU PMREM prefiltering via `generate_pmrem`/`sample_pmrem`
+  (deterministic Hammersley + GGX roughness convolution of a `CubeTexture`).
+  KTX2/Basis transcoding and browser/renderer-integrated PMREM remain open.
 - Done: expose native JPEG/JPG texture loading via `load_jpeg`, add
   byte-signature `load_image` dispatch for PNG and JPEG, and route
   `TextureLoader` through the shared PNG/JPEG path while preserving RGBE/HDR as

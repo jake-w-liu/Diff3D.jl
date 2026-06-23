@@ -233,6 +233,7 @@ export
     Texture, DataTexture, CanvasTexture, DepthTexture, CubeTexture,
     sample_texture, sample_texture_lod, sample_cube, sample_cube_lod,
     equirectangular_to_cubemap, generate_mipmaps!,
+    PMREM, generate_pmrem, sample_pmrem,
     checker_texture, grid_texture, texture_transform_uv, texture_update_matrix!,
 
     # I/O
@@ -242,8 +243,8 @@ export
 
     # Loaders
     compute_vertex_normals!, save_stl_binary, load_stl, load_obj,
-    inflate, zlib_inflate, load_png, load_jpeg, load_image,
-    load_rgbe, load_hdr, TextureLoader, RGBELoader,
+    inflate, zlib_inflate, load_png, load_jpeg, load_ktx2, load_image,
+    load_rgbe, load_hdr, TextureLoader, RGBELoader, load_exr, EXRLoader,
     AudioBufferData, audio_duration, load_wav, load_audio, AudioLoader,
     FontCommand, FontGlyph, FontData, load_font, FontLoader,
     font_glyph_shapes, font_text_shapes, font_kerning,

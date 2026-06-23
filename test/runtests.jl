@@ -6600,6 +6600,59 @@ end
         @test sample_texture(dt, 0.5, 0.5).r ≈ 0.7          # single channel → gray
     end
 
+    @testset "PMREM prefiltered environment" begin
+        mkface(c, sz) = begin
+            d = Array{Float64}(undef, sz, sz, 3)
+            for r in 1:sz, co in 1:sz
+                d[r, co, 1] = c[1]; d[r, co, 2] = c[2]; d[r, co, 3] = c[3]
+            end
+            Texture(d; wrap_s=:clamp, wrap_t=:clamp, colorspace=:linear)
+        end
+        # Structure: level resolutions halve, level count honored.
+        const_cube = CubeTexture(ntuple(_ -> mkface((0.3, 0.6, 0.9), 8), 6))
+        p = generate_pmrem(const_cube; levels=4, samples=64, base_size=8)
+        @test p isa PMREM
+        @test length(p.levels) == 4
+        @test [size(p.levels[i].faces[1].data, 1) for i in 1:4] == [8, 4, 2, 1]
+
+        # Convolving a constant environment must return that constant exactly
+        # (a weighted average of equal values), at every roughness/direction.
+        for r in (0.0, 0.25, 0.5, 0.75, 1.0),
+            d in (Vec3(1.0, 0, 0), Vec3(0, 1.0, 0), Vec3(0.3, -0.7, 0.5), Vec3(-1.0, -1, -1))
+            c = sample_pmrem(p, d, r)
+            @test c.r ≈ 0.3 atol=1e-9
+            @test c.g ≈ 0.6 atol=1e-9
+            @test c.b ≈ 0.9 atol=1e-9
+        end
+
+        # Roughness 0 is the exact mirror reflection of the source.
+        dir = Vec3(0.2, 0.5, -0.8)
+        c0 = sample_pmrem(p, dir, 0.0)
+        cm = sample_cube(const_cube, dir)
+        @test c0.r ≈ cm.r && c0.g ≈ cm.g && c0.b ≈ cm.b
+
+        # Energy conservation: a varying environment stays within its own range.
+        varied = CubeTexture(ntuple(f -> mkface((f / 6, 0.5, 1 - f / 6), 8), 6))
+        pv = generate_pmrem(varied; levels=3, samples=64, base_size=8)
+        lo, hi = Inf, -Inf
+        for lv in pv.levels, fc in lv.faces
+            lo = min(lo, minimum(fc.data)); hi = max(hi, maximum(fc.data))
+        end
+        @test lo >= -1e-9 && hi <= 1 + 1e-9
+
+        # Roughness clamps to [0,1] and rejects non-finite input.
+        @test sample_pmrem(p, dir, 5.0).r == sample_pmrem(p, dir, 1.0).r
+        @test sample_pmrem(p, dir, -2.0).r == sample_pmrem(p, dir, 0.0).r
+        @test_throws ArgumentError sample_pmrem(p, dir, NaN)
+        @test_throws ArgumentError generate_pmrem(const_cube; levels=0)
+        @test_throws ArgumentError generate_pmrem(const_cube; samples=0)
+
+        # Single-level PMREM is the mirror cube.
+        p1 = generate_pmrem(const_cube; levels=1, samples=16, base_size=4)
+        @test length(p1.levels) == 1
+        @test sample_pmrem(p1, dir, 0.7).r ≈ sample_cube(const_cube, dir).r atol=1e-9
+    end
+
     @testset "Material albedo map rendering" begin
         scene = Scene(background=Color3(0.0,0,0.5))
         pl = Mesh(PlaneGeometry(width=4.0,height=4.0, width_segments=16, height_segments=16),
@@ -8539,6 +8592,278 @@ end
         rm(truncated)
     end
 
+    @testset "OpenEXR scanline decode" begin
+        le32i(x) = (v = x < 0 ? x + (1 << 32) : x;
+                    UInt8[v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff])
+        le64(x) = vcat(le32i(x & 0xffffffff), le32i((x >> 32) & 0xffffffff))
+        f32b(x) = le32i(Int(reinterpret(UInt32, Float32(x))))
+        u16b(x) = UInt8[x & 0xff, (x >> 8) & 0xff]
+        cstr(s) = vcat(Vector{UInt8}(codeunits(s)), UInt8(0))
+        attr(nm, ty, v) = vcat(cstr(nm), cstr(ty), le32i(length(v)), v)
+        function chlist(chs)
+            v = UInt8[]
+            for (nm, pt) in chs
+                append!(v, cstr(nm)); append!(v, le32i(pt)); append!(v, UInt8[0, 0, 0, 0])
+                append!(v, le32i(1)); append!(v, le32i(1))
+            end
+            push!(v, 0x00); v
+        end
+        # Build a NONE-compressed scanline EXR (channels must be sorted by name).
+        function build_exr_none(W, H, chs, px; version=2)
+            hdr = vcat(le32i(20000630), le32i(version),
+                       attr("channels", "chlist", chlist(chs)),
+                       attr("compression", "compression", UInt8[0]),
+                       attr("dataWindow", "box2i",
+                            vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]),
+                       UInt8[0x00])
+            chunks = Vector{UInt8}[]
+            for y in 0:(H - 1)
+                data = UInt8[]
+                for (nm, pt) in chs, x in 1:W
+                    val = px[nm][y + 1, x]
+                    pt == 1 ? append!(data, u16b(UInt16(val))) :
+                    pt == 2 ? append!(data, f32b(val)) : append!(data, le32i(Int(val)))
+                end
+                push!(chunks, vcat(le32i(y), le32i(length(data)), data))
+            end
+            body = length(hdr) + H * 8
+            offs = UInt8[]; cur = body
+            for c in chunks; append!(offs, le64(cur)); cur += length(c); end
+            vcat(hdr, offs, chunks...)
+        end
+
+        # IEEE half-float decode for known bit patterns.
+        @test Diff3D._half_to_float(0x3C00) == 1.0
+        @test Diff3D._half_to_float(0x4000) == 2.0
+        @test Diff3D._half_to_float(0xC000) == -2.0
+        @test Diff3D._half_to_float(0x0000) == 0.0
+        @test Diff3D._half_to_float(0x3800) == 0.5
+        @test Diff3D._half_to_float(0x0001) ≈ 2.0^-24
+
+        # ZIP post-process units (verified against OpenEXR ImfZip.cpp).
+        let buf = UInt8[10, 131, 124]
+            Diff3D._exr_unpredict!(buf)
+            @test buf == UInt8[10, 13, 9]
+        end
+        @test Diff3D._exr_deinterleave(UInt8[1, 2, 3, 4, 5]) == UInt8[1, 4, 2, 5, 3]
+        # The decode chain (unpredict∘deinterleave) inverts the encode chain
+        # (interleave then predict) that real ZIP data is inflated into.
+        let raw = UInt8[7, 200, 3, 55, 180, 9, 1, 250, 128], n = 9, half = (9 + 1) >> 1
+            src = Vector{UInt8}(undef, n); j1 = 1; j2 = half + 1; i = 1
+            while i <= n
+                src[j1] = raw[i]; j1 += 1; i += 1
+                i <= n || break
+                src[j2] = raw[i]; j2 += 1; i += 1
+            end
+            d = Vector{UInt8}(undef, n); d[1] = src[1]
+            for k in 2:n; d[k] = UInt8((Int(src[k]) - Int(src[k - 1]) + 128) & 0xff); end
+            @test Diff3D._exr_deinterleave(Diff3D._exr_unpredict!(copy(d))) == raw
+        end
+
+        # FLOAT NONE round-trip (channels sorted B, G, R).
+        R = [0.1 0.2; 0.3 0.4]; G = [0.5 0.6; 0.7 0.8]; B = [0.9 1.0; 1.1 1.2]
+        chs = [("B", 2), ("G", 2), ("R", 2)]
+        img = Diff3D._decode_exr(build_exr_none(2, 2, chs, Dict("R" => R, "G" => G, "B" => B)))
+        @test size(img) == (2, 2, 3)
+        @test img[:, :, 1] ≈ R atol=1e-6     # FLOAT channels carry Float32 precision
+        @test img[:, :, 2] ≈ G atol=1e-6
+        @test img[:, :, 3] ≈ B atol=1e-6
+
+        # HALF NONE round-trip using known half bit patterns.
+        hpx = Dict("R" => [Float64(0x3C00) Float64(0x4000)],
+                   "G" => [Float64(0x3800) Float64(0x3400)],
+                   "B" => [0.0 0.0])
+        himg = Diff3D._decode_exr(build_exr_none(2, 1, [("B", 1), ("G", 1), ("R", 1)], hpx))
+        @test himg[1, 1, 1] == 1.0 && himg[1, 2, 1] == 2.0
+        @test himg[1, 1, 2] == 0.5 && himg[1, 2, 2] == 0.25
+
+        # EXR RLE entropy stage (verified against OpenEXR internal_rle.c):
+        # non-negative control c repeats the next byte c+1 times; control 0xFF
+        # (signed -1) copies one literal byte, etc.
+        @test Diff3D._exr_rle_decompress(UInt8[0x02, 0xAA], 3) == UInt8[0xAA, 0xAA, 0xAA]
+        @test Diff3D._exr_rle_decompress(UInt8[0xFD, 1, 2, 3], 3) == UInt8[1, 2, 3]
+        @test Diff3D._exr_rle_decompress(UInt8[0x01, 0x09, 0xFF, 0x07], 3) == UInt8[9, 9, 7]
+        @test_throws ErrorException Diff3D._exr_rle_decompress(UInt8[0x05, 0x01], 2)  # run truncated
+        # Forward RLE encoder for the end-to-end path (round-trips the decoder).
+        function rle_enc(data)
+            out = UInt8[]; n = length(data); i = 1
+            while i <= n
+                run = 1
+                while i + run <= n && run < 128 && data[i + run] == data[i]; run += 1; end
+                if run >= 2
+                    push!(out, UInt8(run - 1)); push!(out, data[i]); i += run
+                else
+                    push!(out, 0xFF); push!(out, data[i]); i += 1
+                end
+            end
+            out
+        end
+        for rr in (UInt8[5, 5, 5, 9, 1, 2, 2, 2, 200, 200], UInt8[0])
+            @test Diff3D._exr_rle_decompress(rle_enc(rr), length(rr)) == rr
+        end
+        # End-to-end RLE through _decode_exr: a black image compresses, so the
+        # decoder takes the real RLE path (not the raw fallback).
+        function build_exr_rle(W, H, chs, px)
+            hdr = vcat(le32i(20000630), le32i(2),
+                       attr("channels", "chlist", chlist(chs)),
+                       attr("compression", "compression", UInt8[1]),
+                       attr("dataWindow", "box2i",
+                            vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]), UInt8[0x00])
+            chunks = Vector{UInt8}[]
+            for y in 0:(H - 1)
+                rawb = UInt8[]
+                for (nm, pt) in chs, x in 1:W
+                    rawb = vcat(rawb, f32b(px[nm][y + 1, x]))
+                end
+                m = length(rawb); half = (m + 1) >> 1
+                src = Vector{UInt8}(undef, m); j1 = 1; j2 = half + 1; i = 1
+                while i <= m
+                    src[j1] = rawb[i]; j1 += 1; i += 1
+                    i <= m || break
+                    src[j2] = rawb[i]; j2 += 1; i += 1
+                end
+                dd = Vector{UInt8}(undef, m); dd[1] = src[1]
+                for k in 2:m; dd[k] = UInt8((Int(src[k]) - Int(src[k - 1]) + 128) & 0xff); end
+                comp = rle_enc(dd)
+                @test length(comp) < m              # confirms the RLE path is exercised
+                push!(chunks, vcat(le32i(y), le32i(length(comp)), comp))
+            end
+            body = length(hdr) + H * 8
+            offs = UInt8[]; cur = body
+            for c in chunks; offs = vcat(offs, le64(cur)); cur += length(c); end
+            vcat(hdr, offs, chunks...)
+        end
+        zeros2 = Dict("R" => zeros(2, 2), "G" => zeros(2, 2), "B" => zeros(2, 2))
+        rimg = Diff3D._decode_exr(build_exr_rle(2, 2, chs, zeros2))
+        @test size(rimg) == (2, 2, 3) && all(rimg .== 0.0)
+
+        # PXR24: matches three.js EXRLoader uncompressPXR (MSB-first byte planes,
+        # left-neighbour delta; FLOAT keeps 3 bytes = lossy 24-bit precision).
+        # Unit: HALF planes for deltas 0x3C00, 0x0400 accumulate to 0x3C00, 0x4000.
+        @test Diff3D._exr_pxr24_decode(UInt8[0x3C, 0x04, 0x00, 0x00], 1, [("Y", 1)], 2) ==
+              UInt8[0x00, 0x3C, 0x00, 0x40]
+        @test_throws ErrorException Diff3D._exr_pxr24_decode(UInt8[0x00], 1, [("Y", 0)], 1)  # UINT
+        # End-to-end: a stored-deflate block of the 3/4-size FLOAT planes stays
+        # under the raw-fallback threshold, so the real PXR24 path runs.
+        function zlib_store(d)
+            n = length(d)
+            vcat(UInt8[0x78, 0x01, 0x01, n & 0xff, (n >> 8) & 0xff,
+                       (~n) & 0xff, ((~n) >> 8) & 0xff], d, UInt8[0, 0, 0, 0])
+        end
+        function pxr24_enc(W, H, chs, px)
+            planes = UInt8[]
+            for y in 0:(H - 1), (nm, pt) in chs
+                prev = UInt32(0); p0 = UInt8[]; p1 = UInt8[]; p2 = UInt8[]
+                for x in 1:W
+                    if pt == 2
+                        full = (reinterpret(UInt32, Float32(px[nm][y + 1, x])) >> 8) << 8
+                        diff = (full - prev) & 0xffffffff; prev = full
+                        push!(p0, UInt8((diff >> 24) & 0xff)); push!(p1, UInt8((diff >> 16) & 0xff))
+                        push!(p2, UInt8((diff >> 8) & 0xff))
+                    else
+                        val = UInt32(px[nm][y + 1, x]) & 0xffff
+                        diff = (val - prev) & 0xffff; prev = val
+                        push!(p0, UInt8((diff >> 8) & 0xff)); push!(p1, UInt8(diff & 0xff))
+                    end
+                end
+                append!(planes, p0); append!(planes, p1); pt == 2 && append!(planes, p2)
+            end
+            planes
+        end
+        function build_exr_pxr(W, H, chs, px)
+            hdr = vcat(le32i(20000630), le32i(2), attr("channels", "chlist", chlist(chs)),
+                       attr("compression", "compression", UInt8[5]),
+                       attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]), UInt8[0x00])
+            nb = cld(H, 16); chunks = Vector{UInt8}[]; y = 0
+            while y < H
+                nl = min(16, H - y)
+                sub = Dict(k => v[(y + 1):(y + nl), :] for (k, v) in px)
+                data = zlib_store(pxr24_enc(W, nl, chs, sub))
+                push!(chunks, vcat(le32i(y), le32i(length(data)), data)); y += 16
+            end
+            body = length(hdr) + nb * 8; offs = UInt8[]; cur = body
+            for c in chunks; offs = vcat(offs, le64(cur)); cur += length(c); end
+            vcat(hdr, offs, chunks...)
+        end
+        trunc24(v) = reinterpret(Float32, (reinterpret(UInt32, Float32(v)) >> 8) << 8)
+        Rp = [0.1 0.2 0.3 0.4; 0.5 0.6 0.7 0.8]; Gp = Rp .+ 0.05; Bp = Rp .+ 0.1
+        pimg = Diff3D._decode_exr(build_exr_pxr(4, 2, chs, Dict("R" => Rp, "G" => Gp, "B" => Bp)))
+        @test pimg[:, :, 1] == Float64.(trunc24.(Rp))   # exact match to lossy 24-bit
+        @test pimg[:, :, 2] == Float64.(trunc24.(Gp))
+        @test pimg[:, :, 3] == Float64.(trunc24.(Bp))
+        @test maximum(abs.(pimg[:, :, 1] .- Rp)) < 1e-4  # within PXR24 precision
+
+        # B44/B44A: 4×4-block HALF decode transcribed from three.js uncompressB44.
+        # A B44A flat block (byte[2] ≥ 52) stores one ordered-magnitude value for
+        # all 16 pixels; t = (h&0x8000) ? ~h : (h|0x8000).
+        flat44(h) = (t = (h & 0x8000) != 0 ? (~h & 0xffff) : (h | 0x8000);
+                     UInt8[(t >> 8) & 0xff, t & 0xff, 52])
+        # Flat-block unit: half 0x3C00 (=1.0) → LE bytes 0x00,0x3C.
+        @test Diff3D._exr_b44_decode(flat44(0x3C00), 1, [("Y", 1)], [0], 1, true) ==
+              UInt8[0x00, 0x3C]
+        chs44 = [("B", 1), ("G", 1), ("R", 1)]   # B44 operates on HALF channels
+        function build_exr_b44a(W, H, blocks)  # blocks: channel => Vector of per-block halves
+            hdr = vcat(le32i(20000630), le32i(2), attr("channels", "chlist", chlist(chs44)),
+                       attr("compression", "compression", UInt8[7]),
+                       attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]), UInt8[0x00])
+            data = UInt8[]
+            for (nm, _) in chs44, h in blocks[nm]; append!(data, flat44(h)); end
+            chunk = vcat(le32i(0), le32i(length(data)), data)
+            vcat(hdr, le64(length(hdr) + 8), chunk)
+        end
+        # 4×4 constant RGB image (one block per channel) round-trips exactly.
+        cimg = Diff3D._decode_exr(build_exr_b44a(4, 4,
+            Dict("R" => [0x3C00], "G" => [0x3800], "B" => [0x3400])))
+        @test size(cimg) == (4, 4, 3)
+        @test all(cimg[:, :, 1] .== 1.0) && all(cimg[:, :, 2] .== 0.5) && all(cimg[:, :, 3] .== 0.25)
+        # 8×4 image (two horizontal blocks): verifies per-block scatter placement.
+        simg = Diff3D._decode_exr(build_exr_b44a(8, 4,
+            Dict("R" => [0x3C00, 0x4000], "G" => [0x3800, 0x3800], "B" => [0x3400, 0x3400])))
+        @test all(simg[:, 1:4, 1] .== 1.0) && all(simg[:, 5:8, 1] .== 2.0)
+        # A 14-byte B44 block's seed pixel (top-left) decodes from s0 directly.
+        seed_block = vcat(UInt8[0xBC, 0x00], zeros(UInt8, 12))   # s0 = 0xBC00 → 1.0
+        sb = Diff3D._exr_b44_decode(seed_block, 4, [("Y", 1)], [0], 4, false)
+        @test (UInt16(sb[1]) | (UInt16(sb[2]) << 8)) == 0x3C00   # pixel (0,0) == 1.0
+        # pLinear B44 channels are rejected. pLinear byte = name"B\0"(2) + ptype(4) + 1.
+        plin_ch = chlist(chs44); plin_ch[length(cstr("B")) + 4 + 1] = 0x01
+        plin_hdr = vcat(le32i(20000630), le32i(2), attr("channels", "chlist", plin_ch),
+                        attr("compression", "compression", UInt8[7]),
+                        attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(3), le32i(3))),
+                        attr("lineOrder", "lineOrder", UInt8[0]), UInt8[0x00])
+        plin_bytes = vcat(plin_hdr, le64(length(plin_hdr) + 8),
+                          vcat(le32i(0), le32i(9), flat44(0x3C00), flat44(0x3C00), flat44(0x3C00)))
+        @test_throws ErrorException Diff3D._decode_exr(plin_bytes)
+
+        # load_exr / EXRLoader from disk.
+        path = tempname() * ".exr"
+        write(path, build_exr_none(2, 2, chs, Dict("R" => R, "G" => G, "B" => B)))
+        @test load_exr(path) ≈ img
+        @test EXRLoader(path).data ≈ img
+        rm(path)
+
+        # Clear failures rather than silent approximation.
+        zero2 = Dict("R" => zeros(2, 2), "G" => zeros(2, 2), "B" => zeros(2, 2))
+        # A header-only EXR is enough to reach the compression-mode guard.
+        function build_exr_comp(W, H, chs, px, comp)
+            hdr = vcat(le32i(20000630), le32i(2),
+                       attr("channels", "chlist", chlist(chs)),
+                       attr("compression", "compression", UInt8[comp]),
+                       attr("dataWindow", "box2i",
+                            vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]), UInt8[0x00])
+            nb = comp == 3 ? cld(H, 16) : H
+            vcat(hdr, fill(0x00, nb * 8))   # header is enough to reach the comp check
+        end
+        @test_throws ErrorException Diff3D._decode_exr(build_exr_comp(2, 2, chs, zero2, 4))
+        @test_throws ErrorException Diff3D._decode_exr(build_exr_none(1, 1, [("Y", 2)], Dict("Y" => zeros(1, 1))))
+        @test_throws ErrorException Diff3D._decode_exr(build_exr_none(1, 1, chs, Dict("R" => zeros(1, 1), "G" => zeros(1, 1), "B" => zeros(1, 1)); version=(2 | 0x200)))
+        @test_throws ErrorException Diff3D._decode_exr(UInt8[0, 1, 2, 3, 4, 5, 6, 7])
+    end
+
     @testset "OBJ .mtl materials" begin
         dir = mktempdir()
         save_png(joinpath(dir, "diffuse.png"), fill(0.25, 1, 1, 3))
@@ -10418,22 +10743,108 @@ end
             end
 
             let dir = mktempdir()
-                write(joinpath(dir, "texture.ktx2"), UInt8[0xab, 0x4b, 0x54, 0x58, 0x20])
+                # Build a minimal valid uncompressed KTX2 file for round-trip tests.
+                function build_ktx2(width, height, channels, vkFormat, pixels;
+                                    orientation="rd", super=0, comp_bytes=1)
+                    le32(x) = UInt8[x & 0xff, (x >> 8) & 0xff,
+                                    (x >> 16) & 0xff, (x >> 24) & 0xff]
+                    le64(x) = vcat(le32(x & 0xffffffff), le32((x >> 32) & 0xffffffff))
+                    buf = UInt8[0xAB,0x4B,0x54,0x58,0x20,0x32,0x30,0xBB,0x0D,0x0A,0x1A,0x0A]
+                    append!(buf, le32(vkFormat)); append!(buf, le32(1))      # vkFormat, typeSize
+                    append!(buf, le32(width)); append!(buf, le32(height))    # pixelWidth/Height
+                    append!(buf, le32(0)); append!(buf, le32(0))            # pixelDepth, layerCount
+                    append!(buf, le32(1)); append!(buf, le32(1))            # faceCount, levelCount
+                    append!(buf, le32(super))                              # supercompressionScheme
+                    kvd = UInt8[]
+                    if !isempty(orientation)
+                        kv = vcat(Vector{UInt8}(codeunits("KTXorientation")), UInt8(0),
+                                  Vector{UInt8}(codeunits(orientation)), UInt8(0))
+                        append!(kvd, le32(length(kv))); append!(kvd, kv)
+                        while length(kvd) % 4 != 0; push!(kvd, 0x00); end
+                    end
+                    header_end = 12 + 36 + 32 + 24                          # = 104
+                    kvd_off = isempty(kvd) ? 0 : header_end
+                    data_off = header_end + length(kvd)
+                    data_len = width * height * channels * comp_bytes
+                    append!(buf, le32(0)); append!(buf, le32(0))           # dfd offset/length
+                    append!(buf, le32(kvd_off)); append!(buf, le32(length(kvd)))  # kvd offset/length
+                    append!(buf, le64(0)); append!(buf, le64(0))           # sgd offset/length
+                    append!(buf, le64(data_off)); append!(buf, le64(data_len)); append!(buf, le64(data_len))
+                    @assert length(buf) == header_end
+                    append!(buf, kvd)
+                    @assert length(buf) == data_off
+                    @assert length(pixels) == data_len
+                    append!(buf, pixels)
+                    return buf
+                end
+
+                # 2x2 RGBA8, rows top-first: (red, green) / (blue, white).
+                rgba_px = UInt8[255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255]
+                ktx_rd = Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 37, rgba_px))
+                @test size(ktx_rd) == (2, 2, 4)
+                @test ktx_rd[1,1,:] == [1.0, 0.0, 0.0, 1.0]
+                @test ktx_rd[1,2,:] == [0.0, 1.0, 0.0, 1.0]
+                @test ktx_rd[2,1,:] == [0.0, 0.0, 1.0, 1.0]
+                @test ktx_rd[2,2,:] == [1.0, 1.0, 1.0, 1.0]
+
+                # KTXorientation "ru" (bottom-first) must flip to top-first output.
+                ktx_ru = Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 37, rgba_px; orientation="ru"))
+                @test ktx_ru[1,:,:] == ktx_rd[2,:,:]
+                @test ktx_ru[2,:,:] == ktx_rd[1,:,:]
+
+                # RGB8 round-trips too, and load_ktx2 reads from disk.
+                rgb_px = UInt8[10,20,30, 40,50,60]
+                path = joinpath(dir, "rgb.ktx2")
+                write(path, build_ktx2(2, 1, 3, 23, rgb_px))
+                rgb = load_ktx2(path)
+                @test size(rgb) == (1, 2, 3)
+                @test rgb[1,1,:] ≈ [10/255, 20/255, 30/255]
+                @test rgb[1,2,:] ≈ [40/255, 50/255, 60/255]
+
+                # HDR SFLOAT formats decode to linear unclamped values.
+                u16le(x) = UInt8[x & 0xff, (x >> 8) & 0xff]
+                f32le(x) = (b = reinterpret(UInt32, Float32(x));
+                            UInt8[b & 0xff, (b >> 8) & 0xff, (b >> 16) & 0xff, (b >> 24) & 0xff])
+                # R16G16B16A16_SFLOAT (97): half patterns 1.0/2.0/0.5/-1.0, 0/0.25/4.0/1.0.
+                half_bytes = vcat(u16le.(UInt16[0x3C00, 0x4000, 0x3800, 0xBC00,
+                                                 0x0000, 0x3400, 0x4400, 0x3C00])...)
+                hf = Diff3D._decode_ktx2(build_ktx2(2, 1, 4, 97, half_bytes; comp_bytes=2))
+                @test size(hf) == (1, 2, 4)
+                @test hf[1, 1, :] == [1.0, 2.0, 0.5, -1.0]
+                @test hf[1, 2, :] == [0.0, 0.25, 4.0, 1.0]
+                # R32G32B32_SFLOAT (106): exact Float32 values, including >1 (HDR).
+                f32_bytes = vcat(f32le.(Float32[3.14, -2.5, 100.0])...)
+                ff = Diff3D._decode_ktx2(build_ktx2(1, 1, 3, 106, f32_bytes; comp_bytes=4))
+                @test ff[1, 1, :] == [Float64(3.14f0), -2.5, 100.0]
+                # R16_SFLOAT (76): single-channel.
+                r16 = Diff3D._decode_ktx2(build_ktx2(1, 1, 1, 76, u16le(UInt16(0x4000)); comp_bytes=2))
+                @test size(r16) == (1, 1, 1) && r16[1, 1, 1] == 2.0
+
+                # Basis / supercompressed / unsupported-format payloads fail clearly.
+                basis_err = try; Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 0, rgba_px)); nothing
+                            catch e; e end
+                @test occursin("Basis", sprint(showerror, basis_err))
+                super_err = try; Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 37, rgba_px; super=1)); nothing
+                            catch e; e end
+                @test occursin("supercompression", sprint(showerror, super_err))
+                badfmt_err = try; Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 999, rgba_px)); nothing
+                             catch e; e end
+                @test occursin("vkFormat", sprint(showerror, badfmt_err))
+                trunc_err = try; Diff3D._decode_ktx2(build_ktx2(2, 2, 4, 37, rgba_px)[1:50]); nothing
+                            catch e; e end
+                @test occursin("truncated", sprint(showerror, trunc_err))
+
+                # glTF image MIME image/ktx2 now decodes through the loader.
+                write(joinpath(dir, "texture.ktx2"), build_ktx2(2, 2, 4, 37, rgba_px))
                 gltf = Dict{String,Any}(
                     "images"=>Any[Dict{String,Any}("uri"=>"texture.ktx2")],
                     "textures"=>Any[Dict{String,Any}("source"=>0.0)],
                     "materials"=>Any[Dict{String,Any}(
                         "pbrMetallicRoughness"=>Dict{String,Any}(
                             "baseColorTexture"=>Dict{String,Any}("index"=>0.0)))])
-                err = try
-                    Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
-                    nothing
-                catch e
-                    e
-                end
-                msg = sprint(showerror, err)
-                @test occursin("image/ktx2", msg)
-                @test occursin("not supported", msg)
+                mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
+                @test mat.map isa Texture
+                @test size(mat.map.data) == (2, 2, 4)
 
                 basisu = Dict{String,Any}(
                     "images"=>Any[Dict{String,Any}("uri"=>"texture.ktx2")],
