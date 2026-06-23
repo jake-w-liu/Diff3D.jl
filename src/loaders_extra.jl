@@ -1138,6 +1138,346 @@ end
 
 _exr_chan_size(pt::Int) = pt == 1 ? 2 : 4        # HALF=2; UINT/FLOAT=4
 
+# ===== PIZ (wavelet + Huffman) decompression =====
+# Faithful port of three.js EXRLoader uncompressPIZ and its huf*/wav2Decode
+# helpers (the parity reference). The bit reader mirrors JS 32-bit semantics: the
+# accumulator `c` is a UInt32 (so `<<8` discards consumed bytes), and every use
+# of `c` is masked, so JS's signed `>>` and the unsigned shift agree. Verified
+# against openexr-images TestImages/AllHalfValues.exr, whose 256x256 RGB pixels
+# enumerate every 16-bit half value.
+const _PIZ_USHORT_RANGE = 1 << 16
+const _PIZ_BITMAP_SIZE = _PIZ_USHORT_RANGE >> 3
+const _PIZ_HUF_ENCBITS = 16
+const _PIZ_HUF_DECBITS = 14
+const _PIZ_HUF_ENCSIZE = (1 << _PIZ_HUF_ENCBITS) + 1
+const _PIZ_HUF_DECSIZE = 1 << _PIZ_HUF_DECBITS
+const _PIZ_HUF_DECMASK = _PIZ_HUF_DECSIZE - 1
+const _PIZ_NBITS = 16
+const _PIZ_A_OFFSET = 1 << (_PIZ_NBITS - 1)
+const _PIZ_MOD_MASK = (1 << _PIZ_NBITS) - 1
+const _PIZ_SHORT_ZEROCODE_RUN = 59
+const _PIZ_LONG_ZEROCODE_RUN = 63
+const _PIZ_SHORTEST_LONG_RUN = 2 + _PIZ_LONG_ZEROCODE_RUN - _PIZ_SHORT_ZEROCODE_RUN
+
+mutable struct _PizHDec
+    len::Int
+    lit::Int
+    p::Vector{Int}
+end
+
+mutable struct _PizBR
+    data::Vector{UInt8}
+    off::Int            # 0-based next-read position (JS inOffset.value)
+    c::UInt32
+    lc::Int
+end
+
+@inline function _piz_getchar!(r::_PizBR)
+    b = (r.off + 1) <= length(r.data) ? r.data[r.off + 1] : 0x00
+    r.c = (r.c << 8) | UInt32(b)
+    r.off += 1
+    r.lc += 8
+    return nothing
+end
+
+@inline function _piz_getbits!(r::_PizBR, nbits::Int)
+    while r.lc < nbits
+        _piz_getchar!(r)
+    end
+    r.lc -= nbits
+    return Int((r.c >> r.lc) & UInt32((1 << nbits) - 1))
+end
+
+@inline _piz_ru16le(r::_PizBR) = (v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8); r.off += 2; v)
+@inline _piz_ru32le(r::_PizBR) = (v = Int(r.data[r.off + 1]) | (Int(r.data[r.off + 2]) << 8) |
+                                      (Int(r.data[r.off + 3]) << 16) | (Int(r.data[r.off + 4]) << 24);
+                                  r.off += 4; v)
+
+@inline _piz_u16(v::Int) = v & 0xffff
+@inline _piz_i16(v::Int) = (rr = v & 0xffff; rr > 0x7fff ? rr - 0x10000 : rr)
+
+@inline function _piz_wdec14(l::Int, h::Int)
+    ls = _piz_i16(l); hs = _piz_i16(h)
+    ai = ls + (hs & 1) + (hs >> 1)
+    return (ai, ai - hs)
+end
+
+@inline function _piz_wdec16(l::Int, h::Int)
+    m = _piz_u16(l); d = _piz_u16(h)
+    bb = (m - (d >> 1)) & _PIZ_MOD_MASK
+    aa = (d + bb - _PIZ_A_OFFSET) & _PIZ_MOD_MASK
+    return (aa, bb)
+end
+
+function _piz_reverse_lut!(bitmap::Vector{UInt8}, lut::Vector{UInt16})
+    k = 0
+    @inbounds for i in 0:(_PIZ_USHORT_RANGE - 1)
+        if i == 0 || (bitmap[(i >> 3) + 1] & (UInt8(1) << (i & 7))) != 0x00
+            lut[k + 1] = UInt16(i); k += 1
+        end
+    end
+    n = k - 1
+    @inbounds while k < _PIZ_USHORT_RANGE
+        lut[k + 1] = 0x0000; k += 1
+    end
+    return n
+end
+
+function _piz_canonical!(hcode::Vector{Int})
+    buf = zeros(Int, 59)
+    @inbounds for i in 1:_PIZ_HUF_ENCSIZE
+        buf[hcode[i] + 1] += 1
+    end
+    c = 0
+    @inbounds for i in 58:-1:1
+        nc = (c + buf[i + 1]) >> 1
+        buf[i + 1] = c
+        c = nc
+    end
+    @inbounds for i in 1:_PIZ_HUF_ENCSIZE
+        l = hcode[i]
+        if l > 0
+            hcode[i] = l | (buf[l + 1] << 6)
+            buf[l + 1] += 1
+        end
+    end
+end
+
+@inline _piz_huflength(c::Int) = c & 63
+@inline _piz_hufcode(c::Int) = c >> 6
+
+function _piz_unpack_enc_table!(r::_PizBR, im0::Int, iM::Int, hcode::Vector{Int})
+    r.c = UInt32(0); r.lc = 0
+    im = im0
+    @inbounds while im <= iM
+        l = _piz_getbits!(r, 6)
+        hcode[im + 1] = l
+        if l == _PIZ_LONG_ZEROCODE_RUN
+            zerun = _piz_getbits!(r, 8) + _PIZ_SHORTEST_LONG_RUN
+            (im + zerun > iM + 1) && error("EXR PIZ hufUnpackEncTable overrun")
+            while zerun > 0
+                hcode[im + 1] = 0; im += 1; zerun -= 1
+            end
+            im -= 1
+        elseif l >= _PIZ_SHORT_ZEROCODE_RUN
+            zerun = l - _PIZ_SHORT_ZEROCODE_RUN + 2
+            (im + zerun > iM + 1) && error("EXR PIZ hufUnpackEncTable overrun")
+            while zerun > 0
+                hcode[im + 1] = 0; im += 1; zerun -= 1
+            end
+            im -= 1
+        end
+        im += 1
+    end
+    _piz_canonical!(hcode)
+end
+
+function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int, hdec::Vector{_PizHDec})
+    im = im0
+    @inbounds while im <= iM
+        c = _piz_hufcode(hcode[im + 1])
+        l = _piz_huflength(hcode[im + 1])
+        (c >> l != 0) && error("EXR PIZ invalid table entry")
+        if l > _PIZ_HUF_DECBITS
+            pl = hdec[(c >> (l - _PIZ_HUF_DECBITS)) + 1]
+            pl.len != 0 && error("EXR PIZ invalid table entry")
+            pl.lit += 1
+            push!(pl.p, im)
+        elseif l != 0
+            ploff = 0
+            for _ in 1:(1 << (_PIZ_HUF_DECBITS - l))
+                pl = hdec[(c << (_PIZ_HUF_DECBITS - l)) + ploff + 1]
+                (pl.len != 0 || !isempty(pl.p)) && error("EXR PIZ invalid table entry")
+                pl.len = l
+                pl.lit = im
+                ploff += 1
+            end
+        end
+        im += 1
+    end
+end
+
+function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Base.RefValue{Int}, oend::Int)
+    if po == rlc
+        if r.lc < 8
+            _piz_getchar!(r)
+        end
+        r.lc -= 8
+        cs = Int((r.c >> r.lc) & 0xff)
+        (ooff[] + cs > oend) && return false
+        s = out[ooff[]]                       # last written value (0-based ooff-1 -> Julia ooff)
+        while cs > 0
+            out[ooff[] + 1] = s; ooff[] += 1; cs -= 1
+        end
+    elseif ooff[] < oend
+        out[ooff[] + 1] = po; ooff[] += 1
+    else
+        return false
+    end
+    return true
+end
+
+function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni::Int,
+                         rlc::Int, no::Int, out::Vector{Int}, ooff::Base.RefValue{Int})
+    r.c = UInt32(0); r.lc = 0
+    oend = no
+    in_end = r.off + (ni + 7) ÷ 8
+    while r.off < in_end
+        _piz_getchar!(r)
+        while r.lc >= _PIZ_HUF_DECBITS
+            index = Int((r.c >> (r.lc - _PIZ_HUF_DECBITS)) & UInt32(_PIZ_HUF_DECMASK))
+            pl = dec[index + 1]
+            if pl.len != 0
+                r.lc -= pl.len
+                _piz_getcode!(pl.lit, rlc, r, out, ooff, oend)
+            else
+                isempty(pl.p) && error("EXR PIZ hufDecode")
+                matched = false
+                for jj in 1:pl.lit
+                    l = _piz_huflength(enc[pl.p[jj] + 1])
+                    while r.lc < l && r.off < in_end
+                        _piz_getchar!(r)
+                    end
+                    if r.lc >= l
+                        if _piz_hufcode(enc[pl.p[jj] + 1]) == Int((r.c >> (r.lc - l)) & UInt32((1 << l) - 1))
+                            r.lc -= l
+                            _piz_getcode!(pl.p[jj], rlc, r, out, ooff, oend)
+                            matched = true
+                            break
+                        end
+                    end
+                end
+                !matched && error("EXR PIZ hufDecode")
+            end
+        end
+    end
+    i = (8 - ni) & 7
+    r.c >>= i; r.lc -= i
+    while r.lc > 0
+        idx = Int((r.c << (_PIZ_HUF_DECBITS - r.lc)) & UInt32(_PIZ_HUF_DECMASK))
+        pl = dec[idx + 1]
+        pl.len != 0 || error("EXR PIZ hufDecode")
+        r.lc -= pl.len
+        _piz_getcode!(pl.lit, rlc, r, out, ooff, oend)
+    end
+end
+
+function _piz_wav2decode!(buffer::Vector{Int}, j::Int, nx::Int, ox::Int, ny::Int, oy::Int, mx::Int)
+    w14 = mx < (1 << 14)
+    n = nx > ny ? ny : nx
+    p = 1
+    while p <= n; p <<= 1; end
+    p >>= 1
+    p2 = p
+    p >>= 1
+    @inbounds while p >= 1
+        py = 0
+        ey = py + oy * (ny - p2)
+        oy1 = oy * p; oy2 = oy * p2; ox1 = ox * p; ox2 = ox * p2
+        while py <= ey
+            px = py
+            ex = py + ox * (nx - p2)
+            while px <= ex
+                p01 = px + ox1; p10 = px + oy1; p11 = p10 + ox1
+                if w14
+                    a, b = _piz_wdec14(buffer[px + j + 1], buffer[p10 + j + 1]); i00 = a; i10 = b
+                    a, b = _piz_wdec14(buffer[p01 + j + 1], buffer[p11 + j + 1]); i01 = a; i11 = b
+                    a, b = _piz_wdec14(i00, i01); buffer[px + j + 1] = a; buffer[p01 + j + 1] = b
+                    a, b = _piz_wdec14(i10, i11); buffer[p10 + j + 1] = a; buffer[p11 + j + 1] = b
+                else
+                    a, b = _piz_wdec16(buffer[px + j + 1], buffer[p10 + j + 1]); i00 = a; i10 = b
+                    a, b = _piz_wdec16(buffer[p01 + j + 1], buffer[p11 + j + 1]); i01 = a; i11 = b
+                    a, b = _piz_wdec16(i00, i01); buffer[px + j + 1] = a; buffer[p01 + j + 1] = b
+                    a, b = _piz_wdec16(i10, i11); buffer[p10 + j + 1] = a; buffer[p11 + j + 1] = b
+                end
+                px += ox2
+            end
+            if (nx & p) != 0
+                p10 = px + oy1
+                a, b = w14 ? _piz_wdec14(buffer[px + j + 1], buffer[p10 + j + 1]) :
+                             _piz_wdec16(buffer[px + j + 1], buffer[p10 + j + 1])
+                buffer[p10 + j + 1] = b
+                buffer[px + j + 1] = a
+            end
+            py += oy2
+        end
+        if (ny & p) != 0
+            px = py
+            ex = py + ox * (nx - p2)
+            while px <= ex
+                p01 = px + ox1
+                a, b = w14 ? _piz_wdec14(buffer[px + j + 1], buffer[p01 + j + 1]) :
+                             _piz_wdec16(buffer[px + j + 1], buffer[p01 + j + 1])
+                buffer[p01 + j + 1] = b
+                buffer[px + j + 1] = a
+                px += ox2
+            end
+        end
+        p2 = p
+        p >>= 1
+    end
+end
+
+function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width::Int)
+    types = [pt == 1 ? 1 : 2 for (_, pt) in channels]   # int16 count per sample
+    starts = Int[]; s = 0
+    for t in types
+        push!(starts, s); s += width * nlines * t
+    end
+    outend = s
+    outbuf = zeros(Int, outend)
+
+    r = _PizBR(blockdata, 0, UInt32(0), 0)
+    minNZ = _piz_ru16le(r); maxNZ = _piz_ru16le(r)
+    maxNZ >= _PIZ_BITMAP_SIZE && error("EXR PIZ bitmap size")
+    bitmap = zeros(UInt8, _PIZ_BITMAP_SIZE)
+    if minNZ <= maxNZ
+        for i in 0:(maxNZ - minNZ)
+            bitmap[minNZ + i + 1] = r.data[r.off + 1]; r.off += 1
+        end
+    end
+    lut = zeros(UInt16, _PIZ_USHORT_RANGE)
+    maxValue = _piz_reverse_lut!(bitmap, lut)
+    nComp = _piz_ru32le(r)                  # Huffman payload length field
+
+    initial = r.off
+    im = _piz_ru32le(r); iM = _piz_ru32le(r); r.off += 4
+    nBits = _piz_ru32le(r); r.off += 4
+    (0 <= im < _PIZ_HUF_ENCSIZE && 0 <= iM < _PIZ_HUF_ENCSIZE) || error("EXR PIZ HUF_ENCSIZE")
+    freq = zeros(Int, _PIZ_HUF_ENCSIZE)
+    hdec = [_PizHDec(0, 0, Int[]) for _ in 1:_PIZ_HUF_DECSIZE]
+    _piz_unpack_enc_table!(r, im, iM, freq)
+    _piz_build_dec_table!(freq, im, iM, hdec)
+    ooff = Ref(0)
+    _piz_hufdecode!(freq, hdec, r, nBits, iM, outend, outbuf, ooff)
+
+    for (ci, t) in enumerate(types)
+        for jj in 0:(t - 1)
+            _piz_wav2decode!(outbuf, starts[ci] + jj, width, t, nlines, width * t, maxValue)
+        end
+    end
+    @inbounds for idx in 1:outend
+        outbuf[idx] = Int(lut[(outbuf[idx] & 0xffff) + 1])
+    end
+
+    out = zeros(UInt8, nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels))
+    ends = copy(starts)
+    tmpoff = 0
+    for _y in 0:(nlines - 1)
+        for ci in 1:length(channels)
+            t = types[ci]; nn = width * t
+            @inbounds for k in 0:(nn - 1)
+                v = outbuf[ends[ci] + k + 1] & 0xffff
+                out[tmpoff + 2 * k + 1] = UInt8(v & 0xff)
+                out[tmpoff + 2 * k + 2] = UInt8((v >> 8) & 0xff)
+            end
+            tmpoff += nn * 2
+            ends[ci] += nn
+        end
+    end
+    return out
+end
+
 function _decode_exr(bytes::Vector{UInt8})
     length(bytes) >= 8 || error("EXR file is truncated")
     _rd_le32(bytes, 1) == _EXR_MAGIC || error("not an OpenEXR file (bad magic number)")
@@ -1201,10 +1541,11 @@ function _decode_exr(bytes::Vector{UInt8})
                       compression == 1 ? 1 :        # RLE
                       compression == 2 ? 1 :        # ZIPS
                       compression == 3 ? 16 :       # ZIP
+                      compression == 4 ? 32 :       # PIZ
                       compression == 5 ? 16 :       # PXR24
                       compression == 6 ? 32 :       # B44
                       compression == 7 ? 32 :       # B44A
-                      error("EXR compression mode $compression is not supported; only NONE, RLE, ZIP, ZIPS, PXR24, and B44/B44A are implemented")
+                      error("EXR compression mode $compression is not supported; only NONE, RLE, ZIP, ZIPS, PIZ, PXR24, and B44/B44A are implemented")
 
     cnames = first.(channels)
     found = join(cnames, ", ")
@@ -1229,7 +1570,9 @@ function _decode_exr(bytes::Vector{UInt8})
         (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
         nlines = min(lines_per_block, ymax - y0 + 1)
         uncompressed = nlines * row_bytes
-        raw = if compression == 6 || compression == 7  # B44 / B44A (raw-packed, not zlib)
+        raw = if compression == 4                      # PIZ (wavelet + Huffman)
+            _exr_piz_decode(bytes[bp:(bp + dsize - 1)], nlines, channels, width)
+        elseif compression == 6 || compression == 7   # B44 / B44A (raw-packed, not zlib)
             _exr_b44_decode(bytes[bp:(bp + dsize - 1)], nlines, channels, plinear, width, compression == 7)
         elseif compression == 0 || dsize >= uncompressed
             bytes[bp:(bp + dsize - 1)]
@@ -1275,10 +1618,10 @@ end
 
 Decode an OpenEXR scanline image into a linear, unclamped `H×W×3` RGB array.
 A single `Y` luminance channel is replicated across RGB (matching three.js).
-Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PXR24`, and `B44`/`B44A` compression and
-`HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover HALF/FLOAT, matching
-three.js). Tiled, deep, multi-part, subsampled, `pLinear`-B44, and `PIZ`/`DWA`
-payloads raise a clear error rather than being approximated.
+Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PIZ`, `PXR24`, and `B44`/`B44A`
+compression and `HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover HALF/FLOAT,
+matching three.js). Tiled, deep, multi-part, subsampled, `pLinear`-B44, and
+`DWA` payloads raise a clear error rather than being approximated.
 """
 load_exr(path::String) = _decode_exr(read(path))
 

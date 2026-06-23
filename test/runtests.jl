@@ -8682,8 +8682,8 @@ end
         # three.js. Verified against the real openexr-images GrayRampsHorizontal.exr
         # (PXR24, Y-channel) during development.
         yimg = Diff3D._decode_exr(build_exr_none(2, 1, [("Y", 2)], Dict("Y" => [0.4 1.6])))
-        @test yimg[1, 1, :] == [0.4, 0.4, 0.4]
-        @test yimg[1, 2, :] == [1.6, 1.6, 1.6]   # luminance preserved unclamped
+        @test yimg[1, 1, :] ≈ [0.4, 0.4, 0.4] atol=1e-6   # FLOAT channel = Float32 precision
+        @test yimg[1, 2, :] ≈ [1.6, 1.6, 1.6] atol=1e-6   # luminance preserved unclamped
 
         # EXR RLE entropy stage (verified against OpenEXR internal_rle.c):
         # non-negative control c repeats the next byte c+1 times; control 0xFF
@@ -8845,6 +8845,22 @@ end
                           vcat(le32i(0), le32i(9), flat44(0x3C00), flat44(0x3C00), flat44(0x3C00)))
         @test_throws ErrorException Diff3D._decode_exr(plin_bytes)
 
+        # PIZ (wavelet + Huffman): exact, complete verification against the real
+        # openexr-images AllHalfValues.exr, whose 256×256 RGB pixels enumerate
+        # every 16-bit half value in row-major order (decoder-independent truth).
+        piz_path = joinpath(@__DIR__, "fixtures", "AllHalfValues.exr")
+        piz = load_exr(piz_path)
+        @test size(piz) == (256, 256, 3)
+        piz_mismatch = 0
+        for y in 1:256, x in 1:256
+            expected = Float64(Diff3D._half_to_float(UInt16((y - 1) * 256 + (x - 1))))
+            if !(isequal(piz[y, x, 1], expected) && isequal(piz[y, x, 2], expected) &&
+                 isequal(piz[y, x, 3], expected))
+                piz_mismatch += 1
+            end
+        end
+        @test piz_mismatch == 0    # all 65536 half values (incl. subnormals/Inf/NaN)
+
         # load_exr / EXRLoader from disk.
         path = tempname() * ".exr"
         write(path, build_exr_none(2, 2, chs, Dict("R" => R, "G" => G, "B" => B)))
@@ -8865,8 +8881,8 @@ end
             nb = comp == 3 ? cld(H, 16) : H
             vcat(hdr, fill(0x00, nb * 8))   # header is enough to reach the comp check
         end
-        @test_throws ErrorException Diff3D._decode_exr(build_exr_comp(2, 2, chs, zero2, 4))
-        @test_throws ErrorException Diff3D._decode_exr(build_exr_none(1, 1, [("Y", 2)], Dict("Y" => zeros(1, 1))))
+        @test_throws ErrorException Diff3D._decode_exr(build_exr_comp(2, 2, chs, zero2, 8))  # DWA unsupported
+        @test_throws ErrorException Diff3D._decode_exr(build_exr_none(1, 1, [("Z", 2)], Dict("Z" => zeros(1, 1))))  # no R/G/B/Y
         @test_throws ErrorException Diff3D._decode_exr(build_exr_none(1, 1, chs, Dict("R" => zeros(1, 1), "G" => zeros(1, 1), "B" => zeros(1, 1)); version=(2 | 0x200)))
         @test_throws ErrorException Diff3D._decode_exr(UInt8[0, 1, 2, 3, 4, 5, 6, 7])
     end

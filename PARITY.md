@@ -217,9 +217,9 @@ replacement for three.js `WebGLRenderer`.
   logarithmic depth, full tone-output/color-management parity, and texture
   sampling parity.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
-  KTX2Loader Basis transcoding, full EXR compression coverage (scanline
-  NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A now load via `load_exr`/`EXRLoader`; tiled,
-  deep, and PIZ/DWA remain open), UltraHDR environment-map infrastructure
+  KTX2Loader Basis transcoding, EXR compression coverage (scanline
+  NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A now load via `load_exr`/`EXRLoader`;
+  tiled, deep, and DWA remain open), UltraHDR environment-map infrastructure
   (CPU PMREM prefiltering now exists via `generate_pmrem`/`sample_pmrem`),
   advanced SVG path/style parity, advanced text layout/font-geometry parity,
   compressed/browser AudioLoader parity, and other three.js examples
@@ -789,12 +789,13 @@ Parallel audits split the remaining work into five critical tracks:
   orientation signs, RGBE-to-linear floating-point conversion, and clear errors
   for malformed headers/truncated payloads.
 - Done: add OpenEXR scanline loading via `load_exr`/`EXRLoader` for
-  NONE/RLE/ZIP/ZIPS/PXR24/B44/B44A compression and HALF/FLOAT/UINT channels,
-  decoding to linear unclamped RGB with clear errors for tiled, deep,
-  multi-part, subsampled, pLinear-B44, and PIZ/DWA payloads. The ZIP/RLE
-  predictor+deinterleave and RLE entropy steps are verified against OpenEXR
-  `ImfZip.cpp`/`internal_rle.c`; the PXR24 byte-plane/delta and B44 4×4-block
-  decodes match three.js `EXRLoader` (the parity reference).
+  NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A compression and HALF/FLOAT/UINT channels
+  (plus single-`Y` luminance replicated to RGB), decoding to linear unclamped
+  RGB with clear errors for tiled, deep, multi-part, subsampled, pLinear-B44,
+  and DWA payloads. The ZIP/RLE predictor+deinterleave and RLE entropy steps are
+  verified against OpenEXR `ImfZip.cpp`/`internal_rle.c`; the PXR24 byte-plane,
+  B44 4×4-block, and PIZ wavelet+Huffman decodes match three.js `EXRLoader`.
+  PIZ is verified exactly against `AllHalfValues.exr` (every 16-bit half value).
 - Done: add CPU PMREM prefiltering via `generate_pmrem`/`sample_pmrem`
   (deterministic Hammersley + GGX roughness convolution of a `CubeTexture`).
   KTX2/Basis transcoding and browser/renderer-integrated PMREM remain open.
