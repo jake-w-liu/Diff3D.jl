@@ -1478,12 +1478,63 @@ function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width:
     return out
 end
 
+# Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
+function _exr_decode_block(blockbytes::Vector{UInt8}, nlines::Int, width::Int,
+                          compression::Int, channels, plinear)
+    uncompressed = nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels)
+    dsize = length(blockbytes)
+    if compression == 4                                   # PIZ
+        return _exr_piz_decode(blockbytes, nlines, channels, width)
+    elseif compression == 6 || compression == 7          # B44 / B44A
+        return _exr_b44_decode(blockbytes, nlines, channels, plinear, width, compression == 7)
+    elseif compression == 0 || dsize >= uncompressed      # NONE or stored-raw fallback
+        return blockbytes
+    elseif compression == 1                               # RLE
+        return _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(blockbytes, uncompressed)))
+    elseif compression == 5                               # PXR24
+        return _exr_pxr24_decode(zlib_inflate(blockbytes), nlines, channels, width)
+    else                                                  # ZIP / ZIPS
+        inflated = zlib_inflate(blockbytes)
+        length(inflated) == uncompressed ||
+            error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
+        return _exr_deinterleave(_exr_unpredict!(inflated))
+    end
+end
+
+# Place a decoded block's pixels into the output image at (startX, startY).
+# `raw` is laid out per line, then per channel, then `cols` samples.
+function _exr_place_block!(img, raw::Vector{UInt8}, startX::Int, startY::Int,
+                          cols::Int, lines::Int, channels, is_y::Bool)
+    rp = 1
+    for ln in 0:(lines - 1)
+        yrow = startY + ln + 1
+        for (cname, pt) in channels
+            csz = _exr_chan_size(pt)
+            targets = is_y ? (cname == "Y" ? (1, 2, 3) : ()) :
+                      cname == "R" ? (1,) : cname == "G" ? (2,) :
+                      cname == "B" ? (3,) : ()
+            if !isempty(targets)
+                @inbounds for x in 1:cols
+                    base = rp + (x - 1) * csz
+                    v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
+                        pt == 2 ? Float64(_rd_f32(raw, base)) :
+                                  Float64(_rd_le32(raw, base))      # UINT
+                    for t in targets
+                        img[yrow, startX + x, t] = v
+                    end
+                end
+            end
+            rp += cols * csz
+        end
+    end
+end
+
 function _decode_exr(bytes::Vector{UInt8})
     length(bytes) >= 8 || error("EXR file is truncated")
     _rd_le32(bytes, 1) == _EXR_MAGIC || error("not an OpenEXR file (bad magic number)")
     version = _rd_le32(bytes, 5)
     (version & 0xff) == 2 || error("unsupported EXR version $(version & 0xff); only version 2 is supported")
-    (version & 0x200) == 0 || error("tiled EXR files are not supported")
+    tiled = (version & 0x200) != 0
     (version & 0x800) == 0 || error("deep EXR files are not supported")
     (version & 0x1000) == 0 || error("multi-part EXR files are not supported")
 
@@ -1495,6 +1546,7 @@ function _decode_exr(bytes::Vector{UInt8})
     xmin = ymin = xmax = ymax = 0
     have_dw = false
     lineorder = 0
+    tile_x = tile_y = 0; tile_mode = 0           # tiledesc (tiled images)
 
     while pos <= n
         bytes[pos] == 0x00 && (pos += 1; break)  # empty name -> end of header
@@ -1525,6 +1577,10 @@ function _decode_exr(bytes::Vector{UInt8})
             have_dw = true
         elseif name == "lineOrder"
             lineorder = Int(bytes[vstart])
+        elseif name == "tiles"
+            tile_x = _rd_le32(bytes, vstart)
+            tile_y = _rd_le32(bytes, vstart + 4)
+            tile_mode = Int(bytes[vstart + 8]) & 0xf      # levelMode
         end
         pos = vstop + 1
     end
@@ -1554,60 +1610,45 @@ function _decode_exr(bytes::Vector{UInt8})
     (has_rgb || has_y) ||
         error("EXR image must contain R/G/B or a Y luminance channel; found $found")
     is_y = !has_rgb && has_y          # Y (luminance) replicates across RGB output
-    row_bytes = sum(width * _exr_chan_size(pt) for (_, pt) in channels)
-
-    nblocks = cld(height, lines_per_block)
-    pos + nblocks * 8 - 1 <= n || error("EXR scanline offset table is truncated")
-    offsets = (Int(_rd_le64(bytes, pos + 8 * (i - 1))) for i in 1:nblocks)
 
     img = zeros(Float64, height, width, 3)
-    for off in offsets
-        bp = off + 1
-        bp + 7 <= n || error("EXR scanline block header is truncated")
-        y0 = _rd_i32(bytes, bp); bp += 4
-        dsize = _rd_i32(bytes, bp); bp += 4
-        (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
-        (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
-        nlines = min(lines_per_block, ymax - y0 + 1)
-        uncompressed = nlines * row_bytes
-        raw = if compression == 4                      # PIZ (wavelet + Huffman)
-            _exr_piz_decode(bytes[bp:(bp + dsize - 1)], nlines, channels, width)
-        elseif compression == 6 || compression == 7   # B44 / B44A (raw-packed, not zlib)
-            _exr_b44_decode(bytes[bp:(bp + dsize - 1)], nlines, channels, plinear, width, compression == 7)
-        elseif compression == 0 || dsize >= uncompressed
-            bytes[bp:(bp + dsize - 1)]
-        elseif compression == 1
-            _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(bytes[bp:(bp + dsize - 1)], uncompressed)))
-        elseif compression == 5                       # PXR24
-            _exr_pxr24_decode(zlib_inflate(bytes[bp:(bp + dsize - 1)]), nlines, channels, width)
-        else                                          # ZIP / ZIPS
-            inflated = zlib_inflate(bytes[bp:(bp + dsize - 1)])
-            length(inflated) == uncompressed ||
-                error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
-            _exr_deinterleave(_exr_unpredict!(inflated))
+    if tiled
+        tile_mode == 0 || error("EXR tiled images: only ONE_LEVEL is supported (mode $tile_mode)")
+        (tile_x > 0 && tile_y > 0) || error("EXR tiled images require a tiles attribute")
+        numXTiles = cld(width, tile_x)
+        numYTiles = cld(height, tile_y)
+        ntiles = numXTiles * numYTiles
+        pos + ntiles * 8 - 1 <= n || error("EXR tile offset table is truncated")
+        for i in 1:ntiles
+            off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
+            bp = off + 1
+            bp + 19 <= n || error("EXR tile header is truncated")
+            tileX = _rd_i32(bytes, bp); tileY = _rd_i32(bytes, bp + 4)
+            bp += 16                                   # tileX, tileY, levelX, levelY
+            dsize = _rd_i32(bytes, bp); bp += 4
+            (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR tile data is truncated")
+            startX = tileX * tile_x; startY = tileY * tile_y
+            (0 <= startX < width && 0 <= startY < height) ||
+                error("EXR tile coordinate ($tileX,$tileY) is out of range")
+            cols = min(tile_x, width - startX)
+            lines = min(tile_y, height - startY)
+            raw = _exr_decode_block(bytes[bp:(bp + dsize - 1)], lines, cols, compression, channels, plinear)
+            _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
-        length(raw) >= uncompressed || error("EXR scanline block is shorter than its declared pixels")
-        rp = 1
-        for ln in 0:(nlines - 1)
-            yrow = (y0 + ln) - ymin + 1
-            for (cname, pt) in channels
-                csz = _exr_chan_size(pt)
-                targets = is_y ? (cname == "Y" ? (1, 2, 3) : ()) :
-                          cname == "R" ? (1,) : cname == "G" ? (2,) :
-                          cname == "B" ? (3,) : ()
-                if !isempty(targets)
-                    @inbounds for x in 1:width
-                        base = rp + (x - 1) * csz
-                        v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
-                            pt == 2 ? Float64(_rd_f32(raw, base)) :
-                                      Float64(_rd_le32(raw, base))      # UINT
-                        for t in targets
-                            img[yrow, x, t] = v
-                        end
-                    end
-                end
-                rp += width * csz
-            end
+    else
+        nblocks = cld(height, lines_per_block)
+        pos + nblocks * 8 - 1 <= n || error("EXR scanline offset table is truncated")
+        for i in 1:nblocks
+            off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
+            bp = off + 1
+            bp + 7 <= n || error("EXR scanline block header is truncated")
+            y0 = _rd_i32(bytes, bp); bp += 4
+            dsize = _rd_i32(bytes, bp); bp += 4
+            (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
+            (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
+            nlines = min(lines_per_block, ymax - y0 + 1)
+            raw = _exr_decode_block(bytes[bp:(bp + dsize - 1)], nlines, width, compression, channels, plinear)
+            _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
     end
     return img
@@ -1616,12 +1657,13 @@ end
 """
     load_exr(path) -> Array{Float64,3}
 
-Decode an OpenEXR scanline image into a linear, unclamped `H×W×3` RGB array.
-A single `Y` luminance channel is replicated across RGB (matching three.js).
-Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PIZ`, `PXR24`, and `B44`/`B44A`
-compression and `HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover HALF/FLOAT,
-matching three.js). Tiled, deep, multi-part, subsampled, `pLinear`-B44, and
-`DWA` payloads raise a clear error rather than being approximated.
+Decode an OpenEXR scanline or single-level tiled image into a linear, unclamped
+`H×W×3` RGB array. A single `Y` luminance channel is replicated across RGB
+(matching three.js). Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PIZ`, `PXR24`, and
+`B44`/`B44A` compression and `HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover
+HALF/FLOAT, matching three.js). Deep, multi-part, mipmapped/ripmapped tiles,
+subsampled, `pLinear`-B44, and `DWA` payloads raise a clear error rather than
+being approximated.
 """
 load_exr(path::String) = _decode_exr(read(path))
 

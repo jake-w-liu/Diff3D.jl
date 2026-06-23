@@ -8861,6 +8861,46 @@ end
         end
         @test piz_mismatch == 0    # all 65536 half values (incl. subnormals/Inf/NaN)
 
+        # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile
+        # placement exactly — each tile's value must land in its own quadrant.
+        function build_exr_tiled(W, H, tx, ty, tilevals)  # tilevals[(tileX,tileY)] => half
+            tiledesc = vcat(le32i(tx), le32i(ty), UInt8[0])   # ONE_LEVEL, ROUND_DOWN
+            hdr = vcat(le32i(20000630), le32i(2 | 0x200),     # tiled flag
+                       attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
+                       attr("compression", "compression", UInt8[0]),
+                       attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]),
+                       attr("tiles", "tiledesc", tiledesc), UInt8[0x00])
+            u16(h) = UInt8[h & 0xff, (h >> 8) & 0xff]
+            chunks = Vector{UInt8}[]
+            for tiy in 0:(cld(H, ty) - 1), tix in 0:(cld(W, tx) - 1)
+                d = UInt8[]
+                for _ln in 0:(ty - 1), (nm, _) in [("B", 1), ("G", 1), ("R", 1)], _c in 0:(tx - 1)
+                    append!(d, u16(nm == "R" ? tilevals[(tix, tiy)] : nm == "G" ? 0x3800 : 0x3400))
+                end
+                push!(chunks, vcat(le32i(tix), le32i(tiy), le32i(0), le32i(0), le32i(length(d)), d))
+            end
+            body = length(hdr) + length(chunks) * 8
+            offs = UInt8[]; cur = body
+            for c in chunks; offs = vcat(offs, le64(cur)); cur += length(c); end
+            vcat(hdr, offs, chunks...)
+        end
+        timg = Diff3D._decode_exr(build_exr_tiled(4, 4, 2, 2,
+            Dict((0, 0) => 0x3C00, (1, 0) => 0x4000, (0, 1) => 0x4200, (1, 1) => 0x4400)))
+        @test size(timg) == (4, 4, 3)
+        @test all(timg[1:2, 1:2, 1] .== 1.0) && all(timg[1:2, 3:4, 1] .== 2.0)   # tile (0,0),(1,0)
+        @test all(timg[3:4, 1:2, 1] .== 3.0) && all(timg[3:4, 3:4, 1] .== 4.0)   # tile (0,1),(1,1)
+        @test all(timg[:, :, 2] .== 0.5) && all(timg[:, :, 3] .== 0.25)
+        # Mipmapped tiles are rejected.
+        @test_throws ErrorException Diff3D._decode_exr(
+            vcat(le32i(20000630), le32i(2 | 0x200),
+                 attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
+                 attr("compression", "compression", UInt8[0]),
+                 attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(3), le32i(3))),
+                 attr("lineOrder", "lineOrder", UInt8[0]),
+                 attr("tiles", "tiledesc", vcat(le32i(2), le32i(2), UInt8[1])),  # MIPMAP
+                 UInt8[0x00], fill(0x00, 8)))
+
         # load_exr / EXRLoader from disk.
         path = tempname() * ".exr"
         write(path, build_exr_none(2, 2, chs, Dict("R" => R, "G" => G, "B" => B)))
