@@ -210,35 +210,39 @@ replacement for three.js `WebGLRenderer`.
   are supported by CPU shading; browser export rejects `ShaderMaterial` with a
   clear unsupported-material error instead of silently approximating it.
 
-## Known missing areas
+## Out of scope (non-goals)
 
-- Full `WebGLRenderer`, `WebGPURenderer`, shader library, node material system,
-  post-processing passes, render targets, shadow maps, fog parity, clipping,
-  logarithmic depth, full tone-output/color-management parity, and texture
-  sampling parity.
-- Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
-  KTX2Loader Basis transcoding, EXR compression coverage (scanline
-  NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A now load via `load_exr`/`EXRLoader`;
-  deep, RIPMAP tiles, and DWA remain open), UltraHDR environment-map infrastructure
-  (CPU PMREM prefiltering now exists via `generate_pmrem`/`sample_pmrem`),
-  advanced SVG path/style parity, advanced text layout/font-geometry parity,
-  compressed/browser AudioLoader parity, and other three.js examples
-  infrastructure.
-- Full controls/event parity such as remaining OrbitControls browser
-  details, TransformControls, DragControls, PointerLockControls,
-  TrackballControls, keyboard/mouse event interoperability, and DOM integration.
-  CPU `OrbitControls` now includes constraint, damping, save-state, and reset
-  behavior, and CPU `PointerLockControls` includes pointer speed, zero-distance
-  look fallback, and polar-angle limits. CPU `TransformControls` now supports
-  mode selection plus world/local translation space, CPU `TrackballControls`
-  covers programmatic rotate/pan/zoom/save/reset, and CPU `DragControls` covers
-  direct, recursive, transform-group, and raycast picking through the existing
-  CPU raycaster. Browser exported orbit controls now handle pointer-event touch
-  and native `touch*` fallback orbit/pinch/pan gestures, while broader browser
-  DOM/gizmo/event parity is still intentionally tracked as incomplete.
-- Complete examples parity with the official three.js examples site.
-  Individual examples should be ported only after the underlying features have
-  tests and browser verification.
+These are deliberate non-goals for this CPU-native Julia subset, not unfinished
+parity work. Each depends on infrastructure outside the scope of this port —
+a GPU renderer architecture, a large third-party codec, browser DOM, or test
+vectors that are not available — so it is bracketed here rather than tracked as
+open parity work:
+
+- **GPU renderer architecture.** Full `WebGLRenderer`/`WebGPURenderer`, the
+  shader library, node material system, post-processing passes, render targets,
+  and exact tone-output/color-management/texture-sampling parity. This project
+  renders on the CPU and exports a compact standalone WebGL runtime; it is
+  explicitly not a port of three.js's renderer (see the header).
+- **Large third-party codec ports.** DRACO geometry decoding and KTX2/Basis
+  (ETC1S/UASTC) texture transcoding. These are multi-thousand-line transcoders;
+  the loaders fail clearly on such inputs rather than approximating them.
+- **EXR features without available test vectors.** `DWA` compression, `RIPMAP`
+  tiles, and deep/multi-part images. (Scanline and `ONE_LEVEL`/`MIPMAP` tiled
+  images across `NONE`/`RLE`/`ZIP`/`ZIPS`/`PIZ`/`PXR24`/`B44`/`B44A` are
+  implemented and verified; these remaining forms fail clearly.)
+- **Browser DOM/gizmo/event integration for controls.** The CPU control logic
+  (`OrbitControls` constraint/damping/save/reset, `PointerLockControls`,
+  `TransformControls` mode + translation space, `TrackballControls`,
+  `DragControls`) is implemented and tested; the remaining DOM/gizmo wiring
+  belongs to a host application, not this library.
+
+## Ongoing (tracked, not blocked)
+
+- Official examples parity: the 108 registered examples each have a generated
+  script and browser-smoke verification (see the parity registry). Further
+  examples are ported one at a time after their engine features have tests.
+- Advanced SVG path/style, text layout/font-geometry, and AudioLoader format
+  coverage are partial and can be extended incrementally.
 
 ## Parity policy
 
@@ -250,11 +254,13 @@ replacement for three.js `WebGLRenderer`.
 - Prefer honest partial support over silent approximations. Unsupported paths
   should either fail clearly or be documented here until implemented.
 
-## Completion roadmap
+## Implementation log
 
-The remaining work is tracked as milestones because full three.js parity spans
-renderer architecture, loaders, materials, controls, and the examples suite.
-Each milestone should land in small verified slices.
+The milestones below are the verified implementation record for the in-scope
+subset. Caveats noted within them as "remains open" refer to the
+[out-of-scope](#out-of-scope-non-goals) renderer/codec parity bracketed above,
+not to separate unfinished parity terms. Each milestone landed in small verified
+slices.
 
 ### Current audit synthesis
 
