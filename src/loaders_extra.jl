@@ -1184,13 +1184,13 @@ end
 mutable struct _PizBR
     data::Vector{UInt8}
     off::Int            # 0-based next-read position (JS inOffset.value)
-    c::UInt32
+    c::UInt128          # bit accumulator; wide enough for >32-bit Huffman codes
     lc::Int
 end
 
 @inline function _piz_getchar!(r::_PizBR)
     b = (r.off + 1) <= length(r.data) ? r.data[r.off + 1] : 0x00
-    r.c = (r.c << 8) | UInt32(b)
+    r.c = (r.c << 8) | UInt128(b)
     r.off += 1
     r.lc += 8
     return nothing
@@ -1201,7 +1201,7 @@ end
         _piz_getchar!(r)
     end
     r.lc -= nbits
-    return Int((r.c >> r.lc) & UInt32((1 << nbits) - 1))
+    return Int((r.c >> r.lc) & ((UInt128(1) << nbits) - UInt128(1)))
 end
 
 @inline function _piz_ru16le(r::_PizBR)
@@ -1269,7 +1269,7 @@ end
 @inline _piz_hufcode(c::Int) = c >> 6
 
 function _piz_unpack_enc_table!(r::_PizBR, im0::Int, iM::Int, hcode::Vector{Int})
-    r.c = UInt32(0); r.lc = 0
+    r.c = UInt128(0); r.lc = 0
     im = im0
     @inbounds while im <= iM
         l = _piz_getbits!(r, 6)
@@ -1344,13 +1344,13 @@ end
 
 function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni::Int,
                          rlc::Int, no::Int, out::Vector{Int}, ooff::Base.RefValue{Int})
-    r.c = UInt32(0); r.lc = 0
+    r.c = UInt128(0); r.lc = 0
     oend = no
     in_end = r.off + (ni + 7) ÷ 8
     while r.off < in_end
         _piz_getchar!(r)
         while r.lc >= _PIZ_HUF_DECBITS
-            index = Int((r.c >> (r.lc - _PIZ_HUF_DECBITS)) & UInt32(_PIZ_HUF_DECMASK))
+            index = Int((r.c >> (r.lc - _PIZ_HUF_DECBITS)) & UInt128(_PIZ_HUF_DECMASK))
             pl = dec[index + 1]
             if pl.len != 0
                 r.lc -= pl.len
@@ -1364,7 +1364,7 @@ function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni:
                         _piz_getchar!(r)
                     end
                     if r.lc >= l
-                        if _piz_hufcode(enc[pl.p[jj] + 1]) == Int((r.c >> (r.lc - l)) & UInt32((1 << l) - 1))
+                        if _piz_hufcode(enc[pl.p[jj] + 1]) == Int((r.c >> (r.lc - l)) & ((UInt128(1) << l) - UInt128(1)))
                             r.lc -= l
                             _piz_getcode!(pl.p[jj], rlc, r, out, ooff, oend)
                             matched = true
@@ -1379,7 +1379,7 @@ function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni:
     i = (8 - ni) & 7
     r.c >>= i; r.lc -= i
     while r.lc > 0
-        idx = Int((r.c << (_PIZ_HUF_DECBITS - r.lc)) & UInt32(_PIZ_HUF_DECMASK))
+        idx = Int((r.c << (_PIZ_HUF_DECBITS - r.lc)) & UInt128(_PIZ_HUF_DECMASK))
         pl = dec[idx + 1]
         pl.len != 0 || error("EXR PIZ hufDecode")
         r.lc -= pl.len
@@ -1452,7 +1452,7 @@ function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width:
     outend = s
     outbuf = zeros(Int, outend)
 
-    r = _PizBR(blockdata, 0, UInt32(0), 0)
+    r = _PizBR(blockdata, 0, UInt128(0), 0)
     minNZ = _piz_ru16le(r); maxNZ = _piz_ru16le(r)
     maxNZ >= _PIZ_BITMAP_SIZE && error("EXR PIZ bitmap size")
     bitmap = zeros(UInt8, _PIZ_BITMAP_SIZE)

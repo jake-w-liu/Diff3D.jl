@@ -8908,6 +8908,32 @@ end
                      le32i(0), le32i(0), le32i(200000000), le32i(0)),   # width = 200,000,001
                 vcat(cstr2("lineOrder"), cstr2("lineOrder"), le32i(1), UInt8[0]), UInt8[0x00])
             @test_throws ErrorException Diff3D._decode_exr(vcat(huge_dw, fill(0x00, 8)))
+            # PIZ Huffman codes longer than 32 bits must decode (the UInt128 bit
+            # accumulator), not crash with InexactError on `UInt32((1<<l)-1)`.
+            let ENCSIZE = (1 << 16) + 1
+                hcode = zeros(Int, ENCSIZE)
+                for i in 1:40; hcode[i] = i; end
+                hcode[41] = 40                                  # complete canonical tree, max len 40
+                Diff3D._piz_canonical!(hcode)
+                hdec = [Diff3D._PizHDec(0, 0, Int[]) for _ in 1:(1 << 14)]
+                Diff3D._piz_build_dec_table!(hcode, 0, 40, hdec)
+                sym = 39
+                code = Diff3D._piz_hufcode(hcode[sym + 1]); L = Diff3D._piz_huflength(hcode[sym + 1])
+                @test L > 32
+                bits = Int[]
+                for b in (L - 1):-1:0; push!(bits, (code >> b) & 1); end
+                while length(bits) % 8 != 0; push!(bits, 0); end
+                bytes = UInt8[]
+                for k in 1:8:length(bits)
+                    byte = 0
+                    for j in 0:7; byte = (byte << 1) | bits[k + j]; end
+                    push!(bytes, UInt8(byte))
+                end
+                append!(bytes, zeros(UInt8, 8))
+                r = Diff3D._PizBR(bytes, 0, UInt128(0), 0); out = zeros(Int, 50); ooff = Ref(0)
+                Diff3D._piz_hufdecode!(hcode, hdec, r, L, 40, 50, out, ooff)
+                @test out[1] == 39 && ooff[] == 1
+            end
         end
         # KTX2: a huge level-0 byteOffset must not overflow the bounds check (clear error).
         let le(x) = UInt8[x & 0xff, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff],
