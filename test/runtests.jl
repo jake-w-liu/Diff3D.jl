@@ -8917,6 +8917,12 @@ end
                 le(0), le(0), le(0), le(0), le64k(0), le64k(0),
                 le64k(typemax(Int64) - 10), le64k(1), le64k(1), UInt8[0xFF])
             @test_throws ErrorException Diff3D._decode_ktx2(ktx)
+            # Huge dimensions whose byte product overflows Int64 must be rejected
+            # (2^30 x 2^30 x 16B SFLOAT wraps `expected` to 0), not allocate.
+            ktx_ovf = vcat(UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A],
+                le(109), le(4), le(2^30), le(2^30), le(0), le(0), le(1), le(1), le(0),
+                le(0), le(0), le(0), le(0), le64k(0), le64k(0), le64k(104), le64k(0), le64k(0))
+            @test_throws ErrorException Diff3D._decode_ktx2(ktx_ovf)
         end
 
         # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile

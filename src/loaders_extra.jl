@@ -558,6 +558,12 @@ function _decode_ktx2(bytes::Vector{UInt8})
     pixel_bytes = channels * cbytes
     length(bytes) >= 104 ||                         # 80-byte header + one level entry
         error("KTX2 level index is truncated")
+    # KTX2 level data is uncompressed, so it must fit in the file. Bound the
+    # dimensions (overflow-safe) before computing `expected` — otherwise a crafted
+    # huge width/height overflows the Int64 product and defeats the size check.
+    maxpix = length(bytes) ÷ max(1, pixel_bytes)
+    (pixelWidth <= maxpix && pixelHeight <= maxpix && pixelWidth <= maxpix ÷ pixelHeight) ||
+        error("KTX2 dimensions $(pixelWidth)x$(pixelHeight) exceed the $(length(bytes))-byte file")
     byteOffset = _rd_le64(bytes, 81)                # level 0 = full resolution
     byteLength = _rd_le64(bytes, 89)
 
