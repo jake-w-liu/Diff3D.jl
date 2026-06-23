@@ -8891,14 +8891,48 @@ end
         @test all(timg[1:2, 1:2, 1] .== 1.0) && all(timg[1:2, 3:4, 1] .== 2.0)   # tile (0,0),(1,0)
         @test all(timg[3:4, 1:2, 1] .== 3.0) && all(timg[3:4, 3:4, 1] .== 4.0)   # tile (0,1),(1,1)
         @test all(timg[:, :, 2] .== 0.5) && all(timg[:, :, 3] .== 0.25)
-        # Mipmapped tiles are rejected.
+
+        # MIPMAP tiles: decode the full-resolution level 0 (the offset table is
+        # level-0-first). Build 4×4 (tile 2×2) with extra mip levels whose tiles
+        # carry Inf — they must be ignored.
+        function build_exr_mipmap(W, H, tx, ty, l0vals)
+            tiledesc = vcat(le32i(tx), le32i(ty), UInt8[1])   # MIPMAP, ROUND_DOWN
+            hdr = vcat(le32i(20000630), le32i(2 | 0x200),
+                       attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
+                       attr("compression", "compression", UInt8[0]),
+                       attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
+                       attr("lineOrder", "lineOrder", UInt8[0]),
+                       attr("tiles", "tiledesc", tiledesc), UInt8[0x00])
+            u16(h) = UInt8[h & 0xff, (h >> 8) & 0xff]
+            mktile(tix, tiy, lx, ly, cols, rows, rh) = begin
+                d = UInt8[]
+                for _ln in 0:(rows - 1), (nm, _) in [("B", 1), ("G", 1), ("R", 1)], _c in 0:(cols - 1)
+                    append!(d, u16(nm == "R" ? rh : nm == "G" ? 0x3800 : 0x3400))
+                end
+                vcat(le32i(tix), le32i(tiy), le32i(lx), le32i(ly), le32i(length(d)), d)
+            end
+            chunks = Vector{UInt8}[]
+            for tiy in 0:1, tix in 0:1; push!(chunks, mktile(tix, tiy, 0, 0, 2, 2, l0vals[(tix, tiy)])); end
+            push!(chunks, mktile(0, 0, 1, 1, 2, 2, 0x7C00))   # level 1 (Inf) — must be ignored
+            push!(chunks, mktile(0, 0, 2, 2, 1, 1, 0x7C00))   # level 2 (Inf) — must be ignored
+            body = length(hdr) + length(chunks) * 8
+            offs = UInt8[]; cur = body
+            for c in chunks; offs = vcat(offs, le64(cur)); cur += length(c); end
+            vcat(hdr, offs, chunks...)
+        end
+        mimg = Diff3D._decode_exr(build_exr_mipmap(4, 4, 2, 2,
+            Dict((0, 0) => 0x3C00, (1, 0) => 0x4000, (0, 1) => 0x4200, (1, 1) => 0x4400)))
+        @test all(mimg[1:2, 1:2, 1] .== 1.0) && all(mimg[1:2, 3:4, 1] .== 2.0)
+        @test all(mimg[3:4, 1:2, 1] .== 3.0) && all(mimg[3:4, 3:4, 1] .== 4.0)
+        @test all(isfinite, mimg)    # the Inf-valued higher mip levels were ignored
+        # RIPMAP tiles are rejected.
         @test_throws ErrorException Diff3D._decode_exr(
             vcat(le32i(20000630), le32i(2 | 0x200),
                  attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
                  attr("compression", "compression", UInt8[0]),
                  attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(3), le32i(3))),
                  attr("lineOrder", "lineOrder", UInt8[0]),
-                 attr("tiles", "tiledesc", vcat(le32i(2), le32i(2), UInt8[1])),  # MIPMAP
+                 attr("tiles", "tiledesc", vcat(le32i(2), le32i(2), UInt8[2])),  # RIPMAP
                  UInt8[0x00], fill(0x00, 8)))
 
         # load_exr / EXRLoader from disk.

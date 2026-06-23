@@ -219,7 +219,7 @@ replacement for three.js `WebGLRenderer`.
 - Complete loader ecosystem and full-format parity for GLTFLoader, DRACOLoader,
   KTX2Loader Basis transcoding, EXR compression coverage (scanline
   NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A now load via `load_exr`/`EXRLoader`;
-  deep, mipmap tiles, and DWA remain open), UltraHDR environment-map infrastructure
+  deep, RIPMAP tiles, and DWA remain open), UltraHDR environment-map infrastructure
   (CPU PMREM prefiltering now exists via `generate_pmrem`/`sample_pmrem`),
   advanced SVG path/style parity, advanced text layout/font-geometry parity,
   compressed/browser AudioLoader parity, and other three.js examples
@@ -788,12 +788,12 @@ Parallel audits split the remaining work into five critical tracks:
   `RGBELoader`, covering flat and standard per-channel RLE scanlines,
   orientation signs, RGBE-to-linear floating-point conversion, and clear errors
   for malformed headers/truncated payloads.
-- Done: add OpenEXR scanline and single-level tiled loading via
+- Done: add OpenEXR scanline and tiled (ONE_LEVEL + MIPMAP level 0) loading via
   `load_exr`/`EXRLoader` for
   NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A compression and HALF/FLOAT/UINT channels
   (plus single-`Y` luminance replicated to RGB), decoding to linear unclamped
-  RGB for scanline and single-level tiled images, with clear errors for deep,
-  multi-part, mipmapped/ripmapped tiles, subsampled, pLinear-B44, and DWA
+  RGB for scanline and tiled (ONE_LEVEL/MIPMAP level 0) images, with clear errors for deep,
+  multi-part, RIPMAP tiles, subsampled, pLinear-B44, and DWA
   payloads. The ZIP/RLE predictor+deinterleave and RLE entropy steps are
   verified against OpenEXR `ImfZip.cpp`/`internal_rle.c`; the PXR24 byte-plane,
   B44 4×4-block, and PIZ wavelet+Huffman decodes match three.js `EXRLoader`.

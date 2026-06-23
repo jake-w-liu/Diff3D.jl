@@ -1613,7 +1613,10 @@ function _decode_exr(bytes::Vector{UInt8})
 
     img = zeros(Float64, height, width, 3)
     if tiled
-        tile_mode == 0 || error("EXR tiled images: only ONE_LEVEL is supported (mode $tile_mode)")
+        # ONE_LEVEL (0) and MIPMAP_LEVELS (1): the offset table is level-0-first,
+        # so reading the level-0 tile count decodes the full-resolution image.
+        # RIPMAP_LEVELS (2) has a different table order and is rejected.
+        tile_mode in (0, 1) || error("EXR tiled images: RIPMAP levels are not supported (mode $tile_mode)")
         (tile_x > 0 && tile_y > 0) || error("EXR tiled images require a tiles attribute")
         numXTiles = cld(width, tile_x)
         numYTiles = cld(height, tile_y)
@@ -1657,13 +1660,14 @@ end
 """
     load_exr(path) -> Array{Float64,3}
 
-Decode an OpenEXR scanline or single-level tiled image into a linear, unclamped
-`H×W×3` RGB array. A single `Y` luminance channel is replicated across RGB
+Decode an OpenEXR scanline or tiled image into a linear, unclamped `H×W×3` RGB
+array. Tiled images may be `ONE_LEVEL` or `MIPMAP_LEVELS` (the full-resolution
+level 0 is returned). A single `Y` luminance channel is replicated across RGB
 (matching three.js). Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PIZ`, `PXR24`, and
 `B44`/`B44A` compression and `HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover
-HALF/FLOAT, matching three.js). Deep, multi-part, mipmapped/ripmapped tiles,
-subsampled, `pLinear`-B44, and `DWA` payloads raise a clear error rather than
-being approximated.
+HALF/FLOAT, matching three.js). Deep, multi-part, `RIPMAP` tiles, subsampled,
+`pLinear`-B44, and `DWA` payloads raise a clear error rather than being
+approximated.
 """
 load_exr(path::String) = _decode_exr(read(path))
 
