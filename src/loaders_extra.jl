@@ -1208,8 +1208,11 @@ function _decode_exr(bytes::Vector{UInt8})
 
     cnames = first.(channels)
     found = join(cnames, ", ")
-    (("R" in cnames) && ("G" in cnames) && ("B" in cnames)) ||
-        error("EXR image must contain R, G, and B channels; found $found")
+    has_rgb = ("R" in cnames) && ("G" in cnames) && ("B" in cnames)
+    has_y = "Y" in cnames
+    (has_rgb || has_y) ||
+        error("EXR image must contain R/G/B or a Y luminance channel; found $found")
+    is_y = !has_rgb && has_y          # Y (luminance) replicates across RGB output
     row_bytes = sum(width * _exr_chan_size(pt) for (_, pt) in channels)
 
     nblocks = cld(height, lines_per_block)
@@ -1246,14 +1249,18 @@ function _decode_exr(bytes::Vector{UInt8})
             yrow = (y0 + ln) - ymin + 1
             for (cname, pt) in channels
                 csz = _exr_chan_size(pt)
-                outc = cname == "R" ? 1 : cname == "G" ? 2 : cname == "B" ? 3 : 0
-                if outc != 0
+                targets = is_y ? (cname == "Y" ? (1, 2, 3) : ()) :
+                          cname == "R" ? (1,) : cname == "G" ? (2,) :
+                          cname == "B" ? (3,) : ()
+                if !isempty(targets)
                     @inbounds for x in 1:width
                         base = rp + (x - 1) * csz
-                        img[yrow, x, outc] =
-                            pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
+                        v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
                             pt == 2 ? Float64(_rd_f32(raw, base)) :
                                       Float64(_rd_le32(raw, base))      # UINT
+                        for t in targets
+                            img[yrow, x, t] = v
+                        end
                     end
                 end
                 rp += width * csz
@@ -1267,6 +1274,7 @@ end
     load_exr(path) -> Array{Float64,3}
 
 Decode an OpenEXR scanline image into a linear, unclamped `H×W×3` RGB array.
+A single `Y` luminance channel is replicated across RGB (matching three.js).
 Supports `NONE`, `RLE`, `ZIP`, `ZIPS`, `PXR24`, and `B44`/`B44A` compression and
 `HALF`/`FLOAT`/`UINT` channels (`PXR24`/`B44` cover HALF/FLOAT, matching
 three.js). Tiled, deep, multi-part, subsampled, `pLinear`-B44, and `PIZ`/`DWA`

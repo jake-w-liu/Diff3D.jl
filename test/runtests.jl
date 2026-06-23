@@ -8678,6 +8678,13 @@ end
         @test himg[1, 1, 1] == 1.0 && himg[1, 2, 1] == 2.0
         @test himg[1, 1, 2] == 0.5 && himg[1, 2, 2] == 0.25
 
+        # A single Y (luminance) channel replicates across RGB output, matching
+        # three.js. Verified against the real openexr-images GrayRampsHorizontal.exr
+        # (PXR24, Y-channel) during development.
+        yimg = Diff3D._decode_exr(build_exr_none(2, 1, [("Y", 2)], Dict("Y" => [0.4 1.6])))
+        @test yimg[1, 1, :] == [0.4, 0.4, 0.4]
+        @test yimg[1, 2, :] == [1.6, 1.6, 1.6]   # luminance preserved unclamped
+
         # EXR RLE entropy stage (verified against OpenEXR internal_rle.c):
         # non-negative control c repeats the next byte c+1 times; control 0xFF
         # (signed -1) copies one literal byte, etc.
