@@ -8876,6 +8876,37 @@ end
             @test_throws ErrorException Diff3D._exr_decode_block(UInt8[0x78, 0x01], 1, 1, 3, chreg, Int[])
             @test_throws ErrorException Diff3D._exr_piz_decode(UInt8[1, 2, 3], 1, chreg, 1)
         end
+        # Round 2: malformed-input hardening — clear errors, never a raw crash.
+        let cstr2(s) = vcat(Vector{UInt8}(codeunits(s)), UInt8(0)),
+            chan(nm) = vcat(cstr2(nm), le32i(1), UInt8[0, 0, 0, 0], le32i(1), le32i(1)),
+            rgbhdr = vcat(le32i(20000630), le32i(2),
+                vcat(cstr2("channels"), cstr2("chlist"),
+                     le32i(length(vcat(chan("B"), chan("G"), chan("R"), UInt8[0x00]))),
+                     vcat(chan("B"), chan("G"), chan("R"), UInt8[0x00])),
+                vcat(cstr2("compression"), cstr2("compression"), le32i(1), UInt8[0]),
+                vcat(cstr2("dataWindow"), cstr2("box2i"), le32i(16), le32i(0), le32i(0), le32i(0), le32i(0)),
+                vcat(cstr2("lineOrder"), cstr2("lineOrder"), le32i(1), UInt8[0]), UInt8[0x00])
+            # dataWindow attribute too short -> clear error (not BoundsError)
+            short_dw = vcat(le32i(20000630), le32i(2),
+                vcat(cstr2("dataWindow"), cstr2("box2i"), le32i(8), le32i(0), le32i(0)), UInt8[0x00])
+            @test_throws ErrorException Diff3D._decode_exr(short_dw)
+            # scanline offset-table entry out of range (huge / negative) -> clear error
+            @test_throws ErrorException Diff3D._decode_exr(vcat(rgbhdr, le64(typemax(Int64) - 3)))
+            # PIZ run-length code as the first symbol (malformed) must not crash with out[0]
+            let r = Diff3D._PizBR(UInt8[0x05, 0, 0, 0, 0, 0, 0, 0], 0, UInt32(0), 0)
+                ooff = Ref(0)
+                @test Diff3D._piz_getcode!(7, 7, r, zeros(Int, 10), ooff, 10) !== nothing  # no BoundsError
+            end
+        end
+        # KTX2: a huge level-0 byteOffset must not overflow the bounds check (clear error).
+        let le(x) = UInt8[x & 0xff, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff],
+            le64k(x) = vcat(le(x & 0xffffffff), le((x >> 32) & 0xffffffff))
+            ktx = vcat(UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A],
+                le(9), le(1), le(1), le(1), le(0), le(0), le(1), le(1), le(0),   # vk=R8, 1x1, 1 level
+                le(0), le(0), le(0), le(0), le64k(0), le64k(0),
+                le64k(typemax(Int64) - 10), le64k(1), le64k(1), UInt8[0xFF])
+            @test_throws ErrorException Diff3D._decode_ktx2(ktx)
+        end
 
         # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile
         # placement exactly — each tile's value must land in its own quadrant.

@@ -564,7 +564,10 @@ function _decode_ktx2(bytes::Vector{UInt8})
     expected = pixelWidth * pixelHeight * pixel_bytes
     byteLength == expected ||
         error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
-    (byteOffset >= 0 && byteOffset + byteLength <= length(bytes)) ||
+    # Overflow-safe: byteOffset/byteLength come from a u64 read (signed Int), so a
+    # crafted huge offset must not make `byteOffset + byteLength` wrap past the guard.
+    (0 <= byteOffset <= length(bytes) && byteLength >= 0 &&
+     byteLength <= length(bytes) - byteOffset) ||
         error("KTX2 level 0 data range exceeds the file length $(length(bytes))")
 
     # KTXorientation second axis: 'u' (up) stores the bottom row first, so flip
@@ -1318,7 +1321,10 @@ function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Bas
         r.lc -= 8
         cs = Int((r.c >> r.lc) & 0xff)
         (ooff[] + cs > oend) && return false
-        s = out[ooff[]]                       # last written value (0-based ooff-1 -> Julia ooff)
+        # Prior value (0-based ooff-1 -> Julia ooff). When nothing is written yet
+        # (a run as the first symbol, only on malformed data) three.js reads
+        # undefined -> 0; mirror that instead of indexing out[0].
+        s = ooff[] >= 1 ? out[ooff[]] : 0
         while cs > 0
             out[ooff[] + 1] = s; ooff[] += 1; cs -= 1
         end
@@ -1575,6 +1581,7 @@ function _decode_exr(bytes::Vector{UInt8})
         bytes[pos] == 0x00 && (pos += 1; break)  # empty name -> end of header
         name, pos = _exr_str(bytes, pos, n)
         _atype, pos = _exr_str(bytes, pos, n)
+        pos + 3 <= n || error("EXR header attribute size field is truncated")
         asize = _rd_i32(bytes, pos); pos += 4
         asize >= 0 || error("EXR attribute '$name' has negative size")
         vstart = pos; vstop = pos + asize - 1
@@ -1583,6 +1590,7 @@ function _decode_exr(bytes::Vector{UInt8})
             cp = vstart
             while cp <= vstop && bytes[cp] != 0x00
                 cname, cp = _exr_str(bytes, cp, vstop)
+                cp + 15 <= vstop || error("EXR channel '$cname' descriptor is truncated")
                 ptype = _rd_i32(bytes, cp); cp += 4
                 pl = Int(bytes[cp]); cp += 4       # pLinear (1) + reserved (3)
                 xs = _rd_i32(bytes, cp); cp += 4
@@ -1593,14 +1601,18 @@ function _decode_exr(bytes::Vector{UInt8})
                 push!(plinear, pl)
             end
         elseif name == "compression"
+            asize >= 1 || error("EXR compression attribute is too short")
             compression = Int(bytes[vstart])
         elseif name == "dataWindow"
+            asize >= 16 || error("EXR dataWindow attribute is too short")
             xmin = _rd_i32(bytes, vstart);     ymin = _rd_i32(bytes, vstart + 4)
             xmax = _rd_i32(bytes, vstart + 8); ymax = _rd_i32(bytes, vstart + 12)
             have_dw = true
         elseif name == "lineOrder"
+            asize >= 1 || error("EXR lineOrder attribute is too short")
             lineorder = Int(bytes[vstart])
         elseif name == "tiles"
+            asize >= 9 || error("EXR tiles attribute is too short")
             tile_x = _rd_le32(bytes, vstart)
             tile_y = _rd_le32(bytes, vstart + 4)
             tile_mode = Int(bytes[vstart + 8]) & 0xf      # levelMode
@@ -1647,8 +1659,9 @@ function _decode_exr(bytes::Vector{UInt8})
         pos + ntiles * 8 - 1 <= n || error("EXR tile offset table is truncated")
         for i in 1:ntiles
             off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
+            (0 <= off && off <= n - 20) ||   # 20-byte tile header; overflow-safe
+                error("EXR tile block offset is out of range")
             bp = off + 1
-            bp + 19 <= n || error("EXR tile header is truncated")
             tileX = _rd_i32(bytes, bp); tileY = _rd_i32(bytes, bp + 4)
             bp += 16                                   # tileX, tileY, levelX, levelY
             dsize = _rd_i32(bytes, bp); bp += 4
@@ -1666,8 +1679,9 @@ function _decode_exr(bytes::Vector{UInt8})
         pos + nblocks * 8 - 1 <= n || error("EXR scanline offset table is truncated")
         for i in 1:nblocks
             off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
+            (0 <= off && off <= n - 8) ||    # 8-byte scanline header; overflow-safe
+                error("EXR scanline block offset is out of range")
             bp = off + 1
-            bp + 7 <= n || error("EXR scanline block header is truncated")
             y0 = _rd_i32(bytes, bp); bp += 4
             dsize = _rd_i32(bytes, bp); bp += 4
             (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
