@@ -274,7 +274,10 @@ function _web_camera_json(camera)
                ",\"fov\":" * _js_num(camera.fov) *
                ",\"aspect\":" * _js_num(camera.aspect) *
                ",\"near\":" * _js_num(camera.near) *
-               ",\"far\":" * _js_num(camera.far) *
+               # _js_num maps Inf -> "0"; emit the JS literal Infinity instead so
+               # an infinite far clip plane (CPU-supported) is not silently turned
+               # into far=0, which collapses the JS depth range.
+               ",\"far\":" * (camera.far == Inf ? "Infinity" : _js_num(camera.far)) *
                ",\"zoom\":" * _js_num(camera.zoom) *
                "}"
     elseif camera isa OrthographicCamera
@@ -1821,7 +1824,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     scale(x,y,z){ return [x,0,0,0, 0,y,0,0, 0,0,z,0, 0,0,0,1]; },
     quat(q){ const x=q[0],y=q[1],z=q[2],w=q[3], x2=x+x,y2=y+y,z2=z+z, xx=x*x2,xy=x*y2,xz=x*z2, yy=y*y2,yz=y*z2,zz=z*z2, wx=w*x2,wy=w*y2,wz=w*z2; return [1-(yy+zz),xy+wz,xz-wy,0, xy-wz,1-(xx+zz),yz+wx,0, xz+wy,yz-wx,1-(xx+yy),0, 0,0,0,1]; },
     trs(p,q,s){ return M4.mul(M4.translate(p[0],p[1],p[2]), M4.mul(M4.quat(q), M4.scale(s[0],s[1],s[2]))); },
-    perspective(fov, aspect, near, far){ const t=Math.tan(fov/2); return [1/(aspect*t),0,0,0, 0,1/t,0,0, 0,0,-(far+near)/(far-near),-1, 0,0,-2*far*near/(far-near),0]; },
+    perspective(fov, aspect, near, far){ const t=Math.tan(fov/2); const c=isFinite(far)?-(far+near)/(far-near):-1, d=isFinite(far)?-2*far*near/(far-near):-2*near; return [1/(aspect*t),0,0,0, 0,1/t,0,0, 0,0,c,-1, 0,0,d,0]; },
     orthographic(left,right,bottom,top,near,far){ const w=right-left,h=top-bottom,p=far-near,x=(right+left)/w,y=(top+bottom)/h,z=(far+near)/p; return [2/w,0,0,0, 0,2/h,0,0, 0,0,-2/p,0, -x,-y,-z,1]; },
     lookAt(eye,target,up){ const z=norm(sub(eye,target)), x=norm(cross(up,z)), y=cross(z,x); return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,eye),-dot(y,eye),-dot(z,eye),1]; },
     normal3(m){ const a=m[0],b=m[1],c=m[2],d=m[4],e=m[5],f=m[6],g=m[8],h=m[9],i=m[10]; const A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,D=-(b*i-c*h),E=a*i-c*g,F=-(a*h-b*g),G=b*f-c*e,H=-(a*f-c*d),I=a*e-b*d; const det=a*A+b*B+c*C; if(Math.abs(det)<1e-10) return [1,0,0,0,1,0,0,0,1]; const inv=1/det; return [A*inv,B*inv,C*inv,D*inv,E*inv,F*inv,G*inv,H*inv,I*inv]; },

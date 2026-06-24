@@ -15789,4 +15789,34 @@ end
         end
     end
 
+    @testset "fresh audit round 10 fixes" begin
+        # reverse_gradient uses a per-task tape stack: a nested reverse_gradient no
+        # longer wipes the enclosing pass's graph (was a silently-wrong gradient).
+        let outer = function (v)
+                a = v[1]; c = sin(a) * 5.0; d = a^3
+                reverse_gradient(w -> w[1] * w[1], [a.val])   # inner must not corrupt outer
+                c + d
+            end
+            @test isapprox(reverse_gradient(outer, [1.2])[1], 5*cos(1.2) + 3*1.2^2; atol = 1e-9)
+        end
+        # Concurrent reverse_gradient over independent tasks returns correct results
+        # (task-local tape; serial on a 1-thread CI, but exercises the @threads path).
+        let fns = [v -> v[1]^2, v -> v[1]^3, v -> sin(v[1])], xs = [[2.0], [2.0], [1.0]],
+            res = Vector{Float64}(undef, 3)
+            Threads.@threads for i in 1:3
+                res[i] = reverse_gradient(fns[i], xs[i])[1]
+            end
+            @test isapprox(res, [4.0, 12.0, cos(1.0)]; atol = 1e-9)
+        end
+
+        # PerspectiveCamera far=Inf exports the JS literal Infinity (not far=0),
+        # and the embedded JS perspective() handles it; finite far is unchanged.
+        @test occursin("\"far\":Infinity",
+                       Diff3D._web_camera_json(PerspectiveCamera(fov = pi/4, aspect = 1.0,
+                                                                 near = 0.1, far = Inf)))
+        @test occursin("\"far\":1000",
+                       Diff3D._web_camera_json(PerspectiveCamera(fov = pi/4, aspect = 1.0,
+                                                                 near = 0.1, far = 1000.0)))
+    end
+
 end

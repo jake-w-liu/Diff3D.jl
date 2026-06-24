@@ -17,12 +17,19 @@ mutable struct ADVar <: Real
     partials::Tuple              # ∂this/∂parent for each parent (Float64)
 end
 
-# The active tape (operations recorded in creation = topological order).
-const _AD_TAPE = ADVar[]
+# Per-task stack of active tapes (operations recorded in creation = topological
+# order). Task-local so concurrent reverse_gradient calls (e.g. Threads.@threads
+# over independent gradients) never corrupt each other's tape, and a STACK so a
+# nested reverse_gradient records onto its own tape without wiping the enclosing
+# pass's graph. ADVars reference their parents directly via `args`, so the tape
+# is only an ordering for the backward pass — a fresh per-call tape is sufficient.
+_ad_tape_stack() = get!(() -> Vector{ADVar}[], task_local_storage(),
+                        :diff3d_ad_tape_stack)::Vector{Vector{ADVar}}
 
 function _ad_record(val::Float64, args::Tuple, partials::Tuple)
     v = ADVar(val, 0.0, args, partials)
-    push!(_AD_TAPE, v)
+    stack = _ad_tape_stack()
+    isempty(stack) || push!(stack[end], v)   # record only while a gradient pass is active
     return v
 end
 
@@ -158,30 +165,33 @@ Gradient of scalar `f(x)` via one reverse-mode pass. `f` must accept a vector of
 `ADVar` and return a single `ADVar`. Validated against ForwardDiff in tests.
 """
 function reverse_gradient(f, x::AbstractVector{<:Real})
-    empty!(_AD_TAPE)
-    inputs = ADVar[]
-    for xi in x
-        inp = ADVar(Float64(xi))          # leaf (recorded on tape)
-        push!(inputs, inp)
-    end
-    y = f(inputs)
-    y isa ADVar || error("reverse_gradient: f must return a scalar ADVar")
-    # Backward pass: tape is in topological order, so iterate in reverse.
-    for v in _AD_TAPE
-        v.adj = 0.0
-    end
-    y.adj = 1.0
-    @inbounds for k in length(_AD_TAPE):-1:1
-        v = _AD_TAPE[k]
-        a = v.adj
-        a == 0.0 && continue
-        for i in 1:length(v.args)
-            v.args[i].adj += a * v.partials[i]
+    stack = _ad_tape_stack()
+    tape = ADVar[]
+    push!(stack, tape)                    # this pass records onto its own tape
+    try
+        inputs = ADVar[]
+        for xi in x
+            push!(inputs, ADVar(Float64(xi)))   # leaf (recorded on `tape`)
         end
+        y = f(inputs)
+        y isa ADVar || error("reverse_gradient: f must return a scalar ADVar")
+        # Backward pass: tape is in topological order, so iterate in reverse.
+        for v in tape
+            v.adj = 0.0
+        end
+        y.adj = 1.0
+        @inbounds for k in length(tape):-1:1
+            v = tape[k]
+            a = v.adj
+            a == 0.0 && continue
+            for i in 1:length(v.args)
+                v.args[i].adj += a * v.partials[i]
+            end
+        end
+        return [inp.adj for inp in inputs]
+    finally
+        pop!(stack)                       # always release this pass's tape
     end
-    g = [inp.adj for inp in inputs]
-    empty!(_AD_TAPE)                       # release the graph
-    return g
 end
 
 """Value and gradient of `f` at `x` in one reverse pass."""
