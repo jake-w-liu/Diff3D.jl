@@ -139,6 +139,14 @@ Base.round(a::ADVar, r::RoundingMode) = ADVar(round(a.val, r))
 # mod/rem are piecewise-linear with unit slope in the first argument (a.e.).
 Base.mod(a::ADVar, b::Real) = _ad_record(mod(a.val, b), (a,), (1.0,))
 Base.rem(a::ADVar, b::Real) = _ad_record(rem(a.val, b), (a,), (1.0,))
+# Angle conversions. Base routes these through `f(x::Real) = f(float(x))`, and
+# `float(::ADVar) = ADVar` (above) makes that recurse forever (StackOverflow);
+# define them directly via the recorded `*`/sin/cos/tan so the gradient flows.
+Base.deg2rad(x::ADVar) = x * (π / 180)
+Base.rad2deg(x::ADVar) = x * (180 / π)
+Base.sind(x::ADVar) = sin(deg2rad(x))
+Base.cosd(x::ADVar) = cos(deg2rad(x))
+Base.tand(x::ADVar) = tan(deg2rad(x))
 
 """
     reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}

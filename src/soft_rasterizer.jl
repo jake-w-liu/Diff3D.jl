@@ -99,12 +99,25 @@ function soft_render(vertices::Vector{Vec3{Tv}},
         # influence band GROWS with σ. Grow the margin with σ (floor ~1px,
         # cap 50px) so larger σ is not truncated at the bbox edge.
         margin = clamp(3.0 * σ, 1.0, 50.0)
-        bmin_x = max(floor(Int, min(s1.x, s2.x, s3.x) - margin), 1)
-        bmax_x = min(ceil(Int, max(s1.x, s2.x, s3.x) + margin), W)
-        bmin_y = max(floor(Int, min(s1.y, s2.y, s3.y) - margin), 1)
-        bmax_y = min(ceil(Int, max(s1.y, s2.y, s3.y) + margin), H)
+        # Clamp the float extent into [1,W]/[1,H] before the Int conversion (and
+        # reject non-finite projected coords) so a near-camera vertex with a huge
+        # finite screen coordinate cannot overflow floor/ceil(Int, …) — matching
+        # the hard rasterizer. Reachable in inverse rendering when an optimized
+        # vertex transiently slides through the camera.
+        finite = isfinite(Float64(s1.x)) && isfinite(Float64(s1.y)) &&
+                 isfinite(Float64(s2.x)) && isfinite(Float64(s2.y)) &&
+                 isfinite(Float64(s3.x)) && isfinite(Float64(s3.y))
+        fW = Float64(W); fH = Float64(H)
+        if finite
+            bmin_x = max(floor(Int, clamp(min(s1.x, s2.x, s3.x) - margin, 1.0, fW)), 1)
+            bmax_x = min(ceil(Int,  clamp(max(s1.x, s2.x, s3.x) + margin, 1.0, fW)), W)
+            bmin_y = max(floor(Int, clamp(min(s1.y, s2.y, s3.y) - margin, 1.0, fH)), 1)
+            bmax_y = min(ceil(Int,  clamp(max(s1.y, s2.y, s3.y) + margin, 1.0, fH)), H)
+        else
+            bmin_x = 1; bmax_x = 0; bmin_y = 1; bmax_y = 0   # empty box -> valid=false
+        end
 
-        valid = abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
+        valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
         screen_tris[fi] = (s1=s1, s2=s2, s3=s3, color=cols[fi],
                            min_x=bmin_x, max_x=bmax_x, min_y=bmin_y, max_y=bmax_y,
                            area=area, valid=valid)

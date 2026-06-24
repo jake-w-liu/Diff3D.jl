@@ -178,13 +178,22 @@ end
 Sample the texture at UV `(u,v)` ∈ [0,1]² (outside handled by the wrap modes),
 using nearest or bilinear filtering. `v=0` is the bottom row.
 """
+# Sanitize a UV coordinate before the integer texel conversion: a non-finite UV
+# (NaN/Inf from a procedural/loaded geometry's uvs) becomes 0, and an absurdly
+# large finite UV (|uv| > 1e7 — more than ten million texture repeats, beyond any
+# real use) is clamped, so `round/floor(Int, u*W-0.5)` can never throw
+# InexactError and abort the render. The fast path (a normal finite UV) returns
+# the value unchanged and keeps the AD element type for the differentiable path.
+@inline function _sanitize_uv(x)
+    fx = Float64(x)
+    !isfinite(fx) && return zero(x)
+    abs(fx) > 1.0e7 && return oftype(x, clamp(fx, -1.0e7, 1.0e7))
+    return x
+end
+
 function sample_texture(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
-    # Sanitize a non-finite UV (e.g. a NaN in a procedural/loaded geometry's uvs)
-    # to a valid texel before the Int conversion below; otherwise floor/round(Int,
-    # u*W-0.5) throws InexactError and aborts the whole render. zero(.) keeps the
-    # AD element type for the differentiable path.
-    isfinite(Float64(u)) || (u = zero(u)); isfinite(Float64(v)) || (v = zero(v))
+    u = _sanitize_uv(u); v = _sanitize_uv(v)
     H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
@@ -220,7 +229,7 @@ end
 
 function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     u, v = texture_transform_uv(tex, u, v)
-    isfinite(Float64(u)) || (u = zero(u)); isfinite(Float64(v)) || (v = zero(v))
+    u = _sanitize_uv(u); v = _sanitize_uv(v)
     H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
@@ -731,6 +740,7 @@ end
 """`n`×`n`-cell checkerboard texture (each cell `cell` pixels) as an H×W×3 Texture."""
 function checker_texture(; n::Int=8, cell::Int=8, a=Color3(1.0,1.0,1.0), b=Color3(0.0,0.0,0.0),
                           wrap_s=:repeat, wrap_t=:repeat, filter=:nearest)
+    n = max(1, n); cell = max(1, cell)   # avoid a 0-size texture / (i-1)÷0 DivideError
     sz = n * cell
     data = Array{Float64}(undef, sz, sz, 3)
     @inbounds for i in 1:sz, j in 1:sz
@@ -744,6 +754,8 @@ end
 """Grid texture: `line` color on grid lines every `cell` pixels, else `bg`."""
 function grid_texture(; size_px::Int=64, cell::Int=16, line=Color3(0.0,0.0,0.0),
                        bg=Color3(1.0,1.0,1.0), thickness::Int=1, wrap_s=:repeat, wrap_t=:repeat)
+    cell = max(1, cell)            # cell=0 would make (i-1) % cell a DivideError
+    size_px = max(1, size_px)
     data = Array{Float64}(undef, size_px, size_px, 3)
     @inbounds for i in 1:size_px, j in 1:size_px
         on = ((i-1) % cell < thickness) || ((j-1) % cell < thickness)

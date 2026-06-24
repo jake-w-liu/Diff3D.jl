@@ -902,7 +902,10 @@ H×W×3 image. The returned closure matches the [`EffectComposer`] pass conventi
 the depth buffer is captured here because the composer only forwards colour.
 """
 function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0, samples::Int=8)
-    rad = max(Float64(radius), 1e-3)
+    # Bound the radius to a finite sane range so round(Int, rad*…) below can't
+    # overflow on a NaN/Inf/huge radius (1e6 px exceeds any real SSAO kernel).
+    r0 = Float64(radius)
+    rad = isnan(r0) ? 1e-3 : clamp(r0, 1e-3, 1e6)
     inten = clamp(Float64(intensity), 0.0, 1.0)
     ns = max(Int(samples), 1)
     bias = 1e-4

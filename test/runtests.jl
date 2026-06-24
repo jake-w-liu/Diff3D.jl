@@ -15597,4 +15597,66 @@ end
         end
     end
 
+    @testset "fresh audit round 6 fixes" begin
+        # Platonic-solid UVs stay finite at radius=0 (was p.y/radius = 0/0 = NaN);
+        # radius>0 geometry is unchanged.
+        @test all(isfinite, OctahedronGeometry(radius = 0.0).uvs)
+        @test all(isfinite, TetrahedronGeometry(radius = 0.0).uvs)
+        @test all(isfinite, DodecahedronGeometry(radius = 0.0).uvs)
+        @test OctahedronGeometry(radius = 1.0).n_faces > 0
+
+        # ssao_pass bounds a NaN/Inf/huge radius before the Int offset conversion.
+        let depth = fill(2.0, 8, 8), img = ones(Float64, 8, 8, 3)
+            @test all(isfinite, ssao_pass(depth; radius = Inf)(img))
+            @test all(isfinite, ssao_pass(depth; radius = NaN)(img))
+            @test all(isfinite, ssao_pass(depth; radius = 1e300)(img))
+        end
+
+        # Segment-count clamps are finite-safe: a non-finite count no longer
+        # throws InexactError in Int(floor(...)); a normal count is unchanged.
+        @test SphereGeometry(width_segments = Inf).n_faces > 0
+        @test CircleGeometry(segments = NaN).n_faces > 0
+        @test CylinderGeometry(radial_segments = Inf).n_faces > 0
+        @test SphereGeometry(width_segments = 32).n_faces ==
+              SphereGeometry(width_segments = 32.0).n_faces
+
+        # Angle conversions on ADVar no longer StackOverflow (float(::ADVar)=ADVar
+        # otherwise made Base's f(::Real)=f(float(x)) recurse).
+        @test isapprox(reverse_gradient(v -> rad2deg(v[1]), [1.0])[1], 180/pi; atol = 1e-9)
+        @test isapprox(reverse_gradient(v -> sind(v[1]), [45.0])[1], cosd(45.0) * pi/180; atol = 1e-9)
+
+        # soft_render clamps an extreme near-camera projected coordinate before the
+        # Int bbox conversion (was InexactError).
+        let vp = mat4_perspective(deg2rad(60.0), 1.0, 0.01, 100.0)
+            verts = [Vec3(1e15, 0.0, -1e-7), Vec3(0.0, 1.0, -2.0), Vec3(0.0, -1.0, -2.0)]
+            img = soft_render(verts, [(1, 2, 3)], [Color3(1.0, 0.0, 0.0)], vp, 64, 64,
+                              SoftRasterizerConfig(sigma = 1.0))
+            @test size(img) == (64, 64, 3) && all(isfinite, img)
+        end
+
+        # QuaternionKeyframeTrack STEP returns the keyframe AT an exact interior
+        # time, not the previous one (matches the JS runtime and the other tracks).
+        let obj = Object3D(),
+            q0 = Quaternion(0.0, 0.0, 0.0, 1.0),
+            q1 = Quaternion(0.0, 0.0, sqrt(0.5), sqrt(0.5)),
+            q2 = Quaternion(0.0, 0.0, 1.0, 0.0)
+            tr = QuaternionKeyframeTrack(obj, :quaternion, [0.0, 1.0, 2.0], [q0, q1, q2];
+                                         interpolation = :step)
+            v = Diff3D._track_value(tr, 1.0)
+            @test isapprox(v.z, q1.z; atol = 1e-12) && isapprox(v.w, q1.w; atol = 1e-12)
+            v15 = Diff3D._track_value(tr, 1.5)   # between keys -> still q1
+            @test isapprox(v15.z, q1.z; atol = 1e-12)
+        end
+
+        # Texture sampling clamps an absurd finite UV magnitude (no InexactError).
+        let t = Texture(rand(4, 4, 3))
+            @test sample_texture(t, 1e300, 0.5) isa Color3
+            @test Diff3D.sample_texture_channel(t, 1e300, 0.5, 1) isa Real
+        end
+
+        # grid/checker textures reject a 0 cell/size instead of DivideError / empty.
+        @test grid_texture(cell = 0) isa Texture
+        @test size(checker_texture(n = 0).data, 1) > 0
+    end
+
 end

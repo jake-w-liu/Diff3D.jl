@@ -1216,7 +1216,10 @@ function _track_value(tr::QuaternionKeyframeTrack, t)
     t >= times[n] && return values[n]
     hi = searchsortedfirst(times, t)
     lo = hi - 1
-    tr.interpolation === :step && return values[lo]
+    # STEP holds the value of the keyframe AT or before t; at an exact interior
+    # keyframe time searchsortedfirst lands on that key, so use searchsortedlast
+    # (the previous-keyframe `lo` above is correct only for the slerp interval).
+    tr.interpolation === :step && return values[searchsortedlast(times, t)]
     α = (t - times[lo]) / (times[hi] - times[lo])
     return quat_slerp(values[lo], values[hi], α)
 end

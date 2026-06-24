@@ -13,12 +13,15 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
                             radius=1.0, detail::Int=0)
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     vi = 0
-    projr(v) = normalize(v) * radius
     function emit!(a::Vec3, b::Vec3, c::Vec3)
-        for p in (projr(a), projr(b), projr(c))
+        for v in (a, b, c)
+            d = normalize(v)                  # unit direction, independent of radius
+            p = d * radius
             push!(positions, p.x, p.y, p.z)
-            n = normalize(p); push!(normals, n.x, n.y, n.z)
-            push!(uvs, atan(p.z, p.x)/(2π) + 0.5, asin(clamp(p.y/radius, -1.0, 1.0))/π + 0.5)
+            push!(normals, d.x, d.y, d.z)
+            # Derive the spherical UV from the unit direction, not p.y/radius:
+            # at radius=0 the latter is 0/0 = NaN, while asin(d.y) stays finite.
+            push!(uvs, atan(d.z, d.x)/(2π) + 0.5, asin(clamp(d.y, -1.0, 1.0))/π + 0.5)
         end
         push!(indices, vi+1, vi+2, vi+3); vi += 3
     end
@@ -245,7 +248,7 @@ end
 function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_length=2π)
     np = length(points)
     @assert np >= 2 "Lathe needs at least two profile points"
-    segments = max(3, Int(floor(segments)))   # clamp so 0 can't make i/segments NaN
+    segments = _clamp_seg(segments, 3)   # clamp so 0 can't make i/segments NaN
 
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     for i in 0:segments
@@ -277,7 +280,7 @@ end
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     @assert n >= 2 "Tube needs at least two path points"
-    radial_segments = max(3, Int(floor(radial_segments)))   # clamp so 0 can't make j/radial_segments NaN
+    radial_segments = _clamp_seg(radial_segments, 3)   # clamp so 0 can't make j/radial_segments NaN
 
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
@@ -979,8 +982,8 @@ end
 
 function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
-    cap_segments = max(1, Int(floor(cap_segments)))
-    radial_segments = max(3, Int(floor(radial_segments)))
+    cap_segments = _clamp_seg(cap_segments, 1)
+    radial_segments = _clamp_seg(radial_segments, 3)
     half = length / 2
     profile = Tuple{Float64,Float64}[]
     for i in 0:cap_segments                          # top hemisphere: pole → equator

@@ -431,13 +431,20 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 
+# Coerce a segment-count keyword to an Int >= lo, finite-safe. A non-finite
+# (NaN/Inf) or absurdly large value would throw InexactError in Int(floor(...));
+# clamp into [lo, 1_000_000] first (1e6 is a sanity ceiling — no primitive needs
+# more segments than that) and map non-finite to the minimum.
+@inline _clamp_seg(s::Real, lo::Int) =
+    isfinite(Float64(s)) ? Int(floor(clamp(Float64(s), Float64(lo), 1.0e6))) : lo
+
 # ========================== Sphere Geometry ==========================
 
 function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
-    width_segments = max(3, Int(floor(width_segments)))
-    height_segments = max(2, Int(floor(height_segments)))
+    width_segments = _clamp_seg(width_segments, 3)
+    height_segments = _clamp_seg(height_segments, 2)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -492,8 +499,8 @@ end
 function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segments=1)
     # Clamp segment counts (matching SphereGeometry/three.js) so a 0 cannot make
     # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
-    width_segments = max(1, Int(floor(width_segments)))
-    height_segments = max(1, Int(floor(height_segments)))
+    width_segments = _clamp_seg(width_segments, 1)
+    height_segments = _clamp_seg(height_segments, 1)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -533,8 +540,8 @@ end
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                            radial_segments=32, height_segments=1, open_ended=false)
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = max(3, Int(floor(radial_segments)))
-    height_segments = max(1, Int(floor(height_segments)))
+    radial_segments = _clamp_seg(radial_segments, 3)
+    height_segments = _clamp_seg(height_segments, 1)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -631,8 +638,8 @@ end
 
 function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = max(2, Int(floor(radial_segments)))
-    tubular_segments = max(3, Int(floor(tubular_segments)))
+    radial_segments = _clamp_seg(radial_segments, 2)
+    tubular_segments = _clamp_seg(tubular_segments, 3)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -747,8 +754,8 @@ end
 
 function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    theta_segments = max(3, Int(floor(theta_segments)))
-    phi_segments = max(1, Int(floor(phi_segments)))
+    theta_segments = _clamp_seg(theta_segments, 3)
+    phi_segments = _clamp_seg(phi_segments, 1)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -787,7 +794,7 @@ end
 
 function CircleGeometry(; radius=1.0, segments=32)
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
-    segments = max(3, Int(floor(segments)))
+    segments = _clamp_seg(segments, 3)
     positions = Float64[0.0, 0.0, 0.0]  # center
     normals_arr = Float64[0.0, 0.0, 1.0]
     uvs_arr = Float64[0.5, 0.5]
