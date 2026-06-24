@@ -1109,6 +1109,10 @@ reals or `Vec3`.
 function interpolate_catmull_rom(times::AbstractVector, values::AbstractVector, t)
     n = length(times)
     @assert n == length(values) && n >= 1 "times and values must align and be non-empty"
+    # A NaN time passes both endpoint checks (all NaN comparisons are false) and
+    # then indexes one past the end via searchsortedfirst; reject it cleanly, as
+    # interpolate_linear does, instead of leaking a BoundsError.
+    isnan(t) && throw(ArgumentError("interpolate_catmull_rom: query time t must not be NaN"))
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
     n == 1 && return values[1]
@@ -1272,7 +1276,13 @@ Interpolated value of a keyframe `track` at absolute time `t`, using the track's
 own interpolation mode (linear, Catmull-Rom cubic, or quaternion slerp). Returns a
 `Vec3` for property tracks and a `Quaternion` for a `QuaternionKeyframeTrack`.
 """
-sample_track(track::AbstractKeyframeTrack, t) = _track_value(track, t)
+function sample_track(track::AbstractKeyframeTrack, t)
+    # Reject a NaN query time cleanly (matching interpolate_linear/catmull_rom);
+    # otherwise the cubic/quaternion/cubic-spline/morph samplers index past the
+    # end of their keyframe arrays and raise a bare BoundsError.
+    isnan(t) && throw(ArgumentError("sample_track: query time t must not be NaN"))
+    return _track_value(track, t)
+end
 
 # Quaternion → Euler (intrinsic XYZ order, matching the default `Euler`).
 # Mirrors three.js `Euler.setFromQuaternion` for order XYZ.
@@ -1641,6 +1651,7 @@ end
 
 """Sample the clip at absolute time `t` and write each track's value to its target."""
 function mixer_set_time!(mixer::AnimationMixer, t)
+    isnan(Float64(t)) && throw(ArgumentError("mixer_set_time!: time must not be NaN"))
     mixer.time = Float64(t)
     sample_time = _animation_loop_time(mixer.time * mixer.time_scale,
                                        mixer.clip.duration,

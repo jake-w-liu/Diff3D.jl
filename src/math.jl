@@ -223,10 +223,15 @@ end
 function mat4_perspective(fov, aspect, near, far)
     t = tan(fov / 2)
     T = promote_type(typeof(t), typeof(aspect), typeof(near), typeof(far))
+    # far == Inf is a supported config (infinite far clip plane, matching three.js
+    # makePerspective); the limit of the depth terms is c=-1, d=-2·near. Without
+    # this the Inf/Inf forms below are NaN, poisoning the whole projection.
+    c = isfinite(far) ? -(far + near) / (far - near) : -one(T)
+    d = isfinite(far) ? -2 * far * near / (far - near) : -2 * near
     Mat4{T}((one(T)/(aspect*t), zero(T), zero(T), zero(T),
              zero(T), one(T)/t, zero(T), zero(T),
-             zero(T), zero(T), -(far+near)/(far-near), -one(T),
-             zero(T), zero(T), -2*far*near/(far-near), zero(T)))
+             zero(T), zero(T), T(c), -one(T),
+             zero(T), zero(T), T(d), zero(T)))
 end
 
 function mat4_orthographic(left, right, bottom, top, near, far)

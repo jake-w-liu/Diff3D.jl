@@ -15659,4 +15659,59 @@ end
         @test size(checker_texture(n = 0).data, 1) > 0
     end
 
+    @testset "fresh audit round 7 fixes" begin
+        # Perspective with far=Inf (infinite far plane, three.js-supported) gives a
+        # finite projection (m33=-1, m34=-2*near) instead of a NaN depth row.
+        let P = mat4_perspective(pi/4, 1.0, 0.1, Inf)
+            @test !any(isnan, P.e)
+            @test mat4_get(P, 3, 3) == -1.0
+            @test isapprox(mat4_get(P, 3, 4), -0.2; atol = 1e-12)
+        end
+        # finite far is unchanged
+        let Pf = mat4_perspective(pi/4, 1.0, 0.1, 1000.0)
+            @test isapprox(mat4_get(Pf, 3, 3), -(1000.1) / 999.9; atol = 1e-9)
+        end
+
+        # NaN query time is rejected cleanly across the cubic/track samplers
+        # (was a bare BoundsError), matching interpolate_linear; valid times work.
+        @test_throws ArgumentError interpolate_catmull_rom([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], NaN)
+        @test interpolate_catmull_rom([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], 0.5) isa Real
+        let obj = Object3D(),
+            tr = NumberKeyframeTrack(obj, :foo, [0.0, 1.0, 2.0], [0.0, 1.0, 4.0];
+                                     interpolation = :cubic)
+            @test_throws ArgumentError sample_track(tr, NaN)
+            @test sample_track(tr, 0.5) isa Real
+            mixer = AnimationMixer(AnimationClip("c", [tr]))
+            @test_throws ArgumentError mixer_set_time!(mixer, NaN)
+        end
+    end
+
+    @testset "fresh audit round 8 fixes" begin
+        # Texture sampling must keep ForwardDiff.Dual UVs working (the round-5/6
+        # finiteness guards wrongly wrapped them in Float64(::Dual), which is
+        # undefined and crashed the differentiable path).
+        let tex = Texture(rand(4, 4, 3))
+            g = ForwardDiff.gradient(uv -> begin
+                    c = sample_texture(tex, uv[1], uv[2]); c.r + c.g + c.b
+                end, [0.5, 0.5])
+            @test all(isfinite, g)
+            @test (ForwardDiff.derivative(d -> sample_texture_auto(tex, 0.5, 0.5, d).r, 0.1); true)
+        end
+        # soft_render gradient through ForwardDiff stays finite & nonzero (the
+        # core differentiable-rendering feature; the round-6 guard had broken it).
+        let vp = Diff3D.Mat4{Float64}(ntuple(k -> (k == 1 || k == 6 || k == 11 || k == 16) ? 1.0 : 0.0, 16)),
+            f = [(1, 2, 3)], c = [Color3(1.0, 1.0, 1.0)]
+            g = ForwardDiff.gradient(p -> begin
+                    verts = [Vec3(p[1], p[2], 0.0), Vec3(p[3], p[4], 0.0), Vec3(p[5], p[6], 0.0)]
+                    cfg = SoftRasterizerConfig(sigma = 1.0, gamma = 1.0, bg_color = Color3(0.0, 0.0, 0.0))
+                    sum(soft_render(verts, f, c, vp, 24, 24, cfg))
+                end, [-0.5, -0.5, 0.5, -0.5, 0.0, 0.5])
+            @test all(isfinite, g) && any(x -> abs(x) > 1e-6, g)
+        end
+
+        # ADVar to a Rational power no longer hits a dispatch ambiguity.
+        @test isapprox(reverse_gradient(v -> v[1]^(1//3), [8.0])[1], 1/12; atol = 1e-9)
+        @test isapprox(reverse_gradient(v -> v[1]^(3//2), [4.0])[1], 1.5 * sqrt(4.0); atol = 1e-9)
+    end
+
 end

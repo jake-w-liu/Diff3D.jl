@@ -185,9 +185,11 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
 # InexactError and abort the render. The fast path (a normal finite UV) returns
 # the value unchanged and keeps the AD element type for the differentiable path.
 @inline function _sanitize_uv(x)
-    fx = Float64(x)
-    !isfinite(fx) && return zero(x)
-    abs(fx) > 1.0e7 && return oftype(x, clamp(fx, -1.0e7, 1.0e7))
+    # isfinite / comparison / clamp all work directly on Float64, ForwardDiff.Dual,
+    # and ADVar — do NOT call Float64(x): Float64(::ForwardDiff.Dual) is undefined
+    # and would crash differentiable texture sampling.
+    isfinite(x) || return zero(x)
+    (x < -1.0e7 || x > 1.0e7) && return clamp(x, -1.0e7, 1.0e7)
     return x
 end
 
@@ -383,12 +385,14 @@ linear mip blend weight is carried through unchanged so the result stays smooth
 for `ForwardDiff.Dual`/`ADVar` `duv`.
 """
 function sample_texture_auto(tex::Texture, u, v, duv)
-    isfinite(Float64(duv)) ||
+    # isfinite/comparison work directly on Float64/Dual/ADVar; Float64(::Dual) is
+    # undefined and would crash the differentiable path the docstring promises.
+    isfinite(duv) ||
         throw(ArgumentError("texture LOD footprint (duv) must be finite"))
     H, W, _ = size(tex.data)
     sz = max(W, H)
     span_raw = abs(duv) * sz
-    if Float64(span_raw) <= 1.0
+    if span_raw <= 1.0
         return _sample_texture_filtered(tex, u, v,
                                         _texture_mag_filter_texel_filter(tex.mag_filter))
     end
@@ -445,7 +449,7 @@ made on `Float64` magnitudes, while the probe coordinates, the minor-axis
 the returned color.
 """
 function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
-    (isfinite(Float64(du)) && isfinite(Float64(dv))) ||
+    (isfinite(du) && isfinite(dv)) ||
         throw(ArgumentError("texture anisotropic footprint (du, dv) must be finite"))
     # Footprint extents along each UV axis (keep AD type for the live path).
     adu = abs(du)

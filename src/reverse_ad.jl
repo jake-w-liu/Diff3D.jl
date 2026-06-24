@@ -67,6 +67,9 @@ function Base.:^(a::ADVar, p::Real)
     d = (a.val == 0 && p <= 0) ? 0.0 : p * a.val^(p - 1)
     _ad_record(v, (a,), (d,))
 end
+# Resolve the dispatch ambiguity between ^(::ADVar, ::Real) above and Base's
+# ^(::Number, ::Rational): a rational exponent (e.g. x^(1//3)) is ordinary input.
+Base.:^(a::ADVar, p::Rational) = a^float(p)
 function Base.:^(a::ADVar, b::ADVar)   # ADVar exponent (also reached by x::Real ^ ADVar via promotion)
     v = a.val^b.val
     da = (a.val == 0 && b.val <= 0) ? 0.0 : b.val * a.val^(b.val - 1)

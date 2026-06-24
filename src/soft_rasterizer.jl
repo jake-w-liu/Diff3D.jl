@@ -104,9 +104,12 @@ function soft_render(vertices::Vector{Vec3{Tv}},
         # finite screen coordinate cannot overflow floor/ceil(Int, …) — matching
         # the hard rasterizer. Reachable in inverse rendering when an optimized
         # vertex transiently slides through the camera.
-        finite = isfinite(Float64(s1.x)) && isfinite(Float64(s1.y)) &&
-                 isfinite(Float64(s2.x)) && isfinite(Float64(s2.y)) &&
-                 isfinite(Float64(s3.x)) && isfinite(Float64(s3.y))
+        # isfinite works directly on Float64, ForwardDiff.Dual, and ADVar; do NOT
+        # wrap in Float64() — Float64(::ForwardDiff.Dual) is undefined and would
+        # crash the differentiable/inverse-rendering gradient path (its core use).
+        finite = isfinite(s1.x) && isfinite(s1.y) &&
+                 isfinite(s2.x) && isfinite(s2.y) &&
+                 isfinite(s3.x) && isfinite(s3.y)
         fW = Float64(W); fH = Float64(H)
         if finite
             bmin_x = max(floor(Int, clamp(min(s1.x, s2.x, s3.x) - margin, 1.0, fW)), 1)
