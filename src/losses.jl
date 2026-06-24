@@ -107,6 +107,17 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
     return one(R) - mean_ssim
 end
 
+# Per-pixel brightness as the max over the channels that exist, so a grayscale
+# (H×W×1) or 2-channel silhouette/mask is handled instead of indexing past the
+# end of the array with a BoundsError (the sibling losses accept any channel
+# count too).
+@inline function _silhouette_brightness(img, i, j)
+    C = size(img, 3)
+    C == 1 && return img[i, j, 1]
+    C == 2 && return max(img[i, j, 1], img[i, j, 2])
+    return max(img[i, j, 1], img[i, j, 2], img[i, j, 3])
+end
+
 """
 Silhouette IoU loss (Intersection over Union).
 Compares binary silhouettes extracted from images.
@@ -127,9 +138,9 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
 
     for j in 1:W
         for i in 1:H
-            # Brightness as max channel
-            img_val = max(image[i, j, 1], image[i, j, 2], image[i, j, 3])
-            tgt_val = max(target[i, j, 1], target[i, j, 2], target[i, j, 3])
+            # Brightness as max over the available channels (handles grayscale).
+            img_val = _silhouette_brightness(image, i, j)
+            tgt_val = _silhouette_brightness(target, i, j)
 
             # Soft occupancy. The slope must be steep enough that a true-black
             # background (brightness 0) reads ~0 occupancy: at slope 200 and

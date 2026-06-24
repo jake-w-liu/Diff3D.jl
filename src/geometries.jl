@@ -689,6 +689,10 @@ end
 
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
+    # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
+    # a 0/0 = NaN, matching every sibling generator in this file.
+    tubular_segments = _clamp_seg(tubular_segments, 3)
+    radial_segments = _clamp_seg(radial_segments, 3)
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]

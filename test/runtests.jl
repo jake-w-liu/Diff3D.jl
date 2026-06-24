@@ -15819,4 +15819,24 @@ end
                                                                  near = 0.1, far = 1000.0)))
     end
 
+    @testset "fresh audit round 11 fixes" begin
+        # TorusKnotGeometry clamps degenerate segment counts (no 0/0 = NaN), like
+        # every sibling generator.
+        @test !any(isnan, TorusKnotGeometry(tubular_segments = 0).positions)
+        @test !any(isnan, TorusKnotGeometry(radial_segments = 0).positions)
+        @test TorusKnotGeometry().n_faces > 0
+
+        # loss_silhouette_iou accepts a grayscale (H×W×1) mask like its sibling
+        # losses, instead of a BoundsError on channels 2/3.
+        let img = reshape([0.0, 1.0, 1.0, 0.0], 2, 2, 1)
+            @test loss_silhouette_iou(img, img) isa Real
+            @test isapprox(loss_silhouette_iou(img, img), 0.0; atol = 1e-6)  # identical masks
+        end
+        # RGB path unchanged
+        let img = zeros(2, 2, 3)
+            img[1, 1, :] .= 1.0
+            @test loss_silhouette_iou(img, img) isa Real
+        end
+    end
+
 end
