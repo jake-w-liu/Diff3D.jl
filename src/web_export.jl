@@ -83,6 +83,9 @@ _js_mat_array(ms::AbstractVector{<:Mat4}) = "[" * join((_js_mat(m) for m in ms),
 _js_plane(p::Plane) = "[" * _js_num(p.normal.x) * "," * _js_num(p.normal.y) * "," *
                       _js_num(p.normal.z) * "," * _js_num(p.constant) * "]"
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
+# Component-wise color product (three.js InstancedMesh per-instance color
+# multiplies the material color).
+_web_color_mul(a::Color3, b::Color3) = Color3(a.r * b.r, a.g * b.g, a.b * b.b)
 
 function _web_material_color(mat)
     if hasproperty(mat, :color)
@@ -947,12 +950,22 @@ function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int
             push!(out, _web_transform_node_json(obj))
         end
         if obj isa LOD
+            # LOD level objects are also registered as children (add_lod_level! ->
+            # add!), so visit each level once here and skip it in the child loop
+            # below; otherwise every level's subtree is emitted twice with the
+            # same node id.
+            level_ids = Set{Int}()
             for (_, _, child) in obj.levels
+                push!(level_ids, child.id)
                 visit(child)
             end
-        end
-        for child in get_children(obj)
-            visit(child)
+            for child in get_children(obj)
+                child.id in level_ids || visit(child)
+            end
+        else
+            for child in get_children(obj)
+                visit(child)
+            end
         end
     end
     visit(root)
@@ -961,6 +974,7 @@ end
 
 function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles",
                             transform_obj::AbstractObject3D=obj,
+                            color_override::Union{Nothing,Color3}=nothing,
                             instance_matrix=nothing,
                             instance_matrices::AbstractVector{<:Mat4}=Mat4{Float64}[],
                             instance_colors::AbstractVector{<:Color3}=Color3{Float64}[],
@@ -1017,7 +1031,7 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
            ",\"depthPacking\":" * _js_str(_web_material_depth_packing(mat)) *
            ",\"depthPackingMode\":" * string(_web_material_depth_packing_id(mat)) *
            ",\"toonSteps\":" * _js_num(_web_material_toon_steps(mat)) *
-           ",\"color\":" * _js_color(_web_material_color(mat)) *
+           ",\"color\":" * _js_color(color_override === nothing ? _web_material_color(mat) : color_override) *
            ",\"opacity\":" * _js_num(_web_material_opacity(mat)) *
            ",\"alphaTest\":" * _js_num(_web_material_alpha_test(mat)) *
            ",\"transparent\":" * (_web_material_transparent(mat) ? "true" : "false") *
@@ -1343,11 +1357,21 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                   lod_hysteresis=lod_hysteresis))
                 end
             else
-                for im in obj.instance_matrices
+                # Transparent instanced meshes are split into one draw per
+                # instance for correct back-to-front sorting (each split bakes its
+                # instance matrix into o.matrix). A single-instance draw is NOT
+                # GPU-instanced, so the per-instance color attribute is inactive;
+                # fold material_color × instance_color into the emitted base color
+                # so transparent instances keep their colors like the opaque path.
+                for (i, im) in enumerate(obj.instance_matrices)
+                    ic = i <= length(obj.instance_colors) ? obj.instance_colors[i] : nothing
                     if wire_triangles
                         proxy = _web_wireframe_proxy(obj)
+                        ov = ic === nothing ? nothing :
+                             _web_color_mul(_web_material_color(proxy.material), ic)
                         push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
                                                       transform_obj=obj,
+                                                      color_override=ov,
                                                       instance_matrix=im,
                                                       morph_target_ids=ancestor_ids,
                                                       visibility_target_ids=visibility_ids,
@@ -1356,7 +1380,10 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                       lod_distance=lod_distance,
                                                       lod_hysteresis=lod_hysteresis))
                     else
+                        ov = ic === nothing ? nothing :
+                             _web_color_mul(_web_material_color(obj.material), ic)
                         push!(out, _web_drawable_json(obj, parent * im; mode=draw_mode,
+                                                      color_override=ov,
                                                       instance_matrix=im,
                                                       morph_target_ids=ancestor_ids,
                                                       visibility_target_ids=visibility_ids,

@@ -991,7 +991,9 @@ function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMat
         @inbounds for i in 1:H, j in 1:W
             dC = depth[i,j]
             coc = isfinite(dC) ? abs(Float64(dC) - fd) * ap : Float64(maxr)
-            r = min(round(Int, coc), maxr)
+            # Clamp the float CoC into [0, maxr] BEFORE the Int conversion: a large
+            # finite coc (extreme depth or aperture) would overflow round(Int, …).
+            r = round(Int, clamp(coc, 0.0, Float64(maxr)))
             if r <= 0
                 out[i,j,1] = img[i,j,1]; out[i,j,2] = img[i,j,2]; out[i,j,3] = img[i,j,3]
                 continue

@@ -568,7 +568,10 @@ function load_ply(path::String)
             else
                 for _ in 0:ecount-1
                     cnt, i = read_binary(bytes, i, ct)
-                    nidx = Int(round(cnt))
+                    # A signed count type (e.g. `char`) can decode negative; validate
+                    # before allocating so a corrupt count yields a clear loader
+                    # error rather than `invalid GenericMemory size`.
+                    nidx = checked_list_count(cnt)
                     fan = Vector{Int}(undef, nidx)
                     for k in 1:nidx
                         val, i = read_binary(bytes, i, it)

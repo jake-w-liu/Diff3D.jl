@@ -53,7 +53,12 @@ function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
     eye = center + dir * (radius * 2.0)
     lv = mat4_look_at(eye, center, _safe_up(dir))
     s = radius * 1.1
-    lp = mat4_orthographic(-s, s, -s, s, 0.01, radius * 4.0)
+    # Scale near with the scene radius: the eye sits at distance 2·radius, so the
+    # casters span [radius, 3·radius] from it. A hardcoded near=0.01 exceeds
+    # far (radius*4) and clips the whole scene once radius < 0.0025; radius*1e-2
+    # keeps near < closest caster < farthest caster < far at every scene scale
+    # (and equals the old 0.01 at the common radius≈1).
+    lp = mat4_orthographic(-s, s, -s, s, radius * 1e-2, radius * 4.0)
     return lp * lv
 end
 
@@ -94,13 +99,20 @@ end
                                 albedo_map=nothing, alpha_map=nothing,
                                 uv1::Vec2=_ZERO_V2, uv2::Vec2=_ZERO_V2, uv3::Vec2=_ZERO_V2,
                                 uv2_1::Vec2=_ZERO_V2, uv2_2::Vec2=_ZERO_V2, uv2_3::Vec2=_ZERO_V2)
+    # Skip triangles with a non-finite projected vertex (no raster footprint).
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
-    abs(area) < 1e-12 && return nothing
+    (isfinite(area) && abs(area) >= 1e-12) || return nothing
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H)
+    # Clamp the float extent into [1, W]/[1, H] before the Int conversion so an
+    # extreme-but-finite projected vertex cannot overflow floor/ceil(Int, …),
+    # matching the color rasterizer's hardened bbox.
+    fW = Float64(W); fH = Float64(H)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1)
+    max_x = min(ceil(Int,  clamp(max(s1x, s2x, s3x), 1.0, fW)), W)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1)
+    max_y = min(ceil(Int,  clamp(max(s1y, s2y, s3y), 1.0, fH)), H)
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     @inbounds for py in min_y:max_y, px in min_x:max_x

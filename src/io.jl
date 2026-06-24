@@ -88,13 +88,19 @@ end
 
 @inline _be32(x::Integer) = UInt8[(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
 
-# Coerce an H×W×3 image (Float in [0,1] or UInt8) to a UInt8 RGB array.
+# Coerce an image (Float in [0,1] or UInt8) to a UInt8 RGB array. A grayscale or
+# luminance(+alpha) image (1 or 2 channels) broadcasts its first channel across
+# RGB instead of reading past the end of a hardcoded 3-channel loop.
 function image_to_uint8(img::AbstractArray)
-    eltype(img) === UInt8 && return img
     H, W = size(img, 1), size(img, 2)
+    C = size(img, 3)
+    eltype(img) === UInt8 && C >= 3 && return img
+    isu8 = eltype(img) === UInt8
     out = Array{UInt8}(undef, H, W, 3)
     @inbounds for j in 1:W, i in 1:H, c in 1:3
-        out[i, j, c] = round(UInt8, _clamp01(img[i, j, c]) * 255)
+        sc = C >= 3 ? c : 1     # broadcast channel 1 for <3-channel (grayscale) input
+        v = img[i, j, sc]
+        out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
     end
     return out
 end
@@ -135,6 +141,12 @@ function _zlib_store(data::Vector{UInt8})
     push!(out, 0x78, 0x01)            # zlib header: CM=8, CINFO=7, FCHECK
     n = length(data)
     pos = 1
+    if n == 0
+        # Empty input still needs one final empty stored block (BFINAL=1,BTYPE=00,
+        # LEN=0,NLEN=~0); otherwise the stream has no BFINAL flag and standard
+        # zlib decoders reject it as truncated (reachable from a 0-height image).
+        push!(out, 0x01, 0x00, 0x00, 0xff, 0xff)
+    end
     while pos <= n
         block = min(65535, n - pos + 1)
         final = (pos + block - 1) >= n

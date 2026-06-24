@@ -15405,4 +15405,153 @@ end
         end
     end
 
+    @testset "fresh audit round 3 fixes" begin
+        # Reverse-mode x^0 (integer/literal power) records a finite 0 adjoint at
+        # x=0 instead of 0·Inf=NaN; non-zero exponents stay correct.
+        @test reverse_gradient(x -> x[1]^0, [0.0]) == [0.0]
+        @test reverse_gradient(x -> x[1]^2, [3.0]) == [6.0]
+        @test reverse_gradient(x -> x[1]^1, [0.0]) == [1.0]
+        @test reverse_gradient(x -> x[1]^2, [0.0]) == [0.0]
+
+        # loss_ssim rejects window_size < 2 (n=1 ⇒ /(n-1)=0 ⇒ NaN) with a clear error.
+        @test_throws ArgumentError loss_ssim(rand(4, 4, 1), rand(4, 4, 1); window_size = 1)
+        @test isfinite(loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size = 7))
+
+        # Signed 32-bit LE reader returns true negatives (was modular UInt64 wrap).
+        @test Diff3D._le_i32(UInt8[0xff, 0xff, 0xff, 0xff], 1) == -1
+        @test Diff3D._le_i32(UInt8[0x00, 0x00, 0x00, 0x40], 1) == 1073741824
+        @test Diff3D._le_i32(UInt8[0x00, 0x00, 0x00, 0x80], 1) == -2147483648
+
+        # Mipmap box filter is area-weighted: odd dimensions are not cropped, so
+        # the coarsest 1×1 mip equals the true image average; even dims unchanged.
+        let t = Texture(reshape(Float64.(1:9), 3, 3, 1))
+            generate_mipmaps!(t)
+            @test isapprox(t.mipmaps[end][1, 1, 1], 5.0; atol = 1e-12)  # mean(1..9)
+        end
+        let t = Texture(reshape([1.0, 2.0, 3.0, 4.0], 2, 2, 1))
+            generate_mipmaps!(t)
+            @test isapprox(t.mipmaps[end][1, 1, 1], 2.5; atol = 1e-12)
+        end
+
+        # Directional-light shadow near plane scales with scene radius: a point
+        # under an overhead caster is shadowed at any scene scale (was lit when
+        # radius < 0.0025 made near > far).
+        let vis_under = function (s)
+                caster = Mesh(PlaneGeometry(width = 2s, height = 2s),
+                              MeshBasicMaterial(color = Color3(1.0, 0.0, 0.0)); cast_shadow = true)
+                caster.position = Vec3(0.0, s, 0.0); caster.rotation = Euler(-pi/2, 0.0, 0.0)
+                floor = Mesh(PlaneGeometry(width = 8s, height = 8s),
+                             MeshBasicMaterial(color = Color3(0.5, 0.5, 0.5)); receive_shadow = true)
+                floor.rotation = Euler(-pi/2, 0.0, 0.0)
+                sc = Scene(); add!(sc, caster); add!(sc, floor)
+                light = DirectionalLight(; color = Color3(1.0, 1.0, 1.0), intensity = 1.0,
+                                         position = Vec3(0.0, 10s, 0.0), cast_shadow = true)
+                light.target = Vec3(0.0, 0.0, 0.0)
+                sm = compute_shadow_map(sc, light; resolution = 64)
+                shadow_visibility(sm, Vec3(0.0, 0.0, 0.0))
+            end
+            @test vis_under(0.0005) < 0.5   # tiny scene: shadowed
+            @test vis_under(0.5) < 0.5      # normal scene: shadowed
+        end
+
+        # Transparent InstancedMesh keeps per-instance colors (folded into the
+        # split draw's base color); the opaque GPU-instanced path is unchanged.
+        let build = function (op)
+                geo = BoxGeometry(width = 1.0, height = 1.0, depth = 1.0)
+                mat = MeshBasicMaterial(color = Color3(1.0, 1.0, 1.0), opacity = op,
+                                        transparent = (op < 1.0))
+                im = InstancedMesh(geo, mat, 2)
+                transl(x) = Mat4((1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                                  0.0, 0.0, 1.0, 0.0, x, 0.0, 0.0, 1.0))
+                set_instance_matrix!(im, 1, Mat4()); set_instance_matrix!(im, 2, transl(3.0))
+                set_instance_color!(im, 1, Color3(1.0, 0.0, 0.0))
+                set_instance_color!(im, 2, Color3(0.0, 0.0, 1.0))
+                s = Scene(); add!(s, im); WebGLExportCase("c", "t", "s", s)
+            end
+            transp = Diff3D._web_case_json(build(0.5))
+            @test length(collect(eachmatch(r"\"color\":\[1,0,0\]", transp))) == 1
+            @test length(collect(eachmatch(r"\"color\":\[0,0,1\]", transp))) == 1
+            opaque = Diff3D._web_case_json(build(1.0))
+            @test occursin("\"instanceColors\":[", opaque)
+        end
+    end
+
+    @testset "fresh audit round 4 fixes" begin
+        # Real / ADVar exponent at base 0: only non-positive exponents are zeroed;
+        # x^1 keeps derivative 1 (the over-broad guard dropped it).
+        @test reverse_gradient(v -> v[1]^1.0, [0.0]) == [1.0]
+        @test reverse_gradient(v -> v[1]^v[2], [0.0, 1.0])[1] == 1.0
+        @test reverse_gradient(v -> v[1]^2.0, [3.0]) == [6.0]
+
+        # Segment counts of 0 must clamp (no 0/0 = NaN geometry), matching SphereGeometry.
+        for g in (CircleGeometry(segments = 0), RingGeometry(theta_segments = 0),
+                  PlaneGeometry(width_segments = 0), CylinderGeometry(radial_segments = 0),
+                  TorusGeometry(tubular_segments = 0), ConeGeometry(radial_segments = 0))
+            @test g.n_faces > 0
+            @test !any(isnan, g.positions)
+            @test !any(isnan, g.uvs)
+        end
+
+        # bokeh_pass clamps an extreme CoC before Int conversion (was InexactError).
+        let depth = fill(2.0, 4, 4), img = ones(Float64, 4, 4, 3)
+            o = bokeh_pass(depth; focus_depth = 0.0, aperture = 1e19)(img)
+            @test size(o) == (4, 4, 3) && all(isfinite, o)
+            d2 = fill(2.0, 4, 4); d2[3, 3] = 1e300
+            @test all(isfinite, bokeh_pass(d2; focus_depth = 0.0, aperture = 1.0)(img))
+        end
+
+        # Binary PLY face list with a signed (negative) count -> clear loader error.
+        let tmp = tempname() * ".ply"
+            open(tmp, "w") do io
+                write(io, "ply\nformat binary_little_endian 1.0\nelement vertex 3\n" *
+                          "property float x\nproperty float y\nproperty float z\n" *
+                          "element face 1\nproperty list char int vertex_indices\nend_header\n")
+                write(io, 0f0, 0f0, 0f0, 1f0, 0f0, 0f0, 0f0, 1f0, 0f0)
+                write(io, UInt8(0x80))   # signed char 0x80 = -128
+            end
+            @test_throws Exception load_ply(tmp)
+            rm(tmp)
+        end
+
+        # Shadow depth rasterizer skips a triangle with a non-finite vertex
+        # instead of throwing InexactError.
+        let geo = BufferGeometry([0.0, 2.0, 0.0, 1.0, 2.0, 0.0, NaN, 2.0, 1.0],
+                                 Float64[], Float64[], [1, 2, 3], 3, 1)
+            caster = Mesh(geo, MeshBasicMaterial(color = Color3(1.0, 0.0, 0.0)); cast_shadow = true)
+            floor = Mesh(PlaneGeometry(width = 8.0, height = 8.0),
+                         MeshBasicMaterial(color = Color3(0.5, 0.5, 0.5)); receive_shadow = true)
+            floor.rotation = Euler(-pi/2, 0.0, 0.0)
+            sc = Scene(); add!(sc, caster); add!(sc, floor)
+            light = DirectionalLight(; position = Vec3(0.0, 10.0, 0.0), cast_shadow = true)
+            @test (compute_shadow_map(sc, light; resolution = 32); true)
+        end
+
+        # image_to_uint8 broadcasts a grayscale (H×W×1) image to RGB instead of
+        # reading out of bounds.
+        let o = image_to_uint8(fill(0.5, 2, 2, 1))
+            @test size(o) == (2, 2, 3)
+            @test all(o .== 0x80)
+        end
+
+        # _zlib_store emits a valid (BFINAL) empty stored block for empty input.
+        let z = Diff3D._zlib_store(UInt8[]), ad = Diff3D._adler32(UInt8[])
+            @test z == UInt8[0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff,
+                             (ad >> 24) & 0xff, (ad >> 16) & 0xff, (ad >> 8) & 0xff, ad & 0xff]
+        end
+
+        # LOD level subtrees (also registered as children) are emitted once, not twice.
+        let lod = LOD()
+            g1 = Group(); add!(g1, Mesh(BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),
+                                        MeshBasicMaterial(color = Color3(1.0, 0.0, 0.0))))
+            g2 = Group(); add!(g2, Mesh(BoxGeometry(width = 0.5, height = 0.5, depth = 0.5),
+                                        MeshBasicMaterial(color = Color3(0.0, 0.0, 1.0))))
+            add_lod_level!(lod, 0.0, g1); add_lod_level!(lod, 10.0, g2)
+            sc = Scene(); add!(sc, lod)
+            nodes = Diff3D._web_collect_transform_nodes(sc)
+            @test count(n -> occursin("\"id\":$(g1.id)", n), nodes) == 1
+            @test count(n -> occursin("\"id\":$(g2.id)", n), nodes) == 1
+            @test count(n -> occursin("\"id\":$(lod.id)", n), nodes) == 1
+        end
+    end
+
 end

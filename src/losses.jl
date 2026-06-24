@@ -50,6 +50,10 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
     R = promote_type(T, S)
     H, W, C = size(image)
+    # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
+    # divides the (n-1) Bessel correction by zero, silently returning NaN.
+    window_size >= 2 ||
+        throw(ArgumentError("loss_ssim: window_size must be >= 2 (got $window_size)"))
     hw = window_size ÷ 2
     if min(H, W) < 2*hw + 1
         throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))

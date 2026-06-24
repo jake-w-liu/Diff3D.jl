@@ -51,16 +51,25 @@ end
 
 # ---- powers ----
 function Base.:^(a::ADVar, p::Integer)
-    _ad_record(a.val^p, (a,), (Float64(p) * a.val^(p - 1),))
+    # At a.val==0 the formula p·0^(p-1) is correct for p≥1 (gives 1 for p=1, 0
+    # for p≥2) but yields 0·0^(-1)=0·Inf=NaN for p=0 and ±Inf for p<0 (a pole).
+    # Guard those non-positive exponents to 0, matching the ^(::Real) sibling and
+    # ForwardDiff (d/dx of the constant x^0≡1 is 0); without this the NaN adjoint
+    # poisons the whole reverse-mode gradient.
+    d = (a.val == 0 && p <= 0) ? 0.0 : Float64(p) * a.val^(p - 1)
+    _ad_record(a.val^p, (a,), (d,))
 end
 function Base.:^(a::ADVar, p::Real)
     v = a.val^p
-    d = a.val == 0 ? 0.0 : p * a.val^(p - 1)
+    # Only the non-positive exponents are singular at base 0 (p=0 ⇒ 0·Inf=NaN,
+    # p<0 ⇒ pole). p=1 is the smooth identity (derivative 1) and p>1 gives 0, so
+    # the guard must NOT zero those — over-broad `a.val==0 ? 0.0` dropped d/dx x=1.
+    d = (a.val == 0 && p <= 0) ? 0.0 : p * a.val^(p - 1)
     _ad_record(v, (a,), (d,))
 end
 function Base.:^(a::ADVar, b::ADVar)   # ADVar exponent (also reached by x::Real ^ ADVar via promotion)
     v = a.val^b.val
-    da = a.val == 0 ? 0.0 : b.val * a.val^(b.val - 1)
+    da = (a.val == 0 && b.val <= 0) ? 0.0 : b.val * a.val^(b.val - 1)
     db = a.val > 0 ? v * log(a.val) : 0.0
     _ad_record(v, (a, b), (da, db))
 end

@@ -670,8 +670,10 @@ end
 end
 
 @inline function _le_i32(bytes::Vector{UInt8}, pos::Int)
-    u = _le_u32(bytes, pos)
-    return u >= 0x80000000 ? u - 0x100000000 : u
+    # Reinterpret the 32-bit pattern as signed. The old `u - 0x100000000` made the
+    # subtrahend a UInt64 literal, promoting `u` to UInt64 and wrapping modularly,
+    # so every negative 32-bit PCM sample decoded to a huge positive value.
+    return Int(reinterpret(Int32, UInt32(_le_u32(bytes, pos))))
 end
 
 function _le_float32(bytes::Vector{UInt8}, pos::Int)

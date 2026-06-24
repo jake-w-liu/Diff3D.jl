@@ -490,6 +490,10 @@ end
 # ========================== Plane Geometry ==========================
 
 function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segments=1)
+    # Clamp segment counts (matching SphereGeometry/three.js) so a 0 cannot make
+    # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
+    width_segments = max(1, Int(floor(width_segments)))
+    height_segments = max(1, Int(floor(height_segments)))
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -528,6 +532,9 @@ end
 
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                            radial_segments=32, height_segments=1, open_ended=false)
+    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
+    radial_segments = max(3, Int(floor(radial_segments)))
+    height_segments = max(1, Int(floor(height_segments)))
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -623,6 +630,9 @@ end
 # ========================== Torus Geometry ==========================
 
 function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
+    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
+    radial_segments = max(2, Int(floor(radial_segments)))
+    tubular_segments = max(3, Int(floor(tubular_segments)))
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -736,6 +746,9 @@ end
 # ========================== Ring Geometry ==========================
 
 function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
+    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
+    theta_segments = max(3, Int(floor(theta_segments)))
+    phi_segments = max(1, Int(floor(phi_segments)))
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -773,6 +786,8 @@ end
 # ========================== Circle Geometry ==========================
 
 function CircleGeometry(; radius=1.0, segments=32)
+    # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
+    segments = max(3, Int(floor(segments)))
     positions = Float64[0.0, 0.0, 0.0]  # center
     normals_arr = Float64[0.0, 0.0, 1.0]
     uvs_arr = Float64[0.5, 0.5]

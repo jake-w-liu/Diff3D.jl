@@ -252,6 +252,26 @@ end
 
 # ========================== Mipmaps ==========================
 
+# Area-average resampling weights for one axis: output texel o ∈ 1:no covers the
+# continuous source interval [(o-1)·ns/no, o·ns/no); returns, per output texel,
+# the contributing source indices and their overlap length (summing to ns/no).
+# For an even ns this is the plain 2×2 box; for an odd ns the boundary source
+# texel is split with a fractional weight instead of being dropped.
+function _box_filter_weights(ns::Int, no::Int)
+    weights = Vector{Vector{Tuple{Int,Float64}}}(undef, no)
+    step = ns / no
+    for o in 1:no
+        lo = (o - 1) * step; hi = o * step
+        lst = Tuple{Int,Float64}[]
+        for s in (floor(Int, lo) + 1):min(ceil(Int, hi), ns)
+            ov = min(hi, Float64(s)) - max(lo, Float64(s - 1))   # overlap with cell (s-1, s]
+            ov > 0 && push!(lst, (s, ov))
+        end
+        weights[o] = lst
+    end
+    return weights
+end
+
 """Build a box-filtered mipmap pyramid down to 1×1 (three.js `generateMipmaps`)."""
 function generate_mipmaps!(tex::Texture)
     empty!(tex.mipmaps)
@@ -259,10 +279,19 @@ function generate_mipmaps!(tex::Texture)
     while size(cur, 1) > 1 || size(cur, 2) > 1
         H, W, C = size(cur)
         nh = max(H ÷ 2, 1); nw = max(W ÷ 2, 1)
+        # Area-average box filter. Using fractional overlap weights means odd
+        # rows/columns contribute instead of being cropped, so the coarsest mip
+        # equals the true image average (was biased toward the top-left corner).
+        rw = _box_filter_weights(H, nh)
+        cw = _box_filter_weights(W, nw)
+        inv_area = (nh / H) * (nw / W)            # 1 / (cell height · cell width)
         nxt = zeros(Float64, nh, nw, C)
         @inbounds for c in 1:C, i in 1:nh, j in 1:nw
-            i0 = min(2i-1, H); i1 = min(2i, H); j0 = min(2j-1, W); j1 = min(2j, W)
-            nxt[i,j,c] = 0.25*(cur[i0,j0,c] + cur[i1,j0,c] + cur[i0,j1,c] + cur[i1,j1,c])
+            acc = 0.0
+            for (si, wi) in rw[i], (sj, wj) in cw[j]
+                acc += wi * wj * cur[si, sj, c]
+            end
+            nxt[i, j, c] = acc * inv_area
         end
         push!(tex.mipmaps, nxt)
         cur = nxt
