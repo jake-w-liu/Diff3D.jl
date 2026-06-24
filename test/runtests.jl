@@ -15712,6 +15712,34 @@ end
         # ADVar to a Rational power no longer hits a dispatch ambiguity.
         @test isapprox(reverse_gradient(v -> v[1]^(1//3), [8.0])[1], 1/12; atol = 1e-9)
         @test isapprox(reverse_gradient(v -> v[1]^(3//2), [4.0])[1], 1.5 * sqrt(4.0); atol = 1e-9)
+
+        # A transparent smooth-shaded mesh keeps per-pixel interpolated shading
+        # (was silently flattened by routing every transparent mesh to the flat
+        # rasterizer); both opaque and transparent show a multi-value gradient.
+        let render_shades = function (transparent)
+                geo = BufferGeometry()
+                geo.positions = [-1.0,-1.0,0.0, 1.0,-1.0,0.0, -1.0,1.0,0.0,
+                                  1.0,-1.0,0.0, 1.0,1.0,0.0, -1.0,1.0,0.0]
+                geo.normals = [-0.6,0.0,0.8, 0.6,0.0,0.8, -0.6,0.0,0.8,
+                                0.6,0.0,0.8, 0.6,0.0,0.8, -0.6,0.0,0.8]
+                geo.uvs = zeros(12); geo.n_vertices = 6
+                geo.indices = Int[1, 2, 3, 4, 5, 6]; geo.n_faces = 2
+                mat = MeshStandardMaterial(color = Color3(0.8, 0.8, 0.8),
+                                           opacity = transparent ? 0.6 : 1.0,
+                                           transparent = transparent)
+                mesh = Mesh(geo, mat)
+                sc = Scene(); add!(sc, mesh)
+                add!(sc, DirectionalLight(; color = Color3(1.0, 1.0, 1.0), intensity = 1.0,
+                                          position = Vec3(2.0, 0.0, 3.0)))
+                cam = PerspectiveCamera(fov = pi/3, aspect = 1.0, near = 0.1, far = 10.0)
+                cam.position = Vec3(0.0, 0.0, 3.0); cam.target = Vec3(0.0, 0.0, 0.0)
+                rt = RenderTarget(64, 64); render!(rt, sc, cam; shading = :smooth)
+                length(unique([round(rt.color[32, j, 1], digits = 3)
+                               for j in 18:46 if rt.color[32, j, 1] > 0.01]))
+            end
+            @test render_shades(false) > 5      # opaque smooth gradient
+            @test render_shades(true) > 5       # transparent smooth gradient (not flat)
+        end
     end
 
 end

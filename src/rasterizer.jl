@@ -265,8 +265,10 @@ end
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
-        depth_test::Bool=true, depth_write::Bool=true)
+        depth_test::Bool=true, depth_write::Bool=true,
+        stamp=nothing, stamp_id::Int=0)
     W, H = rt.width, rt.height
+    use_stamp = stamp !== nothing   # transparent pass: alpha-blend once per mesh per pixel
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
     (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
@@ -304,6 +306,8 @@ end
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             z = b0 * z1 + b1 * z2 + b2 * z3
             (!depth_test || z < rt.depth[py, px]) || continue
+            use_stamp && stamp[py, px] == stamp_id && continue   # already blended by this mesh
+            frag_alpha = alpha_base
             # Perspective-correct interpolation: weight by 1/w.
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
@@ -325,8 +329,8 @@ end
                 v = a0*uv1.y + a1*uv2.y + a2*uv3.y
                 u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
                 v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
-                _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
-                    continue
+                frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2)
+                frag_alpha >= alpha_test || continue
                 # normalMap perturbs the shading normal before lighting (same
                 # helper as the flat path); the tangent frame uses the UV set
                 # selected by the texture metadata.
@@ -392,10 +396,20 @@ end
                 col = shade_face(wn, vd, wp, _with_vertex_color(material, vc), lights; shadow_fn=shadow_fn)
             end
             col = clamp_color(col)
-            depth_write && (rt.depth[py, px] = z)
-            rt.color[py, px, 1] = col.r
-            rt.color[py, px, 2] = col.g
-            rt.color[py, px, 3] = col.b
+            if use_stamp
+                # Transparent smooth pass: source-over blend, gated once per mesh.
+                ia = 1.0 - frag_alpha
+                rt.color[py, px, 1] = col.r * frag_alpha + rt.color[py, px, 1] * ia
+                rt.color[py, px, 2] = col.g * frag_alpha + rt.color[py, px, 2] * ia
+                rt.color[py, px, 3] = col.b * frag_alpha + rt.color[py, px, 3] * ia
+                depth_write && (rt.depth[py, px] = z)
+                stamp[py, px] = stamp_id
+            else
+                depth_write && (rt.depth[py, px] = z)
+                rt.color[py, px, 1] = col.r
+                rt.color[py, px, 2] = col.g
+                rt.color[py, px, 3] = col.b
+            end
         end
     end
     return nothing
@@ -404,7 +418,8 @@ end
 function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam_pos, shadow_fn=nothing;
                          clipping_planes=_NO_PLANES,
                          xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
-                         log_depth::Bool=false, inv_log_far::Float64=1.0, ortho_dir=nothing)
+                         log_depth::Bool=false, inv_log_far::Float64=1.0, ortho_dir=nothing,
+                         stamp=nothing, stamp_id::Int=0)
     W, H = rt.width, rt.height
     tri = Vector{ShadeVtx}(undef, 3)
     clipped = ShadeVtx[]; sizehint!(clipped, 6)
@@ -505,7 +520,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                     glossiness_map, physical_pbr_map,
                     ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                    depth_test=depth_test, depth_write=depth_write)
+                    depth_test=depth_test, depth_write=depth_write,
+                    stamp=stamp, stamp_id=stamp_id)
             end
         end
     end
@@ -748,13 +764,24 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                                              material_clipping_planes(mesh.material))
             sid += 1
             α = material_opacity(mesh.material)
-            _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
-                                 lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
-                                 clipping_planes=mesh_clipping_planes,
-                                 colorbuf=colorbuf,
-                                 xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                 log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+            if _mesh_is_flat(mesh, shading)
+                _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+                                     lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
+                                     alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
+                                     clipping_planes=mesh_clipping_planes,
+                                     colorbuf=colorbuf,
+                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                     log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+            else
+                # Smooth-shaded transparent mesh: per-pixel interpolated normals with
+                # source-over blending (the same stamp guards against double-blend),
+                # instead of being silently flattened.
+                _render_smooth!(rt, (mesh,), lights, proj, view, near, camera.position, shadow_fn;
+                                clipping_planes=clipping_planes,
+                                xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
+                                stamp=stamp, stamp_id=sid)
+            end
         end
     end
 
