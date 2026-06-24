@@ -13,7 +13,9 @@ Save image as PPM (Portable Pixmap) — no dependencies needed.
 `image` is Array{T, 3} of size (H, W, 3), values in [0,1].
 """
 function save_ppm(filename::String, image::Array{T, 3}) where T
-    H, W, _ = size(image)
+    H, W, C = size(image)
+    gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
+    bi = C >= 3 ? 3 : 1
     open(filename, "w") do f
         println(f, "P3")
         println(f, "$W $H")
@@ -21,8 +23,8 @@ function save_ppm(filename::String, image::Array{T, 3}) where T
         for i in 1:H
             for j in 1:W
                 r = round(Int, _clamp01(image[i, j, 1]) * 255)
-                g = round(Int, _clamp01(image[i, j, 2]) * 255)
-                b = round(Int, _clamp01(image[i, j, 3]) * 255)
+                g = round(Int, _clamp01(image[i, j, gi]) * 255)
+                b = round(Int, _clamp01(image[i, j, bi]) * 255)
                 print(f, "$r $g $b ")
             end
             println(f)
@@ -35,14 +37,16 @@ end
 Save image as raw binary PPM (P6 format) — more compact.
 """
 function save_ppm_binary(filename::String, image::Array{T, 3}) where T
-    H, W, _ = size(image)
+    H, W, C = size(image)
+    gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
+    bi = C >= 3 ? 3 : 1
     open(filename, "w") do f
         write(f, "P6\n$W $H\n255\n")
         for i in 1:H
             for j in 1:W
                 r = UInt8(round(Int, _clamp01(image[i, j, 1]) * 255))
-                g = UInt8(round(Int, _clamp01(image[i, j, 2]) * 255))
-                b = UInt8(round(Int, _clamp01(image[i, j, 3]) * 255))
+                g = UInt8(round(Int, _clamp01(image[i, j, gi]) * 255))
+                b = UInt8(round(Int, _clamp01(image[i, j, bi]) * 255))
                 write(f, r)
                 write(f, g)
                 write(f, b)

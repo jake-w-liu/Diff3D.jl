@@ -163,6 +163,25 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
                 push!(hits, Intersection(t, o + d * t, obj, fi))
             end
         end
+    elseif obj isa InstancedMesh && _instanced_triangle_drawable(obj)
+        # Each instance is the geometry under world_matrix * instance_matrix; test
+        # all of them (was silently skipped, so instanced scenes returned no hits).
+        wm = compute_world_matrix(obj)
+        geo = obj.geometry
+        side = material_side(obj.material)
+        @inbounds for im in obj.instance_matrices
+            m = wm * im
+            for fi in _draw_face_range(geo)
+                i1, i2, i3 = get_face(geo, fi)
+                a = mat4_transform_point(m, get_vertex(geo, i1))
+                b = mat4_transform_point(m, get_vertex(geo, i2))
+                c = mat4_transform_point(m, get_vertex(geo, i3))
+                t = ray_triangle_intersect(o, d, a, b, c; side=side)
+                if t !== nothing && rc.near <= t <= rc.far
+                    push!(hits, Intersection(t, o + d * t, obj, fi))
+                end
+            end
+        end
     elseif obj isa PointsObject
         wm = compute_world_matrix(obj)
         geo = obj.geometry

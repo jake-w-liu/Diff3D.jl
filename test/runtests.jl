@@ -15839,4 +15839,34 @@ end
         end
     end
 
+    @testset "fresh audit round 12 fixes" begin
+        # Cylinder/Cone with height=0 produce finite (radial) normals, not NaN.
+        @test !any(isnan, CylinderGeometry(height = 0.0).normals)
+        @test !any(isnan, ConeGeometry(height = 0.0).normals)
+        @test CylinderGeometry(height = 2.0).n_faces > 0 &&
+              !any(isnan, CylinderGeometry(height = 2.0).normals)
+
+        # save_ppm / save_ppm_binary accept a grayscale (HxWx1) image (broadcast
+        # channel 1), like save_png, instead of a BoundsError on channels 2/3.
+        mktempdir() do dir
+            g = fill(0.5, 4, 4, 1)
+            save_ppm(joinpath(dir, "g.ppm"), g)
+            save_ppm_binary(joinpath(dir, "g2.ppm"), g)
+            @test filesize(joinpath(dir, "g.ppm")) > 0
+            @test filesize(joinpath(dir, "g2.ppm")) > 0
+        end
+
+        # Raycaster intersects an InstancedMesh (per-instance transforms), matching
+        # the plain-Mesh result, instead of silently returning no hits.
+        let geo = PlaneGeometry(width = 2.0, height = 2.0),
+            mat = MeshBasicMaterial(color = Color3(1.0, 0.0, 0.0); side = :double)
+            im = InstancedMesh(geo, mat, 1; draw_mode = :triangles)
+            set_instance_matrix!(im, 1, Mat4())
+            sc = Scene(); add!(sc, im)
+            hits = raycast(Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)), sc)
+            @test !isempty(hits)
+            @test isapprox(hits[1].distance, 5.0; atol = 1e-6)
+        end
+    end
+
 end

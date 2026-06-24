@@ -549,7 +549,9 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     vi = 0
 
     half_h = height / 2
-    slope = (radius_bottom - radius_top) / height
+    # height==0 (degenerate disk) would make slope Inf or 0/0=NaN, poisoning every
+    # side normal; fall back to a purely radial normal (slope=0) instead.
+    slope = height == 0 ? 0.0 : (radius_bottom - radius_top) / height
 
     # Side
     for y_seg in 0:height_segments
