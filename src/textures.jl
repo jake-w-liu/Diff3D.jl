@@ -197,10 +197,20 @@ end
 
 @inline function _texel_channel(tex::Texture, ix::Int, iy::Int, channel::Int, default=1.0)
     H, W, C = size(tex.data)
-    1 <= channel <= C || return default
+    channel < 1 && return default
     x = _wrap_coord(ix, W, tex.wrap_s) + 1
     y = _wrap_coord(iy, H, tex.wrap_t) + 1
-    tex.data[y, x, channel]
+    if channel <= C
+        return tex.data[y, x, channel]
+    elseif C == 1
+        # Single-channel (grayscale / RedFormat) texture: broadcast its lone
+        # channel to any requested channel, matching _texel's luminance
+        # broadcast and three.js's single-channel sampling. Otherwise a natural
+        # grayscale alpha/roughness/etc. map sampled at channel 2/3/4 would be
+        # silently ignored in favor of `default`.
+        return tex.data[y, x, 1]
+    end
+    return default
 end
 
 function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
@@ -329,6 +339,8 @@ linear mip blend weight is carried through unchanged so the result stays smooth
 for `ForwardDiff.Dual`/`ADVar` `duv`.
 """
 function sample_texture_auto(tex::Texture, u, v, duv)
+    isfinite(Float64(duv)) ||
+        throw(ArgumentError("texture LOD footprint (duv) must be finite"))
     H, W, _ = size(tex.data)
     sz = max(W, H)
     span_raw = abs(duv) * sz
@@ -389,6 +401,8 @@ made on `Float64` magnitudes, while the probe coordinates, the minor-axis
 the returned color.
 """
 function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
+    (isfinite(Float64(du)) && isfinite(Float64(dv))) ||
+        throw(ArgumentError("texture anisotropic footprint (du, dv) must be finite"))
     # Footprint extents along each UV axis (keep AD type for the live path).
     adu = abs(du)
     adv = abs(dv)

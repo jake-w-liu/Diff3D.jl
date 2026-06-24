@@ -229,6 +229,30 @@ end
     return nothing
 end
 
+# Liang–Barsky: clip the parametric segment P(t)=P0+t·(P1−P0), t∈[0,1], to the
+# axis-aligned box [xmin,xmax]×[ymin,ymax]. Returns (t0, t1, visible) with
+# 0≤t0≤t1≤1 for the portion inside the box, or visible=false if it misses.
+@inline function _liang_barsky_t(x0, y0, dx, dy, xmin, xmax, ymin, ymax)
+    t0 = 0.0; t1 = 1.0
+    @inbounds for k in 1:4
+        p = k == 1 ? -dx : k == 2 ? dx : k == 3 ? -dy : dy
+        q = k == 1 ? x0 - xmin : k == 2 ? xmax - x0 : k == 3 ? y0 - ymin : ymax - y0
+        if p == 0
+            q < 0 && return (0.0, 0.0, false)   # parallel to this edge and outside
+        else
+            r = q / p
+            if p < 0
+                r > t1 && return (0.0, 0.0, false)
+                r > t0 && (t0 = r)
+            else
+                r < t0 && return (0.0, 0.0, false)
+                r < t1 && (t1 = r)
+            end
+        end
+    end
+    return (t0, t1, true)
+end
+
 # DDA line with depth interpolation and z-test.
 function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      linewidth::Real=1.0,
@@ -237,11 +261,24 @@ function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      depth_test::Bool=true, depth_write::Bool=true,
                      alpha::Float64=1.0,
                      stamp=nothing, stamp_id::Int=0)
+    # A non-finite projected endpoint has no well-defined rasterization; skip it.
+    (isfinite(x0) && isfinite(y0) && isfinite(x1) && isfinite(y1)) || return nothing
     dx = x1 - x0; dy = y1 - y0
-    n = max(ceil(Int, max(abs(dx), abs(dy))), 1)
     radius = max(0.5, Float64(linewidth) / 2)
+    # Clip the DDA parameter range to the viewport (expanded by the stamp radius)
+    # so an endpoint projecting far off-screen drives a step count bounded by the
+    # visible span — not the raw off-axis delta, which would hang the loop or
+    # overflow ceil(Int, ...). Downstream pixels are still bounds-checked, so the
+    # drawn set (and density) is identical to the un-clipped version for any
+    # on-screen segment.
+    m = radius + 1.0
+    t0, t1, vis = _liang_barsky_t(Float64(x0), Float64(y0), Float64(dx), Float64(dy),
+                                  xlo - m, xhi + m, ylo - m, yhi + m)
+    vis || return nothing
+    span = max(abs(dx), abs(dy)) * (t1 - t0)
+    n = max(ceil(Int, span), 1)
     @inbounds for s in 0:n
-        t = s / n
+        t = t0 + (t1 - t0) * (s / n)
         _put_line_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
                          z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi,
                          depth_test, depth_write, alpha, stamp, stamp_id)
@@ -405,13 +442,20 @@ end
         alpha_map=nothing,
         stamp=nothing, stamp_id::Int=0)
     W, H = rt.width, rt.height
+    # Reject non-finite projected corners (no well-defined raster footprint).
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
-    abs(area) < 1e-10 && return nothing
+    (isfinite(area) && abs(area) >= 1e-10) || return nothing
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1, xlo)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
+    # Clamp the float screen-space extent into [1, W]/[1, H] BEFORE the Int
+    # conversion so a finite-but-extreme corner cannot overflow floor/ceil(Int,…)
+    # (InexactError) — matching the hardened mesh rasterizer _rasterize_tri!.
+    fW = Float64(W); fH = Float64(H)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int,  clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int,  clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     (min_x <= max_x && min_y <= max_y) || return nothing
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
@@ -577,6 +621,11 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
             end
             r = max(Int(round(effective_size)) ÷ 2, 0)
             diameter = max(2r + 1, 1)
+            # Skip a point whose footprint can't touch the buffer; this also keeps
+            # round(Int, …) below from overflowing on a far-off-screen vertex that
+            # still passed the near-plane cull (finite-but-extreme screen coords).
+            (isfinite(px) && isfinite(py)) || continue
+            (px + r < xlo || px - r > xhi || py + r < ylo || py - r > yhi) && continue
             cx = round(Int, px); cy = round(Int, py)
             min_px = max(cx - r, xlo)
             max_px = min(cx + r, xhi)

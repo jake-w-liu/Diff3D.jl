@@ -1826,7 +1826,10 @@ function load_obj_groups(path::String)
         if tag == "v"
             push!(verts, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
         elseif tag == "vt"
-            push!(file_uvs, parse(Float64,t[2]), parse(Float64,t[3]))
+            length(t) >= 2 || error("OBJ: malformed 'vt' line (no coordinate): $line")
+            # 1-D texture coordinate `vt u` -> (u, 0), matching three.js OBJLoader.
+            push!(file_uvs, parse(Float64,t[2]),
+                  length(t) >= 3 ? parse(Float64,t[3]) : 0.0)
         elseif tag == "vn"
             push!(file_normals, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4])); have_normals = true
         elseif tag == "mtllib"

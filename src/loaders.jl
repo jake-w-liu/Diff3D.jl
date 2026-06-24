@@ -176,7 +176,12 @@ function load_obj(path::String)
         if tag == "v"
             push!(verts, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
         elseif tag == "vt"
-            push!(file_uvs, parse(Float64, t[2]), parse(Float64, t[3]))
+            length(t) >= 2 || error("OBJ: malformed 'vt' line (no coordinate): $line")
+            # A 1-D texture coordinate (`vt u`) is valid; treat the missing
+            # second component as 0.0 (matching three.js OBJLoader) instead of
+            # indexing past the end of the token list with a BoundsError.
+            push!(file_uvs, parse(Float64, t[2]),
+                  length(t) >= 3 ? parse(Float64, t[3]) : 0.0)
         elseif tag == "vn"
             push!(file_normals, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
             have_normals = true
@@ -519,6 +524,16 @@ function load_ply(path::String)
                 for v in 0:ecount-1
                     b3 = v * 3
                     for (c, p) in enumerate(props)
+                        if p[1] !== :scalar
+                            # A list property on the vertex element (rare but
+                            # legal) is count + items; consume both so the byte
+                            # cursor stays aligned for the next vertex instead of
+                            # reading a single value and desyncing every row after.
+                            cnt, i = read_binary(bytes, i, p[3])
+                            nitems = checked_list_count(cnt)
+                            checked_binary_skip!(nitems * _PLY_SIZE[p[4]])
+                            continue
+                        end
                         val, i = read_binary(bytes, i, types[c])
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val

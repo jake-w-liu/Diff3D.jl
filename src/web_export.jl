@@ -62,9 +62,13 @@ function _web_output_color_space_id(output_color_space::Symbol)
     throw(ArgumentError("unsupported WebGL export output_color_space: $output_color_space"))
 end
 
+# Escape `<` to its \uXXXX form so no embedded user string can trip the HTML
+# script-data tokenizer (`</script`, or the `<!--<script` double-escape entry)
+# and break the surrounding <script> block. `<` is exactly `<` inside a JS
+# string literal, so the decoded value is preserved.
 _js_str(s::AbstractString) = "\"" * replace(s,
     "\\"=>"\\\\", "\""=>"\\\"", "\b"=>"\\b", "\f"=>"\\f", "\n"=>"\\n",
-    "\r"=>"\\r", "\t"=>"\\t", "</"=>"<\\/") * "\""
+    "\r"=>"\\r", "\t"=>"\\t", "<"=>"\\u003c") * "\""
 _js_num(x::Real) = isfinite(Float64(x)) ? @sprintf("%.17g", Float64(x)) : "0"
 _js_array(xs) = "[" * join((_js_num(x) for x in xs), ",") * "]"
 _js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"

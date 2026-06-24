@@ -2,6 +2,12 @@
 # Image I/O: export rendered images to PPM (no external deps) and PNG.
 # --------------------------------------------------------------------------
 
+# Map a pixel value to [0,1], treating NaN as 0 (black). clamp() propagates NaN
+# (clamp(NaN,0,1)==NaN), so round(UInt8/Int/UInt16, NaN*scale) would throw an
+# InexactError; this matches render_to_rgb8's NaN convention so a frame holding
+# a stray NaN exports as black instead of crashing the writer.
+@inline _clamp01(v) = (x = Float64(v); isnan(x) ? 0.0 : clamp(x, 0.0, 1.0))
+
 """
 Save image as PPM (Portable Pixmap) — no dependencies needed.
 `image` is Array{T, 3} of size (H, W, 3), values in [0,1].
@@ -14,9 +20,9 @@ function save_ppm(filename::String, image::Array{T, 3}) where T
         println(f, "255")
         for i in 1:H
             for j in 1:W
-                r = round(Int, clamp(Float64(image[i, j, 1]), 0.0, 1.0) * 255)
-                g = round(Int, clamp(Float64(image[i, j, 2]), 0.0, 1.0) * 255)
-                b = round(Int, clamp(Float64(image[i, j, 3]), 0.0, 1.0) * 255)
+                r = round(Int, _clamp01(image[i, j, 1]) * 255)
+                g = round(Int, _clamp01(image[i, j, 2]) * 255)
+                b = round(Int, _clamp01(image[i, j, 3]) * 255)
                 print(f, "$r $g $b ")
             end
             println(f)
@@ -34,9 +40,9 @@ function save_ppm_binary(filename::String, image::Array{T, 3}) where T
         write(f, "P6\n$W $H\n255\n")
         for i in 1:H
             for j in 1:W
-                r = UInt8(round(Int, clamp(Float64(image[i, j, 1]), 0.0, 1.0) * 255))
-                g = UInt8(round(Int, clamp(Float64(image[i, j, 2]), 0.0, 1.0) * 255))
-                b = UInt8(round(Int, clamp(Float64(image[i, j, 3]), 0.0, 1.0) * 255))
+                r = UInt8(round(Int, _clamp01(image[i, j, 1]) * 255))
+                g = UInt8(round(Int, _clamp01(image[i, j, 2]) * 255))
+                b = UInt8(round(Int, _clamp01(image[i, j, 3]) * 255))
                 write(f, r)
                 write(f, g)
                 write(f, b)
@@ -58,11 +64,15 @@ Create a simple test pattern image for validation.
 """
 function test_pattern(width::Int, height::Int)
     img = Array{Float64}(undef, height, width, 3)
+    # max(.,1) keeps the gradient finite for a 1-wide or 1-tall image (where the
+    # single pixel sits at gradient endpoint 0.0) instead of yielding 0/0 = NaN.
+    wden = max(width - 1, 1)
+    hden = max(height - 1, 1)
     for j in 1:width
         for i in 1:height
-            img[i, j, 1] = (j - 1) / (width - 1)    # red gradient horizontal
-            img[i, j, 2] = (i - 1) / (height - 1)    # green gradient vertical
-            img[i, j, 3] = 0.5                         # constant blue
+            img[i, j, 1] = (j - 1) / wden    # red gradient horizontal
+            img[i, j, 2] = (i - 1) / hden    # green gradient vertical
+            img[i, j, 3] = 0.5                # constant blue
         end
     end
     return img
@@ -84,7 +94,7 @@ function image_to_uint8(img::AbstractArray)
     H, W = size(img, 1), size(img, 2)
     out = Array{UInt8}(undef, H, W, 3)
     @inbounds for j in 1:W, i in 1:H, c in 1:3
-        out[i, j, c] = round(UInt8, clamp(Float64(img[i, j, c]), 0.0, 1.0) * 255)
+        out[i, j, c] = round(UInt8, _clamp01(img[i, j, c]) * 255)
     end
     return out
 end
@@ -195,7 +205,7 @@ function save_png_rgba(filename::String, img::AbstractArray)
         raw[k] = 0x00; k += 1                       # filter None
         for j in 1:W, c in 1:4
             raw[k] = eltype(img) === UInt8 ? img[i,j,c] :
-                     round(UInt8, clamp(Float64(img[i,j,c]), 0.0, 1.0) * 255); k += 1
+                     round(UInt8, _clamp01(img[i,j,c]) * 255); k += 1
         end
     end
     open(filename, "w") do io
@@ -222,7 +232,7 @@ function save_png16(filename::String, img::AbstractArray)
     @inbounds for i in 1:H
         raw[k] = 0x00; k += 1
         for j in 1:W
-            v = round(UInt16, clamp(Float64(gray[i, j]), 0.0, 1.0) * 65535)
+            v = round(UInt16, _clamp01(gray[i, j]) * 65535)
             raw[k] = UInt8(v >> 8); raw[k+1] = UInt8(v & 0xff); k += 2   # big-endian
         end
     end

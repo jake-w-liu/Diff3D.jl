@@ -79,10 +79,29 @@ OrbitControls(cam::PerspectiveCamera; kwargs...) =
 # Current spherical (radius, polar from +y, azimuth) of the camera about target.
 _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
 
+# Clamp an azimuth (read back from cartesian_to_spherical, hence in (-π, π]) to
+# the configured window, matching three.js OrbitControls. The bounds are first
+# normalized into (-π, π]; a window that straddles ±π (so the normalized min
+# ends up above the normalized max) keeps any angle on either arc instead of
+# snapping it to a boundary — without this, a back-facing range such as
+# [π/2, 3π/2] is unusable because cartesian_to_spherical can never return a
+# value above π. A non-finite (default unbounded / one-sided) limit takes the
+# plain clamp, which already does the right thing with ±Inf.
+@inline function _clamp_azimuth(theta, min_az, max_az)
+    (isfinite(min_az) && isfinite(max_az)) || return clamp(theta, min_az, max_az)
+    mn = min_az < -π ? min_az + 2π : (min_az > π ? min_az - 2π : min_az)
+    mx = max_az < -π ? max_az + 2π : (max_az > π ? max_az - 2π : max_az)
+    if mn <= mx
+        return clamp(theta, mn, mx)
+    else
+        return theta > (mn + mx) / 2 ? max(mn, theta) : min(mx, theta)
+    end
+end
+
 function _orbit_constrained(oc::OrbitControls, s::Spherical)
     radius = clamp(s.radius, oc.min_distance, oc.max_distance)
     phi = clamp(s.phi, max(oc.min_polar_angle, 1e-4), min(oc.max_polar_angle, π - 1e-4))
-    theta = clamp(s.theta, oc.min_azimuth_angle, oc.max_azimuth_angle)
+    theta = _clamp_azimuth(s.theta, oc.min_azimuth_angle, oc.max_azimuth_angle)
     return Spherical(radius, phi, theta)
 end
 
@@ -171,7 +190,15 @@ consumed by `orbit_update!`; non-damped behaviour is unchanged.
 function orbit_zoom!(oc::OrbitControls, factor)
     (oc.enabled && oc.enable_zoom) || return oc
     if oc.enable_damping
-        oc.v_zoom += log(factor)
+        f = Float64(factor)
+        # A multiplicative dolly factor must be positive; log() of a non-positive
+        # factor would poison the residual with -Inf/NaN (sticking the controller
+        # forever) or throw DomainError. Apply such an out-of-contract factor
+        # immediately via the non-damped path, which clamps the resulting radius
+        # into [min_distance, max_distance] — the same graceful handling the rest
+        # of the controller uses.
+        f > 0 || return _orbit_zoom_now!(oc, f)
+        oc.v_zoom += log(f)
         return oc
     end
     return _orbit_zoom_now!(oc, factor)

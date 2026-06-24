@@ -15279,4 +15279,130 @@ end
         end
     end
 
+    @testset "fresh audit round 2 fixes" begin
+        # _js_str must neutralize `<` so no embedded user string can break the
+        # surrounding <script> block (`</script`, `<!--<script`).
+        @test !occursin("<", Diff3D._js_str("<!--<script>"))
+        @test occursin("u003c", Diff3D._js_str("<"))
+        # value preserved: the JS literal still decodes to the original text.
+        @test Diff3D._js_str("abc") == "\"abc\""
+
+        # Wrap-around azimuth window must keep an angle on either arc instead of
+        # snapping it to a boundary; normal windows clamp as before.
+        @test isapprox(Diff3D._clamp_azimuth(-2.356, pi/2, 3pi/2), -2.356; atol=1e-9)
+        @test Diff3D._clamp_azimuth(0.0, pi/2, 3pi/2) != 0.0
+        @test Diff3D._clamp_azimuth(0.5, -1.0, 1.0) == 0.5
+        @test Diff3D._clamp_azimuth(2.0, -1.0, 1.0) == 1.0
+        @test Diff3D._clamp_azimuth(2.5, -Inf, Inf) == 2.5
+        let cam = PerspectiveCamera()
+            cam.position = Vec3(0.0, 0.0, 5.0); cam.target = Vec3(0.0, 0.0, 0.0)
+            oc = OrbitControls(cam, Vec3(0.0, 0.0, 0.0);
+                               min_azimuth_angle = pi/2, max_azimuth_angle = 3pi/2)
+            orbit_set!(oc; azimuth = -2.356, polar = pi/2, radius = 5.0)
+            p1 = cam.position
+            orbit_rotate!(oc, 0.01, 0.0)
+            @test norm(cam.position - p1) < 0.2   # tiny nudge, no snap across scene
+        end
+
+        # Damped dolly with a non-positive factor must stay finite (was -Inf /
+        # DomainError), matching the non-damped clamp.
+        let cam = PerspectiveCamera()
+            cam.position = Vec3(0.0, 0.0, 5.0)
+            oc = OrbitControls(cam, Vec3(0.0, 0.0, 0.0);
+                               enable_damping = true, min_distance = 0.5, max_distance = 100.0)
+            orbit_zoom!(oc, 0.0); @test isfinite(oc.v_zoom)
+            orbit_zoom!(oc, -0.5); @test isfinite(oc.v_zoom)   # no DomainError
+        end
+
+        # Single-channel texture broadcasts its lone channel to any requested
+        # channel (grayscale alpha/roughness/etc. maps), like _texel/three.js.
+        let t = DataTexture(fill(0.3, 2, 2, 1))
+            t.filter = :nearest
+            @test Diff3D.sample_texture_channel(t, 0.5, 0.5, 2) == 0.3
+            t0 = DataTexture(zeros(Float64, 2, 2, 1)); t0.filter = :nearest
+            @test Diff3D.sample_texture_channel(t0, 0.5, 0.5, 2) == 0.0   # transparent, not default
+            t3 = DataTexture(zeros(Float64, 2, 2, 3)); t3.filter = :nearest
+            @test Diff3D.sample_texture_channel(t3, 0.5, 0.5, 4; default = 0.7) == 0.7
+        end
+
+        # Non-finite LOD footprint -> clear ArgumentError (was InexactError),
+        # consistent with sample_cube_lod / sample_pmrem.
+        let t = DataTexture(fill(0.3, 2, 2, 1))
+            @test_throws ArgumentError sample_texture_auto(t, 0.5, 0.5, NaN)
+            @test_throws ArgumentError sample_texture_aniso(t, 0.5, 0.5, NaN, 0.1)
+            @test sample_texture_auto(t, 0.5, 0.5, 0.01) isa Color3
+        end
+
+        # Image writers clamp a NaN pixel to black instead of throwing InexactError.
+        let img = fill(0.5, 2, 2, 3)
+            img[1, 1, 1] = NaN
+            tmp = tempname() * ".png"; save_png(tmp, img); @test filesize(tmp) > 0; rm(tmp)
+            tmp2 = tempname() * ".ppm"; save_ppm(tmp2, img); @test filesize(tmp2) > 0; rm(tmp2)
+        end
+        # test_pattern degenerate sizes are finite (was 0/0 = NaN).
+        let p = test_pattern(1, 1)
+            @test all(isfinite, p)
+            @test p[1, 1, 1] == 0.0 && p[1, 1, 2] == 0.0
+        end
+        @test all(isfinite, test_pattern(1, 5))
+        @test all(isfinite, test_pattern(5, 1))
+
+        # Line rasterization bounds work by the visible span: an extreme/off-screen
+        # or NaN endpoint must not hang or overflow, and a normal line still draws.
+        let rt = RenderTarget(64, 64), c = Color3(1.0, 0.0, 0.0)
+            @test (Diff3D._draw_line!(rt, 1e18, 6.0, 0.5, 30.0, 30.0, 0.5, c); true)
+            @test (Diff3D._draw_line!(rt, 32.0, 6.0, 0.5, NaN, 30.0, 0.5, c); true)
+            rt2 = RenderTarget(16, 16)
+            Diff3D._draw_line!(rt2, 2.0, 2.0, 0.5, 14.0, 14.0, 0.5, Color3(1.0, 1.0, 1.0))
+            @test count(!iszero, rt2.color[:, :, 1]) > 0
+        end
+
+        # Sprite / point rasterization with extreme finite projected coords must
+        # not overflow floor/round(Int, …); normal ones still draw.
+        let cam = PerspectiveCamera()
+            cam.position = Vec3(0.0, 0.0, 1.0); cam.target = Vec3(0.0, 0.0, 0.0)
+            spr = Sprite(SpriteMaterial(color = Color3(1.0, 0.0, 0.0)))
+            spr.position = Vec3(0.0, 0.0, 0.5); spr.scale = Vec3(1e12, 1e12, 1.0)
+            sc = Scene(); add!(sc, spr); rt = RenderTarget(64, 64)
+            @test (render_sprites!(rt, sc, cam); true)
+
+            geo = BufferGeometry([1e12, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+            pts = PointsObject(geo, PointsMaterial(size = 4.0))
+            sc2 = Scene(); add!(sc2, pts); rt2 = RenderTarget(64, 64)
+            @test (render_points!(rt2, sc2, cam); true)
+
+            geo3 = BufferGeometry([0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+            pts3 = PointsObject(geo3, PointsMaterial(size = 6.0, color = Color3(1.0, 1.0, 1.0)))
+            sc3 = Scene(); add!(sc3, pts3); rt3 = RenderTarget(64, 64)
+            render_points!(rt3, sc3, cam)
+            @test count(!iszero, rt3.color[:, :, 1]) > 0
+        end
+
+        # Binary PLY with a list property on the vertex element stays byte-aligned
+        # (every vertex after the list-bearing one was silently misread before).
+        let tmp = tempname() * ".ply"
+            open(tmp, "w") do io
+                write(io, "ply\nformat binary_little_endian 1.0\nelement vertex 2\n" *
+                          "property float x\nproperty float y\nproperty float z\n" *
+                          "property list uchar int extra\nend_header\n")
+                write(io, Float32(1), Float32(2), Float32(3), UInt8(1), Int32(99))
+                write(io, Float32(4), Float32(5), Float32(6), UInt8(2), Int32(7), Int32(8))
+            end
+            g = load_ply(tmp)
+            @test g.positions == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            rm(tmp)
+        end
+
+        # OBJ `vt u` (1-D texture coordinate) decodes as (u, 0) instead of BoundsError.
+        let tmp = tempname() * ".obj"
+            open(tmp, "w") do io
+                write(io, "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0.5\nvt 0.25\nvt 0.75\nf 1/1 2/2 3/3\n")
+            end
+            g = load_obj(tmp)
+            @test g.n_faces == 1
+            @test g.uvs == [0.5, 0.0, 0.25, 0.0, 0.75, 0.0]
+            rm(tmp)
+        end
+    end
+
 end
