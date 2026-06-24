@@ -127,6 +127,8 @@ function parse_ies(text::AbstractString)
     #  11: ballast_factor    12: future_use       13: input_watts
     # The vertical-angle vector starts at token 14.
     cand_mult = nums[3]
+    (isfinite(nums[4]) && isfinite(nums[5])) ||
+        throw(ArgumentError("parse_ies: non-finite vertical/horizontal angle count"))
     num_vert = Int(round(nums[4]))
     num_horiz = max(Int(round(nums[5])), 1)
     (num_vert >= 1) || throw(ArgumentError("parse_ies: invalid vertical-angle count"))

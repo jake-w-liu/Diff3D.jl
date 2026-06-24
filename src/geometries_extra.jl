@@ -926,6 +926,7 @@ end
 
 """Filled planar polygon (z = 0), normal +z."""
 function ShapeGeometry(shape::Vector{<:Vec2})
+    shape = _shape_area2(shape) > 0.0 ? shape : reverse(shape)   # normalize to CCW (+z normal)
     np = length(shape)
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     for pt in shape
@@ -941,6 +942,9 @@ end
 """Extrude a planar polygon `shape` to `depth` along +z, or along `extrude_path`."""
 function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path)
+    # Normalize to CCW (like the extrude_path branch) so the hard-coded cap and
+    # side-wall normals stay consistent with the winding for any input orientation.
+    shape = _shape_area2(shape) > 0.0 ? shape : reverse(shape)
     np = length(shape)
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     vi = 0

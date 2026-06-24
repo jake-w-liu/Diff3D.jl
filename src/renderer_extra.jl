@@ -10,7 +10,8 @@
 function tone_map_reinhard(img::AbstractArray)
     out = Array{Float64}(undef, size(img))
     @inbounds for i in eachindex(img)
-        c = Float64(img[i]); out[i] = c / (1 + c)
+        c = Float64(img[i])
+        out[i] = c == Inf ? 1.0 : c / (1 + c)   # limit c->Inf is 1, not Inf/Inf=NaN
     end
     return out
 end

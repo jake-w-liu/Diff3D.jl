@@ -15177,4 +15177,106 @@ end
 
     end
 
+    @testset "fresh audit regression fixes" begin
+        # interpolate_linear must reject NaN query time (else silent garbage).
+        @test_throws ArgumentError interpolate_linear([0.0, 1.0], [10.0, 20.0], NaN)
+        @test interpolate_linear([0.0, 1.0], [10.0, 20.0], 0.5) == 15.0
+
+        # Rasterizer bbox must survive non-finite / huge vertex coords (was
+        # InexactError in floor(Int, ...)).
+        let rt = RenderTarget(8, 8), fc = Color3(1.0, 0.0, 0.0)
+            @test (Diff3D._rasterize_tri!(rt, 2.0, 2.0, 0.5, 6.0, 2.0, 0.5,
+                                          1e19, 6.0, 0.5, fc); true)
+            @test (Diff3D._rasterize_tri!(rt, 2.0, 2.0, 0.5, 6.0, 2.0, 0.5,
+                                          NaN, 6.0, 0.5, fc); true)
+        end
+
+        # render_to_rgb8 must clamp NaN -> 0 and out-of-range -> [0,255].
+        let rt = RenderTarget(2, 2)
+            rt.color[1, 1, 1] = NaN
+            rt.color[1, 1, 2] = 2.0
+            rt.color[1, 1, 3] = -1.0
+            img = render_to_rgb8(rt)
+            @test img[1, 1, 1] == 0x00
+            @test img[1, 1, 2] == 0xff
+            @test img[1, 1, 3] == 0x00
+        end
+
+        # Reinhard tone map must map +Inf -> 1.0 (was NaN from Inf/(1+Inf)).
+        @test tone_map_reinhard([Inf])[1] == 1.0
+        @test tone_map_reinhard([1.0])[1] == 0.5
+
+        # Normal-map bitangent handedness follows UV winding; a flat texel
+        # (0.5,0.5,1.0) must preserve the face normal for either winding.
+        let data = zeros(Float64, 2, 2, 4)
+            data[:, :, 1] .= 0.5; data[:, :, 2] .= 0.5
+            data[:, :, 3] .= 1.0; data[:, :, 4] .= 1.0
+            flat = DataTexture(data)
+            fn = Vec3(0.0, 0.0, 1.0)
+            p1 = Vec3(0.0, 0.0, 0.0); p2 = Vec3(1.0, 0.0, 0.0); p3 = Vec3(0.0, 1.0, 0.0)
+            r_ccw = Diff3D._apply_normal_map(fn, flat, 0.5, 0.5, p1, p2, p3,
+                                             (0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
+            r_cw = Diff3D._apply_normal_map(fn, flat, 0.5, 0.5, p1, p2, p3,
+                                            (0.0, 0.0), (0.0, 1.0), (1.0, 0.0))
+            @test isapprox(r_ccw.z, 1.0; atol = 1e-9)
+            @test isapprox(r_cw.z, 1.0; atol = 1e-9)
+        end
+
+        # transform_geometry must deepcopy custom attributes (copy(Dict) aliased
+        # the BufferAttribute data arrays).
+        let g = BoxGeometry()
+            g.attributes[:foo] = BufferAttribute([5.0, 6.0, 7.0], 1)
+            t = transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
+            t.attributes[:foo].data[1] = 99.0
+            @test g.attributes[:foo].data[1] == 5.0
+        end
+
+        # SphereGeometry must clamp degenerate segment counts (was empty/NaN mesh).
+        let sg = SphereGeometry(height_segments = 1, width_segments = 2)
+            @test sg.n_faces > 0
+            @test all(isfinite, sg.positions)
+        end
+
+        # ShapeGeometry normalizes clockwise outlines to +z-facing normals.
+        let cw = [Vec2(0.0, 0.0), Vec2(0.0, 1.0), Vec2(1.0, 1.0), Vec2(1.0, 0.0)]
+            sg = ShapeGeometry(cw)
+            @test all(i -> sg.normals[3i] > 0.999, 1:sg.n_vertices)
+        end
+
+        # parse_ies must reject non-finite angle counts.
+        @test_throws ArgumentError parse_ies(
+            "IESNA:LM-63-2002\nTILT=NONE\n1 1000 1.0 Inf NaN 1 1 0 0 0\n" *
+            "1.0 1.0 1.0\n0.0\n0.0\n1000.0\n")
+
+        # Truncated binary STL / PLY must error, not read out of bounds.
+        let tmp = tempname() * ".stl"
+            open(tmp, "w") do io
+                write(io, zeros(UInt8, 80)); write(io, UInt32(1_000_000))
+            end
+            @test_throws Exception load_stl(tmp)
+            rm(tmp)
+        end
+        let tmp = tempname() * ".ply"
+            open(tmp, "w") do io
+                write(io, "ply\nformat binary_little_endian 1.0\n" *
+                          "element vertex 1000\nproperty float x\n" *
+                          "property float y\nproperty float z\nend_header\n")
+                write(io, zeros(UInt8, 8))
+            end
+            @test_throws Exception load_ply(tmp)
+            rm(tmp)
+        end
+
+        # glTF matrix accessor component sizes.
+        @test Diff3D._GLTF_COMP_SIZE["MAT2"] == 4
+        @test Diff3D._GLTF_COMP_SIZE["MAT3"] == 9
+
+        # PNG chunk length must be bounded by the file size.
+        let bytes = vcat(UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+                         UInt8[0xff, 0xff, 0xff, 0xff],
+                         UInt8[0x49, 0x48, 0x44, 0x52])
+            @test_throws Exception Diff3D._decode_png(bytes)
+        end
+    end
+
 end

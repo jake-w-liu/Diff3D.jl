@@ -434,6 +434,10 @@ end
 # ========================== Sphere Geometry ==========================
 
 function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
+    # Clamp to a valid minimum (matching three.js), else degenerate counts produce
+    # an empty/NaN sphere from a plausible call.
+    width_segments = max(3, Int(floor(width_segments)))
+    height_segments = max(2, Int(floor(height_segments)))
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]

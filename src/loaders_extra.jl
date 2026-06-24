@@ -403,9 +403,13 @@ function _decode_png(bytes::Vector{UInt8})
     palette = UInt8[]
     trns = UInt8[]
     while pos <= length(bytes)
+        pos + 7 <= length(bytes) || error("PNG chunk header is truncated")
         len = _rd_be32(bytes, pos); pos += 4
         ctype = String(bytes[pos:pos+3]); pos += 4
+        pos + len - 1 <= length(bytes) ||
+            error("PNG chunk '$ctype' length $len exceeds the file size")
         if ctype == "IHDR"
+            len >= 13 || error("PNG IHDR chunk is truncated")
             W = _rd_be32(bytes, pos); H = _rd_be32(bytes, pos+4)
             bitdepth = bytes[pos+8]; colortype = bytes[pos+9]
             interlace = bytes[pos+12]
@@ -7247,7 +7251,8 @@ end
 
 # ========================== glTF 2.0 ==========================
 
-const _GLTF_COMP_SIZE = Dict("SCALAR"=>1, "VEC2"=>2, "VEC3"=>3, "VEC4"=>4, "MAT4"=>16)
+const _GLTF_COMP_SIZE = Dict("SCALAR"=>1, "VEC2"=>2, "VEC3"=>3, "VEC4"=>4,
+                             "MAT2"=>4, "MAT3"=>9, "MAT4"=>16)
 
 struct GLTFAsset
     scene::Scene
@@ -7400,6 +7405,9 @@ function _gltf_component_bytes(ctype::Int)
 end
 
 function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, normalized::Bool)
+    sz = _gltf_component_bytes(ctype)
+    (offset >= 0 && offset + sz <= length(buf)) ||
+        error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
     io = IOBuffer(buf)
     seek(io, offset)
     if ctype == 5126

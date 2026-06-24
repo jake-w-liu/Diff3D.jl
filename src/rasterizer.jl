@@ -139,11 +139,17 @@ end
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
+    # Skip triangles with non-finite screen coords, and clamp extreme-but-finite
+    # extents into the buffer (in float) before the Int conversion, so an
+    # off-screen/degenerate vertex contributes nothing instead of an InexactError.
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1, xlo)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     @inbounds for py in min_y:max_y
@@ -263,11 +269,14 @@ end
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1, xlo)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_albedo = albedo_map !== nothing
     has_alpha_map = alpha_map !== nothing
     has_normalmap = normal_map !== nothing
@@ -1118,11 +1127,14 @@ end
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
-    min_x = max(floor(Int, min(s1x, s2x, s3x)), 1, xlo)
-    max_x = min(ceil(Int, max(s1x, s2x, s3x)), W, xhi)
-    min_y = max(floor(Int, min(s1y, s2y, s3y)), 1, ylo)
-    max_y = min(ceil(Int, max(s1y, s2y, s3y)), H, yhi)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     use_stamp = stamp !== nothing
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), albedo_map, alpha_map)
@@ -1185,11 +1197,13 @@ Returns Matrix{UInt8} of size (H, W*3) or Array{UInt8, 3} of size (H, W, 3).
 function render_to_rgb8(rt::RenderTarget)
     H, W = rt.height, rt.width
     img = Array{UInt8}(undef, H, W, 3)
+    # NaN must map to a defined byte (0), not InexactError: clamp(NaN,...) is NaN.
+    c8(v) = round(UInt8, (isnan(v) ? 0.0 : clamp(Float64(v), 0.0, 1.0)) * 255)
     for j in 1:W
         for i in 1:H
-            img[i, j, 1] = round(UInt8, clamp(rt.color[i, j, 1], 0, 1) * 255)
-            img[i, j, 2] = round(UInt8, clamp(rt.color[i, j, 2], 0, 1) * 255)
-            img[i, j, 3] = round(UInt8, clamp(rt.color[i, j, 3], 0, 1) * 255)
+            img[i, j, 1] = c8(rt.color[i, j, 1])
+            img[i, j, 2] = c8(rt.color[i, j, 2])
+            img[i, j, 3] = c8(rt.color[i, j, 3])
         end
     end
     return img

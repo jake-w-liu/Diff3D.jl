@@ -306,7 +306,9 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
         tn = normalize(mat4_transform_direction(normal_matrix, n))
         push!(normals, tn.x, tn.y, tn.z)
     end
+    # deepcopy the attributes: copy(Dict) shares the BufferAttribute values' data
+    # arrays, so the transformed geometry would alias the source's custom attributes.
     return BufferGeometry(positions, normals, copy(geo.uvs), copy(geo.indices),
                           geo.n_vertices, geo.n_faces,
-                          copy(geo.attributes), copy(geo.groups), geo.draw_range)
+                          deepcopy(geo.attributes), copy(geo.groups), geo.draw_range)
 end

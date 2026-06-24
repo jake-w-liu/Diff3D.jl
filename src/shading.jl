@@ -430,7 +430,9 @@ function _apply_normal_map(face_n::Vec3, nmap, u, v, p1::Vec3, p2::Vec3, p3::Vec
     T = T - face_n * dot(face_n, T)                  # Gram-Schmidt orthonormalize
     tl2 = norm(T); tl2 < 1e-12 && return face_n
     T = T / tl2
-    B = cross(face_n, T)
+    # Bitangent handedness follows the UV winding (sign of det), matching three.js
+    # getTangentFrame; otherwise mirrored UVs perturb the normal the wrong way.
+    B = cross(face_n, T) * sign(det)
     s = sample_texture(nmap, u, v)
     ns = Float64(normal_scale)
     tn = Vec3((s.r*2 - 1) * ns, (s.g*2 - 1) * ns, s.b*2 - 1)

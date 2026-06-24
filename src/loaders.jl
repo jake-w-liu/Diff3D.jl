@@ -104,6 +104,10 @@ function _load_stl_binary(path::String)
     open(path, "r") do io
         seek(io, 80)
         ntri = Int(read(io, UInt32))
+        # A binary STL is exactly 84 + 50*ntri bytes; reject a truncated/corrupt
+        # file (or absurd count) before allocating ntri*9 floats / reading past EOF.
+        filesize(path) >= 84 + 50 * ntri ||
+            error("binary STL declares $ntri triangles but the file is only $(filesize(path)) bytes (truncated/corrupt)")
         positions = Vector{Float64}(undef, ntri * 9)
         normals = Vector{Float64}(undef, ntri * 9)
         indices = Vector{Int}(undef, ntri * 3)
@@ -323,6 +327,8 @@ _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
 # Read one scalar of canonical type `t` from byte vector `b` at 1-based offset
 # `p` (little-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_le(b::Vector{UInt8}, p::Int, t::Symbol)
+    sz = (t === :u8 || t === :i8) ? 1 : (t === :u16 || t === :i16) ? 2 : t === :f64 ? 8 : 4
+    p + sz - 1 <= length(b) || error("PLY binary element data is truncated")
     if t === :u8
         return (Float64(b[p]), p + 1)
     elseif t === :i8
@@ -352,6 +358,8 @@ end
 # Read one scalar of canonical type `t` from byte vector `b` at 1-based offset
 # `p` (big-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_be(b::Vector{UInt8}, p::Int, t::Symbol)
+    sz = (t === :u8 || t === :i8) ? 1 : (t === :u16 || t === :i16) ? 2 : t === :f64 ? 8 : 4
+    p + sz - 1 <= length(b) || error("PLY binary element data is truncated")
     if t === :u8
         return (Float64(b[p]), p + 1)
     elseif t === :i8
@@ -494,6 +502,8 @@ function load_ply(path::String)
             if format == :ascii
                 for v in 0:ecount-1
                     toks = split(strip(next_line()))
+                    length(toks) >= length(props) ||
+                        error("PLY vertex data is truncated: expected $ecount vertices, row $(v+1) has $(length(toks)) of $(length(props)) values")
                     row = [parse(Float64, tok) for tok in toks]
                     b3 = v * 3
                     positions[b3+1] = row[ix]; positions[b3+2] = row[iy]; positions[b3+3] = row[iz]

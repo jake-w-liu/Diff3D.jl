@@ -590,6 +590,7 @@ at `t`, clamped to the endpoints. `values` may be reals or `Vec3`.
 function interpolate_linear(times::AbstractVector, values::AbstractVector, t)
     n = length(times)
     @assert n == length(values) && n >= 1 "times and values must align and be non-empty"
+    isnan(t) && throw(ArgumentError("interpolate_linear: query time t must not be NaN"))
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
     hi = searchsortedfirst(times, t)
