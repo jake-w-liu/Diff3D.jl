@@ -182,6 +182,22 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
                 end
             end
         end
+    elseif obj isa SkinnedMesh
+        # Raycast the posed (skinned) geometry the rasterizer actually renders, so
+        # a visibly-rendered skinned mesh is pickable (was silently skipped).
+        geo = _skinned_render_geometry(obj)
+        wm = compute_world_matrix(obj)
+        side = material_side(obj.material)
+        @inbounds for fi in _draw_face_range(geo)
+            i1, i2, i3 = get_face(geo, fi)
+            a = mat4_transform_point(wm, get_vertex(geo, i1))
+            b = mat4_transform_point(wm, get_vertex(geo, i2))
+            c = mat4_transform_point(wm, get_vertex(geo, i3))
+            t = ray_triangle_intersect(o, d, a, b, c; side=side)
+            if t !== nothing && rc.near <= t <= rc.far
+                push!(hits, Intersection(t, o + d * t, obj, fi))
+            end
+        end
     elseif obj isa PointsObject
         wm = compute_world_matrix(obj)
         geo = obj.geometry

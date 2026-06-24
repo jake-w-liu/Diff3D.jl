@@ -1683,6 +1683,7 @@ end
 
 """A `divisions`×`divisions` grid of size `size` on the xz-plane."""
 function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
+    divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
     pos = Float64[]
     step = size / divisions; half = size / 2
     for i in 0:divisions

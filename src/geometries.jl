@@ -777,7 +777,9 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
             y = r * sin(θ)
             append!(positions, [x, y, 0.0])
             append!(normals_arr, [0.0, 0.0, 1.0])
-            append!(uvs_arr, [(x / outer_radius + 1) / 2, (y / outer_radius + 1) / 2])
+            # outer_radius==0 is a degenerate ring (x=y=0); avoid 0/0=NaN UVs.
+            uvd = outer_radius == 0 ? 1.0 : outer_radius
+            append!(uvs_arr, [(x / uvd + 1) / 2, (y / uvd + 1) / 2])
         end
     end
 

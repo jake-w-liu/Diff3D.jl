@@ -15843,6 +15843,8 @@ end
         # Cylinder/Cone with height=0 produce finite (radial) normals, not NaN.
         @test !any(isnan, CylinderGeometry(height = 0.0).normals)
         @test !any(isnan, ConeGeometry(height = 0.0).normals)
+        # RingGeometry with outer_radius=0 (degenerate) has finite UVs, not 0/0=NaN.
+        @test !any(isnan, RingGeometry(outer_radius = 0.0).uvs)
         @test CylinderGeometry(height = 2.0).n_faces > 0 &&
               !any(isnan, CylinderGeometry(height = 2.0).normals)
 
@@ -15866,6 +15868,37 @@ end
             hits = raycast(Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)), sc)
             @test !isempty(hits)
             @test isapprox(hits[1].distance, 5.0; atol = 1e-6)
+        end
+    end
+
+    @testset "fresh audit round 13 fixes" begin
+        # loss_ssim / loss_silhouette_iou reject mismatched image/target sizes with
+        # a clear error (parity with loss_mse/loss_l1), instead of silently
+        # computing a wrong loss over the overlapping region.
+        @test_throws AssertionError loss_ssim(rand(8, 8, 1), rand(5, 5, 1); window_size = 3)
+        @test_throws AssertionError loss_silhouette_iou(rand(4, 4, 3), rand(5, 5, 3))
+        @test loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size = 3) isa Real
+        @test loss_silhouette_iou(zeros(4, 4, 3), zeros(4, 4, 3)) isa Real
+    end
+
+    @testset "fresh audit round 14 fixes" begin
+        # GridHelper clamps divisions (divisions=0 would make step=Inf -> NaN verts).
+        @test !any(isnan, GridHelper(10.0, 0).geometry.positions)
+        @test GridHelper(10.0, 10).geometry.n_vertices > 0
+
+        # Raycaster intersects a SkinnedMesh (the posed geometry the rasterizer
+        # renders), instead of silently returning no hits like it did before.
+        let geo = BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),
+            mat = MeshBasicMaterial(),
+            bone = Bone(), skel = Skeleton([bone]), nv = geo.n_vertices
+            sm = SkinnedMesh(geo, mat, skel, [(1, 1, 1, 1) for _ in 1:nv],
+                             [(1.0, 0.0, 0.0, 0.0) for _ in 1:nv]; name = "skinned")
+            sm.position = Vec3(3.0, 0.0, 0.0)
+            sc = Scene(); add!(sc, bone); add!(sc, sm)
+            hits = raycast(Raycaster(Vec3(-5.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0)), sc)
+            @test !isempty(hits)
+            @test hits[1].object === sm
+            @test isapprox(hits[1].distance, 4.5; atol = 1e-6)
         end
     end
 

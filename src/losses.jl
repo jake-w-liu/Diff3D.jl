@@ -48,6 +48,7 @@ Simplified single-channel average SSIM.
 """
 function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
+    @assert size(image) == size(target)   # parity with loss_mse/loss_l1 (else silently wrong)
     R = promote_type(T, S)
     H, W, C = size(image)
     # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
@@ -125,6 +126,7 @@ Compares binary silhouettes extracted from images.
 """
 function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
+    @assert size(image) == size(target)   # parity with loss_mse/loss_l1 (else silently wrong)
     R = promote_type(T, S)
     H, W, _ = size(image)
 
