@@ -7201,7 +7201,9 @@ function base64_decode(s::AbstractString)
     out = UInt8[]; acc = 0; nbits = 0
     for ch in s
         ch in ('=', '\n', '\r', ' ') && continue
-        v = _B64_LUT[Int(ch) + 1]
+        c = Int(ch)
+        c > 255 && continue          # non-ASCII can't be base64; skip (lenient), not OOB
+        v = _B64_LUT[c + 1]
         v < 0 && continue
         acc = (acc << 6) | v; nbits += 6
         if nbits >= 8

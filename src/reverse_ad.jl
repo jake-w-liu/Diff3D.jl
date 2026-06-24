@@ -132,6 +132,13 @@ Base.floor(::Type{T}, a::ADVar) where {T<:Integer} = floor(T, a.val)
 Base.ceil(::Type{T}, a::ADVar) where {T<:Integer}  = ceil(T, a.val)
 Base.round(::Type{T}, a::ADVar) where {T<:Integer} = round(T, a.val)
 Base.trunc(::Type{T}, a::ADVar) where {T<:Integer} = trunc(T, a.val)
+# Single-argument floor/ceil/round/trunc(::ADVar) route through this; a rounded
+# result is piecewise-constant, so it carries a zero derivative. Without it those
+# forms raise MethodError instead of returning the rounded value.
+Base.round(a::ADVar, r::RoundingMode) = ADVar(round(a.val, r))
+# mod/rem are piecewise-linear with unit slope in the first argument (a.e.).
+Base.mod(a::ADVar, b::Real) = _ad_record(mod(a.val, b), (a,), (1.0,))
+Base.rem(a::ADVar, b::Real) = _ad_record(rem(a.val, b), (a,), (1.0,))
 
 """
     reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}

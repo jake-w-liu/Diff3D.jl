@@ -246,6 +246,21 @@ end
 function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
     ap = _csg_clone_polygons(_csg_geometry_polygons(a))
     bp = _csg_clone_polygons(_csg_geometry_polygons(b))
+    # An empty operand has a degenerate BSP (root plane === nothing), which the
+    # clip step would otherwise pass through wholesale, returning the other solid.
+    # Resolve set-theoretically instead: ∅∪X=X, ∅-X=∅, X-∅=X, ∅∩X=∅.
+    if isempty(ap) || isempty(bp)
+        result = if operation === :union
+            isempty(ap) ? bp : ap
+        elseif operation === :subtract
+            isempty(ap) ? CSGPolygon[] : ap
+        elseif operation === :intersect
+            CSGPolygon[]
+        else
+            throw(ArgumentError("unsupported CSG operation: $operation"))
+        end
+        return _csg_polygons_to_geometry(result)
+    end
     A = _csg_node(ap)
     B = _csg_node(bp)
 

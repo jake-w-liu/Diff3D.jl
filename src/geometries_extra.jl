@@ -245,6 +245,8 @@ end
 function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_length=2π)
     np = length(points)
     @assert np >= 2 "Lathe needs at least two profile points"
+    segments = max(3, Int(floor(segments)))   # clamp so 0 can't make i/segments NaN
+
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     for i in 0:segments
         phi = phi_start + i/segments * phi_length
@@ -275,6 +277,8 @@ end
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     @assert n >= 2 "Tube needs at least two path points"
+    radial_segments = max(3, Int(floor(radial_segments)))   # clamp so 0 can't make j/radial_segments NaN
+
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     # Initial frame from the first tangent, parallel-transported along the path
@@ -974,6 +978,9 @@ end
 # Cylinder of `length` capped by two hemispheres of `radius`, revolved about y.
 
 function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
+    # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
+    cap_segments = max(1, Int(floor(cap_segments)))
+    radial_segments = max(3, Int(floor(radial_segments)))
     half = length / 2
     profile = Tuple{Float64,Float64}[]
     for i in 0:cap_segments                          # top hemisphere: pole → equator

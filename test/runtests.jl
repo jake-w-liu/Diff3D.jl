@@ -15554,4 +15554,47 @@ end
         end
     end
 
+    @testset "fresh audit round 5 fixes" begin
+        # Texture sampling sanitizes a non-finite UV instead of throwing
+        # InexactError; valid UVs are unchanged.
+        let t = Texture(rand(4, 4, 3))
+            @test sample_texture(t, NaN, 0.5) isa Color3
+            @test sample_texture(t, Inf, 0.5) isa Color3
+            @test sample_texture(t, -Inf, 0.5) isa Color3
+            @test sample_texture(t, 0.5, 0.5) isa Color3
+            @test Diff3D.sample_texture_channel(t, NaN, 0.5, 1) isa Real
+        end
+
+        # Lathe/Tube/Capsule clamp degenerate segment counts (no 0/0 = NaN).
+        let g = LatheGeometry([Vec2(1.0, 0.0), Vec2(1.0, 1.0)]; segments = 0)
+            @test g.n_faces > 0 && !any(isnan, g.positions) && !any(isnan, g.uvs)
+        end
+        let g = TubeGeometry([Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 2.0, 0.0)];
+                             radial_segments = 0)
+            @test g.n_faces > 0 && !any(isnan, g.positions)
+        end
+        @test !any(isnan, CapsuleGeometry(radial_segments = 0).positions)
+        @test !any(isnan, CapsuleGeometry(cap_segments = 0).positions)
+
+        # Single-argument floor/ceil/round/trunc(::ADVar) work (zero derivative);
+        # mod has unit slope in its first argument.
+        @test reverse_gradient(v -> floor(v[1]) + ceil(v[1]) + round(v[1]) + trunc(v[1]), [2.7]) == [0.0]
+        @test reverse_gradient(v -> mod(v[1], 3.0), [7.0]) == [1.0]
+
+        # base64_decode skips a non-ASCII (codepoint > 255) character instead of
+        # indexing the 256-entry LUT out of bounds.
+        @test base64_decode("QUJD" * string(Char(0x2603))) == UInt8[0x41, 0x42, 0x43]
+
+        # CSG with an empty operand resolves set-theoretically.
+        let box = BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),
+            empty = BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
+            @test csg_intersect(empty, box).n_faces == 0
+            @test csg_intersect(box, empty).n_faces == 0
+            @test csg_subtract(empty, box).n_faces == 0
+            @test csg_subtract(box, empty).n_faces == 12
+            @test csg_union(empty, box).n_faces == 12
+            @test csg_union(box, empty).n_faces == 12
+        end
+    end
+
 end

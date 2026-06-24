@@ -180,6 +180,11 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
 """
 function sample_texture(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
+    # Sanitize a non-finite UV (e.g. a NaN in a procedural/loaded geometry's uvs)
+    # to a valid texel before the Int conversion below; otherwise floor/round(Int,
+    # u*W-0.5) throws InexactError and aborts the whole render. zero(.) keeps the
+    # AD element type for the differentiable path.
+    isfinite(Float64(u)) || (u = zero(u)); isfinite(Float64(v)) || (v = zero(v))
     H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
@@ -215,6 +220,7 @@ end
 
 function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     u, v = texture_transform_uv(tex, u, v)
+    isfinite(Float64(u)) || (u = zero(u)); isfinite(Float64(v)) || (v = zero(v))
     H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
