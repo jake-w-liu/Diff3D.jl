@@ -406,12 +406,14 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     # to a value-only `float` conversion.
     span = max(span_raw, one(span_raw))
     lod = clamp(log(span) / log(oftype(float(span), 2)), zero(duv), oftype(float(duv), nlevels))
-    lod_f = Float64(lod)                       # discrete-selection scalar
+    # floor(Int, ·) works directly on Float64, ForwardDiff.Dual, and ADVar for the
+    # discrete level index — do NOT do Float64(lod) (undefined for Dual, crashes
+    # the differentiable path); the AD type stays in `lod`/`frac` for the blend.
     if !_texture_min_filter_blends_mipmaps(tex.min_filter)
-        nearest_level = clamp(floor(Int, lod_f + 0.5), 0, nlevels)
+        nearest_level = clamp(floor(Int, lod + 0.5), 0, nlevels)
         return _sample_texture_lod_filtered(tex, u, v, nearest_level, filter)
     end
-    l0 = floor(Int, lod_f)
+    l0 = floor(Int, lod)
     frac = lod - l0                            # fractional blend weight (AD-stable)
     l1 = min(l0 + 1, nlevels)
     c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
@@ -459,19 +461,19 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
     minor = min(adu, adv)
     major_is_u = adu >= adv
 
-    # Plain Float64 magnitudes for all discrete (non-differentiable) decisions.
-    major_f = Float64(major)
-    minor_f = Float64(minor)
+    # Discrete decisions below use comparisons / ceil(Int,·), which work directly
+    # on Float64, ForwardDiff.Dual, and ADVar — do NOT do Float64(major) (undefined
+    # for Dual, crashes the differentiable footprint path).
 
     # No mipmaps: anisotropic LOD selection is meaningless, fall back to bilinear.
     isempty(tex.mipmaps) && return sample_texture(tex, u, v)
 
     # Near-isotropic footprint, degenerate footprint, or anisotropy disabled:
     # a single isotropic auto-LOD sample is correct and cheapest.
-    if max_aniso <= 1 || minor_f <= 0 || major_f <= 0
+    if max_aniso <= 1 || minor <= 0 || major <= 0
         return sample_texture_auto(tex, u, v, major)
     end
-    ratio = major_f / minor_f
+    ratio = major / minor
     if ratio < 1.5
         return sample_texture_auto(tex, u, v, major)
     end

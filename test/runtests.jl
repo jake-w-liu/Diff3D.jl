@@ -15742,4 +15742,51 @@ end
         end
     end
 
+    @testset "fresh audit round 9 fixes" begin
+        # Differentiable mipmap/aniso texture sampling: the LOD/probe-count
+        # selection used Float64(::Dual) (undefined), crashing ForwardDiff on the
+        # minifying-mipmap and anisotropic paths.
+        let data = zeros(8, 8, 3)
+            for i in 1:8, j in 1:8; data[i, j, 1] = (i + j) / 16; end
+            tex = Texture(data; min_filter = :linear_mipmap_linear, mag_filter = :linear)
+            generate_mipmaps!(tex)
+            @test all(isfinite, ForwardDiff.gradient(d -> sample_texture_auto(tex, 0.5, 0.5, d[1]).r, [0.3]))
+            @test (ForwardDiff.gradient(p -> sample_texture_aniso(tex, 0.5, 0.5, p[1], p[2]).r, [0.3, 0.05]); true)
+        end
+
+        # add_lod_level! leaves no phantom level when add! throws (cycle/self).
+        let lod = LOD()
+            @test_throws Exception add_lod_level!(lod, 0.0, lod)
+            @test length(lod.levels) == 0
+            m = Mesh(BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),
+                     MeshBasicMaterial(color = Color3(1.0, 0.0, 0.0)))
+            add_lod_level!(lod, 0.0, m)
+            @test length(lod.levels) == 1
+        end
+
+        # An object registered at two LOD levels stays visible when chosen.
+        let lod = LOD(),
+            shared = Mesh(BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),
+                          MeshBasicMaterial(color = Color3(0.0, 1.0, 0.0))),
+            far = Mesh(BoxGeometry(width = 0.5, height = 0.5, depth = 0.5),
+                       MeshBasicMaterial(color = Color3(0.0, 0.0, 1.0)))
+            add_lod_level!(lod, 0.0, shared)
+            add_lod_level!(lod, 5.0, far)
+            add_lod_level!(lod, 10.0, shared)
+            @test lod_update!(lod, 0.0) === shared
+            @test shared.visible == true
+        end
+
+        # ACES tone map: negative (unphysical) radiance -> 0, +Inf -> 1.
+        @test tone_map_aces([-0.1])[1] == 0.0
+        @test tone_map_aces([Inf])[1] == 1.0
+        @test 0.0 < tone_map_aces([0.5])[1] < 1.0
+
+        # Catmull-Rom curve rejects a NaN parameter cleanly (was InexactError).
+        let c = CatmullRomCurve([Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(2.0, 1.0, 0.0)])
+            @test_throws ArgumentError catmull_rom_point(c, NaN)
+            @test catmull_rom_point(c, 0.5) isa Vec3
+        end
+    end
+
 end

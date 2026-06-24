@@ -309,8 +309,10 @@ function add_lod_level!(lod::LOD, distance::Real, obj::AbstractObject3D; hystere
     hyst = Float64(hysteresis)
     isfinite(dist) && dist >= 0 || throw(ArgumentError("LOD distance must be finite and non-negative"))
     isfinite(hyst) && hyst >= 0 || throw(ArgumentError("LOD hysteresis must be finite and non-negative"))
-    push!(lod.levels, (dist, hyst, obj))
+    # add! first: it can throw (cycle/self guards). Pushing the level entry only
+    # after it succeeds avoids leaving a phantom level whose object is not a child.
     add!(lod, obj)
+    push!(lod.levels, (dist, hyst, obj))
     sort!(lod.levels, by = first)
     return lod
 end
@@ -345,10 +347,14 @@ function lod_update!(lod::LOD, distance::Real)
         end
     end
 
-    for (i, (_, _, obj)) in enumerate(lod.levels)
-        hasproperty(obj, :visible) && setproperty!(obj, :visible, i == chosen_index)
+    # Compare by object identity, not index: if the same object is registered at
+    # several levels, it must stay visible whenever any of its entries is chosen
+    # (an index test would let a later non-chosen entry hide the chosen object).
+    chosen_obj = lod.levels[chosen_index][3]
+    for (_, _, obj) in lod.levels
+        hasproperty(obj, :visible) && setproperty!(obj, :visible, obj === chosen_obj)
     end
-    return lod.levels[chosen_index][3]
+    return chosen_obj
 end
 
 # ========================== Bone / Skeleton / SkinnedMesh ==========================

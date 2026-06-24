@@ -386,6 +386,9 @@ function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
 end
 
 function _catmull_rom_segment(curve::CatmullRomCurve, t::Real)
+    # clamp() does not sanitize NaN, so a NaN t would reach floor(Int, NaN) and
+    # throw a cryptic InexactError; reject it cleanly like nurbs_point.
+    isnan(t) && throw(ArgumentError("catmull_rom_point: t must not be NaN"))
     n = length(curve.points)
     segments = curve.closed ? n : n - 1
     tf = clamp(Float64(t), 0.0, 1.0)

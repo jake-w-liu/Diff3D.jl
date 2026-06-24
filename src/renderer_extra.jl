@@ -21,8 +21,12 @@ function tone_map_aces(img::AbstractArray)
     a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
     out = Array{Float64}(undef, size(img))
     @inbounds for i in eachindex(img)
+        # Clamp unphysical negative radiance to black first (the ACES rational is
+        # positive for small negative x, so raw negatives map to spurious grays);
+        # +Inf maps to the x->Inf limit a/c≈1.03 -> 1, not Inf/Inf=NaN.
         x = Float64(img[i])
-        out[i] = clamp((x * (a*x + b)) / (x * (c*x + d) + e), 0.0, 1.0)
+        xc = x <= 0.0 ? 0.0 : x
+        out[i] = isinf(xc) ? 1.0 : clamp((xc * (a*xc + b)) / (xc * (c*xc + d) + e), 0.0, 1.0)
     end
     return out
 end
