@@ -383,6 +383,19 @@ const _PLY_SIZE = Dict(:i8=>1, :u8=>1, :i16=>2, :u16=>2, :i32=>4, :u32=>4, :f32=
 # Integer scalar types: PLY colour channels stored as integers are normalised to [0,1].
 _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
 
+function _ply_parse_type(tok, context::String)
+    ty = get(_PLY_TYPE, String(tok), nothing)
+    ty === nothing && error("unsupported PLY $context type $(String(tok))")
+    return ty
+end
+
+function _ply_parse_element_count(tok)
+    count = tryparse(Int, String(tok))
+    (count !== nothing && count >= 0) ||
+        error("PLY element count must be a non-negative integer")
+    return count
+end
+
 # Read one scalar of canonical type `t` from byte vector `b` at 1-based offset
 # `p` (little-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_le(b::Vector{UInt8}, p::Int, t::Symbol)
@@ -491,6 +504,7 @@ function load_ply(path::String)
         t = split(line)
         tag = t[1]
         if tag == "format"
+            length(t) >= 2 || error("PLY format declaration requires a format token")
             fmt = t[2]
             if fmt == "ascii"
                 format = :ascii
@@ -502,16 +516,21 @@ function load_ply(path::String)
                 error("unsupported PLY format $fmt")
             end
         elseif tag == "element"
-            push!(elements, (String(t[2]), parse(Int, t[3]), Any[]))
+            length(t) >= 3 || error("PLY element declaration requires a name and count")
+            push!(elements, (String(t[2]), _ply_parse_element_count(t[3]), Any[]))
         elseif tag == "property"
             isempty(elements) && error("PLY property before element")
             props = elements[end][3]
-            if t[2] == "list"
+            if length(t) >= 2 && t[2] == "list"
+                length(t) >= 5 ||
+                    error("PLY list property declaration requires count type, index type, and name")
                 # property list <count_type> <index_type> <name>
-                ct = _PLY_TYPE[String(t[3])]; it = _PLY_TYPE[String(t[4])]
+                ct = _ply_parse_type(t[3], "list count")
+                it = _ply_parse_type(t[4], "list index")
                 push!(props, (:list, String(t[5]), ct, it))
             else
-                push!(props, (:scalar, String(t[3]), _PLY_TYPE[String(t[2])]))
+                length(t) >= 3 || error("PLY property declaration requires type and name")
+                push!(props, (:scalar, String(t[3]), _ply_parse_type(t[2], "property")))
             end
         elseif tag == "end_header"
             break

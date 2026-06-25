@@ -16262,4 +16262,48 @@ end
         end
     end
 
+    @testset "fresh audit round 25 fixes" begin
+        let ply_path = text -> begin
+                path = tempname() * ".ply"
+                write(path, text)
+                path
+            end
+
+            @test_throws "PLY format declaration requires a format token" load_ply(
+                ply_path("ply\nformat\nend_header\n"))
+            @test_throws "PLY element declaration requires a name and count" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement vertex\nend_header\n"))
+            @test_throws "PLY element count must be a non-negative integer" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement vertex many\nend_header\n"))
+            @test_throws "PLY element count must be a non-negative integer" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement vertex -1\nproperty float x\nproperty float y\nproperty float z\nend_header\n"))
+            @test_throws "PLY property declaration requires type and name" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement vertex 0\nproperty float\nend_header\n"))
+            @test_throws "unsupported PLY property type float128" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement vertex 0\nproperty float128 x\nend_header\n"))
+            @test_throws "PLY list property declaration requires count type, index type, and name" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement face 0\nproperty list uchar int\nend_header\n"))
+            @test_throws "unsupported PLY list index type weird" load_ply(
+                ply_path("ply\nformat ascii 1.0\nelement face 0\nproperty list uchar weird vertex_indices\nend_header\n"))
+
+            geo = load_ply(ply_path("""
+            ply
+            format ascii 1.0
+            element vertex 3
+            property float x
+            property float y
+            property float z
+            element face 1
+            property list uchar int vertex_indices
+            end_header
+            0 0 0
+            1 0 0
+            0 1 0
+            3 0 1 2
+            """))
+            @test geo.n_vertices == 3
+            @test geo.n_faces == 1
+        end
+    end
+
 end
