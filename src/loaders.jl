@@ -128,19 +128,36 @@ end
 
 function _load_stl_ascii(path::String)
     positions = Float64[]; normals = Float64[]; indices = Int[]
-    cur_n = (0.0, 0.0, 0.0); vi = 0
+    cur_n = (0.0, 0.0, 0.0); vi = 0; vertices_in_facet = 0; in_facet = false
     for raw in eachline(path)
         line = strip(raw)
         if startswith(line, "facet normal")
+            !in_facet || error("ASCII STL nested facet is invalid")
             t = split(line)
+            length(t) >= 5 || error("ASCII STL facet normal requires 3 components")
             cur_n = (parse(Float64, t[3]), parse(Float64, t[4]), parse(Float64, t[5]))
+            in_facet = true
+            vertices_in_facet = 0
         elseif startswith(line, "vertex")
+            in_facet || error("ASCII STL vertex appears outside a facet")
             t = split(line)
+            length(t) >= 4 || error("ASCII STL vertex requires 3 coordinates")
+            vertices_in_facet < 3 || error("ASCII STL facet has more than 3 vertices")
             push!(positions, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
             push!(normals, cur_n[1], cur_n[2], cur_n[3])
             vi += 1; push!(indices, vi)
+            vertices_in_facet += 1
+        elseif startswith(line, "endfacet")
+            in_facet || error("ASCII STL endfacet appears outside a facet")
+            vertices_in_facet == 3 ||
+                error("ASCII STL facet has $vertices_in_facet vertices; expected 3")
+            in_facet = false
+            vertices_in_facet = 0
         end
     end
+    !in_facet || error("ASCII STL facet is missing endfacet")
+    rem(length(indices), 3) == 0 ||
+        error("ASCII STL vertex count $(length(indices)) is not divisible by 3")
     nfaces = length(indices) ÷ 3
     return BufferGeometry(positions, normals, Float64[], indices, vi, nfaces)
 end

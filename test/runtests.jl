@@ -16185,4 +16185,26 @@ end
         end
     end
 
+    @testset "fresh audit round 22 fixes" begin
+        let stl_path = text -> begin
+                path = tempname() * ".stl"
+                write(path, text)
+                path
+            end
+
+            @test_throws "ASCII STL facet normal requires 3 components" load_stl(
+                stl_path("solid x\nfacet normal 0 0\nendsolid x\n"))
+            @test_throws "ASCII STL vertex appears outside a facet" load_stl(
+                stl_path("solid x\nvertex 0 0 0\nendsolid x\n"))
+            @test_throws "ASCII STL vertex requires 3 coordinates" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nvertex 0 0\nendfacet\nendsolid x\n"))
+            @test_throws "ASCII STL facet has 2 vertices; expected 3" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nvertex 0 0 0\nvertex 1 0 0\nendfacet\nendsolid x\n"))
+            @test_throws "ASCII STL facet is missing endfacet" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendsolid x\n"))
+            @test_throws "ASCII STL facet has more than 3 vertices" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nvertex 0 0 1\nendfacet\nendsolid x\n"))
+        end
+    end
+
 end
