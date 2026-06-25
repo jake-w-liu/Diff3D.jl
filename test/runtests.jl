@@ -16111,4 +16111,48 @@ end
         end
     end
 
+    @testset "fresh audit round 20 fixes" begin
+        let dir = mktempdir()
+            function skin_joint_path(filename, joint_component_type, append_joints!)
+                bin = UInt8[]
+                append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+                off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+                off_joints = length(bin); append_joints!(bin)
+                off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+                write(joinpath(dir, filename * ".bin"), bin)
+                path = joinpath(dir, filename * ".gltf")
+                write(path, """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+                 "nodes":[{"name":"skinned","mesh":0,"skin":0},{"name":"joint"}],
+                 "buffers":[{"byteLength":$(length(bin)),"uri":"$(filename).bin"}],
+                 "bufferViews":[
+                   {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+                   {"buffer":0,"byteOffset":$off_joints,"byteLength":$(off_weights - off_joints)},
+                   {"buffer":0,"byteOffset":$off_weights,"byteLength":48}],
+                 "accessors":[
+                   {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+                   {"bufferView":1,"componentType":$joint_component_type,"count":3,"type":"VEC4"},
+                   {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+                 "skins":[{"joints":[1]}]}
+                """)
+                return path
+            end
+
+            float_joint_path = skin_joint_path("float_joint", 5126,
+                                               bin -> append!(bin, reinterpret(UInt8, Float32.([0,0,0,0, 0,0,0,0, 0,0,0,0]))))
+            @test_throws "glTF JOINTS_0 componentType" load_gltf_asset(float_joint_path)
+
+            out_of_range_path = skin_joint_path("out_of_range_joint", 5123,
+                                                bin -> append!(bin, reinterpret(UInt8, UInt16.([1,0,0,0, 0,0,0,0, 0,0,0,0]))))
+            @test_throws "glTF skin joint index 1 out of bounds for 1 joints" load_gltf_asset(out_of_range_path)
+        end
+
+        let geo = BufferGeometry([0.0,0,0], Float64[], Float64[], Int[], 1, 0)
+            set_attribute!(geo, :skinIndex, [0.49, 0.0, 0.0, 0.0], 4)
+            @test_throws "glTF skin joint index must be an integer" Diff3D._gltf_skin_tuples(
+                geo, :skinIndex, 1; indices=true, joint_count=1)
+        end
+    end
+
 end

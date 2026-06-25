@@ -8330,9 +8330,7 @@ function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
 end
 
 function _gltf_checked_node_index(raw, node_count::Int, label::String)
-    idx = Int(raw)
-    0 <= idx < node_count || error("glTF $label node index $idx out of bounds")
-    return idx
+    return _gltf_checked_zero_based_index(raw, node_count, "$label node")
 end
 
 function _gltf_skin_node_sets(gltf)
@@ -8355,13 +8353,21 @@ function _gltf_skin_node_sets(gltf)
     return joint_nodes, skin_root_nodes
 end
 
-function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int; indices::Bool=false)
+function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int;
+                           indices::Bool=false, joint_count::Union{Nothing,Int}=nothing)
     has_attribute(geo, name) || error("glTF skinned mesh is missing $name")
     attr = get_attribute(geo, name)
     attr.item_size == 4 || error("glTF $name accessor must be VEC4")
     length(attr.data) == nverts * 4 || error("glTF $name count does not match POSITION")
     if indices
-        return [ntuple(k -> Int(round(attr.data[4i - 4 + k])) + 1, 4) for i in 1:nverts]
+        joint_count === nothing &&
+            error("glTF skin joint indices require a joint count")
+        return [ntuple(k -> begin
+                    idx = _gltf_checked_integer(attr.data[4i - 4 + k], "skin joint index")
+                    0 <= idx < joint_count ||
+                        error("glTF skin joint index $idx out of bounds for $joint_count joints")
+                    idx + 1
+                end, 4) for i in 1:nverts]
     end
     tuples = NTuple{4,Float64}[]
     sizehint!(tuples, nverts)
@@ -8375,7 +8381,9 @@ end
 
 function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
     haskey(skin, "inverseBindMatrices") || return nothing
-    data, ncomp, count = _gltf_accessor(gltf, buffers, Int(skin["inverseBindMatrices"]))
+    accessor_index = _gltf_checked_zero_based_index(
+        skin["inverseBindMatrices"], length(gltf["accessors"]), "inverseBindMatrices accessor")
+    data, ncomp, count = _gltf_accessor(gltf, buffers, accessor_index)
     ncomp == 16 || error("glTF inverseBindMatrices accessor must be MAT4")
     count == joint_count || error("glTF inverseBindMatrices count must match joints")
     return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16)) for i in 1:count]
@@ -8477,7 +8485,15 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             ("WEIGHTS_0", :skinWeight),
         )
             haskey(attrs, gltf_name) || continue
-            data, item_size, attr_count = _gltf_accessor(gltf, buffers, Int(attrs[gltf_name]))
+            attr_accessor = _gltf_checked_zero_based_index(
+                attrs[gltf_name], length(gltf["accessors"]), "$gltf_name accessor")
+            if gltf_name == "JOINTS_0"
+                ctype = _gltf_checked_component_type(
+                    gltf["accessors"][attr_accessor + 1]["componentType"], "JOINTS_0 accessor")
+                ctype in (5121, 5123) ||
+                    error("glTF JOINTS_0 componentType must be UNSIGNED_BYTE or UNSIGNED_SHORT")
+            end
+            data, item_size, attr_count = _gltf_accessor(gltf, buffers, attr_accessor)
             attr_count == nverts || error("glTF $gltf_name count does not match POSITION")
             set_attribute!(geo, local_name, data, item_size)
         end
@@ -8519,7 +8535,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             return Mesh(geo, mat; morph_target_influences=morph_weights,
                         morph_target_names=morph_names)
         end
-        skin = gltf["skins"][Int(skin_idx) + 1]
+        skins = get(gltf, "skins", Any[])
+        skin_index = _gltf_checked_zero_based_index(skin_idx, length(skins), "skin")
+        skin = skins[skin_index + 1]
         bones = Bone[]
         for j in skin["joints"]
             bone = node_objects[Int(j)]
@@ -8528,7 +8546,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
         inv = _gltf_inverse_bind_matrices(gltf, buffers, skin, length(bones))
         skeleton = inv === nothing ? Skeleton(bones, fill(Mat4(), length(bones))) : Skeleton(bones, inv)
-        skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts; indices=true)
+        skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts;
+                                         indices=true, joint_count=length(bones))
         skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
         sm = SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
                          morph_target_influences=morph_weights,
