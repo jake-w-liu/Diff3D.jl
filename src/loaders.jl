@@ -481,6 +481,14 @@ function load_ply(path::String)
             error("PLY list property count must be a non-negative integer")
         return Int(cnt)
     end
+    function checked_vertex_index(idx, nverts::Int)
+        isfinite(idx) && idx == floor(idx) ||
+            error("PLY face vertex index must be an integer")
+        0 <= idx < nverts ||
+            error("PLY face vertex index $idx is outside 0:$(nverts - 1)")
+        iidx = Int(idx)
+        return iidx
+    end
 
     for (ename, ecount, props) in elements
         if ename == "vertex"
@@ -557,15 +565,20 @@ function load_ply(path::String)
             listp === nothing && error("PLY face element has no list property")
             ct = listp[3]; it = listp[4]
             if format == :ascii
-                for _ in 0:ecount-1
+                nverts = length(positions) ÷ 3
+                for face_row in 1:ecount
                     toks = split(strip(next_line()))
-                    nidx = parse(Int, toks[1])
-                    fan = [parse(Int, toks[1+k]) for k in 1:nidx]   # 0-based vertex indices
+                    !isempty(toks) || error("PLY face data is truncated: row $face_row has no list count")
+                    nidx = checked_list_count(parse(Float64, toks[1]))
+                    length(toks) >= 1 + nidx ||
+                        error("PLY face data is truncated: row $face_row declares $nidx indices but has $(length(toks) - 1)")
+                    fan = [checked_vertex_index(parse(Float64, toks[1+k]), nverts) for k in 1:nidx]   # 0-based vertex indices
                     for k in 2:(nidx - 1)
                         push!(indices, fan[1] + 1, fan[k] + 1, fan[k+1] + 1)
                     end
                 end
             else
+                nverts = length(positions) ÷ 3
                 for _ in 0:ecount-1
                     cnt, i = read_binary(bytes, i, ct)
                     # A signed count type (e.g. `char`) can decode negative; validate
@@ -575,7 +588,7 @@ function load_ply(path::String)
                     fan = Vector{Int}(undef, nidx)
                     for k in 1:nidx
                         val, i = read_binary(bytes, i, it)
-                        fan[k] = Int(round(val))        # 0-based
+                        fan[k] = checked_vertex_index(val, nverts)        # 0-based
                     end
                     for k in 2:(nidx - 1)
                         push!(indices, fan[1] + 1, fan[k] + 1, fan[k+1] + 1)

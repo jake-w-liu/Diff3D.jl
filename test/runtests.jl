@@ -15511,6 +15511,35 @@ end
             @test_throws Exception load_ply(tmp)
             rm(tmp)
         end
+        # ASCII PLY must validate the same face list invariants as binary:
+        # negative counts and out-of-range vertex references are corrupt input.
+        let tmp = tempname() * ".ply"
+            write(tmp, "ply\nformat ascii 1.0\nelement vertex 3\n" *
+                       "property float x\nproperty float y\nproperty float z\n" *
+                       "element face 1\nproperty list uchar int vertex_indices\nend_header\n" *
+                       "0 0 0\n1 0 0\n0 1 0\n-1\n")
+            @test_throws "PLY list property count" load_ply(tmp)
+            rm(tmp)
+        end
+        let tmp = tempname() * ".ply"
+            write(tmp, "ply\nformat ascii 1.0\nelement vertex 3\n" *
+                       "property float x\nproperty float y\nproperty float z\n" *
+                       "element face 1\nproperty list uchar int vertex_indices\nend_header\n" *
+                       "0 0 0\n1 0 0\n0 1 0\n3 0 1 9\n")
+            @test_throws "PLY face vertex index 9" load_ply(tmp)
+            rm(tmp)
+        end
+        let tmp = tempname() * ".ply"
+            open(tmp, "w") do io
+                write(io, "ply\nformat binary_little_endian 1.0\nelement vertex 3\n" *
+                          "property float x\nproperty float y\nproperty float z\n" *
+                          "element face 1\nproperty list uchar int vertex_indices\nend_header\n")
+                write(io, 0f0, 0f0, 0f0, 1f0, 0f0, 0f0, 0f0, 1f0, 0f0)
+                write(io, UInt8(3), Int32(0), Int32(1), Int32(9))
+            end
+            @test_throws "PLY face vertex index 9" load_ply(tmp)
+            rm(tmp)
+        end
 
         # Shadow depth rasterizer skips a triangle with a non-finite vertex
         # instead of throwing InexactError.
