@@ -126,6 +126,12 @@ function _load_stl_binary(path::String)
     end
 end
 
+function _stl_parse_ascii_float(tok, context::String)
+    value = tryparse(Float64, String(tok))
+    value === nothing && error("ASCII STL $context must be a number")
+    return value
+end
+
 function _load_stl_ascii(path::String)
     positions = Float64[]; normals = Float64[]; indices = Int[]
     cur_n = (0.0, 0.0, 0.0); vi = 0; vertices_in_facet = 0; in_facet = false
@@ -135,7 +141,11 @@ function _load_stl_ascii(path::String)
             !in_facet || error("ASCII STL nested facet is invalid")
             t = split(line)
             length(t) >= 5 || error("ASCII STL facet normal requires 3 components")
-            cur_n = (parse(Float64, t[3]), parse(Float64, t[4]), parse(Float64, t[5]))
+            cur_n = (
+                _stl_parse_ascii_float(t[3], "facet normal x"),
+                _stl_parse_ascii_float(t[4], "facet normal y"),
+                _stl_parse_ascii_float(t[5], "facet normal z"),
+            )
             in_facet = true
             vertices_in_facet = 0
         elseif startswith(line, "vertex")
@@ -143,7 +153,10 @@ function _load_stl_ascii(path::String)
             t = split(line)
             length(t) >= 4 || error("ASCII STL vertex requires 3 coordinates")
             vertices_in_facet < 3 || error("ASCII STL facet has more than 3 vertices")
-            push!(positions, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
+            push!(positions,
+                  _stl_parse_ascii_float(t[2], "vertex x"),
+                  _stl_parse_ascii_float(t[3], "vertex y"),
+                  _stl_parse_ascii_float(t[4], "vertex z"))
             push!(normals, cur_n[1], cur_n[2], cur_n[3])
             vi += 1; push!(indices, vi)
             vertices_in_facet += 1

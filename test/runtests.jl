@@ -16207,6 +16207,20 @@ end
         end
     end
 
+    @testset "fresh audit round 27 fixes" begin
+        let stl_path = text -> begin
+                path = tempname() * ".stl"
+                write(path, text)
+                path
+            end
+
+            @test_throws "ASCII STL facet normal x must be a number" load_stl(
+                stl_path("solid x\nfacet normal nope 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid x\n"))
+            @test_throws "ASCII STL vertex x must be a number" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nouter loop\nvertex nope 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid x\n"))
+        end
+    end
+
     @testset "fresh audit round 23 fixes" begin
         let mtl_path = text -> begin
                 path = tempname() * ".mtl"
