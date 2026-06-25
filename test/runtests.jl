@@ -8754,11 +8754,6 @@ end
         @test_throws ErrorException Diff3D._exr_pxr24_decode(UInt8[0x00], 1, [("Y", 0)], 1)  # UINT
         # End-to-end: a stored-deflate block of the 3/4-size FLOAT planes stays
         # under the raw-fallback threshold, so the real PXR24 path runs.
-        function zlib_store(d)
-            n = length(d)
-            vcat(UInt8[0x78, 0x01, 0x01, n & 0xff, (n >> 8) & 0xff,
-                       (~n) & 0xff, ((~n) >> 8) & 0xff], d, UInt8[0, 0, 0, 0])
-        end
         function pxr24_enc(W, H, chs, px)
             planes = UInt8[]
             for y in 0:(H - 1), (nm, pt) in chs
@@ -8788,7 +8783,7 @@ end
             while y < H
                 nl = min(16, H - y)
                 sub = Dict(k => v[(y + 1):(y + nl), :] for (k, v) in px)
-                data = zlib_store(pxr24_enc(W, nl, chs, sub))
+                data = Diff3D._zlib_store(pxr24_enc(W, nl, chs, sub))
                 push!(chunks, vcat(le32i(y), le32i(length(data)), data)); y += 16
             end
             body = length(hdr) + nb * 8; offs = UInt8[]; cur = body
@@ -8934,9 +8929,9 @@ end
                 Diff3D._piz_hufdecode!(hcode, hdec, r, L, 40, 50, out, ooff)
                 @test out[1] == 39 && ooff[] == 1
             end
-            # A corrupt DEFLATE stream (back-reference distance past the output) must
-            # raise a clear error, not a BoundsError (reachable via ZIP/PXR24 EXR).
-            @test_throws ErrorException Diff3D.zlib_inflate(UInt8[0x78, 0x01, 0x73, 0x04, 0x52])
+            # A corrupt raw DEFLATE stream (back-reference distance past the output)
+            # must raise a clear error, not a BoundsError (reachable via ZIP/PXR24 EXR).
+            @test_throws ErrorException Diff3D.inflate(UInt8[0x73, 0x04, 0x52])
             # B44 shift count is masked to 5 bits (JS/OpenEXR 32-bit shift) so a
             # corrupt shift>=32 stays consistent with the parity reference, no crash.
             let b = zeros(UInt8, 14)
@@ -15899,6 +15894,28 @@ end
             @test !isempty(hits)
             @test hits[1].object === sm
             @test isapprox(hits[1].distance, 4.5; atol = 1e-6)
+        end
+    end
+
+    @testset "fresh audit round 15 fixes" begin
+        # zlib_inflate validates the zlib wrapper instead of accepting any two
+        # leading bytes and ignoring the Adler-32 trailer.
+        let data = UInt8[0x41, 0x42, 0x43],
+            z = Diff3D._zlib_store(data)
+            @test zlib_inflate(z) == data
+
+            corrupt = copy(z)
+            corrupt[end] ⊻= 0xff
+            @test_throws Exception zlib_inflate(corrupt)
+
+            bad_header = copy(z)
+            bad_header[1] = 0x00
+            bad_header[2] = 0x00
+            @test_throws Exception zlib_inflate(bad_header)
+
+            bad_nlen = copy(z)
+            bad_nlen[6] ⊻= 0x01
+            @test_throws Exception zlib_inflate(bad_nlen)
         end
     end
 

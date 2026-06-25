@@ -179,6 +179,8 @@ function inflate(data::Vector{UInt8})
             br.bitcnt = 0                       # align to byte boundary
             br.pos + 3 <= length(br.data) || error("DEFLATE stored block is truncated")
             len = Int(br.data[br.pos]) | (Int(br.data[br.pos + 1]) << 8)
+            nlen = Int(br.data[br.pos + 2]) | (Int(br.data[br.pos + 3]) << 8)
+            nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
             br.pos += 4                         # skip LEN(2) + NLEN(2)
             br.pos + len - 1 <= length(br.data) || error("DEFLATE stored block is truncated")
             for _ in 1:len
@@ -196,7 +198,23 @@ function inflate(data::Vector{UInt8})
     return out
 end
 
-zlib_inflate(data::Vector{UInt8}) = inflate(data[3:end])   # skip 2-byte zlib header; ignore Adler trailer
+function zlib_inflate(data::Vector{UInt8})
+    length(data) >= 6 || error("zlib stream is truncated")
+    cmf = data[1]
+    flg = data[2]
+    (cmf & 0x0f) == 0x08 || error("zlib stream uses unsupported compression method")
+    (cmf >> 4) <= 0x07 || error("zlib stream uses an invalid window size")
+    ((UInt16(cmf) << 8) | UInt16(flg)) % 31 == 0 ||
+        error("zlib stream has an invalid header check")
+    (flg & 0x20) == 0x00 || error("zlib streams with preset dictionaries are not supported")
+
+    out = inflate(data[3:end - 4])
+    expected = (UInt32(data[end - 3]) << 24) | (UInt32(data[end - 2]) << 16) |
+               (UInt32(data[end - 1]) << 8) | UInt32(data[end])
+    actual = _adler32(out)
+    actual == expected || error("zlib Adler-32 checksum mismatch")
+    return out
+end
 
 # ========================== PNG decode ==========================
 
