@@ -1827,6 +1827,24 @@ function _mtl_texture_path(tokens::Vector{SubString{String}})
     return ""
 end
 
+function _mtl_require_values(tokens, count::Int, label::String)
+    length(tokens) >= count + 1 ||
+        error("MTL $label requires $count $(count == 1 ? "value" : "values")")
+end
+
+function _mtl_parse_float(tok, label::String)
+    value = tryparse(Float64, String(tok))
+    value === nothing && error("MTL $label must be a number")
+    return value
+end
+
+function _mtl_parse_color(tokens, label::String)
+    _mtl_require_values(tokens, 3, label)
+    return Color3(_mtl_parse_float(tokens[2], "$label red"),
+                  _mtl_parse_float(tokens[3], "$label green"),
+                  _mtl_parse_float(tokens[4], "$label blue"))
+end
+
 function load_mtl(path::String)
     mats = Dict{String, MeshPhongMaterial}()
     name = ""
@@ -1844,15 +1862,22 @@ function load_mtl(path::String)
         isempty(t) && continue
         tag = t[1]
         if tag == "newmtl"
+            length(t) >= 2 || error("MTL newmtl requires a material name")
             flush!()
             name = t[2]; kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
             ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0; diffuse_map = nothing
-        elseif tag == "Kd"; kd = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
-        elseif tag == "Ks"; ks = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
-        elseif tag == "Ke"; ke = Color3(parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
-        elseif tag == "Ns"; ns = parse(Float64, t[2])
-        elseif tag == "d";  d = parse(Float64, t[2])
-        elseif tag == "Tr"; d = 1.0 - parse(Float64, t[2])
+        elseif tag == "Kd"; kd = _mtl_parse_color(t, "Kd")
+        elseif tag == "Ks"; ks = _mtl_parse_color(t, "Ks")
+        elseif tag == "Ke"; ke = _mtl_parse_color(t, "Ke")
+        elseif tag == "Ns"
+            _mtl_require_values(t, 1, "Ns")
+            ns = _mtl_parse_float(t[2], "Ns")
+        elseif tag == "d"
+            _mtl_require_values(t, 1, "d")
+            d = _mtl_parse_float(t[2], "d")
+        elseif tag == "Tr"
+            _mtl_require_values(t, 1, "Tr")
+            d = 1.0 - _mtl_parse_float(t[2], "Tr")
         elseif tag == "map_Kd"
             texpath = _mtl_texture_path(t)
             isempty(texpath) && error("MTL map_Kd requires a texture path")
@@ -1890,8 +1915,10 @@ function load_obj_groups(path::String)
         elseif tag == "vn"
             push!(file_normals, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4])); have_normals = true
         elseif tag == "mtllib"
+            length(t) >= 2 || error("OBJ mtllib requires a material library path")
             mp = joinpath(dir, t[2]); isfile(mp) && merge!(materials, load_mtl(mp))
         elseif tag == "usemtl"
+            length(t) >= 2 || error("OBJ usemtl requires a material name")
             cur_mtl = t[2]
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3

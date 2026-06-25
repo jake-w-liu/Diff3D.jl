@@ -16207,4 +16207,34 @@ end
         end
     end
 
+    @testset "fresh audit round 23 fixes" begin
+        let mtl_path = text -> begin
+                path = tempname() * ".mtl"
+                write(path, text)
+                path
+            end,
+            obj_path = text -> begin
+                path = tempname() * ".obj"
+                write(path, text)
+                path
+            end,
+            obj_base = """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            f 1 2 3
+            """
+
+            @test_throws "MTL newmtl requires a material name" load_mtl(mtl_path("newmtl\n"))
+            @test_throws "MTL Kd requires 3 values" load_mtl(mtl_path("newmtl m\nKd 1 0\n"))
+            @test_throws "MTL Kd red must be a number" load_mtl(mtl_path("newmtl m\nKd nope 0 1\n"))
+            @test_throws "MTL Ns requires 1 value" load_mtl(mtl_path("newmtl m\nNs\n"))
+            @test_throws "MTL d must be a number" load_mtl(mtl_path("newmtl m\nd opaque\n"))
+            @test_throws "OBJ mtllib requires a material library path" load_obj_groups(
+                obj_path("mtllib\n" * obj_base))
+            @test_throws "OBJ usemtl requires a material name" load_obj_groups(
+                obj_path("usemtl\n" * obj_base))
+        end
+    end
+
 end
