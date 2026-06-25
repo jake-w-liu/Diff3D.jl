@@ -756,16 +756,18 @@ function _decode_wav(bytes::Vector{UInt8})
     String(bytes[1:4]) == "RIFF" || error("not a RIFF WAV file")
     String(bytes[9:12]) == "WAVE" || error("RIFF file is not WAVE audio")
     riff_size = _le_u32(bytes, 5)
-    riff_size + 8 <= length(bytes) || error("WAV RIFF size exceeds file length")
+    riff_end = riff_size + 8
+    riff_end <= length(bytes) || error("WAV RIFF size exceeds file length")
     fmt = nothing
     data_start = 0
     data_len = 0
     pos = 13
-    while pos + 7 <= min(length(bytes), riff_size + 8)
+    while pos + 7 <= riff_end
         chunk_id = String(bytes[pos:pos + 3])
         chunk_len = _le_u32(bytes, pos + 4)
         chunk_start = pos + 8
         chunk_end = chunk_start + chunk_len - 1
+        chunk_end <= riff_end || error("WAV chunk $chunk_id exceeds RIFF declared size")
         chunk_end <= length(bytes) || error("WAV chunk $chunk_id exceeds file length")
         if chunk_id == "fmt "
             fmt = bytes[chunk_start:chunk_end]

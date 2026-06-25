@@ -6885,6 +6885,10 @@ end
         @test vec(afloat.samples) ≈ [-0.25, 0.5, 1.25]
         rm(float_path)
 
+        bad_riff_size = wav_bytes(1, 1, 8000, 16, UInt8[0x00, 0x00])
+        bad_riff_size[5:8] = le32(36)  # WAVE + fmt chunk + data header, but no data payload
+        @test_throws ErrorException Diff3D._decode_wav(bad_riff_size)
+
         bad_path = tempname() * ".wav"
         write(bad_path, UInt8[0x52, 0x49, 0x46, 0x46, 0x00])
         @test_throws ErrorException load_wav(bad_path)
