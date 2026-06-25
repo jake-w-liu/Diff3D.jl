@@ -2143,7 +2143,16 @@ FontData(family_name, resolution, ascender, descender, glyphs) =
 _font_float(d::AbstractDict, key::String, default::Real=0.0) =
     haskey(d, key) && d[key] !== nothing ? Float64(d[key]) : Float64(default)
 
-function _font_parse_outline(outline::AbstractString)
+function _font_outline_parse_float(tok, char::String, cmd::String, field::String)
+    value = tryparse(Float64, String(tok))
+    value === nothing &&
+        error("font glyph $char outline command $cmd $field must be a number")
+    isfinite(value) ||
+        error("font glyph $char outline command $cmd $field must be finite")
+    return value
+end
+
+function _font_parse_outline(outline::AbstractString, char::String)
     tokens = split(strip(String(outline)))
     commands = FontCommand[]
     i = 1
@@ -2155,22 +2164,27 @@ function _font_parse_outline(outline::AbstractString)
         i += 1
         if cmd == "m" || cmd == "l"
             need(2, cmd)
-            x = parse(Float64, tokens[i])
-            y = parse(Float64, tokens[i + 1])
+            x = _font_outline_parse_float(tokens[i], char, cmd, "x")
+            y = _font_outline_parse_float(tokens[i + 1], char, cmd, "y")
             i += 2
             push!(commands, FontCommand(cmd == "m" ? :move : :line,
                                         [Vec2(x, y)]))
         elseif cmd == "q"
             need(4, cmd)
-            c = Vec2(parse(Float64, tokens[i]), parse(Float64, tokens[i + 1]))
-            p = Vec2(parse(Float64, tokens[i + 2]), parse(Float64, tokens[i + 3]))
+            c = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "control x"),
+                     _font_outline_parse_float(tokens[i + 1], char, cmd, "control y"))
+            p = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "x"),
+                     _font_outline_parse_float(tokens[i + 3], char, cmd, "y"))
             i += 4
             push!(commands, FontCommand(:quadratic, [c, p]))
         elseif cmd == "b"
             need(6, cmd)
-            c1 = Vec2(parse(Float64, tokens[i]), parse(Float64, tokens[i + 1]))
-            c2 = Vec2(parse(Float64, tokens[i + 2]), parse(Float64, tokens[i + 3]))
-            p = Vec2(parse(Float64, tokens[i + 4]), parse(Float64, tokens[i + 5]))
+            c1 = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "control 1 x"),
+                      _font_outline_parse_float(tokens[i + 1], char, cmd, "control 1 y"))
+            c2 = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "control 2 x"),
+                      _font_outline_parse_float(tokens[i + 3], char, cmd, "control 2 y"))
+            p = Vec2(_font_outline_parse_float(tokens[i + 4], char, cmd, "x"),
+                     _font_outline_parse_float(tokens[i + 5], char, cmd, "y"))
             i += 6
             push!(commands, FontCommand(:bezier, [c1, c2, p]))
         else
@@ -2188,7 +2202,7 @@ function _font_glyph(char::String, raw)
                      _font_float(raw, "x_min", 0.0),
                      _font_float(raw, "x_max", 0.0),
                      outline,
-                     _font_parse_outline(outline))
+                     _font_parse_outline(outline, char))
 end
 
 function _font_kerning_amount(raw, context::AbstractString)

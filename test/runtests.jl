@@ -7057,6 +7057,30 @@ end
         """)
         @test_throws "unsupported font glyph outline command" load_font(bad_command_path)
         rm(bad_command_path)
+
+        bad_coordinate_path = tempname() * ".typeface.json"
+        write(bad_coordinate_path, """
+        {
+          "resolution": 1000,
+          "glyphs": {
+            "A": { "ha": 1000, "o": "m nope 0 l 1 1" }
+          }
+        }
+        """)
+        @test_throws "font glyph A outline command m x must be a number" load_font(bad_coordinate_path)
+        rm(bad_coordinate_path)
+
+        nonfinite_coordinate_path = tempname() * ".typeface.json"
+        write(nonfinite_coordinate_path, """
+        {
+          "resolution": 1000,
+          "glyphs": {
+            "A": { "ha": 1000, "o": "m 0 0 l 1 Inf" }
+          }
+        }
+        """)
+        @test_throws "font glyph A outline command l y must be finite" load_font(nonfinite_coordinate_path)
+        rm(nonfinite_coordinate_path)
     end
 
     @testset "SVGLoader basic shapes" begin
