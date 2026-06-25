@@ -1980,7 +1980,10 @@ end
 function _json_parse(s::String)
     p = _JSONParser(s, 1)
     _json_ws(p)
+    p.i <= ncodeunits(p.s) || error("empty JSON input")
     v = _json_value(p)
+    _json_ws(p)
+    p.i > ncodeunits(p.s) || error("unexpected trailing JSON content")
     return v
 end
 
@@ -1991,38 +1994,71 @@ end
     end
 end
 
+function _json_current(p, context::String)
+    p.i <= ncodeunits(p.s) || error("unexpected end of JSON $context")
+    return p.s[p.i]
+end
+
+function _json_literal(p, literal::String, value)
+    n = ncodeunits(p.s)
+    last = p.i + ncodeunits(literal) - 1
+    last <= n && p.s[p.i:last] == literal ||
+        error("invalid JSON literal at byte $(p.i)")
+    p.i = last + 1
+    return value
+end
+
 function _json_value(p)
-    c = p.s[p.i]
+    c = _json_current(p, "value")
     if c == '{'; return _json_object(p)
     elseif c == '['; return _json_array(p)
     elseif c == '"'; return _json_string(p)
-    elseif c == 't'; p.i += 4; return true
-    elseif c == 'f'; p.i += 5; return false
-    elseif c == 'n'; p.i += 4; return nothing
+    elseif c == 't'; return _json_literal(p, "true", true)
+    elseif c == 'f'; return _json_literal(p, "false", false)
+    elseif c == 'n'; return _json_literal(p, "null", nothing)
     else; return _json_number(p)
     end
 end
 
 function _json_object(p)
     d = Dict{String, Any}(); p.i += 1; _json_ws(p)
-    p.s[p.i] == '}' && (p.i += 1; return d)
+    _json_current(p, "object") == '}' && (p.i += 1; return d)
     while true
-        _json_ws(p); key = _json_string(p); _json_ws(p)
-        p.i += 1                                # ':'
+        _json_ws(p)
+        _json_current(p, "object key") == '"' ||
+            error("JSON object key must be a string")
+        key = _json_string(p); _json_ws(p)
+        _json_current(p, "object entry") == ':' ||
+            error("JSON object entry is missing ':'")
+        p.i += 1
         _json_ws(p); d[key] = _json_value(p); _json_ws(p)
-        if p.s[p.i] == ','; p.i += 1
-        else; p.i += 1; break; end              # '}'
+        c = _json_current(p, "object entry")
+        if c == ','
+            p.i += 1
+        elseif c == '}'
+            p.i += 1
+            break
+        else
+            error("JSON object entry must end with ',' or '}'")
+        end
     end
     return d
 end
 
 function _json_array(p)
     a = Any[]; p.i += 1; _json_ws(p)
-    p.s[p.i] == ']' && (p.i += 1; return a)
+    _json_current(p, "array") == ']' && (p.i += 1; return a)
     while true
         _json_ws(p); push!(a, _json_value(p)); _json_ws(p)
-        if p.s[p.i] == ','; p.i += 1
-        else; p.i += 1; break; end              # ']'
+        c = _json_current(p, "array entry")
+        if c == ','
+            p.i += 1
+        elseif c == ']'
+            p.i += 1
+            break
+        else
+            error("JSON array entry must end with ',' or ']'")
+        end
     end
     return a
 end
@@ -2105,7 +2141,12 @@ function _json_number(p)
     while p.i <= n && (p.s[p.i] in ('-','+','.','e','E','0','1','2','3','4','5','6','7','8','9'))
         p.i += 1
     end
-    return parse(Float64, p.s[start:p.i-1])
+    p.i > start || error("invalid JSON value at byte $start")
+    raw = p.s[start:p.i-1]
+    value = tryparse(Float64, raw)
+    value === nothing && error("invalid JSON number $raw")
+    isfinite(value) || error("JSON number $raw must be finite")
+    return value
 end
 
 # ========================== FontLoader / typeface JSON ==========================

@@ -7081,6 +7081,34 @@ end
         """)
         @test_throws "font glyph A outline command l y must be finite" load_font(nonfinite_coordinate_path)
         rm(nonfinite_coordinate_path)
+
+        trailing_json_path = tempname() * ".typeface.json"
+        write(trailing_json_path, """
+        {
+          "resolution": 1000,
+          "glyphs": {
+            "A": { "ha": 1000, "o": "m 0 0 l 1 1" }
+          }
+        }
+        trailing-garbage
+        """)
+        @test_throws "unexpected trailing JSON content" load_font(trailing_json_path)
+        rm(trailing_json_path)
+
+        invalid_number_path = tempname() * ".typeface.json"
+        write(invalid_number_path, """{"resolution": ., "glyphs": {}}""")
+        @test_throws "invalid JSON number ." load_font(invalid_number_path)
+        rm(invalid_number_path)
+
+        invalid_literal_path = tempname() * ".typeface.json"
+        write(invalid_literal_path, "tr")
+        @test_throws "invalid JSON literal at byte 1" load_font(invalid_literal_path)
+        rm(invalid_literal_path)
+
+        missing_colon_path = tempname() * ".typeface.json"
+        write(missing_colon_path, """{"resolution" 1000, "glyphs": {}}""")
+        @test_throws "JSON object entry is missing" load_font(missing_colon_path)
+        rm(missing_colon_path)
     end
 
     @testset "SVGLoader basic shapes" begin
