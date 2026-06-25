@@ -15943,4 +15943,39 @@ end
         end
     end
 
+    @testset "fresh audit round 17 fixes" begin
+        # _decode_png enforces required PNG structure instead of decoding files
+        # that happen to contain enough compressed bytes but are missing core
+        # chunks or valid image dimensions.
+        let tiny_png = () -> begin
+                io = IOBuffer()
+                write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+                ihdr = UInt8[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]
+                Diff3D._png_chunk(io, "IHDR", ihdr)
+                Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(UInt8[0, 255, 0, 0]))
+                Diff3D._png_chunk(io, "IEND", UInt8[])
+                take!(io)
+            end
+            good = tiny_png()
+            @test size(Diff3D._decode_png(good)) == (1, 1, 3)
+
+            without_iend = UInt8[]
+            append!(without_iend, good[1:end-12])
+            @test_throws Exception Diff3D._decode_png(without_iend)
+
+            no_ihdr = IOBuffer()
+            write(no_ihdr, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+            Diff3D._png_chunk(no_ihdr, "IDAT", Diff3D._zlib_store(UInt8[]))
+            Diff3D._png_chunk(no_ihdr, "IEND", UInt8[])
+            @test_throws Exception Diff3D._decode_png(take!(no_ihdr))
+
+            zero_dim = IOBuffer()
+            write(zero_dim, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+            Diff3D._png_chunk(zero_dim, "IHDR", UInt8[0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 0, 0])
+            Diff3D._png_chunk(zero_dim, "IDAT", Diff3D._zlib_store(UInt8[]))
+            Diff3D._png_chunk(zero_dim, "IEND", UInt8[])
+            @test_throws Exception Diff3D._decode_png(take!(zero_dim))
+        end
+    end
+
 end

@@ -420,6 +420,10 @@ function _decode_png(bytes::Vector{UInt8})
     idat = UInt8[]
     palette = UInt8[]
     trns = UInt8[]
+    seen_ihdr = false
+    seen_idat = false
+    seen_iend = false
+    idat_closed = false
     while pos <= length(bytes)
         pos + 7 <= length(bytes) || error("PNG chunk header is truncated")
         len = _rd_be32(bytes, pos); pos += 4
@@ -439,22 +443,41 @@ function _decode_png(bytes::Vector{UInt8})
         end
         _crc32(crc_data) == expected_crc ||
             error("PNG chunk '$ctype' CRC mismatch")
+        seen_ihdr || ctype == "IHDR" || error("PNG first chunk must be IHDR")
         if ctype == "IHDR"
-            len >= 13 || error("PNG IHDR chunk is truncated")
+            !seen_ihdr || error("PNG contains multiple IHDR chunks")
+            len == 13 || error("PNG IHDR chunk length must be 13")
             W = _rd_be32(bytes, pos); H = _rd_be32(bytes, pos+4)
             bitdepth = bytes[pos+8]; colortype = bytes[pos+9]
+            bytes[pos+10] == 0 || error("unsupported PNG compression method $(bytes[pos+10])")
+            bytes[pos+11] == 0 || error("unsupported PNG filter method $(bytes[pos+11])")
             interlace = bytes[pos+12]
+            (W > 0 && H > 0) || error("PNG dimensions must be positive")
+            seen_ihdr = true
         elseif ctype == "IDAT"
-            append!(idat, @view bytes[pos:pos+len-1])
+            !idat_closed || error("PNG IDAT chunks must be consecutive")
+            seen_idat = true
+            if len > 0
+                append!(idat, @view bytes[pos:pos+len-1])
+            end
         elseif ctype == "PLTE"
+            !seen_idat || error("PNG PLTE chunk must appear before IDAT")
             palette = collect(@view bytes[pos:pos+len-1])
         elseif ctype == "tRNS"
+            !seen_idat || error("PNG tRNS chunk must appear before IDAT")
             trns = collect(@view bytes[pos:pos+len-1])
         elseif ctype == "IEND"
+            len == 0 || error("PNG IEND chunk must be empty")
+            seen_iend = true
             break
+        elseif seen_idat
+            idat_closed = true
         end
         pos += len + 4                          # data + CRC
     end
+    seen_ihdr || error("PNG IHDR chunk is missing")
+    seen_idat || error("PNG IDAT chunk is missing")
+    seen_iend || error("PNG IEND chunk is missing")
     (interlace == 0 || interlace == 1) || error("unsupported PNG interlace method $interlace")
     if colortype == 3
         bitdepth in (1, 2, 4, 8) || error("unsupported PNG palette bit depth $bitdepth")
