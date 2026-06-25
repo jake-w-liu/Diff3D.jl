@@ -16011,4 +16011,57 @@ end
         end
     end
 
+    @testset "fresh audit round 18 fixes" begin
+        # glTF triangle indices are validated before constructing BufferGeometry:
+        # with normals present, the old loader accepted index 3 for a 3-vertex
+        # primitive and returned geometry with indices [1, 2, 4].
+        let dir = mktempdir(), bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            append_u16!(xs) = append!(bin, reinterpret(UInt8, UInt16.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_nrm = length(bin); append_f32!([0,0,1, 0,0,1, 0,0,1])
+            off_idx = length(bin); append_u16!([0,1,3])
+            write(joinpath(dir, "bad_index.bin"), bin)
+            path = joinpath(dir, "bad_index.gltf")
+            write(path, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"bad_index.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_nrm,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_idx,"byteLength":6}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1},"indices":2}]}]}
+            """)
+            @test_throws "glTF primitive index 3.0 out of bounds" load_gltf(path)
+        end
+
+        # Primitive indices accessors must be unsigned integer SCALAR accessors;
+        # a FLOAT accessor must not be rounded and accepted as topology.
+        let dir = mktempdir(), bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
+            off_idx = length(bin); append_f32!([0,1,2])
+            write(joinpath(dir, "float_index.bin"), bin)
+            path = joinpath(dir, "float_index.gltf")
+            write(path, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"float_index.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_pos,"byteLength":36},
+               {"buffer":0,"byteOffset":$off_idx,"byteLength":12}],
+             "accessors":[
+               {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+               {"bufferView":1,"componentType":5126,"count":3,"type":"SCALAR"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}]}
+            """)
+            @test_throws "glTF primitive indices componentType" load_gltf(path)
+        end
+    end
+
 end

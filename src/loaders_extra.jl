@@ -8042,6 +8042,40 @@ function _gltf_triangulate_indices(order::Vector{Int}, mode::Int)
     return out
 end
 
+function _gltf_checked_zero_based_index(raw, count::Int, label::String)
+    raw isa Bool && error("glTF $label index must be an integer")
+    raw isa Real || error("glTF $label index must be an integer")
+    idx = Float64(raw)
+    isfinite(idx) && idx == floor(idx) ||
+        error("glTF $label index must be an integer")
+    0 <= idx < count ||
+        error("glTF $label index $idx out of bounds")
+    return Int(idx)
+end
+
+function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int)
+    accessors = gltf["accessors"]
+    0 <= accessor_index < length(accessors) ||
+        error("glTF primitive indices accessor index $accessor_index out of bounds")
+    acc = accessors[accessor_index + 1]
+    acc["type"] == "SCALAR" ||
+        error("glTF primitive indices accessor must be SCALAR")
+    ctype = Int(acc["componentType"])
+    ctype in (5121, 5123, 5125) ||
+        error("glTF primitive indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
+    idxf, ncomp, _ = _gltf_accessor(gltf, buffers, accessor_index)
+    ncomp == 1 || error("glTF primitive indices accessor must be SCALAR")
+    out = Vector{Int}(undef, length(idxf))
+    @inbounds for (i, idx) in enumerate(idxf)
+        isfinite(idx) && idx == floor(idx) ||
+            error("glTF primitive index must be an integer")
+        0 <= idx < nverts ||
+            error("glTF primitive index $idx out of bounds for $nverts vertices")
+        out[i] = Int(idx) + 1
+    end
+    return out
+end
+
 function _gltf_expand_attribute(data::AbstractVector, item_size::Int,
                                 order::Vector{Int}, nverts::Int, label::String)
     item_size > 0 || error("$label item_size must be positive")
@@ -8385,8 +8419,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             uvcomp == 2 || error("glTF TEXCOORD_0 accessor must be VEC2")
         end
         if haskey(prim, "indices")
-            idxf, _, _ = _gltf_accessor(gltf, buffers, Int(prim["indices"]))
-            indices = Int.(round.(idxf)) .+ 1
+            indices_accessor = _gltf_checked_zero_based_index(
+                prim["indices"], length(gltf["accessors"]), "primitive indices accessor")
+            indices = _gltf_primitive_indices(gltf, buffers, indices_accessor, nverts)
         else
             indices = collect(1:nverts)
         end
