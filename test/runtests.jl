@@ -16237,4 +16237,29 @@ end
         end
     end
 
+    @testset "fresh audit round 24 fixes" begin
+        let obj_path = text -> begin
+                path = tempname() * ".obj"
+                write(path, text)
+                path
+            end,
+            base = """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            """
+
+            @test_throws "OBJ v requires 3 values" load_obj(obj_path("v 0 0\n"))
+            @test_throws "OBJ v requires 3 values" load_obj_groups(obj_path("v 0 0\n"))
+            @test_throws "OBJ v x must be a number" load_obj(obj_path("v nope 0 0\n"))
+            @test_throws "OBJ vt requires 1 value" load_obj(obj_path(base * "vt\nf 1 2 3\n"))
+            @test_throws "OBJ vt v must be a number" load_obj_groups(
+                obj_path(base * "vt 0 nope\nf 1/1 2/1 3/1\n"))
+            @test_throws "OBJ vn requires 3 values" load_obj(
+                obj_path(base * "vn 0 0\nf 1//1 2//1 3//1\n"))
+            @test_throws "OBJ vn z must be a number" load_obj_groups(
+                obj_path(base * "vn 0 0 nope\nf 1//1 2//1 3//1\n"))
+        end
+    end
+
 end

@@ -1906,14 +1906,16 @@ function load_obj_groups(path::String)
         (isempty(line) || startswith(line, "#")) && continue
         t = split(line); tag = t[1]
         if tag == "v"
-            push!(verts, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4]))
+            x, y, z = _obj_parse_vec3(t, "v")
+            push!(verts, x, y, z)
         elseif tag == "vt"
-            length(t) >= 2 || error("OBJ: malformed 'vt' line (no coordinate): $line")
+            _obj_require_values(t, 1, "vt")
             # 1-D texture coordinate `vt u` -> (u, 0), matching three.js OBJLoader.
-            push!(file_uvs, parse(Float64,t[2]),
-                  length(t) >= 3 ? parse(Float64,t[3]) : 0.0)
+            push!(file_uvs, _obj_parse_float(t[2], "vt u"),
+                  length(t) >= 3 ? _obj_parse_float(t[3], "vt v") : 0.0)
         elseif tag == "vn"
-            push!(file_normals, parse(Float64,t[2]), parse(Float64,t[3]), parse(Float64,t[4])); have_normals = true
+            x, y, z = _obj_parse_vec3(t, "vn")
+            push!(file_normals, x, y, z); have_normals = true
         elseif tag == "mtllib"
             length(t) >= 2 || error("OBJ mtllib requires a material library path")
             mp = joinpath(dir, t[2]); isfile(mp) && merge!(materials, load_mtl(mp))

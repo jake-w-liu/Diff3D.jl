@@ -182,6 +182,24 @@ function _obj_checked_index(tok, count::Int, kind::Symbol)
     return idx
 end
 
+function _obj_require_values(tokens, count::Int, label::String)
+    length(tokens) >= count + 1 ||
+        error("OBJ $label requires $count $(count == 1 ? "value" : "values")")
+end
+
+function _obj_parse_float(tok, label::String)
+    value = tryparse(Float64, String(tok))
+    value === nothing && error("OBJ $label must be a number")
+    return value
+end
+
+function _obj_parse_vec3(tokens, label::String)
+    _obj_require_values(tokens, 3, label)
+    return (_obj_parse_float(tokens[2], "$label x"),
+            _obj_parse_float(tokens[3], "$label y"),
+            _obj_parse_float(tokens[4], "$label z"))
+end
+
 """
     load_obj(path) -> BufferGeometry
 
@@ -207,16 +225,18 @@ function load_obj(path::String)
         t = split(line)
         tag = t[1]
         if tag == "v"
-            push!(verts, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
+            x, y, z = _obj_parse_vec3(t, "v")
+            push!(verts, x, y, z)
         elseif tag == "vt"
-            length(t) >= 2 || error("OBJ: malformed 'vt' line (no coordinate): $line")
+            _obj_require_values(t, 1, "vt")
             # A 1-D texture coordinate (`vt u`) is valid; treat the missing
             # second component as 0.0 (matching three.js OBJLoader) instead of
             # indexing past the end of the token list with a BoundsError.
-            push!(file_uvs, parse(Float64, t[2]),
-                  length(t) >= 3 ? parse(Float64, t[3]) : 0.0)
+            push!(file_uvs, _obj_parse_float(t[2], "vt u"),
+                  length(t) >= 3 ? _obj_parse_float(t[3], "vt v") : 0.0)
         elseif tag == "vn"
-            push!(file_normals, parse(Float64, t[2]), parse(Float64, t[3]), parse(Float64, t[4]))
+            x, y, z = _obj_parse_vec3(t, "vn")
+            push!(file_normals, x, y, z)
             have_normals = true
         elseif tag == "f"
             nverts_v = length(verts) ÷ 3
