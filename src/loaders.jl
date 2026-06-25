@@ -396,6 +396,12 @@ function _ply_parse_element_count(tok)
     return count
 end
 
+function _ply_parse_ascii_float(tok, context::String)
+    value = tryparse(Float64, String(tok))
+    value === nothing && error("PLY $context must be a number")
+    return value
+end
+
 # Read one scalar of canonical type `t` from byte vector `b` at 1-based offset
 # `p` (little-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_le(b::Vector{UInt8}, p::Int, t::Symbol)
@@ -590,7 +596,10 @@ function load_ply(path::String)
                     toks = split(strip(next_line()))
                     length(toks) >= length(props) ||
                         error("PLY vertex data is truncated: expected $ecount vertices, row $(v+1) has $(length(toks)) of $(length(props)) values")
-                    row = [parse(Float64, tok) for tok in toks]
+                    row = [
+                        _ply_parse_ascii_float(tok, "vertex row $(v+1) $(j <= length(props) ? "property $(props[j][2])" : "value $j")")
+                        for (j, tok) in enumerate(toks)
+                    ]
                     b3 = v * 3
                     positions[b3+1] = row[ix]; positions[b3+2] = row[iy]; positions[b3+3] = row[iz]
                     if have_normals
@@ -642,10 +651,16 @@ function load_ply(path::String)
                 for face_row in 1:ecount
                     toks = split(strip(next_line()))
                     !isempty(toks) || error("PLY face data is truncated: row $face_row has no list count")
-                    nidx = checked_list_count(parse(Float64, toks[1]))
+                    nidx = checked_list_count(_ply_parse_ascii_float(toks[1], "face row $face_row list count"))
                     length(toks) >= 1 + nidx ||
                         error("PLY face data is truncated: row $face_row declares $nidx indices but has $(length(toks) - 1)")
-                    fan = [checked_vertex_index(parse(Float64, toks[1+k]), nverts) for k in 1:nidx]   # 0-based vertex indices
+                    fan = [
+                        checked_vertex_index(
+                            _ply_parse_ascii_float(toks[1+k], "face row $face_row vertex index $k"),
+                            nverts,
+                        )
+                        for k in 1:nidx
+                    ]   # 0-based vertex indices
                     for k in 2:(nidx - 1)
                         push!(indices, fan[1] + 1, fan[k] + 1, fan[k+1] + 1)
                     end

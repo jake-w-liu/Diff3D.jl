@@ -16306,4 +16306,43 @@ end
         end
     end
 
+    @testset "fresh audit round 26 fixes" begin
+        let ply_path = text -> begin
+                path = tempname() * ".ply"
+                write(path, text)
+                path
+            end,
+            base_with_face = """
+            ply
+            format ascii 1.0
+            element vertex 3
+            property float x
+            property float y
+            property float z
+            element face 1
+            property list uchar int vertex_indices
+            end_header
+            0 0 0
+            1 0 0
+            0 1 0
+            """
+
+            @test_throws "PLY vertex row 1 property x must be a number" load_ply(
+                ply_path("""
+                ply
+                format ascii 1.0
+                element vertex 1
+                property float x
+                property float y
+                property float z
+                end_header
+                nope 0 0
+                """))
+            @test_throws "PLY face row 1 list count must be a number" load_ply(
+                ply_path(base_with_face * "nope 0 1 2\n"))
+            @test_throws "PLY face row 1 vertex index 2 must be a number" load_ply(
+                ply_path(base_with_face * "3 0 nope 2\n"))
+        end
+    end
+
 end
