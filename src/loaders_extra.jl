@@ -423,9 +423,22 @@ function _decode_png(bytes::Vector{UInt8})
     while pos <= length(bytes)
         pos + 7 <= length(bytes) || error("PNG chunk header is truncated")
         len = _rd_be32(bytes, pos); pos += 4
-        ctype = String(bytes[pos:pos+3]); pos += 4
-        pos + len - 1 <= length(bytes) ||
+        ctype_start = pos
+        ctype = String(bytes[ctype_start:ctype_start+3]); pos += 4
+        data_stop = pos + len - 1
+        crc_pos = data_stop + 1
+        data_stop <= length(bytes) ||
             error("PNG chunk '$ctype' length $len exceeds the file size")
+        crc_pos + 3 <= length(bytes) ||
+            error("PNG chunk '$ctype' CRC is truncated")
+        expected_crc = UInt32(_rd_be32(bytes, crc_pos))
+        crc_data = Vector{UInt8}(undef, 4 + len)
+        copyto!(crc_data, 1, bytes, ctype_start, 4)
+        if len > 0
+            copyto!(crc_data, 5, bytes, pos, len)
+        end
+        _crc32(crc_data) == expected_crc ||
+            error("PNG chunk '$ctype' CRC mismatch")
         if ctype == "IHDR"
             len >= 13 || error("PNG IHDR chunk is truncated")
             W = _rd_be32(bytes, pos); H = _rd_be32(bytes, pos+4)

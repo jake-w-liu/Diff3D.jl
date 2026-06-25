@@ -15919,4 +15919,28 @@ end
         end
     end
 
+    @testset "fresh audit round 16 fixes" begin
+        # _decode_png validates chunk CRCs instead of accepting corrupted or
+        # truncated PNG chunks as valid image data.
+        let tiny_png = () -> begin
+                io = IOBuffer()
+                write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+                ihdr = UInt8[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]
+                Diff3D._png_chunk(io, "IHDR", ihdr)
+                Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(UInt8[0, 255, 0, 0]))
+                Diff3D._png_chunk(io, "IEND", UInt8[])
+                take!(io)
+            end
+            good = tiny_png()
+            @test size(Diff3D._decode_png(good)) == (1, 1, 3)
+
+            bad_crc = copy(good)
+            bad_crc[30] ⊻= 0xff
+            @test_throws Exception Diff3D._decode_png(bad_crc)
+
+            missing_crc = good[1:end-4]
+            @test_throws Exception Diff3D._decode_png(missing_crc)
+        end
+    end
+
 end
