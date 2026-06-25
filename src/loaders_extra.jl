@@ -7411,44 +7411,88 @@ end
 
 _gltf_document_buffers(gltf) = get(gltf, "buffers", Any[])
 
+function _gltf_checked_integer(raw, label::String)
+    raw isa Bool && error("glTF $label must be an integer")
+    raw isa Real || error("glTF $label must be an integer")
+    value = Float64(raw)
+    isfinite(value) && value == floor(value) ||
+        error("glTF $label must be an integer")
+    Float64(typemin(Int)) <= value <= prevfloat(Float64(typemax(Int))) ||
+        error("glTF $label is outside the supported integer range")
+    return Int(value)
+end
+
+function _gltf_checked_nonnegative_integer(raw, label::String)
+    value = _gltf_checked_integer(raw, label)
+    value >= 0 || error("glTF $label must be non-negative")
+    return value
+end
+
+function _gltf_checked_index(raw, count::Int, label::String)
+    idx = _gltf_checked_integer(raw, "$label index")
+    0 <= idx < count || error("glTF $label index $idx out of bounds")
+    return idx
+end
+
+function _gltf_checked_component_type(raw, label::String)
+    return _gltf_checked_integer(raw, "$label componentType")
+end
+
 # Read accessor `ai` (0-based) as a vector of Float64 tuples / scalars.
 function _gltf_accessor(gltf, buffers, ai::Int)
-    acc = gltf["accessors"][ai + 1]
-    count = Int(acc["count"])
-    ncomp = _GLTF_COMP_SIZE[acc["type"]]
-    ctype = Int(acc["componentType"])
+    accessors = gltf["accessors"]
+    0 <= ai < length(accessors) || error("glTF accessor index $ai out of bounds")
+    acc = accessors[ai + 1]
+    count = _gltf_checked_nonnegative_integer(acc["count"], "accessor count")
+    typ = String(acc["type"])
+    haskey(_GLTF_COMP_SIZE, typ) || error("glTF accessor type $typ")
+    ncomp = _GLTF_COMP_SIZE[typ]
+    ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
     normalized = Bool(get(acc, "normalized", false))
     out = zeros(Float64, count * ncomp)
 
     compbytes = _gltf_component_bytes(ctype)
 
     if haskey(acc, "bufferView")
-        bv = gltf["bufferViews"][Int(acc["bufferView"]) + 1]
-        buf = buffers[Int(bv["buffer"]) + 1]
-        offset = Int(get(bv, "byteOffset", 0.0)) + Int(get(acc, "byteOffset", 0.0))
-        stride = Int(get(bv, "byteStride", 0.0))   # 0 (or absent) => tightly packed
-        stride = stride == 0 ? ncomp * compbytes : stride
+        buffer_views = get(gltf, "bufferViews", Any[])
+        bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views), "accessor bufferView") + 1]
+        buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]
+        offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0), "bufferView byteOffset") +
+                 _gltf_checked_nonnegative_integer(get(acc, "byteOffset", 0.0), "accessor byteOffset")
+        raw_stride = _gltf_checked_nonnegative_integer(get(bv, "byteStride", 0.0), "bufferView byteStride")
+        stride = raw_stride == 0 ? ncomp * compbytes : raw_stride
+        stride >= ncomp * compbytes || error("glTF bufferView byteStride is smaller than accessor element size")
+        stride % compbytes == 0 || error("glTF bufferView byteStride must be a multiple of component size")
         _gltf_read_accessor_payload!(out, buf, offset, count, ncomp, ctype, stride, normalized)
     end
 
     if haskey(acc, "sparse")
         sparse = acc["sparse"]
-        scount = Int(sparse["count"])
+        scount = _gltf_checked_nonnegative_integer(sparse["count"], "sparse accessor count")
+        scount <= count || error("glTF sparse accessor count exceeds accessor count")
         indices_def = sparse["indices"]
         values_def = sparse["values"]
-        ibv = gltf["bufferViews"][Int(indices_def["bufferView"]) + 1]
-        vbv = gltf["bufferViews"][Int(values_def["bufferView"]) + 1]
-        ibuf = buffers[Int(ibv["buffer"]) + 1]
-        vbuf = buffers[Int(vbv["buffer"]) + 1]
-        ioffset = Int(get(ibv, "byteOffset", 0.0)) + Int(get(indices_def, "byteOffset", 0.0))
-        voffset = Int(get(vbv, "byteOffset", 0.0)) + Int(get(values_def, "byteOffset", 0.0))
-        ictype = Int(indices_def["componentType"])
+        buffer_views = get(gltf, "bufferViews", Any[])
+        ibv = buffer_views[_gltf_checked_index(indices_def["bufferView"], length(buffer_views), "sparse indices bufferView") + 1]
+        vbv = buffer_views[_gltf_checked_index(values_def["bufferView"], length(buffer_views), "sparse values bufferView") + 1]
+        ibuf = buffers[_gltf_checked_index(ibv["buffer"], length(buffers), "sparse indices buffer") + 1]
+        vbuf = buffers[_gltf_checked_index(vbv["buffer"], length(buffers), "sparse values buffer") + 1]
+        ioffset = _gltf_checked_nonnegative_integer(get(ibv, "byteOffset", 0.0), "sparse indices bufferView byteOffset") +
+                  _gltf_checked_nonnegative_integer(get(indices_def, "byteOffset", 0.0), "sparse indices byteOffset")
+        voffset = _gltf_checked_nonnegative_integer(get(vbv, "byteOffset", 0.0), "sparse values bufferView byteOffset") +
+                  _gltf_checked_nonnegative_integer(get(values_def, "byteOffset", 0.0), "sparse values byteOffset")
+        ictype = _gltf_checked_component_type(indices_def["componentType"], "sparse accessor indices")
+        ictype in (5121, 5123, 5125) ||
+            error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes = _gltf_component_bytes(ictype)
         vstride = ncomp * compbytes
         tmp = Vector{Float64}(undef, ncomp)
+        prev_idx = -1
         for s in 0:scount-1
             idx = Int(_gltf_read_component(ibuf, ioffset + s * icompbytes, ictype, false))
             0 <= idx < count || error("glTF sparse accessor index $idx out of bounds")
+            idx > prev_idx || error("glTF sparse accessor indices must be strictly increasing")
+            prev_idx = idx
             _gltf_read_accessor_payload!(tmp, vbuf, voffset + s * vstride, 1, ncomp,
                                          ctype, vstride, normalized)
             copyto!(out, idx * ncomp + 1, tmp, 1, ncomp)
@@ -8043,14 +8087,10 @@ function _gltf_triangulate_indices(order::Vector{Int}, mode::Int)
 end
 
 function _gltf_checked_zero_based_index(raw, count::Int, label::String)
-    raw isa Bool && error("glTF $label index must be an integer")
-    raw isa Real || error("glTF $label index must be an integer")
-    idx = Float64(raw)
-    isfinite(idx) && idx == floor(idx) ||
-        error("glTF $label index must be an integer")
+    idx = _gltf_checked_integer(raw, "$label index")
     0 <= idx < count ||
         error("glTF $label index $idx out of bounds")
-    return Int(idx)
+    return idx
 end
 
 function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int)

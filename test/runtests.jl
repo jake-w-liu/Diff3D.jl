@@ -16064,4 +16064,51 @@ end
         end
     end
 
+    @testset "fresh audit round 19 fixes" begin
+        # Sparse accessor indices must use unsigned integer component types; a
+        # FLOAT sparse index used to be accepted and applied to vertex data.
+        let dir = mktempdir(), bin = UInt8[]
+            append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
+            off_idx = length(bin); append_f32!([1.0])
+            off_val = length(bin); append_f32!([1.0, 2.0, 3.0])
+            write(joinpath(dir, "sparse_float_index.bin"), bin)
+            path = joinpath(dir, "sparse_float_index.gltf")
+            write(path, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"sparse_float_index.bin"}],
+             "bufferViews":[
+               {"buffer":0,"byteOffset":$off_idx,"byteLength":4},
+               {"buffer":0,"byteOffset":$off_val,"byteLength":12}],
+             "accessors":[
+               {"componentType":5126,"count":3,"type":"VEC3",
+                "sparse":{"count":1,
+                  "indices":{"bufferView":0,"componentType":5126},
+                  "values":{"bufferView":1}}}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}]}
+            """)
+            @test_throws "glTF sparse accessor indices componentType" load_gltf(path)
+        end
+
+        # Sparse indices are required to be strictly increasing; duplicates
+        # silently overwrote earlier sparse values before validation.
+        let buf = UInt8[]
+            append_u16!(xs) = append!(buf, reinterpret(UInt8, UInt16.(xs)))
+            append_f32!(xs) = append!(buf, reinterpret(UInt8, Float32.(xs)))
+            index_offset = length(buf); append_u16!([1, 1])
+            value_offset = length(buf); append_f32!([5.0, 6.0])
+            gltf = Dict{String,Any}(
+                "accessors"=>[Dict{String,Any}(
+                    "count"=>3.0, "type"=>"SCALAR", "componentType"=>5126.0,
+                    "sparse"=>Dict{String,Any}(
+                        "count"=>2.0,
+                        "indices"=>Dict{String,Any}("bufferView"=>0.0, "componentType"=>5123.0),
+                        "values"=>Dict{String,Any}("bufferView"=>1.0)))],
+                "bufferViews"=>[
+                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset)),
+                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset))])
+            @test_throws "glTF sparse accessor indices must be strictly increasing" Diff3D._gltf_accessor(gltf, [buf], 0)
+        end
+    end
+
 end
