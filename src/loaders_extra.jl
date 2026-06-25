@@ -1875,7 +1875,6 @@ function load_obj_groups(path::String)
     face_mtl = String[]
     have_normals = false; have_uvs = false; out_vi = 0; cur_mtl = ""
     materials = Dict{String, MeshPhongMaterial}()
-    parse_index(tok, n) = (i = parse(Int, tok); i < 0 ? n + i + 1 : i)
     dir = dirname(path)
     for raw in eachline(path)
         line = strip(raw)
@@ -1897,20 +1896,21 @@ function load_obj_groups(path::String)
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
             corners = t[2:end]
+            length(corners) >= 3 || error("OBJ face requires at least 3 vertices")
             for k in 2:(length(corners) - 1)
                 for c in (corners[1], corners[k], corners[k+1])
                     sub = split(c, '/')
-                    vidx = parse_index(sub[1], nv); base = (vidx-1)*3
+                    vidx = _obj_checked_index(sub[1], nv, :vertex); base = (vidx-1)*3
                     push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
                     if length(sub) >= 2 && !isempty(sub[2])
-                        uidx = parse_index(sub[2], nuv); ub = (uidx-1)*2
+                        uidx = _obj_checked_index(sub[2], nuv, :uv); ub = (uidx-1)*2
                         push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
                         have_uvs = true
                     else
                         push!(out_uvs, 0.0, 0.0)
                     end
                     if have_normals && length(sub) >= 3 && !isempty(sub[3])
-                        nidx = parse_index(sub[3], nn); nb = (nidx-1)*3
+                        nidx = _obj_checked_index(sub[3], nn, :normal); nb = (nidx-1)*3
                         push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
                     else
                         push!(out_nrm, 0.0, 0.0, 0.0)

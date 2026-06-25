@@ -147,6 +147,24 @@ end
 
 # ========================== OBJ ==========================
 
+function _obj_index_count_label(kind::Symbol)
+    kind === :vertex && return "vertices"
+    kind === :uv && return "texture coordinates"
+    kind === :normal && return "normals"
+    return string(kind, "s")
+end
+
+function _obj_checked_index(tok, count::Int, kind::Symbol)
+    label = String(kind)
+    raw = tryparse(Int, String(tok))
+    raw === nothing && error("OBJ $label index must be an integer")
+    raw == 0 && error("OBJ $label index 0 is invalid")
+    idx = raw < 0 ? count + raw + 1 : raw
+    1 <= idx <= count ||
+        error("OBJ $label index $raw out of bounds for $count $(_obj_index_count_label(kind))")
+    return idx
+end
+
 """
     load_obj(path) -> BufferGeometry
 
@@ -165,8 +183,6 @@ function load_obj(path::String)
     have_normals = false
     have_uvs = false
     out_vi = 0
-
-    parse_index(tok, n) = (i = parse(Int, tok); i < 0 ? n + i + 1 : i)
 
     for raw in eachline(path)
         line = strip(raw)
@@ -190,15 +206,16 @@ function load_obj(path::String)
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
             corners = t[2:end]
+            length(corners) >= 3 || error("OBJ face requires at least 3 vertices")
             # Fan-triangulate polygon (corner 1, k, k+1).
             for k in 2:(length(corners) - 1)
                 for c in (corners[1], corners[k], corners[k+1])
                     sub = split(c, '/')
-                    vidx = parse_index(sub[1], nverts_v)
+                    vidx = _obj_checked_index(sub[1], nverts_v, :vertex)
                     base = (vidx - 1) * 3
                     push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
                     if length(sub) >= 2 && !isempty(sub[2])
-                        uidx = parse_index(sub[2], nverts_uv)
+                        uidx = _obj_checked_index(sub[2], nverts_uv, :uv)
                         ub = (uidx - 1) * 2
                         push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
                         have_uvs = true
@@ -206,7 +223,7 @@ function load_obj(path::String)
                         push!(out_uvs, 0.0, 0.0)
                     end
                     if have_normals && length(sub) >= 3 && !isempty(sub[3])
-                        nidx = parse_index(sub[3], nverts_n)
+                        nidx = _obj_checked_index(sub[3], nverts_n, :normal)
                         nb = (nidx - 1) * 3
                         push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
                     else

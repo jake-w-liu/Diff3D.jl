@@ -16155,4 +16155,34 @@ end
         end
     end
 
+    @testset "fresh audit round 21 fixes" begin
+        let obj_path = text -> begin
+                path = tempname() * ".obj"
+                write(path, text)
+                path
+            end,
+            base = """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            """
+
+            valid_negative = load_obj(obj_path(base * "f -3 -2 -1\n"))
+            @test valid_negative.n_faces == 1
+            @test get_vertex(valid_negative, 2).x ≈ 1.0
+            grouped_negative = load_obj_groups(obj_path(base * "f -3 -2 -1\n"))[1]
+            @test grouped_negative.n_faces == 1
+
+            @test_throws "OBJ vertex index 0 is invalid" load_obj(obj_path(base * "f 0 1 2\n"))
+            @test_throws "OBJ vertex index 4 out of bounds for 3 vertices" load_obj(obj_path(base * "f 1 2 4\n"))
+            @test_throws "OBJ vertex index 4 out of bounds for 3 vertices" load_obj_groups(obj_path(base * "f 1 2 4\n"))
+            @test_throws "OBJ vertex index -4 out of bounds for 3 vertices" load_obj(obj_path(base * "f -4 1 2\n"))
+            @test_throws "OBJ uv index 2 out of bounds for 1 texture coordinates" load_obj(
+                obj_path(base * "vt 0 0\nf 1/2 2/1 3/1\n"))
+            @test_throws "OBJ normal index 2 out of bounds for 1 normals" load_obj(
+                obj_path(base * "vn 0 0 1\nf 1//2 2//1 3//1\n"))
+            @test_throws "OBJ face requires at least 3 vertices" load_obj(obj_path(base * "f 1 2\n"))
+        end
+    end
+
 end
