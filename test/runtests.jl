@@ -16542,4 +16542,34 @@ end
         end
     end
 
+    @testset "fresh audit round 30 fixes" begin
+        mktempdir() do dir
+            bin = UInt8[]
+            append!(bin, reinterpret(UInt8, Float32[NaN,0,0, 1,0,0, 0,1,0]))
+            write(joinpath(dir, "nan_position.bin"), bin)
+            path = joinpath(dir, "nan_position.gltf")
+            write(path, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+             "nodes":[{"mesh":0}],
+             "buffers":[{"byteLength":$(length(bin)),"uri":"nan_position.bin"}],
+             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":$(length(bin))}],
+             "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+             "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}]}
+            """)
+
+            @test_throws "glTF FLOAT accessor value" load_gltf(path)
+        end
+
+        mktempdir() do dir
+            write(joinpath(dir, "one.bin"), UInt8[0x00])
+            path = joinpath(dir, "bool_length.gltf")
+            write(path, """
+            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],
+             "buffers":[{"byteLength":true,"uri":"one.bin"}]}
+            """)
+
+            @test_throws "glTF buffer byteLength must be an integer" load_gltf(path)
+        end
+    end
+
 end

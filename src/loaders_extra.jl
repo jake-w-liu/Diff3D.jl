@@ -7489,14 +7489,31 @@ end
 
 function _gltf_trim_declared_buffer(buf::Dict, data::Vector{UInt8}, label::String)
     declared = get(buf, "byteLength", length(data))
-    expected = Int(declared)
-    expected >= 0 || error("$label byteLength must be non-negative")
+    expected = _gltf_checked_declared_byte_length(declared, label)
     length(data) >= expected ||
         error("$label byteLength $expected exceeds available bytes $(length(data))")
     return data[1:expected]
 end
 
 _gltf_document_buffers(gltf) = get(gltf, "buffers", Any[])
+
+function _gltf_checked_declared_byte_length(raw, label::String)
+    raw isa Bool && error("$label byteLength must be an integer")
+    if raw isa Integer
+        raw >= 0 || error("$label byteLength must be non-negative")
+        raw <= typemax(Int) ||
+            error("$label byteLength is outside the supported integer range")
+        return Int(raw)
+    end
+    raw isa Real || error("$label byteLength must be an integer")
+    value = Float64(raw)
+    isfinite(value) && value == floor(value) ||
+        error("$label byteLength must be an integer")
+    value >= 0 || error("$label byteLength must be non-negative")
+    value <= prevfloat(Float64(typemax(Int))) ||
+        error("$label byteLength is outside the supported integer range")
+    return Int(value)
+end
 
 function _gltf_checked_integer(raw, label::String)
     raw isa Bool && error("glTF $label must be an integer")
@@ -7605,7 +7622,10 @@ function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, norma
     io = IOBuffer(buf)
     seek(io, offset)
     if ctype == 5126
-        return Float64(read(io, Float32))
+        value = Float64(read(io, Float32))
+        isfinite(value) ||
+            error("glTF FLOAT accessor value at byte offset $offset must be finite")
+        return value
     elseif ctype == 5125
         v = read(io, UInt32)
         return normalized ? Float64(v) / Float64(typemax(UInt32)) : Float64(v)
