@@ -114,8 +114,14 @@ function _load_stl_binary(path::String)
         p = 1; vi = 0
         for _ in 1:ntri
             nx = Float64(read(io, Float32)); ny = Float64(read(io, Float32)); nz = Float64(read(io, Float32))
+            isfinite(nx) || error("binary STL facet normal x must be finite")
+            isfinite(ny) || error("binary STL facet normal y must be finite")
+            isfinite(nz) || error("binary STL facet normal z must be finite")
             for _v in 1:3
                 x = Float64(read(io, Float32)); y = Float64(read(io, Float32)); z = Float64(read(io, Float32))
+                isfinite(x) || error("binary STL vertex x must be finite")
+                isfinite(y) || error("binary STL vertex y must be finite")
+                isfinite(z) || error("binary STL vertex z must be finite")
                 positions[p] = x; positions[p+1] = y; positions[p+2] = z
                 normals[p] = nx; normals[p+1] = ny; normals[p+2] = nz
                 p += 3; vi += 1; indices[vi] = vi
@@ -129,6 +135,7 @@ end
 function _stl_parse_ascii_float(tok, context::String)
     value = tryparse(Float64, String(tok))
     value === nothing && error("ASCII STL $context must be a number")
+    isfinite(value) || error("ASCII STL $context must be finite")
     return value
 end
 
@@ -203,6 +210,7 @@ end
 function _obj_parse_float(tok, label::String)
     value = tryparse(Float64, String(tok))
     value === nothing && error("OBJ $label must be a number")
+    isfinite(value) || error("OBJ $label must be finite")
     return value
 end
 
@@ -412,6 +420,12 @@ end
 function _ply_parse_ascii_float(tok, context::String)
     value = tryparse(Float64, String(tok))
     value === nothing && error("PLY $context must be a number")
+    isfinite(value) || error("PLY $context must be finite")
+    return value
+end
+
+function _ply_checked_finite(value, context::String)
+    isfinite(value) || error("PLY $context must be finite")
     return value
 end
 
@@ -638,6 +652,7 @@ function load_ply(path::String)
                             continue
                         end
                         val, i = read_binary(bytes, i, types[c])
+                        val = _ply_checked_finite(val, "vertex row $(v+1) property $(p[2])")
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val
                         elseif c == iz; positions[b3+3] = val

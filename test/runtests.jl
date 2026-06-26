@@ -16419,4 +16419,98 @@ end
         end
     end
 
+    @testset "fresh audit round 28 fixes" begin
+        let obj_path = text -> begin
+                path = tempname() * ".obj"
+                write(path, text)
+                path
+            end,
+            stl_path = text -> begin
+                path = tempname() * ".stl"
+                write(path, text)
+                path
+            end,
+            ply_path = text -> begin
+                path = tempname() * ".ply"
+                write(path, text)
+                path
+            end,
+            mtl_path = text -> begin
+                path = tempname() * ".mtl"
+                write(path, text)
+                path
+            end,
+            binary_stl_path = values -> begin
+                path = tempname() * ".stl"
+                open(path, "w") do io
+                    write(io, zeros(UInt8, 80))
+                    write(io, UInt32(1))
+                    for value in Float32.(values)
+                        write(io, value)
+                    end
+                    write(io, UInt16(0))
+                end
+                path
+            end,
+            binary_ply_path = values -> begin
+                path = tempname() * ".ply"
+                header = "ply\nformat binary_little_endian 1.0\n" *
+                         "element vertex 3\nproperty float x\nproperty float y\nproperty float z\n" *
+                         "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+                open(path, "w") do io
+                    write(io, codeunits(header))
+                    for value in Float32.(values)
+                        write(io, value)
+                    end
+                    write(io, UInt8(3))
+                    for index in Int32[0, 1, 2]
+                        write(io, index)
+                    end
+                end
+                path
+            end,
+            obj_base = """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            """,
+            ply_base = """
+            ply
+            format ascii 1.0
+            element vertex 3
+            property float x
+            property float y
+            property float z
+            element face 1
+            property list uchar int vertex_indices
+            end_header
+            """
+
+            @test_throws "OBJ v x must be finite" load_obj(
+                obj_path("v NaN 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"))
+            @test_throws "OBJ vt u must be finite" load_obj(
+                obj_path(obj_base * "vt Inf 0\nf 1/1 2/1 3/1\n"))
+            @test_throws "OBJ vn z must be finite" load_obj_groups(
+                obj_path(obj_base * "vn 0 0 -Inf\nf 1//1 2//1 3//1\n"))
+            @test_throws "ASCII STL facet normal x must be finite" load_stl(
+                stl_path("solid x\nfacet normal NaN 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid x\n"))
+            @test_throws "ASCII STL vertex x must be finite" load_stl(
+                stl_path("solid x\nfacet normal 0 0 1\nouter loop\nvertex Inf 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid x\n"))
+            @test_throws "binary STL facet normal x must be finite" load_stl(
+                binary_stl_path([NaN, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]))
+            @test_throws "binary STL vertex x must be finite" load_stl(
+                binary_stl_path([0, 0, 1, Inf, 0, 0, 1, 0, 0, 0, 1, 0]))
+            @test_throws "PLY vertex row 1 property x must be finite" load_ply(
+                ply_path(ply_base * "Inf 0 0\n1 0 0\n0 1 0\n3 0 1 2\n"))
+            @test_throws "PLY face row 1 list count must be finite" load_ply(
+                ply_path(ply_base * "0 0 0\n1 0 0\n0 1 0\nNaN 0 1 2\n"))
+            @test_throws "PLY vertex row 1 property x must be finite" load_ply(
+                binary_ply_path([NaN, 0, 0, 1, 0, 0, 0, 1, 0]))
+            @test_throws "MTL Kd red must be finite" load_mtl(
+                mtl_path("newmtl m\nKd NaN 0 1\n"))
+            @test_throws "MTL Ns must be finite" load_mtl(
+                mtl_path("newmtl m\nNs Inf\n"))
+        end
+    end
+
 end

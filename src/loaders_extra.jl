@@ -1835,6 +1835,7 @@ end
 function _mtl_parse_float(tok, label::String)
     value = tryparse(Float64, String(tok))
     value === nothing && error("MTL $label must be a number")
+    isfinite(value) || error("MTL $label must be finite")
     return value
 end
 
