@@ -12,6 +12,7 @@ struct ShadowMap
 
     function ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias, pcf_radius)
         !isempty(depth) || throw(ArgumentError("ShadowMap depth must be non-empty"))
+        all(isfinite, light_vp.e) || throw(ArgumentError("ShadowMap light_vp must be finite"))
         b = _validated_shadow_bias(bias)
         b === nothing && throw(ArgumentError("ShadowMap bias must be finite"))
         pcf = _validated_shadow_pcf_radius(pcf_radius)
@@ -286,9 +287,13 @@ single-sample hard shadow exactly.
 """
 function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius)
     r = _validated_shadow_pcf_radius(pcf_radius)::Int
+    isfinite(p.x) && isfinite(p.y) && isfinite(p.z) ||
+        throw(ArgumentError("shadow_visibility point must be finite"))
     c = mat4_transform_vec4(sm.light_vp, _vh(p))
+    isfinite(c.w) || return 1.0
     c.w <= 1e-6 && return 1.0
     ndcx = c.x / c.w; ndcy = c.y / c.w; ndcz = c.z / c.w
+    isfinite(ndcx) && isfinite(ndcy) && isfinite(ndcz) || return 1.0
     (abs(ndcx) > 1 || abs(ndcy) > 1) && return 1.0          # outside the light frustum
     H, W = size(sm.depth)
     px = clamp(floor(Int, (ndcx + 1) * 0.5 * W) + 1, 1, W)

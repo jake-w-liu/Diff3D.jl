@@ -17022,6 +17022,8 @@ end
             Scene(), DirectionalLight(cast_shadow = true); resolution = 0)
         @test_throws "ShadowMap depth must be non-empty" ShadowMap(
             fill(Inf, 0, 0), Mat4{Float64}(), 0.0, 0)
+        @test_throws "ShadowMap light_vp must be finite" ShadowMap(
+            fill(Inf, 1, 1), Mat4{Float64}(ntuple(_ -> NaN, 16)), 0.0, 0)
         @test_throws "shadow_bias must be finite" ShadowMap(
             fill(Inf, 1, 1), Mat4{Float64}(), NaN, 0)
         @test_throws "shadow_pcf_radius must be >= 0" ShadowMap(
@@ -17029,6 +17031,12 @@ end
         @test_throws "shadow_pcf_radius must be >= 0" shadow_visibility(
             ShadowMap(fill(Inf, 1, 1), Mat4{Float64}(), 0.0, 0),
             Vec3(0.0, 0.0, 0.0); pcf_radius = -1)
+        @test_throws "shadow_visibility point must be finite" shadow_visibility(
+            ShadowMap(fill(Inf, 1, 1), Mat4{Float64}(), 0.0, 0),
+            Vec3(NaN, 0.0, 0.0))
+        @test shadow_visibility(
+            ShadowMap(fill(Inf, 1, 1), mat4_scaling(1e308, 1.0, 1.0), 0.0, 0),
+            Vec3(1e308, 0.0, 0.0)) == 1.0
     end
 
 end
