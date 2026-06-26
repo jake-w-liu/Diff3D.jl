@@ -17053,4 +17053,18 @@ end
             scene, cam, 0, 1; warmup = 0, reps = 1)
     end
 
+    @testset "fresh audit round 42 fixes" begin
+        @test_throws "downsample scale must be positive" downsample(zeros(2, 2, 3), 0)
+        @test_throws "downsample expects an H×W×3 image" downsample(zeros(2, 2), 1)
+        @test_throws "downsample expects an H×W×3 image" downsample(zeros(2, 2, 2), 1)
+        @test_throws "downsample image dimensions must be divisible by scale" downsample(
+            zeros(5, 4, 3), 2)
+
+        scene = Scene()
+        cam = PerspectiveCamera()
+        @test_throws "render_aa ss must be positive" render_aa(scene, cam, 2, 2; ss = 0)
+        @test_throws "render_msaa! samples must be positive" render_msaa!(
+            RenderTarget(2, 2), scene, cam; samples = 0)
+    end
+
 end

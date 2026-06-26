@@ -47,7 +47,12 @@ end
 
 """Box-average downsample an H·ss × W·ss image to H × W."""
 function downsample(img::AbstractArray, ss::Int)
+    ss > 0 || throw(ArgumentError("downsample scale must be positive"))
+    (ndims(img) == 3 && size(img, 3) == 3) ||
+        throw(ArgumentError("downsample expects an H×W×3 image"))
     Hb, Wb, _ = size(img)
+    (Hb % ss == 0 && Wb % ss == 0) ||
+        throw(ArgumentError("downsample image dimensions must be divisible by scale"))
     H, W = Hb ÷ ss, Wb ÷ ss
     out = zeros(Float64, H, W, 3)
     inv = 1.0 / (ss * ss)
@@ -64,6 +69,7 @@ end
 """Render at `ss`× resolution and box-downsample — supersampled anti-aliasing."""
 function render_aa(scene::Scene, camera::AbstractCamera, width::Int, height::Int;
                    ss::Int=2, shading::Symbol=:flat, shadows::Bool=false)
+    ss > 0 || throw(ArgumentError("render_aa ss must be positive"))
     rt = RenderTarget(width*ss, height*ss)
     render!(rt, scene, camera; shading=shading, shadows=shadows)
     return downsample(rt.color, ss)
@@ -78,6 +84,7 @@ fills the supplied `RenderTarget`, so the renderer itself yields an AA frame.
 """
 function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                       samples::Int=4, shading::Symbol=:flat, shadows::Bool=false)
+    samples > 0 || throw(ArgumentError("render_msaa! samples must be positive"))
     ss = max(ceil(Int, sqrt(samples)), 1)
     big = RenderTarget(rt.width*ss, rt.height*ss)
     render!(big, scene, camera; shading=shading, shadows=shadows)
