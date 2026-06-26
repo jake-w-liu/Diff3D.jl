@@ -7740,12 +7740,14 @@ function _gltf_image_mime_from_uri(uri::String)
 end
 
 function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::String)
-    bv = gltf["bufferViews"][buffer_view_index + 1]
-    buf = buffers[Int(bv["buffer"]) + 1]
-    offset = Int(get(bv, "byteOffset", 0.0))
-    len = Int(bv["byteLength"])
-    offset >= 0 || error("$label byteOffset must be non-negative")
-    len >= 0 || error("$label byteLength must be non-negative")
+    buffer_views = get(gltf, "bufferViews", Any[])
+    0 <= buffer_view_index < length(buffer_views) ||
+        error("$label index $buffer_view_index out of bounds")
+    bv = buffer_views[buffer_view_index + 1]
+    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]
+    offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
+                                               "bufferView byteOffset")
+    len = _gltf_checked_nonnegative_integer(bv["byteLength"], "bufferView byteLength")
     offset + len <= length(buf) ||
         error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
     return len == 0 ? UInt8[] : buf[(offset + 1):(offset + len)]
@@ -7763,7 +7765,10 @@ function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
         inferred_mime = _gltf_image_mime_from_uri(uri)
         return bytes, !isempty(declared_mime) ? declared_mime : inferred_mime
     elseif haskey(imgdef, "bufferView")
-        bytes = _gltf_buffer_view_bytes(gltf, buffers, Int(imgdef["bufferView"]),
+        buffer_view_index = _gltf_checked_index(imgdef["bufferView"],
+                                                length(get(gltf, "bufferViews", Any[])),
+                                                "image bufferView")
+        bytes = _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index,
                                         "glTF image bufferView")
         return bytes, declared_mime
     end
@@ -7828,8 +7833,9 @@ end
 function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb)
     texinfo === nothing && return nothing
     haskey(gltf, "textures") || return nothing
-    ti = Int(texinfo["index"])
-    texdef = gltf["textures"][ti + 1]
+    textures = gltf["textures"]
+    ti = _gltf_checked_index(texinfo["index"], length(textures), "texture")
+    texdef = textures[ti + 1]
     if !haskey(texdef, "source")
         basisu = get(get(texdef, "extensions", Dict{String,Any}()),
                      "KHR_texture_basisu", nothing)
@@ -7838,7 +7844,9 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
             error("glTF KHR_texture_basisu texture requires a source image index")
         error("glTF KHR_texture_basisu textures are not supported; KTX2/Basis texture loading is not implemented")
     end
-    imgdef = gltf["images"][Int(texdef["source"]) + 1]
+    images = get(gltf, "images", Any[])
+    source_idx = _gltf_checked_index(texdef["source"], length(images), "texture source")
+    imgdef = images[source_idx + 1]
     bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
     bytes === nothing && return nothing
     data = _gltf_decode_image(bytes, mime)
@@ -7848,8 +7856,14 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     # GLTFLoader. KHR_texture_transform stays correct because
     # `texture_transform_uv` runs on the untouched glTF-space UVs.
     data = data[end:-1:1, :, :]
-    sampler = haskey(texdef, "sampler") && haskey(gltf, "samplers") ?
-              gltf["samplers"][Int(texdef["sampler"]) + 1] : Dict{String,Any}()
+    sampler = if haskey(texdef, "sampler")
+        samplers = get(gltf, "samplers", Any[])
+        sampler_idx = _gltf_checked_index(texdef["sampler"], length(samplers),
+                                          "texture sampler")
+        samplers[sampler_idx + 1]
+    else
+        Dict{String,Any}()
+    end
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
     min_filter = _gltf_min_filter_mode(get(sampler, "minFilter",
                                            get(sampler, "magFilter", 9729.0)))
@@ -7872,7 +7886,9 @@ end
 
 function _gltf_material(gltf, buffers, dir::String, mi)
     mi === nothing && return MeshStandardMaterial()
-    m = gltf["materials"][Int(mi) + 1]
+    materials = get(gltf, "materials", Any[])
+    material_idx = _gltf_checked_index(mi, length(materials), "material")
+    m = materials[material_idx + 1]
     pbr = get(m, "pbrMetallicRoughness", Dict{String,Any}())
     extensions = get(m, "extensions", Dict{String,Any}())
     bc = get(pbr, "baseColorFactor", [1.0,1.0,1.0,1.0])

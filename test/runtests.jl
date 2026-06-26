@@ -16572,4 +16572,45 @@ end
         end
     end
 
+    @testset "fresh audit round 31 fixes" begin
+        mktempdir() do dir
+            red = zeros(1, 1, 3); red[1, 1, 1] = 1.0
+            blue = zeros(1, 1, 3); blue[1, 1, 3] = 1.0
+            save_png(joinpath(dir, "red.png"), red)
+            save_png(joinpath(dir, "blue.png"), blue)
+            bin = UInt8[]
+            append!(bin, reinterpret(UInt8, Float32[0,0,0, 1,0,0, 0,1,0]))
+            write(joinpath(dir, "mesh.bin"), bin)
+
+            function textured_path(filename; material_index="0", texture_index="0",
+                                   texture_source="0", texture_sampler=nothing,
+                                   samplers_json="")
+                sampler_field = texture_sampler === nothing ? "" : ",\"sampler\":$texture_sampler"
+                path = joinpath(dir, filename)
+                write(path, """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0}],
+                 "buffers":[{"byteLength":$(length(bin)),"uri":"mesh.bin"}],
+                 "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":$(length(bin))}],
+                 "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":$material_index}]}],
+                 "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":$texture_index}}},{}],
+                 "textures":[{"source":$texture_source$sampler_field},{"source":1}],
+                 "images":[{"uri":"red.png"},{"uri":"blue.png"}]$samplers_json}
+                """)
+                return path
+            end
+
+            @test_throws "glTF texture index must be an integer" load_gltf(
+                textured_path("bool_texture_index.gltf"; texture_index="true"))
+            @test_throws "glTF texture source index must be an integer" load_gltf(
+                textured_path("bool_texture_source.gltf"; texture_source="true"))
+            @test_throws "glTF texture sampler index must be an integer" load_gltf(
+                textured_path("bool_texture_sampler.gltf"; texture_sampler="true",
+                              samplers_json=",\"samplers\":[{\"magFilter\":9728},{\"magFilter\":9729}]"))
+            @test_throws "glTF material index must be an integer" load_gltf(
+                textured_path("bool_material_index.gltf"; material_index="true"))
+        end
+    end
+
 end
