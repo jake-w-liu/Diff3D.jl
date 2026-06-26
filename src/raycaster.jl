@@ -18,6 +18,16 @@ in units of `dir`. `side` culls by winding like three.js `Ray.intersectTriangle`
 """
 function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3;
                                 eps=1e-9, side::Symbol=:double)
+    side in (:front, :back, :double) ||
+        throw(ArgumentError("ray_triangle_intersect side must be one of :front, :back, or :double"))
+    isfinite(eps) && eps >= 0 ||
+        throw(ArgumentError("ray_triangle_intersect eps must be finite and non-negative"))
+    _finite_vec3(origin) || throw(ArgumentError("ray_triangle_intersect origin must be finite"))
+    _finite_vec3(dir) || throw(ArgumentError("ray_triangle_intersect direction must be finite"))
+    dot(dir, dir) > zero(dot(dir, dir)) ||
+        throw(ArgumentError("ray_triangle_intersect direction must be non-zero"))
+    (_finite_vec3(a) && _finite_vec3(b) && _finite_vec3(c)) ||
+        throw(ArgumentError("ray_triangle_intersect triangle vertices must be finite"))
     e1 = b - a; e2 = c - a
     p = cross(dir, e2)
     det = dot(e1, p)                             # det = -dot(dir, cross(e1, e2))
@@ -47,13 +57,52 @@ mutable struct Raycaster
     point_threshold::Float64 # world-space pick radius for PointsObject vertices (three.js params.Points.threshold)
     line_threshold::Float64  # world-space pick radius for Line/LineSegments segments (three.js params.Line.threshold)
 end
+
+_finite_vec3(v::Vec3) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
+
+function _raycaster_vec3(v::Vec3, label::AbstractString)
+    out = Vec3(Float64(v.x), Float64(v.y), Float64(v.z))
+    _finite_vec3(out) || throw(ArgumentError("Raycaster $label must be finite"))
+    return out
+end
+
+function _raycaster_direction(dir::Vec3)
+    d = _raycaster_vec3(dir, "direction")
+    scale = max(abs(d.x), abs(d.y), abs(d.z))
+    scale > 0.0 || throw(ArgumentError("Raycaster direction must be finite and non-zero"))
+    scaled = d / scale
+    len = norm(scaled)
+    isfinite(len) && len > 0.0 ||
+        throw(ArgumentError("Raycaster direction must be finite and non-zero"))
+    return scaled / len
+end
+
+function _raycaster_range(near, far)
+    n = Float64(near)
+    f = Float64(far)
+    isfinite(n) && n >= 0.0 ||
+        throw(ArgumentError("Raycaster near must be finite and non-negative"))
+    !isnan(f) || throw(ArgumentError("Raycaster far must not be NaN"))
+    f >= n || throw(ArgumentError("Raycaster far must be greater than or equal to near"))
+    return n, f
+end
+
+function _raycaster_threshold(value, label::AbstractString)
+    t = Float64(value)
+    isfinite(t) && t >= 0.0 ||
+        throw(ArgumentError("Raycaster $label must be finite and non-negative"))
+    return t
+end
+
 Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
           layers::Layers=layers_enable_all!(Layers()),
-          point_threshold=1.0, line_threshold=1.0) =
-    Raycaster(Ray(Vec3(Float64(origin.x), Float64(origin.y), Float64(origin.z)),
-                  normalize(Vec3(Float64(dir.x), Float64(dir.y), Float64(dir.z)))),
-              Float64(near), Float64(far), layers,
-              Float64(point_threshold), Float64(line_threshold))
+          point_threshold=1.0, line_threshold=1.0) = begin
+    n, f = _raycaster_range(near, far)
+    Raycaster(Ray(_raycaster_vec3(origin, "origin"), _raycaster_direction(dir)),
+              n, f, layers,
+              _raycaster_threshold(point_threshold, "point_threshold"),
+              _raycaster_threshold(line_threshold, "line_threshold"))
+end
 
 const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
 const _OBJECT_LAYER_LOCK = ReentrantLock()
@@ -132,12 +181,16 @@ function _camera_ray(camera::AbstractCamera, ndc_x, ndc_y)
     # Perspective rays originate at the camera apex; orthographic rays originate
     # at the unprojected near-plane point because they do not share an apex.
     origin = camera isa PerspectiveCamera ? camera.position : p_near
-    Ray(origin, normalize(p_far - p_near))
+    Ray(_raycaster_vec3(origin, "origin"), _raycaster_direction(p_far - p_near))
 end
 
 """Aim the raycaster through screen NDC `(x,y)` from a camera (three.js `setFromCamera`)."""
 function set_from_camera!(rc::Raycaster, camera::AbstractCamera, ndc_x, ndc_y)
-    rc.ray = _camera_ray(camera, ndc_x, ndc_y)
+    x = Float64(ndc_x)
+    y = Float64(ndc_y)
+    isfinite(x) && isfinite(y) ||
+        throw(ArgumentError("set_from_camera! NDC coordinates must be finite"))
+    rc.ray = _camera_ray(camera, x, y)
     return rc
 end
 

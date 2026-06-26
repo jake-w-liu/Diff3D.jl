@@ -16919,4 +16919,45 @@ end
         @test interpolate_catmull_rom([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], 0.5) isa Real
     end
 
+    @testset "fresh audit round 39 fixes" begin
+        @test_throws "Raycaster direction must be finite and non-zero" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0))
+        @test_throws "Raycaster direction must be finite" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(NaN, 0.0, 0.0))
+        @test_throws "Raycaster origin must be finite" Raycaster(
+            Vec3(NaN, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
+        @test_throws "Raycaster near must be finite and non-negative" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); near = NaN)
+        @test_throws "Raycaster near must be finite and non-negative" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); near = -1.0)
+        @test_throws "Raycaster far must be greater than or equal to near" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); near = 2.0, far = 1.0)
+        @test_throws "Raycaster point_threshold must be finite and non-negative" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); point_threshold = -1.0)
+        @test_throws "Raycaster line_threshold must be finite and non-negative" Raycaster(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0); line_threshold = NaN)
+
+        huge = Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(1e300, 0.0, 0.0))
+        tiny = Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(1e-300, 0.0, 0.0))
+        @test huge.ray.direction == Vec3(1.0, 0.0, 0.0)
+        @test tiny.ray.direction == Vec3(1.0, 0.0, 0.0)
+
+        cam = PerspectiveCamera(fov = pi / 4, aspect = 1.0, near = 0.1, far = 100.0)
+        rc = Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, -1.0))
+        @test_throws "set_from_camera! NDC coordinates must be finite" set_from_camera!(rc, cam, NaN, 0.0)
+        @test_throws "set_from_camera! NDC coordinates must be finite" set_from_camera!(rc, cam, 0.0, Inf)
+
+        ta = Vec3(0.0, 0.0, 0.0)
+        tb = Vec3(1.0, 0.0, 0.0)
+        tc = Vec3(0.0, 1.0, 0.0)
+        @test_throws "ray_triangle_intersect side must be one of" ray_triangle_intersect(
+            Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, -1.0), ta, tb, tc; side = :bogus)
+        @test_throws "ray_triangle_intersect eps must be finite and non-negative" ray_triangle_intersect(
+            Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, -1.0), ta, tb, tc; eps = NaN)
+        @test_throws "ray_triangle_intersect direction must be non-zero" ray_triangle_intersect(
+            Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, 0.0), ta, tb, tc)
+        @test_throws "ray_triangle_intersect triangle vertices must be finite" ray_triangle_intersect(
+            Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, -1.0), Vec3(NaN, 0.0, 0.0), tb, tc)
+    end
+
 end
