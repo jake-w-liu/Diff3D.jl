@@ -7532,6 +7532,30 @@ function _gltf_checked_nonnegative_integer(raw, label::String)
     return value
 end
 
+function _gltf_checked_finite_number(raw, label::String)
+    raw isa Bool && error("glTF $label must be a finite number")
+    raw isa Real || error("glTF $label must be a finite number")
+    value = Float64(raw)
+    isfinite(value) || error("glTF $label must be a finite number")
+    return value
+end
+
+function _gltf_checked_bool(raw, label::String)
+    raw isa Bool || error("glTF $label must be a boolean")
+    return raw
+end
+
+function _gltf_checked_number_tuple(raw, len::Int, label::String)
+    raw isa AbstractVector && length(raw) == len ||
+        error("glTF $label must be an array of length $len")
+    return ntuple(i -> _gltf_checked_finite_number(raw[i], "$label[$i]"), len)
+end
+
+function _gltf_checked_number_vector(raw, label::String)
+    raw isa AbstractVector || error("glTF $label must be an array")
+    return [_gltf_checked_finite_number(raw[i], "$label[$i]") for i in eachindex(raw)]
+end
+
 function _gltf_checked_index(raw, count::Int, label::String)
     idx = _gltf_checked_integer(raw, "$label index")
     0 <= idx < count || error("glTF $label index $idx out of bounds")
@@ -7552,7 +7576,7 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     haskey(_GLTF_COMP_SIZE, typ) || error("glTF accessor type $typ")
     ncomp = _GLTF_COMP_SIZE[typ]
     ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
-    normalized = Bool(get(acc, "normalized", false))
+    normalized = _gltf_checked_bool(get(acc, "normalized", false), "accessor normalized")
     out = zeros(Float64, count * ncomp)
 
     compbytes = _gltf_component_bytes(ctype)
@@ -7724,13 +7748,16 @@ end
 function _gltf_texture_transform(texinfo)
     ext = get(get(texinfo, "extensions", Dict{String,Any}()),
               "KHR_texture_transform", Dict{String,Any}())
-    offset = get(ext, "offset", [0.0, 0.0])
-    scale = get(ext, "scale", [1.0, 1.0])
-    rotation = Float64(get(ext, "rotation", 0.0))
+    offset = _gltf_checked_number_tuple(get(ext, "offset", [0.0, 0.0]), 2,
+                                        "texture transform offset")
+    scale = _gltf_checked_number_tuple(get(ext, "scale", [1.0, 1.0]), 2,
+                                       "texture transform scale")
+    rotation = _gltf_checked_finite_number(get(ext, "rotation", 0.0),
+                                           "texture transform rotation")
     tex_coord = _gltf_checked_nonnegative_integer(
         get(ext, "texCoord", get(texinfo, "texCoord", 0.0)), "texture texCoord")
-    return (Vec2(Float64(offset[1]), Float64(offset[2])),
-            Vec2(Float64(scale[1]), Float64(scale[2])),
+    return (Vec2(offset[1], offset[2]),
+            Vec2(scale[1], scale[2]),
             rotation,
             tex_coord)
 end
@@ -7914,14 +7941,18 @@ function _gltf_material(gltf, buffers, dir::String, mi)
     m = materials[material_idx + 1]
     pbr = get(m, "pbrMetallicRoughness", Dict{String,Any}())
     extensions = get(m, "extensions", Dict{String,Any}())
-    bc = get(pbr, "baseColorFactor", [1.0,1.0,1.0,1.0])
-    emissive = get(m, "emissiveFactor", [0.0,0.0,0.0])
+    bc = _gltf_checked_number_tuple(get(pbr, "baseColorFactor", [1.0,1.0,1.0,1.0]),
+                                    4, "baseColorFactor")
+    emissive = _gltf_checked_number_tuple(get(m, "emissiveFactor", [0.0,0.0,0.0]),
+                                          3, "emissiveFactor")
     alpha_mode = String(get(m, "alphaMode", "OPAQUE"))
-    alpha_test = alpha_mode == "MASK" ? Float64(get(m, "alphaCutoff", 0.5)) : 0.0
+    alpha_test = alpha_mode == "MASK" ?
+                 _gltf_checked_finite_number(get(m, "alphaCutoff", 0.5),
+                                             "alphaCutoff") : 0.0
     # OPAQUE ignores the alpha value entirely (spec); only BLEND alpha-blends.
-    opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ? Float64(bc[4]) : 1.0
+    opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ? bc[4] : 1.0
     transparent = alpha_mode == "BLEND"
-    side = Bool(get(m, "doubleSided", false)) ? :double : :front
+    side = _gltf_checked_bool(get(m, "doubleSided", false), "doubleSided") ? :double : :front
     base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
                                        colorspace=:srgb)
     if haskey(extensions, "KHR_materials_unlit")
@@ -7933,16 +7964,26 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                   alpha_test=alpha_test)
     end
     normal_info = get(m, "normalTexture", nothing)
-    normal_scale = normal_info isa AbstractDict ? Float64(get(normal_info, "scale", 1.0)) : 1.0
+    normal_scale = normal_info isa AbstractDict ?
+                   _gltf_checked_finite_number(get(normal_info, "scale", 1.0),
+                                               "normalTexture scale") : 1.0
     occ = get(m, "occlusionTexture", nothing)
-    emissive_strength = Float64(get(get(extensions, "KHR_materials_emissive_strength",
-                                        Dict{String,Any}()), "emissiveStrength", 1.0))
-    ao_strength = occ isa AbstractDict ? Float64(get(occ, "strength", 1.0)) : 1.0
+    emissive_strength = _gltf_checked_finite_number(
+        get(get(extensions, "KHR_materials_emissive_strength", Dict{String,Any}()),
+            "emissiveStrength", 1.0), "emissiveStrength")
+    ao_strength = occ isa AbstractDict ?
+                  _gltf_checked_finite_number(get(occ, "strength", 1.0),
+                                              "occlusionTexture strength") : 1.0
     if haskey(extensions, "KHR_materials_pbrSpecularGlossiness")
         specgloss_ext = get(extensions, "KHR_materials_pbrSpecularGlossiness", Dict{String,Any}())
-        diffuse = get(specgloss_ext, "diffuseFactor", [1.0, 1.0, 1.0, 1.0])
-        specular = get(specgloss_ext, "specularFactor", [1.0, 1.0, 1.0])
-        glossiness = Float64(get(specgloss_ext, "glossinessFactor", 1.0))
+        diffuse = _gltf_checked_number_tuple(
+            get(specgloss_ext, "diffuseFactor", [1.0, 1.0, 1.0, 1.0]),
+            4, "diffuseFactor")
+        specular = _gltf_checked_number_tuple(
+            get(specgloss_ext, "specularFactor", [1.0, 1.0, 1.0]),
+            3, "specularFactor")
+        glossiness = _gltf_checked_finite_number(
+            get(specgloss_ext, "glossinessFactor", 1.0), "glossinessFactor")
         diffuse_texture = _gltf_texture(gltf, buffers, dir,
                                         get(specgloss_ext, "diffuseTexture", nothing);
                                         colorspace=:srgb)
@@ -7950,7 +7991,7 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                           get(specgloss_ext, "specularGlossinessTexture", nothing);
                                           colorspace=:srgb)
         specgloss_opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ?
-                            Float64(diffuse[4]) : 1.0
+                            diffuse[4] : 1.0
         return MeshPhongMaterial(color=Color3(diffuse[1], diffuse[2], diffuse[3]),
                                  specular=Color3(specular[1], specular[2], specular[3]),
                                  emissive=Color3(emissive[1], emissive[2], emissive[3]),
@@ -7997,16 +8038,30 @@ function _gltf_material(gltf, buffers, dir::String, mi)
         anisotropy_ext = get(extensions, "KHR_materials_anisotropy", Dict{String,Any}())
         clearcoat_normal_info = get(clearcoat_ext, "clearcoatNormalTexture", nothing)
         clearcoat_normal_scale = clearcoat_normal_info isa AbstractDict ?
-                                 Float64(get(clearcoat_normal_info, "scale", 1.0)) : 1.0
-        sheen_color_factor = get(sheen_ext, "sheenColorFactor", [0.0, 0.0, 0.0])
-        attenuation_color = get(volume_ext, "attenuationColor", [1.0, 1.0, 1.0])
-        specular_color_factor = get(specular_ext, "specularColorFactor", [1.0, 1.0, 1.0])
-        thickness_min = Float64(get(iridescence_ext, "iridescenceThicknessMinimum", 100.0))
-        thickness_max = Float64(get(iridescence_ext, "iridescenceThicknessMaximum", 400.0))
+                                 _gltf_checked_finite_number(
+                                     get(clearcoat_normal_info, "scale", 1.0),
+                                     "clearcoatNormalTexture scale") : 1.0
+        sheen_color_factor = _gltf_checked_number_tuple(
+            get(sheen_ext, "sheenColorFactor", [0.0, 0.0, 0.0]),
+            3, "sheenColorFactor")
+        attenuation_color = _gltf_checked_number_tuple(
+            get(volume_ext, "attenuationColor", [1.0, 1.0, 1.0]),
+            3, "attenuationColor")
+        specular_color_factor = _gltf_checked_number_tuple(
+            get(specular_ext, "specularColorFactor", [1.0, 1.0, 1.0]),
+            3, "specularColorFactor")
+        thickness_min = _gltf_checked_finite_number(
+            get(iridescence_ext, "iridescenceThicknessMinimum", 100.0),
+            "iridescenceThicknessMinimum")
+        thickness_max = _gltf_checked_finite_number(
+            get(iridescence_ext, "iridescenceThicknessMaximum", 400.0),
+            "iridescenceThicknessMaximum")
         return MeshPhysicalMaterial(color=Color3(bc[1], bc[2], bc[3]),
                                     emissive=Color3(emissive[1], emissive[2], emissive[3]),
-                                    metalness=Float64(get(pbr, "metallicFactor", 1.0)),
-                                    roughness=Float64(get(pbr, "roughnessFactor", 1.0)),
+                                    metalness=_gltf_checked_finite_number(
+                                        get(pbr, "metallicFactor", 1.0), "metallicFactor"),
+                                    roughness=_gltf_checked_finite_number(
+                                        get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                                      opacity=opacity,
                                      transparent=transparent,
                                      alpha_test=alpha_test,
@@ -8023,8 +8078,11 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                                                colorspace=:srgb),
                                     emissive_intensity=emissive_strength,
                                     ao_map_intensity=ao_strength,
-                                    clearcoat=Float64(get(clearcoat_ext, "clearcoatFactor", 0.0)),
-                                    clearcoat_roughness=Float64(get(clearcoat_ext, "clearcoatRoughnessFactor", 0.0)),
+                                    clearcoat=_gltf_checked_finite_number(
+                                        get(clearcoat_ext, "clearcoatFactor", 0.0), "clearcoatFactor"),
+                                    clearcoat_roughness=_gltf_checked_finite_number(
+                                        get(clearcoat_ext, "clearcoatRoughnessFactor", 0.0),
+                                        "clearcoatRoughnessFactor"),
                                     clearcoat_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatTexture", nothing);
                                                                 colorspace=:linear),
                                     clearcoat_roughness_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatRoughnessTexture", nothing);
@@ -8032,34 +8090,47 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                     clearcoat_normal_map=_gltf_texture(gltf, buffers, dir, clearcoat_normal_info;
                                                                        colorspace=:linear),
                                     clearcoat_normal_scale=clearcoat_normal_scale,
-                                    transmission=Float64(get(transmission_ext, "transmissionFactor", 0.0)),
+                                    transmission=_gltf_checked_finite_number(
+                                        get(transmission_ext, "transmissionFactor", 0.0),
+                                        "transmissionFactor"),
                                     transmission_map=_gltf_texture(gltf, buffers, dir, get(transmission_ext, "transmissionTexture", nothing);
                                                                    colorspace=:linear),
-                                    thickness=Float64(get(volume_ext, "thicknessFactor", 0.0)),
+                                    thickness=_gltf_checked_finite_number(
+                                        get(volume_ext, "thicknessFactor", 0.0), "thicknessFactor"),
                                     thickness_map=_gltf_texture(gltf, buffers, dir, get(volume_ext, "thicknessTexture", nothing);
                                                                 colorspace=:linear),
-                                    attenuation_distance=Float64(get(volume_ext, "attenuationDistance", 0.0)),
+                                    attenuation_distance=_gltf_checked_finite_number(
+                                        get(volume_ext, "attenuationDistance", 0.0),
+                                        "attenuationDistance"),
                                     attenuation_color=Color3(attenuation_color[1],
                                                              attenuation_color[2],
                                                              attenuation_color[3]),
-                                    ior=Float64(get(ior_ext, "ior", 1.5)),
-                                    sheen=maximum(Float64.(sheen_color_factor)),
+                                    ior=_gltf_checked_finite_number(get(ior_ext, "ior", 1.5),
+                                                                    "ior"),
+                                    sheen=maximum(sheen_color_factor),
                                     sheen_color=Color3(sheen_color_factor[1],
                                                        sheen_color_factor[2],
                                                        sheen_color_factor[3]),
-                                    sheen_roughness=Float64(get(sheen_ext, "sheenRoughnessFactor", 0.0)),
+                                    sheen_roughness=_gltf_checked_finite_number(
+                                        get(sheen_ext, "sheenRoughnessFactor", 0.0),
+                                        "sheenRoughnessFactor"),
                                     sheen_color_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenColorTexture", nothing);
                                                                   colorspace=:srgb),
                                     sheen_roughness_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenRoughnessTexture", nothing);
                                                                       colorspace=:linear),
-                                    iridescence=Float64(get(iridescence_ext, "iridescenceFactor", 0.0)),
-                                    iridescence_ior=Float64(get(iridescence_ext, "iridescenceIor", 1.3)),
+                                    iridescence=_gltf_checked_finite_number(
+                                        get(iridescence_ext, "iridescenceFactor", 0.0),
+                                        "iridescenceFactor"),
+                                    iridescence_ior=_gltf_checked_finite_number(
+                                        get(iridescence_ext, "iridescenceIor", 1.3),
+                                        "iridescenceIor"),
                                     iridescence_thickness=0.5 * (thickness_min + thickness_max),
                                     iridescence_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceTexture", nothing);
                                                                   colorspace=:linear),
                                     iridescence_thickness_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceThicknessTexture", nothing);
                                                                             colorspace=:linear),
-                                    specular_intensity=Float64(get(specular_ext, "specularFactor", 1.0)),
+                                    specular_intensity=_gltf_checked_finite_number(
+                                        get(specular_ext, "specularFactor", 1.0), "specularFactor"),
                                     specular_color=Color3(specular_color_factor[1],
                                                           specular_color_factor[2],
                                                           specular_color_factor[3]),
@@ -8067,16 +8138,23 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                                                          colorspace=:linear),
                                     specular_color_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularColorTexture", nothing);
                                                                      colorspace=:srgb),
-                                    dispersion=Float64(get(dispersion_ext, "dispersion", 0.0)),
-                                    anisotropy=Float64(get(anisotropy_ext, "anisotropyStrength", 0.0)),
-                                    anisotropy_rotation=Float64(get(anisotropy_ext, "anisotropyRotation", 0.0)),
+                                    dispersion=_gltf_checked_finite_number(
+                                        get(dispersion_ext, "dispersion", 0.0), "dispersion"),
+                                    anisotropy=_gltf_checked_finite_number(
+                                        get(anisotropy_ext, "anisotropyStrength", 0.0),
+                                        "anisotropyStrength"),
+                                    anisotropy_rotation=_gltf_checked_finite_number(
+                                        get(anisotropy_ext, "anisotropyRotation", 0.0),
+                                        "anisotropyRotation"),
                                     anisotropy_map=_gltf_texture(gltf, buffers, dir, get(anisotropy_ext, "anisotropyTexture", nothing);
                                                                  colorspace=:linear))
     end
     MeshStandardMaterial(color=Color3(bc[1], bc[2], bc[3]),
                          emissive=Color3(emissive[1], emissive[2], emissive[3]),
-                         metalness=Float64(get(pbr, "metallicFactor", 1.0)),
-                         roughness=Float64(get(pbr, "roughnessFactor", 1.0)),
+                         metalness=_gltf_checked_finite_number(
+                             get(pbr, "metallicFactor", 1.0), "metallicFactor"),
+                         roughness=_gltf_checked_finite_number(
+                             get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                           opacity=opacity,
                           transparent=transparent,
                           alpha_test=alpha_test,
@@ -8303,12 +8381,15 @@ end
 
 function _gltf_node_matrix(node)
     if haskey(node, "matrix")
-        m = node["matrix"]
-        return Mat4{Float64}(ntuple(k -> Float64(m[k]), 16))
+        m = _gltf_checked_number_tuple(node["matrix"], 16, "node matrix")
+        return Mat4{Float64}(m)
     end
-    t = get(node, "translation", [0.0,0.0,0.0])
-    r = get(node, "rotation", [0.0,0.0,0.0,1.0])
-    s = get(node, "scale", [1.0,1.0,1.0])
+    t = _gltf_checked_number_tuple(get(node, "translation", [0.0,0.0,0.0]),
+                                   3, "node translation")
+    r = _gltf_checked_number_tuple(get(node, "rotation", [0.0,0.0,0.0,1.0]),
+                                   4, "node rotation")
+    s = _gltf_checked_number_tuple(get(node, "scale", [1.0,1.0,1.0]),
+                                   3, "node scale")
     T = mat4_translation(t[1], t[2], t[3])
     R = quat_to_mat4(Quaternion(r[1], r[2], r[3], r[4]))
     S = mat4_scaling(s[1], s[2], s[3])
@@ -8407,8 +8488,9 @@ function _gltf_transform_direction(M::Mat4, v::Vec3)
     return n > 0 ? d / n : v
 end
 
-function _gltf_color3(v)
-    Color3(Float64(v[1]), Float64(v[2]), Float64(v[3]))
+function _gltf_color3(v, label::String="color")
+    c = _gltf_checked_number_tuple(v, 3, label)
+    Color3(c[1], c[2], c[3])
 end
 
 function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
@@ -8416,20 +8498,26 @@ function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
     typ = String(camdef["type"])
     cam = if typ == "perspective"
         p = camdef["perspective"]
-        PerspectiveCamera(fov=Float64(p["yfov"]),
-                          aspect=Float64(get(p, "aspectRatio", 1.0)),
-                          near=Float64(p["znear"]),
-                          far=Float64(get(p, "zfar", 1000.0)),
+        PerspectiveCamera(fov=_gltf_checked_finite_number(p["yfov"],
+                                                          "camera yfov"),
+                          aspect=_gltf_checked_finite_number(
+                              get(p, "aspectRatio", 1.0), "camera aspectRatio"),
+                          near=_gltf_checked_finite_number(p["znear"],
+                                                           "camera znear"),
+                          far=_gltf_checked_finite_number(get(p, "zfar", 1000.0),
+                                                          "camera zfar"),
                           name=name)
     elseif typ == "orthographic"
         o = camdef["orthographic"]
-        xmag = Float64(o["xmag"])
-        ymag = Float64(o["ymag"])
+        xmag = _gltf_checked_finite_number(o["xmag"], "camera xmag")
+        ymag = _gltf_checked_finite_number(o["ymag"], "camera ymag")
         # xmag/ymag are HALF extents (spec: P[0][0] = 1/xmag, P[1][1] = 1/ymag).
         OrthographicCamera(left=-xmag, right=xmag,
                            bottom=-ymag, top=ymag,
-                           near=Float64(o["znear"]),
-                           far=Float64(o["zfar"]),
+                           near=_gltf_checked_finite_number(o["znear"],
+                                                            "camera znear"),
+                           far=_gltf_checked_finite_number(o["zfar"],
+                                                           "camera zfar"),
                            name=name)
     else
         error("unsupported glTF camera type: $typ")
@@ -8454,22 +8542,27 @@ function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
     lights = _gltf_punctual_lights(gltf)
     ldef = lights[light_idx + 1]
     typ = String(ldef["type"])
-    color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]))
-    intensity = Float64(get(ldef, "intensity", 1.0))
+    color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]), "light color")
+    intensity = _gltf_checked_finite_number(get(ldef, "intensity", 1.0),
+                                            "light intensity")
     pos, rot, scl = _gltf_decompose(M)
     light = if typ == "directional"
         DirectionalLight(color=color, intensity=intensity, position=pos, name=name)
     elseif typ == "point"
         PointLight(color=color, intensity=intensity,
-                   distance=Float64(get(ldef, "range", 0.0)),
+                   distance=_gltf_checked_finite_number(get(ldef, "range", 0.0),
+                                                        "light range"),
                    position=pos, name=name)
     elseif typ == "spot"
         spot = get(ldef, "spot", Dict{String,Any}())
-        outer = Float64(get(spot, "outerConeAngle", pi/4))
-        inner = Float64(get(spot, "innerConeAngle", 0.0))
+        outer = _gltf_checked_finite_number(get(spot, "outerConeAngle", pi/4),
+                                            "spot outerConeAngle")
+        inner = _gltf_checked_finite_number(get(spot, "innerConeAngle", 0.0),
+                                            "spot innerConeAngle")
         penumbra = outer > 0 ? clamp(1.0 - inner / outer, 0.0, 1.0) : 0.0
         SpotLight(color=color, intensity=intensity,
-                  distance=Float64(get(ldef, "range", 0.0)),
+                  distance=_gltf_checked_finite_number(get(ldef, "range", 0.0),
+                                                       "light range"),
                   angle=outer, penumbra=penumbra,
                   position=pos, name=name)
     else
@@ -8771,7 +8864,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             mesh_idx = _gltf_checked_zero_based_index(
                 node["mesh"], length(get(gltf, "meshes", Any[])), "node mesh")
             mesh_def = gltf["meshes"][mesh_idx + 1]
-            morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
+            morph_weights = _gltf_checked_number_vector(
+                get(node, "weights", get(mesh_def, "weights", Float64[])), "morph weights")
             morph_names = _gltf_target_names(mesh_def)
             for prim in mesh_def["primitives"]
                 if instance_matrices !== nothing

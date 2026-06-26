@@ -16702,4 +16702,86 @@ end
         end
     end
 
+    @testset "fresh audit round 33 fixes" begin
+        mktempdir() do dir
+            bin = UInt8[]
+            append!(bin, reinterpret(UInt8, Float32[0,0,0, 1,0,0, 0,1,0]))
+            write(joinpath(dir, "mesh.bin"), bin)
+            red = zeros(1, 1, 3); red[1, 1, 1] = 1.0
+            save_png(joinpath(dir, "red.png"), red)
+
+            function gltf_path(filename, body)
+                path = joinpath(dir, filename)
+                write(path, body)
+                return path
+            end
+
+            function mesh_material_path(filename, material_json; accessor_extra="")
+                return gltf_path(filename, """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0}],
+                 "buffers":[{"byteLength":$(length(bin)),"uri":"mesh.bin"}],
+                 "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":$(length(bin))}],
+                 "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"$accessor_extra}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+                 "materials":[$material_json]}
+                """)
+            end
+
+            @test_throws "glTF metallicFactor must be a finite number" load_gltf(
+                mesh_material_path("bool_metallic.gltf",
+                                   "{\"pbrMetallicRoughness\":{\"metallicFactor\":true}}"))
+            @test_throws "glTF doubleSided must be a boolean" load_gltf(
+                mesh_material_path("numeric_double_sided.gltf",
+                                   "{\"doubleSided\":1}"))
+            @test_throws "glTF baseColorFactor[1] must be a finite number" load_gltf(
+                mesh_material_path("bool_base_color.gltf",
+                                   "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[true,1,1,1]}}"))
+            @test_throws "glTF accessor normalized must be a boolean" load_gltf(
+                mesh_material_path("numeric_normalized.gltf", "{}";
+                                   accessor_extra=",\"normalized\":1"))
+            @test_throws "glTF texture transform rotation must be a finite number" load_gltf(
+                gltf_path("bool_texture_rotation.gltf", """
+                {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0}],
+                 "buffers":[{"byteLength":$(length(bin)),"uri":"mesh.bin"}],
+                 "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":$(length(bin))}],
+                 "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+                 "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,
+                   "extensions":{"KHR_texture_transform":{"rotation":true}}}}}],
+                 "textures":[{"source":0}],"images":[{"uri":"red.png"}]}
+                """))
+            @test_throws "glTF node translation[1] must be a finite number" load_gltf(
+                gltf_path("bool_translation.gltf", """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"translation":[true,0,0]}]}
+                """))
+            @test_throws "glTF camera yfov must be a finite number" load_gltf(
+                gltf_path("bool_camera_yfov.gltf", """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"camera":0}],
+                 "cameras":[{"type":"perspective",
+                   "perspective":{"yfov":true,"znear":0.1}}]}
+                """))
+            @test_throws "glTF light intensity must be a finite number" load_gltf(
+                gltf_path("bool_light_intensity.gltf", """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"extensions":{"KHR_lights_punctual":{"light":0}}}],
+                 "extensions":{"KHR_lights_punctual":{"lights":[{"type":"point",
+                   "intensity":true}]}}}
+                """))
+            @test_throws "glTF morph weights[1] must be a finite number" load_gltf(
+                gltf_path("bool_morph_weight.gltf", """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0,"weights":[true]}],
+                 "meshes":[{"primitives":[]}]}
+                """))
+        end
+    end
+
 end
