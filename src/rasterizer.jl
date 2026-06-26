@@ -11,6 +11,7 @@ struct RenderTarget{T<:Real}
 end
 
 function RenderTarget(width::Int, height::Int; T=Float64)
+    (width > 0 && height > 0) || throw(ArgumentError("RenderTarget dimensions must be positive"))
     color = zeros(T, height, width, 3)
     depth = fill(T(Inf), height, width)
     RenderTarget{T}(width, height, color, depth)

@@ -65,6 +65,8 @@ bounded (no framebuffer reallocation).
 """
 function benchmark_render(scene::Scene, camera::AbstractCamera, W::Int, H::Int;
                           warmup::Int=2, reps::Int=7, shading::Symbol=:flat)
+    warmup >= 0 || throw(ArgumentError("benchmark_render warmup must be non-negative"))
+    reps > 0 || throw(ArgumentError("benchmark_render reps must be positive"))
     rt = RenderTarget(W, H)
     for _ in 1:warmup
         render!(rt, scene, camera; shading=shading)

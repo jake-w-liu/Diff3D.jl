@@ -16961,6 +16961,9 @@ end
     end
 
     @testset "fresh audit round 40 fixes" begin
+        @test_throws "RenderTarget dimensions must be positive" RenderTarget(0, 1)
+        @test_throws "RenderTarget dimensions must be positive" RenderTarget(1, 0)
+
         @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = NaN)
         @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = 0.0)
         @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = pi)
@@ -17037,6 +17040,17 @@ end
         @test shadow_visibility(
             ShadowMap(fill(Inf, 1, 1), mat4_scaling(1e308, 1.0, 1.0), 0.0, 0),
             Vec3(1e308, 0.0, 0.0)) == 1.0
+    end
+
+    @testset "fresh audit round 41 fixes" begin
+        scene = Scene()
+        cam = PerspectiveCamera()
+        @test_throws "benchmark_render warmup must be non-negative" benchmark_render(
+            scene, cam, 1, 1; warmup = -1, reps = 1)
+        @test_throws "benchmark_render reps must be positive" benchmark_render(
+            scene, cam, 1, 1; warmup = 0, reps = 0)
+        @test_throws "RenderTarget dimensions must be positive" benchmark_render(
+            scene, cam, 0, 1; warmup = 0, reps = 1)
     end
 
 end
