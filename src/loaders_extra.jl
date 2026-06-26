@@ -7727,7 +7727,8 @@ function _gltf_texture_transform(texinfo)
     offset = get(ext, "offset", [0.0, 0.0])
     scale = get(ext, "scale", [1.0, 1.0])
     rotation = Float64(get(ext, "rotation", 0.0))
-    tex_coord = Int(get(ext, "texCoord", get(texinfo, "texCoord", 0.0)))
+    tex_coord = _gltf_checked_nonnegative_integer(
+        get(ext, "texCoord", get(texinfo, "texCoord", 0.0)), "texture texCoord")
     return (Vec2(Float64(offset[1]), Float64(offset[2])),
             Vec2(Float64(scale[1]), Float64(scale[2])),
             rotation,
@@ -8238,6 +8239,11 @@ function _gltf_checked_zero_based_index(raw, count::Int, label::String)
     return idx
 end
 
+function _gltf_checked_accessor_index(gltf, raw, label::String)
+    return _gltf_checked_zero_based_index(raw, length(get(gltf, "accessors", Any[])),
+                                         "$label accessor")
+end
+
 function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int)
     accessors = gltf["accessors"]
     0 <= accessor_index < length(accessors) ||
@@ -8245,7 +8251,8 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     acc = accessors[accessor_index + 1]
     acc["type"] == "SCALAR" ||
         error("glTF primitive indices accessor must be SCALAR")
-    ctype = Int(acc["componentType"])
+    ctype = _gltf_checked_component_type(acc["componentType"],
+                                         "primitive indices accessor")
     ctype in (5121, 5123, 5125) ||
         error("glTF primitive indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
     idxf, ncomp, _ = _gltf_accessor(gltf, buffers, accessor_index)
@@ -8310,7 +8317,9 @@ end
 
 function _gltf_instance_attribute(gltf, buffers, attrs, name::String, ncomp::Int)
     haskey(attrs, name) || return nothing
-    data, item_size, count = _gltf_accessor(gltf, buffers, Int(attrs[name]))
+    accessor_index = _gltf_checked_accessor_index(
+        gltf, attrs[name], "EXT_mesh_gpu_instancing $name")
+    data, item_size, count = _gltf_accessor(gltf, buffers, accessor_index)
     item_size == ncomp || error("EXT_mesh_gpu_instancing $name accessor must be $(ncomp == 3 ? "VEC3" : "VEC4")")
     return data, count
 end
@@ -8541,13 +8550,16 @@ end
 function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String="")
     _gltf_check_required_extensions(gltf)
     scene = Scene()
+    node_count = length(get(gltf, "nodes", Any[]))
     node_objects = Dict{Int, AbstractObject3D}()
     joint_nodes, skin_root_nodes = _gltf_skin_node_sets(gltf)
     morph_animated_nodes = Set{Int}()
     for anim in get(gltf, "animations", Any[]), ch in get(anim, "channels", Any[])
         target = get(ch, "target", Dict{String,Any}())
         get(target, "path", "") == "weights" && haskey(target, "node") &&
-            push!(morph_animated_nodes, Int(target["node"]))
+            push!(morph_animated_nodes,
+                  _gltf_checked_node_index(target["node"], node_count,
+                                           "animation target"))
     end
     pending_skin_binds = SkinnedMesh[]
     pending_inverse_calcs = SkinnedMesh[]
@@ -8596,19 +8608,25 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
                              morph_names=String[]; preserve_nontriangle_morphs::Bool=false)
-        mode = Int(get(prim, "mode", 4))
+        mode = _gltf_checked_integer(get(prim, "mode", 4), "primitive mode")
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
             error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
         attrs = prim["attributes"]
-        pos, _, nverts = _gltf_accessor(gltf, buffers, Int(attrs["POSITION"]))
+        position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
+                                                         "POSITION")
+        pos, _, nverts = _gltf_accessor(gltf, buffers, position_accessor)
         normals = Float64[]
         if haskey(attrs, "NORMAL")
-            normals, _, _ = _gltf_accessor(gltf, buffers, Int(attrs["NORMAL"]))
+            normal_accessor = _gltf_checked_accessor_index(gltf, attrs["NORMAL"],
+                                                           "NORMAL")
+            normals, _, _ = _gltf_accessor(gltf, buffers, normal_accessor)
         end
         uvs = Float64[]
         if haskey(attrs, "TEXCOORD_0")
-            uvs, uvcomp, _ = _gltf_accessor(gltf, buffers, Int(attrs["TEXCOORD_0"]))
+            uv_accessor = _gltf_checked_accessor_index(gltf, attrs["TEXCOORD_0"],
+                                                       "TEXCOORD_0")
+            uvs, uvcomp, _ = _gltf_accessor(gltf, buffers, uv_accessor)
             uvcomp == 2 || error("glTF TEXCOORD_0 accessor must be VEC2")
         end
         if haskey(prim, "indices")
@@ -8649,7 +8667,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 ("TANGENT", "morphTangent"),
             )
                 haskey(target, gltf_name) || continue
-                data, item_size, attr_count = _gltf_accessor(gltf, buffers, Int(target[gltf_name]))
+                target_accessor = _gltf_checked_accessor_index(
+                    gltf, target[gltf_name], "morph target $gltf_name")
+                data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
                 attr_count == nverts || error("glTF morph target $gltf_name count does not match POSITION")
                 set_attribute!(geo, Symbol(local_prefix * string(ti - 1)), data, item_size)
             end
@@ -8685,7 +8705,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         skin = skins[skin_index + 1]
         bones = Bone[]
         for j in skin["joints"]
-            bone = node_objects[Int(j)]
+            joint_idx = _gltf_checked_node_index(j, node_count, "skin joint")
+            bone = node_objects[joint_idx]
             bone isa Bone || error("glTF skin joint node was not loaded as a Bone")
             push!(bones, bone)
         end
@@ -8707,11 +8728,15 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         M = _gltf_node_matrix(node)
         node_name = String(get(node, "name", "node_$node_idx"))
         obj = if haskey(node, "camera")
-            _gltf_camera(gltf, Int(node["camera"]), node_name, M)
+            camera_idx = _gltf_checked_zero_based_index(
+                node["camera"], length(get(gltf, "cameras", Any[])), "node camera")
+            _gltf_camera(gltf, camera_idx, node_name, M)
         elseif haskey(node, "extensions") &&
                haskey(node["extensions"], "KHR_lights_punctual") &&
                haskey(node["extensions"]["KHR_lights_punctual"], "light")
-            light_idx = Int(node["extensions"]["KHR_lights_punctual"]["light"])
+            light_idx = _gltf_checked_zero_based_index(
+                node["extensions"]["KHR_lights_punctual"]["light"],
+                length(_gltf_punctual_lights(gltf)), "node light")
             _gltf_node_light(gltf, light_idx, node_name, M)
         elseif node_idx in joint_nodes
             Bone(name=node_name)
@@ -8743,7 +8768,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         if haskey(node, "mesh")
             instance_matrices !== nothing && haskey(node, "skin") &&
                 error("EXT_mesh_gpu_instancing with skinned meshes is not supported")
-            mesh_def = gltf["meshes"][Int(node["mesh"]) + 1]
+            mesh_idx = _gltf_checked_zero_based_index(
+                node["mesh"], length(get(gltf, "meshes", Any[])), "node mesh")
+            mesh_def = gltf["meshes"][mesh_idx + 1]
             morph_weights = Float64.(get(node, "weights", get(mesh_def, "weights", Float64[])))
             morph_names = _gltf_target_names(mesh_def)
             for prim in mesh_def["primitives"]
@@ -8770,7 +8797,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             end
         end
         for child in get(node, "children", Any[])
-            add_node!(obj, Int(child))
+            child_idx = _gltf_checked_node_index(child, node_count, "child")
+            add_node!(obj, child_idx)
         end
     end
 
@@ -8778,16 +8806,18 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         node = gltf["nodes"][node_idx + 1]
         obj = node_objects[node_idx]
         for child in get(node, "children", Any[])
-            child_idx = Int(child)
+            child_idx = _gltf_checked_node_index(child, node_count, "child")
             child_obj = node_objects[child_idx]
             add!(obj, child_obj)
             link_node_hierarchy!(child_idx)
         end
     end
 
-    scene_def = gltf["scenes"][Int(get(gltf, "scene", 0.0)) + 1]
+    scene_idx = _gltf_checked_zero_based_index(
+        get(gltf, "scene", 0.0), length(get(gltf, "scenes", Any[])), "scene")
+    scene_def = gltf["scenes"][scene_idx + 1]
     for n in scene_def["nodes"]
-        add_node!(scene, Int(n))
+        add_node!(scene, _gltf_checked_node_index(n, node_count, "scene root"))
     end
     for root_idx in skin_root_nodes
         root_idx in scene_linked_nodes || link_node_hierarchy!(root_idx)
@@ -8875,6 +8905,7 @@ end
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
+    node_count = length(get(gltf, "nodes", Any[]))
     for (ai, anim) in enumerate(gltf["animations"])
         samplers = anim["samplers"]
         channels = get(anim, "channels", Any[])
@@ -8882,15 +8913,22 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
         for ch in channels
             target = ch["target"]
             haskey(target, "node") || continue
-            node_idx = Int(target["node"])
+            node_idx = _gltf_checked_node_index(target["node"], node_count,
+                                                "animation target")
             haskey(node_objects, node_idx) || continue
             path = String(target["path"])
             path in ("translation", "rotation", "scale", "weights") || continue
-            sampler = samplers[Int(ch["sampler"]) + 1]
+            sampler_idx = _gltf_checked_zero_based_index(
+                ch["sampler"], length(samplers), "animation sampler")
+            sampler = samplers[sampler_idx + 1]
             interpolation = Symbol(lowercase(String(get(sampler, "interpolation", "LINEAR"))))
-            times, tncomp, tcount = _gltf_accessor(gltf, buffers, Int(sampler["input"]))
+            input_accessor = _gltf_checked_accessor_index(gltf, sampler["input"],
+                                                          "animation input")
+            times, tncomp, tcount = _gltf_accessor(gltf, buffers, input_accessor)
             tncomp == 1 || error("glTF animation input accessor must be SCALAR")
-            out, ncomp, count = _gltf_accessor(gltf, buffers, Int(sampler["output"]))
+            output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
+                                                           "animation output")
+            out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"
                 if interpolation === :cubicspline

@@ -16583,8 +16583,11 @@ end
             write(joinpath(dir, "mesh.bin"), bin)
 
             function textured_path(filename; material_index="0", texture_index="0",
+                                   texture_tex_coord=nothing,
                                    texture_source="0", texture_sampler=nothing,
                                    samplers_json="")
+                tex_coord_field = texture_tex_coord === nothing ? "" :
+                                  ",\"texCoord\":$texture_tex_coord"
                 sampler_field = texture_sampler === nothing ? "" : ",\"sampler\":$texture_sampler"
                 path = joinpath(dir, filename)
                 write(path, """
@@ -16594,7 +16597,7 @@ end
                  "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":$(length(bin))}],
                  "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
                  "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":$material_index}]}],
-                 "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":$texture_index}}},{}],
+                 "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":$texture_index$tex_coord_field}}},{}],
                  "textures":[{"source":$texture_source$sampler_field},{"source":1}],
                  "images":[{"uri":"red.png"},{"uri":"blue.png"}]$samplers_json}
                 """)
@@ -16620,8 +16623,82 @@ end
             @test_throws "glTF sampler minFilter value 12345 is unsupported" load_gltf(
                 textured_path("bad_sampler_min_filter.gltf"; texture_sampler="0",
                               samplers_json=",\"samplers\":[{\"minFilter\":12345}]"))
+            @test_throws "glTF texture texCoord must be an integer" load_gltf(
+                textured_path("bool_texture_texcoord.gltf"; texture_tex_coord="true"))
             @test_throws "glTF material index must be an integer" load_gltf(
                 textured_path("bool_material_index.gltf"; material_index="true"))
+        end
+    end
+
+    @testset "fresh audit round 32 fixes" begin
+        mktempdir() do dir
+            function gltf_path(filename, body)
+                path = joinpath(dir, filename)
+                write(path, body)
+                return path
+            end
+
+            @test_throws "glTF scene index must be an integer" load_gltf(gltf_path(
+                "bool_scene.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":true,
+                 "scenes":[{"nodes":[0]},{"nodes":[1]}],
+                 "nodes":[{"name":"zero"},{"name":"one"}]}
+                """))
+            @test_throws "glTF scene root node index must be an integer" load_gltf(gltf_path(
+                "bool_scene_root.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[true]}],
+                 "nodes":[{"name":"zero"},{"name":"one"}]}
+                """))
+            @test_throws "glTF child node index must be an integer" load_gltf(gltf_path(
+                "bool_child.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"name":"zero","children":[true]},{"name":"one"}]}
+                """))
+            @test_throws "glTF node mesh index must be an integer" load_gltf(gltf_path(
+                "bool_node_mesh.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":true}]}
+                """))
+            @test_throws "glTF primitive mode must be an integer" load_gltf(gltf_path(
+                "bool_primitive_mode.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0}],
+                 "meshes":[{"primitives":[{"mode":true}]}]}
+                """))
+            @test_throws "glTF POSITION accessor index must be an integer" load_gltf(gltf_path(
+                "bool_position_accessor.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],
+                 "nodes":[{"mesh":0}],
+                 "accessors":[{},{}],
+                 "meshes":[{"primitives":[{"attributes":{"POSITION":true}}]}]}
+                """))
+            @test_throws "glTF animation target node index must be an integer" load_gltf_asset(
+                gltf_path("bool_animation_target.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],"nodes":[{}],
+                 "animations":[{"samplers":[{},{}],
+                   "channels":[{"sampler":0,"target":{"node":true,"path":"translation"}}]}]}
+                """))
+            @test_throws "glTF animation sampler index must be an integer" load_gltf_asset(
+                gltf_path("bool_animation_sampler.gltf",
+                """
+                {"asset":{"version":"2.0"},"scene":0,
+                 "scenes":[{"nodes":[0]}],"nodes":[{}],
+                 "animations":[{"samplers":[{},{}],
+                   "channels":[{"sampler":true,"target":{"node":0,"path":"translation"}}]}]}
+                """))
         end
     end
 
