@@ -7100,6 +7100,14 @@ end
         @test_throws "invalid JSON number ." load_font(invalid_number_path)
         rm(invalid_number_path)
 
+        for invalid_number in ("+1000", ".5", "1.", "01")
+            invalid_number_form_path = tempname() * ".typeface.json"
+            write(invalid_number_form_path,
+                  """{"resolution": $invalid_number, "glyphs": {}}""")
+            @test_throws "invalid JSON number $invalid_number" load_font(invalid_number_form_path)
+            rm(invalid_number_form_path)
+        end
+
         invalid_literal_path = tempname() * ".typeface.json"
         write(invalid_literal_path, "tr")
         @test_throws "invalid JSON literal at byte 1" load_font(invalid_literal_path)

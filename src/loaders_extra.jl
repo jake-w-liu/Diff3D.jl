@@ -2143,6 +2143,8 @@ function _json_number(p)
     end
     p.i > start || error("invalid JSON value at byte $start")
     raw = p.s[start:p.i-1]
+    occursin(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$", raw) ||
+        error("invalid JSON number $raw")
     value = tryparse(Float64, raw)
     value === nothing && error("invalid JSON number $raw")
     isfinite(value) || error("JSON number $raw must be finite")
