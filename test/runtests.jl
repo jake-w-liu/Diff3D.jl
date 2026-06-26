@@ -16846,4 +16846,30 @@ end
         @test loss_silhouette_iou(zeros(2, 2, 1), zeros(2, 2, 1)) < 0.05
     end
 
+    @testset "fresh audit round 36 fixes" begin
+        @test_throws "LatheGeometry needs at least two profile points" LatheGeometry(Vec2{Float64}[])
+        @test_throws "LatheGeometry needs at least two profile points" LatheGeometry([Vec2(1.0, 0.0)])
+        @test_throws "LatheGeometry profile point 1 must be finite" LatheGeometry([
+            Vec2(NaN, 0.0), Vec2(1.0, 1.0)
+        ])
+        @test_throws "LatheGeometry phi_start and phi_length must be finite" LatheGeometry([
+            Vec2(1.0, 0.0), Vec2(1.0, 1.0)
+        ]; phi_start = NaN)
+
+        @test_throws "TubeGeometry needs at least two path points" TubeGeometry(Vec3{Float64}[])
+        @test_throws "TubeGeometry needs at least two path points" TubeGeometry([Vec3(0.0, 0.0, 0.0)])
+        @test_throws "TubeGeometry path point 2 must be finite" TubeGeometry([
+            Vec3(0.0, 0.0, 0.0), Vec3(0.0, Inf, 1.0)
+        ])
+        @test_throws "TubeGeometry radius must be finite" TubeGeometry([
+            Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)
+        ]; radius = NaN)
+
+        lat = LatheGeometry([Vec2(1.0, 0.0), Vec2(1.0, 1.0)]; segments = 0)
+        @test lat.n_faces > 0 && all(isfinite, lat.positions) && all(isfinite, lat.normals)
+        tub = TubeGeometry([Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)];
+                           radius = 0.25, radial_segments = 0)
+        @test tub.n_faces > 0 && all(isfinite, tub.positions) && all(isfinite, tub.normals)
+    end
+
 end

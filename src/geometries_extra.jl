@@ -245,9 +245,20 @@ end
 # ========================== LatheGeometry ==========================
 # Revolve a 2D profile (x = radius, y = height) about the y-axis.
 
+function _validate_lathe_points(points::Vector{<:Vec2})
+    length(points) >= 2 || throw(ArgumentError("LatheGeometry needs at least two profile points"))
+    for (i, pt) in pairs(points)
+        (isfinite(pt.x) && isfinite(pt.y)) ||
+            throw(ArgumentError("LatheGeometry profile point $i must be finite"))
+    end
+    return nothing
+end
+
 function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_length=2π)
     np = length(points)
-    @assert np >= 2 "Lathe needs at least two profile points"
+    _validate_lathe_points(points)
+    (isfinite(phi_start) && isfinite(phi_length)) ||
+        throw(ArgumentError("LatheGeometry phi_start and phi_length must be finite"))
     segments = _clamp_seg(segments, 3)   # clamp so 0 can't make i/segments NaN
 
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
@@ -277,9 +288,19 @@ end
 # ========================== TubeGeometry ==========================
 # Sweep a circle of `radius` along a polyline `path`.
 
+function _validate_tube_path(path::Vector{<:Vec3}, radius)
+    length(path) >= 2 || throw(ArgumentError("TubeGeometry needs at least two path points"))
+    for (i, pt) in pairs(path)
+        (isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z)) ||
+            throw(ArgumentError("TubeGeometry path point $i must be finite"))
+    end
+    isfinite(radius) || throw(ArgumentError("TubeGeometry radius must be finite"))
+    return nothing
+end
+
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
-    @assert n >= 2 "Tube needs at least two path points"
+    _validate_tube_path(path, radius)
     radial_segments = _clamp_seg(radial_segments, 3)   # clamp so 0 can't make j/radial_segments NaN
 
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
