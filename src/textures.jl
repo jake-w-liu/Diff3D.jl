@@ -61,6 +61,13 @@ function _texture_max_anisotropy(v)::Float64
     return f
 end
 
+@inline function _checked_texture_data_size(tex::Texture, label::String)
+    H, W, C = size(tex.data)
+    (H > 0 && W > 0 && C > 0) ||
+        throw(ArgumentError("$label texture dimensions must be positive; got $(size(tex.data))"))
+    return H, W, C
+end
+
 function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=:bilinear,
                  min_filter=nothing, mag_filter=nothing,
                  mipmaps::Vector{Array{Float64,3}}=Array{Float64,3}[], colorspace::Symbol=:srgb,
@@ -194,9 +201,9 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
 end
 
 function sample_texture(tex::Texture, u, v)
+    H, W, _ = _checked_texture_data_size(tex, "sample_texture")
     u, v = texture_transform_uv(tex, u, v)
     u = _sanitize_uv(u); v = _sanitize_uv(v)
-    H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
     if tex.filter === :nearest
@@ -230,9 +237,9 @@ end
 end
 
 function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
+    H, W, _ = _checked_texture_data_size(tex, "sample_texture_channel")
     u, v = texture_transform_uv(tex, u, v)
     u = _sanitize_uv(u); v = _sanitize_uv(v)
-    H, W, _ = size(tex.data)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
     if tex.filter === :nearest
@@ -291,6 +298,7 @@ end
 
 """Build a box-filtered mipmap pyramid down to 1×1 (three.js `generateMipmaps`)."""
 function generate_mipmaps!(tex::Texture)
+    _checked_texture_data_size(tex, "generate_mipmaps!")
     empty!(tex.mipmaps)
     cur = tex.data
     while size(cur, 1) > 1 || size(cur, 2) > 1
@@ -318,6 +326,7 @@ end
 
 """Sample a discrete mip level (0 = base). Clamped to the available levels."""
 function sample_texture_lod(tex::Texture, u, v, lod::Int)
+    _checked_texture_data_size(tex, "sample_texture_lod")
     lod <= 0 && return sample_texture(tex, u, v)
     isempty(tex.mipmaps) && return sample_texture(tex, u, v)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
@@ -389,7 +398,7 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     # undefined and would crash the differentiable path the docstring promises.
     isfinite(duv) ||
         throw(ArgumentError("texture LOD footprint (duv) must be finite"))
-    H, W, _ = size(tex.data)
+    H, W, _ = _checked_texture_data_size(tex, "sample_texture_auto")
     sz = max(W, H)
     span_raw = abs(duv) * sz
     if span_raw <= 1.0

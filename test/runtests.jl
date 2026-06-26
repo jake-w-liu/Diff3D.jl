@@ -16872,4 +16872,29 @@ end
         @test tub.n_faces > 0 && all(isfinite, tub.positions) && all(isfinite, tub.normals)
     end
 
+    @testset "fresh audit round 37 fixes" begin
+        @test_throws "sample_texture texture dimensions must be positive" sample_texture(
+            Texture(zeros(Float64, 0, 2, 3)), 0.5, 0.5)
+        @test_throws "sample_texture texture dimensions must be positive" sample_texture(
+            Texture(zeros(Float64, 2, 0, 3)), 0.5, 0.5)
+        @test_throws "sample_texture texture dimensions must be positive" sample_texture(
+            Texture(zeros(Float64, 2, 2, 0)), 0.5, 0.5)
+        @test_throws "sample_texture_channel texture dimensions must be positive" Diff3D.sample_texture_channel(
+            Texture(zeros(Float64, 2, 2, 0)), 0.5, 0.5, 1)
+        @test_throws "sample_texture_auto texture dimensions must be positive" sample_texture_auto(
+            Texture(zeros(Float64, 0, 2, 3)), 0.5, 0.5, 0.1)
+        @test_throws "sample_texture_lod texture dimensions must be positive" sample_texture_lod(
+            Texture(zeros(Float64, 2, 0, 3)), 0.5, 0.5, 1)
+
+        bad = Texture(zeros(Float64, 0, 2, 3))
+        push!(bad.mipmaps, ones(Float64, 1, 1, 3))
+        @test_throws "generate_mipmaps! texture dimensions must be positive" generate_mipmaps!(bad)
+        @test length(bad.mipmaps) == 1
+        @test all(isfinite, generate_mipmaps!(Texture(reshape(collect(1.0:9.0), 3, 3, 1))).mipmaps[end])
+
+        # Zero-sized textures can still be used as web-export placeholders; the
+        # sampling/mipmap APIs reject them only when texels are actually needed.
+        @test Diff3D._web_texture_json(Texture(zeros(Float64, 0, 1, 3))) == "null"
+    end
+
 end
