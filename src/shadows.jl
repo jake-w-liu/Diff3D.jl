@@ -9,12 +9,26 @@ struct ShadowMap
     light_vp::Mat4{Float64}     # light view-projection
     bias::Float64
     pcf_radius::Int             # percentage-closer-filtering radius r; 0 = hard shadow
+
+    function ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias, pcf_radius)
+        !isempty(depth) || throw(ArgumentError("ShadowMap depth must be non-empty"))
+        b = _validated_shadow_bias(bias)
+        b === nothing && throw(ArgumentError("ShadowMap bias must be finite"))
+        pcf = _validated_shadow_pcf_radius(pcf_radius)
+        pcf === nothing && throw(ArgumentError("ShadowMap pcf_radius must be an integer"))
+        return new(depth, light_vp, b, pcf)
+    end
 end
 
 # Backward-compatible constructor: existing 3-arg callers get a hard shadow (r=0),
 # matching the original single-sample depth comparison byte-for-byte.
 ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias::Float64) =
     ShadowMap(depth, light_vp, bias, 0)
+
+function _validated_shadow_resolution(resolution::Int)
+    resolution > 0 || throw(ArgumentError("shadow resolution must be positive"))
+    return resolution
+end
 
 function _expand_shadow_bounds!(box::Box3, geo, world::Mat4)
     for vi in 1:geo.n_vertices
@@ -215,6 +229,7 @@ shadow (`pcf_radius=0`) and `bias=3e-3` defaults are preserved.
 """
 function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                             clipping_planes=_NO_PLANES)
+    res = _validated_shadow_resolution(resolution)
     shadow_bias = bias === nothing ? _light_shadow_bias(light, 3e-3) :
                   _validated_shadow_bias(bias)
     pcf = pcf_radius === nothing ? _light_shadow_pcf_radius(light, 0) :
@@ -227,10 +242,10 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf
                  any(im -> _visible_in_tree(im) && _instanced_triangle_drawable(im) &&
                            object_casts_shadow(im), instanced)
     has_caster ||
-        return ShadowMap(fill(Inf, resolution, resolution), Mat4{Float64}(), shadow_bias, pcf)
+        return ShadowMap(fill(Inf, res, res), Mat4{Float64}(), shadow_bias, pcf)
     center, radius = _scene_bounds(meshes, instanced)
     vp = _light_view_proj(light, center, radius)
-    W = H = resolution
+    W = H = res
     depth = fill(Inf, H, W)
     for mesh in meshes
         is_visible(mesh) || continue
@@ -270,6 +285,7 @@ The neighbourhood is clamped to the map bounds. `pcf_radius=0` reproduces the
 single-sample hard shadow exactly.
 """
 function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius)
+    r = _validated_shadow_pcf_radius(pcf_radius)::Int
     c = mat4_transform_vec4(sm.light_vp, _vh(p))
     c.w <= 1e-6 && return 1.0
     ndcx = c.x / c.w; ndcy = c.y / c.w; ndcz = c.z / c.w
@@ -278,7 +294,6 @@ function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius
     px = clamp(floor(Int, (ndcx + 1) * 0.5 * W) + 1, 1, W)
     py = clamp(floor(Int, (1 - ndcy) * 0.5 * H) + 1, 1, H)
 
-    r = pcf_radius
     if r <= 0                                               # hard shadow: single sample
         d = sm.depth[py, px]
         isinf(d) && return 1.0
@@ -310,10 +325,11 @@ end
 # lit fraction in [0,1] via the radius stored on each `ShadowMap`.
 function _build_shadow_query(scene, lights; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                              clipping_planes=_NO_PLANES)
+    res = _validated_shadow_resolution(resolution)
     maps = IdDict{AbstractLight, ShadowMap}()
     for light in lights
         if !_is_fill_light(light) && hasfield(typeof(light), :cast_shadow) && getfield(light, :cast_shadow)
-            maps[light] = compute_shadow_map(scene, light; resolution=resolution,
+            maps[light] = compute_shadow_map(scene, light; resolution=res,
                                              bias=bias, pcf_radius=pcf_radius,
                                              clipping_planes=clipping_planes)
         end

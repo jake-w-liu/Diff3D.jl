@@ -17017,6 +17017,18 @@ end
         bad_shadow = compute_shadow_map(bad_scene, bad_light; resolution = 8)
         @test all(isfinite, bad_shadow.light_vp.e)
         @test all(isinf, bad_shadow.depth)
+
+        @test_throws "shadow resolution must be positive" compute_shadow_map(
+            Scene(), DirectionalLight(cast_shadow = true); resolution = 0)
+        @test_throws "ShadowMap depth must be non-empty" ShadowMap(
+            fill(Inf, 0, 0), Mat4{Float64}(), 0.0, 0)
+        @test_throws "shadow_bias must be finite" ShadowMap(
+            fill(Inf, 1, 1), Mat4{Float64}(), NaN, 0)
+        @test_throws "shadow_pcf_radius must be >= 0" ShadowMap(
+            fill(Inf, 1, 1), Mat4{Float64}(), 0.0, -1)
+        @test_throws "shadow_pcf_radius must be >= 0" shadow_visibility(
+            ShadowMap(fill(Inf, 1, 1), Mat4{Float64}(), 0.0, 0),
+            Vec3(0.0, 0.0, 0.0); pcf_radius = -1)
     end
 
 end
