@@ -15963,8 +15963,8 @@ end
         # loss_ssim / loss_silhouette_iou reject mismatched image/target sizes with
         # a clear error (parity with loss_mse/loss_l1), instead of silently
         # computing a wrong loss over the overlapping region.
-        @test_throws AssertionError loss_ssim(rand(8, 8, 1), rand(5, 5, 1); window_size = 3)
-        @test_throws AssertionError loss_silhouette_iou(rand(4, 4, 3), rand(5, 5, 3))
+        @test_throws ArgumentError loss_ssim(rand(8, 8, 1), rand(5, 5, 1); window_size = 3)
+        @test_throws ArgumentError loss_silhouette_iou(rand(4, 4, 3), rand(5, 5, 3))
         @test loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size = 3) isa Real
         @test loss_silhouette_iou(zeros(4, 4, 3), zeros(4, 4, 3)) isa Real
     end
@@ -16824,6 +16824,26 @@ end
             @test_throws "save_pdf dpi must be a finite positive number" save_pdf(
                 joinpath(dir, "dpibool.pdf"), pdf_img; dpi=true)
         end
+    end
+
+    @testset "fresh audit round 35 fixes" begin
+        @test_throws "loss_mse: image dimensions must be positive" loss_mse(
+            zeros(0, 2, 3), zeros(0, 2, 3))
+        @test_throws "loss_l1: image dimensions must be positive" loss_l1(
+            zeros(2, 0, 3), zeros(2, 0, 3))
+        @test_throws "loss_mse: image dimensions must be positive" loss_mse(
+            zeros(2, 2, 0), zeros(2, 2, 0))
+        @test_throws "loss_ssim: image dimensions must be positive" loss_ssim(
+            zeros(8, 8, 0), zeros(8, 8, 0); window_size = 3)
+        @test_throws "loss_silhouette_iou: image dimensions must be positive" loss_silhouette_iou(
+            zeros(2, 2, 0), zeros(2, 2, 0))
+        @test_throws "loss_mse: image and target sizes must match" loss_mse(
+            zeros(2, 2, 3), zeros(2, 3, 3))
+
+        @test loss_mse(fill(0.25, 2, 2, 1), fill(0.25, 2, 2, 1)) == 0.0
+        @test loss_l1(fill(0.25, 2, 2, 1), fill(0.5, 2, 2, 1)) == 0.25
+        @test loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size = 3) isa Real
+        @test loss_silhouette_iou(zeros(2, 2, 1), zeros(2, 2, 1)) < 0.05
     end
 
 end

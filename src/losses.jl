@@ -7,9 +7,17 @@
 L2 (MSE) loss between two images.
 Images are Array{T, 3} of size (H, W, C).
 """
-function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
-    @assert size(image) == size(target)
+function _checked_loss_image_size(image::AbstractArray, target::AbstractArray, label::String)
+    size(image) == size(target) ||
+        throw(ArgumentError("$label: image and target sizes must match; got $(size(image)) and $(size(target))"))
     H, W, C = size(image)
+    (H > 0 && W > 0 && C > 0) ||
+        throw(ArgumentError("$label: image dimensions must be positive; got $(size(image))"))
+    return H, W, C
+end
+
+function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
+    H, W, C = _checked_loss_image_size(image, target, "loss_mse")
     total = zero(promote_type(T, S))
     n = H * W * C
     for c in 1:C
@@ -27,8 +35,7 @@ end
 L1 loss between two images.
 """
 function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
-    @assert size(image) == size(target)
-    H, W, C = size(image)
+    H, W, C = _checked_loss_image_size(image, target, "loss_l1")
     total = zero(promote_type(T, S))
     n = H * W * C
     for c in 1:C
@@ -48,9 +55,8 @@ Simplified single-channel average SSIM.
 """
 function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
-    @assert size(image) == size(target)   # parity with loss_mse/loss_l1 (else silently wrong)
     R = promote_type(T, S)
-    H, W, C = size(image)
+    H, W, C = _checked_loss_image_size(image, target, "loss_ssim")
     # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
     # divides the (n-1) Bessel correction by zero, silently returning NaN.
     window_size >= 2 ||
@@ -126,9 +132,8 @@ Compares binary silhouettes extracted from images.
 """
 function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
-    @assert size(image) == size(target)   # parity with loss_mse/loss_l1 (else silently wrong)
     R = promote_type(T, S)
-    H, W, _ = size(image)
+    H, W, _ = _checked_loss_image_size(image, target, "loss_silhouette_iou")
 
     # Convert to grayscale silhouettes via soft thresholding
     intersection = zero(R)
