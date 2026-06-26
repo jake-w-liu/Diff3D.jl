@@ -1107,8 +1107,7 @@ on possibly non-uniform `times`; endpoint tangents are one-sided. `values` may b
 reals or `Vec3`.
 """
 function interpolate_catmull_rom(times::AbstractVector, values::AbstractVector, t)
-    n = length(times)
-    @assert n == length(values) && n >= 1 "times and values must align and be non-empty"
+    n = _validate_interpolant_inputs("interpolate_catmull_rom", times, values)
     # A NaN time passes both endpoint checks (all NaN comparisons are false) and
     # then indexes one past the end via searchsortedfirst; reject it cleanly, as
     # interpolate_linear does, instead of leaking a BoundsError.

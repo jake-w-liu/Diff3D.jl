@@ -16897,4 +16897,26 @@ end
         @test Diff3D._web_texture_json(Texture(zeros(Float64, 0, 1, 3))) == "null"
     end
 
+    @testset "fresh audit round 38 fixes" begin
+        @test_throws "interpolate_linear requires at least one keyframe" interpolate_linear(
+            Float64[], Float64[], 0.0)
+        @test_throws "interpolate_linear times and values must have the same length" interpolate_linear(
+            [0.0, 1.0], [0.0], 0.5)
+        @test_throws "interpolate_linear times must be strictly increasing" interpolate_linear(
+            [0.0, 0.0, 1.0], [0.0, 1.0, 2.0], 0.25)
+
+        @test_throws "interpolate_catmull_rom requires at least one keyframe" interpolate_catmull_rom(
+            Float64[], Float64[], 0.0)
+        @test_throws "interpolate_catmull_rom times and values must have the same length" interpolate_catmull_rom(
+            [0.0, 1.0], [0.0], 0.5)
+        @test_throws "interpolate_catmull_rom times must be strictly increasing" interpolate_catmull_rom(
+            [0.0, 0.0, 1.0], [0.0, 1.0, 2.0], 0.25)
+
+        @test interpolate_linear([0.0], [3.5], 999.0) == 3.5
+        @test interpolate_catmull_rom([0.0], [3.5], 999.0) == 3.5
+        v = interpolate_linear([0.0, 1.0], [Vec3(0.0, 0.0, 0.0), Vec3(2.0, 4.0, 6.0)], 0.25)
+        @test v.x == 0.5 && v.y == 1.0 && v.z == 1.5
+        @test interpolate_catmull_rom([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], 0.5) isa Real
+    end
+
 end

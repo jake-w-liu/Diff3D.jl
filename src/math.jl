@@ -586,6 +586,18 @@ cartesian_to_cylindrical(v::Vec3) =
 
 # ========================== Interpolant ==========================
 
+function _validate_interpolant_inputs(kind::AbstractString, times::AbstractVector,
+                                      values::AbstractVector)
+    length(times) == length(values) ||
+        throw(ArgumentError("$kind times and values must have the same length"))
+    isempty(times) && throw(ArgumentError("$kind requires at least one keyframe"))
+    for i in 2:length(times)
+        times[i] > times[i - 1] ||
+            throw(ArgumentError("$kind times must be strictly increasing"))
+    end
+    return length(times)
+end
+
 """
     interpolate_linear(times, values, t)
 
@@ -593,8 +605,7 @@ Piecewise-linear interpolation of `values` sampled at sorted `times`, evaluated
 at `t`, clamped to the endpoints. `values` may be reals or `Vec3`.
 """
 function interpolate_linear(times::AbstractVector, values::AbstractVector, t)
-    n = length(times)
-    @assert n == length(values) && n >= 1 "times and values must align and be non-empty"
+    n = _validate_interpolant_inputs("interpolate_linear", times, values)
     isnan(t) && throw(ArgumentError("interpolate_linear: query time t must not be NaN"))
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
