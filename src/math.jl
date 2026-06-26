@@ -221,13 +221,22 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
 end
 
 function mat4_perspective(fov, aspect, near, far)
+    isfinite(fov) && 0 < fov < Float64(pi) ||
+        throw(ArgumentError("mat4_perspective fov must be finite and between 0 and pi radians"))
+    isfinite(aspect) && aspect > 0 ||
+        throw(ArgumentError("mat4_perspective aspect must be finite and positive"))
+    isfinite(near) && near > 0 ||
+        throw(ArgumentError("mat4_perspective near must be finite and positive"))
+    !isnan(far) || throw(ArgumentError("mat4_perspective far must not be NaN"))
+    (isinf(far) && far > 0) || (isfinite(far) && far > near) ||
+        throw(ArgumentError("mat4_perspective far must be finite and greater than near, or +Inf"))
     t = tan(fov / 2)
     T = promote_type(typeof(t), typeof(aspect), typeof(near), typeof(far))
     # far == Inf is a supported config (infinite far clip plane, matching three.js
     # makePerspective); the limit of the depth terms is c=-1, d=-2·near. Without
     # this the Inf/Inf forms below are NaN, poisoning the whole projection.
-    c = isfinite(far) ? -(far + near) / (far - near) : -one(T)
-    d = isfinite(far) ? -2 * far * near / (far - near) : -2 * near
+    c = isinf(far) ? -one(T) : -(far + near) / (far - near)
+    d = isinf(far) ? -2 * near : -2 * far * near / (far - near)
     Mat4{T}((one(T)/(aspect*t), zero(T), zero(T), zero(T),
              zero(T), one(T)/t, zero(T), zero(T),
              zero(T), zero(T), T(c), -one(T),
@@ -235,6 +244,15 @@ function mat4_perspective(fov, aspect, near, far)
 end
 
 function mat4_orthographic(left, right, bottom, top, near, far)
+    isfinite(left) && isfinite(right) ||
+        throw(ArgumentError("mat4_orthographic left and right must be finite"))
+    isfinite(bottom) && isfinite(top) ||
+        throw(ArgumentError("mat4_orthographic bottom and top must be finite"))
+    left != right || throw(ArgumentError("mat4_orthographic left and right must differ"))
+    bottom != top || throw(ArgumentError("mat4_orthographic bottom and top must differ"))
+    isfinite(near) && isfinite(far) ||
+        throw(ArgumentError("mat4_orthographic near and far must be finite"))
+    far != near || throw(ArgumentError("mat4_orthographic near and far must differ"))
     T = promote_type(typeof(left), typeof(right), typeof(bottom), typeof(top),
                      typeof(near), typeof(far), Float64)
     rl = T(right - left)

@@ -16960,4 +16960,63 @@ end
             Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, -1.0), Vec3(NaN, 0.0, 0.0), tb, tc)
     end
 
+    @testset "fresh audit round 40 fixes" begin
+        @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = NaN)
+        @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = 0.0)
+        @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(fov = pi)
+        @test_throws "PerspectiveCamera aspect must be finite and positive" PerspectiveCamera(aspect = 0.0)
+        @test_throws "PerspectiveCamera near must be finite and positive" PerspectiveCamera(near = 0.0)
+        @test_throws "PerspectiveCamera near must be finite and positive" PerspectiveCamera(near = NaN)
+        @test_throws "PerspectiveCamera far must not be NaN" PerspectiveCamera(far = NaN)
+        @test_throws "PerspectiveCamera far must be finite and greater than near" PerspectiveCamera(
+            near = 2.0, far = 1.0)
+
+        @test_throws "OrthographicCamera left and right must differ" OrthographicCamera(
+            left = 1.0, right = 1.0)
+        @test_throws "OrthographicCamera bottom and top must differ" OrthographicCamera(
+            bottom = 2.0, top = 2.0)
+        @test_throws "OrthographicCamera near must be finite and non-negative" OrthographicCamera(
+            near = -1.0)
+        @test_throws "OrthographicCamera near must be finite and non-negative" OrthographicCamera(
+            near = NaN)
+        @test_throws "OrthographicCamera far must be finite and greater than near" OrthographicCamera(
+            far = Inf)
+        @test_throws "OrthographicCamera far must be finite and greater than near" OrthographicCamera(
+            near = 2.0, far = 1.0)
+
+        pc = PerspectiveCamera()
+        pc.aspect = 0.0
+        @test_throws "PerspectiveCamera aspect must be finite and positive" projection_matrix(pc)
+        oc = OrthographicCamera()
+        oc.left = oc.right
+        @test_throws "OrthographicCamera left and right must differ" projection_matrix(oc)
+
+        @test_throws "mat4_perspective far must not be NaN" mat4_perspective(
+            pi / 4, 1.0, 0.1, NaN)
+        @test_throws "mat4_perspective near must be finite and positive" mat4_perspective(
+            pi / 4, 1.0, 0.0, 100.0)
+        @test_throws "mat4_orthographic left and right must differ" mat4_orthographic(
+            1.0, 1.0, -1.0, 1.0, 0.1, 100.0)
+        @test_throws "mat4_orthographic near and far must differ" mat4_orthographic(
+            -1.0, 1.0, -1.0, 1.0, 1.0, 1.0)
+
+        pinf = projection_matrix(PerspectiveCamera(fov = pi / 4, aspect = 1.0,
+                                                   near = 0.1, far = Inf))
+        @test all(isfinite, pinf.e)
+        @test mat4_get(pinf, 3, 3) == -1.0
+        @test isapprox(mat4_get(pinf, 3, 4), -0.2; atol = 1e-12)
+        @test ForwardDiff.derivative(n -> projection_matrix_from_params(
+            pi / 4, 1.0, n, 100.0).e[11], 0.1) isa Real
+
+        bad_geo = BufferGeometry(
+            fill(NaN, 9), Float64[], Float64[], [1, 2, 3], 3, 1)
+        bad_caster = Mesh(bad_geo, MeshBasicMaterial(); cast_shadow = true)
+        bad_scene = Scene(); add!(bad_scene, bad_caster)
+        bad_light = DirectionalLight(; position = Vec3(0.0, 10.0, 0.0),
+                                     cast_shadow = true)
+        bad_shadow = compute_shadow_map(bad_scene, bad_light; resolution = 8)
+        @test all(isfinite, bad_shadow.light_vp.e)
+        @test all(isinf, bad_shadow.depth)
+    end
+
 end

@@ -28,9 +28,9 @@ function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                            children::Vector{AbstractObject3D}, visible::Bool,
                            name::String, id::Int, fov, aspect, near, far,
                            target::Vec3{Float64}, up::Vec3{Float64})
+    f, a, n, fr = _validated_perspective_params(fov, aspect, near, far)
     PerspectiveCamera(position, rotation, scale, parent, children, visible,
-                      name, id, Float64(fov), Float64(aspect), Float64(near),
-                      Float64(far), 1.0, target, up)
+                      name, id, f, a, n, fr, 1.0, target, up)
 end
 
 function _validated_camera_zoom(zoom)
@@ -39,12 +39,50 @@ function _validated_camera_zoom(zoom)
     return z
 end
 
+function _validated_perspective_params(fov, aspect, near, far)
+    f = Float64(fov)
+    a = Float64(aspect)
+    n = Float64(near)
+    fr = Float64(far)
+    isfinite(f) && 0.0 < f < Float64(pi) ||
+        throw(ArgumentError("PerspectiveCamera fov must be finite and between 0 and pi radians"))
+    isfinite(a) && a > 0.0 ||
+        throw(ArgumentError("PerspectiveCamera aspect must be finite and positive"))
+    isfinite(n) && n > 0.0 ||
+        throw(ArgumentError("PerspectiveCamera near must be finite and positive"))
+    !isnan(fr) || throw(ArgumentError("PerspectiveCamera far must not be NaN"))
+    (isinf(fr) && fr > 0.0) || (isfinite(fr) && fr > n) ||
+        throw(ArgumentError("PerspectiveCamera far must be finite and greater than near, or +Inf"))
+    return f, a, n, fr
+end
+
+function _validated_orthographic_params(left, right, bottom, top, near, far)
+    l = Float64(left)
+    r = Float64(right)
+    b = Float64(bottom)
+    t = Float64(top)
+    n = Float64(near)
+    fr = Float64(far)
+    isfinite(l) && isfinite(r) ||
+        throw(ArgumentError("OrthographicCamera left and right must be finite"))
+    isfinite(b) && isfinite(t) ||
+        throw(ArgumentError("OrthographicCamera bottom and top must be finite"))
+    l != r || throw(ArgumentError("OrthographicCamera left and right must differ"))
+    b != t || throw(ArgumentError("OrthographicCamera bottom and top must differ"))
+    isfinite(n) && n >= 0.0 ||
+        throw(ArgumentError("OrthographicCamera near must be finite and non-negative"))
+    isfinite(fr) && fr > n ||
+        throw(ArgumentError("OrthographicCamera far must be finite and greater than near"))
+    return l, r, b, t, n, fr
+end
+
 function PerspectiveCamera(; fov=π/4, aspect=1.0, near=0.1, far=1000.0,
                            zoom=1.0, name="PerspectiveCamera")
+    f, a, n, fr = _validated_perspective_params(fov, aspect, near, far)
     PerspectiveCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
-        fov, aspect, near, far, _validated_camera_zoom(zoom),
+        f, a, n, fr, _validated_camera_zoom(zoom),
         Vec3(), Vec3(0.0, 1.0, 0.0)
     )
 end
@@ -59,8 +97,9 @@ set_parent!(c::PerspectiveCamera, p) = (c.parent = p)
 
 function projection_matrix(c::PerspectiveCamera)
     zoom = _validated_camera_zoom(c.zoom)
-    fov = 2.0 * atan(tan(c.fov / 2.0) / zoom)
-    mat4_perspective(fov, c.aspect, c.near, c.far)
+    f, a, n, fr = _validated_perspective_params(c.fov, c.aspect, c.near, c.far)
+    fov = 2.0 * atan(tan(f / 2.0) / zoom)
+    mat4_perspective(fov, a, n, fr)
 end
 
 function view_matrix(c::PerspectiveCamera)
@@ -93,19 +132,19 @@ function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                             children::Vector{AbstractObject3D}, visible::Bool,
                             name::String, id::Int, left, right, bottom, top,
                             near, far, target::Vec3{Float64}, up::Vec3{Float64})
+    l, r, b, t, n, fr = _validated_orthographic_params(left, right, bottom, top, near, far)
     OrthographicCamera(position, rotation, scale, parent, children, visible,
-                       name, id, Float64(left), Float64(right),
-                       Float64(bottom), Float64(top), Float64(near),
-                       Float64(far), 1.0, target, up)
+                       name, id, l, r, b, t, n, fr, 1.0, target, up)
 end
 
 function OrthographicCamera(; left=-1.0, right=1.0, bottom=-1.0, top=1.0,
                              near=0.1, far=1000.0, zoom=1.0,
                              name="OrthographicCamera")
+    l, r, b, t, n, fr = _validated_orthographic_params(left, right, bottom, top, near, far)
     OrthographicCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
-        left, right, bottom, top, near, far, _validated_camera_zoom(zoom),
+        l, r, b, t, n, fr, _validated_camera_zoom(zoom),
         Vec3(), Vec3(0.0, 1.0, 0.0)
     )
 end
@@ -120,11 +159,13 @@ set_parent!(c::OrthographicCamera, p) = (c.parent = p)
 
 function projection_matrix(c::OrthographicCamera)
     zoom = _validated_camera_zoom(c.zoom)
-    cx = (c.left + c.right) * 0.5
-    cy = (c.bottom + c.top) * 0.5
-    hx = (c.right - c.left) * 0.5 / zoom
-    hy = (c.top - c.bottom) * 0.5 / zoom
-    mat4_orthographic(cx - hx, cx + hx, cy - hy, cy + hy, c.near, c.far)
+    l, r, b, t, n, fr = _validated_orthographic_params(
+        c.left, c.right, c.bottom, c.top, c.near, c.far)
+    cx = (l + r) * 0.5
+    cy = (b + t) * 0.5
+    hx = (r - l) * 0.5 / zoom
+    hy = (t - b) * 0.5 / zoom
+    mat4_orthographic(cx - hx, cx + hx, cy - hy, cy + hy, n, fr)
 end
 
 function view_matrix(c::OrthographicCamera)

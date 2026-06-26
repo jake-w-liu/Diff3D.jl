@@ -18,10 +18,17 @@ ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias::Float64) =
 
 function _expand_shadow_bounds!(box::Box3, geo, world::Mat4)
     for vi in 1:geo.n_vertices
-        box = box3_expand_by_point(box, mat4_transform_point(world, get_vertex(geo, vi)))
+        p = mat4_transform_point(world, get_vertex(geo, vi))
+        isfinite(p.x) && isfinite(p.y) && isfinite(p.z) || continue
+        box = box3_expand_by_point(box, p)
     end
     return box
 end
+
+_valid_shadow_box(box::Box3) =
+    isfinite(box.min.x) && isfinite(box.min.y) && isfinite(box.min.z) &&
+    isfinite(box.max.x) && isfinite(box.max.y) && isfinite(box.max.z) &&
+    box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z
 
 # World-space bounding sphere of all shadow-casting drawables under the scene.
 function _scene_bounds(meshes, instanced)
@@ -41,6 +48,7 @@ function _scene_bounds(meshes, instanced)
             box = _expand_shadow_bounds!(box, im.geometry, base * M)
         end
     end
+    _valid_shadow_box(box) || return (Vec3(), 1e-3)
     center = (box.min + box.max) * 0.5
     radius = norm(box.max - center)
     return (center, max(radius, 1e-3))
