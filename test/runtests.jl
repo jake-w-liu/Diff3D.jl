@@ -16513,4 +16513,33 @@ end
         end
     end
 
+    @testset "fresh audit round 29 fixes" begin
+        let ies_text = (control, candela) ->
+                "IESNA:LM-63-2002\nTILT=NONE\n" *
+                control * "\n" *
+                "1.0 1.0 100.0\n" *
+                "0 30 60\n" *
+                "0.0\n" *
+                candela * "\n"
+
+            @test_throws "parse_ies: numeric token" parse_ies(
+                ies_text("1 1000 1.0 3 1 1 1 0 0 0", "1000 NaN 0"))
+            @test_throws "parse_ies: numeric token" parse_ies(
+                ies_text("1 1000 Inf 3 1 1 1 0 0 0", "1000 500 0"))
+            @test_throws "parse_ies: invalid numeric token" parse_ies(
+                ies_text("1 1000 1.0 3 1 1 1 0 0 0", "1000 nope 0 1"))
+            @test_throws "parse_ies: vertical-angle count must be a positive integer" parse_ies(
+                ies_text("1 1000 1.0 2.6 1 1 1 0 0 0", "1000 500 0"))
+            @test_throws "parse_ies: horizontal-angle count must be a positive integer" parse_ies(
+                ies_text("1 1000 1.0 3 0 1 1 0 0 0", "1000 500 0"))
+            @test_throws "IESProfile: angles must be finite" IESProfile([0.0, NaN], [1.0, 0.0])
+            @test_throws "IESProfile: candela values must be finite" IESProfile(
+                [0.0, 90.0], [1.0, NaN])
+            @test_throws "IESProfile: angles must be strictly increasing" IESProfile(
+                [0.0, 0.0, 90.0], [1.0, 0.5, 0.0])
+            @test_throws "IESProfile: candela values must be non-negative" IESProfile(
+                [0.0, 90.0], [1.0, -0.1])
+        end
+    end
+
 end

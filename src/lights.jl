@@ -33,6 +33,14 @@ function IESProfile(angles::AbstractVector{<:Real}, candela::AbstractVector{<:Re
     length(angles) >= 1 || throw(ArgumentError("IESProfile: need at least one sample"))
     a = collect(Float64, angles)
     c = collect(Float64, candela)
+    all(isfinite, a) || throw(ArgumentError("IESProfile: angles must be finite"))
+    all(isfinite, c) || throw(ArgumentError("IESProfile: candela values must be finite"))
+    all(x -> x >= 0.0, c) ||
+        throw(ArgumentError("IESProfile: candela values must be non-negative"))
+    @inbounds for i in 2:length(a)
+        a[i] > a[i - 1] ||
+            throw(ArgumentError("IESProfile: angles must be strictly increasing"))
+    end
     mx = maximum(c)
     IESProfile(a, c, mx)
 end
@@ -91,6 +99,22 @@ The numeric layout after `TILT=NONE` is:
     <horizontal_angles...>    (num_horizontal values)
     <candela values...>       (num_vertical × num_horizontal, plane-major)
 """
+function _ies_parse_numeric_token(tok::AbstractString, line_no::Int)
+    value = tryparse(Float64, tok)
+    value === nothing &&
+        throw(ArgumentError("parse_ies: invalid numeric token $(repr(String(tok))) on line $line_no"))
+    isfinite(value) ||
+        throw(ArgumentError("parse_ies: numeric token $(repr(String(tok))) on line $line_no must be finite"))
+    return value
+end
+
+function _ies_positive_integer_count(value::Real, label::String)
+    f = Float64(value)
+    (f >= 1.0 && f == floor(f) && f <= Float64(typemax(Int))) ||
+        throw(ArgumentError("parse_ies: $label count must be a positive integer"))
+    return Int(f)
+end
+
 function parse_ies(text::AbstractString)
     lines = split(text, '\n')
     # Find the TILT line; everything after it is the numeric payload.
@@ -112,8 +136,7 @@ function parse_ies(text::AbstractString)
         (isempty(s) || startswith(s, '[')) && continue
         # LM-63 permits commas as field delimiters; normalize them to spaces.
         for tok in split(replace(s, ',' => ' '))
-            v = tryparse(Float64, tok)
-            v !== nothing && push!(nums, v)
+            push!(nums, _ies_parse_numeric_token(tok, li))
         end
     end
     length(nums) >= 14 || throw(ArgumentError("parse_ies: truncated photometric data"))
@@ -127,11 +150,8 @@ function parse_ies(text::AbstractString)
     #  11: ballast_factor    12: future_use       13: input_watts
     # The vertical-angle vector starts at token 14.
     cand_mult = nums[3]
-    (isfinite(nums[4]) && isfinite(nums[5])) ||
-        throw(ArgumentError("parse_ies: non-finite vertical/horizontal angle count"))
-    num_vert = Int(round(nums[4]))
-    num_horiz = max(Int(round(nums[5])), 1)
-    (num_vert >= 1) || throw(ArgumentError("parse_ies: invalid vertical-angle count"))
+    num_vert = _ies_positive_integer_count(nums[4], "vertical-angle")
+    num_horiz = _ies_positive_integer_count(nums[5], "horizontal-angle")
     idx = 14
     vend = idx + num_vert - 1
     vend <= length(nums) || throw(ArgumentError("parse_ies: missing vertical angles"))
