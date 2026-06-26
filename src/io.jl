@@ -8,12 +8,34 @@
 # a stray NaN exports as black instead of crashing the writer.
 @inline _clamp01(v) = (x = Float64(v); isnan(x) ? 0.0 : clamp(x, 0.0, 1.0))
 
+function _image_size_and_channels(img::AbstractArray, label::String)
+    nd = ndims(img)
+    (nd == 2 || nd == 3) ||
+        throw(ArgumentError("$label must be a 2-D grayscale image or a 3-D H×W×C image"))
+    H, W = size(img, 1), size(img, 2)
+    (H > 0 && W > 0) || throw(ArgumentError("$label dimensions must be positive"))
+    C = nd == 2 ? 1 : size(img, 3)
+    C >= 1 || throw(ArgumentError("$label must have at least one channel"))
+    return H, W, C
+end
+
+function _checked_positive_finite_number(value, label::String)
+    value isa Bool && throw(ArgumentError("$label must be a finite positive number"))
+    x = try
+        Float64(value)
+    catch
+        throw(ArgumentError("$label must be a finite positive number"))
+    end
+    (isfinite(x) && x > 0) || throw(ArgumentError("$label must be a finite positive number"))
+    return x
+end
+
 """
 Save image as PPM (Portable Pixmap) — no dependencies needed.
 `image` is Array{T, 3} of size (H, W, 3), values in [0,1].
 """
 function save_ppm(filename::String, image::Array{T, 3}) where T
-    H, W, C = size(image)
+    H, W, C = _image_size_and_channels(image, "PPM image")
     gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
     bi = C >= 3 ? 3 : 1
     open(filename, "w") do f
@@ -37,7 +59,7 @@ end
 Save image as raw binary PPM (P6 format) — more compact.
 """
 function save_ppm_binary(filename::String, image::Array{T, 3}) where T
-    H, W, C = size(image)
+    H, W, C = _image_size_and_channels(image, "PPM image")
     gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
     bi = C >= 3 ? 3 : 1
     open(filename, "w") do f
@@ -96,14 +118,14 @@ end
 # luminance(+alpha) image (1 or 2 channels) broadcasts its first channel across
 # RGB instead of reading past the end of a hardcoded 3-channel loop.
 function image_to_uint8(img::AbstractArray)
-    H, W = size(img, 1), size(img, 2)
-    C = size(img, 3)
-    eltype(img) === UInt8 && C >= 3 && return img
+    H, W, C = _image_size_and_channels(img, "image")
+    isgray2d = ndims(img) == 2
+    eltype(img) === UInt8 && C == 3 && !isgray2d && return img
     isu8 = eltype(img) === UInt8
     out = Array{UInt8}(undef, H, W, 3)
     @inbounds for j in 1:W, i in 1:H, c in 1:3
         sc = C >= 3 ? c : 1     # broadcast channel 1 for <3-channel (grayscale) input
-        v = img[i, j, sc]
+        v = isgray2d ? img[i, j] : img[i, j, sc]
         out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
     end
     return out
@@ -148,7 +170,7 @@ function _zlib_store(data::Vector{UInt8})
     if n == 0
         # Empty input still needs one final empty stored block (BFINAL=1,BTYPE=00,
         # LEN=0,NLEN=~0); otherwise the stream has no BFINAL flag and standard
-        # zlib decoders reject it as truncated (reachable from a 0-height image).
+        # zlib decoders reject it as truncated.
         push!(out, 0x01, 0x00, 0x00, 0xff, 0xff)
     end
     while pos <= n
@@ -213,8 +235,8 @@ save_png(filename::String, rt::RenderTarget) = save_png(filename, rt.color)
 Write an H×W×4 image (Float in [0,1] or UInt8) as an 8-bit RGBA PNG (color type 6).
 """
 function save_png_rgba(filename::String, img::AbstractArray)
-    H, W = size(img, 1), size(img, 2)
-    @assert size(img, 3) == 4 "save_png_rgba expects an H×W×4 image"
+    H, W, C = _image_size_and_channels(img, "RGBA image")
+    C == 4 || throw(ArgumentError("save_png_rgba expects an H×W×4 image"))
     raw = Vector{UInt8}(undef, H * (1 + W * 4))
     k = 1
     @inbounds for i in 1:H
@@ -241,8 +263,8 @@ end
 Write a 16-bit grayscale PNG from an H×W (or H×W×1) image of values in [0,1].
 """
 function save_png16(filename::String, img::AbstractArray)
+    H, W, _ = _image_size_and_channels(img, "16-bit grayscale image")
     gray = ndims(img) == 3 ? @view(img[:, :, 1]) : img
-    H, W = size(gray, 1), size(gray, 2)
     raw = Vector{UInt8}(undef, H * (1 + W * 2))
     k = 1
     @inbounds for i in 1:H
@@ -272,13 +294,14 @@ as a DeviceRGB image XObject. Page size is `pixels / dpi` inches. Pure Julia.
 function save_pdf(filename::String, img::AbstractArray; dpi::Real=144)
     buf = image_to_uint8(img)
     H, W = size(buf, 1), size(buf, 2)
+    dpi_value = _checked_positive_finite_number(dpi, "save_pdf dpi")
     rgb = Vector{UInt8}(undef, H * W * 3)         # PDF image samples: top row first
     k = 1
     @inbounds for i in 1:H, j in 1:W
         rgb[k] = buf[i, j, 1]; rgb[k + 1] = buf[i, j, 2]; rgb[k + 2] = buf[i, j, 3]; k += 3
     end
-    pw = round(W / dpi * 72; digits=2)
-    ph = round(H / dpi * 72; digits=2)
+    pw = round(W / dpi_value * 72; digits=2)
+    ph = round(H / dpi_value * 72; digits=2)
     content = Vector{UInt8}(codeunits("q $pw 0 0 $ph 0 0 cm /Im0 Do Q"))
 
     io = IOBuffer()

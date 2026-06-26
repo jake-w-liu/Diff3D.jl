@@ -16784,4 +16784,46 @@ end
         end
     end
 
+    @testset "fresh audit round 34 fixes" begin
+        mktempdir() do dir
+            # image_to_uint8 promises an RGB image. UInt8 RGBA inputs must drop
+            # alpha into a fresh H×W×3 buffer instead of returning H×W×4.
+            rgba = fill(UInt8(7), 2, 3, 4)
+            rgb = image_to_uint8(rgba)
+            @test size(rgb) == (2, 3, 3)
+            @test rgb !== rgba
+            @test all(rgb .== 0x07)
+            @test size(image_to_uint8(fill(0.5, 2, 3))) == (2, 3, 3)
+
+            @test_throws "image dimensions must be positive" save_png(
+                joinpath(dir, "h0.png"), zeros(Float64, 0, 2, 3))
+            @test_throws "image dimensions must be positive" save_png(
+                joinpath(dir, "w0.png"), zeros(Float64, 2, 0, 3))
+            @test_throws "image must have at least one channel" image_to_uint8(
+                zeros(Float64, 2, 2, 0))
+            @test_throws "image must be a 2-D grayscale image or a 3-D H×W×C image" image_to_uint8(
+                zeros(Float64, 1, 1, 1, 1))
+
+            @test_throws "PPM image dimensions must be positive" save_ppm(
+                joinpath(dir, "h0.ppm"), zeros(Float64, 0, 2, 3))
+            @test_throws "PPM image must have at least one channel" save_ppm_binary(
+                joinpath(dir, "c0.ppm"), zeros(Float64, 2, 2, 0))
+
+            @test_throws "RGBA image dimensions must be positive" save_png_rgba(
+                joinpath(dir, "rgba_h0.png"), zeros(Float64, 0, 2, 4))
+            @test_throws "save_png_rgba expects an H×W×4 image" save_png_rgba(
+                joinpath(dir, "rgb.png"), zeros(Float64, 2, 2, 3))
+            @test_throws "16-bit grayscale image dimensions must be positive" save_png16(
+                joinpath(dir, "g16_h0.png"), zeros(Float64, 0, 2))
+
+            pdf_img = fill(0.5, 1, 1, 3)
+            @test_throws "save_pdf dpi must be a finite positive number" save_pdf(
+                joinpath(dir, "dpi0.pdf"), pdf_img; dpi=0)
+            @test_throws "save_pdf dpi must be a finite positive number" save_pdf(
+                joinpath(dir, "dpinan.pdf"), pdf_img; dpi=NaN)
+            @test_throws "save_pdf dpi must be a finite positive number" save_pdf(
+                joinpath(dir, "dpibool.pdf"), pdf_img; dpi=true)
+        end
+    end
+
 end
