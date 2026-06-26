@@ -16608,6 +16608,18 @@ end
             @test_throws "glTF texture sampler index must be an integer" load_gltf(
                 textured_path("bool_texture_sampler.gltf"; texture_sampler="true",
                               samplers_json=",\"samplers\":[{\"magFilter\":9728},{\"magFilter\":9729}]"))
+            @test_throws "glTF sampler wrapS must be an integer" load_gltf(
+                textured_path("bool_sampler_wrap.gltf"; texture_sampler="0",
+                              samplers_json=",\"samplers\":[{\"wrapS\":true}]"))
+            @test_throws "glTF sampler wrapT value 12345 is unsupported" load_gltf(
+                textured_path("bad_sampler_wrap.gltf"; texture_sampler="0",
+                              samplers_json=",\"samplers\":[{\"wrapT\":12345}]"))
+            @test_throws "glTF sampler magFilter must be an integer" load_gltf(
+                textured_path("bool_sampler_mag_filter.gltf"; texture_sampler="0",
+                              samplers_json=",\"samplers\":[{\"magFilter\":true}]"))
+            @test_throws "glTF sampler minFilter value 12345 is unsupported" load_gltf(
+                textured_path("bad_sampler_min_filter.gltf"; texture_sampler="0",
+                              samplers_json=",\"samplers\":[{\"minFilter\":12345}]"))
             @test_throws "glTF material index must be an integer" load_gltf(
                 textured_path("bool_material_index.gltf"; material_index="true"))
         end

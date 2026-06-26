@@ -7660,18 +7660,35 @@ function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::Vector{UInt8}, 
     return out
 end
 
-_gltf_wrap_mode(v) = Int(v) == 33071 ? :clamp : Int(v) == 33648 ? :mirror : :repeat
-_gltf_filter_mode(v) = Int(v) in (9728, 9984, 9986) ? :nearest : :bilinear
-_gltf_mag_filter_mode(v) = Int(v) == 9728 ? :nearest : :linear
+const _GLTF_WRAP_MODES = Dict(33071 => :clamp, 33648 => :mirror, 10497 => :repeat)
+const _GLTF_MAG_FILTERS = Dict(9728 => :nearest, 9729 => :linear)
+const _GLTF_MIN_FILTERS = Dict(
+    9728 => :nearest,
+    9729 => :linear,
+    9984 => :nearest_mipmap_nearest,
+    9985 => :linear_mipmap_nearest,
+    9986 => :nearest_mipmap_linear,
+    9987 => :linear_mipmap_linear,
+)
+
+function _gltf_checked_sampler_enum(raw, modes::AbstractDict{Int,Symbol}, label::String)
+    iv = _gltf_checked_integer(raw, "sampler $label")
+    haskey(modes, iv) || error("glTF sampler $label value $iv is unsupported")
+    return iv
+end
+
+_gltf_wrap_mode(v, label::String) =
+    _GLTF_WRAP_MODES[_gltf_checked_sampler_enum(v, _GLTF_WRAP_MODES, label)]
+
+function _gltf_filter_mode(v, modes::AbstractDict{Int,Symbol}, label::String)
+    iv = _gltf_checked_sampler_enum(v, modes, label)
+    return iv in (9728, 9984, 9986) ? :nearest : :bilinear
+end
+
+_gltf_mag_filter_mode(v) =
+    _GLTF_MAG_FILTERS[_gltf_checked_sampler_enum(v, _GLTF_MAG_FILTERS, "magFilter")]
 function _gltf_min_filter_mode(v)
-    iv = Int(v)
-    iv == 9728 && return :nearest
-    iv == 9729 && return :linear
-    iv == 9984 && return :nearest_mipmap_nearest
-    iv == 9985 && return :linear_mipmap_nearest
-    iv == 9986 && return :nearest_mipmap_linear
-    iv == 9987 && return :linear_mipmap_linear
-    return :linear
+    return _GLTF_MIN_FILTERS[_gltf_checked_sampler_enum(v, _GLTF_MIN_FILTERS, "minFilter")]
 end
 _gltf_uses_mipmaps(filter::Symbol) =
     filter in (:nearest_mipmap_nearest, :nearest_mipmap_linear,
@@ -7865,14 +7882,19 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
         Dict{String,Any}()
     end
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
-    min_filter = _gltf_min_filter_mode(get(sampler, "minFilter",
-                                           get(sampler, "magFilter", 9729.0)))
-    mag_filter = _gltf_mag_filter_mode(get(sampler, "magFilter", 9729.0))
+    raw_mag_filter = get(sampler, "magFilter", 9729.0)
+    mag_filter = _gltf_mag_filter_mode(raw_mag_filter)
+    raw_min_filter = haskey(sampler, "minFilter") ? sampler["minFilter"] : raw_mag_filter
+    min_filter = _gltf_min_filter_mode(raw_min_filter)
+    filter = if haskey(sampler, "magFilter")
+        _gltf_filter_mode(raw_mag_filter, _GLTF_MAG_FILTERS, "magFilter")
+    else
+        _gltf_filter_mode(raw_min_filter, _GLTF_MIN_FILTERS, "minFilter")
+    end
     tex = Texture(data;
-                  wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0)),
-                  wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0)),
-                  filter=_gltf_filter_mode(get(sampler, "magFilter",
-                                               get(sampler, "minFilter", 9729.0))),
+                  wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0), "wrapS"),
+                  wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0), "wrapT"),
+                  filter=filter,
                   min_filter=min_filter,
                   mag_filter=mag_filter,
                   colorspace=colorspace,
