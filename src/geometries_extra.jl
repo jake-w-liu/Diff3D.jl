@@ -379,8 +379,7 @@ function CatmullRomCurve(points::AbstractVector{<:Vec3};
         throw(ArgumentError("CatmullRomCurve needs at least two control points"))
     curve_type in _CATMULL_ROM_CURVE_TYPES ||
         throw(ArgumentError("unsupported CatmullRomCurve curve_type: $curve_type"))
-    tf = Float64(tension)
-    isfinite(tf) || throw(ArgumentError("CatmullRomCurve tension must be finite"))
+    tf = Float64(_geometry_finite_scalar(tension, "CatmullRomCurve tension"))
     return CatmullRomCurve([_catmull_rom_control_point(p) for p in points],
                            curve_type, Bool(closed), tf)
 end
@@ -425,12 +424,12 @@ function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
 end
 
 function _catmull_rom_segment(curve::CatmullRomCurve, t::Real)
-    # clamp() does not sanitize NaN, so a NaN t would reach floor(Int, NaN) and
-    # throw a cryptic InexactError; reject it cleanly like nurbs_point.
-    isnan(t) && throw(ArgumentError("catmull_rom_point: t must not be NaN"))
+    # Keep finite out-of-range samples clamped to endpoints, but reject NaN/Inf
+    # and Bool explicitly instead of silently mapping them to endpoint samples.
+    tf = Float64(_geometry_finite_scalar(t, "catmull_rom_point t"))
     n = length(curve.points)
     segments = curve.closed ? n : n - 1
-    tf = clamp(Float64(t), 0.0, 1.0)
+    tf = clamp(tf, 0.0, 1.0)
     scaled = tf * segments
     if scaled >= segments
         return segments, 1.0

@@ -17307,4 +17307,18 @@ end
         @test all(isfinite, TubeGeometry(tube_path; radius = 0.25).positions)
     end
 
+    @testset "fresh audit round 56 fixes" begin
+        points = Vec3[
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(2.0, 0.0, 0.0),
+        ]
+        @test_throws "CatmullRomCurve tension must be finite" CatmullRomCurve(
+            points; tension = true)
+        curve = CatmullRomCurve(points)
+        @test_throws "catmull_rom_point t must be finite" catmull_rom_point(curve, Inf)
+        @test_throws "catmull_rom_point t must be finite" catmull_rom_point(curve, true)
+        @test catmull_rom_point(curve, 1.5) == points[end]
+    end
+
 end
