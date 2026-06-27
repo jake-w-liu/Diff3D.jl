@@ -89,6 +89,7 @@ end
 Create a simple test pattern image for validation.
 """
 function test_pattern(width::Int, height::Int)
+    (width > 0 && height > 0) || throw(ArgumentError("test_pattern dimensions must be positive"))
     img = Array{Float64}(undef, height, width, 3)
     # max(.,1) keeps the gradient finite for a 1-wide or 1-tall image (where the
     # single pixel sits at gradient endpoint 0.0) instead of yielding 0/0 = NaN.
@@ -263,7 +264,8 @@ end
 Write a 16-bit grayscale PNG from an H×W (or H×W×1) image of values in [0,1].
 """
 function save_png16(filename::String, img::AbstractArray)
-    H, W, _ = _image_size_and_channels(img, "16-bit grayscale image")
+    H, W, C = _image_size_and_channels(img, "16-bit grayscale image")
+    C == 1 || throw(ArgumentError("save_png16 expects an H×W or H×W×1 image"))
     gray = ndims(img) == 3 ? @view(img[:, :, 1]) : img
     raw = Vector{UInt8}(undef, H * (1 + W * 2))
     k = 1

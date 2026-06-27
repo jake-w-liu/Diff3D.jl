@@ -16815,6 +16815,8 @@ end
                 joinpath(dir, "rgb.png"), zeros(Float64, 2, 2, 3))
             @test_throws "16-bit grayscale image dimensions must be positive" save_png16(
                 joinpath(dir, "g16_h0.png"), zeros(Float64, 0, 2))
+            @test_throws "save_png16 expects an H×W or H×W×1 image" save_png16(
+                joinpath(dir, "g16_rgb.png"), zeros(Float64, 2, 2, 3))
 
             pdf_img = fill(0.5, 1, 1, 3)
             @test_throws "save_pdf dpi must be a finite positive number" save_pdf(
@@ -17087,6 +17089,11 @@ end
         @test_throws "ssao_pass depth dimensions must match image" ssao_pass(bad_depth)(img)
         @test_throws "bokeh_pass depth dimensions must match image" bokeh_pass(
             bad_depth; focus_depth = 1.0)(img)
+    end
+
+    @testset "fresh audit round 45 fixes" begin
+        @test_throws "test_pattern dimensions must be positive" test_pattern(0, 2)
+        @test_throws "test_pattern dimensions must be positive" test_pattern(2, 0)
     end
 
 end
