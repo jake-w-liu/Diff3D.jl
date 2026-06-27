@@ -277,7 +277,7 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     _validate_lathe_points(points)
     (isfinite(phi_start) && isfinite(phi_length)) ||
         throw(ArgumentError("LatheGeometry phi_start and phi_length must be finite"))
-    segments = _clamp_seg(segments, 3)   # clamp so 0 can't make i/segments NaN
+    segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
 
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     for i in 0:segments
@@ -319,7 +319,7 @@ end
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     _validate_tube_path(path, radius)
-    radial_segments = _clamp_seg(radial_segments, 3)   # clamp so 0 can't make j/radial_segments NaN
+    radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
@@ -1030,8 +1030,8 @@ function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segmen
     radius = _geometry_finite_scalar(radius, "CapsuleGeometry radius")
     length = _geometry_finite_scalar(length, "CapsuleGeometry length")
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
-    cap_segments = _clamp_seg(cap_segments, 1)
-    radial_segments = _clamp_seg(radial_segments, 3)
+    cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
+    radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
     half = length / 2
     profile = Tuple{Float64,Float64}[]
     for i in 0:cap_segments                          # top hemisphere: pole → equator

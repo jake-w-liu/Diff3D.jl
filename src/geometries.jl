@@ -533,8 +533,17 @@ end
 # (NaN/Inf) or absurdly large value would throw InexactError in Int(floor(...));
 # clamp into [lo, 1_000_000] first (1e6 is a sanity ceiling — no primitive needs
 # more segments than that) and map non-finite to the minimum.
-@inline _clamp_seg(s::Real, lo::Int) =
-    isfinite(Float64(s)) ? Int(floor(clamp(Float64(s), Float64(lo), 1.0e6))) : lo
+function _clamp_seg(s::Real, lo::Int, label::String)
+    s isa Bool && throw(ArgumentError("$label must be numeric"))
+    sf = try
+        Float64(s)
+    catch
+        throw(ArgumentError("$label must be numeric"))
+    end
+    return isfinite(sf) ? Int(floor(clamp(sf, Float64(lo), 1.0e6))) : lo
+end
+_clamp_seg(s, lo::Int, label::String) = throw(ArgumentError("$label must be numeric"))
+@inline _clamp_seg(s, lo::Int) = _clamp_seg(s, lo, "segment count")
 
 # ========================== Sphere Geometry ==========================
 
@@ -542,8 +551,8 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
     radius = _geometry_finite_scalar(radius, "SphereGeometry radius")
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
-    width_segments = _clamp_seg(width_segments, 3)
-    height_segments = _clamp_seg(height_segments, 2)
+    width_segments = _clamp_seg(width_segments, 3, "SphereGeometry width_segments")
+    height_segments = _clamp_seg(height_segments, 2, "SphereGeometry height_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -600,8 +609,8 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
     height = _geometry_finite_scalar(height, "PlaneGeometry height")
     # Clamp segment counts (matching SphereGeometry/three.js) so a 0 cannot make
     # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
-    width_segments = _clamp_seg(width_segments, 1)
-    height_segments = _clamp_seg(height_segments, 1)
+    width_segments = _clamp_seg(width_segments, 1, "PlaneGeometry width_segments")
+    height_segments = _clamp_seg(height_segments, 1, "PlaneGeometry height_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -644,8 +653,8 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     radius_bottom = _geometry_finite_scalar(radius_bottom, "CylinderGeometry radius_bottom")
     height = _geometry_finite_scalar(height, "CylinderGeometry height")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 3)
-    height_segments = _clamp_seg(height_segments, 1)
+    radial_segments = _clamp_seg(radial_segments, 3, "CylinderGeometry radial_segments")
+    height_segments = _clamp_seg(height_segments, 1, "CylinderGeometry height_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -748,8 +757,8 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
     radius = _geometry_finite_scalar(radius, "TorusGeometry radius")
     tube = _geometry_finite_scalar(tube, "TorusGeometry tube")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 2)
-    tubular_segments = _clamp_seg(tubular_segments, 3)
+    radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
+    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -805,8 +814,8 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     q_val = _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val")
     # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
     # a 0/0 = NaN, matching every sibling generator in this file.
-    tubular_segments = _clamp_seg(tubular_segments, 3)
-    radial_segments = _clamp_seg(radial_segments, 3)
+    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusKnotGeometry tubular_segments")
+    radial_segments = _clamp_seg(radial_segments, 3, "TorusKnotGeometry radial_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -874,8 +883,8 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
     inner_radius = _geometry_finite_scalar(inner_radius, "RingGeometry inner_radius")
     outer_radius = _geometry_finite_scalar(outer_radius, "RingGeometry outer_radius")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    theta_segments = _clamp_seg(theta_segments, 3)
-    phi_segments = _clamp_seg(phi_segments, 1)
+    theta_segments = _clamp_seg(theta_segments, 3, "RingGeometry theta_segments")
+    phi_segments = _clamp_seg(phi_segments, 1, "RingGeometry phi_segments")
     positions = Float64[]
     normals_arr = Float64[]
     uvs_arr = Float64[]
@@ -917,7 +926,7 @@ end
 function CircleGeometry(; radius=1.0, segments=32)
     radius = _geometry_finite_scalar(radius, "CircleGeometry radius")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
-    segments = _clamp_seg(segments, 3)
+    segments = _clamp_seg(segments, 3, "CircleGeometry segments")
     positions = Float64[0.0, 0.0, 0.0]  # center
     normals_arr = Float64[0.0, 0.0, 1.0]
     uvs_arr = Float64[0.5, 0.5]

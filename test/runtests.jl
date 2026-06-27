@@ -17271,4 +17271,24 @@ end
             (u, v) -> Vec3(u, v, 0.0), true, 1)
     end
 
+    @testset "fresh audit round 54 fixes" begin
+        @test_throws "SphereGeometry width_segments must be numeric" SphereGeometry(
+            width_segments = true)
+        @test_throws "PlaneGeometry height_segments must be numeric" PlaneGeometry(
+            height_segments = "bad")
+        @test_throws "CylinderGeometry radial_segments must be numeric" CylinderGeometry(
+            radial_segments = true)
+        @test_throws "CircleGeometry segments must be numeric" CircleGeometry(
+            segments = "bad")
+        @test_throws "LatheGeometry segments must be numeric" LatheGeometry(
+            [Vec2(1.0, 0.0), Vec2(1.0, 1.0)]; segments = true)
+        @test_throws "TubeGeometry radial_segments must be numeric" TubeGeometry(
+            [Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)]; radial_segments = "bad")
+        @test_throws "CapsuleGeometry cap_segments must be numeric" CapsuleGeometry(
+            cap_segments = "bad")
+
+        @test SphereGeometry(width_segments = Inf).n_faces > 0
+        @test CircleGeometry(segments = NaN).n_faces > 0
+    end
+
 end
