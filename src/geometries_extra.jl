@@ -975,7 +975,7 @@ end
 
 """Filled planar polygon (z = 0), normal +z."""
 function ShapeGeometry(shape::Vector{<:Vec2})
-    shape = _shape_area2(shape) > 0.0 ? shape : reverse(shape)   # normalize to CCW (+z normal)
+    shape = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     np = length(shape)
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     for pt in shape
@@ -991,9 +991,10 @@ end
 """Extrude a planar polygon `shape` to `depth` along +z, or along `extrude_path`."""
 function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path)
+    depth = _geometry_finite_scalar(depth, "ExtrudeGeometry depth")
     # Normalize to CCW (like the extrude_path branch) so the hard-coded cap and
     # side-wall normals stay consistent with the winding for any input orientation.
-    shape = _shape_area2(shape) > 0.0 ? shape : reverse(shape)
+    shape = _extrude_clean_shape(shape)
     np = length(shape)
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     vi = 0
@@ -1023,6 +1024,8 @@ end
 # Cylinder of `length` capped by two hemispheres of `radius`, revolved about y.
 
 function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
+    radius = _geometry_finite_scalar(radius, "CapsuleGeometry radius")
+    length = _geometry_finite_scalar(length, "CapsuleGeometry length")
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
     cap_segments = _clamp_seg(cap_segments, 1)
     radial_segments = _clamp_seg(radial_segments, 3)
@@ -1086,6 +1089,7 @@ end
 `threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
 line BufferGeometry. Coincident vertices are merged by position first."""
 function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
+    threshold_angle = _geometry_finite_scalar(threshold_angle, "edges_geometry threshold_angle")
     cosT = cos(threshold_angle)
     # Canonicalize vertices by position.
     canon = Dict{Tuple{Float64,Float64,Float64}, Int}()

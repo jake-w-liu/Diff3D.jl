@@ -17182,4 +17182,17 @@ end
         @test all(isfinite, TorusKnotGeometry(p_val = 2, q_val = 3).positions)
     end
 
+    @testset "fresh audit round 50 fixes" begin
+        @test_throws "ExtrudeGeometry shape needs at least three points" ShapeGeometry(
+            Vec2{Float64}[])
+        @test_throws "ExtrudeGeometry shape points must be finite" ShapeGeometry(
+            [Vec2(0.0, 0.0), Vec2(NaN, 0.0), Vec2(0.0, 1.0)])
+        @test_throws "ExtrudeGeometry depth must be finite" ExtrudeGeometry(
+            [Vec2(0.0, 0.0), Vec2(1.0, 0.0), Vec2(0.0, 1.0)]; depth = NaN)
+        @test_throws "CapsuleGeometry radius must be finite" CapsuleGeometry(radius = NaN)
+        @test_throws "CapsuleGeometry length must be finite" CapsuleGeometry(length = NaN)
+        @test_throws "edges_geometry threshold_angle must be finite" edges_geometry(
+            BoxGeometry(); threshold_angle = NaN)
+    end
+
 end
