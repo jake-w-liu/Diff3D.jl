@@ -17351,4 +17351,14 @@ end
                                       Vec3{Bool}(true, true, false)])
     end
 
+    @testset "fresh audit round 58 fixes" begin
+        short_positions = BufferGeometry([0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+        @test_throws "compute_bounding_box positions length must cover n_vertices" compute_bounding_box(short_positions)
+        @test_throws "compute_bounding_sphere positions length must cover n_vertices" compute_bounding_sphere(short_positions)
+
+        negative_vertices = BufferGeometry(Float64[], Float64[], Float64[], Int[], -1, 0)
+        @test_throws "compute_bounding_box n_vertices must be non-negative" compute_bounding_box(negative_vertices)
+        @test_throws "compute_bounding_sphere n_vertices must be non-negative" compute_bounding_sphere(negative_vertices)
+    end
+
 end

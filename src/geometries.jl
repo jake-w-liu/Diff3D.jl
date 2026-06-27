@@ -54,15 +54,20 @@ function BufferGeometry()
     BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
 end
 
-function _validate_triangle_geometry_indices(geo::BufferGeometry, context::String)
+function _validate_geometry_vertices(geo::BufferGeometry, context::String)
     geo.n_vertices >= 0 || throw(ArgumentError("$context n_vertices must be non-negative"))
-    geo.n_faces >= 0 || throw(ArgumentError("$context n_faces must be non-negative"))
     geo.n_vertices <= typemax(Int) ÷ 3 ||
         throw(ArgumentError("$context n_vertices is too large"))
-    geo.n_faces <= typemax(Int) ÷ 3 ||
-        throw(ArgumentError("$context n_faces is too large"))
     length(geo.positions) >= 3 * geo.n_vertices ||
         throw(ArgumentError("$context positions length must cover n_vertices"))
+    return nothing
+end
+
+function _validate_triangle_geometry_indices(geo::BufferGeometry, context::String)
+    _validate_geometry_vertices(geo, context)
+    geo.n_faces >= 0 || throw(ArgumentError("$context n_faces must be non-negative"))
+    geo.n_faces <= typemax(Int) ÷ 3 ||
+        throw(ArgumentError("$context n_faces is too large"))
     length(geo.indices) >= 3 * geo.n_faces ||
         throw(ArgumentError("$context indices length must cover n_faces"))
     @inbounds for fi in 1:geo.n_faces
@@ -402,9 +407,7 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
     return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)
 end
 
-"""Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
-function compute_bounding_box(g::BufferGeometry)
-    g.n_vertices == 0 && return Box3()
+function _compute_bounding_box_validated(g::BufferGeometry)
     box = Box3()
     @inbounds for vi in 1:g.n_vertices
         box = box3_expand_by_point(box, get_vertex(g, vi))
@@ -412,10 +415,18 @@ function compute_bounding_box(g::BufferGeometry)
     return box
 end
 
+"""Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
+function compute_bounding_box(g::BufferGeometry)
+    _validate_geometry_vertices(g, "compute_bounding_box")
+    g.n_vertices == 0 && return Box3()
+    return _compute_bounding_box_validated(g)
+end
+
 """Bounding sphere centred on the box centre (three.js `computeBoundingSphere`)."""
 function compute_bounding_sphere(g::BufferGeometry)
+    _validate_geometry_vertices(g, "compute_bounding_sphere")
     g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
-    box = compute_bounding_box(g)
+    box = _compute_bounding_box_validated(g)
     center = (box.min + box.max) * 0.5
     r2 = 0.0
     @inbounds for vi in 1:g.n_vertices
