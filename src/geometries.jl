@@ -54,6 +54,15 @@ function BufferGeometry()
     BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
 end
 
+function _geometry_int(value::Integer, label::String)
+    value isa Bool && throw(ArgumentError("$label must be an integer"))
+    try
+        return Int(value)
+    catch
+        throw(ArgumentError("$label is too large"))
+    end
+end
+
 """
     add_group!(geo, start, count, material_index)
 
@@ -62,7 +71,13 @@ Append a draw group to `geo` (three.js `BufferGeometry.addGroup`). `start` is th
 `material_index` the 0-based material slot. Returns `geo`.
 """
 function add_group!(g::BufferGeometry, start::Integer, count::Integer, material_index::Integer)
-    push!(g.groups, (Int(start), Int(count), Int(material_index)))
+    start_i = _geometry_int(start, "group start")
+    count_i = _geometry_int(count, "group count")
+    material_i = _geometry_int(material_index, "group material_index")
+    start_i >= 1 || throw(ArgumentError("group start must be at least 1"))
+    count_i >= 0 || throw(ArgumentError("group count must be non-negative"))
+    material_i >= 0 || throw(ArgumentError("group material_index must be non-negative"))
+    push!(g.groups, (start_i, count_i, material_i))
     return g
 end
 
@@ -84,8 +99,8 @@ Draw entries are triangle/line/point index-buffer entries, or vertices for
 unindexed line/point geometry. Returns `geo`.
 """
 function set_draw_range!(g::BufferGeometry, start::Integer, count::Integer)
-    start_i = Int(start)
-    count_i = Int(count)
+    start_i = _geometry_int(start, "draw range start")
+    count_i = _geometry_int(count, "draw range count")
     start_i >= 1 || throw(ArgumentError("draw range start must be at least 1"))
     count_i >= 0 || throw(ArgumentError("draw range count must be non-negative"))
     g.draw_range = (start_i, count_i)
@@ -127,6 +142,9 @@ end
 
 """Attach a generic named vertex attribute (three.js `setAttribute`)."""
 function set_attribute!(g::BufferGeometry, name::Symbol, data::Vector, item_size::Int)
+    item_size > 0 || throw(ArgumentError("geometry attribute item_size must be positive"))
+    rem(length(data), item_size) == 0 ||
+        throw(ArgumentError("geometry attribute data length must be divisible by item_size"))
     g.attributes[name] = BufferAttribute(data, item_size)
     return g
 end

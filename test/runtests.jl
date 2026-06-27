@@ -11705,6 +11705,7 @@ end
             @test get_draw_range(g) === nothing
             @test_throws ArgumentError set_draw_range!(g, 0, 1)
             @test_throws ArgumentError set_draw_range!(g, 1, -1)
+            @test_throws "draw range start must be an integer" set_draw_range!(g, true, 1)
         end
 
         # [MAT:materials+shading] Per-vertex colors (vertexColors)
@@ -17140,6 +17141,21 @@ end
             @test_throws "save_stl_binary face indices must reference vertices" save_stl_binary(
                 joinpath(dir, "bad.stl"), bad_index)
         end
+    end
+
+    @testset "fresh audit round 48 fixes" begin
+        geo = BufferGeometry()
+        @test_throws "group start must be at least 1" add_group!(geo, 0, 1, 0)
+        @test_throws "group count must be non-negative" add_group!(geo, 1, -1, 0)
+        @test_throws "group material_index must be non-negative" add_group!(geo, 1, 1, -1)
+        @test_throws "group start must be an integer" add_group!(geo, true, 1, 0)
+        @test isempty(get_groups(geo))
+
+        @test_throws "geometry attribute item_size must be positive" set_attribute!(
+            geo, :bad, Float64[], 0)
+        @test_throws "geometry attribute data length must be divisible by item_size" set_attribute!(
+            geo, :bad, [1.0, 2.0], 3)
+        @test !has_attribute(geo, :bad)
     end
 
 end
