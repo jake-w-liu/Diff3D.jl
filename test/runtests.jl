@@ -17096,4 +17096,28 @@ end
         @test_throws "test_pattern dimensions must be positive" test_pattern(2, 0)
     end
 
+    @testset "fresh audit round 46 fixes" begin
+        vp = Mat4{Float64}()
+        verts = [Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)]
+        faces = [(1, 2, 3)]
+        colors = [Color3(1.0, 0.0, 0.0)]
+
+        @test_throws "SoftRasterizerConfig sigma must be finite and positive" SoftRasterizerConfig(
+            sigma = 0.0)
+        @test_throws "SoftRasterizerConfig gamma must be finite and positive" SoftRasterizerConfig(
+            gamma = NaN)
+        @test_throws "SoftRasterizerConfig eps must be finite and positive" SoftRasterizerConfig(
+            eps = 0.0)
+        @test_throws "SoftRasterizerConfig bg_color must be finite" SoftRasterizerConfig(
+            bg_color = Color3(NaN, 0.0, 0.0))
+
+        @test_throws "soft_render dimensions must be positive" soft_render(
+            verts, faces, colors, vp, 0, 2)
+        @test_throws "soft_render face_colors length must match faces length" soft_render(
+            verts, faces, Color3{Float64}[], vp, 2, 2)
+        @test_throws "soft_render face indices must reference vertices" soft_render(
+            verts, [(1, 2, 4)], colors, vp, 2, 2)
+        @test all(isfinite, soft_render(verts, faces, colors, vp, 2, 2))
+    end
+
 end

@@ -18,12 +18,30 @@ struct SoftRasterizerConfig{T<:Real}
     eps::T
 end
 
+function _soft_positive_finite(value, label::String)
+    value isa Bool && throw(ArgumentError("$label must be finite and positive"))
+    (isfinite(value) && value > zero(value)) ||
+        throw(ArgumentError("$label must be finite and positive"))
+    return value
+end
+
+function _soft_finite_color(color::Color3, label::String)
+    (isfinite(color.r) && isfinite(color.g) && isfinite(color.b)) ||
+        throw(ArgumentError("$label must be finite"))
+    return color
+end
+
 function SoftRasterizerConfig(; sigma=1.0, gamma=1.0,
                                bg_color=Color3(0.0, 0.0, 0.0),
                                eps=1e-8)
     T = promote_type(typeof(sigma), typeof(gamma), typeof(bg_color.r), typeof(eps))
-    SoftRasterizerConfig{T}(T(sigma), T(gamma),
-                            Color3(T(bg_color.r), T(bg_color.g), T(bg_color.b)), T(eps))
+    sigma_t = _soft_positive_finite(T(sigma), "SoftRasterizerConfig sigma")
+    gamma_t = _soft_positive_finite(T(gamma), "SoftRasterizerConfig gamma")
+    eps_t = _soft_positive_finite(T(eps), "SoftRasterizerConfig eps")
+    bg_t = _soft_finite_color(
+        Color3(T(bg_color.r), T(bg_color.g), T(bg_color.b)),
+        "SoftRasterizerConfig bg_color")
+    SoftRasterizerConfig{T}(sigma_t, gamma_t, bg_t, eps_t)
 end
 
 """
@@ -65,6 +83,19 @@ function soft_render(vertices::Vector{Vec3{Tv}},
 
     n_faces = length(faces)
     W, H = width, height
+    (W > 0 && H > 0) || throw(ArgumentError("soft_render dimensions must be positive"))
+    length(face_colors) == n_faces ||
+        throw(ArgumentError("soft_render face_colors length must match faces length"))
+    _soft_positive_finite(σ, "SoftRasterizerConfig sigma")
+    _soft_positive_finite(γ, "SoftRasterizerConfig gamma")
+    _soft_positive_finite(eps, "SoftRasterizerConfig eps")
+    _soft_finite_color(bg, "SoftRasterizerConfig bg_color")
+    n_vertices = length(verts)
+    for face in faces
+        i1, i2, i3 = face
+        (1 <= i1 <= n_vertices && 1 <= i2 <= n_vertices && 1 <= i3 <= n_vertices) ||
+            throw(ArgumentError("soft_render face indices must reference vertices"))
+    end
 
     # Project all vertices to screen space
     screen_verts = Vector{Vec3{T}}(undef, length(verts))
