@@ -240,10 +240,30 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
     return geo
 end
 
+function _morph_finite_float(value::Real, label::String)
+    value isa Bool && throw(ArgumentError("$label must be finite"))
+    out = try
+        Float64(value)
+    catch
+        throw(ArgumentError("$label must be finite"))
+    end
+    isfinite(out) || throw(ArgumentError("$label must be finite"))
+    return out
+end
+_morph_finite_float(value, label::String) =
+    throw(ArgumentError("$label must be finite"))
+
+@inline _morph_influence(weight::Real, ti::Int) =
+    _morph_finite_float(weight, "morph target influence $ti")
+
+@inline _morph_attribute_value(attr::BufferAttribute, idx::Int, name::Symbol) =
+    _morph_finite_float(attr.data[idx], "$name attribute data")
+
 function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
     out = [get_vertex(g, vi) for vi in 1:g.n_vertices]
     for (ti, weight) in enumerate(influences)
-        weight == 0 && continue
+        w = _morph_influence(weight, ti)
+        w == 0.0 && continue
         name = Symbol("morphPosition$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
@@ -251,7 +271,10 @@ function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Rea
         length(attr.data) == g.n_vertices * 3 || error("$name count does not match geometry")
         @inbounds for vi in 1:g.n_vertices
             base = 3vi - 2
-            out[vi] = out[vi] + Vec3(attr.data[base], attr.data[base + 1], attr.data[base + 2]) * Float64(weight)
+            delta = Vec3(_morph_attribute_value(attr, base, name),
+                         _morph_attribute_value(attr, base + 1, name),
+                         _morph_attribute_value(attr, base + 2, name))
+            out[vi] = out[vi] + delta * w
         end
     end
     return out
@@ -290,7 +313,8 @@ function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Rea
     length(g.normals) >= g.n_vertices * 3 || return copy(g.normals)
     out = copy(g.normals)
     for (ti, weight) in enumerate(influences)
-        weight == 0 && continue
+        w = _morph_influence(weight, ti)
+        w == 0.0 && continue
         name = Symbol("morphNormal$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
@@ -299,9 +323,9 @@ function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Rea
         @inbounds for vi in 1:g.n_vertices
             dst = 3vi - 2
             src = (vi - 1) * attr.item_size + 1
-            out[dst] += Float64(attr.data[src]) * Float64(weight)
-            out[dst + 1] += Float64(attr.data[src + 1]) * Float64(weight)
-            out[dst + 2] += Float64(attr.data[src + 2]) * Float64(weight)
+            out[dst] += _morph_attribute_value(attr, src, name) * w
+            out[dst + 1] += _morph_attribute_value(attr, src + 1, name) * w
+            out[dst + 2] += _morph_attribute_value(attr, src + 2, name) * w
         end
     end
     return _normalize_attribute3!(out, g.n_vertices, 3)
@@ -322,7 +346,8 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
         return copy(Float64.(base_attr.data))
     out = Float64.(copy(base_attr.data))
     for (ti, weight) in enumerate(influences)
-        weight == 0 && continue
+        w = _morph_influence(weight, ti)
+        w == 0.0 && continue
         name = Symbol("morphTangent$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
@@ -331,9 +356,9 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
         @inbounds for vi in 1:g.n_vertices
             dst = (vi - 1) * base_attr.item_size + 1
             src = (vi - 1) * attr.item_size + 1
-            out[dst] += Float64(attr.data[src]) * Float64(weight)
-            out[dst + 1] += Float64(attr.data[src + 1]) * Float64(weight)
-            out[dst + 2] += Float64(attr.data[src + 2]) * Float64(weight)
+            out[dst] += _morph_attribute_value(attr, src, name) * w
+            out[dst + 1] += _morph_attribute_value(attr, src + 1, name) * w
+            out[dst + 2] += _morph_attribute_value(attr, src + 2, name) * w
         end
     end
     return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)

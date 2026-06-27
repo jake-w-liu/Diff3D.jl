@@ -17195,4 +17195,31 @@ end
             BoxGeometry(); threshold_angle = NaN)
     end
 
+    @testset "fresh audit round 51 fixes" begin
+        morph_geo = BufferGeometry([0.0, 0.0, 0.0],
+                                   [0.0, 0.0, 1.0],
+                                   Float64[], Int[], 1, 0)
+        set_attribute!(morph_geo, :morphPosition0, [1.0, 0.0, 0.0], 3)
+        @test_throws "morph target influence 1 must be finite" apply_morph_targets(
+            morph_geo, [NaN])
+
+        set_attribute!(morph_geo, :morphPosition0, [NaN, 0.0, 0.0], 3)
+        @test_throws "morphPosition0 attribute data must be finite" apply_morph_targets(
+            morph_geo, [1.0])
+        set_attribute!(morph_geo, :morphPosition0, Any["bad", 0.0, 0.0], 3)
+        @test_throws "morphPosition0 attribute data must be finite" apply_morph_targets(
+            morph_geo, [1.0])
+
+        set_attribute!(morph_geo, :morphNormal0, [0.0, Inf, 0.0], 3)
+        @test_throws "morphNormal0 attribute data must be finite" apply_morph_normals(
+            morph_geo, [1.0])
+
+        set_attribute!(morph_geo, :tangent, [1.0, 0.0, 0.0, 1.0], 4)
+        set_attribute!(morph_geo, :morphTangent0, [0.0, NaN, 0.0], 3)
+        @test_throws "morph target influence 1 must be finite" apply_morph_tangents(
+            morph_geo, [true])
+        @test_throws "morphTangent0 attribute data must be finite" apply_morph_tangents(
+            morph_geo, [1.0])
+    end
+
 end
