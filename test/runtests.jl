@@ -17120,4 +17120,26 @@ end
         @test all(isfinite, soft_render(verts, faces, colors, vp, 2, 2))
     end
 
+    @testset "fresh audit round 47 fixes" begin
+        bad_index = BufferGeometry(
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            Float64[], Float64[], [1, 2, 4], 3, 1)
+        @test_throws "compute_vertex_normals! face indices must reference vertices" compute_vertex_normals!(
+            bad_index)
+
+        bad_vertices = BufferGeometry(Float64[], Float64[], Float64[], Int[], -1, 0)
+        @test_throws "compute_vertex_normals! n_vertices must be non-negative" compute_vertex_normals!(
+            bad_vertices)
+
+        short_positions = BufferGeometry(Float64[0.0, 0.0, 0.0], Float64[], Float64[],
+                                         [1, 1, 1], 2, 1)
+        @test_throws "compute_vertex_normals! positions length must cover n_vertices" compute_vertex_normals!(
+            short_positions)
+
+        mktempdir() do dir
+            @test_throws "save_stl_binary face indices must reference vertices" save_stl_binary(
+                joinpath(dir, "bad.stl"), bad_index)
+        end
+    end
+
 end
