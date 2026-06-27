@@ -54,6 +54,26 @@ function BufferGeometry()
     BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
 end
 
+function _validate_triangle_geometry_indices(geo::BufferGeometry, context::String)
+    geo.n_vertices >= 0 || throw(ArgumentError("$context n_vertices must be non-negative"))
+    geo.n_faces >= 0 || throw(ArgumentError("$context n_faces must be non-negative"))
+    geo.n_vertices <= typemax(Int) ÷ 3 ||
+        throw(ArgumentError("$context n_vertices is too large"))
+    geo.n_faces <= typemax(Int) ÷ 3 ||
+        throw(ArgumentError("$context n_faces is too large"))
+    length(geo.positions) >= 3 * geo.n_vertices ||
+        throw(ArgumentError("$context positions length must cover n_vertices"))
+    length(geo.indices) >= 3 * geo.n_faces ||
+        throw(ArgumentError("$context indices length must cover n_faces"))
+    @inbounds for fi in 1:geo.n_faces
+        base = (fi - 1) * 3
+        i1, i2, i3 = geo.indices[base + 1], geo.indices[base + 2], geo.indices[base + 3]
+        (1 <= i1 <= geo.n_vertices && 1 <= i2 <= geo.n_vertices && 1 <= i3 <= geo.n_vertices) ||
+            throw(ArgumentError("$context face indices must reference vertices"))
+    end
+    return nothing
+end
+
 function _geometry_int(value::Integer, label::String)
     value isa Bool && throw(ArgumentError("$label must be an integer"))
     try

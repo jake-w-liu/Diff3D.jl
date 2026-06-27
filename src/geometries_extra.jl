@@ -1066,6 +1066,7 @@ end
 """All unique triangle edges as line segments (three.js `WireframeGeometry`).
 Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
 function wireframe_geometry(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     seen = Set{Tuple{Int,Int}}()
     positions = Float64[]; indices = Int[]; vi = 0
     for fi in 1:geo.n_faces
@@ -1089,6 +1090,7 @@ end
 `threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
 line BufferGeometry. Coincident vertices are merged by position first."""
 function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
+    _validate_triangle_geometry_indices(geo, "edges_geometry")
     threshold_angle = _geometry_finite_scalar(threshold_angle, "edges_geometry threshold_angle")
     cosT = cos(threshold_angle)
     # Canonicalize vertices by position.

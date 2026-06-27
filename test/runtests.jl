@@ -17222,4 +17222,14 @@ end
             morph_geo, [1.0])
     end
 
+    @testset "fresh audit round 52 fixes" begin
+        bad_edge_geo = BufferGeometry([0.0, 0.0, 0.0],
+                                      Float64[], Float64[],
+                                      [1, 2, 1], 1, 1)
+        @test_throws "wireframe_geometry face indices must reference vertices" wireframe_geometry(
+            bad_edge_geo)
+        @test_throws "edges_geometry face indices must reference vertices" edges_geometry(
+            bad_edge_geo)
+    end
+
 end
