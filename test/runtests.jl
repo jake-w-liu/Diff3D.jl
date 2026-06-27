@@ -17067,4 +17067,13 @@ end
             RenderTarget(2, 2), scene, cam; samples = 0)
     end
 
+    @testset "fresh audit round 43 fixes" begin
+        scene = Scene()
+        cam = PerspectiveCamera()
+        @test_throws "render_tiled! tiles must be positive" render_tiled!(
+            RenderTarget(2, 2), scene, cam; tiles = 0)
+        @test_throws "render_tiled! tiles must be positive" render_tiled!(
+            RenderTarget(2, 2), scene, cam; tiles = -1)
+    end
+
 end

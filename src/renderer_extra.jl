@@ -1041,6 +1041,7 @@ Produces the same image as [`render!`] for opaque flat scenes.
 function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                        tiles::Int=max(Threads.nthreads(), 1), shading::Symbol=:flat)
     shading === :flat || throw(ArgumentError("render_tiled! supports only :flat shading"))
+    tiles > 0 || throw(ArgumentError("render_tiled! tiles must be positive"))
     clear!(rt, scene.background)
     proj = projection_matrix(camera)
     view = view_matrix(camera)
