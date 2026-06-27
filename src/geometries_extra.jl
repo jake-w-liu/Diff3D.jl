@@ -461,8 +461,7 @@ function catmull_rom_point(curve::CatmullRomCurve, t::Real)
 end
 
 function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
-    segs = Int(segments)
-    segs >= 1 || throw(ArgumentError("catmull_rom_points segments must be positive"))
+    segs = _geometry_positive_int(segments, "catmull_rom_points segments")
     return [catmull_rom_point(curve, i / segs) for i in 0:segs]
 end
 
@@ -511,10 +510,9 @@ struct NURBSVolume
 end
 
 function _nurbs_degree(degree::Integer)
-    degree >= 1 || throw(ArgumentError("NURBS degree must be positive"))
-    degree <= typemax(Int) || throw(ArgumentError("NURBS degree is too large"))
-    return Int(degree)
+    return _geometry_positive_int(degree, "NURBS degree")
 end
+_nurbs_degree(degree) = throw(ArgumentError("NURBS degree must be an integer"))
 
 function _nurbs_knots(knots, degree::Int, npoints::Int, label::String)
     npoints >= degree + 1 ||
@@ -641,8 +639,10 @@ function _nurbs_basis(span::Int, u::Float64, degree::Int, knots::Vector{Float64}
     return basis
 end
 
-function _nurbs_parameter(t, knots::Vector{Float64}, degree::Int, npoints::Int)
-    tf = clamp(Float64(t), 0.0, 1.0)
+function _nurbs_parameter(t, knots::Vector{Float64}, degree::Int, npoints::Int,
+                          label::String)
+    tf = _geometry_finite_scalar(t, label)
+    tf = clamp(Float64(tf), 0.0, 1.0)
     u0 = knots[degree + 1]
     u1 = knots[npoints + 1]
     return u0 + tf * (u1 - u0)
@@ -656,7 +656,8 @@ end
 
 function nurbs_point(curve::NURBSCurve, t::Real)
     npoints = length(curve.control_points)
-    u = _nurbs_parameter(t, curve.knots, curve.degree, npoints)
+    u = _nurbs_parameter(t, curve.knots, curve.degree, npoints,
+                         "NURBS curve parameter t")
     span = _nurbs_span(curve.degree, curve.knots, npoints, u)
     basis = _nurbs_basis(span, u, curve.degree, curve.knots)
     x = 0.0; y = 0.0; z = 0.0; w = 0.0
@@ -674,8 +675,10 @@ end
 function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
     nu = length(surface.control_points)
     nv = length(surface.control_points[1])
-    uu = _nurbs_parameter(u, surface.knots_u, surface.degree_u, nu)
-    vv = _nurbs_parameter(v, surface.knots_v, surface.degree_v, nv)
+    uu = _nurbs_parameter(u, surface.knots_u, surface.degree_u, nu,
+                          "NURBS surface parameter u")
+    vv = _nurbs_parameter(v, surface.knots_v, surface.degree_v, nv,
+                          "NURBS surface parameter v")
     span_u = _nurbs_span(surface.degree_u, surface.knots_u, nu, uu)
     span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
     basis_u = _nurbs_basis(span_u, uu, surface.degree_u, surface.knots_u)
@@ -696,9 +699,12 @@ function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
     nu = length(volume.control_points)
     nv = length(volume.control_points[1])
     nw = length(volume.control_points[1][1])
-    uu = _nurbs_parameter(u, volume.knots_u, volume.degree_u, nu)
-    vv = _nurbs_parameter(v, volume.knots_v, volume.degree_v, nv)
-    ww = _nurbs_parameter(wparam, volume.knots_w, volume.degree_w, nw)
+    uu = _nurbs_parameter(u, volume.knots_u, volume.degree_u, nu,
+                          "NURBS volume parameter u")
+    vv = _nurbs_parameter(v, volume.knots_v, volume.degree_v, nv,
+                          "NURBS volume parameter v")
+    ww = _nurbs_parameter(wparam, volume.knots_w, volume.degree_w, nw,
+                          "NURBS volume parameter w")
     span_u = _nurbs_span(volume.degree_u, volume.knots_u, nu, uu)
     span_v = _nurbs_span(volume.degree_v, volume.knots_v, nv, vv)
     span_w = _nurbs_span(volume.degree_w, volume.knots_w, nw, ww)
@@ -718,8 +724,7 @@ function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
 end
 
 function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
-    segs = Int(segments)
-    segs >= 1 || throw(ArgumentError("NURBSCurveGeometry segments must be positive"))
+    segs = _geometry_positive_int(segments, "NURBSCurveGeometry segments")
     positions = Float64[]
     for i in 0:segs
         p = nurbs_point(curve, i / segs)
@@ -756,10 +761,8 @@ function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, n
 end
 
 function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20)
-    us = Int(slices)
-    vs = Int(stacks)
-    us >= 1 && vs >= 1 ||
-        throw(ArgumentError("ParametricGeometry slices and stacks must be positive"))
+    us = _geometry_positive_int(slices, "ParametricGeometry slices")
+    vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
     positions = Float64[]
     uvs = Float64[]
     indices = Int[]

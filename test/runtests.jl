@@ -17232,4 +17232,43 @@ end
             bad_edge_geo)
     end
 
+    @testset "fresh audit round 53 fixes" begin
+        curve = NURBSCurve(1, [0.0, 0.0, 1.0, 1.0],
+                           [Vec4(0.0, 0.0, 0.0, 1.0),
+                            Vec4(1.0, 0.0, 0.0, 1.0)])
+        surface = NURBSSurface(1, 1, [0.0, 0.0, 1.0, 1.0],
+                               [0.0, 0.0, 1.0, 1.0],
+                               [[Vec4(0.0, 0.0, 0.0, 1.0),
+                                 Vec4(0.0, 1.0, 0.0, 1.0)],
+                                [Vec4(1.0, 0.0, 0.0, 1.0),
+                                 Vec4(1.0, 1.0, 0.0, 1.0)]])
+        volume = NURBSVolume(1, 1, 1, [0.0, 0.0, 1.0, 1.0],
+                             [0.0, 0.0, 1.0, 1.0],
+                             [0.0, 0.0, 1.0, 1.0],
+                             [[[Vec4(0.0, 0.0, 0.0, 1.0),
+                                Vec4(0.0, 0.0, 1.0, 1.0)],
+                               [Vec4(0.0, 1.0, 0.0, 1.0),
+                                Vec4(0.0, 1.0, 1.0, 1.0)]],
+                              [[Vec4(1.0, 0.0, 0.0, 1.0),
+                                Vec4(1.0, 0.0, 1.0, 1.0)],
+                               [Vec4(1.0, 1.0, 0.0, 1.0),
+                                Vec4(1.0, 1.0, 1.0, 1.0)]]])
+        @test_throws "NURBS curve parameter t must be finite" nurbs_point(curve, NaN)
+        @test_throws "NURBS surface parameter u must be finite" nurbs_point(surface, NaN, 0.5)
+        @test_throws "NURBS volume parameter w must be finite" nurbs_point(volume, 0.5, 0.5, Inf)
+        @test_throws "NURBS degree must be an integer" NURBSCurve(
+            true, [0.0, 0.0, 1.0, 1.0],
+            [Vec4(0.0, 0.0, 0.0, 1.0), Vec4(1.0, 0.0, 0.0, 1.0)])
+        @test_throws "NURBS degree must be an integer" NURBSSurface(
+            true, 1, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0],
+            surface.control_points)
+        @test_throws "NURBSCurveGeometry segments must be an integer" NURBSCurveGeometry(
+            curve; segments = true)
+        catmull = CatmullRomCurve([Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0)])
+        @test_throws "catmull_rom_points segments must be an integer" catmull_rom_points(
+            catmull; segments = true)
+        @test_throws "ParametricGeometry slices must be an integer" ParametricGeometry(
+            (u, v) -> Vec3(u, v, 0.0), true, 1)
+    end
+
 end

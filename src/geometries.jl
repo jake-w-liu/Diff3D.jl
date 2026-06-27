@@ -91,6 +91,13 @@ function _geometry_nonnegative_int(value::Integer, label::String)
 end
 _geometry_nonnegative_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
 
+function _geometry_positive_int(value::Integer, label::String)
+    n = _geometry_int(value, label)
+    n >= 1 || throw(ArgumentError("$label must be positive"))
+    return n
+end
+_geometry_positive_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
+
 function _geometry_finite_scalar(value, label::String)
     value isa Bool && throw(ArgumentError("$label must be finite"))
     ok = try
