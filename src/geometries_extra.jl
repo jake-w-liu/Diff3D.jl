@@ -275,8 +275,8 @@ end
 function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_length=2π)
     np = length(points)
     _validate_lathe_points(points)
-    (isfinite(phi_start) && isfinite(phi_length)) ||
-        throw(ArgumentError("LatheGeometry phi_start and phi_length must be finite"))
+    phi_start = _geometry_finite_scalar(phi_start, "LatheGeometry phi_start")
+    phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
     segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
 
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
@@ -306,19 +306,19 @@ end
 # ========================== TubeGeometry ==========================
 # Sweep a circle of `radius` along a polyline `path`.
 
-function _validate_tube_path(path::Vector{<:Vec3}, radius)
+function _validate_tube_path(path::Vector{<:Vec3})
     length(path) >= 2 || throw(ArgumentError("TubeGeometry needs at least two path points"))
     for (i, pt) in pairs(path)
         (isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z)) ||
             throw(ArgumentError("TubeGeometry path point $i must be finite"))
     end
-    isfinite(radius) || throw(ArgumentError("TubeGeometry radius must be finite"))
     return nothing
 end
 
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
-    _validate_tube_path(path, radius)
+    _validate_tube_path(path)
+    radius = _geometry_finite_scalar(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]

@@ -16855,7 +16855,7 @@ end
         @test_throws "LatheGeometry profile point 1 must be finite" LatheGeometry([
             Vec2(NaN, 0.0), Vec2(1.0, 1.0)
         ])
-        @test_throws "LatheGeometry phi_start and phi_length must be finite" LatheGeometry([
+        @test_throws "LatheGeometry phi_start must be finite" LatheGeometry([
             Vec2(1.0, 0.0), Vec2(1.0, 1.0)
         ]; phi_start = NaN)
 
@@ -17289,6 +17289,22 @@ end
 
         @test SphereGeometry(width_segments = Inf).n_faces > 0
         @test CircleGeometry(segments = NaN).n_faces > 0
+    end
+
+    @testset "fresh audit round 55 fixes" begin
+        lathe_points = [Vec2(1.0, 0.0), Vec2(1.0, 1.0)]
+        @test_throws "LatheGeometry phi_start must be finite" LatheGeometry(
+            lathe_points; phi_start = true)
+        @test_throws "LatheGeometry phi_length must be finite" LatheGeometry(
+            lathe_points; phi_length = "bad")
+
+        tube_path = [Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)]
+        @test_throws "TubeGeometry radius must be finite" TubeGeometry(
+            tube_path; radius = true)
+        @test_throws "TubeGeometry radius must be finite" TubeGeometry(
+            tube_path; radius = "bad")
+        @test all(isfinite, LatheGeometry(lathe_points; phi_start = 0.25).positions)
+        @test all(isfinite, TubeGeometry(tube_path; radius = 0.25).positions)
     end
 
 end
