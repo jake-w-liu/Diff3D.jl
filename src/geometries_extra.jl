@@ -10,7 +10,19 @@
 # of the given radius. Vertices are non-indexed (3 per face).
 
 function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTuple{3,Int}};
-                            radius=1.0, detail::Int=0)
+                            radius=1.0, detail=0)
+    radius = _geometry_finite_scalar(radius, "PolyhedronGeometry radius")
+    detail = _geometry_nonnegative_int(detail, "PolyhedronGeometry detail")
+    for (i, v) in enumerate(base_verts)
+        (isfinite(v.x) && isfinite(v.y) && isfinite(v.z)) ||
+            throw(ArgumentError("PolyhedronGeometry base vertex $i must be finite"))
+    end
+    nbase = length(base_verts)
+    for face in base_faces
+        i1, i2, i3 = face
+        (1 <= i1 <= nbase && 1 <= i2 <= nbase && 1 <= i3 <= nbase) ||
+            throw(ArgumentError("PolyhedronGeometry face indices must reference base vertices"))
+    end
     positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
     vi = 0
     function emit!(a::Vec3, b::Vec3, c::Vec3)
@@ -40,6 +52,8 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
 end
 
 function OctahedronGeometry(; radius=1.0, detail=0)
+    radius = _geometry_finite_scalar(radius, "OctahedronGeometry radius")
+    detail = _geometry_nonnegative_int(detail, "OctahedronGeometry detail")
     v = [Vec3(1.0,0,0), Vec3(-1.0,0,0), Vec3(0.0,1.0,0), Vec3(0.0,-1.0,0),
          Vec3(0.0,0,1.0), Vec3(0.0,0,-1.0)]
     f = NTuple{3,Int}[(1,3,5),(1,5,4),(1,4,6),(1,6,3),(2,3,6),(2,6,4),(2,4,5),(2,5,3)]
@@ -47,12 +61,16 @@ function OctahedronGeometry(; radius=1.0, detail=0)
 end
 
 function TetrahedronGeometry(; radius=1.0, detail=0)
+    radius = _geometry_finite_scalar(radius, "TetrahedronGeometry radius")
+    detail = _geometry_nonnegative_int(detail, "TetrahedronGeometry detail")
     v = [Vec3(1.0,1,1), Vec3(-1.0,-1,1), Vec3(-1.0,1,-1), Vec3(1.0,-1,-1)]
     f = NTuple{3,Int}[(3,2,1),(1,4,3),(2,4,1),(3,4,2)]
     PolyhedronGeometry(v, f; radius=radius, detail=detail)
 end
 
 function DodecahedronGeometry(; radius=1.0, detail=0)
+    radius = _geometry_finite_scalar(radius, "DodecahedronGeometry radius")
+    detail = _geometry_nonnegative_int(detail, "DodecahedronGeometry detail")
     t = (1 + sqrt(5)) / 2
     r = 1 / t
     v = [Vec3(-1.0,-1,-1), Vec3(-1.0,-1,1), Vec3(-1.0,1,-1), Vec3(-1.0,1,1),

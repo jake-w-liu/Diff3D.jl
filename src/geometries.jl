@@ -62,6 +62,31 @@ function _geometry_int(value::Integer, label::String)
         throw(ArgumentError("$label is too large"))
     end
 end
+_geometry_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
+
+function _geometry_nonnegative_int(value::Integer, label::String)
+    n = _geometry_int(value, label)
+    n >= 0 || throw(ArgumentError("$label must be non-negative"))
+    return n
+end
+_geometry_nonnegative_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
+
+function _geometry_finite_scalar(value, label::String)
+    value isa Bool && throw(ArgumentError("$label must be finite"))
+    ok = try
+        isfinite(value)
+    catch
+        false
+    end
+    ok || throw(ArgumentError("$label must be finite"))
+    return value
+end
+
+function _geometry_nonzero_finite_scalar(value, label::String)
+    _geometry_finite_scalar(value, label)
+    value != zero(value) || throw(ArgumentError("$label must be finite and non-zero"))
+    return value
+end
 
 """
     add_group!(geo, start, count, material_index)
@@ -375,6 +400,9 @@ end
 
 function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
                      width_segments=1, height_segments=1, depth_segments=1)
+    width = _geometry_finite_scalar(width, "BoxGeometry width")
+    height = _geometry_finite_scalar(height, "BoxGeometry height")
+    depth = _geometry_finite_scalar(depth, "BoxGeometry depth")
     ws = _geometry_segment_count("width_segments", width_segments)
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
@@ -459,6 +487,7 @@ end
 # ========================== Sphere Geometry ==========================
 
 function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
+    radius = _geometry_finite_scalar(radius, "SphereGeometry radius")
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
     width_segments = _clamp_seg(width_segments, 3)
@@ -515,6 +544,8 @@ end
 # ========================== Plane Geometry ==========================
 
 function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segments=1)
+    width = _geometry_finite_scalar(width, "PlaneGeometry width")
+    height = _geometry_finite_scalar(height, "PlaneGeometry height")
     # Clamp segment counts (matching SphereGeometry/three.js) so a 0 cannot make
     # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
     width_segments = _clamp_seg(width_segments, 1)
@@ -557,6 +588,9 @@ end
 
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                            radial_segments=32, height_segments=1, open_ended=false)
+    radius_top = _geometry_finite_scalar(radius_top, "CylinderGeometry radius_top")
+    radius_bottom = _geometry_finite_scalar(radius_bottom, "CylinderGeometry radius_bottom")
+    height = _geometry_finite_scalar(height, "CylinderGeometry height")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 3)
     height_segments = _clamp_seg(height_segments, 1)
@@ -649,6 +683,8 @@ end
 
 function ConeGeometry(; radius=1.0, height=1.0, radial_segments=32, height_segments=1,
                        open_ended=false)
+    radius = _geometry_finite_scalar(radius, "ConeGeometry radius")
+    height = _geometry_finite_scalar(height, "ConeGeometry height")
     CylinderGeometry(; radius_top=0.0, radius_bottom=radius, height=height,
                       radial_segments=radial_segments, height_segments=height_segments,
                       open_ended=open_ended)
@@ -657,6 +693,8 @@ end
 # ========================== Torus Geometry ==========================
 
 function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
+    radius = _geometry_finite_scalar(radius, "TorusGeometry radius")
+    tube = _geometry_finite_scalar(tube, "TorusGeometry tube")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2)
     tubular_segments = _clamp_seg(tubular_segments, 3)
@@ -709,6 +747,10 @@ end
 
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
+    radius = _geometry_finite_scalar(radius, "TorusKnotGeometry radius")
+    tube = _geometry_finite_scalar(tube, "TorusKnotGeometry tube")
+    p_val = _geometry_nonzero_finite_scalar(p_val, "TorusKnotGeometry p_val")
+    q_val = _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val")
     # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
     # a 0/0 = NaN, matching every sibling generator in this file.
     tubular_segments = _clamp_seg(tubular_segments, 3)
@@ -777,6 +819,8 @@ end
 # ========================== Ring Geometry ==========================
 
 function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
+    inner_radius = _geometry_finite_scalar(inner_radius, "RingGeometry inner_radius")
+    outer_radius = _geometry_finite_scalar(outer_radius, "RingGeometry outer_radius")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     theta_segments = _clamp_seg(theta_segments, 3)
     phi_segments = _clamp_seg(phi_segments, 1)
@@ -819,6 +863,7 @@ end
 # ========================== Circle Geometry ==========================
 
 function CircleGeometry(; radius=1.0, segments=32)
+    radius = _geometry_finite_scalar(radius, "CircleGeometry radius")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
     segments = _clamp_seg(segments, 3)
     positions = Float64[0.0, 0.0, 0.0]  # center
@@ -847,6 +892,8 @@ end
 # ========================== Icosahedron Geometry ==========================
 
 function IcosahedronGeometry(; radius=1.0, detail=0)
+    radius = _geometry_finite_scalar(radius, "IcosahedronGeometry radius")
+    detail = _geometry_nonnegative_int(detail, "IcosahedronGeometry detail")
     t = (1 + sqrt(5)) / 2
 
     # Base vertices (un-normalized): PolyhedronGeometry projects each to the sphere.

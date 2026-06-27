@@ -17158,4 +17158,28 @@ end
         @test !has_attribute(geo, :bad)
     end
 
+    @testset "fresh audit round 49 fixes" begin
+        @test_throws "BoxGeometry width must be finite" BoxGeometry(width = NaN)
+        @test_throws "SphereGeometry radius must be finite" SphereGeometry(radius = NaN)
+        @test_throws "PlaneGeometry width must be finite" PlaneGeometry(width = Inf)
+        @test_throws "CylinderGeometry radius_top must be finite" CylinderGeometry(radius_top = NaN)
+        @test_throws "ConeGeometry radius must be finite" ConeGeometry(radius = NaN)
+        @test_throws "TorusGeometry tube must be finite" TorusGeometry(tube = NaN)
+        @test_throws "TorusKnotGeometry p_val must be finite and non-zero" TorusKnotGeometry(
+            p_val = 0)
+        @test_throws "TorusKnotGeometry q_val must be finite" TorusKnotGeometry(q_val = Inf)
+        @test_throws "RingGeometry outer_radius must be finite" RingGeometry(outer_radius = NaN)
+        @test_throws "CircleGeometry radius must be finite" CircleGeometry(radius = NaN)
+        @test_throws "IcosahedronGeometry detail must be non-negative" IcosahedronGeometry(
+            detail = -1)
+
+        @test_throws "PolyhedronGeometry radius must be finite" PolyhedronGeometry(
+            [Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)],
+            [(1, 2, 3)]; radius = NaN)
+        @test_throws "PolyhedronGeometry face indices must reference base vertices" PolyhedronGeometry(
+            [Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)],
+            [(1, 2, 4)])
+        @test all(isfinite, TorusKnotGeometry(p_val = 2, q_val = 3).positions)
+    end
+
 end
