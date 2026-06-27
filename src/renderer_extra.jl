@@ -48,9 +48,7 @@ end
 """Box-average downsample an H·ss × W·ss image to H × W."""
 function downsample(img::AbstractArray, ss::Int)
     ss > 0 || throw(ArgumentError("downsample scale must be positive"))
-    (ndims(img) == 3 && size(img, 3) == 3) ||
-        throw(ArgumentError("downsample expects an H×W×3 image"))
-    Hb, Wb, _ = size(img)
+    Hb, Wb = _rgb_image_size(img, "downsample")
     (Hb % ss == 0 && Wb % ss == 0) ||
         throw(ArgumentError("downsample image dimensions must be divisible by scale"))
     H, W = Hb ÷ ss, Wb ÷ ss
@@ -698,7 +696,7 @@ end
 
 # Built-in passes.
 function grayscale_pass(img::AbstractArray)
-    H, W, _ = size(img)
+    H, W = _rgb_image_size(img, "grayscale_pass")
     out = Array{Float64}(undef, H, W, 3)
     @inbounds for i in 1:H, j in 1:W
         g = 0.299*img[i,j,1] + 0.587*img[i,j,2] + 0.114*img[i,j,3]
@@ -727,6 +725,19 @@ srgb_pass(img) = srgb_encode(img)
 # Rec.601 luma of an RGB pixel at (i,j) — shared by several passes.
 @inline _luma(img, i, j) = @inbounds 0.299*img[i,j,1] + 0.587*img[i,j,2] + 0.114*img[i,j,3]
 
+function _rgb_image_size(img::AbstractArray, label::AbstractString)
+    (ndims(img) == 3 && size(img, 3) == 3) ||
+        throw(ArgumentError("$label expects an H×W×3 image"))
+    H, W = size(img, 1), size(img, 2)
+    (H > 0 && W > 0) || throw(ArgumentError("$label image dimensions must be positive"))
+    return H, W
+end
+
+function _check_depth_size(depth::AbstractMatrix, H::Int, W::Int, label::AbstractString)
+    size(depth) == (H, W) || throw(ArgumentError("$label depth dimensions must match image"))
+    return nothing
+end
+
 # Build a 1-D Gaussian kernel of the given integer radius (σ = radius/2, clamped),
 # normalized to sum 1. Returned as an OffsetVector-free plain Vector indexed 1..2r+1
 # (centre at r+1).
@@ -747,7 +758,7 @@ end
 # handled by clamping the sample index (replicate border). Uses one scratch
 # buffer for the horizontal pass, then writes the vertical pass into `out`.
 function _blur_separable(img::AbstractArray, radius::Int)
-    H, W, _ = size(img)
+    H, W = _rgb_image_size(img, "blur")
     r = max(radius, 0)
     r == 0 && return Float64.(img)
     k = _gaussian_kernel(r)
@@ -784,7 +795,7 @@ returned closure matches the [`EffectComposer`] pass convention (`img -> img`).
 function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6, radius::Int=2)
     thr = Float64(threshold); inten = Float64(intensity); rad = max(Int(radius), 0)
     return function (img::AbstractArray)
-        H, W, _ = size(img)
+        H, W = _rgb_image_size(img, "bloom_pass")
         bright = Array{Float64}(undef, H, W, 3)        # bright-pass extraction
         @inbounds for i in 1:H, j in 1:W
             if _luma(img, i, j) > thr
@@ -817,7 +828,7 @@ function fxaa_pass()
     EDGE_MIN = 0.0312     # absolute luma floor below which no AA is applied
     EDGE_REL = 0.125      # contrast must exceed this fraction of the local max luma
     return function (img::AbstractArray)
-        H, W, _ = size(img)
+        H, W = _rgb_image_size(img, "fxaa_pass")
         out = Float64.(img)
         @inbounds for i in 2:H-1, j in 2:W-1
             lC = _luma(img, i, j)
@@ -869,7 +880,8 @@ function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=
         isfinite(d) ? Float64(d) : 1.0e9
     end
     return function (img::AbstractArray)
-        H, W, _ = size(img)
+        H, W = _rgb_image_size(img, "outline_pass")
+        _check_depth_size(depth, H, W, "outline_pass")
         out = Float64.(img)
         (H >= 3 && W >= 3) || return out
         # Normalize the gradient by the finite depth range so `threshold` is scale-free.
@@ -930,7 +942,8 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
         offs[s] = (rr*cos(θ), rr*sin(θ))
     end
     return function (img::AbstractArray)
-        H, W, _ = size(img)
+        H, W = _rgb_image_size(img, "ssao_pass")
+        _check_depth_size(depth, H, W, "ssao_pass")
         out = Float64.(img)
         (H >= 3 && W >= 3) || return out
         @inline df(i, j) = (d = depth[clamp(i,1,H), clamp(j,1,W)]; isfinite(d) ? Float64(d) : NaN)
@@ -1000,7 +1013,8 @@ function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMat
     fd = Float64(focus_depth); ap = max(Float64(aperture), 0.0)
     maxr = 16                                  # cap CoC radius to bound work
     return function (img::AbstractArray)
-        H, W, _ = size(img)
+        H, W = _rgb_image_size(img, "bokeh_pass")
+        _check_depth_size(depth, H, W, "bokeh_pass")
         out = Array{Float64}(undef, H, W, 3)
         @inbounds for i in 1:H, j in 1:W
             dC = depth[i,j]

@@ -17076,4 +17076,17 @@ end
             RenderTarget(2, 2), scene, cam; tiles = -1)
     end
 
+    @testset "fresh audit round 44 fixes" begin
+        @test_throws "grayscale_pass expects an H×W×3 image" grayscale_pass(zeros(2, 2))
+        @test_throws "bloom_pass image dimensions must be positive" bloom_pass()(zeros(0, 2, 3))
+        @test_throws "fxaa_pass expects an H×W×3 image" fxaa_pass()(zeros(4, 4, 2))
+
+        img = zeros(4, 4, 3)
+        bad_depth = zeros(2, 2)
+        @test_throws "outline_pass depth dimensions must match image" outline_pass(bad_depth)(img)
+        @test_throws "ssao_pass depth dimensions must match image" ssao_pass(bad_depth)(img)
+        @test_throws "bokeh_pass depth dimensions must match image" bokeh_pass(
+            bad_depth; focus_depth = 1.0)(img)
+    end
+
 end
