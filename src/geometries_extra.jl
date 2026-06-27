@@ -13,11 +13,13 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
                             radius=1.0, detail=0)
     radius = _geometry_finite_scalar(radius, "PolyhedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "PolyhedronGeometry detail")
+    verts = Vec3{Float64}[]
     for (i, v) in enumerate(base_verts)
-        (isfinite(v.x) && isfinite(v.y) && isfinite(v.z)) ||
-            throw(ArgumentError("PolyhedronGeometry base vertex $i must be finite"))
+        push!(verts, Vec3(_geometry_finite_float(v.x, "PolyhedronGeometry base vertex $i"),
+                          _geometry_finite_float(v.y, "PolyhedronGeometry base vertex $i"),
+                          _geometry_finite_float(v.z, "PolyhedronGeometry base vertex $i")))
     end
-    nbase = length(base_verts)
+    nbase = length(verts)
     for face in base_faces
         i1, i2, i3 = face
         (1 <= i1 <= nbase && 1 <= i2 <= nbase && 1 <= i3 <= nbase) ||
@@ -39,7 +41,7 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
     end
     cols = detail + 1
     for (i1, i2, i3) in base_faces
-        A = base_verts[i1]; B = base_verts[i2]; C = base_verts[i3]
+        A = verts[i1]; B = verts[i2]; C = verts[i3]
         bary(p, q) = A*((cols - p - q)/cols) + B*(p/cols) + C*(q/cols)
         for i in 0:cols-1, j in 0:(cols-1-i)
             emit!(bary(i, j), bary(i+1, j), bary(i, j+1))
@@ -94,9 +96,9 @@ end
 function _convex_clean_points(points::AbstractVector{<:Vec3})
     raw = Vec3{Float64}[]
     for p in points
-        q = Vec3(Float64(p.x), Float64(p.y), Float64(p.z))
-        isfinite(q.x) && isfinite(q.y) && isfinite(q.z) ||
-            throw(ArgumentError("ConvexGeometry points must be finite"))
+        q = Vec3(_geometry_finite_float(p.x, "ConvexGeometry points"),
+                 _geometry_finite_float(p.y, "ConvexGeometry points"),
+                 _geometry_finite_float(p.z, "ConvexGeometry points"))
         push!(raw, q)
     end
     isempty(raw) && throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
@@ -266,8 +268,8 @@ end
 function _validate_lathe_points(points::Vector{<:Vec2})
     length(points) >= 2 || throw(ArgumentError("LatheGeometry needs at least two profile points"))
     for (i, pt) in pairs(points)
-        (isfinite(pt.x) && isfinite(pt.y)) ||
-            throw(ArgumentError("LatheGeometry profile point $i must be finite"))
+        _geometry_finite_float(pt.x, "LatheGeometry profile point $i")
+        _geometry_finite_float(pt.y, "LatheGeometry profile point $i")
     end
     return nothing
 end
@@ -309,8 +311,9 @@ end
 function _validate_tube_path(path::Vector{<:Vec3})
     length(path) >= 2 || throw(ArgumentError("TubeGeometry needs at least two path points"))
     for (i, pt) in pairs(path)
-        (isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z)) ||
-            throw(ArgumentError("TubeGeometry path point $i must be finite"))
+        _geometry_finite_float(pt.x, "TubeGeometry path point $i")
+        _geometry_finite_float(pt.y, "TubeGeometry path point $i")
+        _geometry_finite_float(pt.z, "TubeGeometry path point $i")
     end
     return nothing
 end
@@ -365,9 +368,9 @@ end
 const _CATMULL_ROM_CURVE_TYPES = (:catmullrom, :centripetal, :chordal)
 
 function _catmull_rom_control_point(point::Vec3)
-    p = Vec3(Float64(point.x), Float64(point.y), Float64(point.z))
-    isfinite(p.x) && isfinite(p.y) && isfinite(p.z) ||
-        throw(ArgumentError("CatmullRomCurve control points must be finite"))
+    p = Vec3(_geometry_finite_float(point.x, "CatmullRomCurve control points"),
+             _geometry_finite_float(point.y, "CatmullRomCurve control points"),
+             _geometry_finite_float(point.z, "CatmullRomCurve control points"))
     return p
 end
 
@@ -530,12 +533,10 @@ function _nurbs_knots(knots, degree::Int, npoints::Int, label::String)
 end
 
 function _nurbs_control_point(point::Vec4)
-    x = Float64(point.x)
-    y = Float64(point.y)
-    z = Float64(point.z)
-    w = Float64(point.w)
-    isfinite(x) && isfinite(y) && isfinite(z) && isfinite(w) ||
-        throw(ArgumentError("NURBS control points must be finite"))
+    x = _geometry_finite_float(point.x, "NURBS control points")
+    y = _geometry_finite_float(point.y, "NURBS control points")
+    z = _geometry_finite_float(point.z, "NURBS control points")
+    w = _geometry_finite_float(point.w, "NURBS control points")
     w > 0.0 || throw(ArgumentError("NURBS control point weights must be positive"))
     return Vec4(x, y, z, w)
 end
@@ -770,9 +771,10 @@ function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20
         v = j / vs
         p = fn(u, v)
         p isa Vec3 || throw(ArgumentError("ParametricGeometry callback must return Vec3"))
-        all(isfinite, (Float64(p.x), Float64(p.y), Float64(p.z))) ||
-            throw(ArgumentError("ParametricGeometry callback returned a non-finite point"))
-        push!(positions, Float64(p.x), Float64(p.y), Float64(p.z))
+        x = _geometry_finite_float(p.x, "ParametricGeometry callback returned a non-finite point")
+        y = _geometry_finite_float(p.y, "ParametricGeometry callback returned a non-finite point")
+        z = _geometry_finite_float(p.z, "ParametricGeometry callback returned a non-finite point")
+        push!(positions, x, y, z)
         push!(uvs, u, 1.0 - v)
     end
     row = us + 1
@@ -817,9 +819,8 @@ function _extrude_clean_shape(shape::AbstractVector{<:Vec2})
     clean = Vec2{Float64}[]
     scale = 1.0
     for p in shape
-        q = Vec2(Float64(p.x), Float64(p.y))
-        isfinite(q.x) && isfinite(q.y) ||
-            throw(ArgumentError("ExtrudeGeometry shape points must be finite"))
+        q = Vec2(_geometry_finite_float(p.x, "ExtrudeGeometry shape points"),
+                 _geometry_finite_float(p.y, "ExtrudeGeometry shape points"))
         scale = max(scale, abs(q.x), abs(q.y))
         if isempty(clean) || _shape_len(q - clean[end]) > 1e-12 * scale
             push!(clean, q)
@@ -840,9 +841,9 @@ function _extrude_clean_path(path::AbstractVector{<:Vec3})
     raw = Vec3{Float64}[]
     scale = 1.0
     for p in path
-        q = Vec3(Float64(p.x), Float64(p.y), Float64(p.z))
-        isfinite(q.x) && isfinite(q.y) && isfinite(q.z) ||
-            throw(ArgumentError("ExtrudeGeometry extrude_path points must be finite"))
+        q = Vec3(_geometry_finite_float(p.x, "ExtrudeGeometry extrude_path points"),
+                 _geometry_finite_float(p.y, "ExtrudeGeometry extrude_path points"),
+                 _geometry_finite_float(p.z, "ExtrudeGeometry extrude_path points"))
         scale = max(scale, abs(q.x), abs(q.y), abs(q.z))
         push!(raw, q)
     end

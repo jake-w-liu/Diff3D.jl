@@ -109,6 +109,17 @@ function _geometry_finite_scalar(value, label::String)
     return value
 end
 
+function _geometry_finite_float(value, label::String)
+    checked = _geometry_finite_scalar(value, label)
+    try
+        out = Float64(checked)
+        isfinite(out) || throw(ArgumentError("$label must be finite"))
+        return out
+    catch
+        throw(ArgumentError("$label must be finite"))
+    end
+end
+
 function _geometry_nonzero_finite_scalar(value, label::String)
     _geometry_finite_scalar(value, label)
     value != zero(value) || throw(ArgumentError("$label must be finite and non-zero"))

@@ -17321,4 +17321,34 @@ end
         @test catmull_rom_point(curve, 1.5) == points[end]
     end
 
+    @testset "fresh audit round 57 fixes" begin
+        @test_throws "PolyhedronGeometry base vertex 1 must be finite" PolyhedronGeometry(
+            Vec3{Bool}[Vec3{Bool}(true, false, false), Vec3{Bool}(false, true, false),
+                       Vec3{Bool}(false, false, true)],
+            [(1, 2, 3)])
+        @test_throws "ConvexGeometry points must be finite" ConvexGeometry(
+            Vec3{BigFloat}[Vec3{BigFloat}(parse(BigFloat, "1e10000"), 0, 0),
+                           Vec3{BigFloat}(0, 1, 0), Vec3{BigFloat}(0, 0, 1),
+                           Vec3{BigFloat}(1, 1, 1)])
+        @test_throws "LatheGeometry profile point 1 must be finite" LatheGeometry(
+            Vec2{Bool}[Vec2{Bool}(true, false), Vec2{Bool}(true, true)])
+        @test_throws "TubeGeometry path point 1 must be finite" TubeGeometry(
+            Vec3{Bool}[Vec3{Bool}(false, false, false), Vec3{Bool}(true, true, false)])
+        @test_throws "CatmullRomCurve control points must be finite" CatmullRomCurve(
+            Vec3{Bool}[Vec3{Bool}(false, false, false), Vec3{Bool}(true, true, false)])
+        @test_throws "NURBS control points must be finite" NURBSCurve(
+            1, [0.0, 0.0, 1.0, 1.0],
+            Vec4{Bool}[Vec4{Bool}(true, false, false, true),
+                       Vec4{Bool}(true, true, false, true)])
+        @test_throws "ParametricGeometry callback returned a non-finite point" ParametricGeometry(
+            (u, v) -> Vec3{Bool}(true, false, false), 1, 1)
+        @test_throws "ExtrudeGeometry shape points must be finite" ShapeGeometry(
+            Vec2{Bool}[Vec2{Bool}(false, false), Vec2{Bool}(true, false),
+                       Vec2{Bool}(false, true)])
+        @test_throws "ExtrudeGeometry extrude_path points must be finite" ExtrudeGeometry(
+            [Vec2(0.0, 0.0), Vec2(1.0, 0.0), Vec2(0.0, 1.0)];
+            extrude_path = Vec3{Bool}[Vec3{Bool}(false, false, false),
+                                      Vec3{Bool}(true, true, false)])
+    end
+
 end
