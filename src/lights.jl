@@ -461,6 +461,35 @@ get_parent(o::LightProbe) = o.parent
 is_visible(o::LightProbe) = o.visible
 set_parent!(o::LightProbe, p) = (o.parent = p)
 
+@_compute_world_matrix_method(AmbientLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(DirectionalLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(PointLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(SpotLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(HemisphereLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(RectAreaLight,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+@_compute_world_matrix_method(LightProbe,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe)
+
 # ========================== Light collection ==========================
 
 # Keep scene light containers concrete so the shading loop can union-split over

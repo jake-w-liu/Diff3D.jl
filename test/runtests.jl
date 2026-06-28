@@ -2316,6 +2316,19 @@ end
         meshes = collect_meshes(scene)
         @test length(meshes) == 1
         @test meshes[1] === mesh
+
+        parent = Group()
+        parent.position = Vec3(1.0, 2.0, 3.0)
+        child = Mesh(BoxGeometry(), MeshBasicMaterial())
+        child.position = Vec3(0.5, -0.25, 1.0)
+        add!(parent, child)
+        @test compute_world_matrix(child).e ==
+              (compute_local_matrix(parent) * compute_local_matrix(child)).e
+
+        compute_world_matrix(mesh)
+        @test_opt_alloc 64 compute_world_matrix(mesh)
+        compute_world_matrix(child)
+        @test_opt_alloc 64 compute_world_matrix(child)
     end
 
     @testset "Camera projection" begin

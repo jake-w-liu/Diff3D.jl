@@ -451,6 +451,43 @@ get_children(o::SkinnedMesh) = o.children
 get_parent(o::SkinnedMesh) = o.parent
 is_visible(o::SkinnedMesh) = o.visible
 set_parent!(o::SkinnedMesh, p) = (o.parent = p)
+
+@_compute_world_matrix_method(InstancedMesh,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(LineSegments,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(LineLoop,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(Sprite,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(LOD,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(Bone,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+@_compute_world_matrix_method(SkinnedMesh,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera,
+    AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight, LightProbe,
+    InstancedMesh, LineSegments, LineLoop, Sprite, LOD, Bone, SkinnedMesh)
+
 apply_morph_targets(mesh::SkinnedMesh) =
     apply_morph_targets(mesh.geometry, mesh.morph_target_influences)
 apply_morph_normals(mesh::SkinnedMesh) =

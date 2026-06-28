@@ -89,6 +89,31 @@ function compute_world_matrix(obj::AbstractObject3D)
     end
 end
 
+macro _compute_world_matrix_method(T, parent_types...)
+    branch = :(compute_world_matrix(p) * local_mat)
+    for parent_type in reverse(parent_types)
+        branch = quote
+            if p isa $parent_type
+                compute_world_matrix(p) * local_mat
+            else
+                $branch
+            end
+        end
+    end
+
+    esc(quote
+        function compute_world_matrix(obj::$T)::Mat4{Float64}
+            local_mat = compute_local_matrix(obj)
+            p = obj.parent
+            if p === nothing
+                local_mat
+            else
+                $branch
+            end
+        end
+    end)
+end
+
 # ========================== Fog ==========================
 
 abstract type AbstractFog end
@@ -302,6 +327,13 @@ is_visible(o::PointsObject) = o.visible
 set_parent!(o::PointsObject, p) = (o.parent = p)
 apply_morph_targets(points::PointsObject) =
     apply_morph_targets(points.geometry, points.morph_target_influences)
+
+@_compute_world_matrix_method Object3D Scene Group Object3D Mesh LineObject PointsObject
+@_compute_world_matrix_method Scene Scene Group Object3D Mesh LineObject PointsObject
+@_compute_world_matrix_method Group Scene Group Object3D Mesh LineObject PointsObject
+@_compute_world_matrix_method Mesh Scene Group Object3D Mesh LineObject PointsObject
+@_compute_world_matrix_method LineObject Scene Group Object3D Mesh LineObject PointsObject
+@_compute_world_matrix_method PointsObject Scene Group Object3D Mesh LineObject PointsObject
 
 # ========================== Traversal ==========================
 

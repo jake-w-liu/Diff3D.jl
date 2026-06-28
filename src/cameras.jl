@@ -157,6 +157,13 @@ get_parent(c::OrthographicCamera) = c.parent
 is_visible(c::OrthographicCamera) = c.visible
 set_parent!(c::OrthographicCamera, p) = (c.parent = p)
 
+@_compute_world_matrix_method(PerspectiveCamera,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera)
+@_compute_world_matrix_method(OrthographicCamera,
+    Scene, Group, Object3D, Mesh, LineObject, PointsObject,
+    PerspectiveCamera, OrthographicCamera)
+
 function projection_matrix(c::OrthographicCamera)
     zoom = _validated_camera_zoom(c.zoom)
     l, r, b, t, n, fr = _validated_orthographic_params(
