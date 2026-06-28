@@ -517,6 +517,70 @@ function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
                                     stamp, stamp_id)
 end
 
+@inline _object_has_children(obj::AbstractObject3D) = !isempty(get_children(obj))
+@inline _object_has_children(obj::Object3D) = !isempty(obj.children)
+@inline _object_has_children(obj::Scene) = !isempty(obj.children)
+@inline _object_has_children(obj::Group) = !isempty(obj.children)
+@inline _object_has_children(obj::Mesh) = !isempty(obj.children)
+@inline _object_has_children(obj::LineObject) = !isempty(obj.children)
+@inline _object_has_children(obj::PointsObject) = !isempty(obj.children)
+@inline _object_has_children(obj::PerspectiveCamera) = !isempty(obj.children)
+@inline _object_has_children(obj::OrthographicCamera) = !isempty(obj.children)
+@inline _object_has_children(obj::AmbientLight) = !isempty(obj.children)
+@inline _object_has_children(obj::DirectionalLight) = !isempty(obj.children)
+@inline _object_has_children(obj::PointLight) = !isempty(obj.children)
+@inline _object_has_children(obj::SpotLight) = !isempty(obj.children)
+@inline _object_has_children(obj::HemisphereLight) = !isempty(obj.children)
+@inline _object_has_children(obj::RectAreaLight) = !isempty(obj.children)
+@inline _object_has_children(obj::LightProbe) = !isempty(obj.children)
+@inline _object_has_children(obj::InstancedMesh) = !isempty(obj.children)
+@inline _object_has_children(obj::LineSegments) = !isempty(obj.children)
+@inline _object_has_children(obj::LineLoop) = !isempty(obj.children)
+@inline _object_has_children(obj::Sprite) = !isempty(obj.children)
+@inline _object_has_children(obj::LOD) = !isempty(obj.children)
+@inline _object_has_children(obj::Bone) = !isempty(obj.children)
+@inline _object_has_children(obj::SkinnedMesh) = !isempty(obj.children)
+
+@inline _line_subtree_may_draw(obj::AbstractObject3D) =
+    is_visible(obj) && (_object_has_children(obj) || obj isa LineObject ||
+                        obj isa LineSegments || obj isa LineLoop ||
+                        (obj isa InstancedMesh && _instanced_line_drawable(obj)))
+
+function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
+                                     proj::Mat4, view::Mat4, near,
+                                     xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                     cache::Union{Nothing,RenderCache},
+                                     stamp::Union{Nothing,Matrix{Int}},
+                                     stamp_id::Int)
+    is_visible(obj) || return stamp, stamp_id
+    if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
+        line_mode = obj isa LineSegments ? :lines :
+                    obj isa LineLoop ? :line_loop : :line_strip
+        if _line_geometry_has_segment(obj.geometry, line_mode)
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
+            stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+                                          xlo, xhi, ylo, yhi, stamp, stamp_id)
+        end
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+        if _line_geometry_has_segment(obj.geometry, obj.draw_mode)
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
+            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
+                                              xlo, xhi, ylo, yhi, stamp, stamp_id)
+        end
+    end
+    for child in get_children(obj)
+        _line_subtree_may_draw(child) || continue
+        stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                      xlo, xhi, ylo, yhi, cache,
+                                                      stamp, stamp_id)
+    end
+    return stamp, stamp_id
+end
+
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height,
@@ -524,29 +588,8 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
-    stamp = nothing
-    stamp_id = 0
-
-    traverse(scene, function(obj)
-        _visible_in_tree(obj) || return
-        if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
-            line_mode = obj isa LineSegments ? :lines :
-                        obj isa LineLoop ? :line_loop : :line_strip
-            _line_geometry_has_segment(obj.geometry, line_mode) || return
-            stamp === nothing &&
-                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-                         _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id = _draw_line_object!(rt, obj, proj, view, near,
-                                          xlo, xhi, ylo, yhi, stamp, stamp_id)
-        elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
-            _line_geometry_has_segment(obj.geometry, obj.draw_mode) || return
-            stamp === nothing &&
-                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-                         _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
-                                              xlo, xhi, ylo, yhi, stamp, stamp_id)
-        end
-    end)
+    _render_lines_visible_tree!(rt, scene, proj, view, near, xlo, xhi, ylo, yhi,
+                                cache, nothing, 0)
     return rt
 end
 
@@ -676,6 +719,98 @@ end
     return nothing
 end
 
+function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, camera::AbstractCamera,
+                              view::Mat4, vp::Mat4, W::Int, H::Int,
+                              clipping_planes, xlo::Int, xhi::Int,
+                              ylo::Int, yhi::Int,
+                              cache::Union{Nothing,RenderCache},
+                              stamp::Union{Nothing,Matrix{Int}},
+                              stamp_id::Int)
+    stamp_id += 1
+    M = sprite_world_matrix(obj, camera)
+    mat = obj.material
+    tint = _material_field(mat, :color)
+    tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
+    alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
+    tex = _material_field(mat, :map)
+    alpha_test = material_alpha_test(mat)
+    alpha_map = _material_field(mat, :alpha_map)
+    rot = _material_field(mat, :rotation)
+    rot === nothing && (rot = 0.0)
+    depth_test = material_depth_test(mat)
+    depth_write = material_depth_write(mat)
+    size_attenuation = _material_field(mat, :size_attenuation)
+    size_attenuation === nothing && (size_attenuation = true)
+    center_world = Vec3(mat4_get(M, 1, 4), mat4_get(M, 2, 4), mat4_get(M, 3, 4))
+    center_view = mat4_transform_vec4(view, Vec4(center_world.x, center_world.y, center_world.z, 1.0))
+    attenuation = size_attenuation ? 1.0 : max(0.0001, -center_view.z)
+    c = cos(rot)
+    sr = sin(rot)
+    cx = obj.center.x
+    cy = obj.center.y
+    px0 = -cx;       py0 = -cy
+    px1 = 1.0 - cx;  py1 = -cy
+    px2 = 1.0 - cx;  py2 = 1.0 - cy
+    px3 = -cx;       py3 = 1.0 - cy
+    x0 = (c * px0 - sr * py0) * attenuation
+    y0 = (sr * px0 + c * py0) * attenuation
+    x1 = (c * px1 - sr * py1) * attenuation
+    y1 = (sr * px1 + c * py1) * attenuation
+    x2 = (c * px2 - sr * py2) * attenuation
+    y2 = (sr * px2 + c * py2) * attenuation
+    x3 = (c * px3 - sr * py3) * attenuation
+    y3 = (sr * px3 + c * py3) * attenuation
+    (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(M, vp, x0, y0, W, H)
+    (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp, x1, y1, W, H)
+    (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
+    (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
+    (ok0 && ok1 && ok2 && ok3) || return stamp, stamp_id
+    stamp === nothing &&
+        (stamp = cache === nothing ? zeros(Int, H, W) :
+                 _render_cache_stamp!(cache, H, W))
+    # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
+    _rasterize_sprite_tri!(rt,
+        s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
+        s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
+        s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
+        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+        alpha_test, alpha_map, stamp, stamp_id)
+    # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
+    _rasterize_sprite_tri!(rt,
+        s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
+        s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
+        s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
+        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+        alpha_test, alpha_map, stamp, stamp_id)
+    return stamp, stamp_id
+end
+
+@inline _sprite_subtree_may_draw(obj::AbstractObject3D) =
+    is_visible(obj) && (_object_has_children(obj) || obj isa Sprite)
+
+function _render_sprites_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
+                                       camera::AbstractCamera, view::Mat4, vp::Mat4,
+                                       W::Int, H::Int, clipping_planes,
+                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                       cache::Union{Nothing,RenderCache},
+                                       stamp::Union{Nothing,Matrix{Int}},
+                                       stamp_id::Int)
+    is_visible(obj) || return stamp, stamp_id
+    if obj isa Sprite
+        stamp, stamp_id = _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
+                                               clipping_planes, xlo, xhi, ylo, yhi,
+                                               cache, stamp, stamp_id)
+    end
+    for child in get_children(obj)
+        _sprite_subtree_may_draw(child) || continue
+        stamp, stamp_id = _render_sprites_visible_tree!(rt, child, camera, view, vp,
+                                                        W, H, clipping_planes,
+                                                        xlo, xhi, ylo, yhi,
+                                                        cache, stamp, stamp_id)
+    end
+    return stamp, stamp_id
+end
+
 """
     render_sprites!(rt, scene, camera; clipping_planes=Plane[])
 
@@ -697,62 +832,8 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
-    stamp = nothing
-    stamp_id = 0
-    traverse(scene, function(obj)
-        (obj isa Sprite && _visible_in_tree(obj)) || return
-        stamp_id += 1
-        M = sprite_world_matrix(obj, camera)
-        mat = obj.material
-        tint = _material_field(mat, :color)
-        tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
-        alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
-        tex = _material_field(mat, :map)
-        alpha_test = material_alpha_test(mat)
-        alpha_map = _material_field(mat, :alpha_map)
-        rot = _material_field(mat, :rotation)
-        rot === nothing && (rot = 0.0)
-        depth_test = material_depth_test(mat)
-        depth_write = material_depth_write(mat)
-        size_attenuation = _material_field(mat, :size_attenuation)
-        size_attenuation === nothing && (size_attenuation = true)
-        center_world = Vec3(mat4_get(M, 1, 4), mat4_get(M, 2, 4), mat4_get(M, 3, 4))
-        center_view = mat4_transform_vec4(view, Vec4(center_world.x, center_world.y, center_world.z, 1.0))
-        attenuation = size_attenuation ? 1.0 : max(0.0001, -center_view.z)
-        c = cos(rot); s = sin(rot)
-        function xy(x, y)
-            px = x - obj.center.x
-            py = y - obj.center.y
-            return ((c * px - s * py) * attenuation, (s * px + c * py) * attenuation)
-        end
-        # Quad corners (local sprite plane) and their UVs (v=0 at the bottom).
-        x0, y0 = xy(0.0, 0.0)
-        x1, y1 = xy(1.0, 0.0)
-        x2, y2 = xy(1.0, 1.0)
-        x3, y3 = xy(0.0, 1.0)
-        (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(M, vp, x0, y0, W, H)
-        (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp, x1, y1, W, H)
-        (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
-        (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
-        (ok0 && ok1 && ok2 && ok3) || return
-        stamp === nothing &&
-            (stamp = cache === nothing ? zeros(Int, H, W) :
-                     _render_cache_stamp!(cache, H, W))
-        # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
-        _rasterize_sprite_tri!(rt,
-            s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
-            s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
-            s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
-            tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-            alpha_test, alpha_map, stamp, stamp_id)
-        # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
-        _rasterize_sprite_tri!(rt,
-            s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
-            s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
-            s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
-            tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-            alpha_test, alpha_map, stamp, stamp_id)
-    end)
+    _render_sprites_visible_tree!(rt, scene, camera, view, vp, W, H, clipping_planes,
+                                  xlo, xhi, ylo, yhi, cache, nothing, 0)
     return rt
 end
 
@@ -870,6 +951,28 @@ function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
     return nothing
 end
 
+@inline _point_subtree_may_draw(obj::AbstractObject3D) =
+    is_visible(obj) && (_object_has_children(obj) || obj isa PointsObject ||
+                        (obj isa InstancedMesh && _instanced_point_drawable(obj)))
+
+function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
+                                      camera::AbstractCamera, proj::Mat4, view::Mat4,
+                                      near, W::Int, H::Int,
+                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int)
+    is_visible(obj) || return nothing
+    if obj isa PointsObject
+        _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
+    elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
+        _draw_instanced_points!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
+    end
+    for child in get_children(obj)
+        _point_subtree_may_draw(child) || continue
+        _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
+                                     xlo, xhi, ylo, yhi)
+    end
+    return nothing
+end
+
 """Rasterize `PointsObject` vertices as small point sprites sized by the material."""
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
@@ -879,14 +982,8 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     near = _camera_near(camera)
     W, H = rt.width, rt.height
 
-    traverse(scene, function(obj)
-        _visible_in_tree(obj) || return
-        if obj isa PointsObject
-            _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
-        elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
-            _draw_instanced_points!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
-        end
-    end)
+    _render_points_visible_tree!(rt, scene, camera, proj, view, near, W, H,
+                                 xlo, xhi, ylo, yhi)
     return rt
 end
 

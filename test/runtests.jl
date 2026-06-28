@@ -15077,6 +15077,24 @@ end
             rt_empty_lines = RenderTarget(16, 16)
             render_lines!(rt_empty_lines, empty_line_scene, pers_cam)
             @test_opt_alloc 512 render_lines!(rt_empty_lines, empty_line_scene, pers_cam)
+            mesh_only_scene = Scene()
+            mesh_only_geo = BoxGeometry(width=0.1, height=0.1, depth=0.1)
+            mesh_only_mat = MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0))
+            for i in 1:32
+                m = Mesh(mesh_only_geo, mesh_only_mat)
+                m.position = Vec3(0.01 * i, 0.0, 0.0)
+                add!(mesh_only_scene, m)
+            end
+            primitive_cache = RenderCache()
+            rt_empty_primitives = RenderTarget(16, 16)
+            render_sprites!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
+            render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
+            render_points!(rt_empty_primitives, mesh_only_scene, pers_cam)
+            @test_opt_alloc 1024 render_sprites!(rt_empty_primitives, mesh_only_scene, pers_cam;
+                                                 cache=primitive_cache)
+            @test_opt_alloc 1024 render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam;
+                                               cache=primitive_cache)
+            @test_opt_alloc 1024 render_points!(rt_empty_primitives, mesh_only_scene, pers_cam)
 
             # render_points!: a point inside the near volume is culled, not drawn over everything
             np_geo = BufferGeometry(); np_geo.positions = [0.0, 0.0, 3.95]; np_geo.n_vertices = 1  # view z = -0.05 > -near
