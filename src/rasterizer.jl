@@ -596,7 +596,8 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
                                       ylo::Int=1, yhi::Int=rt.height,
                                       log_depth::Bool=false,
                                       inv_log_far=1.0,
-                                      ortho_dir=nothing)
+                                      ortho_dir=nothing,
+                                      stamp_cache=nothing)
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
@@ -605,7 +606,8 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
         instance_material = _with_vertex_color(mat, instance_colors[instance_index])
         if wireframe
             _render_wireframe_mesh!(rt, geo, instance_material, world, proj, view, near;
-                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    cache=stamp_cache)
         else
             _rasterize_geo_flat!(rt, geo, world, instance_material,
                                  lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
@@ -766,7 +768,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                      colorbuf=colorbuf,
                                      xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                      log_depth=log_depth, inv_log_far=inv_log_far,
-                                     ortho_dir=ortho_dir)
+                                     ortho_dir=ortho_dir, stamp_cache=cache)
     end
 
     # Smooth (per-pixel) opaque meshes share the same depth buffer.
@@ -814,15 +816,16 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     # Camera-facing sprites (billboards), depth-tested against the mesh passes.
     render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
-                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
 
     for mesh in wireframe_meshes
         _render_wireframe_mesh!(rt, mesh.geometry, mesh.material, compute_world_matrix(mesh),
-                                proj, view, near; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+                                proj, view, near; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                cache=cache)
     end
 
     # Line and point primitives (depth-tested against the mesh passes).
-    render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
     render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
 
     return rt

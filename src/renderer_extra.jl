@@ -432,7 +432,8 @@ end
 """Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                        xlo::Int=1, xhi::Int=rt.width,
-                       ylo::Int=1, yhi::Int=rt.height)
+                       ylo::Int=1, yhi::Int=rt.height,
+                       cache::Union{Nothing,RenderCache}=nothing)
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
@@ -457,7 +458,9 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             i2 = _draw_vertex_index(geo, i + 1)
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
-            stamp === nothing && (stamp = zeros(Int, rt.height, rt.width))
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -469,7 +472,9 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             i2 = _draw_vertex_index(geo, first_entry)
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
-            stamp === nothing && (stamp = zeros(Int, rt.height, rt.width))
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -503,13 +508,15 @@ end
 function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
                                  world::Mat4, proj::Mat4, view::Mat4, near;
                                  xlo::Int=1, xhi::Int=rt.width,
-                                 ylo::Int=1, yhi::Int=rt.height)
+                                 ylo::Int=1, yhi::Int=rt.height,
+                                 cache::Union{Nothing,RenderCache}=nothing)
     line_geo = wireframe_geometry(geo)
     col = hasfield(typeof(mat), :color) ? mat.color : Color3(1.0, 1.0, 1.0)
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
-    stamp = zeros(Int, rt.height, rt.width)
+    stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+            _render_cache_stamp!(cache, rt.height, rt.width)
     stamp_id = 0
     i = 1
     while i + 1 <= line_geo.n_vertices
@@ -634,7 +641,8 @@ as other CPU-rasterized materials. Without a map the flat tint colour is used.
 function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                          clipping_planes=_NO_PLANES,
                          xlo::Int=1, xhi::Int=rt.width,
-                         ylo::Int=1, yhi::Int=rt.height)
+                         ylo::Int=1, yhi::Int=rt.height,
+                         cache::Union{Nothing,RenderCache}=nothing)
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
@@ -676,7 +684,9 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
         (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
         (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
         (ok0 && ok1 && ok2 && ok3) || return
-        stamp === nothing && (stamp = zeros(Int, H, W))
+        stamp === nothing &&
+            (stamp = cache === nothing ? zeros(Int, H, W) :
+                     _render_cache_stamp!(cache, H, W))
         # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,

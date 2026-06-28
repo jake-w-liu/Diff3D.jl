@@ -10208,6 +10208,26 @@ end
             @test_throws ArgumentError render_tiled!(r5, scene, cam; tiles=2, cache=RenderCache[])
         end
 
+        line_scene = Scene(background=Color3(0.0,0.0,0.0))
+        line_positions = Float64[]
+        for i in 1:64
+            y = -1.0 + 2.0 * (i - 1) / 63
+            append!(line_positions, (-1.0, y, 0.0, 1.0, y, 0.0))
+        end
+        line_geo = BufferGeometry(line_positions, Float64[], Float64[], Int[], 128, 0)
+        add!(line_scene, LineSegments(line_geo,
+                                      LineBasicMaterial(color=Color3(1.0,1.0,1.0),
+                                                        linewidth=2.0)))
+        line_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+        line_cam.position = Vec3(0.0,0.0,4.0); line_cam.target = Vec3(0.0,0.0,0.0)
+        line_uncached = RenderTarget(256,256)
+        line_cached = RenderTarget(256,256)
+        line_cache = RenderCache()
+        render!(line_uncached, line_scene, line_cam)
+        render!(line_cached, line_scene, line_cam; cache=line_cache)
+        @test maximum(abs.(line_uncached.color .- line_cached.color)) < 1e-12
+        @test_opt_alloc 65536 render!(line_cached, line_scene, line_cam; cache=line_cache)
+
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),
                                    MeshLambertMaterial(color=Color3(1.0,1.0,1.0)), 2)
