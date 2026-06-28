@@ -1807,6 +1807,13 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     </section>
   </main>
   <script>
+  function reportStartupError(err){
+    const el=document.getElementById("stats");
+    const msg=err&&(err.message||err.description)?(err.message||err.description):String(err||"unknown error");
+    if(el) el.textContent="error: "+msg;
+  }
+  window.addEventListener("error",e=>reportStartupError(e.error||e.message));
+  window.addEventListener("unhandledrejection",e=>reportStartupError(e.reason));
   const DATA = $data_json;
   const canvas = document.getElementById("canvas");
   canvas.tabIndex = 0;
@@ -1963,9 +1970,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const usesClearcoatNormal=(DATA.cases||[]).some(c=>(c.objects||[]).some(o=>!!o.clearcoatNormalTexture));
   const clearcoatNormalTexturesEnabled=usesClearcoatNormal&&maxTextureUnits>clearcoatNormalTextureUnit&&maxCombinedTextureUnits>clearcoatNormalTextureUnit;
   const shadowTextureUnits=usesClearcoatNormal&&clearcoatNormalTexturesEnabled?[12]:[12,15];
-  const physicalTexturesEnabled=maxTextureUnits>=12;
   const boneTexturesEnabled=!!floatTextureExt&&vertexTextureUnits>0&&maxCombinedTextureUnits>boneTextureUnit;
   const cubeTexturesEnabled=maxTextureUnits>envCubeTextureUnit&&maxCombinedTextureUnits>envCubeTextureUnit;
+  // Full physical materials declare 17 sampler2D uniforms plus the optional env cube sampler.
+  const fullPhysicalSamplerCount=17+(cubeTexturesEnabled?1:0);
+  const physicalTexturesEnabled=maxTextureUnits>=fullPhysicalSamplerCount&&maxCombinedTextureUnits>=fullPhysicalSamplerCount;
   const meshFragmentShader=physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE;
   const meshFragmentShaderCubeLod=(cubeTexturesEnabled&&textureLodExt)?meshFragmentShader
     .replace("#extension GL_OES_standard_derivatives : enable\\n  precision",
