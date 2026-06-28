@@ -206,6 +206,23 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     return nothing
 end
 
+# Function barrier for `InstancedMesh`'s `Any`-typed geometry/material fields:
+# dispatch once per instanced object, then rasterize each instance in a
+# specialized loop.
+function _rasterize_instanced_geo_flat_pooled!(rt::RenderTarget, geo, mat,
+                                               instance_matrices::Vector{Mat4{Float64}},
+                                               base::Mat4, lights, proj::Mat4,
+                                               view::Mat4, near, cam_pos::Vec3,
+                                               tri, clipped, sx, sy, sz,
+                                               colorbuf::Vector{Color3{Float64}},
+                                               ortho_dir)
+    @inbounds for M in instance_matrices
+        _rasterize_geo_flat_pooled!(rt, geo, base * M, mat, lights, proj, view, near, cam_pos,
+                                    tri, clipped, sx, sy, sz, colorbuf; ortho_dir=ortho_dir)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
@@ -238,12 +255,11 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     for im in cache.instanced
         (_visible_in_tree(im) && !material_wireframe(im.material)) || continue
         base = compute_world_matrix(im)
-        for M in im.instance_matrices
-            _rasterize_geo_flat_pooled!(rt, im.geometry, base * M, im.material,
-                                        cache.lights, proj, view, near, camera.position,
-                                        cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz,
-                                        cache.colors; ortho_dir=ortho_dir)
-        end
+        _rasterize_instanced_geo_flat_pooled!(rt, im.geometry, im.material, im.instance_matrices,
+                                              base, cache.lights, proj, view, near,
+                                              camera.position, cache.tri, cache.clipped,
+                                              cache.sx, cache.sy, cache.sz, cache.colors,
+                                              ortho_dir)
     end
     return rt
 end

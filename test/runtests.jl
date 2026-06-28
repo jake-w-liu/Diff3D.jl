@@ -10148,6 +10148,19 @@ end
         a3 = @allocated render_pooled!(r2, scene, cam, cache)
         @test a3 <= a2                                         # allocation does not grow per frame
 
+        im = only(collect_instanced(scene))
+        base = compute_world_matrix(im)
+        proj = projection_matrix(cam); view = view_matrix(cam); near = Diff3D._camera_near(cam)
+        geo = im.geometry; mat = im.material; mats = im.instance_matrices
+        instanced_call(rt, geo, mat, mats, base, cache, proj, view, near, cam_pos) =
+            Diff3D._rasterize_instanced_geo_flat_pooled!(rt, geo, mat, mats, base,
+                                                         cache.lights, proj, view, near, cam_pos,
+                                                         cache.tri, cache.clipped, cache.sx,
+                                                         cache.sy, cache.sz, cache.colors, nothing)
+        instanced_call(r2, geo, mat, mats, base, cache, proj, view, near, cam.position)
+        @test @allocated(instanced_call(r2, geo, mat, mats, base, cache, proj, view, near,
+                                        cam.position)) <= 256
+
         cache2 = RenderCache(); r3 = RenderTarget(64,64); render!(r3, scene, cam; cache=cache2)
         @test maximum(abs.(r1.color .- r3.color)) < 1e-12
         default_alloc = @allocated render!(r1, scene, cam)
