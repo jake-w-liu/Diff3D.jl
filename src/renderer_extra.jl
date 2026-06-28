@@ -1179,8 +1179,11 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             _visible_in_tree(im) || continue
             _instanced_triangle_drawable(im) || continue
             base = compute_world_matrix(im)
-            for M in im.instance_matrices
-                _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
+            for instance_index in eachindex(im.instance_matrices)
+                instance_material = _with_vertex_color(im.material,
+                                                       im.instance_colors[instance_index])
+                _rasterize_geo_flat!(rt, im.geometry, base * im.instance_matrices[instance_index],
+                                     instance_material,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
                                      ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
             end

@@ -10200,9 +10200,12 @@ end
         add!(colored_scene, AmbientLight(intensity=1.0))
         rt_colored = RenderTarget(64,64)
         rt_colored_pooled = RenderTarget(64,64)
+        rt_colored_tiled = RenderTarget(64,64)
         render!(rt_colored, colored_scene, cam)
         render_pooled!(rt_colored_pooled, colored_scene, cam, RenderCache())
+        render_tiled!(rt_colored_tiled, colored_scene, cam; tiles=2)
         @test maximum(abs.(rt_colored.color .- rt_colored_pooled.color)) < 1e-12
+        @test maximum(abs.(rt_colored.color .- rt_colored_tiled.color)) < 1e-12
         white_mat = MeshLambertMaterial(color=Color3(0.7,0.45,0.30))
         @test Diff3D._with_vertex_color(white_mat, Color3(1.0,1.0,1.0)) === white_mat
     end
