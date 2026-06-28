@@ -17361,4 +17361,18 @@ end
         @test_throws "compute_bounding_sphere n_vertices must be non-negative" compute_bounding_sphere(negative_vertices)
     end
 
+    @testset "fresh audit round 59 fixes" begin
+        short_positions = BufferGeometry([0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+        @test_throws "apply_morph_targets positions length must cover n_vertices" apply_morph_targets(
+            short_positions, Float64[])
+
+        negative_vertices = BufferGeometry(Float64[], Float64[], Float64[], Int[], -1, 0)
+        @test_throws "apply_morph_targets n_vertices must be non-negative" apply_morph_targets(
+            negative_vertices, Float64[])
+        @test_throws "apply_morph_normals n_vertices must be non-negative" apply_morph_normals(
+            negative_vertices, Float64[])
+        @test_throws "apply_morph_tangents n_vertices must be non-negative" apply_morph_tangents(
+            negative_vertices, Float64[])
+    end
+
 end

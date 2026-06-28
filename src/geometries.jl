@@ -54,10 +54,15 @@ function BufferGeometry()
     BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
 end
 
-function _validate_geometry_vertices(geo::BufferGeometry, context::String)
+function _validate_geometry_vertex_count(geo::BufferGeometry, context::String)
     geo.n_vertices >= 0 || throw(ArgumentError("$context n_vertices must be non-negative"))
     geo.n_vertices <= typemax(Int) ÷ 3 ||
         throw(ArgumentError("$context n_vertices is too large"))
+    return nothing
+end
+
+function _validate_geometry_vertices(geo::BufferGeometry, context::String)
+    _validate_geometry_vertex_count(geo, context)
     length(geo.positions) >= 3 * geo.n_vertices ||
         throw(ArgumentError("$context positions length must cover n_vertices"))
     return nothing
@@ -303,6 +308,7 @@ _morph_finite_float(value, label::String) =
     _morph_finite_float(attr.data[idx], "$name attribute data")
 
 function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
+    _validate_geometry_vertices(g, "apply_morph_targets")
     out = [get_vertex(g, vi) for vi in 1:g.n_vertices]
     for (ti, weight) in enumerate(influences)
         w = _morph_influence(weight, ti)
@@ -353,6 +359,7 @@ Apply `morphNormal*` target deltas to `geo.normals` and normalize each resulting
 normal. Returns a flat normal buffer.
 """
 function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Real})
+    _validate_geometry_vertex_count(g, "apply_morph_normals")
     length(g.normals) >= g.n_vertices * 3 || return copy(g.normals)
     out = copy(g.normals)
     for (ti, weight) in enumerate(influences)
@@ -383,6 +390,7 @@ Returns a flat tangent attribute buffer, or an empty vector if no tangent
 attribute exists.
 """
 function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Real})
+    _validate_geometry_vertex_count(g, "apply_morph_tangents")
     has_attribute(g, :tangent) || return Float64[]
     base_attr = get_attribute(g, :tangent)
     base_attr.item_size >= 3 && length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
