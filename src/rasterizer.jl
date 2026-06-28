@@ -697,7 +697,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         sy = cache.sy
         sz = cache.sz
     end
-    colorbuf = cache === nothing ? nothing : cache.colors
+    colorbuf = cache === nothing ? Color3{Float64}[] : cache.colors
 
     # Opaque pass first (writes the depth buffer). Per-mesh shading mode honours
     # the mesh's `flat_shading` override, else the renderer default. Opaque meshes

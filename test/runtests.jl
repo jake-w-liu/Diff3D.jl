@@ -10133,10 +10133,10 @@ end
 
         expected = shade_mesh_faces(geo, wm, mat, lights, campos)
         actual = Vector{Color3{Float64}}(undef, geo.n_faces)
-        shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
+        Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
         @test all(i -> actual[i] == expected[i], eachindex(actual))
 
-        shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
+        Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
         @test_opt_alloc 64 Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
     end
 
@@ -10185,6 +10185,7 @@ end
         cached_instanced_call(r3, im, base, cache2, proj, view, near, cam.position)
         @test_opt_alloc 4096 cached_instanced_call(r3, im, base, cache2, proj, view, near,
                                                    cam.position)
+        @test_opt_alloc 32768 render!(r1, scene, cam)
         default_alloc = @allocated render!(r1, scene, cam)
         cached_alloc1 = @allocated render!(r3, scene, cam; cache=cache2)
         cached_alloc2 = @allocated render!(r3, scene, cam; cache=cache2)
