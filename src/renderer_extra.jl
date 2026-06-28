@@ -1159,15 +1159,23 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     _append_skinned_render_meshes!(meshes, scene)
     lights = collect_lights(scene)
     instanced = collect_instanced(scene)
+    # Reuse scratch buffers per Julia thread. Each worker reuses one cache across
+    # all bands it processes, avoiding per-band allocations for triangles/scratch
+    # buffers and face-color vectors.
+    thread_caches = [RenderCache() for _ in 1:Threads.nthreads()]
     band = cld(H, tiles)
     Threads.@threads for t in 1:tiles
         ylo = (t-1)*band + 1
         yhi = min(t*band, H)
         ylo > yhi && continue
-        tri = Vector{Vec4{Float64}}(undef, 3)
-        clipped = Vector{Vec4{Float64}}(undef, 0); sizehint!(clipped, 6)
-        sx = Vector{Float64}(undef, 8); sy = Vector{Float64}(undef, 8); sz = Vector{Float64}(undef, 8)
-        colorbuf = Vector{Color3{Float64}}(undef, 0)
+        cache = thread_caches[mod1(Threads.threadid() - 1, Threads.nthreads())]
+        tri = cache.tri
+        clipped = cache.clipped
+        empty!(clipped)
+        sx = cache.sx
+        sy = cache.sy
+        sz = cache.sz
+        colorbuf = cache.colors
         for mesh in meshes
             is_visible(mesh) || continue
             is_transparent_material(mesh.material) && continue
