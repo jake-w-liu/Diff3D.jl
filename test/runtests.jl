@@ -10288,6 +10288,34 @@ end
         @test maximum(abs.(line_uncached.color .- line_cached.color)) < 1e-12
         @test_opt_alloc 65536 render!(line_cached, line_scene, line_cam; cache=line_cache)
 
+        inst_line_geo = BufferGeometry([-0.02,0.0,0.0, 0.02,0.0,0.0],
+                                       Float64[], Float64[], Int[], 2, 0)
+        inst_line_mat = LineBasicMaterial(color=Color3(0.9,0.6,0.25), linewidth=2.0)
+        inst_line_scene = Scene(background=Color3(0.0,0.0,0.0))
+        inst_line_expected_scene = Scene(background=Color3(0.0,0.0,0.0))
+        inst_line = InstancedMesh(inst_line_geo, inst_line_mat, 128; draw_mode=:lines)
+        for i in 1:128
+            x = -1.2 + 2.4 * ((i - 1) % 16) / 15
+            y = -0.6 + 1.2 * ((i - 1) ÷ 16) / 7
+            vc = i % 3 == 1 ? Color3(1.0,0.3,0.2) :
+                 i % 3 == 2 ? Color3(0.2,1.0,0.4) : Color3(0.3,0.5,1.0)
+            set_instance_matrix!(inst_line, i, mat4_translation(x, y, 0.0))
+            set_instance_color!(inst_line, i, vc)
+            expected_line = LineSegments(inst_line_geo,
+                                         LineBasicMaterial(color=Diff3D._modulate(inst_line_mat.color, vc),
+                                                           linewidth=inst_line_mat.linewidth))
+            expected_line.position = Vec3(x, y, 0.0)
+            add!(inst_line_expected_scene, expected_line)
+        end
+        add!(inst_line_scene, inst_line)
+        inst_line_expected = RenderTarget(128,128)
+        inst_line_actual = RenderTarget(128,128)
+        inst_line_cache = RenderCache()
+        render!(inst_line_expected, inst_line_expected_scene, line_cam; cache=RenderCache())
+        render!(inst_line_actual, inst_line_scene, line_cam; cache=inst_line_cache)
+        @test maximum(abs.(inst_line_expected.color .- inst_line_actual.color)) < 1e-12
+        @test_opt_alloc 8192 render!(inst_line_actual, inst_line_scene, line_cam; cache=inst_line_cache)
+
         point_geo = BufferGeometry([0.0,0.0,0.0], Float64[], Float64[], Int[], 1, 0)
         point_mat = PointsMaterial(color=Color3(0.8,0.5,0.25), size=3.0)
         point_instanced_scene = Scene(background=Color3(0.0,0.0,0.0))

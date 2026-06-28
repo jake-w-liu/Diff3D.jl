@@ -430,7 +430,93 @@ function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, n
     return nothing
 end
 
+@inline function _line_geometry_has_segment(geo, line_mode::Symbol)
+    entries = _draw_entry_range(geo)
+    !isempty(entries) && last(entries) - first(entries) + 1 >= 2
+end
+
+function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
+                                      line_mode::Symbol, proj::Mat4, view::Mat4, near,
+                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                      stamp::Matrix{Int}, stamp_id::Int,
+                                      morphed_positions, instance_color::Color3)
+    col = _point_material_color(material, instance_color)
+    linewidth = hasfield(typeof(material), :linewidth) ? Float64(getfield(material, :linewidth)) : 1.0
+    alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    depth_test = material_depth_test(material)
+    depth_write = material_depth_write(material)
+    stride = line_mode === :lines ? 2 : 1
+    entries = _draw_entry_range(geo)
+    isempty(entries) && return stamp_id
+    first_entry = first(entries)
+    last_entry = last(entries)
+    i = first_entry
+    while i + 1 <= last_entry
+        i1 = _draw_vertex_index(geo, i)
+        i2 = _draw_vertex_index(geo, i + 1)
+        a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
+        b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
+        stamp_id += 1
+        _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                    xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+                                    stamp, stamp_id)
+        i += stride
+    end
+    if line_mode === :line_loop && last_entry - first_entry + 1 > 2
+        i1 = _draw_vertex_index(geo, last_entry)
+        i2 = _draw_vertex_index(geo, first_entry)
+        a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
+        b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
+        stamp_id += 1
+        _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
+                                    xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+                                    stamp, stamp_id)
+    end
+    return stamp_id
+end
+
 """Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
+function _draw_line_object!(rt::RenderTarget, obj, proj::Mat4, view::Mat4, near,
+                            xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                            stamp::Matrix{Int}, stamp_id::Int)
+    line_mode = obj isa LineSegments ? :lines :
+                obj isa LineLoop ? :line_loop : :line_strip
+    geo = obj.geometry
+    return _draw_line_geometry_stamped!(rt, geo, obj.material, compute_world_matrix(obj),
+                                        line_mode, proj, view, near, xlo, xhi, ylo, yhi,
+                                        stamp, stamp_id, _object_morph_positions(obj, geo),
+                                        Color3(1.0,1.0,1.0))
+end
+
+function _draw_instanced_lines_geometry!(rt::RenderTarget, geo, material,
+                                         instance_matrices::Vector{Mat4{Float64}},
+                                         instance_colors::Vector{Color3{Float64}},
+                                         base::Mat4, line_mode::Symbol,
+                                         proj::Mat4, view::Mat4, near,
+                                         xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                         stamp::Matrix{Int}, stamp_id::Int)
+    @inbounds for instance_index in eachindex(instance_matrices)
+        stamp_id = _draw_line_geometry_stamped!(rt, geo, material,
+                                                base * instance_matrices[instance_index],
+                                                line_mode, proj, view, near,
+                                                xlo, xhi, ylo, yhi, stamp,
+                                                stamp_id, nothing,
+                                                instance_colors[instance_index])
+    end
+    return stamp_id
+end
+
+function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
+                                proj::Mat4, view::Mat4, near,
+                                xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                stamp::Matrix{Int}, stamp_id::Int)
+    _draw_instanced_lines_geometry!(rt, obj.geometry, obj.material,
+                                    obj.instance_matrices, obj.instance_colors,
+                                    compute_world_matrix(obj), obj.draw_mode,
+                                    proj, view, near, xlo, xhi, ylo, yhi,
+                                    stamp, stamp_id)
+end
+
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height,
@@ -441,66 +527,24 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     stamp = nothing
     stamp_id = 0
 
-    function draw_line_geometry!(geo, material, wm::Mat4, line_mode::Symbol,
-                                 morphed_positions=nothing)
-        col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
-        linewidth = hasfield(typeof(material), :linewidth) ? material.linewidth : 1.0
-        alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
-        depth_test = material_depth_test(material)
-        depth_write = material_depth_write(material)
-        stride = line_mode === :lines ? 2 : 1
-        entries = _draw_entry_range(geo)
-        isempty(entries) && return nothing
-        first_entry = first(entries)
-        last_entry = last(entries)
-        i = first_entry
-        while i + 1 <= last_entry
-            i1 = _draw_vertex_index(geo, i)
-            i2 = _draw_vertex_index(geo, i + 1)
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
-            stamp === nothing &&
-                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-                         _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id += 1
-            _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
-                                        xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                        stamp, stamp_id)
-            i += stride
-        end
-        if line_mode === :line_loop && last_entry - first_entry + 1 > 2
-            i1 = _draw_vertex_index(geo, last_entry)
-            i2 = _draw_vertex_index(geo, first_entry)
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
-            stamp === nothing &&
-                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-                         _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id += 1
-            _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
-                                        xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                        stamp, stamp_id)
-        end
-        return nothing
-    end
-
     traverse(scene, function(obj)
         _visible_in_tree(obj) || return
         if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
             line_mode = obj isa LineSegments ? :lines :
                         obj isa LineLoop ? :line_loop : :line_strip
-            geo = obj.geometry
-            morphed_positions = _object_morph_positions(obj, geo)
-            draw_line_geometry!(geo, obj.material, compute_world_matrix(obj), line_mode,
-                                morphed_positions)
+            _line_geometry_has_segment(obj.geometry, line_mode) || return
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
+            stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+                                          xlo, xhi, ylo, yhi, stamp, stamp_id)
         elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
-            base = compute_world_matrix(obj)
-            for (instance_index, M) in enumerate(obj.instance_matrices)
-                draw_line_geometry!(obj.geometry,
-                                    _with_vertex_color(obj.material,
-                                                       obj.instance_colors[instance_index]),
-                                    base * M, obj.draw_mode)
-            end
+            _line_geometry_has_segment(obj.geometry, obj.draw_mode) || return
+            stamp === nothing &&
+                (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
+                         _render_cache_stamp!(cache, rt.height, rt.width))
+            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
+                                              xlo, xhi, ylo, yhi, stamp, stamp_id)
         end
     end)
     return rt
