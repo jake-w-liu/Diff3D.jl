@@ -10164,13 +10164,13 @@ end
         base = compute_world_matrix(im)
         proj = projection_matrix(cam); view = view_matrix(cam); near = Diff3D._camera_near(cam)
         geo = im.geometry; mat = im.material; mats = im.instance_matrices
-        instanced_call(rt, geo, mat, mats, base, cache, proj, view, near, cam_pos) =
-            Diff3D._rasterize_instanced_geo_flat_pooled!(rt, geo, mat, mats, base,
+        instanced_call(rt, geo, mat, colors, mats, base, cache, proj, view, near, cam_pos) =
+            Diff3D._rasterize_instanced_geo_flat_pooled!(rt, geo, mat, colors, mats, base,
                                                          cache.lights, proj, view, near, cam_pos,
                                                          cache.tri, cache.clipped, cache.sx,
                                                          cache.sy, cache.sz, cache.colors, nothing)
-        instanced_call(r2, geo, mat, mats, base, cache, proj, view, near, cam.position)
-        @test_opt_alloc 256 instanced_call(r2, geo, mat, mats, base, cache, proj, view, near,
+        instanced_call(r2, geo, mat, im.instance_colors, mats, base, cache, proj, view, near, cam.position)
+        @test_opt_alloc 256 instanced_call(r2, geo, mat, im.instance_colors, mats, base, cache, proj, view, near,
                                            cam.position)
 
         cache2 = RenderCache(); r3 = RenderTarget(64,64); render!(r3, scene, cam; cache=cache2)
@@ -10188,6 +10188,23 @@ end
         cached_alloc2 = @allocated render!(r3, scene, cam; cache=cache2)
         @test cached_alloc2 <= cached_alloc1
         @test cached_alloc2 < default_alloc
+
+        colored_scene = Scene(background=Color3(0.0,0.0,0.0))
+        colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),
+                                   MeshLambertMaterial(color=Color3(1.0,1.0,1.0)), 2)
+        set_instance_matrix!(colored_im, 1, mat4_translation(-1.2, 0.0, 0.0))
+        set_instance_matrix!(colored_im, 2, mat4_translation( 1.2, 0.0, 0.0))
+        set_instance_color!(colored_im, 1, Color3(1.0, 0.0, 0.0))
+        set_instance_color!(colored_im, 2, Color3(0.0, 0.0, 1.0))
+        add!(colored_scene, colored_im)
+        add!(colored_scene, AmbientLight(intensity=1.0))
+        rt_colored = RenderTarget(64,64)
+        rt_colored_pooled = RenderTarget(64,64)
+        render!(rt_colored, colored_scene, cam)
+        render_pooled!(rt_colored_pooled, colored_scene, cam, RenderCache())
+        @test maximum(abs.(rt_colored.color .- rt_colored_pooled.color)) < 1e-12
+        white_mat = MeshLambertMaterial(color=Color3(0.7,0.45,0.30))
+        @test Diff3D._with_vertex_color(white_mat, Color3(1.0,1.0,1.0)) === white_mat
     end
 
     @testset "Flat rasterizer scratch — bounded allocation" begin

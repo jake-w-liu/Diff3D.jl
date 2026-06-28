@@ -235,25 +235,30 @@ end
 @inline _wants_vertex_colors(m) = hasfield(typeof(m), :vertex_colors) && getfield(m, :vertex_colors)
 
 @inline _modulate(c::Color3, v::Color3) = Color3(c.r * v.r, c.g * v.g, c.b * v.b)
+@inline _is_identity_vertex_color(vc::Color3) = vc.r == 1.0 && vc.g == 1.0 && vc.b == 1.0
 @inline _with_vertex_color(m::AbstractMaterial, vc::Color3) = m
 function _with_vertex_color(m::LineBasicMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     LineBasicMaterial(color=_modulate(m.color, vc), linewidth=m.linewidth,
                       opacity=m.opacity, depth_test=m.depth_test,
                       depth_write=m.depth_write)
 end
 function _with_vertex_color(m::LineDashedMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     LineDashedMaterial(color=_modulate(m.color, vc), linewidth=m.linewidth,
                        scale=m.scale, dash_size=m.dash_size,
                        gap_size=m.gap_size, opacity=m.opacity,
                        depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _with_vertex_color(m::PointsMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     PointsMaterial(color=_modulate(m.color, vc), size=m.size, opacity=m.opacity,
                    transparent=m.transparent, map=m.map, alpha_map=m.alpha_map,
                    alpha_test=m.alpha_test, size_attenuation=m.size_attenuation,
                    depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     MeshBasicMaterial(color=_modulate(m.color, vc), opacity=m.opacity,
                       transparent=m.transparent, wireframe=m.wireframe,
                       side=m.side, map=m.map, alpha_map=m.alpha_map,
@@ -266,6 +271,7 @@ function _with_vertex_color(m::MeshBasicMaterial, vc::Color3)
                       clipping_planes=m.clipping_planes)
 end
 function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     MeshLambertMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
                         opacity=m.opacity, transparent=m.transparent,
                         wireframe=m.wireframe, side=m.side,
@@ -282,6 +288,7 @@ function _with_vertex_color(m::MeshLambertMaterial, vc::Color3)
                         clipping_planes=m.clipping_planes)
 end
 function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     MeshPhongMaterial(color=_modulate(m.color, vc), specular=m.specular,
                       emissive=m.emissive, shininess=m.shininess,
                       glossiness=m.glossiness,
@@ -300,6 +307,7 @@ function _with_vertex_color(m::MeshPhongMaterial, vc::Color3)
                       depth_test=m.depth_test, depth_write=m.depth_write)
 end
 function _with_vertex_color(m::MeshStandardMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     MeshStandardMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
                          metalness=m.metalness, roughness=m.roughness,
                          opacity=m.opacity, transparent=m.transparent, side=m.side,
@@ -357,6 +365,7 @@ function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u
     return _phong_with_maps(m, specular, glossiness)
 end
 function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
+    _is_identity_vertex_color(vc) && return m
     MeshPhysicalMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
                          metalness=m.metalness, roughness=m.roughness,
                          clearcoat=m.clearcoat, clearcoat_roughness=m.clearcoat_roughness,
