@@ -423,7 +423,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
-    stamp = zeros(Int, rt.height, rt.width)
+    stamp = nothing
     stamp_id = 0
 
     function draw_line_geometry!(geo, material, wm::Mat4, line_mode::Symbol,
@@ -444,6 +444,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             i2 = _draw_vertex_index(geo, i + 1)
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
+            stamp === nothing && (stamp = zeros(Int, rt.height, rt.width))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -455,6 +456,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
             i2 = _draw_vertex_index(geo, first_entry)
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
+            stamp === nothing && (stamp = zeros(Int, rt.height, rt.width))
             stamp_id += 1
             _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                         xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
@@ -623,7 +625,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
-    stamp = zeros(Int, H, W)
+    stamp = nothing
     stamp_id = 0
     traverse(scene, function(obj)
         (obj isa Sprite && _visible_in_tree(obj)) || return
@@ -661,6 +663,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
         (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
         (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
         (ok0 && ok1 && ok2 && ok3) || return
+        stamp === nothing && (stamp = zeros(Int, H, W))
         # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
         _rasterize_sprite_tri!(rt,
             s0x, s0y, z0, iw0, 0.0, 0.0, wp0,

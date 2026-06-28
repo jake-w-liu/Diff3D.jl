@@ -25,6 +25,18 @@ if get(ENV, "DIFF3D_TEST_LOWOPT", "") != "1" && Base.JLOptions().opt_level > 0
     _diff3d_respawn_lowopt_tests()
 end
 
+# The package-test suite respawns under `-O0 --compile=min` to keep compile time
+# bounded in CI. Allocation budgets are only meaningful in optimized code, so
+# enforce them only when Julia is running with optimizer passes enabled.
+const DIFF3D_ALLOC_ASSERTIONS_ENABLED = Base.JLOptions().opt_level > 0
+
+macro test_opt_alloc(limit, expr)
+    quote
+        @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
+              (@allocated($(esc(expr))) <= $(esc(limit)))
+    end
+end
+
 using Test
 using Base64
 using Diff3D
@@ -2165,7 +2177,7 @@ end
         @test mat4_transform_point(M, p) == mat4_transform_point(T, mat4_transform_point(S, p))
 
         T * S
-        @test @allocated(T * S) <= 64
+        @test_opt_alloc 64 T * S
     end
 
     @testset "Mat4 perspective projection" begin
@@ -10125,7 +10137,7 @@ end
         @test all(i -> actual[i] == expected[i], eachindex(actual))
 
         shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
-        @test @allocated(shade_mesh_faces!(actual, geo, wm, mat, lights, campos)) <= 64
+        @test_opt_alloc 64 Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
     end
 
     @testset "In-renderer MSAA" begin
@@ -10158,8 +10170,8 @@ end
                                                          cache.tri, cache.clipped, cache.sx,
                                                          cache.sy, cache.sz, cache.colors, nothing)
         instanced_call(r2, geo, mat, mats, base, cache, proj, view, near, cam.position)
-        @test @allocated(instanced_call(r2, geo, mat, mats, base, cache, proj, view, near,
-                                        cam.position)) <= 256
+        @test_opt_alloc 256 instanced_call(r2, geo, mat, mats, base, cache, proj, view, near,
+                                           cam.position)
 
         cache2 = RenderCache(); r3 = RenderTarget(64,64); render!(r3, scene, cam; cache=cache2)
         @test maximum(abs.(r1.color .- r3.color)) < 1e-12
@@ -10187,7 +10199,7 @@ end
                                                     tri, clipped, sx, sy, sz;
                                                     colorbuf=cache.colors)
         raster_call()
-        @test @allocated(raster_call()) <= 128
+        @test_opt_alloc 128 raster_call()
     end
 
     @testset "Reverse-mode AD — matches ForwardDiff" begin
@@ -10378,7 +10390,7 @@ end
             expect = mat.emissive + amb_fill + dir
             @test isapprox(c.r, expect.r; atol=1e-12) && isapprox(c.g, expect.g; atol=1e-12) && isapprox(c.b, expect.b; atol=1e-12)
             Diff3D.shade_face(n, vd, p, mat, lights)
-            @test @allocated(Diff3D.shade_face(n, vd, p, mat, lights)) <= 64
+            @test_opt_alloc 64 Diff3D.shade_face(n, vd, p, mat, lights)
         end
 
         # [D:renderer+textures+controls] #16 render_tiled! never draws InstancedMesh objects -> blank frame for instanced scenes
@@ -11876,10 +11888,12 @@ end
             @test rt.color[24, 24, 2] < 1e-6
             @test sum(rt.color[:, :, 1]) > 0.0
             # Standalone sprite pass on an empty scene leaves the background untouched.
+            empty_scene = Scene()
             rt2 = RenderTarget(16, 16)
             clear!(rt2, Color3(0.0, 0.0, 0.0))
-            render_sprites!(rt2, Scene(), cam)
+            render_sprites!(rt2, empty_scene, cam)
             @test sum(rt2.color) == 0.0
+            @test_opt_alloc 256 render_sprites!(rt2, empty_scene, cam)
         end
 
         # [RAS:rasterizer+renderer] Frustum culling in render!
@@ -14842,6 +14856,10 @@ end
             add!(straddle_scene, LineObject(straddle_geo, LineBasicMaterial(color=Color3(1.0, 0, 0))))
             rt_straddle = RenderTarget(40, 40); render!(rt_straddle, straddle_scene, pers_cam)
             @test count(>(0.5), rt_straddle.color[:, :, 1]) > 5             # visible part still drawn
+            empty_line_scene = Scene()
+            rt_empty_lines = RenderTarget(16, 16)
+            render_lines!(rt_empty_lines, empty_line_scene, pers_cam)
+            @test_opt_alloc 512 render_lines!(rt_empty_lines, empty_line_scene, pers_cam)
 
             # render_points!: a point inside the near volume is culled, not drawn over everything
             np_geo = BufferGeometry(); np_geo.positions = [0.0, 0.0, 3.95]; np_geo.n_vertices = 1  # view z = -0.05 > -near
