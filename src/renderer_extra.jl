@@ -111,6 +111,7 @@ mutable struct RenderCache
     sz::Vector{Float64}
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
+    wire_edges::Set{Tuple{Int,Int}}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
@@ -118,7 +119,7 @@ function RenderCache()
                 Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
-                Color3{Float64}[], zeros(Int, 0, 0))
+                Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}())
 end
 
 function _render_cache_stamp!(cache::RenderCache, H::Int, W::Int)
@@ -510,23 +511,29 @@ function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::Abs
                                  xlo::Int=1, xhi::Int=rt.width,
                                  ylo::Int=1, yhi::Int=rt.height,
                                  cache::Union{Nothing,RenderCache}=nothing)
-    line_geo = wireframe_geometry(geo)
+    _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     col = hasfield(typeof(mat), :color) ? mat.color : Color3(1.0, 1.0, 1.0)
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
             _render_cache_stamp!(cache, rt.height, rt.width)
+    seen = cache === nothing ? Set{Tuple{Int,Int}}() : cache.wire_edges
+    empty!(seen)
     stamp_id = 0
-    i = 1
-    while i + 1 <= line_geo.n_vertices
-        a = mat4_transform_point(world, get_vertex(line_geo, i))
-        b = mat4_transform_point(world, get_vertex(line_geo, i + 1))
-        stamp_id += 1
-        _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, 1.0,
-                                    xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                    stamp, stamp_id)
-        i += 2
+    for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        for (ia, ib) in ((i1, i2), (i2, i3), (i3, i1))
+            key = ia < ib ? (ia, ib) : (ib, ia)
+            key in seen && continue
+            push!(seen, key)
+            a = mat4_transform_point(world, get_vertex(geo, ia))
+            b = mat4_transform_point(world, get_vertex(geo, ib))
+            stamp_id += 1
+            _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, 1.0,
+                                        xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
+                                        stamp, stamp_id)
+        end
     end
     return nothing
 end

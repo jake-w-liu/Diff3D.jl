@@ -10228,6 +10228,23 @@ end
         @test maximum(abs.(line_uncached.color .- line_cached.color)) < 1e-12
         @test_opt_alloc 65536 render!(line_cached, line_scene, line_cam; cache=line_cache)
 
+        wire_geo = SphereGeometry(radius=1.0, width_segments=16, height_segments=8)
+        wire_scene = Scene(background=Color3(0.0,0.0,0.0))
+        wire_expected_scene = Scene(background=Color3(0.0,0.0,0.0))
+        wire_color = Color3(0.4,0.8,1.0)
+        add!(wire_scene, Mesh(wire_geo,
+                              MeshBasicMaterial(color=wire_color, wireframe=true)))
+        add!(wire_expected_scene,
+             LineSegments(wireframe_geometry(wire_geo),
+                          LineBasicMaterial(color=wire_color)))
+        wire_rt = RenderTarget(128,128)
+        wire_expected = RenderTarget(128,128)
+        wire_cache = RenderCache()
+        render!(wire_rt, wire_scene, line_cam; cache=wire_cache)
+        render!(wire_expected, wire_expected_scene, line_cam; cache=RenderCache())
+        @test maximum(abs.(wire_rt.color .- wire_expected.color)) < 1e-12
+        @test_opt_alloc 16384 render!(wire_rt, wire_scene, line_cam; cache=wire_cache)
+
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),
                                    MeshLambertMaterial(color=Color3(1.0,1.0,1.0)), 2)
