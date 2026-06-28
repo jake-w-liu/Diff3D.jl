@@ -99,17 +99,14 @@ function soft_render(vertices::Vector{Vec3{Tv}},
 
     # Project all vertices to screen space
     screen_verts = Vector{Vec3{T}}(undef, length(verts))
-    ndc_verts = Vector{Vec3{T}}(undef, length(verts))
     for (vi, v) in enumerate(verts)
         clip = mat4_transform_vec4(vp, Vec4(v.x, v.y, v.z, one(T)))
         if clip.w > eps
             ndc = Vec3(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w)
-            ndc_verts[vi] = ndc
             sx = (ndc.x + 1) * T(0.5) * W
             sy = (1 - ndc.y) * T(0.5) * H
             screen_verts[vi] = Vec3(sx, sy, ndc.z)
         else
-            ndc_verts[vi] = Vec3(zero(T), zero(T), T(1000))
             screen_verts[vi] = Vec3(-T(1000), -T(1000), T(1000))
         end
     end

@@ -2489,6 +2489,22 @@ end
         # Center pixel should have some color (not just black background)
         center_brightness = img[8, 8, 1] + img[8, 8, 2] + img[8, 8, 3]
         @test center_brightness > 0.01
+
+        soft_verts = Vec3{Float64}[]
+        soft_faces = NTuple{3,Int}[]
+        soft_colors = Color3{Float64}[]
+        for iy in 0:15, ix in 0:15
+            x = -0.9 + 1.8 * ix / 16
+            y = -0.9 + 1.8 * iy / 16
+            s = 0.8 / 16
+            base = length(soft_verts)
+            push!(soft_verts, Vec3(x, y, 0.0), Vec3(x + s, y, 0.0), Vec3(x, y + s, 0.0))
+            push!(soft_faces, (base + 1, base + 2, base + 3))
+            push!(soft_colors, Color3(1.0, 0.4, 0.2))
+        end
+        soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(), 16, 16, config)
+        @test_opt_alloc 85000 soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(),
+                                          16, 16, config)
     end
 
     @testset "Loss functions" begin
