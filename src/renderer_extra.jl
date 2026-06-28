@@ -148,10 +148,14 @@ end
 function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, world_mat::Mat4, mat,
                                      lights, proj::Mat4, view::Mat4, near, cam_pos::Vec3,
                                      tri, clipped, sx, sy, sz, colorbuf::Vector{Color3{Float64}};
+                                     xlo::Int=1, xhi::Int=rt.width,
+                                     ylo::Int=1, yhi::Int=rt.height,
                                      ortho_dir=nothing)
     if _render_pooled_uses_fragment_alpha(geo, mat)
         return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
-                                    tri, clipped, sx, sy, sz; colorbuf=colorbuf, ortho_dir=ortho_dir)
+                                    tri, clipped, sx, sy, sz; colorbuf=colorbuf,
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
     end
 
     side = material_side(mat)
@@ -194,11 +198,13 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             if depth_test && depth_write
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
-                                sx[k+1], sy[k+1], sz[k+1], fc)
+                                sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
+                                xlo=xlo, xhi=xhi)
             else
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
-                                sx[k+1], sy[k+1], sz[k+1], fc;
+                                sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
+                                xlo=xlo, xhi=xhi,
                                 depth_test=depth_test, depth_write=depth_write)
             end
         end
@@ -216,12 +222,16 @@ function _rasterize_instanced_geo_flat_pooled!(rt::RenderTarget, geo, mat,
                                                view::Mat4, near, cam_pos::Vec3,
                                                tri, clipped, sx, sy, sz,
                                                colorbuf::Vector{Color3{Float64}},
-                                               ortho_dir)
+                                               ortho_dir;
+                                               xlo::Int=1, xhi::Int=rt.width,
+                                               ylo::Int=1, yhi::Int=rt.height)
     @inbounds for instance_index in eachindex(instance_matrices)
         instance_material = _with_vertex_color(mat, instance_colors[instance_index])
         _rasterize_geo_flat_pooled!(rt, geo, base * instance_matrices[instance_index],
                                     instance_material, lights, proj, view, near, cam_pos,
-                                    tri, clipped, sx, sy, sz, colorbuf; ortho_dir=ortho_dir)
+                                    tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
     end
     return nothing
 end
@@ -1196,23 +1206,20 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         for mesh in meshes
             is_visible(mesh) || continue
             is_transparent_material(mesh.material) && continue
-            _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
-                                 lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 ylo=ylo, yhi=yhi, colorbuf=colorbuf, ortho_dir=ortho_dir)
+            _rasterize_geo_flat_pooled!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+                                        lights, proj, view, near, camera.position,
+                                        tri, clipped, sx, sy, sz, colorbuf;
+                                        ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
         end
         for im in instanced
             # collect_instanced traverses without pruning invisible subtrees.
             _visible_in_tree(im) || continue
             _instanced_triangle_drawable(im) || continue
             base = compute_world_matrix(im)
-            for instance_index in eachindex(im.instance_matrices)
-                instance_material = _with_vertex_color(im.material,
-                                                       im.instance_colors[instance_index])
-                _rasterize_geo_flat!(rt, im.geometry, base * im.instance_matrices[instance_index],
-                                     instance_material,
-                                     lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                     ylo=ylo, yhi=yhi, colorbuf=colorbuf, ortho_dir=ortho_dir)
-            end
+            _rasterize_instanced_geo_flat_pooled!(rt, im.geometry, im.material, im.instance_colors,
+                                                  im.instance_matrices, base, lights, proj, view, near,
+                                                  camera.position, tri, clipped, sx, sy, sz,
+                                                  colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
         end
     end
     return rt
