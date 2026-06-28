@@ -27,24 +27,28 @@ function inverse_render_optimize(initial_params::Vector{Float64},
                                  lr=0.01,
                                  n_iters=100,
                                  verbose=true)
+    n_iters >= 0 || throw(ArgumentError("n_iters must be non-negative"))
     params = copy(initial_params)
-    n = length(params)
-    loss_history = Float64[]
+    loss_history = Vector{Float64}(undef, n_iters)
+
+    function objective(p)
+        img = render_fn(p)
+        loss_fn(img, target_image)
+    end
+
+    grad = similar(params)
+    grad_cfg = ForwardDiff.GradientConfig(objective, params)
 
     for iter in 1:n_iters
-        # Compute loss and gradient
-        function objective(p)
-            img = render_fn(p)
-            loss_fn(img, target_image)
-        end
-
         current_loss = objective(params)
-        push!(loss_history, current_loss)
+        loss_history[iter] = current_loss
 
-        grad = ForwardDiff.gradient(objective, params)
+        ForwardDiff.gradient!(grad, objective, params, grad_cfg)
 
         # Gradient descent step
-        params .-= lr .* grad
+        @inbounds for i in eachindex(params, grad)
+            params[i] -= lr * grad[i]
+        end
 
         if verbose && (iter % 10 == 0 || iter == 1)
             @info "Iter $iter/$n_iters: loss = $(round(current_loss, sigdigits=6))"
@@ -67,29 +71,41 @@ function inverse_render_adam(initial_params::Vector{Float64},
                             ε=1e-8,
                             n_iters=100,
                             verbose=true)
+    n_iters >= 0 || throw(ArgumentError("n_iters must be non-negative"))
     params = copy(initial_params)
     n = length(params)
     m = zeros(n)  # first moment
     v = zeros(n)  # second moment
-    loss_history = Float64[]
+    grad = similar(params)
+    loss_history = Vector{Float64}(undef, n_iters)
+
+    function objective(p)
+        img = render_fn(p)
+        loss_fn(img, target_image)
+    end
+
+    grad_cfg = ForwardDiff.GradientConfig(objective, params)
+    one_minus_β1 = 1 - β1
+    one_minus_β2 = 1 - β2
 
     for iter in 1:n_iters
-        function objective(p)
-            img = render_fn(p)
-            loss_fn(img, target_image)
-        end
-
         current_loss = objective(params)
-        push!(loss_history, current_loss)
+        loss_history[iter] = current_loss
 
-        grad = ForwardDiff.gradient(objective, params)
+        ForwardDiff.gradient!(grad, objective, params, grad_cfg)
 
         # Adam update
-        m .= β1 .* m .+ (1 - β1) .* grad
-        v .= β2 .* v .+ (1 - β2) .* grad .^ 2
-        m_hat = m ./ (1 - β1^iter)
-        v_hat = v ./ (1 - β2^iter)
-        params .-= lr .* m_hat ./ (sqrt.(v_hat) .+ ε)
+        inv_m_correction = 1 / (1 - β1^iter)
+        inv_v_correction = 1 / (1 - β2^iter)
+        @inbounds for i in eachindex(params, grad, m, v)
+            gi = grad[i]
+            mi = β1 * m[i] + one_minus_β1 * gi
+            vi = β2 * v[i] + one_minus_β2 * gi * gi
+            m[i] = mi
+            v[i] = vi
+            params[i] -= lr * (mi * inv_m_correction) /
+                         (sqrt(vi * inv_v_correction) + ε)
+        end
 
         if verbose && (iter % 10 == 0 || iter == 1)
             @info "Adam iter $iter/$n_iters: loss = $(round(current_loss, sigdigits=6))"
@@ -106,11 +122,16 @@ Uses second-order accurate central differences (O(δ²) error) so that this
 serves as a trustworthy oracle for the automatic-differentiation gradients.
 """
 function numerical_gradient(f, params::Vector{Float64}; δ=1e-5)
+    δ isa Bool && throw(ArgumentError("numerical_gradient δ must be finite and non-zero"))
+    (isfinite(δ) && δ != 0) ||
+        throw(ArgumentError("numerical_gradient δ must be finite and non-zero"))
     n = length(params)
-    grad = zeros(n)
+    grad = Vector{Float64}(undef, n)
+    p_plus = copy(params)
+    p_minus = copy(params)
     for i in 1:n
-        p_plus = copy(params)
-        p_minus = copy(params)
+        copyto!(p_plus, params)
+        copyto!(p_minus, params)
         p_plus[i] += δ
         p_minus[i] -= δ
         grad[i] = (f(p_plus) - f(p_minus)) / (2 * δ)

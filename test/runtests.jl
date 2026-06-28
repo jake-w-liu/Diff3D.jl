@@ -2543,6 +2543,46 @@ end
         @test g[1] ≈ 2.0 atol=1e-4
         @test g[2] ≈ 4.0 atol=1e-4
         @test g[3] ≈ 6.0 atol=1e-4
+
+        p = [1.0, 2.0, 3.0]
+        f_mutating(x) = (s = sum(abs2, x); fill!(x, 0.0); s)
+        @test numerical_gradient(f_mutating, p) ≈ [2.0, 4.0, 6.0] atol=1e-4
+        @test p == [1.0, 2.0, 3.0]
+        @test_throws ArgumentError numerical_gradient(f, p; δ=0.0)
+        wide = collect(range(0.1, 1.0; length=64))
+        @test_opt_alloc 8192 numerical_gradient(x -> sum(abs2, x), wide)
+    end
+
+    @testset "Inverse optimizers — descent and bounded workspace" begin
+        function linear_image(p)
+            img = Array{eltype(p),3}(undef, 1, 1, 2)
+            img[1, 1, 1] = p[1]
+            img[1, 1, 2] = p[2]
+            img
+        end
+        target = Array{Float64,3}(undef, 1, 1, 2)
+        target[1, 1, 1] = 1.0
+        target[1, 1, 2] = -1.0
+        p0 = [0.0, 0.0]
+        loss0 = loss_mse(linear_image(p0), target)
+
+        gd, gd_hist = inverse_render_optimize(p0, target, linear_image, loss_mse;
+                                              lr=0.2, n_iters=8, verbose=false)
+        @test length(gd_hist) == 8
+        @test loss_mse(linear_image(gd), target) < loss0
+
+        adam, adam_hist = inverse_render_adam(p0, target, linear_image, loss_mse;
+                                              lr=0.1, n_iters=8, verbose=false)
+        @test length(adam_hist) == 8
+        @test loss_mse(linear_image(adam), target) < loss0
+        @test_throws ArgumentError inverse_render_optimize(p0, target, linear_image, loss_mse;
+                                                           n_iters=-1, verbose=false)
+        @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
+                                                       n_iters=-1, verbose=false)
+        @test_opt_alloc 8192 inverse_render_optimize(p0, target, linear_image, loss_mse;
+                                                     lr=0.2, n_iters=10, verbose=false)
+        @test_opt_alloc 8192 inverse_render_adam(p0, target, linear_image, loss_mse;
+                                                 lr=0.1, n_iters=10, verbose=false)
     end
 
     @testset "I/O — PPM export" begin
