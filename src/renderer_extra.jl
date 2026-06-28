@@ -1167,12 +1167,13 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         tri = Vector{Vec4{Float64}}(undef, 3)
         clipped = Vector{Vec4{Float64}}(undef, 0); sizehint!(clipped, 6)
         sx = Vector{Float64}(undef, 8); sy = Vector{Float64}(undef, 8); sz = Vector{Float64}(undef, 8)
+        colorbuf = Vector{Color3{Float64}}(undef, 0)
         for mesh in meshes
             is_visible(mesh) || continue
             is_transparent_material(mesh.material) && continue
             _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
                                  lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                 ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
+                                 ylo=ylo, yhi=yhi, colorbuf=colorbuf, ortho_dir=ortho_dir)
         end
         for im in instanced
             # collect_instanced traverses without pruning invisible subtrees.
@@ -1185,7 +1186,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 _rasterize_geo_flat!(rt, im.geometry, base * im.instance_matrices[instance_index],
                                      instance_material,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                     ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
+                                     ylo=ylo, yhi=yhi, colorbuf=colorbuf, ortho_dir=ortho_dir)
             end
         end
     end

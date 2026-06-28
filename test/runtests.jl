@@ -10175,6 +10175,8 @@ end
 
         cache2 = RenderCache(); r3 = RenderTarget(64,64); render!(r3, scene, cam; cache=cache2)
         @test maximum(abs.(r1.color .- r3.color)) < 1e-12
+        r4 = RenderTarget(64,64); render_tiled!(r4, scene, cam; tiles=2)
+        @test maximum(abs.(r1.color .- r4.color)) < 1e-12
         cached_instanced_call(rt, im, base, cache, proj, view, near, cam_pos) =
             Diff3D._render_instanced_mesh_flat!(rt, im.geometry, im.material, im.instance_colors,
                                                 im.instance_matrices, base, cache.lights, proj,
@@ -10186,6 +10188,7 @@ end
         default_alloc = @allocated render!(r1, scene, cam)
         cached_alloc1 = @allocated render!(r3, scene, cam; cache=cache2)
         cached_alloc2 = @allocated render!(r3, scene, cam; cache=cache2)
+        @test_opt_alloc 131072 render_tiled!(r4, scene, cam; tiles=2)
         @test cached_alloc2 <= cached_alloc1
         @test cached_alloc2 < default_alloc
 
