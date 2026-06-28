@@ -2157,6 +2157,17 @@ end
         end
     end
 
+    @testset "Mat4 multiply — identical output, bounded allocation" begin
+        T = mat4_translation(3.0, -7.0, 11.0)
+        S = mat4_scaling(2.0, 3.0, 4.0)
+        M = T * S
+        p = Vec3(1.0, 1.0, 1.0)
+        @test mat4_transform_point(M, p) == mat4_transform_point(T, mat4_transform_point(S, p))
+
+        T * S
+        @test @allocated(T * S) <= 64
+    end
+
     @testset "Mat4 perspective projection" begin
         P = mat4_perspective(π/4, 1.0, 0.1, 100.0)
         # Point at origin along -Z should project to center

@@ -120,15 +120,31 @@ Mat4() = Mat4{Float64}()
 
 function mat4_multiply(a::Mat4, b::Mat4)
     T = promote_type(eltype(a.e), eltype(b.e))
-    e = ntuple(16) do idx
-        col = (idx - 1) ÷ 4 + 1
-        row = (idx - 1) % 4 + 1
-        mat4_get(a, row, 1) * mat4_get(b, 1, col) +
-        mat4_get(a, row, 2) * mat4_get(b, 2, col) +
-        mat4_get(a, row, 3) * mat4_get(b, 3, col) +
-        mat4_get(a, row, 4) * mat4_get(b, 4, col)
-    end
-    Mat4{T}(e)
+    ae = a.e
+    be = b.e
+    # Build the product tuple directly so repeated Mat4 multiplies do not pay for
+    # the closure allocation inherent in the previous `ntuple` implementation.
+    Mat4{T}((
+        ae[1]*be[1]  + ae[5]*be[2]  + ae[9]*be[3]   + ae[13]*be[4],
+        ae[2]*be[1]  + ae[6]*be[2]  + ae[10]*be[3]  + ae[14]*be[4],
+        ae[3]*be[1]  + ae[7]*be[2]  + ae[11]*be[3]  + ae[15]*be[4],
+        ae[4]*be[1]  + ae[8]*be[2]  + ae[12]*be[3]  + ae[16]*be[4],
+
+        ae[1]*be[5]  + ae[5]*be[6]  + ae[9]*be[7]   + ae[13]*be[8],
+        ae[2]*be[5]  + ae[6]*be[6]  + ae[10]*be[7]  + ae[14]*be[8],
+        ae[3]*be[5]  + ae[7]*be[6]  + ae[11]*be[7]  + ae[15]*be[8],
+        ae[4]*be[5]  + ae[8]*be[6]  + ae[12]*be[7]  + ae[16]*be[8],
+
+        ae[1]*be[9]  + ae[5]*be[10] + ae[9]*be[11]  + ae[13]*be[12],
+        ae[2]*be[9]  + ae[6]*be[10] + ae[10]*be[11] + ae[14]*be[12],
+        ae[3]*be[9]  + ae[7]*be[10] + ae[11]*be[11] + ae[15]*be[12],
+        ae[4]*be[9]  + ae[8]*be[10] + ae[12]*be[11] + ae[16]*be[12],
+
+        ae[1]*be[13] + ae[5]*be[14] + ae[9]*be[15]  + ae[13]*be[16],
+        ae[2]*be[13] + ae[6]*be[14] + ae[10]*be[15] + ae[14]*be[16],
+        ae[3]*be[13] + ae[7]*be[14] + ae[11]*be[15] + ae[15]*be[16],
+        ae[4]*be[13] + ae[8]*be[14] + ae[12]*be[15] + ae[16]*be[16],
+    ))
 end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
