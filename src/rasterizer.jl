@@ -975,10 +975,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     alpha_base = Float64(alpha)
     use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
-    attr_tri = use_fragment_alpha ? Vector{ShadeVtx}(undef, 3) : ShadeVtx[]
-    attr_clipped = use_fragment_alpha ? ShadeVtx[] : ShadeVtx[]
-    use_fragment_alpha && sizehint!(attr_clipped, 6)
-    siw = use_fragment_alpha ? Vector{Float64}(undef, 8) : Float64[]
+    attr_tri = use_fragment_alpha ? Vector{ShadeVtx}(undef, 3) : nothing
+    attr_clipped = use_fragment_alpha ? ShadeVtx[] : nothing
+    use_fragment_alpha && sizehint!(attr_clipped::Vector{ShadeVtx}, 6)
+    siw = use_fragment_alpha ? Vector{Float64}(undef, 8) : nothing
     # Per-fragment clipping needs each clipped vertex's world position. The
     # near-clipped polygon is in view space with w=1 (affine), so mapping it back
     # by the inverse view matrix recovers the world position. Computed once per
@@ -1007,10 +1007,13 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
         tri[3] = mat4_transform_vec4(modelview, Vec4(v3.x, v3.y, v3.z, 1.0))
 
         if use_fragment_alpha
+            tri_attr = attr_tri::Vector{ShadeVtx}
+            clipped_attr = attr_clipped::Vector{ShadeVtx}
+            invw_scratch = siw::Vector{Float64}
             @inbounds for (slot, vi, vtx) in ((1, i1, v1), (2, i2, v2), (3, i3, v3))
                 uv = has_uvs ? Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2]) : _ZERO_V2
                 uv2v = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
-                attr_tri[slot] = ShadeVtx(
+                tri_attr[slot] = ShadeVtx(
                     tri[slot],
                     mat4_transform_point(world_mat, vtx),
                     _ZERO_V3,
@@ -1020,17 +1023,17 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                 )
             end
 
-            m = _clip_near_attr!(attr_clipped, attr_tri, 3, near)
+            m = _clip_near_attr!(clipped_attr, tri_attr, 3, near)
             m < 3 && continue
 
             @inbounds for k in 1:m
-                cv = mat4_transform_vec4(proj, attr_clipped[k].vp)
+                cv = mat4_transform_vec4(proj, clipped_attr[k].vp)
                 invw = 1.0 / cv.w
                 ndcx = cv.x * invw; ndcy = cv.y * invw; ndcz = cv.z * invw
                 sx[k] = (ndcx + 1) * 0.5 * W
                 sy[k] = (1 - ndcy) * 0.5 * H
                 sz[k] = log_depth ? _encode_log_depth(cv.w, inv_log_far) : ndcz
-                siw[k] = invw
+                invw_scratch[k] = invw
             end
 
             fc = face_colors[fi]
@@ -1041,37 +1044,37 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                           sx[k+1], sy[k+1], sz[k+1], fc, alpha, stamp, stamp_id;
                                           xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                           clipping_planes=clipping_planes,
-                                          wp1=attr_clipped[1].wp,
-                                          wp2=attr_clipped[k].wp,
-                                          wp3=attr_clipped[k+1].wp,
-                                          iw1=siw[1], iw2=siw[k], iw3=siw[k+1],
+                                          wp1=clipped_attr[1].wp,
+                                          wp2=clipped_attr[k].wp,
+                                          wp3=clipped_attr[k+1].wp,
+                                          iw1=invw_scratch[1], iw2=invw_scratch[k], iw3=invw_scratch[k+1],
                                           depth_test=depth_test, depth_write=depth_write,
                                           alpha_test=alpha_test, albedo_map=albedo_map, alpha_map=alpha_map,
-                                          uv1=attr_clipped[1].uv,
-                                          uv2=attr_clipped[k].uv,
-                                          uv3=attr_clipped[k+1].uv,
-                                          uv2_1=attr_clipped[1].uv2,
-                                          uv2_2=attr_clipped[k].uv2,
-                                          uv2_3=attr_clipped[k+1].uv2)
+                                          uv1=clipped_attr[1].uv,
+                                          uv2=clipped_attr[k].uv,
+                                          uv3=clipped_attr[k+1].uv,
+                                          uv2_1=clipped_attr[1].uv2,
+                                          uv2_2=clipped_attr[k].uv2,
+                                          uv2_3=clipped_attr[k+1].uv2)
                 else
                     _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                     sx[k], sy[k], sz[k],
                                     sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
                                     xlo=xlo, xhi=xhi,
                                     clipping_planes=clipping_planes,
-                                    wp1=attr_clipped[1].wp,
-                                    wp2=attr_clipped[k].wp,
-                                    wp3=attr_clipped[k+1].wp,
-                                    iw1=siw[1], iw2=siw[k], iw3=siw[k+1],
+                                    wp1=clipped_attr[1].wp,
+                                    wp2=clipped_attr[k].wp,
+                                    wp3=clipped_attr[k+1].wp,
+                                    iw1=invw_scratch[1], iw2=invw_scratch[k], iw3=invw_scratch[k+1],
                                     depth_test=depth_test, depth_write=depth_write,
                                     alpha_test=alpha_test, alpha_base=alpha_base,
                                     albedo_map=albedo_map, alpha_map=alpha_map,
-                                    uv1=attr_clipped[1].uv,
-                                    uv2=attr_clipped[k].uv,
-                                    uv3=attr_clipped[k+1].uv,
-                                    uv2_1=attr_clipped[1].uv2,
-                                    uv2_2=attr_clipped[k].uv2,
-                                    uv2_3=attr_clipped[k+1].uv2)
+                                    uv1=clipped_attr[1].uv,
+                                    uv2=clipped_attr[k].uv,
+                                    uv3=clipped_attr[k+1].uv,
+                                    uv2_1=clipped_attr[1].uv2,
+                                    uv2_2=clipped_attr[k].uv2,
+                                    uv2_3=clipped_attr[k+1].uv2)
                 end
             end
             continue

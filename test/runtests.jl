@@ -10157,6 +10157,26 @@ end
         @test cached_alloc2 < default_alloc
     end
 
+    @testset "Flat rasterizer scratch — bounded allocation" begin
+        scene = build_instanced_scene(40)
+        im = only(collect_instanced(scene))
+        cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=500.0)
+        cam.position = Vec3(8.0,8,14.0); cam.target = Vec3(3.0,3,3)
+        rt = RenderTarget(64,64)
+        cache = RenderCache()
+        proj = projection_matrix(cam); view = view_matrix(cam); near = Diff3D._camera_near(cam)
+        lights = collect_lights(scene)
+        geo = im.geometry; mat = im.material
+        tri = cache.tri; clipped = cache.clipped; sx = cache.sx; sy = cache.sy; sz = cache.sz
+        world = compute_world_matrix(im) * im.instance_matrices[1]
+        raster_call() = Diff3D._rasterize_geo_flat!(rt, geo, world, mat, lights,
+                                                    proj, view, near, cam.position,
+                                                    tri, clipped, sx, sy, sz;
+                                                    colorbuf=cache.colors)
+        raster_call()
+        @test @allocated(raster_call()) <= 128
+    end
+
     @testset "Reverse-mode AD — matches ForwardDiff" begin
         # Analytic: ∇ Σxᵢ² = 2x.
         @test reverse_gradient(x -> sum(x.^2), [1.0,2.0,3.0,4.0]) == [2.0,4.0,6.0,8.0]
