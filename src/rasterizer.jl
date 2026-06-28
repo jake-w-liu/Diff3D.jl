@@ -229,6 +229,21 @@ end
     Color3(d[b + 1], d[b + 2], d[b + 3])
 end
 
+@inline function _shade_vertex(geo, vi::Int, world_mat::Mat4, normal_mat::Mat4,
+                               modelview::Mat4, has_normals::Bool, fallback_n::Vec3,
+                               has_uvs::Bool, uv2_attr, use_vertex_colors::Bool,
+                               color_attr)
+    v = get_vertex(geo, vi)
+    nrm = has_normals ? get_normal(geo, vi) : fallback_n
+    wp = mat4_transform_point(world_mat, v)
+    wn = mat4_transform_direction(normal_mat, nrm)
+    vp = mat4_transform_vec4(modelview, Vec4(v.x, v.y, v.z, 1.0))
+    uv = has_uvs ? Vec2(geo.uvs[(vi - 1) * 2 + 1], geo.uvs[(vi - 1) * 2 + 2]) : Vec2(0.0, 0.0)
+    uv2 = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
+    vc = use_vertex_colors ? _vertex_color(color_attr, vi) : Color3(1.0, 1.0, 1.0)
+    ShadeVtx(vp, wp, wn, uv, uv2, vc)
+end
+
 function _clip_near_attr!(out::Vector{ShadeVtx}, verts::Vector{ShadeVtx}, n::Int, near)
     empty!(out)
     @inbounds for i in 1:n
@@ -486,16 +501,16 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                 gl = norm(gn)
                 fallback_n = gl > 1e-12 ? gn / gl : Vec3(0.0, 0.0, 1.0)
             end
-            @inbounds for (slot, vi) in ((1, i1), (2, i2), (3, i3))
-                v = get_vertex(geo, vi)
-                nrm = has_normals ? get_normal(geo, vi) : fallback_n
-                wp = mat4_transform_point(world_mat, v)
-                wn = mat4_transform_direction(normal_mat, nrm)
-                vp = mat4_transform_vec4(modelview, Vec4(v.x, v.y, v.z, 1.0))
-                uv = has_uvs ? Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2]) : Vec2(0.0, 0.0)
-                uv2 = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
-                vc = use_vertex_colors ? _vertex_color(color_attr, vi) : Color3(1.0, 1.0, 1.0)
-                tri[slot] = ShadeVtx(vp, wp, wn, uv, uv2, vc)
+            @inbounds begin
+                tri[1] = _shade_vertex(geo, i1, world_mat, normal_mat, modelview,
+                                       has_normals, fallback_n, has_uvs, uv2_attr,
+                                       use_vertex_colors, color_attr)
+                tri[2] = _shade_vertex(geo, i2, world_mat, normal_mat, modelview,
+                                       has_normals, fallback_n, has_uvs, uv2_attr,
+                                       use_vertex_colors, color_attr)
+                tri[3] = _shade_vertex(geo, i3, world_mat, normal_mat, modelview,
+                                       has_normals, fallback_n, has_uvs, uv2_attr,
+                                       use_vertex_colors, color_attr)
             end
             m = _clip_near_attr!(clipped, tri, 3, near)
             m < 3 && continue

@@ -4859,6 +4859,9 @@ end
         # Smooth shading yields a continuous gradient: many more distinct shades.
         uniq(rt) = length(unique(round.(vec(rt.color[:, :, 1]), digits=3)))
         @test uniq(rts) > 5 * uniq(rtf)
+        smooth_cache = RenderCache()
+        render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
+        @test_opt_alloc 700000 render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
 
         # Invalid shading mode is rejected.
         @test_throws ArgumentError render!(RenderTarget(8, 8), scene, cam; shading=:bogus)
