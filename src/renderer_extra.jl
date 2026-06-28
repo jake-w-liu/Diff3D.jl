@@ -712,6 +712,120 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     return rt
 end
 
+@inline _point_material_color(material, ::Color3) =
+    hasfield(typeof(material), :color) ? getfield(material, :color) : Color3(1.0,1.0,1.0)
+@inline _point_material_color(material::LineBasicMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::LineDashedMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::PointsMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::MeshBasicMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::MeshLambertMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::MeshPhongMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::MeshStandardMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+@inline _point_material_color(material::MeshPhysicalMaterial, vc::Color3) =
+    _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
+
+function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
+                                camera::AbstractCamera, proj::Mat4, view::Mat4,
+                                near, W::Int, H::Int, xlo::Int, xhi::Int,
+                                ylo::Int, yhi::Int, morphed_positions,
+                                instance_color::Color3)
+    col = _point_material_color(material, instance_color)
+    alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    depth_test = material_depth_test(material)
+    depth_write = material_depth_write(material)
+    alpha_test = material_alpha_test(material)
+    albedo_map = _material_field(material, :map)
+    alpha_map = _material_field(material, :alpha_map)
+    use_color_map = albedo_map isa Texture
+    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
+    base_size = hasfield(typeof(material), :size) ? Float64(getfield(material, :size)) : 1.0
+    size_attenuation = _material_field(material, :size_attenuation)
+    size_attenuation === nothing && (size_attenuation = true)
+    reference_depth = camera isa PerspectiveCamera ?
+        max(norm(camera.position - camera.target), near) : 1.0
+    for entry in _draw_entry_range(geo)
+        vi = _draw_vertex_index(geo, entry)
+        pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
+        pv.z <= -near || continue      # near-plane cull, matching the mesh path
+        (px, py, pz, ok) = _project(proj, pv, W, H)
+        ok || continue
+        effective_size = base_size
+        if size_attenuation && camera isa PerspectiveCamera
+            effective_size *= reference_depth / max(1e-6, -pv.z)
+        end
+        r = max(Int(round(effective_size)) ÷ 2, 0)
+        diameter = max(2r + 1, 1)
+        # Skip a point whose footprint cannot touch the buffer; this also keeps
+        # round(Int, ...) below from overflowing on finite extreme screen coords.
+        (isfinite(px) && isfinite(py)) || continue
+        (px + r < xlo || px - r > xhi || py + r < ylo || py - r > yhi) && continue
+        cx = round(Int, px); cy = round(Int, py)
+        min_px = max(cx - r, xlo)
+        max_px = min(cx + r, xhi)
+        min_py = max(cy - r, ylo)
+        max_py = min(cy + r, yhi)
+        for py in min_py:max_py, px in min_px:max_px
+            u = clamp((px - (cx - r) + 0.5) / diameter, 0.0, 1.0)
+            v = clamp(1.0 - (py - (cy - r) + 0.5) / diameter, 0.0, 1.0)
+            frag_alpha = use_fragment_alpha ?
+                _fragment_alpha(alpha, albedo_map, alpha_map, u, v, u, v) : alpha
+            frag_alpha >= alpha_test || continue
+            point_col = col
+            if use_color_map
+                tex_col = sample_texture_linear(albedo_map, u, v)
+                point_col = Color3(col.r * tex_col.r, col.g * tex_col.g, col.b * tex_col.b)
+            end
+            _put_pixel!(rt, px, py, pz, point_col, xlo, xhi, ylo, yhi,
+                        depth_test, depth_write, frag_alpha)
+        end
+    end
+    return nothing
+end
+
+function _draw_points_object!(rt::RenderTarget, obj::PointsObject,
+                              camera::AbstractCamera, proj::Mat4, view::Mat4,
+                              near, W::Int, H::Int, xlo::Int, xhi::Int,
+                              ylo::Int, yhi::Int)
+    geo = obj.geometry
+    _draw_points_geometry!(rt, geo, obj.material, compute_world_matrix(obj),
+                           camera, proj, view, near, W, H, xlo, xhi, ylo, yhi,
+                           _object_morph_positions(obj, geo), Color3(1.0,1.0,1.0))
+    return nothing
+end
+
+function _draw_instanced_points_geometry!(rt::RenderTarget, geo, material,
+                                          instance_matrices::Vector{Mat4{Float64}},
+                                          instance_colors::Vector{Color3{Float64}},
+                                          base::Mat4, camera::AbstractCamera,
+                                          proj::Mat4, view::Mat4, near,
+                                          W::Int, H::Int, xlo::Int, xhi::Int,
+                                          ylo::Int, yhi::Int)
+    @inbounds for instance_index in eachindex(instance_matrices)
+        _draw_points_geometry!(rt, geo, material, base * instance_matrices[instance_index],
+                               camera, proj, view, near, W, H, xlo, xhi, ylo, yhi,
+                               nothing, instance_colors[instance_index])
+    end
+    return nothing
+end
+
+function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
+                                 camera::AbstractCamera, proj::Mat4, view::Mat4,
+                                 near, W::Int, H::Int, xlo::Int, xhi::Int,
+                                 ylo::Int, yhi::Int)
+    _draw_instanced_points_geometry!(rt, obj.geometry, obj.material,
+                                     obj.instance_matrices, obj.instance_colors,
+                                     compute_world_matrix(obj), camera, proj, view,
+                                     near, W, H, xlo, xhi, ylo, yhi)
+    return nothing
+end
+
 """Rasterize `PointsObject` vertices as small point sprites sized by the material."""
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
@@ -721,75 +835,12 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     near = _camera_near(camera)
     W, H = rt.width, rt.height
 
-    function draw_points_geometry!(geo, material, wm::Mat4, morphed_positions=nothing)
-        col = hasfield(typeof(material), :color) ? material.color : Color3(1.0,1.0,1.0)
-        alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
-        depth_test = material_depth_test(material)
-        depth_write = material_depth_write(material)
-        alpha_test = material_alpha_test(material)
-        albedo_map = _material_field(material, :map)
-        alpha_map = _material_field(material, :alpha_map)
-        use_color_map = albedo_map isa Texture
-        use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
-        base_size = hasfield(typeof(material), :size) ? Float64(material.size) : 1.0
-        size_attenuation = _material_field(material, :size_attenuation)
-        size_attenuation === nothing && (size_attenuation = true)
-        reference_depth = camera isa PerspectiveCamera ?
-            max(norm(camera.position - camera.target), near) : 1.0
-        for entry in _draw_entry_range(geo)
-            vi = _draw_vertex_index(geo, entry)
-            pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
-            pv.z <= -near || continue      # near-plane cull, matching the mesh path
-            (px, py, pz, ok) = _project(proj, pv, W, H)
-            ok || continue
-            effective_size = base_size
-            if size_attenuation && camera isa PerspectiveCamera
-                effective_size *= reference_depth / max(1e-6, -pv.z)
-            end
-            r = max(Int(round(effective_size)) ÷ 2, 0)
-            diameter = max(2r + 1, 1)
-            # Skip a point whose footprint can't touch the buffer; this also keeps
-            # round(Int, …) below from overflowing on a far-off-screen vertex that
-            # still passed the near-plane cull (finite-but-extreme screen coords).
-            (isfinite(px) && isfinite(py)) || continue
-            (px + r < xlo || px - r > xhi || py + r < ylo || py - r > yhi) && continue
-            cx = round(Int, px); cy = round(Int, py)
-            min_px = max(cx - r, xlo)
-            max_px = min(cx + r, xhi)
-            min_py = max(cy - r, ylo)
-            max_py = min(cy + r, yhi)
-            for py in min_py:max_py, px in min_px:max_px
-                u = clamp((px - (cx - r) + 0.5) / diameter, 0.0, 1.0)
-                v = clamp(1.0 - (py - (cy - r) + 0.5) / diameter, 0.0, 1.0)
-                frag_alpha = use_fragment_alpha ?
-                    _fragment_alpha(alpha, albedo_map, alpha_map, u, v, u, v) : alpha
-                frag_alpha >= alpha_test || continue
-                point_col = col
-                if use_color_map
-                    tex_col = sample_texture_linear(albedo_map, u, v)
-                    point_col = Color3(col.r * tex_col.r, col.g * tex_col.g, col.b * tex_col.b)
-                end
-                _put_pixel!(rt, px, py, pz, point_col, xlo, xhi, ylo, yhi,
-                            depth_test, depth_write, frag_alpha)
-            end
-        end
-        return nothing
-    end
-
     traverse(scene, function(obj)
         _visible_in_tree(obj) || return
         if obj isa PointsObject
-            geo = obj.geometry
-            draw_points_geometry!(geo, obj.material, compute_world_matrix(obj),
-                                  _object_morph_positions(obj, geo))
+            _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
         elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
-            base = compute_world_matrix(obj)
-            for (instance_index, M) in enumerate(obj.instance_matrices)
-                draw_points_geometry!(obj.geometry,
-                                      _with_vertex_color(obj.material,
-                                                         obj.instance_colors[instance_index]),
-                                      base * M)
-            end
+            _draw_instanced_points!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
         end
     end)
     return rt

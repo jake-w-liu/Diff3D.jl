@@ -10228,6 +10228,35 @@ end
         @test maximum(abs.(line_uncached.color .- line_cached.color)) < 1e-12
         @test_opt_alloc 65536 render!(line_cached, line_scene, line_cam; cache=line_cache)
 
+        point_geo = BufferGeometry([0.0,0.0,0.0], Float64[], Float64[], Int[], 1, 0)
+        point_mat = PointsMaterial(color=Color3(0.8,0.5,0.25), size=3.0)
+        point_instanced_scene = Scene(background=Color3(0.0,0.0,0.0))
+        point_expected_scene = Scene(background=Color3(0.0,0.0,0.0))
+        point_im = InstancedMesh(point_geo, point_mat, 128; draw_mode=:points)
+        for i in 1:128
+            x = -1.2 + 2.4 * ((i - 1) % 16) / 15
+            y = -0.6 + 1.2 * ((i - 1) ÷ 16) / 7
+            vc = i % 3 == 1 ? Color3(1.0,0.3,0.2) :
+                 i % 3 == 2 ? Color3(0.2,1.0,0.4) : Color3(0.3,0.5,1.0)
+            set_instance_matrix!(point_im, i, mat4_translation(x, y, 0.0))
+            set_instance_color!(point_im, i, vc)
+            point_obj = PointsObject(point_geo,
+                                     PointsMaterial(color=Diff3D._modulate(point_mat.color, vc),
+                                                    size=point_mat.size))
+            point_obj.position = Vec3(x, y, 0.0)
+            add!(point_expected_scene, point_obj)
+        end
+        add!(point_instanced_scene, point_im)
+        point_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+        point_cam.position = Vec3(0.0,0.0,4.0); point_cam.target = Vec3(0.0,0.0,0.0)
+        point_expected = RenderTarget(96,96)
+        point_actual = RenderTarget(96,96)
+        point_cache = RenderCache()
+        render!(point_expected, point_expected_scene, point_cam; cache=RenderCache())
+        render!(point_actual, point_instanced_scene, point_cam; cache=point_cache)
+        @test maximum(abs.(point_expected.color .- point_actual.color)) < 1e-12
+        @test_opt_alloc 8192 render!(point_actual, point_instanced_scene, point_cam; cache=point_cache)
+
         wire_geo = SphereGeometry(radius=1.0, width_segments=16, height_segments=8)
         wire_scene = Scene(background=Color3(0.0,0.0,0.0))
         wire_expected_scene = Scene(background=Color3(0.0,0.0,0.0))
