@@ -693,7 +693,7 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
     # own visibility or ancestor visibility is animated (force_ids) must be
     # exported even while currently hidden. Statically hidden lights are dropped
     # to match the CPU renderer's hierarchical visibility.
-    all_lights = AbstractLight[]
+    all_lights = SceneLight[]
     traverse(scene, o -> o isa AbstractLight && push!(all_lights, o))
     for light in all_lights
         _web_visible_or_forced(light, force_ids) || continue

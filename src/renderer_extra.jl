@@ -99,7 +99,7 @@ colour buffer are reused via [`render_pooled!`].
 """
 mutable struct RenderCache
     meshes::Vector{Mesh}
-    lights::Vector{AbstractLight}
+    lights::Vector{SceneLight}
     instanced::Vector{InstancedMesh}
     transparent::Vector{Mesh}
     opaque_flat::Vector{Mesh}
@@ -114,7 +114,7 @@ mutable struct RenderCache
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
-    RenderCache(Mesh[], AbstractLight[], InstancedMesh[],
+    RenderCache(Mesh[], SceneLight[], InstancedMesh[],
                 Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),

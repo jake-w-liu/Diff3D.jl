@@ -10292,22 +10292,29 @@ end
             @test count(>(0.5), rtd.color[:,:,1]) > 100                 # :double still renders in both old and new
         end
 
-        # [C:shading+rasterizer] #15 Lit shading loops a Vector{AbstractLight} (abstract eltype) causing dynamic dispatch +
-        @testset "Bug15 _shade_lit output unchanged (function barrier)" begin
+        # [C:shading+rasterizer] #15 Scene light collection now keeps a concrete union eltype so
+        # the per-face shading loop does not allocate through `Vector{AbstractLight}`.
+        @testset "Bug15 _shade_lit output unchanged and light collection stays concrete" begin
             # Behaviour-preserving: a mixed light set must give the exact same shaded color.
             n  = Diff3D.Vec3(0.0, 0.0, 1.0); vd = Diff3D.Vec3(0.0, 0.0, 1.0); p = Diff3D.Vec3(0.0,0.0,0.0)
             mat = Diff3D.MeshLambertMaterial(color=Diff3D.Color3(0.8,0.4,0.2))
-            lights = Diff3D.AbstractLight[Diff3D.AmbientLight(intensity=0.3)]
+            scene = Diff3D.Scene()
+            amb_light = Diff3D.AmbientLight(intensity=0.3)
             d = Diff3D.DirectionalLight(intensity=0.9, position=Diff3D.Vec3(0.0,0.0,5.0)); d.target = Diff3D.Vec3(0.0,0.0,0.0)
-            push!(lights, d)
+            add!(scene, amb_light)
+            add!(scene, d)
+            lights = Diff3D.collect_lights(scene)
+            @test eltype(lights) === Diff3D.SceneLight
             c = Diff3D.shade_face(n, vd, p, mat, lights)
             # Independent hand recomputation of the same accumulation order: emissive + ambient fill + lambert direct.
-            amb = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * 0.3)
+            amb_fill = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * 0.3)
             ldir = Diff3D.normalize(d.position - d.target)                 # = (0,0,1)
             ndotl = max(Diff3D.dot(n, ldir), 0.0)                          # = 1.0
             dir = mat.color * (Diff3D.Color3(1.0,1.0,1.0)) * (ndotl * 0.9)
-            expect = mat.emissive + amb + dir
+            expect = mat.emissive + amb_fill + dir
             @test isapprox(c.r, expect.r; atol=1e-12) && isapprox(c.g, expect.g; atol=1e-12) && isapprox(c.b, expect.b; atol=1e-12)
+            Diff3D.shade_face(n, vd, p, mat, lights)
+            @test @allocated(Diff3D.shade_face(n, vd, p, mat, lights)) <= 64
         end
 
         # [D:renderer+textures+controls] #16 render_tiled! never draws InstancedMesh objects -> blank frame for instanced scenes

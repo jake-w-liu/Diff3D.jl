@@ -1042,11 +1042,12 @@ end
 
 # Per-light accumulation, factored into a function barrier so that once a light
 # is dispatched to its concrete type the inner work (light_contribution, fill
-# response, direct response) is type-stable instead of boxing through the
-# abstract `Vector{AbstractLight}` element type. The arithmetic and accumulation
-# order are byte-identical to the inlined loop: `light_contribution` is queried
-# only for non-fill lights, and a non-positive visibility leaves `result`
-# unchanged (the previous loop `continue` skipped the addition).
+# response, direct response) stays type-stable when called from the concrete
+# `collect_lights`/`RenderCache` scene-light vectors. The arithmetic and
+# accumulation order are byte-identical to the inlined loop:
+# `light_contribution` is queried only for non-fill lights, and a non-positive
+# visibility leaves `result` unchanged (the previous loop `continue` skipped
+# the addition).
 # Transmission contribution is gated to MeshPhysicalMaterial and treats the
 # fill irradiance as the background radiance the refracted ray would reveal. A
 # CPU rasterizer cannot ray-trace true refraction, so this is the documented

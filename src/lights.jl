@@ -463,9 +463,22 @@ set_parent!(o::LightProbe, p) = (o.parent = p)
 
 # ========================== Light collection ==========================
 
+# Keep scene light containers concrete so the shading loop can union-split over
+# the finite set of supported light types instead of paying abstract-dispatch
+# allocation costs on every shaded face.
+const SceneLight = Union{
+    AmbientLight,
+    DirectionalLight,
+    PointLight,
+    SpotLight,
+    HemisphereLight,
+    RectAreaLight,
+    LightProbe,
+}
+
 # Visibility-aware traversal: invisible nodes are skipped along with their
 # entire subtree, matching three.js hierarchical visibility semantics.
-function _collect_lights!(lights::Vector{AbstractLight}, obj::AbstractObject3D)
+function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
     is_visible(obj) || return nothing
     obj isa AbstractLight && push!(lights, obj)
     for child in get_children(obj)
@@ -475,7 +488,7 @@ function _collect_lights!(lights::Vector{AbstractLight}, obj::AbstractObject3D)
 end
 
 function collect_lights(scene::AbstractObject3D)
-    lights = AbstractLight[]
+    lights = SceneLight[]
     _collect_lights!(lights, scene)
     return lights
 end
