@@ -10097,6 +10097,26 @@ end
         @test eff.metalness ≈ 0.45
     end
 
+    @testset "Flat face shading fast path — identical output, bounded allocation" begin
+        geo = SphereGeometry(radius=0.7, width_segments=16, height_segments=8)
+        wm = Mat4{Float64}()
+        scene = Scene()
+        add!(scene, AmbientLight(intensity=0.4))
+        d = DirectionalLight(intensity=0.8, position=Vec3(1.0,1.0,1.0)); d.target = Vec3(0.0,0.0,0.0)
+        add!(scene, d)
+        lights = collect_lights(scene)
+        campos = Vec3(0.0, 0.0, 3.0)
+        mat = MeshLambertMaterial(color=Color3(0.7,0.45,0.30))
+
+        expected = shade_mesh_faces(geo, wm, mat, lights, campos)
+        actual = Vector{Color3{Float64}}(undef, geo.n_faces)
+        shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
+        @test all(i -> actual[i] == expected[i], eachindex(actual))
+
+        shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
+        @test @allocated(shade_mesh_faces!(actual, geo, wm, mat, lights, campos)) <= 64
+    end
+
     @testset "In-renderer MSAA" begin
         scene = Scene(background=Color3(0.0,0,0))
         add!(scene, Mesh(SphereGeometry(radius=1.0), MeshBasicMaterial(color=Color3(1.0,1,1))))

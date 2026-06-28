@@ -641,6 +641,32 @@ shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4, material::AbstractMateria
     shade_mesh_faces!(Vector{Color3{Float64}}(undef, geo.n_faces),
                       geo, world_mat, material, lights, cam_pos; shadow_fn=shadow_fn)
 
+function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
+                                 geo::BufferGeometry, world_mat::Mat4, material,
+                                 lights::Vector{<:AbstractLight}, cam_pos::Vec3,
+                                 normal_mat::Mat4, has_normals::Bool; shadow_fn=nothing)
+    @inbounds for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
+        v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
+        v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
+        center = Vec3((v1.x+v2.x+v3.x)/3, (v1.y+v2.y+v3.y)/3, (v1.z+v2.z+v3.z)/3)
+
+        if material isa MeshDepthMaterial
+            d = norm(cam_pos - center)
+            depth = clamp((d - material.near) / max(material.far - material.near, 1e-9), 0.0, 1.0)
+            colors[fi] = _depth_material_color(material, depth)
+            continue
+        end
+
+        face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
+        view_dir = normalize(cam_pos - center)
+        color = shade_face(face_n, view_dir, center, material, lights; shadow_fn=shadow_fn)
+        colors[fi] = clamp_color(color)
+    end
+    return colors
+end
+
 # In-place variant: writes one colour per face into `colors` (resized to fit),
 # so a caller can reuse the buffer across frames/meshes (bounded allocation).
 function shade_mesh_faces!(colors::Vector{Color3{Float64}},
@@ -679,6 +705,11 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
 
     # Environment-map reflection (basic IBL specular) for PBR materials.
     env_map = _envmap_field(material)
+
+    if !use_maps && !use_vertex_colors && env_map === nothing
+        return _shade_mesh_faces_fast!(colors, geo, world_mat, material, lights, cam_pos,
+                                       normal_mat, has_normals; shadow_fn=shadow_fn)
+    end
 
     for fi in 1:n_faces
         i1, i2, i3 = get_face(geo, fi)
