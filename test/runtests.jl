@@ -10192,6 +10192,16 @@ end
         @test_opt_alloc 131072 render_tiled!(r4, scene, cam; tiles=2)
         @test cached_alloc2 <= cached_alloc1
         @test cached_alloc2 < default_alloc
+        tile_caches = [RenderCache() for _ in 1:Threads.nthreads()]
+        r5 = RenderTarget(64,64)
+        render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
+        @test maximum(abs.(r1.color .- r5.color)) < 1e-12
+        cached_tiled1 = @allocated render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
+        cached_tiled2 = @allocated render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
+        @test cached_tiled2 <= cached_tiled1
+        if Threads.nthreads() > 1
+            @test_throws ArgumentError render_tiled!(r5, scene, cam; tiles=2, cache=RenderCache[])
+        end
 
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),

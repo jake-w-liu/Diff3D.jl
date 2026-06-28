@@ -1137,14 +1137,19 @@ bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
 # ========================== Tiled / parallel rasterization ==========================
 
 """
-    render_tiled!(rt, scene, camera; tiles=Threads.nthreads(), shading=:flat)
+    render_tiled!(rt, scene, camera; tiles=Threads.nthreads(), shading=:flat, cache=nothing)
 
 Flat-rasterize the scene in horizontal row bands. Bands write disjoint rows, so
 they can run on separate threads (used when Julia is started with > 1 thread).
 Produces the same image as [`render!`] for opaque flat scenes.
+
+Passing a `cache` vector reuses per-thread scratch buffers across repeated calls.
+Each thread uses one cache entry, so the vector must have at least as many
+entries as active worker threads used by this invocation.
 """
 function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
-                       tiles::Int=max(Threads.nthreads(), 1), shading::Symbol=:flat)
+                       tiles::Int=max(Threads.nthreads(), 1), shading::Symbol=:flat,
+                       cache::Union{Nothing, Vector{RenderCache}}=nothing)
     shading === :flat || throw(ArgumentError("render_tiled! supports only :flat shading"))
     tiles > 0 || throw(ArgumentError("render_tiled! tiles must be positive"))
     clear!(rt, scene.background)
@@ -1155,27 +1160,39 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
     H = rt.height
-    meshes = collect_meshes(scene)
+    thread_count = Threads.nthreads()
+    thread_caches = if cache === nothing
+        [RenderCache() for _ in 1:thread_count]
+    else
+        length(cache) >= thread_count ||
+            throw(ArgumentError("render_tiled! cache must have at least $(thread_count) entries"))
+        cache
+    end
+
+    # Reuse scene collection buffers on the shared cache entry so repeated calls do
+    # not reallocate mesh/light/instance vectors.
+    shared_cache = thread_caches[1]
+    meshes = shared_cache.meshes
+    _collect_into!(meshes, scene, m -> m isa Mesh)
     _append_skinned_render_meshes!(meshes, scene)
-    lights = collect_lights(scene)
-    instanced = collect_instanced(scene)
-    # Reuse scratch buffers per Julia thread. Each worker reuses one cache across
-    # all bands it processes, avoiding per-band allocations for triangles/scratch
-    # buffers and face-color vectors.
-    thread_caches = [RenderCache() for _ in 1:Threads.nthreads()]
+    lights = shared_cache.lights
+    _collect_into!(lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
+    instanced = shared_cache.instanced
+    _collect_into!(instanced, scene, o -> o isa InstancedMesh)
     band = cld(H, tiles)
     Threads.@threads for t in 1:tiles
         ylo = (t-1)*band + 1
         yhi = min(t*band, H)
         ylo > yhi && continue
-        cache = thread_caches[mod1(Threads.threadid() - 1, Threads.nthreads())]
-        tri = cache.tri
-        clipped = cache.clipped
+        cache_idx = mod1(Threads.threadid() - 1, thread_count)
+        thread_cache = thread_caches[cache_idx]
+        tri = thread_cache.tri
+        clipped = thread_cache.clipped
         empty!(clipped)
-        sx = cache.sx
-        sy = cache.sy
-        sz = cache.sz
-        colorbuf = cache.colors
+        sx = thread_cache.sx
+        sy = thread_cache.sy
+        sz = thread_cache.sz
+        colorbuf = thread_cache.colors
         for mesh in meshes
             is_visible(mesh) || continue
             is_transparent_material(mesh.material) && continue
