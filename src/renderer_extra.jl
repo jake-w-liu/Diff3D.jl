@@ -137,6 +137,75 @@ function _collect_into!(out::Vector, root, pred)
     return out
 end
 
+function _render_pooled_uses_fragment_alpha(geo::BufferGeometry, mat)
+    has_uvs = length(geo.uvs) >= geo.n_vertices * 2
+    has_uvs || return false
+    albedo_map = _material_field(mat, :map)
+    alpha_map = _material_field(mat, :alpha_map)
+    _needs_fragment_alpha(material_alpha_test(mat), 1.0, albedo_map, alpha_map)
+end
+
+function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, world_mat::Mat4, mat,
+                                     lights, proj::Mat4, view::Mat4, near, cam_pos::Vec3,
+                                     tri, clipped, sx, sy, sz, colorbuf::Vector{Color3{Float64}};
+                                     ortho_dir=nothing)
+    if _render_pooled_uses_fragment_alpha(geo, mat)
+        return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
+                                    tri, clipped, sx, sy, sz; colorbuf=colorbuf, ortho_dir=ortho_dir)
+    end
+
+    side = material_side(mat)
+    depth_test = material_depth_test(mat)
+    depth_write = material_depth_write(mat)
+    has_normals = length(geo.normals) >= geo.n_vertices * 3
+    normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
+    modelview = view * world_mat
+    face_colors = shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos)
+
+    @inbounds for fi in _draw_face_range(geo)
+        i1, i2, i3 = get_face(geo, fi)
+        v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
+        if side !== :double
+            wc = mat4_transform_point(world_mat, Vec3((v1.x+v2.x+v3.x)/3,
+                                                      (v1.y+v2.y+v3.y)/3,
+                                                      (v1.z+v2.z+v3.z)/3))
+            fn = _flat_face_normal(geo, i1, i2, i3,
+                                   mat4_transform_point(world_mat, v1),
+                                   mat4_transform_point(world_mat, v2),
+                                   mat4_transform_point(world_mat, v3), normal_mat, has_normals)
+            facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
+            (side === :front ? facing <= 0 : facing > 0) && continue
+        end
+        tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
+        tri[2] = mat4_transform_vec4(modelview, Vec4(v2.x, v2.y, v2.z, 1.0))
+        tri[3] = mat4_transform_vec4(modelview, Vec4(v3.x, v3.y, v3.z, 1.0))
+        m = _clip_near!(clipped, tri, 3, near)
+        m < 3 && continue
+        for k in 1:m
+            cv = mat4_transform_vec4(proj, clipped[k])
+            invw = 1.0 / cv.w
+            ndcx = cv.x * invw; ndcy = cv.y * invw; ndcz = cv.z * invw
+            sx[k] = (ndcx + 1) * 0.5 * rt.width
+            sy[k] = (1 - ndcy) * 0.5 * rt.height
+            sz[k] = ndcz
+        end
+        fc = face_colors[fi]
+        for k in 2:(m - 1)
+            if depth_test && depth_write
+                _rasterize_tri!(rt, sx[1], sy[1], sz[1],
+                                sx[k], sy[k], sz[k],
+                                sx[k+1], sy[k+1], sz[k+1], fc)
+            else
+                _rasterize_tri!(rt, sx[1], sy[1], sz[1],
+                                sx[k], sy[k], sz[k],
+                                sx[k+1], sy[k+1], sz[k+1], fc;
+                                depth_test=depth_test, depth_write=depth_write)
+            end
+        end
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
@@ -161,19 +230,19 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     for mesh in cache.meshes
         (_visible_in_tree(mesh) && !is_transparent_material(mesh.material) &&
          !material_wireframe(mesh.material)) || continue
-        _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
-                             cache.lights, proj, view, near, camera.position,
-                             cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz;
-                             colorbuf=cache.colors, ortho_dir=ortho_dir)
+        _rasterize_geo_flat_pooled!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+                                    cache.lights, proj, view, near, camera.position,
+                                    cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz,
+                                    cache.colors; ortho_dir=ortho_dir)
     end
     for im in cache.instanced
         (_visible_in_tree(im) && !material_wireframe(im.material)) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
-            _rasterize_geo_flat!(rt, im.geometry, base * M, im.material,
-                                 cache.lights, proj, view, near, camera.position,
-                                 cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz;
-                                 colorbuf=cache.colors, ortho_dir=ortho_dir)
+            _rasterize_geo_flat_pooled!(rt, im.geometry, base * M, im.material,
+                                        cache.lights, proj, view, near, camera.position,
+                                        cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz,
+                                        cache.colors; ortho_dir=ortho_dir)
         end
     end
     return rt
