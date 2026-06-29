@@ -112,14 +112,19 @@ mutable struct RenderCache
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
     wire_edges::Set{Tuple{Int,Int}}
+    smooth_tri::Vector{ShadeVtx}
+    smooth_clipped::Vector{ShadeVtx}
+    smooth_iw::Vector{Float64}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
+    scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
     RenderCache(Mesh[], SceneLight[], InstancedMesh[],
                 Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
-                Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}())
+                Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
+                Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8))
 end
 
 @inline _instanced_geometry(mesh::InstancedMesh)::BufferGeometry = mesh.geometry

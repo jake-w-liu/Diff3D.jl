@@ -284,7 +284,7 @@ end
         normal_scale, clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
-        stamp=nothing, stamp_id::Int=0)
+        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true)
     W, H = rt.width, rt.height
     use_stamp = stamp !== nothing   # transparent pass: alpha-blend once per mesh per pixel
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
@@ -370,7 +370,8 @@ end
                     eff_mat = material
                 end
                 vd = normalize(cam_pos - wp)
-                col = shade_face(wn, vd, wp, _with_vertex_color(eff_mat, vc), lights; shadow_fn=shadow_fn)
+                shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, vc) : eff_mat
+                col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
                 # three.js keeps emission OUT of the diffuse map chain: remove the
                 # base `emissive · intensity` added by `shade_face` before the
                 # multiplicative maps below, and add the modulated form
@@ -411,7 +412,8 @@ end
                 end
             else
                 vd = normalize(cam_pos - wp)
-                col = shade_face(wn, vd, wp, _with_vertex_color(material, vc), lights; shadow_fn=shadow_fn)
+                shade_mat = use_vertex_colors ? _with_vertex_color(material, vc) : material
+                col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
             end
             col = clamp_color(col)
             if use_stamp
@@ -433,102 +435,178 @@ end
     return nothing
 end
 
-function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam_pos, shadow_fn=nothing;
-                         clipping_planes=_NO_PLANES,
-                         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
-                         log_depth::Bool=false, inv_log_far::Float64=1.0, ortho_dir=nothing,
-                         stamp=nothing, stamp_id::Int=0)
+@inline function _rasterize_tri_smooth_nomaps!(rt::RenderTarget,
+        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, vc1::Color3,
+        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, vc2::Color3,
+        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, vc3::Color3,
+        material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
+        clipping_planes;
+        xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
+        depth_test::Bool=true, depth_write::Bool=true,
+        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true)
     W, H = rt.width, rt.height
-    tri = Vector{ShadeVtx}(undef, 3)
-    clipped = ShadeVtx[]; sizehint!(clipped, 6)
-    sx = Vector{Float64}(undef, 8); sy = Vector{Float64}(undef, 8)
-    sz = Vector{Float64}(undef, 8); iw = Vector{Float64}(undef, 8)
-    for mesh in meshes
-        !is_visible(mesh) && continue
-        mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
-        world_mat = compute_world_matrix(mesh)
-        modelview = view * world_mat
-        normal_mat = mat4_transpose(mat4_inverse(world_mat))
-        geo = _mesh_geometry(mesh)
-        mat = _mesh_material(mesh)
-        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                         material_clipping_planes(mat))
-        depth_test = material_depth_test(mat)
-        depth_write = material_depth_write(mat)
-        # Back-face culling, matching the flat path (`_rasterize_geo_flat!`): the
-        # per-pixel path must agree with the per-face path on which faces survive.
-        side = material_side(mat)
-        has_normals = length(geo.normals) >= geo.n_vertices * 3
-        # Per-pixel material maps, applied only when the
-        # geometry carries UVs and the material exposes the map. Matches the flat
-        # path's material-map handling so textured surfaces agree.
-        has_uvs = length(geo.uvs) >= geo.n_vertices * 2
-        albedo_map = has_uvs ? _material_field(mat, :map) : nothing
-        normal_map = has_uvs ? _material_field(mat, :normal_map) : nothing
-        normal_scale = _material_scalar(mat, :normal_scale, 1.0)
-        roughness_map = has_uvs ? _material_field(mat, :roughness_map) : nothing
-        metalness_map = has_uvs ? _material_field(mat, :metalness_map) : nothing
-        specular_map = has_uvs ? _material_field(mat, :specular_map) : nothing
-        glossiness_map = has_uvs ? _material_field(mat, :glossiness_map) : nothing
-        physical_pbr_map = has_uvs ? _physical_pbr_map(mat) : nothing
-        alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
-        ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
-        emissive_map = has_uvs ? _material_field(mat, :emissive_map) : nothing
-        light_map = has_uvs ? _material_field(mat, :light_map) : nothing
-        uv2_attr = _uv2_attribute(geo)
-        color_attr = (_wants_vertex_colors(mat) && has_attribute(geo, :color)) ?
-                     get_attribute(geo, :color) : nothing
-        use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
-                            length(color_attr.data) >= geo.n_vertices * color_attr.item_size
-        for fi in 1:geo.n_faces
-            i1, i2, i3 = get_face(geo, fi)
-            if side !== :double
-                w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
-                w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
-                w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
-                wc = Vec3((w1.x+w2.x+w3.x)/3, (w1.y+w2.y+w3.y)/3, (w1.z+w2.z+w3.z)/3)
-                fn = _flat_face_normal(geo, i1, i2, i3, w1, w2, w3, normal_mat, has_normals)
-                # Orthographic rays are parallel, so facing is judged against the
-                # constant view direction; the eye-point vector is perspective-only.
-                facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
-                (side === :front ? facing <= 0 : facing > 0) && continue
+    use_stamp = stamp !== nothing
+    area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
+    abs(area) < 1e-10 && return nothing
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    fW, fH = Float64(W), Float64(H)
+    inv_area = 1.0 / area
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
+    has_clip = !isempty(clipping_planes)
+    alpha_test = material_alpha_test(material)
+    alpha_base = Float64(material_opacity(material))
+    @inbounds for py in min_y:max_y
+        for px in min_x:max_x
+            cx = px - 0.5
+            cy = py - 0.5
+            b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
+            b1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
+            b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
+            z = b0 * z1 + b1 * z2 + b2 * z3
+            (!depth_test || z < rt.depth[py, px]) || continue
+            use_stamp && stamp[py, px] == stamp_id && continue
+            alpha_base < alpha_test && continue
+            iw = b0 * iw1 + b1 * iw2 + b2 * iw3
+            a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
+            wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                      a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                      a0*wp1.z + a1*wp2.z + a2*wp3.z)
+            has_clip && (_clip_keep(clipping_planes, wp) || continue)
+            wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
+                                a0*wn1.y + a1*wn2.y + a2*wn3.y,
+                                a0*wn1.z + a1*wn2.z + a2*wn3.z))
+            vd = normalize(cam_pos - wp)
+            shade_mat = material
+            if use_vertex_colors
+                vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
+                            a0*vc1.g + a1*vc2.g + a2*vc3.g,
+                            a0*vc1.b + a1*vc2.b + a2*vc3.b)
+                shade_mat = _with_vertex_color(material, vc)
             end
-            # Geometry without authored normals: fall back to the local-space
-            # winding normal once per face (matching `_flat_face_normal`'s
-            # fallback in the flat path) instead of indexing the empty buffer.
-            fallback_n = _ZERO_V3
-            if !has_normals
-                p1 = get_vertex(geo, i1); p2 = get_vertex(geo, i2); p3 = get_vertex(geo, i3)
-                gn = cross(p2 - p1, p3 - p1)
-                gl = norm(gn)
-                fallback_n = gl > 1e-12 ? gn / gl : Vec3(0.0, 0.0, 1.0)
+            col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
+            col = clamp_color(col)
+            if use_stamp
+                ia = 1.0 - alpha_base
+                rt.color[py, px, 1] = col.r * alpha_base + rt.color[py, px, 1] * ia
+                rt.color[py, px, 2] = col.g * alpha_base + rt.color[py, px, 2] * ia
+                rt.color[py, px, 3] = col.b * alpha_base + rt.color[py, px, 3] * ia
+                depth_write && (rt.depth[py, px] = z)
+                stamp[py, px] = stamp_id
+            else
+                depth_write && (rt.depth[py, px] = z)
+                rt.color[py, px, 1] = col.r
+                rt.color[py, px, 2] = col.g
+                rt.color[py, px, 3] = col.b
             end
-            @inbounds begin
-                tri[1] = _shade_vertex(geo, i1, world_mat, normal_mat, modelview,
-                                       has_normals, fallback_n, has_uvs, uv2_attr,
-                                       use_vertex_colors, color_attr)
-                tri[2] = _shade_vertex(geo, i2, world_mat, normal_mat, modelview,
-                                       has_normals, fallback_n, has_uvs, uv2_attr,
-                                       use_vertex_colors, color_attr)
-                tri[3] = _shade_vertex(geo, i3, world_mat, normal_mat, modelview,
-                                       has_normals, fallback_n, has_uvs, uv2_attr,
-                                       use_vertex_colors, color_attr)
-            end
-            m = _clip_near_attr!(clipped, tri, 3, near)
-            m < 3 && continue
-            @inbounds for k in 1:m
-                cv = mat4_transform_vec4(proj, clipped[k].vp)
-                invw = 1.0 / cv.w
-                sx[k] = (cv.x * invw + 1) * 0.5 * W
-                sy[k] = (1 - cv.y * invw) * 0.5 * H
-                # Depth stored in the z-buffer: NDC z by default, or the
-                # logarithmic encoding of the clip-space w (= view distance) when
-                # `log_depth` is set. Both are monotone in distance so the z-test
-                # is unchanged; the encoded value is interpolated as a varying.
-                sz[k] = log_depth ? _encode_log_depth(cv.w, inv_log_far) : cv.z * invw
-                iw[k] = invw
-            end
-            @inbounds for k in 2:(m - 1)
+        end
+    end
+    return nothing
+end
+
+function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
+                              mat::M, lights, proj::Mat4, view::Mat4, near,
+                              cam_pos::Vec3, shadow_fn, tri::Vector{ShadeVtx},
+                              clipped::Vector{ShadeVtx}, sx::Vector{Float64},
+                              sy::Vector{Float64}, sz::Vector{Float64},
+                              iw::Vector{Float64}, clipping_planes,
+                              xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                              log_depth::Bool, inv_log_far::Float64, ortho_dir,
+                              stamp, stamp_id::Int) where {M<:AbstractMaterial}
+    W, H = rt.width, rt.height
+    mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
+    world_mat = compute_world_matrix(mesh)
+    modelview = view * world_mat
+    normal_mat = mat4_transpose(mat4_inverse(world_mat))
+    mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                     material_clipping_planes(mat))
+    depth_test = material_depth_test(mat)
+    depth_write = material_depth_write(mat)
+    # Back-face culling, matching the flat path (`_rasterize_geo_flat!`): the
+    # per-pixel path must agree with the per-face path on which faces survive.
+    side = material_side(mat)
+    has_normals = length(geo.normals) >= geo.n_vertices * 3
+    # Per-pixel material maps, applied only when the
+    # geometry carries UVs and the material exposes the map. Matches the flat
+    # path's material-map handling so textured surfaces agree.
+    has_uvs = length(geo.uvs) >= geo.n_vertices * 2
+    albedo_map = has_uvs ? _material_field(mat, :map) : nothing
+    normal_map = has_uvs ? _material_field(mat, :normal_map) : nothing
+    normal_scale = _material_scalar(mat, :normal_scale, 1.0)
+    roughness_map = has_uvs ? _material_field(mat, :roughness_map) : nothing
+    metalness_map = has_uvs ? _material_field(mat, :metalness_map) : nothing
+    specular_map = has_uvs ? _material_field(mat, :specular_map) : nothing
+    glossiness_map = has_uvs ? _material_field(mat, :glossiness_map) : nothing
+    physical_pbr_map = has_uvs ? _physical_pbr_map(mat) : nothing
+    alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
+    ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
+    emissive_map = has_uvs ? _material_field(mat, :emissive_map) : nothing
+    light_map = has_uvs ? _material_field(mat, :light_map) : nothing
+    has_uv_maps = albedo_map !== nothing || alpha_map !== nothing ||
+                  normal_map !== nothing || roughness_map !== nothing ||
+                  metalness_map !== nothing || specular_map !== nothing ||
+                  glossiness_map !== nothing || physical_pbr_map !== nothing ||
+                  ao_map !== nothing || emissive_map !== nothing ||
+                  light_map !== nothing
+    uv2_attr = _uv2_attribute(geo)
+    color_attr = (_wants_vertex_colors(mat) && has_attribute(geo, :color)) ?
+                 get_attribute(geo, :color) : nothing
+    use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
+                        length(color_attr.data) >= geo.n_vertices * color_attr.item_size
+    for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        if side !== :double
+            w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
+            w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
+            w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
+            wc = Vec3((w1.x+w2.x+w3.x)/3, (w1.y+w2.y+w3.y)/3, (w1.z+w2.z+w3.z)/3)
+            fn = _flat_face_normal(geo, i1, i2, i3, w1, w2, w3, normal_mat, has_normals)
+            # Orthographic rays are parallel, so facing is judged against the
+            # constant view direction; the eye-point vector is perspective-only.
+            facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
+            (side === :front ? facing <= 0 : facing > 0) && continue
+        end
+        # Geometry without authored normals: fall back to the local-space
+        # winding normal once per face (matching `_flat_face_normal`'s
+        # fallback in the flat path) instead of indexing the empty buffer.
+        fallback_n = _ZERO_V3
+        if !has_normals
+            p1 = get_vertex(geo, i1); p2 = get_vertex(geo, i2); p3 = get_vertex(geo, i3)
+            gn = cross(p2 - p1, p3 - p1)
+            gl = norm(gn)
+            fallback_n = gl > 1e-12 ? gn / gl : Vec3(0.0, 0.0, 1.0)
+        end
+        @inbounds begin
+            tri[1] = _shade_vertex(geo, i1, world_mat, normal_mat, modelview,
+                                   has_normals, fallback_n, has_uvs, uv2_attr,
+                                   use_vertex_colors, color_attr)
+            tri[2] = _shade_vertex(geo, i2, world_mat, normal_mat, modelview,
+                                   has_normals, fallback_n, has_uvs, uv2_attr,
+                                   use_vertex_colors, color_attr)
+            tri[3] = _shade_vertex(geo, i3, world_mat, normal_mat, modelview,
+                                   has_normals, fallback_n, has_uvs, uv2_attr,
+                                   use_vertex_colors, color_attr)
+        end
+        m = _clip_near_attr!(clipped, tri, 3, near)
+        m < 3 && continue
+        @inbounds for k in 1:m
+            cv = mat4_transform_vec4(proj, clipped[k].vp)
+            invw = 1.0 / cv.w
+            sx[k] = (cv.x * invw + 1) * 0.5 * W
+            sy[k] = (1 - cv.y * invw) * 0.5 * H
+            # Depth stored in the z-buffer: NDC z by default, or the
+            # logarithmic encoding of the clip-space w (= view distance) when
+            # `log_depth` is set. Both are monotone in distance so the z-test
+            # is unchanged; the encoded value is interpolated as a varying.
+            sz[k] = log_depth ? _encode_log_depth(cv.w, inv_log_far) : cv.z * invw
+            iw[k] = invw
+        end
+        @inbounds for k in 2:(m - 1)
+            if has_uv_maps
                 _rasterize_tri_smooth!(rt,
                     sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
                     sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
@@ -539,9 +617,109 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                     ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
-                    stamp=stamp, stamp_id=stamp_id)
+                    stamp=stamp, stamp_id=stamp_id,
+                    use_vertex_colors=use_vertex_colors)
+            else
+                _rasterize_tri_smooth_nomaps!(rt,
+                    sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].vc,
+                    sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].vc,
+                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].vc,
+                    mat, lights, cam_pos, mesh_shadow_fn, mesh_clipping_planes;
+                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                    depth_test=depth_test, depth_write=depth_write,
+                    stamp=stamp, stamp_id=stamp_id,
+                    use_vertex_colors=use_vertex_colors)
             end
         end
+    end
+    return nothing
+end
+
+@inline function _render_smooth_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh,
+                                                lights, proj::Mat4, view::Mat4, near,
+                                                cam_pos::Vec3, shadow_fn,
+                                                tri::Vector{ShadeVtx},
+                                                clipped::Vector{ShadeVtx},
+                                                sx::Vector{Float64},
+                                                sy::Vector{Float64},
+                                                sz::Vector{Float64},
+                                                iw::Vector{Float64},
+                                                clipping_planes,
+                                                xlo::Int, xhi::Int,
+                                                ylo::Int, yhi::Int,
+                                                log_depth::Bool,
+                                                inv_log_far::Float64,
+                                                ortho_dir, stamp, stamp_id::Int)
+    geo = _mesh_geometry(mesh)
+    mat = _mesh_material(mesh)
+    if mat isa MeshBasicMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshBasicMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshLambertMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshLambertMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshPhongMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhongMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshStandardMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshStandardMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshPhysicalMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhysicalMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshToonMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshToonMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshNormalMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshNormalMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshMatcapMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshMatcapMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa MeshDepthMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshDepthMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa ShaderMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::ShaderMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa SpriteMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::SpriteMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa LineBasicMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::LineBasicMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa LineDashedMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::LineDashedMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    elseif mat isa PointsMaterial
+        _render_smooth_mesh!(rt, mesh, geo, mat::PointsMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    else
+        _render_smooth_mesh!(rt, mesh, geo, mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+    end
+    return nothing
+end
+
+function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam_pos, shadow_fn=nothing;
+                         clipping_planes=_NO_PLANES,
+                         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
+                         log_depth::Bool=false, inv_log_far::Float64=1.0, ortho_dir=nothing,
+                         stamp=nothing, stamp_id::Int=0,
+                         smooth_tri=nothing, smooth_clipped=nothing,
+                         smooth_sx=nothing, smooth_sy=nothing,
+                         smooth_sz=nothing, smooth_iw=nothing)
+    tri = smooth_tri === nothing ? Vector{ShadeVtx}(undef, 3) :
+          smooth_tri::Vector{ShadeVtx}
+    clipped = if smooth_clipped === nothing
+        buf = ShadeVtx[]
+        sizehint!(buf, 6)
+        buf
+    else
+        buf = smooth_clipped::Vector{ShadeVtx}
+        empty!(buf)
+        buf
+    end
+    sx = smooth_sx === nothing ? Vector{Float64}(undef, 8) :
+         smooth_sx::Vector{Float64}
+    sy = smooth_sy === nothing ? Vector{Float64}(undef, 8) :
+         smooth_sy::Vector{Float64}
+    sz = smooth_sz === nothing ? Vector{Float64}(undef, 8) :
+         smooth_sz::Vector{Float64}
+    iw = smooth_iw === nothing ? Vector{Float64}(undef, 8) :
+         smooth_iw::Vector{Float64}
+    for mesh in meshes
+        !is_visible(mesh) && continue
+        _render_smooth_mesh_from_mesh!(rt, mesh, lights, proj, view, near,
+                                       cam_pos, shadow_fn, tri, clipped,
+                                       sx, sy, sz, iw, clipping_planes,
+                                       xlo, xhi, ylo, yhi, log_depth,
+                                       inv_log_far, ortho_dir, stamp, stamp_id)
     end
     return rt
 end
@@ -790,7 +968,13 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _render_smooth!(rt, smooth_meshes, lights, proj, view, near, camera.position, shadow_fn;
                         clipping_planes=clipping_planes,
                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                        log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+                        log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
+                        smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
+                        smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
+                        smooth_sx=cache === nothing ? nothing : sx,
+                        smooth_sy=cache === nothing ? nothing : sy,
+                        smooth_sz=cache === nothing ? nothing : sz,
+                        smooth_iw=cache === nothing ? nothing : cache.smooth_iw)
 
     # Transparent pass: back-to-front, z-tested against the current depth buffer
     # and alpha-blended over the existing colour. Depth writes follow the
@@ -817,7 +1001,13 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                 clipping_planes=clipping_planes,
                                 xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                 log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
-                                stamp=stamp, stamp_id=sid)
+                                stamp=stamp, stamp_id=sid,
+                                smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
+                                smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
+                                smooth_sx=cache === nothing ? nothing : sx,
+                                smooth_sy=cache === nothing ? nothing : sy,
+                                smooth_sz=cache === nothing ? nothing : sz,
+                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw)
             end
         end
     end

@@ -4878,7 +4878,7 @@ end
         @test uniq(rts) > 5 * uniq(rtf)
         smooth_cache = RenderCache()
         render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
-        @test_opt_alloc 700000 render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
+        @test_opt_alloc 4096 render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
 
         # Invalid shading mode is rejected.
         @test_throws ArgumentError render!(RenderTarget(8, 8), scene, cam; shading=:bogus)
@@ -10475,6 +10475,27 @@ end
         @test maximum(abs.(many_transparent_expected.color .- many_transparent_rt.color)) < 1e-12
         @test_opt_alloc 4096 render!(many_transparent_rt, many_transparent_scene, line_cam;
                                      cache=many_transparent_cache)
+
+        many_smooth_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_smooth_geo = SphereGeometry(radius=0.08, width_segments=8, height_segments=4)
+        many_smooth_mat = MeshLambertMaterial(color=Color3(0.8,0.4,0.3))
+        for i in 1:32
+            m = Mesh(many_smooth_geo, many_smooth_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_smooth_scene, m)
+        end
+        add!(many_smooth_scene, AmbientLight(intensity=1.0))
+        many_smooth_expected = RenderTarget(64, 64)
+        many_smooth_rt = RenderTarget(64, 64)
+        many_smooth_cache = RenderCache()
+        render!(many_smooth_expected, many_smooth_scene, line_cam; shading=:smooth)
+        render!(many_smooth_rt, many_smooth_scene, line_cam; shading=:smooth,
+                cache=many_smooth_cache)
+        @test maximum(abs.(many_smooth_expected.color .- many_smooth_rt.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_smooth_rt, many_smooth_scene, line_cam;
+                                     shading=:smooth, cache=many_smooth_cache)
 
         alpha_discard_scene = Scene(background=Color3(0.0,0.0,0.0))
         alpha_discard_mat = MeshBasicMaterial(color=Color3(1.0,1.0,1.0),
