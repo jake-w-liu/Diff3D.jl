@@ -53,6 +53,19 @@ function downsample(img::AbstractArray, ss::Int)
         throw(ArgumentError("downsample image dimensions must be divisible by scale"))
     H, W = Hb ÷ ss, Wb ÷ ss
     out = zeros(Float64, H, W, 3)
+    downsample!(out, img, ss)
+    return out
+end
+
+function downsample!(out::AbstractArray, img::AbstractArray, ss::Int)
+    ss > 0 || throw(ArgumentError("downsample scale must be positive"))
+    Hb, Wb = _rgb_image_size(img, "downsample")
+    (Hb % ss == 0 && Wb % ss == 0) ||
+        throw(ArgumentError("downsample image dimensions must be divisible by scale"))
+    H, W = Hb ÷ ss, Wb ÷ ss
+    Ho, Wo = _rgb_image_size(out, "downsample output")
+    (Ho == H && Wo == W) ||
+        throw(ArgumentError("downsample output dimensions must match input ÷ scale"))
     inv = 1.0 / (ss * ss)
     @inbounds for c in 1:3, i in 1:H, j in 1:W
         s = 0.0
@@ -74,19 +87,26 @@ function render_aa(scene::Scene, camera::AbstractCamera, width::Int, height::Int
 end
 
 """
-    render_msaa!(rt, scene, camera; samples=4, shading=:flat, shadows=false)
+    render_msaa!(rt, scene, camera; samples=4, shading=:flat, shadows=false, cache=nothing)
 
 In-renderer multisample anti-aliasing: render an internal ⌈√samples⌉× target and
 box-downsample into `rt.color`. Unlike `render_aa` (which returns an array), this
 fills the supplied `RenderTarget`, so the renderer itself yields an AA frame.
+Pass `cache=RenderCache()` to reuse the internal high-resolution render target
+and renderer scratch buffers across frames.
 """
 function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
-                      samples::Int=4, shading::Symbol=:flat, shadows::Bool=false)
+                      samples::Int=4, shading::Symbol=:flat, shadows::Bool=false,
+                      cache=nothing)
     samples > 0 || throw(ArgumentError("render_msaa! samples must be positive"))
     ss = max(ceil(Int, sqrt(samples)), 1)
-    big = RenderTarget(rt.width*ss, rt.height*ss)
-    render!(big, scene, camera; shading=shading, shadows=shadows)
-    rt.color .= downsample(big.color, ss)
+    big_w = rt.width * ss
+    big_h = rt.height * ss
+    big = cache === nothing ? RenderTarget(big_w, big_h) :
+          _render_cache_msaa_target!(cache, big_w, big_h)
+    render!(big, scene, camera; shading=shading, shadows=shadows,
+            cache=cache === nothing ? nothing : cache)
+    downsample!(rt.color, big.color, ss)
     return rt
 end
 
@@ -115,6 +135,7 @@ mutable struct RenderCache
     smooth_tri::Vector{ShadeVtx}
     smooth_clipped::Vector{ShadeVtx}
     smooth_iw::Vector{Float64}
+    msaa_target::Union{Nothing,RenderTarget{Float64}}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
@@ -124,7 +145,16 @@ function RenderCache()
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
-                Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8))
+                Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing)
+end
+
+function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)
+    target = cache.msaa_target
+    if target === nothing || target.width != width || target.height != height
+        target = RenderTarget(width, height)
+        cache.msaa_target = target
+    end
+    return target
 end
 
 @inline _instanced_geometry(mesh::InstancedMesh)::BufferGeometry = mesh.geometry

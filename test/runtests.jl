@@ -10227,6 +10227,11 @@ end
         rt = RenderTarget(48, 48); render_msaa!(rt, scene, cam; samples=9)
         @test size(rt.color) == (48, 48, 3)
         @test count(v -> 0.05 < v < 0.95, rt.color[:,:,1]) > 10   # anti-aliased edge band
+        rt_cached = RenderTarget(48, 48)
+        msaa_cache = RenderCache()
+        render_msaa!(rt_cached, scene, cam; samples=9, cache=msaa_cache)
+        @test maximum(abs.(rt.color .- rt_cached.color)) < 1e-12
+        @test_opt_alloc 4096 render_msaa!(rt_cached, scene, cam; samples=9, cache=msaa_cache)
     end
 
     @testset "Pooled rendering — identical output, bounded allocation" begin
