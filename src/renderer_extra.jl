@@ -172,7 +172,10 @@ function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
                                       alpha, stamp, stamp_id::Int, shadow_fn,
                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                       clipping_planes, log_depth::Bool,
-                                      inv_log_far::Float64, ortho_dir)
+                                      inv_log_far::Float64, ortho_dir,
+                                      flat_attr_tri=nothing,
+                                      flat_attr_clipped=nothing,
+                                      flat_iw=nothing)
     mesh_shadow_fn = shadow_fn === nothing ? nothing : (mesh.receive_shadow ? shadow_fn : nothing)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
@@ -181,7 +184,10 @@ function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
                          stamp_id=stamp_id, shadow_fn=mesh_shadow_fn, xlo=xlo, xhi=xhi,
                          ylo=ylo, yhi=yhi, colorbuf=colorbuf,
                          clipping_planes=mesh_clipping_planes, log_depth=log_depth,
-                         inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+                         inv_log_far=inv_log_far, ortho_dir=ortho_dir,
+                         flat_attr_tri=flat_attr_tri,
+                         flat_attr_clipped=flat_attr_clipped,
+                         flat_iw=flat_iw)
 end
 
 function _rasterize_flat_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
@@ -191,7 +197,10 @@ function _rasterize_flat_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Ma
                                          alpha, stamp, stamp_id::Int, shadow_fn,
                                          xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                          clipping_planes, log_depth::Bool,
-                                         inv_log_far::Float64, ortho_dir)
+                                         inv_log_far::Float64, ortho_dir,
+                                         flat_attr_tri=nothing,
+                                         flat_attr_clipped=nothing,
+                                         flat_iw=nothing)
     geo = _mesh_geometry(mesh)
     mat = mesh.material
     if mat isa MeshBasicMaterial
@@ -199,67 +208,78 @@ function _rasterize_flat_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Ma
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshLambertMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshPhongMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshStandardMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshNormalMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshPhysicalMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshToonMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshMatcapMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa MeshDepthMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     elseif mat isa ShaderMaterial
         _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
                                      cam_pos, tri, clipped, sx, sy, sz, colorbuf,
                                      alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
                                      ylo, yhi, clipping_planes, log_depth, inv_log_far,
-                                     ortho_dir)
+                                     ortho_dir, flat_attr_tri, flat_attr_clipped,
+                                     flat_iw)
     else
         _rasterize_flat_mesh_cached!(rt, geo, mat::AbstractMaterial, mesh, world, lights,
                                      proj, view, near, cam_pos, tri, clipped, sx, sy,
                                      sz, colorbuf, alpha, stamp, stamp_id, shadow_fn,
                                      xlo, xhi, ylo, yhi, clipping_planes, log_depth,
-                                     inv_log_far, ortho_dir)
+                                     inv_log_far, ortho_dir, flat_attr_tri,
+                                     flat_attr_clipped, flat_iw)
     end
 end
 
@@ -276,12 +296,16 @@ function _rasterize_flat_mesh_material_opacity_cached!(rt::RenderTarget,
                                                        yhi::Int, clipping_planes,
                                                        log_depth::Bool,
                                                        inv_log_far::Float64,
-                                                       ortho_dir)
+                                                       ortho_dir,
+                                                       flat_attr_tri=nothing,
+                                                       flat_attr_clipped=nothing,
+                                                       flat_iw=nothing)
     _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view,
                                  near, cam_pos, tri, clipped, sx, sy, sz,
                                  colorbuf, Float64(material_opacity(mat)), stamp,
                                  stamp_id, shadow_fn, xlo, xhi, ylo, yhi,
-                                 clipping_planes, log_depth, inv_log_far, ortho_dir)
+                                 clipping_planes, log_depth, inv_log_far, ortho_dir,
+                                 flat_attr_tri, flat_attr_clipped, flat_iw)
 end
 
 function _rasterize_flat_mesh_material_opacity_from_mesh!(rt::RenderTarget,
@@ -295,65 +319,79 @@ function _rasterize_flat_mesh_material_opacity_from_mesh!(rt::RenderTarget,
                                                           yhi::Int, clipping_planes,
                                                           log_depth::Bool,
                                                           inv_log_far::Float64,
-                                                          ortho_dir)
+                                                          ortho_dir,
+                                                          flat_attr_tri=nothing,
+                                                          flat_attr_clipped=nothing,
+                                                          flat_iw=nothing)
     geo = _mesh_geometry(mesh)
     mat = mesh.material
     if mat isa MeshBasicMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshLambertMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshPhongMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshStandardMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshNormalMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshPhysicalMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshToonMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshMatcapMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa MeshDepthMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     elseif mat isa ShaderMaterial
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
             clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
-            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir,
+            flat_attr_tri, flat_attr_clipped, flat_iw)
     else
         _rasterize_flat_mesh_material_opacity_cached!(
             rt, geo, mat::AbstractMaterial, mesh, world, lights, proj, view, near,
             cam_pos, tri, clipped, sx, sy, sz, colorbuf, stamp, stamp_id,
             shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
-            inv_log_far, ortho_dir)
+            inv_log_far, ortho_dir, flat_attr_tri, flat_attr_clipped,
+            flat_iw)
     end
     return nothing
 end
@@ -1222,16 +1260,38 @@ end
     return nothing
 end
 
+mutable struct _SpriteRenderState
+    stamp::Union{Nothing,Matrix{Int}}
+    stamp_id::Int
+end
+
 function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, camera::AbstractCamera,
                               view::Mat4, vp::Mat4, W::Int, H::Int,
                               clipping_planes, xlo::Int, xhi::Int,
                               ylo::Int, yhi::Int,
                               cache::Union{Nothing,RenderCache},
-                              stamp::Union{Nothing,Matrix{Int}},
-                              stamp_id::Int)
-    stamp_id += 1
-    M = sprite_world_matrix(obj, camera)
+                              state::_SpriteRenderState)
     mat = obj.material
+    if mat isa SpriteMaterial
+        return _draw_sprite_object_material!(rt, obj, mat::SpriteMaterial,
+                                             camera, view, vp, W, H,
+                                             clipping_planes, xlo, xhi, ylo, yhi,
+                                             cache, state)
+    end
+    return _draw_sprite_object_material!(rt, obj, mat, camera, view, vp, W, H,
+                                         clipping_planes, xlo, xhi, ylo, yhi,
+                                         cache, state)
+end
+
+function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
+                                       camera::AbstractCamera, view::Mat4,
+                                       vp::Mat4, W::Int, H::Int, clipping_planes,
+                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                       cache::Union{Nothing,RenderCache},
+                                       state::_SpriteRenderState)
+    state.stamp_id += 1
+    stamp_id = state.stamp_id
+    M = sprite_world_matrix(obj, camera)
     tint = _material_field(mat, :color)
     tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
@@ -1267,25 +1327,66 @@ function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, camera::AbstractCam
     (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp, x1, y1, W, H)
     (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
     (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
-    (ok0 && ok1 && ok2 && ok3) || return stamp, stamp_id
-    stamp === nothing &&
-        (stamp = cache === nothing ? zeros(Int, H, W) :
-                 _render_cache_stamp!(cache, H, W))
+    (ok0 && ok1 && ok2 && ok3) || return nothing
+    stamp = state.stamp
+    if stamp === nothing
+        stamp = cache === nothing ? zeros(Int, H, W) : _render_cache_stamp!(cache, H, W)
+        state.stamp = stamp
+    end
+    stamp_matrix = stamp::Matrix{Int}
+    if tex isa Texture && alpha_map === nothing
+        _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
+                                s1x, s1y, z1, iw1, wp1,
+                                s2x, s2y, z2, iw2, wp2,
+                                s3x, s3y, z3, iw3, wp3,
+                                tint, tex, nothing, clipping_planes,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write,
+                                alpha, alpha_test, stamp_matrix, stamp_id)
+    elseif tex === nothing && alpha_map === nothing
+        _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
+                                s1x, s1y, z1, iw1, wp1,
+                                s2x, s2y, z2, iw2, wp2,
+                                s3x, s3y, z3, iw3, wp3,
+                                tint, nothing, nothing, clipping_planes,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write,
+                                alpha, alpha_test, stamp_matrix, stamp_id)
+    else
+        _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
+                                s1x, s1y, z1, iw1, wp1,
+                                s2x, s2y, z2, iw2, wp2,
+                                s3x, s3y, z3, iw3, wp3,
+                                tint, tex, alpha_map, clipping_planes,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write,
+                                alpha, alpha_test, stamp_matrix, stamp_id)
+    end
+    return nothing
+end
+
+@inline function _draw_sprite_triangles!(rt::RenderTarget,
+        s0x, s0y, z0, iw0, wp0::Vec3,
+        s1x, s1y, z1, iw1, wp1::Vec3,
+        s2x, s2y, z2, iw2, wp2::Vec3,
+        s3x, s3y, z3, iw3, wp3::Vec3,
+        tint::Color3, tex, alpha_map, clipping_planes,
+        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+        depth_test::Bool, depth_write::Bool,
+        alpha::Float64, alpha_test::Float64,
+        stamp::Matrix{Int}, stamp_id::Int)
     # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
-        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-        alpha_test, alpha_map, stamp, stamp_id)
+        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
+        alpha, alpha_test, alpha_map, stamp, stamp_id)
     # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
         s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
-        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-        alpha_test, alpha_map, stamp, stamp_id)
-    return stamp, stamp_id
+        tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
+        alpha, alpha_test, alpha_map, stamp, stamp_id)
+    return nothing
 end
 
 @inline _sprite_subtree_may_draw(obj::AbstractObject3D) =
@@ -1296,22 +1397,53 @@ function _render_sprites_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                        W::Int, H::Int, clipping_planes,
                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                        cache::Union{Nothing,RenderCache},
-                                       stamp::Union{Nothing,Matrix{Int}},
-                                       stamp_id::Int)
-    is_visible(obj) || return stamp, stamp_id
+                                       state::_SpriteRenderState)
+    is_visible(obj) || return nothing
     if obj isa Sprite
-        stamp, stamp_id = _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
-                                               clipping_planes, xlo, xhi, ylo, yhi,
-                                               cache, stamp, stamp_id)
+        _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
+                             clipping_planes, xlo, xhi, ylo, yhi,
+                             cache, state)
     end
+    _render_sprite_children!(rt, obj, camera, view, vp, W, H, clipping_planes,
+                             xlo, xhi, ylo, yhi, cache, state)
+    return nothing
+end
+
+function _render_sprites_visible_tree!(rt::RenderTarget, obj::Sprite,
+                                       camera::AbstractCamera, view::Mat4, vp::Mat4,
+                                       W::Int, H::Int, clipping_planes,
+                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                       cache::Union{Nothing,RenderCache},
+                                       state::_SpriteRenderState)
+    is_visible(obj) || return nothing
+    _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
+                         clipping_planes, xlo, xhi, ylo, yhi, cache, state)
+    _render_sprite_children!(rt, obj, camera, view, vp, W, H, clipping_planes,
+                             xlo, xhi, ylo, yhi, cache, state)
+    return nothing
+end
+
+function _render_sprite_children!(rt::RenderTarget, obj::AbstractObject3D,
+                                  camera::AbstractCamera, view::Mat4, vp::Mat4,
+                                  W::Int, H::Int, clipping_planes,
+                                  xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                  cache::Union{Nothing,RenderCache},
+                                  state::_SpriteRenderState)
     for child in get_children(obj)
         _sprite_subtree_may_draw(child) || continue
-        stamp, stamp_id = _render_sprites_visible_tree!(rt, child, camera, view, vp,
-                                                        W, H, clipping_planes,
-                                                        xlo, xhi, ylo, yhi,
-                                                        cache, stamp, stamp_id)
+        if child isa Sprite
+            _render_sprites_visible_tree!(rt, child::Sprite, camera, view, vp,
+                                          W, H, clipping_planes,
+                                          xlo, xhi, ylo, yhi,
+                                          cache, state)
+        else
+            _render_sprites_visible_tree!(rt, child, camera, view, vp,
+                                          W, H, clipping_planes,
+                                          xlo, xhi, ylo, yhi,
+                                          cache, state)
+        end
     end
-    return stamp, stamp_id
+    return nothing
 end
 
 """
@@ -1335,8 +1467,9 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
+    state = _SpriteRenderState(nothing, 0)
     _render_sprites_visible_tree!(rt, scene, camera, view, vp, W, H, clipping_planes,
-                                  xlo, xhi, ylo, yhi, cache, nothing, 0)
+                                  xlo, xhi, ylo, yhi, cache, state)
     return rt
 end
 

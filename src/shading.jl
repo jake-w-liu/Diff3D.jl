@@ -720,6 +720,44 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                        normal_mat, has_normals; shadow_fn=shadow_fn)
     end
 
+    if use_maps && albedo_map isa Texture && ao_map === nothing &&
+       emissive_map === nothing && normal_map === nothing &&
+       roughness_map === nothing && metalness_map === nothing &&
+       specular_map === nothing && glossiness_map === nothing &&
+       physical_pbr_map === nothing && light_map === nothing &&
+       !use_vertex_colors && env_map === nothing
+        return _shade_mesh_faces_mapped!(colors, geo, world_mat, material, lights, cam_pos,
+                                         normal_mat, has_normals, true,
+                                         albedo_map, nothing, nothing, nothing,
+                                         normal_scale, nothing, nothing, nothing,
+                                         nothing, nothing, nothing, uv2_attr,
+                                         nothing, false, nothing;
+                                         shadow_fn=shadow_fn)
+    end
+
+    return _shade_mesh_faces_mapped!(colors, geo, world_mat, material, lights, cam_pos,
+                                     normal_mat, has_normals, use_maps,
+                                     albedo_map, ao_map, emissive_map, normal_map,
+                                     normal_scale, roughness_map, metalness_map,
+                                     specular_map, glossiness_map, physical_pbr_map,
+                                     light_map, uv2_attr, color_attr,
+                                     use_vertex_colors, env_map;
+                                     shadow_fn=shadow_fn)
+end
+
+function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
+                                   geo::BufferGeometry, world_mat::Mat4,
+                                   material::AbstractMaterial,
+                                   lights::Vector{<:AbstractLight}, cam_pos::Vec3,
+                                   normal_mat::Mat4, has_normals::Bool,
+                                   use_maps::Bool, albedo_map, ao_map,
+                                   emissive_map, normal_map,
+                                   normal_scale::Float64, roughness_map,
+                                   metalness_map, specular_map, glossiness_map,
+                                   physical_pbr_map, light_map, uv2_attr,
+                                   color_attr, use_vertex_colors::Bool,
+                                   env_map; shadow_fn=nothing)
+    n_faces = geo.n_faces
     for fi in 1:n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))

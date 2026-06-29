@@ -557,6 +557,58 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                  get_attribute(geo, :color) : nothing
     use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
                         length(color_attr.data) >= geo.n_vertices * color_attr.item_size
+    if has_uv_maps && albedo_map isa Texture && alpha_map === nothing &&
+       normal_map === nothing && roughness_map === nothing &&
+       metalness_map === nothing && specular_map === nothing &&
+       glossiness_map === nothing && physical_pbr_map === nothing &&
+       ao_map === nothing && emissive_map === nothing && light_map === nothing &&
+       !use_vertex_colors
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+                                         mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+                                         xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                         ortho_dir, stamp, stamp_id, W, H, world_mat,
+                                         modelview, normal_mat, mesh_clipping_planes,
+                                         depth_test, depth_write, side, has_normals,
+                                         has_uvs, albedo_map, nothing, nothing,
+                                         nothing, nothing, nothing, nothing, nothing,
+                                         nothing, nothing, nothing, normal_scale,
+                                         true, uv2_attr, nothing, false)
+    end
+    return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+                                     mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+                                     xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                     ortho_dir, stamp, stamp_id, W, H, world_mat,
+                                     modelview, normal_mat, mesh_clipping_planes,
+                                     depth_test, depth_write, side, has_normals,
+                                     has_uvs, albedo_map, alpha_map, normal_map,
+                                     roughness_map, metalness_map, specular_map,
+                                     glossiness_map, physical_pbr_map, ao_map,
+                                     emissive_map, light_map, normal_scale,
+                                     has_uv_maps, uv2_attr, color_attr,
+                                     use_vertex_colors)
+end
+
+function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
+                                   mat::M, lights, proj::Mat4, near,
+                                   cam_pos::Vec3, mesh_shadow_fn,
+                                   tri::Vector{ShadeVtx},
+                                   clipped::Vector{ShadeVtx},
+                                   sx::Vector{Float64}, sy::Vector{Float64},
+                                   sz::Vector{Float64}, iw::Vector{Float64},
+                                   xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                   log_depth::Bool, inv_log_far::Float64,
+                                   ortho_dir, stamp, stamp_id::Int, W::Int, H::Int,
+                                   world_mat::Mat4, modelview::Mat4,
+                                   normal_mat::Mat4, mesh_clipping_planes,
+                                   depth_test::Bool, depth_write::Bool,
+                                   side::Symbol, has_normals::Bool,
+                                   has_uvs::Bool, albedo_map, alpha_map,
+                                   normal_map, roughness_map, metalness_map,
+                                   specular_map, glossiness_map, physical_pbr_map,
+                                   ao_map, emissive_map, light_map,
+                                   normal_scale::Float64, has_uv_maps::Bool,
+                                   uv2_attr, color_attr,
+                                   use_vertex_colors::Bool) where {M<:AbstractMaterial}
     for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         if side !== :double
@@ -796,6 +848,9 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
+    flat_attr_tri = stamp_cache === nothing ? nothing : stamp_cache.smooth_tri
+    flat_attr_clipped = stamp_cache === nothing ? nothing : stamp_cache.smooth_clipped
+    flat_iw = stamp_cache === nothing ? nothing : stamp_cache.smooth_iw
     @inbounds for instance_index in eachindex(instance_matrices)
         world = base * instance_matrices[instance_index]
         instance_material = _with_vertex_color(mat, instance_colors[instance_index])
@@ -809,7 +864,10 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
                                  colorbuf=colorbuf,
                                  xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                  log_depth=log_depth, inv_log_far=inv_log_far,
-                                 ortho_dir=ortho_dir)
+                                 ortho_dir=ortho_dir,
+                                 flat_attr_tri=flat_attr_tri,
+                                 flat_attr_clipped=flat_attr_clipped,
+                                 flat_iw=flat_iw)
         end
     end
     return nothing
@@ -940,7 +998,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                         sx, sy, sz, colorbuf, 1.0, nothing, 0,
                                         shadow_fn, xlo, xhi, ylo, yhi,
                                         clipping_planes, log_depth, inv_log_far,
-                                        ortho_dir)
+                                        ortho_dir,
+                                        cache === nothing ? nothing : cache.smooth_tri,
+                                        cache === nothing ? nothing : cache.smooth_clipped,
+                                        cache === nothing ? nothing : cache.smooth_iw)
     end
 
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
@@ -992,7 +1053,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                     rt, mesh, compute_world_matrix(mesh), lights, proj, view, near,
                     camera.position, tri, clipped, sx, sy, sz, colorbuf, stamp, sid,
                     shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
-                    inv_log_far, ortho_dir)
+                    inv_log_far, ortho_dir,
+                    cache === nothing ? nothing : cache.smooth_tri,
+                    cache === nothing ? nothing : cache.smooth_clipped,
+                    cache === nothing ? nothing : cache.smooth_iw)
             else
                 # Smooth-shaded transparent mesh: per-pixel interpolated normals with
                 # source-over blending (the same stamp guards against double-blend),
@@ -1182,7 +1246,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                               ylo::Int=1, yhi::Int=typemax(Int), colorbuf=nothing,
                               clipping_planes=_NO_PLANES,
                               log_depth::Bool=false, inv_log_far::Float64=1.0,
-                              ortho_dir=nothing)
+                              ortho_dir=nothing,
+                              flat_attr_tri=nothing,
+                              flat_attr_clipped=nothing,
+                              flat_iw=nothing)
     W, H = rt.width, rt.height
     modelview = view * world_mat
     face_colors = colorbuf === nothing ?
@@ -1201,10 +1268,25 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     alpha_base = Float64(alpha)
     use_fragment_alpha = _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
-    attr_tri = use_fragment_alpha ? Vector{ShadeVtx}(undef, 3) : nothing
-    attr_clipped = use_fragment_alpha ? ShadeVtx[] : nothing
-    use_fragment_alpha && sizehint!(attr_clipped::Vector{ShadeVtx}, 6)
-    siw = use_fragment_alpha ? Vector{Float64}(undef, 8) : nothing
+    attr_tri = use_fragment_alpha ?
+        (flat_attr_tri === nothing ? Vector{ShadeVtx}(undef, 3) :
+         flat_attr_tri::Vector{ShadeVtx}) : nothing
+    attr_clipped = if use_fragment_alpha
+        if flat_attr_clipped === nothing
+            buf = ShadeVtx[]
+            sizehint!(buf, 6)
+            buf
+        else
+            buf = flat_attr_clipped::Vector{ShadeVtx}
+            empty!(buf)
+            buf
+        end
+    else
+        nothing
+    end
+    siw = use_fragment_alpha ?
+        (flat_iw === nothing ? Vector{Float64}(undef, 8) :
+         flat_iw::Vector{Float64}) : nothing
     # Per-fragment clipping needs each clipped vertex's world position. The
     # near-clipped polygon is in view space with w=1 (affine), so mapping it back
     # by the inverse view matrix recovers the world position. Computed once per
