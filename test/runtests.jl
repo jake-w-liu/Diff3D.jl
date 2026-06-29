@@ -10377,6 +10377,20 @@ end
         render!(wire_expected, wire_expected_scene, line_cam; cache=RenderCache())
         @test maximum(abs.(wire_rt.color .- wire_expected.color)) < 1e-12
         @test_opt_alloc 16384 render!(wire_rt, wire_scene, line_cam; cache=wire_cache)
+        many_wire_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_wire_geo = BoxGeometry(width=0.2, height=0.2, depth=0.2)
+        many_wire_mat = MeshBasicMaterial(color=Color3(1.0,1.0,1.0), wireframe=true)
+        for i in 1:32
+            m = Mesh(many_wire_geo, many_wire_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_wire_scene, m)
+        end
+        many_wire_rt = RenderTarget(64, 64)
+        many_wire_cache = RenderCache()
+        render!(many_wire_rt, many_wire_scene, line_cam; cache=many_wire_cache)
+        @test_opt_alloc 8192 render!(many_wire_rt, many_wire_scene, line_cam; cache=many_wire_cache)
 
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),

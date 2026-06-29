@@ -122,6 +122,9 @@ function RenderCache()
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}())
 end
 
+@inline _instanced_geometry(mesh::InstancedMesh)::BufferGeometry = mesh.geometry
+@inline _instanced_material(mesh::InstancedMesh)::AbstractMaterial = mesh.material
+
 function _render_cache_stamp!(cache::RenderCache, H::Int, W::Int)
     if size(cache.stamp) != (H, W)
         cache.stamp = zeros(Int, H, W)
@@ -259,17 +262,19 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
     _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
     for mesh in cache.meshes
-        (_visible_in_tree(mesh) && !is_transparent_material(mesh.material) &&
-         !material_wireframe(mesh.material)) || continue
-        _rasterize_geo_flat_pooled!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+        mat = _mesh_material(mesh)
+        (_visible_in_tree(mesh) && !is_transparent_material(mat) &&
+         !material_wireframe(mat)) || continue
+        _rasterize_geo_flat_pooled!(rt, _mesh_geometry(mesh), compute_world_matrix(mesh), mat,
                                     cache.lights, proj, view, near, camera.position,
                                     cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz,
                                     cache.colors; ortho_dir=ortho_dir)
     end
     for im in cache.instanced
-        (_visible_in_tree(im) && !material_wireframe(im.material)) || continue
+        mat = _instanced_material(im)
+        (_visible_in_tree(im) && !material_wireframe(mat)) || continue
         base = compute_world_matrix(im)
-        _rasterize_instanced_geo_flat_pooled!(rt, im.geometry, im.material, im.instance_colors,
+        _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im), mat, im.instance_colors,
                                               im.instance_matrices, base, cache.lights, proj, view, near,
                                               camera.position, cache.tri, cache.clipped,
                                               cache.sx, cache.sy, cache.sz, cache.colors,
@@ -510,7 +515,7 @@ function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
                                 proj::Mat4, view::Mat4, near,
                                 xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                 stamp::Matrix{Int}, stamp_id::Int)
-    _draw_instanced_lines_geometry!(rt, obj.geometry, obj.material,
+    _draw_instanced_lines_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
                                     obj.instance_matrices, obj.instance_colors,
                                     compute_world_matrix(obj), obj.draw_mode,
                                     proj, view, near, xlo, xhi, ylo, yhi,
@@ -593,11 +598,10 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     return rt
 end
 
-function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
-                                 world::Mat4, proj::Mat4, view::Mat4, near;
-                                 xlo::Int=1, xhi::Int=rt.width,
-                                 ylo::Int=1, yhi::Int=rt.height,
-                                 cache::Union{Nothing,RenderCache}=nothing)
+function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
+                                        world::Mat4, proj::Mat4, view::Mat4, near,
+                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                        cache::Union{Nothing,RenderCache})
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     col = hasfield(typeof(mat), :color) ? mat.color : Color3(1.0, 1.0, 1.0)
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
@@ -623,6 +627,57 @@ function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::Abs
         end
     end
     return nothing
+end
+
+function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
+                                 world::Mat4, proj::Mat4, view::Mat4, near;
+                                 xlo::Int=1, xhi::Int=rt.width,
+                                 ylo::Int=1, yhi::Int=rt.height,
+                                 cache::Union{Nothing,RenderCache}=nothing)
+    _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                   xlo, xhi, ylo, yhi, cache)
+end
+
+function _render_wireframe_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
+                                           proj::Mat4, view::Mat4, near,
+                                           xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                           cache::Union{Nothing,RenderCache})
+    geo = _mesh_geometry(mesh)
+    mat = mesh.material
+    if mat isa MeshBasicMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshLambertMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshPhongMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshStandardMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshNormalMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshPhysicalMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshToonMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshMatcapMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa MeshDepthMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    elseif mat isa ShaderMaterial
+        _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    else
+        _render_wireframe_mesh_cached!(rt, geo, mat::AbstractMaterial, world, proj, view, near,
+                                       xlo, xhi, ylo, yhi, cache)
+    end
 end
 
 # ========================== Sprite rasterization ==========================
@@ -944,7 +999,7 @@ function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
                                  camera::AbstractCamera, proj::Mat4, view::Mat4,
                                  near, W::Int, H::Int, xlo::Int, xhi::Int,
                                  ylo::Int, yhi::Int)
-    _draw_instanced_points_geometry!(rt, obj.geometry, obj.material,
+    _draw_instanced_points_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
                                      obj.instance_matrices, obj.instance_colors,
                                      compute_world_matrix(obj), camera, proj, view,
                                      near, W, H, xlo, xhi, ylo, yhi)
@@ -1414,8 +1469,9 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         colorbuf = thread_cache.colors
         for mesh in meshes
             is_visible(mesh) || continue
-            is_transparent_material(mesh.material) && continue
-            _rasterize_geo_flat_pooled!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+            mat = _mesh_material(mesh)
+            is_transparent_material(mat) && continue
+            _rasterize_geo_flat_pooled!(rt, _mesh_geometry(mesh), compute_world_matrix(mesh), mat,
                                         lights, proj, view, near, camera.position,
                                         tri, clipped, sx, sy, sz, colorbuf;
                                         ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
@@ -1425,7 +1481,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             _visible_in_tree(im) || continue
             _instanced_triangle_drawable(im) || continue
             base = compute_world_matrix(im)
-            _rasterize_instanced_geo_flat_pooled!(rt, im.geometry, im.material, im.instance_colors,
+            _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im), _instanced_material(im), im.instance_colors,
                                                   im.instance_matrices, base, lights, proj, view, near,
                                                   camera.position, tri, clipped, sx, sy, sz,
                                                   colorbuf, ortho_dir; ylo=ylo, yhi=yhi)

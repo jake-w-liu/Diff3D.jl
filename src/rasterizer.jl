@@ -58,6 +58,8 @@ end
 
 @inline _camera_near(c::AbstractCamera) = c.near
 @inline _camera_far(c::AbstractCamera) = c.far
+@inline _mesh_geometry(mesh::Mesh)::BufferGeometry = mesh.geometry
+@inline _mesh_material(mesh::Mesh)::AbstractMaterial = mesh.material
 
 # Logarithmic depth encoding (three.js `logarithmicDepthBuffer`, interpolated-
 # varying fallback). Given the clip-space `w` of a vertex (for a perspective
@@ -447,8 +449,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
         world_mat = compute_world_matrix(mesh)
         modelview = view * world_mat
         normal_mat = mat4_transpose(mat4_inverse(world_mat))
-        geo = mesh.geometry
-        mat = mesh.material
+        geo = _mesh_geometry(mesh)
+        mat = _mesh_material(mesh)
         mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                          material_clipping_planes(mat))
         depth_test = material_depth_test(mat)
@@ -620,9 +622,8 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
         world = base * instance_matrices[instance_index]
         instance_material = _with_vertex_color(mat, instance_colors[instance_index])
         if wireframe
-            _render_wireframe_mesh!(rt, geo, instance_material, world, proj, view, near;
-                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    cache=stamp_cache)
+            _render_wireframe_mesh_cached!(rt, geo, instance_material, world, proj, view, near,
+                                           xlo, xhi, ylo, yhi, stamp_cache)
         else
             _rasterize_geo_flat!(rt, geo, world, instance_material,
                                  lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
@@ -737,10 +738,12 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     for mesh in meshes
         !_visible_in_tree(mesh) && continue
         wm = compute_world_matrix(mesh)
-        (frustum === nothing || _mesh_in_frustum(frustum, mesh.geometry, wm)) || continue
-        if material_wireframe(mesh.material)
+        geo = _mesh_geometry(mesh)
+        mat = _mesh_material(mesh)
+        (frustum === nothing || _mesh_in_frustum(frustum, geo, wm)) || continue
+        if material_wireframe(mat)
             push!(wireframe_meshes, mesh)
-        elseif is_transparent_material(mesh.material)
+        elseif is_transparent_material(mat)
             push!(transparent, mesh)
         elseif _mesh_is_flat(mesh, shading)
             push!(opaque_flat, mesh)
@@ -757,10 +760,12 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
 
     for mesh in opaque_flat
+        geo = _mesh_geometry(mesh)
+        mat = _mesh_material(mesh)
         mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
         mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                         material_clipping_planes(mesh.material))
-        _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+                                                         material_clipping_planes(mat))
+        _rasterize_geo_flat!(rt, geo, compute_world_matrix(mesh), mat,
                              lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
                              shadow_fn=mesh_shadow_fn, clipping_planes=mesh_clipping_planes,
                              colorbuf=colorbuf,
@@ -775,8 +780,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue
         base = compute_world_matrix(im)
+        geo = _instanced_geometry(im)
+        mat = _instanced_material(im)
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
-        _render_instanced_mesh_flat!(rt, im.geometry, im.material, im.instance_colors,
+        _render_instanced_mesh_flat!(rt, geo, mat, im.instance_colors,
                                      im.instance_matrices, base, lights, proj, view, near,
                                      camera.position, tri, clipped, sx, sy, sz;
                                      shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
@@ -803,13 +810,15 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
         for mesh in transparent
+            geo = _mesh_geometry(mesh)
+            mat = _mesh_material(mesh)
             mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
             mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                             material_clipping_planes(mesh.material))
+                                                             material_clipping_planes(mat))
             sid += 1
-            α = material_opacity(mesh.material)
+            α = material_opacity(mat)
             if _mesh_is_flat(mesh, shading)
-                _rasterize_geo_flat!(rt, mesh.geometry, compute_world_matrix(mesh), mesh.material,
+                _rasterize_geo_flat!(rt, geo, compute_world_matrix(mesh), mat,
                                      lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
                                      alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
                                      clipping_planes=mesh_clipping_planes,
@@ -834,9 +843,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
 
     for mesh in wireframe_meshes
-        _render_wireframe_mesh!(rt, mesh.geometry, mesh.material, compute_world_matrix(mesh),
-                                proj, view, near; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                cache=cache)
+        _render_wireframe_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh), proj, view, near,
+                                          xlo, xhi, ylo, yhi, cache)
     end
 
     # Line and point primitives (depth-tested against the mesh passes).
