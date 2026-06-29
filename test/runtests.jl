@@ -10414,6 +10414,34 @@ end
         @test maximum(abs.(many_flat_expected.color .- many_flat_rt.color)) < 1e-12
         @test_opt_alloc 4096 render!(many_flat_rt, many_flat_scene, line_cam; cache=many_flat_cache)
 
+        many_transparent_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_transparent_mat = MeshBasicMaterial(color=Color3(0.7,0.8,0.9),
+                                                 transparent=true, opacity=0.5)
+        for i in 1:32
+            m = Mesh(many_flat_geo, many_transparent_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_transparent_scene, m)
+        end
+        many_transparent_expected = RenderTarget(64, 64)
+        many_transparent_rt = RenderTarget(64, 64)
+        many_transparent_cache = RenderCache()
+        render!(many_transparent_expected, many_transparent_scene, line_cam)
+        render!(many_transparent_rt, many_transparent_scene, line_cam; cache=many_transparent_cache)
+        @test maximum(abs.(many_transparent_expected.color .- many_transparent_rt.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_transparent_rt, many_transparent_scene, line_cam;
+                                     cache=many_transparent_cache)
+
+        alpha_discard_scene = Scene(background=Color3(0.0,0.0,0.0))
+        alpha_discard_mat = MeshBasicMaterial(color=Color3(1.0,1.0,1.0),
+                                              transparent=true, opacity=0.25,
+                                              alpha_test=0.5)
+        add!(alpha_discard_scene, Mesh(many_flat_geo, alpha_discard_mat))
+        alpha_discard_rt = RenderTarget(32, 32)
+        render!(alpha_discard_rt, alpha_discard_scene, line_cam; cache=RenderCache())
+        @test maximum(alpha_discard_rt.color) == 0.0
+
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),
                                    MeshLambertMaterial(color=Color3(1.0,1.0,1.0)), 2)

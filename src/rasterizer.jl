@@ -802,16 +802,13 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
         for mesh in transparent
-            mat = _mesh_material(mesh)
             sid += 1
-            α = material_opacity(mat)
             if _mesh_is_flat(mesh, shading)
-                _rasterize_flat_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh),
-                                                lights, proj, view, near, camera.position,
-                                                tri, clipped, sx, sy, sz, colorbuf, α,
-                                                stamp, sid, shadow_fn, xlo, xhi,
-                                                ylo, yhi, clipping_planes, log_depth,
-                                                inv_log_far, ortho_dir)
+                _rasterize_flat_mesh_material_opacity_from_mesh!(
+                    rt, mesh, compute_world_matrix(mesh), lights, proj, view, near,
+                    camera.position, tri, clipped, sx, sy, sz, colorbuf, stamp, sid,
+                    shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
+                    inv_log_far, ortho_dir)
             else
                 # Smooth-shaded transparent mesh: per-pixel interpolated normals with
                 # source-over blending (the same stamp guards against double-blend),
@@ -1012,7 +1009,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
     alpha_test = material_alpha_test(mat)
     alpha_base = Float64(alpha)
-    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
+    use_fragment_alpha = _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
     attr_tri = use_fragment_alpha ? Vector{ShadeVtx}(undef, 3) : nothing
     attr_clipped = use_fragment_alpha ? ShadeVtx[] : nothing
@@ -1155,7 +1152,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                       xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                       clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
                                       iw1=iw1, iw2=iw2, iw3=iw3,
-                                      depth_test=depth_test, depth_write=depth_write)
+                                      depth_test=depth_test, depth_write=depth_write,
+                                      alpha_test=alpha_test)
             elseif has_clip
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
@@ -1163,13 +1161,15 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                 xlo=xlo, xhi=xhi,
                                 clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
                                 iw1=iw1, iw2=iw2, iw3=iw3,
-                                depth_test=depth_test, depth_write=depth_write)
+                                depth_test=depth_test, depth_write=depth_write,
+                                alpha_test=alpha_test, alpha_base=alpha_base)
             else
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
                                 xlo=xlo, xhi=xhi,
-                                depth_test=depth_test, depth_write=depth_write)
+                                depth_test=depth_test, depth_write=depth_write,
+                                alpha_test=alpha_test, alpha_base=alpha_base)
             end
         end
     end

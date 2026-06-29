@@ -224,6 +224,101 @@ function _rasterize_flat_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Ma
     end
 end
 
+function _rasterize_flat_mesh_material_opacity_cached!(rt::RenderTarget,
+                                                       geo::BufferGeometry,
+                                                       mat::AbstractMaterial,
+                                                       mesh::Mesh, world::Mat4,
+                                                       lights, proj::Mat4, view::Mat4,
+                                                       near, cam_pos::Vec3, tri,
+                                                       clipped, sx, sy, sz,
+                                                       colorbuf::Vector{Color3{Float64}},
+                                                       stamp, stamp_id::Int, shadow_fn,
+                                                       xlo::Int, xhi::Int, ylo::Int,
+                                                       yhi::Int, clipping_planes,
+                                                       log_depth::Bool,
+                                                       inv_log_far::Float64,
+                                                       ortho_dir)
+    _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view,
+                                 near, cam_pos, tri, clipped, sx, sy, sz,
+                                 colorbuf, Float64(material_opacity(mat)), stamp,
+                                 stamp_id, shadow_fn, xlo, xhi, ylo, yhi,
+                                 clipping_planes, log_depth, inv_log_far, ortho_dir)
+end
+
+function _rasterize_flat_mesh_material_opacity_from_mesh!(rt::RenderTarget,
+                                                          mesh::Mesh, world::Mat4,
+                                                          lights, proj::Mat4, view::Mat4,
+                                                          near, cam_pos::Vec3, tri,
+                                                          clipped, sx, sy, sz,
+                                                          colorbuf::Vector{Color3{Float64}},
+                                                          stamp, stamp_id::Int, shadow_fn,
+                                                          xlo::Int, xhi::Int, ylo::Int,
+                                                          yhi::Int, clipping_planes,
+                                                          log_depth::Bool,
+                                                          inv_log_far::Float64,
+                                                          ortho_dir)
+    geo = _mesh_geometry(mesh)
+    mat = mesh.material
+    if mat isa MeshBasicMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshLambertMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshPhongMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshStandardMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshNormalMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshPhysicalMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshToonMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshMatcapMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa MeshDepthMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    elseif mat isa ShaderMaterial
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat, mesh, world, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, stamp, stamp_id, shadow_fn, xlo, xhi,
+            ylo, yhi, clipping_planes, log_depth, inv_log_far, ortho_dir)
+    else
+        _rasterize_flat_mesh_material_opacity_cached!(
+            rt, geo, mat::AbstractMaterial, mesh, world, lights, proj, view, near,
+            cam_pos, tri, clipped, sx, sy, sz, colorbuf, stamp, stamp_id,
+            shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
+            inv_log_far, ortho_dir)
+    end
+    return nothing
+end
+
 function _rasterize_flat_mesh_pooled_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
                                                 lights, proj::Mat4, view::Mat4, near,
                                                 cam_pos::Vec3, tri, clipped, sx, sy, sz,
