@@ -2620,6 +2620,16 @@ end
                                                            n_iters=-1, verbose=false)
         @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
                                                        n_iters=-1, verbose=false)
+        gd_calls = Ref(0)
+        gd_counting_image(p) = (gd_calls[] += 1; linear_image(p))
+        inverse_render_optimize(p0, target, gd_counting_image, loss_mse;
+                                lr=0.2, n_iters=4, verbose=false)
+        @test gd_calls[] == 4
+        adam_calls = Ref(0)
+        adam_counting_image(p) = (adam_calls[] += 1; linear_image(p))
+        inverse_render_adam(p0, target, adam_counting_image, loss_mse;
+                            lr=0.1, n_iters=4, verbose=false)
+        @test adam_calls[] == 4
         @test_opt_alloc 8192 inverse_render_optimize(p0, target, linear_image, loss_mse;
                                                      lr=0.2, n_iters=10, verbose=false)
         @test_opt_alloc 8192 inverse_render_adam(p0, target, linear_image, loss_mse;

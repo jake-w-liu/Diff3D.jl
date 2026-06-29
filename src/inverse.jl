@@ -5,6 +5,72 @@
 
 using ForwardDiff
 
+struct _ForwardDiffValueGradientConfig{N,Tag}
+    dual_params::Vector{ForwardDiff.Dual{Tag,Float64,N}}
+end
+
+function _forwarddiff_value_gradient_config(objective::F,
+                                            params::AbstractVector{Float64}) where {F}
+    chunk = isempty(params) ? 1 : min(ForwardDiff.pickchunksize(length(params)),
+                                      length(params))
+    return _forwarddiff_value_gradient_config(objective, params, Val(chunk))
+end
+
+function _forwarddiff_value_gradient_config(::F,
+                                            params::AbstractVector{Float64},
+                                            ::Val{N}) where {F,N}
+    Tag = ForwardDiff.Tag{F, Float64}
+    dual_params = Vector{ForwardDiff.Dual{Tag,Float64,N}}(undef, length(params))
+    return _ForwardDiffValueGradientConfig{N,Tag}(dual_params)
+end
+
+function _forwarddiff_value_and_gradient!(grad::AbstractVector{Float64},
+                                          objective::F,
+                                          params::AbstractVector{Float64},
+                                          cfg::_ForwardDiffValueGradientConfig{N,Tag}) where {F,N,Tag}
+    length(grad) == length(params) ||
+        throw(ArgumentError("gradient workspace length must match params"))
+    length(cfg.dual_params) == length(params) ||
+        throw(ArgumentError("ForwardDiff workspace length must match params"))
+    n = length(params)
+    if n == 0
+        return Float64(objective(params))
+    end
+    return _forwarddiff_value_and_gradient_chunk!(grad, objective, params, cfg)
+end
+
+function _forwarddiff_value_and_gradient_chunk!(grad::AbstractVector{Float64},
+                                                objective::F,
+                                                params::AbstractVector{Float64},
+                                                cfg::_ForwardDiffValueGradientConfig{N,Tag}) where {F,N,Tag}
+    dual_params = cfg.dual_params
+    value = 0.0
+    got_value = false
+    @inbounds for first_idx in 1:N:length(params)
+        last_idx = min(first_idx + N - 1, length(params))
+        for i in eachindex(params)
+            lane = i - first_idx + 1
+            partials = ForwardDiff.Partials{N,Float64}(
+                ntuple(j -> j == lane ? 1.0 : 0.0, Val(N)))
+            dual_params[i] = ForwardDiff.Dual{Tag}(params[i], partials)
+        end
+        y = objective(dual_params)
+        if y isa ForwardDiff.Dual
+            got_value || (value = Float64(ForwardDiff.value(y)); got_value = true)
+            ypartials = ForwardDiff.partials(y)
+            for lane in 1:(last_idx - first_idx + 1)
+                grad[first_idx + lane - 1] = ypartials[lane]
+            end
+        else
+            # Objective ignored the parameters; ForwardDiff would return a zero
+            # gradient, and the first scalar value is the loss for this step.
+            fill!(grad, 0.0)
+            return Float64(y)
+        end
+    end
+    return value
+end
+
 """
 Gradient descent optimizer for inverse rendering.
 Optimizes `params` to minimize the loss between rendered image and target.
@@ -37,13 +103,11 @@ function inverse_render_optimize(initial_params::Vector{Float64},
     end
 
     grad = similar(params)
-    grad_cfg = ForwardDiff.GradientConfig(objective, params)
+    grad_cfg = _forwarddiff_value_gradient_config(objective, params)
 
     for iter in 1:n_iters
-        current_loss = objective(params)
+        current_loss = _forwarddiff_value_and_gradient!(grad, objective, params, grad_cfg)
         loss_history[iter] = current_loss
-
-        ForwardDiff.gradient!(grad, objective, params, grad_cfg)
 
         # Gradient descent step
         @inbounds for i in eachindex(params, grad)
@@ -84,15 +148,13 @@ function inverse_render_adam(initial_params::Vector{Float64},
         loss_fn(img, target_image)
     end
 
-    grad_cfg = ForwardDiff.GradientConfig(objective, params)
     one_minus_β1 = 1 - β1
     one_minus_β2 = 1 - β2
+    grad_cfg = _forwarddiff_value_gradient_config(objective, params)
 
     for iter in 1:n_iters
-        current_loss = objective(params)
+        current_loss = _forwarddiff_value_and_gradient!(grad, objective, params, grad_cfg)
         loss_history[iter] = current_loss
-
-        ForwardDiff.gradient!(grad, objective, params, grad_cfg)
 
         # Adam update
         inv_m_correction = 1 / (1 - β1^iter)
