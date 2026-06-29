@@ -15,7 +15,8 @@ documentation build and published with the docs site.
 <script>
 (function () {
   var base = typeof documenterBaseURL === "string" ? documenterBaseURL : ".";
-  var path = base.replace(/\/$/, "") + "/assets/gallery/example_gallery.html";
+  var version = Date.parse(document.lastModified || "") || Date.now();
+  var path = base.replace(/\/$/, "") + "/assets/gallery/example_gallery.html?v=" + encodeURIComponent(String(version));
   document.getElementById("diff3d-gallery-link").href = path;
   document.getElementById("diff3d-gallery-frame").src = path;
 })();

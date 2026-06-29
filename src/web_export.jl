@@ -1985,6 +1985,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   const meshFragmentShaderRuntime=cubeTexturesEnabled?meshFragmentShaderCubeLod:meshFragmentShaderCubeLod.replace(/\\n  uniform samplerCube uEnvCubeMap;/,"").replace("vec3 envColor(vec3 dir,float rough){ if(uUseEnvCubeMap>0.5) return textureCube(uEnvCubeMap,dir).rgb; ","vec3 envColor(vec3 dir,float rough){ ");
   const meshProgram=program(VSH,meshFragmentShaderRuntime), meshBoneProgram=boneTexturesEnabled?program(VSH_BONE_TEXTURE,meshFragmentShaderRuntime):meshProgram, colorProgram=program(CVSH,CFSH), pointProgram=program(PVSH,PFSH), spriteProgram=program(SVSH,SFSH), depthProgram=program(DVSH,DFSH), depthBoneProgram=boneTexturesEnabled?program(DVSH_BONE_TEXTURE,DFSH):depthProgram, pointDepthProgram=program(PDVSH,PDFSH), pointDepthBoneProgram=boneTexturesEnabled?program(PDVSH_BONE_TEXTURE,PDFSH):pointDepthProgram;
   function buf(data,target=gl.ARRAY_BUFFER,ctor=Float32Array,usage=gl.STATIC_DRAW){ const b=gl.createBuffer(); gl.bindBuffer(target,b); gl.bufferData(target,new ctor(data),usage); return b; }
+  const identityInstanceBuf=buf([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
+  const identityInstanceColorBuf=buf([1,1,1]);
   function isPow2(v){ return (v & (v - 1)) === 0; }
   function wrapMode(v){ return v==="mirror"?gl.MIRRORED_REPEAT:(v==="clamp"?gl.CLAMP_TO_EDGE:gl.REPEAT); }
   function magFilterMode(v){ return v==="nearest"?gl.NEAREST:gl.LINEAR; }
@@ -2184,7 +2186,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     o.indexType=maxIndex>65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     if(o.indexType===gl.UNSIGNED_INT && !gl.getExtension("OES_element_index_uint")) throw new Error("OES_element_index_uint is required for this exported geometry");
     o.idxBuf=buf(o.indices,gl.ELEMENT_ARRAY_BUFFER,o.indexType===gl.UNSIGNED_INT ? Uint32Array : Uint16Array);
-    o.instanceBuf=o.instanceMatrices?buf(o.instanceMatrices.flat()):null; o.instanceColorBuf=o.instanceColors?buf(o.instanceColors.flat()):null; o.instanceCount=o.instanceMatrices?o.instanceMatrices.length:1;
+    o.instanceCount=o.instanceMatrices?o.instanceMatrices.length:1; o.instanceBuf=o.instanceMatrices?buf(o.instanceMatrices.flat()):identityInstanceBuf; o.instanceColorBuf=o.instanceColors?buf(o.instanceColors.flat()):(o.instanceMatrices?buf(new Array(o.instanceCount*3).fill(1)):identityInstanceColorBuf);
     o.drawStart=Math.max(0,Math.min(Math.floor(Number(o.drawStart)||0),o.indices.length)); const remaining=Math.max(0,o.indices.length-o.drawStart), requested=o.drawCount==null?remaining:Math.max(0,Math.floor(Number(o.drawCount)||0)); o.count=Math.min(requested,remaining); return o;
   }
   for(const c of DATA.cases) c.camera=buildCamera(c.camera);
