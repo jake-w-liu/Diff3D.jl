@@ -10592,6 +10592,67 @@ end
                                      shading=:smooth,
                                      cache=many_textured_smooth_cache)
 
+        normal_data = fill(0.5, 4, 4, 3)
+        normal_data[:, :, 3] .= 1.0
+        normal_texture = Texture(normal_data; filter=:nearest, colorspace=:linear)
+        many_normal_smooth_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_normal_smooth_mat = MeshLambertMaterial(color=Color3(0.8,0.4,0.3),
+                                                     normal_map=normal_texture)
+        for i in 1:32
+            m = Mesh(many_smooth_geo, many_normal_smooth_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_normal_smooth_scene, m)
+        end
+        add!(many_normal_smooth_scene, AmbientLight(intensity=1.0))
+        many_normal_smooth_expected = RenderTarget(64, 64)
+        many_normal_smooth_rt = RenderTarget(64, 64)
+        many_normal_smooth_cache = RenderCache()
+        render!(many_normal_smooth_expected, many_normal_smooth_scene,
+                line_cam; shading=:smooth)
+        render!(many_normal_smooth_rt, many_normal_smooth_scene, line_cam;
+                shading=:smooth, cache=many_normal_smooth_cache)
+        @test maximum(abs.(many_normal_smooth_expected.color .-
+                           many_normal_smooth_rt.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_normal_smooth_rt,
+                                     many_normal_smooth_scene, line_cam;
+                                     shading=:smooth,
+                                     cache=many_normal_smooth_cache)
+
+        rough_texture = Texture(fill(0.8, 4, 4, 3);
+                                filter=:nearest, colorspace=:linear)
+        metal_texture = Texture(fill(0.2, 4, 4, 3);
+                                filter=:nearest, colorspace=:linear)
+        ao_texture = Texture(fill(1.0, 4, 4, 3);
+                             filter=:nearest, colorspace=:linear)
+        many_standard_smooth_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_standard_smooth_mat = MeshStandardMaterial(color=Color3(0.8,0.4,0.3),
+                                                        roughness_map=rough_texture,
+                                                        metalness_map=metal_texture,
+                                                        ao_map=ao_texture)
+        for i in 1:32
+            m = Mesh(many_smooth_geo, many_standard_smooth_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_standard_smooth_scene, m)
+        end
+        add!(many_standard_smooth_scene, AmbientLight(intensity=1.0))
+        many_standard_smooth_expected = RenderTarget(64, 64)
+        many_standard_smooth_rt = RenderTarget(64, 64)
+        many_standard_smooth_cache = RenderCache()
+        render!(many_standard_smooth_expected, many_standard_smooth_scene,
+                line_cam; shading=:smooth)
+        render!(many_standard_smooth_rt, many_standard_smooth_scene, line_cam;
+                shading=:smooth, cache=many_standard_smooth_cache)
+        @test maximum(abs.(many_standard_smooth_expected.color .-
+                           many_standard_smooth_rt.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_standard_smooth_rt,
+                                     many_standard_smooth_scene, line_cam;
+                                     shading=:smooth,
+                                     cache=many_standard_smooth_cache)
+
         many_sprite_scene = Scene(background=Color3(0.0,0.0,0.0))
         many_sprite_mat = SpriteMaterial(color=Color3(0.7,0.8,0.9),
                                          map=texture)
@@ -10611,6 +10672,33 @@ end
         @test maximum(abs.(many_sprite_expected.color .- many_sprite_rt.color)) < 1e-12
         @test_opt_alloc 1024 render_sprites!(many_sprite_rt, many_sprite_scene,
                                              line_cam; cache=many_sprite_cache)
+
+        sprite_alpha_texture = Texture(fill(1.0, 4, 4, 2);
+                                       filter=:nearest, colorspace=:linear)
+        many_sprite_alpha_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_sprite_alpha_mat = SpriteMaterial(color=Color3(0.7,0.8,0.9),
+                                               alpha_map=sprite_alpha_texture,
+                                               alpha_test=0.5)
+        for i in 1:32
+            s = Sprite(many_sprite_alpha_mat)
+            s.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_sprite_alpha_scene, s)
+        end
+        many_sprite_alpha_expected = RenderTarget(64, 64)
+        many_sprite_alpha_rt = RenderTarget(64, 64)
+        many_sprite_alpha_cache = RenderCache()
+        render_sprites!(many_sprite_alpha_expected, many_sprite_alpha_scene,
+                        line_cam)
+        render_sprites!(many_sprite_alpha_rt, many_sprite_alpha_scene, line_cam;
+                        cache=many_sprite_alpha_cache)
+        @test maximum(abs.(many_sprite_alpha_expected.color .-
+                           many_sprite_alpha_rt.color)) < 1e-12
+        @test_opt_alloc 1024 render_sprites!(many_sprite_alpha_rt,
+                                             many_sprite_alpha_scene,
+                                             line_cam;
+                                             cache=many_sprite_alpha_cache)
 
         alpha_discard_scene = Scene(background=Color3(0.0,0.0,0.0))
         alpha_discard_mat = MeshBasicMaterial(color=Color3(1.0,1.0,1.0),

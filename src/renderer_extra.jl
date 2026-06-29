@@ -1342,6 +1342,22 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 tint, tex, nothing, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
                                 alpha, alpha_test, stamp_matrix, stamp_id)
+    elseif tex === nothing && alpha_map isa Texture
+        _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
+                                s1x, s1y, z1, iw1, wp1,
+                                s2x, s2y, z2, iw2, wp2,
+                                s3x, s3y, z3, iw3, wp3,
+                                tint, nothing, alpha_map, clipping_planes,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write,
+                                alpha, alpha_test, stamp_matrix, stamp_id)
+    elseif tex isa Texture && alpha_map isa Texture
+        _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
+                                s1x, s1y, z1, iw1, wp1,
+                                s2x, s2y, z2, iw2, wp2,
+                                s3x, s3y, z3, iw3, wp3,
+                                tint, tex, alpha_map, clipping_planes,
+                                xlo, xhi, ylo, yhi, depth_test, depth_write,
+                                alpha, alpha_test, stamp_matrix, stamp_id)
     elseif tex === nothing && alpha_map === nothing
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,

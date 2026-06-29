@@ -1165,6 +1165,70 @@ function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
     return result
 end
 
+function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
+                                      view_dir::Vec3, position::Vec3,
+                                      light::RectAreaLight,
+                                      metalness::Float64, roughness::Float64)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + shade_pbr(normal, ldir, view_dir, light.color, li,
+                                    m.color, metalness, roughness)
+    end
+    return result
+end
+
+function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
+                                    normal::Vec3, view_dir::Vec3, position::Vec3,
+                                    light::RectAreaLight, shadow_fn,
+                                    metalness::Float64, roughness::Float64)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_standard_response(m, normal, view_dir, position,
+                                                 light, metalness, roughness) * vis
+end
+
+function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
+                                    normal::Vec3, view_dir::Vec3, position::Vec3,
+                                    light, shadow_fn,
+                                    metalness::Float64, roughness::Float64)
+    if _is_fill_light(light)
+        fc = _fill_color(normal, light)
+        return result + _pbr_ambient(normal, m.color, metalness, roughness, fc)
+    else
+        lc, li, ldir = light_contribution(light, position)
+        vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+        vis <= 0.0 && return result
+        return result + shade_pbr(normal, ldir, view_dir, lc, li, m.color,
+                                  metalness, roughness) * vis
+    end
+end
+
+function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
+                                material::MeshStandardMaterial, lights, shadow_fn,
+                                metalness::Float64, roughness::Float64)
+    result = material.emissive * material.emissive_intensity
+    for light in lights
+        result = _accumulate_standard_light(result, material, normal, view_dir,
+                                            position, light, shadow_fn,
+                                            metalness, roughness)
+    end
+    return result
+end
+
 function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
                            position::Vec3, light::RectAreaLight, shadow_fn)
     vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)

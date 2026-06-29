@@ -334,13 +334,50 @@ end
         s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
         s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
         s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
-        material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, shadow_fn,
         albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
-        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true)
+        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true) where {M<:AbstractMaterial}
+    if use_vertex_colors
+        return _rasterize_tri_smooth_impl!(Val(true), rt,
+            s1x, s1y, z1, iw1, wp1, wn1, uv1, uv2_1, vc1,
+            s2x, s2y, z2, iw2, wp2, wn2, uv2, uv2_2, vc2,
+            s3x, s3y, z3, iw3, wp3, wn3, uv3, uv2_3, vc3,
+            material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
+            normal_map, roughness_map, metalness_map, specular_map,
+            glossiness_map, physical_pbr_map, ao_map, emissive_map,
+            light_map, normal_scale, clipping_planes;
+            xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+            depth_test=depth_test, depth_write=depth_write,
+            stamp=stamp, stamp_id=stamp_id)
+    end
+    return _rasterize_tri_smooth_impl!(Val(false), rt,
+        s1x, s1y, z1, iw1, wp1, wn1, uv1, uv2_1, vc1,
+        s2x, s2y, z2, iw2, wp2, wn2, uv2, uv2_2, vc2,
+        s3x, s3y, z3, iw3, wp3, wn3, uv3, uv2_3, vc3,
+        material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
+        normal_map, roughness_map, metalness_map, specular_map,
+        glossiness_map, physical_pbr_map, ao_map, emissive_map,
+        light_map, normal_scale, clipping_planes;
+        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+        depth_test=depth_test, depth_write=depth_write,
+        stamp=stamp, stamp_id=stamp_id)
+end
+
+@inline function _rasterize_tri_smooth_impl!(::Val{UseVertexColors}, rt::RenderTarget,
+        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
+        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
+        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
+        material::M, lights, cam_pos::Vec3, shadow_fn,
+        albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
+        specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
+        normal_scale, clipping_planes;
+        xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
+        depth_test::Bool=true, depth_write::Bool=true,
+        stamp=nothing, stamp_id::Int=0) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
     use_stamp = stamp !== nothing   # transparent pass: alpha-blend once per mesh per pixel
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
@@ -420,14 +457,34 @@ end
                 if has_specular || has_glossiness
                     eff_mat = _apply_phong_maps(material, specular_map, glossiness_map,
                                                 u, v, u2, v2)
+                    vd = normalize(cam_pos - wp)
+                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
+                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
+                elseif material isa MeshStandardMaterial && !UseVertexColors &&
+                       (has_roughness || has_metalness) && !has_physical_pbr
+                    ru, rv = roughness_map === nothing ? (u, v) :
+                             _map_uv(roughness_map, u, v, u2, v2)
+                    mu, mv = metalness_map === nothing ? (u, v) :
+                             _map_uv(metalness_map, u, v, u2, v2)
+                    roughness = roughness_map === nothing ? material.roughness :
+                                material.roughness * sample_texture(roughness_map, ru, rv).g
+                    metalness = metalness_map === nothing ? material.metalness :
+                               material.metalness * sample_texture(metalness_map, mu, mv).b
+                    vd = normalize(cam_pos - wp)
+                    col = _shade_standard_mapped(wn, vd, wp, material, lights, shadow_fn,
+                                                 Float64(metalness), Float64(roughness))
                 elseif has_roughness || has_metalness || has_physical_pbr
-                    eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2)
+                    eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
+                                              u, v, u2, v2)
+                    vd = normalize(cam_pos - wp)
+                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
+                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
                 else
                     eff_mat = material
+                    vd = normalize(cam_pos - wp)
+                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
+                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
                 end
-                vd = normalize(cam_pos - wp)
-                shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, vc) : eff_mat
-                col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
                 # three.js keeps emission OUT of the diffuse map chain: remove the
                 # base `emissive · intensity` added by `shade_face` before the
                 # multiplicative maps below, and add the modulated form
@@ -468,7 +525,7 @@ end
                 end
             else
                 vd = normalize(cam_pos - wp)
-                shade_mat = use_vertex_colors ? _with_vertex_color(material, vc) : material
+                shade_mat = UseVertexColors ? _with_vertex_color(material, vc) : material
                 col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
             end
             col = clamp_color(col)
@@ -495,11 +552,40 @@ end
         s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, vc1::Color3,
         s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, vc2::Color3,
         s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, vc3::Color3,
-        material::AbstractMaterial, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, shadow_fn,
         clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
-        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true)
+        stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true) where {M<:AbstractMaterial}
+    if use_vertex_colors
+        return _rasterize_tri_smooth_nomaps_impl!(Val(true), rt,
+            s1x, s1y, z1, iw1, wp1, wn1, vc1,
+            s2x, s2y, z2, iw2, wp2, wn2, vc2,
+            s3x, s3y, z3, iw3, wp3, wn3, vc3,
+            material, lights, cam_pos, shadow_fn, clipping_planes;
+            xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+            depth_test=depth_test, depth_write=depth_write,
+            stamp=stamp, stamp_id=stamp_id)
+    end
+    return _rasterize_tri_smooth_nomaps_impl!(Val(false), rt,
+        s1x, s1y, z1, iw1, wp1, wn1, vc1,
+        s2x, s2y, z2, iw2, wp2, wn2, vc2,
+        s3x, s3y, z3, iw3, wp3, wn3, vc3,
+        material, lights, cam_pos, shadow_fn, clipping_planes;
+        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+        depth_test=depth_test, depth_write=depth_write,
+        stamp=stamp, stamp_id=stamp_id)
+end
+
+@inline function _rasterize_tri_smooth_nomaps_impl!(::Val{UseVertexColors}, rt::RenderTarget,
+        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, vc1::Color3,
+        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, vc2::Color3,
+        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, vc3::Color3,
+        material::M, lights, cam_pos::Vec3, shadow_fn,
+        clipping_planes;
+        xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
+        depth_test::Bool=true, depth_write::Bool=true,
+        stamp=nothing, stamp_id::Int=0) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
     use_stamp = stamp !== nothing
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
@@ -538,7 +624,7 @@ end
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
             vd = normalize(cam_pos - wp)
             shade_mat = material
-            if use_vertex_colors
+            if UseVertexColors
                 vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                             a0*vc1.g + a1*vc2.g + a2*vc3.g,
                             a0*vc1.b + a1*vc2.b + a2*vc3.b)
@@ -613,6 +699,18 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                  get_attribute(geo, :color) : nothing
     use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
                         length(color_attr.data) >= geo.n_vertices * color_attr.item_size
+    if !has_uv_maps && !use_vertex_colors
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+                                         mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+                                         xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                         ortho_dir, stamp, stamp_id, W, H, world_mat,
+                                         modelview, normal_mat, mesh_clipping_planes,
+                                         depth_test, depth_write, side, has_normals,
+                                         has_uvs, nothing, nothing, nothing, nothing,
+                                         nothing, nothing, nothing, nothing, nothing,
+                                         nothing, nothing, normal_scale, false,
+                                         nothing, nothing, false)
+    end
     if has_uv_maps && albedo_map isa Texture && alpha_map === nothing &&
        normal_map === nothing && roughness_map === nothing &&
        metalness_map === nothing && specular_map === nothing &&
@@ -629,6 +727,40 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, normal_scale,
                                          true, uv2_attr, nothing, false)
+    end
+    if has_uv_maps && albedo_map === nothing && alpha_map === nothing &&
+       normal_map isa Texture && roughness_map === nothing &&
+       metalness_map === nothing && specular_map === nothing &&
+       glossiness_map === nothing && physical_pbr_map === nothing &&
+       ao_map === nothing && emissive_map === nothing && light_map === nothing &&
+       !use_vertex_colors
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+                                         mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+                                         xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                         ortho_dir, stamp, stamp_id, W, H, world_mat,
+                                         modelview, normal_mat, mesh_clipping_planes,
+                                         depth_test, depth_write, side, has_normals,
+                                         has_uvs, nothing, nothing, normal_map,
+                                         nothing, nothing, nothing, nothing, nothing,
+                                         nothing, nothing, nothing, normal_scale,
+                                         true, uv2_attr, nothing, false)
+    end
+    if mat isa MeshStandardMaterial && has_uv_maps &&
+       albedo_map === nothing && alpha_map === nothing && normal_map === nothing &&
+       roughness_map isa Texture && metalness_map isa Texture &&
+       specular_map === nothing && glossiness_map === nothing &&
+       physical_pbr_map === nothing && ao_map isa Texture &&
+       emissive_map === nothing && light_map === nothing && !use_vertex_colors
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+                                         mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+                                         xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                         ortho_dir, stamp, stamp_id, W, H, world_mat,
+                                         modelview, normal_mat, mesh_clipping_planes,
+                                         depth_test, depth_write, side, has_normals,
+                                         has_uvs, nothing, nothing, nothing,
+                                         roughness_map, metalness_map, nothing,
+                                         nothing, nothing, ao_map, nothing, nothing,
+                                         normal_scale, true, uv2_attr, nothing, false)
     end
     return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
                                      mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
