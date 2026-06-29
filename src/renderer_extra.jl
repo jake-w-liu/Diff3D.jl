@@ -124,6 +124,10 @@ end
 
 @inline _instanced_geometry(mesh::InstancedMesh)::BufferGeometry = mesh.geometry
 @inline _instanced_material(mesh::InstancedMesh)::AbstractMaterial = mesh.material
+@inline _line_geometry(obj::LineObject)::BufferGeometry = obj.geometry
+@inline _line_geometry(obj::LineSegments)::BufferGeometry = obj.geometry
+@inline _line_geometry(obj::LineLoop)::BufferGeometry = obj.geometry
+@inline _points_geometry(obj::PointsObject)::BufferGeometry = obj.geometry
 
 function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
                                       mat::AbstractMaterial, mesh::Mesh, world::Mat4,
@@ -766,17 +770,80 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
     return stamp_id
 end
 
+@inline function _draw_line_geometry_from_material!(rt::RenderTarget, geo::BufferGeometry,
+                                                    material, wm::Mat4, line_mode::Symbol,
+                                                    proj::Mat4, view::Mat4, near,
+                                                    xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                                    stamp::Matrix{Int}, stamp_id::Int,
+                                                    morphed_positions, instance_color::Color3)
+    if material isa LineBasicMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa LineDashedMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa MeshBasicMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa MeshLambertMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa MeshPhongMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa MeshStandardMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    elseif material isa MeshPhysicalMaterial
+        return _draw_line_geometry_stamped!(rt, geo, material, wm, line_mode, proj, view,
+                                            near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    else
+        return _draw_line_geometry_stamped!(rt, geo, material::AbstractMaterial, wm,
+                                            line_mode, proj, view, near, xlo, xhi,
+                                            ylo, yhi, stamp, stamp_id,
+                                            morphed_positions, instance_color)
+    end
+end
+
 """Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
-function _draw_line_object!(rt::RenderTarget, obj, proj::Mat4, view::Mat4, near,
+function _draw_line_object!(rt::RenderTarget, obj::LineObject,
+                            proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                             stamp::Matrix{Int}, stamp_id::Int)
-    line_mode = obj isa LineSegments ? :lines :
-                obj isa LineLoop ? :line_loop : :line_strip
-    geo = obj.geometry
-    return _draw_line_geometry_stamped!(rt, geo, obj.material, compute_world_matrix(obj),
-                                        line_mode, proj, view, near, xlo, xhi, ylo, yhi,
-                                        stamp, stamp_id, _object_morph_positions(obj, geo),
-                                        Color3(1.0,1.0,1.0))
+    geo = _line_geometry(obj)
+    return _draw_line_geometry_from_material!(
+        rt, geo, obj.material, compute_world_matrix(obj), :line_strip, proj, view,
+        near, xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        Color3(1.0,1.0,1.0))
+end
+
+function _draw_line_object!(rt::RenderTarget, obj::LineSegments,
+                            proj::Mat4, view::Mat4, near,
+                            xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                            stamp::Matrix{Int}, stamp_id::Int)
+    geo = _line_geometry(obj)
+    return _draw_line_geometry_from_material!(
+        rt, geo, obj.material, compute_world_matrix(obj), :lines, proj, view, near,
+        xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        Color3(1.0,1.0,1.0))
+end
+
+function _draw_line_object!(rt::RenderTarget, obj::LineLoop,
+                            proj::Mat4, view::Mat4, near,
+                            xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                            stamp::Matrix{Int}, stamp_id::Int)
+    geo = _line_geometry(obj)
+    return _draw_line_geometry_from_material!(
+        rt, geo, obj.material, compute_world_matrix(obj), :line_loop, proj, view, near,
+        xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        Color3(1.0,1.0,1.0))
 end
 
 function _draw_instanced_lines_geometry!(rt::RenderTarget, geo, material,
@@ -865,11 +932,65 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
     end
     for child in get_children(obj)
         _line_subtree_may_draw(child) || continue
-        stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
-                                                      xlo, xhi, ylo, yhi, cache,
-                                                      stamp, stamp_id)
+        # Keep drawable children type-narrowed; abstract recursive calls allocate
+        # in scenes with many primitive objects.
+        if child isa LineObject || child isa LineSegments || child isa LineLoop ||
+           child isa InstancedMesh
+            stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          xlo, xhi, ylo, yhi, cache,
+                                                          stamp, stamp_id)
+        else
+            stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          xlo, xhi, ylo, yhi, cache,
+                                                          stamp, stamp_id)
+        end
     end
     return stamp, stamp_id
+end
+
+function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObject3D,
+                                            proj::Mat4, view::Mat4, near,
+                                            xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                            stamp::Matrix{Int}, stamp_id::Int)
+    is_visible(obj) || return stamp_id
+    if obj isa LineObject
+        geo = _line_geometry(obj)
+        _line_geometry_has_segment(geo, :line_strip) &&
+            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+    elseif obj isa LineSegments
+        geo = _line_geometry(obj)
+        _line_geometry_has_segment(geo, :lines) &&
+            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+    elseif obj isa LineLoop
+        geo = _line_geometry(obj)
+        _line_geometry_has_segment(geo, :line_loop) &&
+            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+        geo = _instanced_geometry(obj)
+        if _line_geometry_has_segment(geo, obj.draw_mode)
+            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
+                                              xlo, xhi, ylo, yhi, stamp, stamp_id)
+        end
+    end
+    for child in get_children(obj)
+        _line_subtree_may_draw(child) || continue
+        # Keep drawable children type-narrowed; abstract recursive calls allocate
+        # in scenes with many primitive objects.
+        if child isa LineObject || child isa LineSegments || child isa LineLoop ||
+           child isa InstancedMesh
+            stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          xlo, xhi, ylo, yhi, stamp,
+                                                          stamp_id)
+        else
+            stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          xlo, xhi, ylo, yhi, stamp,
+                                                          stamp_id)
+        end
+    end
+    return stamp_id
 end
 
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
@@ -879,8 +1000,14 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
-    _render_lines_visible_tree!(rt, scene, proj, view, near, xlo, xhi, ylo, yhi,
-                                cache, nothing, 0)
+    if cache === nothing
+        _render_lines_visible_tree!(rt, scene, proj, view, near, xlo, xhi, ylo, yhi,
+                                    cache, nothing, 0)
+    else
+        stamp = _render_cache_stamp!(cache, rt.height, rt.width)
+        _render_lines_visible_tree_cached!(rt, scene, proj, view, near,
+                                           xlo, xhi, ylo, yhi, stamp, 0)
+    end
     return rt
 end
 
@@ -1255,14 +1382,54 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
     return nothing
 end
 
+@inline function _draw_points_geometry_from_material!(rt::RenderTarget, geo::BufferGeometry,
+                                                      material, wm::Mat4,
+                                                      camera::AbstractCamera, proj::Mat4,
+                                                      view::Mat4, near, W::Int, H::Int,
+                                                      xlo::Int, xhi::Int, ylo::Int,
+                                                      yhi::Int, morphed_positions,
+                                                      instance_color::Color3)
+    if material isa PointsMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    elseif material isa MeshBasicMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    elseif material isa MeshLambertMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    elseif material isa MeshPhongMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    elseif material isa MeshStandardMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    elseif material isa MeshPhysicalMaterial
+        _draw_points_geometry!(rt, geo, material, wm, camera, proj, view, near,
+                               W, H, xlo, xhi, ylo, yhi, morphed_positions,
+                               instance_color)
+    else
+        _draw_points_geometry!(rt, geo, material::AbstractMaterial, wm, camera,
+                               proj, view, near, W, H, xlo, xhi, ylo, yhi,
+                               morphed_positions, instance_color)
+    end
+    return nothing
+end
+
 function _draw_points_object!(rt::RenderTarget, obj::PointsObject,
                               camera::AbstractCamera, proj::Mat4, view::Mat4,
                               near, W::Int, H::Int, xlo::Int, xhi::Int,
                               ylo::Int, yhi::Int)
-    geo = obj.geometry
-    _draw_points_geometry!(rt, geo, obj.material, compute_world_matrix(obj),
-                           camera, proj, view, near, W, H, xlo, xhi, ylo, yhi,
-                           _object_morph_positions(obj, geo), Color3(1.0,1.0,1.0))
+    geo = _points_geometry(obj)
+    _draw_points_geometry_from_material!(
+        rt, geo, obj.material, compute_world_matrix(obj), camera, proj, view, near,
+        W, H, xlo, xhi, ylo, yhi, _object_morph_positions(obj, geo),
+        Color3(1.0,1.0,1.0))
     return nothing
 end
 
@@ -1308,8 +1475,15 @@ function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
     end
     for child in get_children(obj)
         _point_subtree_may_draw(child) || continue
-        _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
-                                     xlo, xhi, ylo, yhi)
+        # Keep drawable children type-narrowed; abstract recursive calls allocate
+        # in scenes with many primitive objects.
+        if child isa PointsObject || child isa InstancedMesh
+            _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
+                                         xlo, xhi, ylo, yhi)
+        else
+            _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
+                                         xlo, xhi, ylo, yhi)
+        end
     end
     return nothing
 end

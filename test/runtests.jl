@@ -10308,6 +10308,28 @@ end
         @test maximum(abs.(line_uncached.color .- line_cached.color)) < 1e-12
         @test_opt_alloc 65536 render!(line_cached, line_scene, line_cam; cache=line_cache)
 
+        many_line_objects_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_line_geo = BufferGeometry([-0.08,0.0,0.0, 0.08,0.0,0.0],
+                                       Float64[], Float64[], Int[], 2, 0)
+        many_line_mat = LineBasicMaterial(color=Color3(0.8,0.9,1.0), linewidth=2.0)
+        for i in 1:32
+            obj = LineSegments(many_line_geo, many_line_mat)
+            obj.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                                -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                                0.0)
+            add!(many_line_objects_scene, obj)
+        end
+        many_line_expected = RenderTarget(64,64)
+        many_line_actual = RenderTarget(64,64)
+        many_line_cache = RenderCache()
+        render!(many_line_expected, many_line_objects_scene, line_cam)
+        render!(many_line_actual, many_line_objects_scene, line_cam; cache=many_line_cache)
+        @test maximum(abs.(many_line_expected.color .- many_line_actual.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_line_actual, many_line_objects_scene, line_cam;
+                                     cache=many_line_cache)
+        @test_opt_alloc 1024 render_lines!(many_line_actual, many_line_objects_scene, line_cam;
+                                           cache=many_line_cache)
+
         inst_line_geo = BufferGeometry([-0.02,0.0,0.0, 0.02,0.0,0.0],
                                        Float64[], Float64[], Int[], 2, 0)
         inst_line_mat = LineBasicMaterial(color=Color3(0.9,0.6,0.25), linewidth=2.0)
@@ -10364,6 +10386,27 @@ end
         render!(point_actual, point_instanced_scene, point_cam; cache=point_cache)
         @test maximum(abs.(point_expected.color .- point_actual.color)) < 1e-12
         @test_opt_alloc 8192 render!(point_actual, point_instanced_scene, point_cam; cache=point_cache)
+
+        many_point_objects_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_point_geo = BufferGeometry([0.0,0.0,0.0], Float64[], Float64[], Int[], 1, 0)
+        many_point_mat = PointsMaterial(color=Color3(1.0,0.9,0.7), size=3.0)
+        for i in 1:32
+            obj = PointsObject(many_point_geo, many_point_mat)
+            obj.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                                -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                                0.0)
+            add!(many_point_objects_scene, obj)
+        end
+        many_point_expected = RenderTarget(64,64)
+        many_point_actual = RenderTarget(64,64)
+        many_point_cache = RenderCache()
+        render!(many_point_expected, many_point_objects_scene, point_cam)
+        render!(many_point_actual, many_point_objects_scene, point_cam; cache=many_point_cache)
+        @test maximum(abs.(many_point_expected.color .- many_point_actual.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_point_actual, many_point_objects_scene, point_cam;
+                                     cache=many_point_cache)
+        @test_opt_alloc 1024 render_points!(many_point_actual, many_point_objects_scene,
+                                            point_cam)
 
         wire_geo = SphereGeometry(radius=1.0, width_segments=16, height_segments=8)
         wire_scene = Scene(background=Color3(0.0,0.0,0.0))
