@@ -7,7 +7,17 @@
 # --------------------------------------------------------------------------
 
 # Promote a Float64 Mat4 to element type T (so AD duals flow through projection).
-@inline _promote_mat4(vp::Mat4, ::Type{T}) where {T} = Mat4{T}(ntuple(k -> T(vp.e[k]), 16))
+@inline _promote_mat4(vp::Mat4{T}, ::Type{T}) where {T} = vp
+@inline _promote_mat4(vp::Mat4, ::Type{T}) where {T} =
+    Mat4{T}(ntuple(k -> T(vp.e[k]), 16))
+
+@inline _promote_vec3_vector(vertices::Vector{Vec3{T}}, ::Type{T}) where {T} = vertices
+@inline _promote_vec3_vector(vertices, ::Type{T}) where {T} =
+    Vec3{T}[Vec3(T(v.x), T(v.y), T(v.z)) for v in vertices]
+
+@inline _promote_color_vector(colors::Vector{Color3{T}}, ::Type{T}) where {T} = colors
+@inline _promote_color_vector(colors, ::Type{T}) where {T} =
+    Color3{T}[Color3(T(c.r), T(c.g), T(c.b)) for c in colors]
 
 """
     vertex_render_fn(faces, face_colors, vp, W, H; sigma, gamma)
@@ -21,7 +31,7 @@ function vertex_render_fn(faces, face_colors, vp::Mat4, W::Int, H::Int;
         T = eltype(p)
         nv = length(p) ÷ 3
         verts = [Vec3(p[3i-2], p[3i-1], p[3i]) for i in 1:nv]
-        cols = [Color3(T(c.r), T(c.g), T(c.b)) for c in face_colors]
+        cols = _promote_color_vector(face_colors, T)
         cfg = SoftRasterizerConfig(sigma=T(sigma), gamma=T(gamma),
                                    bg_color=Color3(T(bg.r), T(bg.g), T(bg.b)))
         soft_render(verts, faces, cols, _promote_mat4(vp, T), W, H, cfg)
@@ -41,7 +51,7 @@ function color_render_fn(vertices, faces, vp::Mat4, W::Int, H::Int;
         T = eltype(p)
         nf = length(p) ÷ 3
         cols = [Color3(p[3i-2], p[3i-1], p[3i]) for i in 1:nf]
-        verts = [Vec3(T(v.x), T(v.y), T(v.z)) for v in vertices]
+        verts = _promote_vec3_vector(vertices, T)
         cfg = SoftRasterizerConfig(sigma=T(sigma), gamma=T(gamma),
                                    bg_color=Color3(T(bg.r), T(bg.g), T(bg.b)))
         soft_render(verts, faces, cols, _promote_mat4(vp, T), W, H, cfg)

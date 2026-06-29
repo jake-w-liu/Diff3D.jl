@@ -154,6 +154,63 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                            area=area, valid=valid)
     end
 
+    if n_faces <= 1
+        # A single triangle needs no spatial index: scanning it directly avoids
+        # the CSR tile buffers that dominate tiny inverse-rendering problems.
+        image = Array{T}(undef, H, W, 3)
+        for py in 1:H
+            for px in 1:W
+                cx = T(px) - T(0.5)
+                cy = T(py) - T(0.5)
+
+                m = -one(T) / γ
+                any_face = false
+                for fi in 1:n_faces
+                    tri = screen_tris[fi]
+                    tri.valid || continue
+                    !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
+                    z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                    e_f = -z_face / γ
+                    if e_f > m
+                        m = e_f
+                    end
+                    any_face = true
+                end
+
+                total_weight = zero(T)
+                color_r = zero(T)
+                color_g = zero(T)
+                color_b = zero(T)
+                if any_face
+                    for fi in 1:n_faces
+                        tri = screen_tris[fi]
+                        tri.valid || continue
+                        !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
+
+                        d = signed_distance_to_triangle(cx, cy,
+                            tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y)
+                        coverage = sigmoid_approx(d / σ)
+                        z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                        depth_weight = exp(-z_face / γ - m)
+
+                        w = coverage * depth_weight
+                        total_weight += w
+                        color_r += w * tri.color.r
+                        color_g += w * tri.color.g
+                        color_b += w * tri.color.b
+                    end
+                end
+
+                w_bg = exp(-one(T) / γ - m) + eps
+                denom = total_weight + w_bg
+                image[py, px, 1] = (color_r + w_bg * bg.r) / denom
+                image[py, px, 2] = (color_g + w_bg * bg.g) / denom
+                image[py, px, 3] = (color_b + w_bg * bg.b) / denom
+            end
+        end
+        return image
+    end
+
     # --------------------------------------------------------------------
     # Spatial acceleration: uniform tile grid.
     #

@@ -2503,6 +2503,18 @@ end
         center_brightness = img[8, 8, 1] + img[8, 8, 2] + img[8, 8, 3]
         @test center_brightness > 0.01
 
+        one_face_verts = [verts[1], verts[2], verts[3]]
+        one_face_faces = [(1, 2, 3)]
+        one_face_colors = [colors[1]]
+        soft_render(one_face_verts, one_face_faces, one_face_colors, vp, 16, 16, config)
+        @test_opt_alloc 6700 soft_render(one_face_verts, one_face_faces, one_face_colors,
+                                         vp, 16, 16, config)
+        one_face_rf = vertex_render_fn(one_face_faces, one_face_colors, vp, 16, 16;
+                                       sigma=1e-2, gamma=1.0)
+        one_face_params = [-0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0]
+        one_face_rf(one_face_params)
+        @test_opt_alloc 7600 one_face_rf(one_face_params)
+
         soft_verts = Vec3{Float64}[]
         soft_faces = NTuple{3,Int}[]
         soft_colors = Color3{Float64}[]
