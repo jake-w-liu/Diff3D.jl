@@ -4903,6 +4903,40 @@ end
         @test rt.color[16, 16, 3] ≈ 0.2 atol=1e-6
     end
 
+    @testset "RenderCache reuses per-frame renderer scratch" begin
+        cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+        cam.position = Vec3(0.0, 0.0, 4.0)
+        cam.target = Vec3(0.0, 0.0, 0.0)
+
+        scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene, Mesh(BoxGeometry(), MeshLambertMaterial(color=Color3(0.8, 0.3, 0.2))))
+        add!(scene, AmbientLight(intensity=0.3))
+        add!(scene, DirectionalLight(intensity=0.7, position=Vec3(3.0, 3.0, 4.0)))
+        rt_direct = RenderTarget(32, 32); render!(rt_direct, scene, cam)
+        rt_cached = RenderTarget(32, 32); cache = RenderCache()
+        render!(rt_cached, scene, cam; cache=cache)
+        @test maximum(abs.(rt_cached.color .- rt_direct.color)) < 1e-12
+        @test_opt_alloc 512 render!(rt_cached, scene, cam; cache=cache)
+
+        wire_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(wire_scene, Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                               wireframe=true)))
+        wire_direct = RenderTarget(32, 32); render!(wire_direct, wire_scene, cam)
+        wire_cached = RenderTarget(32, 32); wire_cache = RenderCache()
+        render!(wire_cached, wire_scene, cam; cache=wire_cache)
+        @test maximum(abs.(wire_cached.color .- wire_direct.color)) < 1e-12
+        @test_opt_alloc 512 render!(wire_cached, wire_scene, cam; cache=wire_cache)
+
+        tex = Texture(ones(Float64, 2, 2, 3); filter=:nearest, colorspace=:linear)
+        sprite_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(sprite_scene, Sprite(SpriteMaterial(color=Color3(1.0, 1.0, 1.0), map=tex)))
+        sprite_direct = RenderTarget(32, 32); render!(sprite_direct, sprite_scene, cam)
+        sprite_cached = RenderTarget(32, 32); sprite_cache = RenderCache()
+        render!(sprite_cached, sprite_scene, cam; cache=sprite_cache)
+        @test maximum(abs.(sprite_cached.color .- sprite_direct.color)) < 1e-12
+        @test_opt_alloc 512 render!(sprite_cached, sprite_scene, cam; cache=sprite_cache)
+    end
+
     @testset "Smooth shading — vertex colors are interpolated" begin
         geo = PlaneGeometry(width=2.0, height=2.0)
         set_attribute!(geo, :color, fill(0.0, 4 * geo.n_vertices), 4)

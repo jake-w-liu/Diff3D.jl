@@ -112,6 +112,11 @@ end
 
 # ========================== Pooled rendering (bounded allocation) ==========================
 
+mutable struct _SpriteRenderState
+    stamp::Union{Nothing,Matrix{Int}}
+    stamp_id::Int
+end
+
 """
 Reusable scratch buffers for the flat opaque path, so repeated frames allocate a
 bounded amount (independent of frame count). Mesh/light lists and the per-face
@@ -121,9 +126,11 @@ mutable struct RenderCache
     meshes::Vector{Mesh}
     lights::Vector{SceneLight}
     instanced::Vector{InstancedMesh}
+    skinned::Vector{SkinnedMesh}
     transparent::Vector{Mesh}
     opaque_flat::Vector{Mesh}
     smooth_meshes::Vector{Mesh}
+    wireframe_meshes::Vector{Mesh}
     tri::Vector{Vec4{Float64}}
     clipped::Vector{Vec4{Float64}}
     sx::Vector{Float64}
@@ -132,6 +139,7 @@ mutable struct RenderCache
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
     wire_edges::Set{Tuple{Int,Int}}
+    sprite_state::_SpriteRenderState
     smooth_tri::Vector{ShadeVtx}
     smooth_clipped::Vector{ShadeVtx}
     smooth_iw::Vector{Float64}
@@ -140,11 +148,12 @@ end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
     scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
-    RenderCache(Mesh[], SceneLight[], InstancedMesh[],
-                Mesh[], Mesh[], Mesh[],
+    RenderCache(Mesh[], SceneLight[], InstancedMesh[], SkinnedMesh[],
+                Mesh[], Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
+                _SpriteRenderState(nothing, 0),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing)
 end
 
@@ -620,7 +629,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
     _collect_meshes_into!(cache.meshes, scene)
-    _append_skinned_render_meshes!(cache.meshes, scene)
+    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned)
     _collect_lights_into!(cache.lights, scene)
     _collect_instanced_into!(cache.instanced, scene)
     for mesh in cache.meshes
@@ -1260,11 +1269,6 @@ end
     return nothing
 end
 
-mutable struct _SpriteRenderState
-    stamp::Union{Nothing,Matrix{Int}}
-    stamp_id::Int
-end
-
 function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, camera::AbstractCamera,
                               view::Mat4, vp::Mat4, W::Int, H::Int,
                               clipping_planes, xlo::Int, xhi::Int,
@@ -1483,7 +1487,9 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
-    state = _SpriteRenderState(nothing, 0)
+    state = cache === nothing ? _SpriteRenderState(nothing, 0) : cache.sprite_state
+    state.stamp = nothing
+    state.stamp_id = 0
     _render_sprites_visible_tree!(rt, scene, camera, view, vp, W, H, clipping_planes,
                                   xlo, xhi, ylo, yhi, cache, state)
     return rt
@@ -2092,7 +2098,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
     _collect_meshes_into!(meshes, scene)
-    _append_skinned_render_meshes!(meshes, scene)
+    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned)
     lights = shared_cache.lights
     _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced

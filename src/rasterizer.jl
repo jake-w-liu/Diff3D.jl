@@ -1113,7 +1113,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         meshes = _collect_meshes_into!(cache.meshes, scene)
         lights = _collect_lights_into!(cache.lights, scene)
     end
-    _append_skinned_render_meshes!(meshes, scene)
+    if cache === nothing
+        _append_skinned_render_meshes!(meshes, scene)
+    else
+        _append_skinned_render_meshes!(meshes, scene, cache.skinned)
+    end
     shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution,
                                               clipping_planes=clipping_planes) : nothing
 
@@ -1155,7 +1159,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         empty!(opaque_flat)
         empty!(smooth_meshes)
     end
-    wireframe_meshes = Mesh[]
+    wireframe_meshes = cache === nothing ? Mesh[] : cache.wireframe_meshes
+    empty!(wireframe_meshes)
     for mesh in meshes
         !_visible_in_tree(mesh) && continue
         wm = compute_world_matrix(mesh)

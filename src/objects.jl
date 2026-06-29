@@ -633,13 +633,19 @@ function _collect_skinned_meshes!(out::Vector{SkinnedMesh}, obj::AbstractObject3
     return nothing
 end
 
-function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D)
-    skinned = SkinnedMesh[]
+function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D,
+                                        skinned::Vector{SkinnedMesh})
+    empty!(skinned)
     _collect_skinned_meshes!(skinned, scene)
     for sm in skinned
         push!(meshes, _skinned_render_mesh(sm))
     end
     return meshes
+end
+
+function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D)
+    skinned = SkinnedMesh[]
+    return _append_skinned_render_meshes!(meshes, scene, skinned)
 end
 
 # ========================== World-matrix cache ==========================
