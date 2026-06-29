@@ -154,9 +154,9 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                            area=area, valid=valid)
     end
 
-    if n_faces <= 1
-        # A single triangle needs no spatial index: scanning it directly avoids
-        # the CSR tile buffers that dominate tiny inverse-rendering problems.
+    if n_faces <= 8
+        # Tiny face sets need no spatial index: scanning directly avoids the CSR
+        # tile buffers that dominate small inverse-rendering problems.
         image = Array{T}(undef, H, W, 3)
         for py in 1:H
             for px in 1:W

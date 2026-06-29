@@ -2502,6 +2502,11 @@ end
         # Center pixel should have some color (not just black background)
         center_brightness = img[8, 8, 1] + img[8, 8, 2] + img[8, 8, 3]
         @test center_brightness > 0.01
+        @test_opt_alloc 6900 soft_render(verts, faces, colors, vp, 16, 16, config)
+        padded_faces = [faces; fill((1, 1, 1), 7)]
+        padded_colors = [colors; fill(Color3(0.0, 0.0, 0.0), 7)]
+        padded_img = soft_render(verts, padded_faces, padded_colors, vp, 16, 16, config)
+        @test maximum(abs.(img .- padded_img)) < 1e-12
 
         one_face_verts = [verts[1], verts[2], verts[3]]
         one_face_faces = [(1, 2, 3)]
