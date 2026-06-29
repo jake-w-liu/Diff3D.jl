@@ -195,6 +195,62 @@ end
     return nothing
 end
 
+@inline function _rasterize_tri_alpha!(rt::RenderTarget,
+        s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3, fc::Color3,
+        ylo::Int, yhi::Int, xlo::Int, xhi::Int, clipping_planes,
+        wp1::Vec3, wp2::Vec3, wp3::Vec3,
+        iw1::Float64, iw2::Float64, iw3::Float64,
+        depth_test::Bool, depth_write::Bool,
+        alpha_test::Float64, alpha_base::Float64, albedo_map, alpha_map,
+        uv1::Vec2, uv2::Vec2, uv3::Vec2,
+        uv2_1::Vec2, uv2_2::Vec2, uv2_3::Vec2)
+    W, H = rt.width, rt.height
+    area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
+    abs(area) < 1e-10 && return nothing
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    fW, fH = Float64(W), Float64(H)
+    inv_area = 1.0 / area
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
+    max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
+    max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
+    has_clip = !isempty(clipping_planes)
+    @inbounds for py in min_y:max_y
+        for px in min_x:max_x
+            cx = px - 0.5
+            cy = py - 0.5
+            w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
+            w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
+            w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            if w0 >= 0 && w1 >= 0 && w2 >= 0
+                z = w0 * z1 + w1 * z2 + w2 * z3
+                if !depth_test || z < rt.depth[py, px]
+                    iw = w0*iw1 + w1*iw2 + w2*iw3
+                    a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
+                    if has_clip
+                        wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
+                                  a0*wp1.y + a1*wp2.y + a2*wp3.y,
+                                  a0*wp1.z + a1*wp2.z + a2*wp3.z)
+                        _clip_keep(clipping_planes, wp) || continue
+                    end
+                    u = a0*uv1.x + a1*uv2.x + a2*uv3.x
+                    v = a0*uv1.y + a1*uv2.y + a2*uv3.y
+                    u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
+                    v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
+                    _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
+                        continue
+                    depth_write && (rt.depth[py, px] = z)
+                    rt.color[py, px, 1] = fc.r
+                    rt.color[py, px, 2] = fc.g
+                    rt.color[py, px, 3] = fc.b
+                end
+            end
+        end
+    end
+    return nothing
+end
+
 # ==========================================================================
 # Smooth (per-pixel) shading path.
 # Per-vertex world position and normal are interpolated perspective-correctly
@@ -1318,17 +1374,35 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             tri_attr = attr_tri::Vector{ShadeVtx}
             clipped_attr = attr_clipped::Vector{ShadeVtx}
             invw_scratch = siw::Vector{Float64}
-            @inbounds for (slot, vi, vtx) in ((1, i1, v1), (2, i2, v2), (3, i3, v3))
-                uv = has_uvs ? Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2]) : _ZERO_V2
-                uv2v = uv2_attr === nothing ? uv : Vec2(_vertex_uv_attr(uv2_attr, vi)...)
-                tri_attr[slot] = ShadeVtx(
-                    tri[slot],
-                    mat4_transform_point(world_mat, vtx),
-                    _ZERO_V3,
-                    uv,
-                    uv2v,
-                    Color3(1.0, 1.0, 1.0),
-                )
+            alpha_albedo_map = albedo_map isa Texture ? albedo_map::Texture : nothing
+            alpha_alpha_map = alpha_map isa Texture ? alpha_map::Texture : nothing
+            if uv2_attr === nothing
+                @inbounds for (slot, vi, vtx) in ((1, i1, v1), (2, i2, v2), (3, i3, v3))
+                    uv = Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2])
+                    tri_attr[slot] = ShadeVtx(
+                        tri[slot],
+                        mat4_transform_point(world_mat, vtx),
+                        _ZERO_V3,
+                        uv,
+                        uv,
+                        Color3(1.0, 1.0, 1.0),
+                    )
+                end
+            else
+                uv2_data = uv2_attr::BufferAttribute
+                @inbounds for (slot, vi, vtx) in ((1, i1, v1), (2, i2, v2), (3, i3, v3))
+                    uv = Vec2(geo.uvs[(vi-1)*2+1], geo.uvs[(vi-1)*2+2])
+                    uv2_tuple = _vertex_uv_attr(uv2_data, vi)
+                    uv2v = Vec2(uv2_tuple[1], uv2_tuple[2])
+                    tri_attr[slot] = ShadeVtx(
+                        tri[slot],
+                        mat4_transform_point(world_mat, vtx),
+                        _ZERO_V3,
+                        uv,
+                        uv2v,
+                        Color3(1.0, 1.0, 1.0),
+                    )
+                end
             end
 
             m = _clip_near_attr!(clipped_attr, tri_attr, 3, near)
@@ -1365,24 +1439,25 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                           uv2_2=clipped_attr[k].uv2,
                                           uv2_3=clipped_attr[k+1].uv2)
                 else
-                    _rasterize_tri!(rt, sx[1], sy[1], sz[1],
-                                    sx[k], sy[k], sz[k],
-                                    sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
-                                    xlo=xlo, xhi=xhi,
-                                    clipping_planes=clipping_planes,
-                                    wp1=clipped_attr[1].wp,
-                                    wp2=clipped_attr[k].wp,
-                                    wp3=clipped_attr[k+1].wp,
-                                    iw1=invw_scratch[1], iw2=invw_scratch[k], iw3=invw_scratch[k+1],
-                                    depth_test=depth_test, depth_write=depth_write,
-                                    alpha_test=alpha_test, alpha_base=alpha_base,
-                                    albedo_map=albedo_map, alpha_map=alpha_map,
-                                    uv1=clipped_attr[1].uv,
-                                    uv2=clipped_attr[k].uv,
-                                    uv3=clipped_attr[k+1].uv,
-                                    uv2_1=clipped_attr[1].uv2,
-                                    uv2_2=clipped_attr[k].uv2,
-                                    uv2_3=clipped_attr[k+1].uv2)
+                    _rasterize_tri_alpha!(rt, sx[1], sy[1], sz[1],
+                                           sx[k], sy[k], sz[k],
+                                           sx[k+1], sy[k+1], sz[k+1], fc,
+                                           ylo, yhi, xlo, xhi, clipping_planes,
+                                           clipped_attr[1].wp,
+                                           clipped_attr[k].wp,
+                                           clipped_attr[k+1].wp,
+                                           invw_scratch[1],
+                                           invw_scratch[k],
+                                           invw_scratch[k+1],
+                                           depth_test, depth_write,
+                                           alpha_test, alpha_base,
+                                           alpha_albedo_map, alpha_alpha_map,
+                                           clipped_attr[1].uv,
+                                           clipped_attr[k].uv,
+                                           clipped_attr[k+1].uv,
+                                           clipped_attr[1].uv2,
+                                           clipped_attr[k].uv2,
+                                           clipped_attr[k+1].uv2)
                 end
             end
             continue

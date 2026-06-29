@@ -10538,9 +10538,9 @@ end
         many_textured_rgba_cache = RenderCache()
         render!(many_textured_rgba_rt, many_textured_rgba_scene, line_cam;
                 cache=many_textured_rgba_cache)
-        @test_opt_alloc 32768 render!(many_textured_rgba_rt,
-                                      many_textured_rgba_scene, line_cam;
-                                      cache=many_textured_rgba_cache)
+        @test_opt_alloc 4096 render!(many_textured_rgba_rt,
+                                     many_textured_rgba_scene, line_cam;
+                                     cache=many_textured_rgba_cache)
 
         many_textured_transparent_scene = Scene(background=Color3(0.0,0.0,0.0))
         many_textured_transparent_mat = MeshBasicMaterial(color=Color3(0.7,0.8,0.9),
