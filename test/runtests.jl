@@ -10396,6 +10396,24 @@ end
         render!(many_wire_rt, many_wire_scene, line_cam; cache=many_wire_cache)
         @test_opt_alloc 8192 render!(many_wire_rt, many_wire_scene, line_cam; cache=many_wire_cache)
 
+        many_flat_scene = Scene(background=Color3(0.0,0.0,0.0))
+        many_flat_geo = BoxGeometry(width=0.2, height=0.2, depth=0.2)
+        many_flat_mat = MeshBasicMaterial(color=Color3(0.7,0.8,0.9))
+        for i in 1:32
+            m = Mesh(many_flat_geo, many_flat_mat)
+            m.position = Vec3(-1.0 + 2.0 * ((i - 1) % 8) / 7,
+                              -1.0 + 2.0 * ((i - 1) ÷ 8) / 3,
+                              0.0)
+            add!(many_flat_scene, m)
+        end
+        many_flat_expected = RenderTarget(64, 64)
+        many_flat_rt = RenderTarget(64, 64)
+        many_flat_cache = RenderCache()
+        render!(many_flat_expected, many_flat_scene, line_cam)
+        render!(many_flat_rt, many_flat_scene, line_cam; cache=many_flat_cache)
+        @test maximum(abs.(many_flat_expected.color .- many_flat_rt.color)) < 1e-12
+        @test_opt_alloc 4096 render!(many_flat_rt, many_flat_scene, line_cam; cache=many_flat_cache)
+
         colored_scene = Scene(background=Color3(0.0,0.0,0.0))
         colored_im = InstancedMesh(SphereGeometry(radius=0.7, width_segments=12, height_segments=6),
                                    MeshLambertMaterial(color=Color3(1.0,1.0,1.0)), 2)

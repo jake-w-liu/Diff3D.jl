@@ -125,6 +125,171 @@ end
 @inline _instanced_geometry(mesh::InstancedMesh)::BufferGeometry = mesh.geometry
 @inline _instanced_material(mesh::InstancedMesh)::AbstractMaterial = mesh.material
 
+function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
+                                      mat::AbstractMaterial, mesh::Mesh, world::Mat4,
+                                      lights, proj::Mat4, view::Mat4, near,
+                                      cam_pos::Vec3, tri, clipped, sx, sy, sz,
+                                      colorbuf::Vector{Color3{Float64}},
+                                      alpha, stamp, stamp_id::Int, shadow_fn,
+                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                      clipping_planes, log_depth::Bool,
+                                      inv_log_far::Float64, ortho_dir)
+    mesh_shadow_fn = shadow_fn === nothing ? nothing : (mesh.receive_shadow ? shadow_fn : nothing)
+    mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                     material_clipping_planes(mat))
+    _rasterize_geo_flat!(rt, geo, world, mat, lights, proj, view, near, cam_pos,
+                         tri, clipped, sx, sy, sz; alpha=alpha, stamp=stamp,
+                         stamp_id=stamp_id, shadow_fn=mesh_shadow_fn, xlo=xlo, xhi=xhi,
+                         ylo=ylo, yhi=yhi, colorbuf=colorbuf,
+                         clipping_planes=mesh_clipping_planes, log_depth=log_depth,
+                         inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+end
+
+function _rasterize_flat_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
+                                         lights, proj::Mat4, view::Mat4, near,
+                                         cam_pos::Vec3, tri, clipped, sx, sy, sz,
+                                         colorbuf::Vector{Color3{Float64}},
+                                         alpha, stamp, stamp_id::Int, shadow_fn,
+                                         xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                         clipping_planes, log_depth::Bool,
+                                         inv_log_far::Float64, ortho_dir)
+    geo = _mesh_geometry(mesh)
+    mat = mesh.material
+    if mat isa MeshBasicMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshLambertMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshPhongMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshStandardMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshNormalMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshPhysicalMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshToonMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshMatcapMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa MeshDepthMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    elseif mat isa ShaderMaterial
+        _rasterize_flat_mesh_cached!(rt, geo, mat, mesh, world, lights, proj, view, near,
+                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+                                     alpha, stamp, stamp_id, shadow_fn, xlo, xhi,
+                                     ylo, yhi, clipping_planes, log_depth, inv_log_far,
+                                     ortho_dir)
+    else
+        _rasterize_flat_mesh_cached!(rt, geo, mat::AbstractMaterial, mesh, world, lights,
+                                     proj, view, near, cam_pos, tri, clipped, sx, sy,
+                                     sz, colorbuf, alpha, stamp, stamp_id, shadow_fn,
+                                     xlo, xhi, ylo, yhi, clipping_planes, log_depth,
+                                     inv_log_far, ortho_dir)
+    end
+end
+
+function _rasterize_flat_mesh_pooled_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
+                                                lights, proj::Mat4, view::Mat4, near,
+                                                cam_pos::Vec3, tri, clipped, sx, sy, sz,
+                                                colorbuf::Vector{Color3{Float64}},
+                                                xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                                ortho_dir)
+    geo = _mesh_geometry(mesh)
+    mat = mesh.material
+    if mat isa MeshBasicMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshLambertMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshPhongMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshStandardMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshNormalMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshPhysicalMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshToonMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshMatcapMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa MeshDepthMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    elseif mat isa ShaderMaterial
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
+                                    cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    else
+        _rasterize_geo_flat_pooled!(rt, geo, world, mat::AbstractMaterial, lights,
+                                    proj, view, near, cam_pos, tri, clipped, sx, sy,
+                                    sz, colorbuf; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    end
+end
+
 function _render_cache_stamp!(cache::RenderCache, H::Int, W::Int)
     if size(cache.stamp) != (H, W)
         cache.stamp = zeros(Int, H, W)
@@ -139,6 +304,33 @@ function _collect_into!(out::Vector, root, pred)
     empty!(out)
     traverse(root, o -> pred(o) && push!(out, o))
     return out
+end
+
+function _collect_meshes_into!(out::Vector{Mesh}, root::AbstractObject3D)
+    empty!(out)
+    _collect_meshes!(out, root)
+    return out
+end
+
+function _collect_lights_into!(out::Vector{SceneLight}, root::AbstractObject3D)
+    empty!(out)
+    _collect_lights!(out, root)
+    return out
+end
+
+function _collect_instanced_into!(out::Vector{InstancedMesh}, root::AbstractObject3D)
+    empty!(out)
+    _collect_instanced_into_visit!(out, root)
+    return out
+end
+
+function _collect_instanced_into_visit!(out::Vector{InstancedMesh}, obj::AbstractObject3D)
+    is_visible(obj) || return nothing
+    obj isa InstancedMesh && push!(out, obj)
+    @inbounds for child in get_children(obj)
+        _collect_instanced_into_visit!(out, child)
+    end
+    return nothing
 end
 
 function _render_pooled_uses_fragment_alpha(geo::BufferGeometry, mat)
@@ -255,20 +447,19 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
-    # `_collect_into!` traverses without pruning invisible subtrees, so apply
-    # the hierarchical visibility test (three.js semantics) per object here.
-    _collect_into!(cache.meshes, scene, m -> m isa Mesh)
+    _collect_meshes_into!(cache.meshes, scene)
     _append_skinned_render_meshes!(cache.meshes, scene)
-    _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
-    _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
+    _collect_lights_into!(cache.lights, scene)
+    _collect_instanced_into!(cache.instanced, scene)
     for mesh in cache.meshes
         mat = _mesh_material(mesh)
         (_visible_in_tree(mesh) && !is_transparent_material(mat) &&
          !material_wireframe(mat)) || continue
-        _rasterize_geo_flat_pooled!(rt, _mesh_geometry(mesh), compute_world_matrix(mesh), mat,
-                                    cache.lights, proj, view, near, camera.position,
-                                    cache.tri, cache.clipped, cache.sx, cache.sy, cache.sz,
-                                    cache.colors; ortho_dir=ortho_dir)
+        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+                                               cache.lights, proj, view, near,
+                                               camera.position, cache.tri, cache.clipped,
+                                               cache.sx, cache.sy, cache.sz, cache.colors,
+                                               1, rt.width, 1, rt.height, ortho_dir)
     end
     for im in cache.instanced
         mat = _instanced_material(im)
@@ -1447,12 +1638,12 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # not reallocate mesh/light/instance vectors.
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
-    _collect_into!(meshes, scene, m -> m isa Mesh)
+    _collect_meshes_into!(meshes, scene)
     _append_skinned_render_meshes!(meshes, scene)
     lights = shared_cache.lights
-    _collect_into!(lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
+    _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced
-    _collect_into!(instanced, scene, o -> o isa InstancedMesh)
+    _collect_instanced_into!(instanced, scene)
     band = cld(H, tiles)
     Threads.@threads for t in 1:tiles
         ylo = (t-1)*band + 1
@@ -1471,13 +1662,12 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             is_visible(mesh) || continue
             mat = _mesh_material(mesh)
             is_transparent_material(mat) && continue
-            _rasterize_geo_flat_pooled!(rt, _mesh_geometry(mesh), compute_world_matrix(mesh), mat,
-                                        lights, proj, view, near, camera.position,
-                                        tri, clipped, sx, sy, sz, colorbuf;
-                                        ylo=ylo, yhi=yhi, ortho_dir=ortho_dir)
+            _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+                                                   lights, proj, view, near, camera.position,
+                                                   tri, clipped, sx, sy, sz, colorbuf,
+                                                   1, rt.width, ylo, yhi, ortho_dir)
         end
         for im in instanced
-            # collect_instanced traverses without pruning invisible subtrees.
             _visible_in_tree(im) || continue
             _instanced_triangle_drawable(im) || continue
             base = compute_world_matrix(im)

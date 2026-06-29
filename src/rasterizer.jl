@@ -686,11 +686,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         meshes = collect_meshes(scene)
         lights = collect_lights(scene)
     else
-        # `collect_lights` prunes invisible subtrees; the cached traversal does
-        # not, so apply the same hierarchical visibility filter here (meshes are
-        # filtered per object in the classify loop below).
-        meshes = _collect_into!(cache.meshes, scene, m -> m isa Mesh)
-        lights = _collect_into!(cache.lights, scene, l -> l isa AbstractLight && _visible_in_tree(l))
+        meshes = _collect_meshes_into!(cache.meshes, scene)
+        lights = _collect_lights_into!(cache.lights, scene)
     end
     _append_skinned_render_meshes!(meshes, scene)
     shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution,
@@ -760,22 +757,17 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
 
     for mesh in opaque_flat
-        geo = _mesh_geometry(mesh)
-        mat = _mesh_material(mesh)
-        mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
-        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                         material_clipping_planes(mat))
-        _rasterize_geo_flat!(rt, geo, compute_world_matrix(mesh), mat,
-                             lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                             shadow_fn=mesh_shadow_fn, clipping_planes=mesh_clipping_planes,
-                             colorbuf=colorbuf,
-                             xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                             log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+        _rasterize_flat_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh), lights,
+                                        proj, view, near, camera.position, tri, clipped,
+                                        sx, sy, sz, colorbuf, 1.0, nothing, 0,
+                                        shadow_fn, xlo, xhi, ylo, yhi,
+                                        clipping_planes, log_depth, inv_log_far,
+                                        ortho_dir)
     end
 
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
     instanced = cache === nothing ? collect_instanced(scene) :
-                _collect_into!(cache.instanced, scene, o -> o isa InstancedMesh)
+                _collect_instanced_into!(cache.instanced, scene)
     for im in instanced
         !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue
@@ -810,21 +802,16 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
         for mesh in transparent
-            geo = _mesh_geometry(mesh)
             mat = _mesh_material(mesh)
-            mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
-            mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                             material_clipping_planes(mat))
             sid += 1
             α = material_opacity(mat)
             if _mesh_is_flat(mesh, shading)
-                _rasterize_geo_flat!(rt, geo, compute_world_matrix(mesh), mat,
-                                     lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz;
-                                     alpha=α, stamp=stamp, stamp_id=sid, shadow_fn=mesh_shadow_fn,
-                                     clipping_planes=mesh_clipping_planes,
-                                     colorbuf=colorbuf,
-                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                     log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir)
+                _rasterize_flat_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+                                                lights, proj, view, near, camera.position,
+                                                tri, clipped, sx, sy, sz, colorbuf, α,
+                                                stamp, sid, shadow_fn, xlo, xhi,
+                                                ylo, yhi, clipping_planes, log_depth,
+                                                inv_log_far, ortho_dir)
             else
                 # Smooth-shaded transparent mesh: per-pixel interpolated normals with
                 # source-over blending (the same stamp guards against double-blend),
