@@ -9,15 +9,53 @@
 # Subdivide each base triangle into (detail+1)² faces and project to a sphere
 # of the given radius. Vertices are non-indexed (3 per face).
 
+_polyhedron_bary(A::Vec3, B::Vec3, C::Vec3, cols::Int, p::Int, q::Int) =
+    A * ((cols - p - q) / cols) + B * (p / cols) + C * (q / cols)
+
+function _polyhedron_emit_vertex!(positions::Vector{Float64}, normals::Vector{Float64},
+                                  uvs::Vector{Float64}, vi::Int, v::Vec3,
+                                  radius)
+    d = normalize(v)                  # unit direction, independent of radius
+    p = d * radius
+    next_vi = vi + 1
+    pbase = 3next_vi - 2
+    ubase = 2next_vi - 1
+    positions[pbase] = p.x
+    positions[pbase + 1] = p.y
+    positions[pbase + 2] = p.z
+    normals[pbase] = d.x
+    normals[pbase + 1] = d.y
+    normals[pbase + 2] = d.z
+    # Derive the spherical UV from the unit direction, not p.y/radius:
+    # at radius=0 the latter is 0/0 = NaN, while asin(d.y) stays finite.
+    uvs[ubase] = atan(d.z, d.x) / (2π) + 0.5
+    uvs[ubase + 1] = asin(clamp(d.y, -1.0, 1.0)) / π + 0.5
+    return next_vi
+end
+
+function _polyhedron_emit_triangle!(positions::Vector{Float64}, normals::Vector{Float64},
+                                    uvs::Vector{Float64}, indices::Vector{Int},
+                                    vi::Int, out::Int, a::Vec3, b::Vec3,
+                                    c::Vec3, radius)
+    start = vi + 1
+    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, a, radius)
+    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, b, radius)
+    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, c, radius)
+    indices[out] = start
+    indices[out + 1] = start + 1
+    indices[out + 2] = start + 2
+    return vi, out + 3
+end
+
 function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTuple{3,Int}};
                             radius=1.0, detail=0)
     radius = _geometry_finite_scalar(radius, "PolyhedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "PolyhedronGeometry detail")
-    verts = Vec3{Float64}[]
+    verts = Vector{Vec3{Float64}}(undef, length(base_verts))
     for (i, v) in enumerate(base_verts)
-        push!(verts, Vec3(_geometry_finite_float(v.x, "PolyhedronGeometry base vertex $i"),
-                          _geometry_finite_float(v.y, "PolyhedronGeometry base vertex $i"),
-                          _geometry_finite_float(v.z, "PolyhedronGeometry base vertex $i")))
+        verts[i] = Vec3(_geometry_finite_float(v.x, "PolyhedronGeometry base vertex $i"),
+                        _geometry_finite_float(v.y, "PolyhedronGeometry base vertex $i"),
+                        _geometry_finite_float(v.z, "PolyhedronGeometry base vertex $i"))
     end
     nbase = length(verts)
     for face in base_faces
@@ -25,32 +63,35 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
         (1 <= i1 <= nbase && 1 <= i2 <= nbase && 1 <= i3 <= nbase) ||
             throw(ArgumentError("PolyhedronGeometry face indices must reference base vertices"))
     end
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
-    vi = 0
-    function emit!(a::Vec3, b::Vec3, c::Vec3)
-        for v in (a, b, c)
-            d = normalize(v)                  # unit direction, independent of radius
-            p = d * radius
-            push!(positions, p.x, p.y, p.z)
-            push!(normals, d.x, d.y, d.z)
-            # Derive the spherical UV from the unit direction, not p.y/radius:
-            # at radius=0 the latter is 0/0 = NaN, while asin(d.y) stays finite.
-            push!(uvs, atan(d.z, d.x)/(2π) + 0.5, asin(clamp(d.y, -1.0, 1.0))/π + 0.5)
-        end
-        push!(indices, vi+1, vi+2, vi+3); vi += 3
-    end
     cols = detail + 1
+    n_faces = length(base_faces) * cols * cols
+    n_verts = 3 * n_faces
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    vi = 0
+    out = 1
     for (i1, i2, i3) in base_faces
         A = verts[i1]; B = verts[i2]; C = verts[i3]
-        bary(p, q) = A*((cols - p - q)/cols) + B*(p/cols) + C*(q/cols)
         for i in 0:cols-1, j in 0:(cols-1-i)
-            emit!(bary(i, j), bary(i+1, j), bary(i, j+1))
+            vi, out = _polyhedron_emit_triangle!(
+                positions, normals, uvs, indices, vi, out,
+                _polyhedron_bary(A, B, C, cols, i, j),
+                _polyhedron_bary(A, B, C, cols, i + 1, j),
+                _polyhedron_bary(A, B, C, cols, i, j + 1),
+                radius)
             if j < cols - 1 - i
-                emit!(bary(i+1, j), bary(i+1, j+1), bary(i, j+1))
+                vi, out = _polyhedron_emit_triangle!(
+                    positions, normals, uvs, indices, vi, out,
+                    _polyhedron_bary(A, B, C, cols, i + 1, j),
+                    _polyhedron_bary(A, B, C, cols, i + 1, j + 1),
+                    _polyhedron_bary(A, B, C, cols, i, j + 1),
+                    radius)
             end
         end
     end
-    BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, vi, n_faces)
 end
 
 function OctahedronGeometry(; radius=1.0, detail=0)

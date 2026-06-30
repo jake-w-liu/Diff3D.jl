@@ -5730,6 +5730,8 @@ end
         # Subdivision: detail=d multiplies faces by (d+1)².
         @test OctahedronGeometry(detail=1).n_faces == 8 * 4
         @test TetrahedronGeometry(detail=2).n_faces == 4 * 9
+        @test_opt_alloc 20000 IcosahedronGeometry(radius=1.0)
+        @test_opt_alloc 35000 DodecahedronGeometry(radius=1.0)
         # Octahedron/Tetrahedron geometric winding agrees with stored outward normals.
         for geo in (OctahedronGeometry(), TetrahedronGeometry())
             for fi in 1:geo.n_faces
