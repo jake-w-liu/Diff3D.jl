@@ -1210,35 +1210,64 @@ function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segmen
     cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
     half = length / 2
-    profile = Tuple{Float64,Float64}[]
+    np = 2 * (cap_segments + 1)
+    profile_r = Vector{Float64}(undef, np)
+    profile_y = Vector{Float64}(undef, np)
     for i in 0:cap_segments                          # top hemisphere: pole → equator
         a = i/cap_segments * (π/2)
-        push!(profile, (radius*sin(a), half + radius*cos(a)))
+        idx = i + 1
+        profile_r[idx] = radius * sin(a)
+        profile_y[idx] = half + radius * cos(a)
     end
     for i in 0:cap_segments                          # bottom hemisphere: equator → pole
         a = i/cap_segments * (π/2)
-        push!(profile, (radius*cos(a), -half - radius*sin(a)))
+        idx = cap_segments + i + 2
+        profile_r[idx] = radius * cos(a)
+        profile_y[idx] = -half - radius * sin(a)
     end
-    np = Base.length(profile)
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
-    for s in 0:radial_segments
-        phi = s/radial_segments * 2π
+    n_verts = (radial_segments + 1) * np
+    n_faces = 2 * radial_segments * (np - 1)
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    @inbounds for s in 0:radial_segments
+        u = s / radial_segments
+        phi = u * 2π
         c = cos(phi); sn = sin(phi)
-        for (j, (r, y)) in enumerate(profile)
+        for j in 1:np
+            r = profile_r[j]
+            y = profile_y[j]
             x = r*c; z = -r*sn
             cy = clamp(y, -half, half)               # nearest point on the spine
             nx = x; ny = y - cy; nz = z
             nl = sqrt(nx^2 + ny^2 + nz^2); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
-            push!(positions, x, y, z); push!(normals, nx, ny, nz)
-            push!(uvs, s/radial_segments, (j-1)/(np-1))
+            vi = s * np + j
+            pbase = 3vi - 2
+            positions[pbase] = x
+            positions[pbase + 1] = y
+            positions[pbase + 2] = z
+            normals[pbase] = nx
+            normals[pbase + 1] = ny
+            normals[pbase + 2] = nz
+            ubase = 2vi - 1
+            uvs[ubase] = u
+            uvs[ubase + 1] = (j - 1) / (np - 1)
         end
     end
-    for s in 0:radial_segments-1, j in 0:np-2
+    out = 1
+    @inbounds for s in 0:radial_segments-1, j in 0:np-2
         a = s*np + j + 1; b = (s+1)*np + j + 1
         c = (s+1)*np + j + 2; d = s*np + j + 2
-        push!(indices, a, d, b, b, d, c)
+        indices[out] = a
+        indices[out + 1] = d
+        indices[out + 2] = b
+        indices[out + 3] = b
+        indices[out + 4] = d
+        indices[out + 5] = c
+        out += 6
     end
-    BufferGeometry(positions, normals, uvs, indices, (radial_segments+1)*np, Base.length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 # ========================== Edges / Wireframe ==========================

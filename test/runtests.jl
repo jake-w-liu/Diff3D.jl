@@ -6007,6 +6007,8 @@ end
             cy = clamp(v.y, -half, half)                  # nearest spine point
             @test sqrt(v.x^2 + (v.y - cy)^2 + v.z^2) ≈ radius atol=1e-9
         end
+        @test_opt_alloc 24576 CapsuleGeometry(radius=radius, length=len,
+                                              cap_segments=6, radial_segments=12)
     end
 
     @testset "Wireframe and Edges geometry" begin
