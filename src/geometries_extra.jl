@@ -1157,15 +1157,31 @@ end
 function ShapeGeometry(shape::Vector{<:Vec2})
     shape = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     np = length(shape)
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
-    for pt in shape
-        push!(positions, pt.x, pt.y, 0.0); push!(normals, 0.0, 0.0, 1.0)
-        push!(uvs, pt.x, pt.y)
+    n_faces = np - 2
+    positions = Vector{Float64}(undef, 3 * np)
+    normals = Vector{Float64}(undef, 3 * np)
+    uvs = Vector{Float64}(undef, 2 * np)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    @inbounds for i in 1:np
+        pt = shape[i]
+        pbase = 3i - 2
+        positions[pbase] = pt.x
+        positions[pbase + 1] = pt.y
+        positions[pbase + 2] = 0.0
+        normals[pbase] = 0.0
+        normals[pbase + 1] = 0.0
+        normals[pbase + 2] = 1.0
+        ubase = 2i - 1
+        uvs[ubase] = pt.x
+        uvs[ubase + 1] = pt.y
     end
-    for k in 2:np-1
-        push!(indices, 1, k, k+1)
+    @inbounds for k in 2:np-1
+        out = 3k - 5
+        indices[out] = 1
+        indices[out + 1] = k
+        indices[out + 2] = k + 1
     end
-    BufferGeometry(positions, normals, uvs, indices, np, length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, np, n_faces)
 end
 
 """Extrude a planar polygon `shape` to `depth` along +z, or along `extrude_path`."""
@@ -1176,28 +1192,85 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     # side-wall normals stay consistent with the winding for any input orientation.
     shape = _extrude_clean_shape(shape)
     np = length(shape)
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
-    vi = 0
-    pushv(x,y,z,nx,ny,nz,u,v) = (push!(positions,x,y,z); push!(normals,nx,ny,nz);
-                                  push!(uvs,u,v); vi += 1; vi)
-    front = [pushv(pt.x, pt.y, 0.0,   0.0,0.0,-1.0, 0.0,0.0) for pt in shape]
-    back  = [pushv(pt.x, pt.y, depth, 0.0,0.0, 1.0, 1.0,1.0) for pt in shape]
-    for k in 2:np-1
-        push!(indices, front[1], front[k+1], front[k])   # -z face
-        push!(indices, back[1],  back[k],    back[k+1])   # +z face
+    n_verts = 6 * np
+    n_faces = 4 * np - 4
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+
+    @inbounds for i in 1:np
+        pt = shape[i]
+        front_base = 3i - 2
+        back = np + i
+        back_base = 3back - 2
+        positions[front_base] = pt.x
+        positions[front_base + 1] = pt.y
+        positions[front_base + 2] = 0.0
+        normals[front_base] = 0.0
+        normals[front_base + 1] = 0.0
+        normals[front_base + 2] = -1.0
+        uvs[2i - 1] = 0.0
+        uvs[2i] = 0.0
+
+        positions[back_base] = pt.x
+        positions[back_base + 1] = pt.y
+        positions[back_base + 2] = depth
+        normals[back_base] = 0.0
+        normals[back_base + 1] = 0.0
+        normals[back_base + 2] = 1.0
+        uvs[2back - 1] = 1.0
+        uvs[2back] = 1.0
     end
-    for i in 1:np
+
+    out = 1
+    @inbounds for k in 2:np-1
+        indices[out] = 1
+        indices[out + 1] = k + 1
+        indices[out + 2] = k
+        indices[out + 3] = np + 1
+        indices[out + 4] = np + k
+        indices[out + 5] = np + k + 1
+        out += 6
+    end
+    vi = 2 * np
+    @inbounds for i in 1:np
         i2 = i % np + 1
         p1 = shape[i]; p2 = shape[i2]
         ex = p2.x - p1.x; ey = p2.y - p1.y
         nx = ey; ny = -ex; nl = sqrt(nx^2 + ny^2); nl > 0 && (nx/=nl; ny/=nl)
-        a = pushv(p1.x,p1.y,0.0,   nx,ny,0.0, 0.0,0.0)
-        b = pushv(p2.x,p2.y,0.0,   nx,ny,0.0, 1.0,0.0)
-        c = pushv(p2.x,p2.y,depth, nx,ny,0.0, 1.0,1.0)
-        d = pushv(p1.x,p1.y,depth, nx,ny,0.0, 0.0,1.0)
-        push!(indices, a, b, c, a, c, d)
+        a = vi + 1
+        b = vi + 2
+        c = vi + 3
+        d = vi + 4
+        vals = ((p1.x, p1.y, 0.0,   0.0, 0.0),
+                (p2.x, p2.y, 0.0,   1.0, 0.0),
+                (p2.x, p2.y, depth, 1.0, 1.0),
+                (p1.x, p1.y, depth, 0.0, 1.0))
+        for (offset, val) in enumerate(vals)
+            x, y, z, u, v = val
+            dst = vi + offset
+            pbase = 3dst - 2
+            positions[pbase] = x
+            positions[pbase + 1] = y
+            positions[pbase + 2] = z
+            normals[pbase] = nx
+            normals[pbase + 1] = ny
+            normals[pbase + 2] = 0.0
+            ubase = 2dst - 1
+            uvs[ubase] = u
+            uvs[ubase + 1] = v
+        end
+        vi += 4
+        indices[out] = a
+        indices[out + 1] = b
+        indices[out + 2] = c
+        indices[out + 3] = a
+        indices[out + 4] = c
+        indices[out + 5] = d
+        out += 6
     end
-    BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 # ========================== CapsuleGeometry ==========================

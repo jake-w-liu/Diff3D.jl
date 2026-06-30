@@ -5969,11 +5969,13 @@ end
         sh = ShapeGeometry(sq)
         @test sh.n_faces == 2
         @test get_normal(sh, 1).z ≈ 1.0
+        @test_opt_alloc 2560 ShapeGeometry(sq)
         ex = ExtrudeGeometry(sq, depth=2.0)
         @test ex.n_faces == 12                            # 2 caps×2 + 4 walls×2
         bb = compute_bounding_box(ex)
         @test bb.min.z ≈ 0.0 && bb.max.z ≈ 2.0
         @test bb.min.x ≈ 0.0 && bb.max.x ≈ 1.0
+        @test_opt_alloc 4096 ExtrudeGeometry(sq, depth=2.0)
 
         path_ex = ExtrudeGeometry(sq; extrude_path=[
             Vec3(0.0, 0.0, 0.0),
