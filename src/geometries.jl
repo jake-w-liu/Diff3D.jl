@@ -868,22 +868,34 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_verts = (radial_segments + 1) * (tubular_segments + 1)
+    n_faces = 2 * radial_segments * tubular_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
 
     for j in 0:radial_segments
+        vj = j / radial_segments
+        v = vj * 2π
+        cosv = cos(v)
+        sinv = sin(v)
+        r_tube = radius + tube * cosv
         for i in 0:tubular_segments
-            u = i / tubular_segments * 2π
-            v = j / radial_segments * 2π
+            ui = i / tubular_segments
+            u = ui * 2π
+            cosu = cos(u)
+            sinu = sin(u)
+            vi = j * (tubular_segments + 1) + i + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
 
-            x = (radius + tube * cos(v)) * cos(u)
-            y = (radius + tube * cos(v)) * sin(u)
-            z = tube * sin(v)
+            x = r_tube * cosu
+            y = r_tube * sinu
+            z = tube * sinv
 
-            cx = radius * cos(u)
-            cy = radius * sin(u)
+            cx = radius * cosu
+            cy = radius * sinu
             nx = x - cx
             ny = y - cy
             nz = z
@@ -892,24 +904,34 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
                 nx /= nl; ny /= nl; nz /= nl
             end
 
-            append!(positions, [x, y, z])
-            append!(normals_arr, [nx, ny, nz])
-            append!(uvs_arr, [i/tubular_segments, j/radial_segments])
+            positions[pbase] = x
+            positions[pbase + 1] = y
+            positions[pbase + 2] = z
+            normals_arr[pbase] = nx
+            normals_arr[pbase + 1] = ny
+            normals_arr[pbase + 2] = nz
+            uvs_arr[ubase] = ui
+            uvs_arr[ubase + 1] = vj
         end
     end
 
+    out = 1
     for j in 1:radial_segments
         for i in 1:tubular_segments
             a = (j - 1) * (tubular_segments + 1) + i
             b = a + 1
             c = j * (tubular_segments + 1) + i
             d = c + 1
-            append!(indices, [a, b, d, a, d, c])
+            indices[out] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = a
+            indices[out + 4] = d
+            indices[out + 5] = c
+            out += 6
         end
     end
 
-    n_verts = (radial_segments + 1) * (tubular_segments + 1)
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 

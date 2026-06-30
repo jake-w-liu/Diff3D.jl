@@ -2305,6 +2305,7 @@ end
     @testset "TorusGeometry" begin
         geo = TorusGeometry(radius=2.0, tube=0.5)
         @test geo.n_faces > 0
+        @test_opt_alloc 115000 TorusGeometry(radius=2.0, tube=0.5)
     end
 
     @testset "Scene graph" begin
