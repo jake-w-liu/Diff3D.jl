@@ -2289,6 +2289,7 @@ end
         geo = PlaneGeometry(width=4.0, height=4.0)
         @test geo.n_vertices == 4
         @test geo.n_faces == 2
+        @test_opt_alloc 1024 PlaneGeometry(width=4.0, height=4.0)
     end
 
     @testset "CylinderGeometry" begin

@@ -641,10 +641,12 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
     # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
     width_segments = _clamp_seg(width_segments, 1, "PlaneGeometry width_segments")
     height_segments = _clamp_seg(height_segments, 1, "PlaneGeometry height_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_verts = (width_segments + 1) * (height_segments + 1)
+    n_faces = 2 * width_segments * height_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
 
     hw, hh = width/2, height/2
     dw = width / width_segments
@@ -654,24 +656,37 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
         y = iy * dh - hh
         for ix in 0:width_segments
             x = ix * dw - hw
-            append!(positions, [x, -y, 0.0])
-            append!(normals_arr, [0.0, 0.0, 1.0])
-            append!(uvs_arr, [ix/width_segments, 1.0 - iy/height_segments])
+            vi = iy * (width_segments + 1) + ix + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = x
+            positions[pbase + 1] = -y
+            positions[pbase + 2] = 0.0
+            normals_arr[pbase] = 0.0
+            normals_arr[pbase + 1] = 0.0
+            normals_arr[pbase + 2] = 1.0
+            uvs_arr[ubase] = ix / width_segments
+            uvs_arr[ubase + 1] = 1.0 - iy / height_segments
         end
     end
 
+    out = 1
     for iy in 0:height_segments-1
         for ix in 0:width_segments-1
             a = iy * (width_segments + 1) + ix + 1
             b = a + 1
             c = a + (width_segments + 1)
             d = c + 1
-            append!(indices, [a, d, b, a, c, d])
+            indices[out] = a
+            indices[out + 1] = d
+            indices[out + 2] = b
+            indices[out + 3] = a
+            indices[out + 4] = c
+            indices[out + 5] = d
+            out += 6
         end
     end
 
-    n_verts = (width_segments + 1) * (height_segments + 1)
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 
