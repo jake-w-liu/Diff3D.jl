@@ -5985,6 +5985,10 @@ end
         path_bb = compute_bounding_box(path_ex)
         @test path_bb.min == Vec3(0.0, 0.0, 0.0)
         @test path_bb.max == Vec3(1.0, 1.0, 2.0)
+        @test_opt_alloc 5120 ExtrudeGeometry(sq; extrude_path=[
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(0.0, 0.0, 2.0),
+        ])
 
         tri = [Vec2(0.0, 0.3), Vec2(-0.3, -0.3), Vec2(0.3, -0.3)]
         closed_path = Vec3[
@@ -5994,6 +5998,7 @@ end
         ]
         closed_ex = ExtrudeGeometry(tri; extrude_path=closed_path)
         @test closed_ex.n_faces == 4 * 3 * 2
+        @test_opt_alloc 6144 ExtrudeGeometry(tri; extrude_path=closed_path)
         @test_throws ArgumentError ExtrudeGeometry(sq; extrude_path=[Vec3(0.0, 0.0, 0.0)])
         @test_throws ArgumentError ExtrudeGeometry([Vec2(0.0, 0.0), Vec2(1.0, 0.0)];
                                                    extrude_path=closed_path)

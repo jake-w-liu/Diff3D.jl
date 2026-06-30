@@ -1040,8 +1040,8 @@ end
 
 function _extrude_path_tangents(path::Vector{Vec3{Float64}}, closed::Bool, eps::Float64)
     n = length(path)
-    tangents = Vec3{Float64}[]
-    for i in 1:n
+    tangents = Vector{Vec3{Float64}}(undef, n)
+    @inbounds for i in 1:n
         prev = closed ? path[mod1(i - 1, n)] : path[max(i - 1, 1)]
         nxt = closed ? path[mod1(i + 1, n)] : path[min(i + 1, n)]
         t = nxt - prev
@@ -1052,26 +1052,26 @@ function _extrude_path_tangents(path::Vector{Vec3{Float64}}, closed::Bool, eps::
         end
         norm(t) > eps ||
             throw(ArgumentError("ExtrudeGeometry extrude_path contains degenerate segment"))
-        push!(tangents, normalize(t))
+        tangents[i] = normalize(t)
     end
     return tangents
 end
 
 function _extrude_shape_vertex_normals(shape::Vector{Vec2{Float64}})
     np = length(shape)
-    edge_normals = Vec2{Float64}[]
-    for i in 1:np
+    edge_normals = Vector{Vec2{Float64}}(undef, np)
+    @inbounds for i in 1:np
         p1 = shape[i]
         p2 = shape[mod1(i + 1, np)]
         edge = p2 - p1
         len = _shape_len(edge)
         len > 0.0 || throw(ArgumentError("ExtrudeGeometry shape contains degenerate edge"))
-        push!(edge_normals, Vec2(edge.y / len, -edge.x / len))
+        edge_normals[i] = Vec2(edge.y / len, -edge.x / len)
     end
-    normals = Vec2{Float64}[]
-    for i in 1:np
+    normals = Vector{Vec2{Float64}}(undef, np)
+    @inbounds for i in 1:np
         n = edge_normals[mod1(i - 1, np)] + edge_normals[i]
-        push!(normals, _shape_len(n) > 1e-12 ? _shape_normalize(n) : edge_normals[i])
+        normals[i] = _shape_len(n) > 1e-12 ? _shape_normalize(n) : edge_normals[i]
     end
     return normals
 end
@@ -1084,37 +1084,52 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     shape_normals = _extrude_shape_vertex_normals(shape)
     np = length(shape)
     nr = length(path)
-    positions = Float64[]
-    normals = Float64[]
-    uvs = Float64[]
-    indices = Int[]
-    frames = Tuple{Vec3{Float64},Vec3{Float64}}[]
+    segments = closed ? nr : nr - 1
+    n_verts = nr * np + (closed ? 0 : 2 * np)
+    n_faces = 2 * segments * np + (closed ? 0 : 2 * (np - 2))
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
 
     T = tangents[1]
     refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     N = normalize(cross(refv, T))
     B = cross(T, N)
-    for i in 1:nr
+    first_N = N
+    first_B = B
+    last_N = N
+    last_B = B
+    @inbounds for i in 1:nr
         T = tangents[i]
         if i > 1
             projected = N - T * dot(N, T)
             N = norm(projected) > eps ? normalize(projected) : normalize(cross(B, T))
             B = cross(T, N)
         end
-        push!(frames, (N, B))
+        i == 1 && (first_N = N; first_B = B)
+        i == nr && (last_N = N; last_B = B)
         for j in 1:np
             pt = shape[j]
             normal2 = shape_normals[j]
             p = path[i] + N * pt.x + B * pt.y
             n = normalize(N * normal2.x + B * normal2.y)
-            push!(positions, p.x, p.y, p.z)
-            push!(normals, n.x, n.y, n.z)
-            push!(uvs, (i - 1) / max(nr - 1, 1), (j - 1) / np)
+            vi = (i - 1) * np + j
+            pbase = 3vi - 2
+            positions[pbase] = p.x
+            positions[pbase + 1] = p.y
+            positions[pbase + 2] = p.z
+            normals[pbase] = n.x
+            normals[pbase + 1] = n.y
+            normals[pbase + 2] = n.z
+            ubase = 2vi - 1
+            uvs[ubase] = (i - 1) / max(nr - 1, 1)
+            uvs[ubase + 1] = (j - 1) / np
         end
     end
 
-    segments = closed ? nr : nr - 1
-    for i in 1:segments
+    out = 1
+    @inbounds for i in 1:segments
         i2 = i == nr ? 1 : i + 1
         for j in 1:np
             j2 = mod1(j + 1, np)
@@ -1122,35 +1137,67 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
             b = (i - 1) * np + j2
             c = (i2 - 1) * np + j2
             d = (i2 - 1) * np + j
-            push!(indices, a, b, c, a, c, d)
+            indices[out] = a
+            indices[out + 1] = b
+            indices[out + 2] = c
+            indices[out + 3] = a
+            indices[out + 4] = c
+            indices[out + 5] = d
+            out += 6
         end
     end
 
     if !closed
-        for (ring, cap_normal, reverse_cap) in ((1, -tangents[1], true),
-                                                (nr, tangents[end], false))
-            start = length(positions) ÷ 3
-            N, B = frames[ring]
-            cap_indices = Int[]
-            for pt in shape
-                p = path[ring] + N * pt.x + B * pt.y
-                push!(positions, p.x, p.y, p.z)
-                push!(normals, cap_normal.x, cap_normal.y, cap_normal.z)
-                push!(uvs, pt.x, pt.y)
-                push!(cap_indices, start + length(cap_indices) + 1)
-            end
-            for k in 2:(np - 1)
-                if reverse_cap
-                    push!(indices, cap_indices[1], cap_indices[k + 1], cap_indices[k])
-                else
-                    push!(indices, cap_indices[1], cap_indices[k], cap_indices[k + 1])
-                end
-            end
+        start = nr * np
+        cap_normal = -tangents[1]
+        @inbounds for j in 1:np
+            pt = shape[j]
+            p = path[1] + first_N * pt.x + first_B * pt.y
+            vi = start + j
+            pbase = 3vi - 2
+            positions[pbase] = p.x
+            positions[pbase + 1] = p.y
+            positions[pbase + 2] = p.z
+            normals[pbase] = cap_normal.x
+            normals[pbase + 1] = cap_normal.y
+            normals[pbase + 2] = cap_normal.z
+            ubase = 2vi - 1
+            uvs[ubase] = pt.x
+            uvs[ubase + 1] = pt.y
+        end
+        @inbounds for k in 2:(np - 1)
+            indices[out] = start + 1
+            indices[out + 1] = start + k + 1
+            indices[out + 2] = start + k
+            out += 3
+        end
+
+        start += np
+        cap_normal = tangents[end]
+        @inbounds for j in 1:np
+            pt = shape[j]
+            p = path[nr] + last_N * pt.x + last_B * pt.y
+            vi = start + j
+            pbase = 3vi - 2
+            positions[pbase] = p.x
+            positions[pbase + 1] = p.y
+            positions[pbase + 2] = p.z
+            normals[pbase] = cap_normal.x
+            normals[pbase + 1] = cap_normal.y
+            normals[pbase + 2] = cap_normal.z
+            ubase = 2vi - 1
+            uvs[ubase] = pt.x
+            uvs[ubase + 1] = pt.y
+        end
+        @inbounds for k in 2:(np - 1)
+            indices[out] = start + 1
+            indices[out + 1] = start + k
+            indices[out + 2] = start + k + 1
+            out += 3
         end
     end
 
-    return BufferGeometry(positions, normals, uvs, indices,
-                          length(positions) ÷ 3, length(indices) ÷ 3)
+    return BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 """Filled planar polygon (z = 0), normal +z."""
