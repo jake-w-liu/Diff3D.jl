@@ -947,23 +947,28 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     # a 0/0 = NaN, matching every sibling generator in this file.
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusKnotGeometry tubular_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "TorusKnotGeometry radial_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_verts = (tubular_segments + 1) * (radial_segments + 1)
+    n_faces = 2 * tubular_segments * radial_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    q_over_p = q_val / p_val
 
     function knot_point(t)
         cu = cos(t)
         su = sin(t)
-        qu_over_p = q_val / p_val * t
-        cx = radius * (2 + cos(qu_over_p)) * cu * 0.5
-        cy = radius * (2 + cos(qu_over_p)) * su * 0.5
+        qu_over_p = q_over_p * t
+        radial = radius * (2 + cos(qu_over_p)) * 0.5
+        cx = radial * cu
+        cy = radial * su
         cz = radius * sin(qu_over_p) * 0.5
         Vec3(cx, cy, cz)
     end
 
     for i in 0:tubular_segments
-        u = i / tubular_segments * p_val * 2π
+        ui = i / tubular_segments
+        u = ui * p_val * 2π
         p1 = knot_point(u)
         p2 = knot_point(u + 0.01)
         T_vec = normalize(p2 - p1)
@@ -972,7 +977,8 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
         N_vec = cross(B_vec, T_vec)
 
         for j in 0:radial_segments
-            v = j / radial_segments * 2π
+            vj = j / radial_segments
+            v = vj * 2π
             cx = tube * cos(v)
             cy = tube * sin(v)
             px = p1.x + cx * N_vec.x + cy * B_vec.x
@@ -987,24 +993,37 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                 nx /= nl; ny /= nl; nz /= nl
             end
 
-            append!(positions, [px, py, pz])
-            append!(normals_arr, [nx, ny, nz])
-            append!(uvs_arr, [i/tubular_segments, j/radial_segments])
+            vi = i * (radial_segments + 1) + j + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = px
+            positions[pbase + 1] = py
+            positions[pbase + 2] = pz
+            normals_arr[pbase] = nx
+            normals_arr[pbase + 1] = ny
+            normals_arr[pbase + 2] = nz
+            uvs_arr[ubase] = ui
+            uvs_arr[ubase + 1] = vj
         end
     end
 
+    out = 1
     for i in 1:tubular_segments
         for j in 1:radial_segments
             a = (i - 1) * (radial_segments + 1) + j
             b = a + 1
             c = i * (radial_segments + 1) + j
             d = c + 1
-            append!(indices, [a, b, d, a, d, c])
+            indices[out] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = a
+            indices[out + 4] = d
+            indices[out + 5] = c
+            out += 6
         end
     end
 
-    n_verts = (tubular_segments + 1) * (radial_segments + 1)
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 

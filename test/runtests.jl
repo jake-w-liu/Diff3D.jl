@@ -2308,6 +2308,13 @@ end
         @test_opt_alloc 115000 TorusGeometry(radius=2.0, tube=0.5)
     end
 
+    @testset "TorusKnotGeometry" begin
+        geo = TorusKnotGeometry(radius=1.0, tube=0.4)
+        @test geo.n_faces > 0
+        @test geo.n_vertices > 0
+        @test_opt_alloc 70000 TorusKnotGeometry(radius=1.0, tube=0.4)
+    end
+
     @testset "Scene graph" begin
         scene = Scene()
         geo = BoxGeometry()
