@@ -583,34 +583,49 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
     # an empty/NaN sphere from a plausible call.
     width_segments = _clamp_seg(width_segments, 3, "SphereGeometry width_segments")
     height_segments = _clamp_seg(height_segments, 2, "SphereGeometry height_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_verts = (height_segments + 1) * (width_segments + 1)
+    n_faces = 2 * width_segments * (height_segments - 1)
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
 
     for j in 0:height_segments
         v = j / height_segments
         θ = v * π
+        sinθ = sin(θ)
+        cosθ = cos(θ)
         for i in 0:width_segments
             u = i / width_segments
             ϕ = u * 2π
+            sinϕ = sin(ϕ)
+            cosϕ = cos(ϕ)
 
-            x = -radius * sin(θ) * cos(ϕ)
-            y = radius * cos(θ)
-            z = radius * sin(θ) * sin(ϕ)
+            x = -radius * sinθ * cosϕ
+            y = radius * cosθ
+            z = radius * sinθ * sinϕ
 
-            nx, ny, nz = -sin(θ)*cos(ϕ), cos(θ), sin(θ)*sin(ϕ)
+            nx, ny, nz = -sinθ * cosϕ, cosθ, sinθ * sinϕ
             nl = sqrt(nx^2 + ny^2 + nz^2)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
             end
 
-            append!(positions, [x, y, z])
-            append!(normals_arr, [nx, ny, nz])
-            append!(uvs_arr, [u, 1.0-v])
+            vi = j * (width_segments + 1) + i + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = x
+            positions[pbase + 1] = y
+            positions[pbase + 2] = z
+            normals_arr[pbase] = nx
+            normals_arr[pbase + 1] = ny
+            normals_arr[pbase + 2] = nz
+            uvs_arr[ubase] = u
+            uvs_arr[ubase + 1] = 1.0 - v
         end
     end
 
+    out = 1
     for j in 0:height_segments-1
         for i in 0:width_segments-1
             a = j * (width_segments + 1) + i + 1
@@ -619,16 +634,20 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             d = c + 1
 
             if j != 0
-                append!(indices, [a, d, b])
+                indices[out] = a
+                indices[out + 1] = d
+                indices[out + 2] = b
+                out += 3
             end
             if j != height_segments - 1
-                append!(indices, [a, c, d])
+                indices[out] = a
+                indices[out + 1] = c
+                indices[out + 2] = d
+                out += 3
             end
         end
     end
 
-    n_verts = (height_segments + 1) * (width_segments + 1)
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 

@@ -2283,6 +2283,7 @@ end
             r = norm(v)
             @test r ≈ 2.0 atol=1e-10
         end
+        @test_opt_alloc 24576 SphereGeometry(radius=2.0, width_segments=16, height_segments=8)
     end
 
     @testset "PlaneGeometry" begin
