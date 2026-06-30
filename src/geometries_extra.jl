@@ -322,28 +322,49 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
     segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
 
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
+    n_verts = (segments + 1) * np
+    n_faces = 2 * segments * (np - 1)
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
     for i in 0:segments
-        phi = phi_start + i/segments * phi_length
+        u = i / segments
+        phi = phi_start + u * phi_length
         c = cos(phi); s = sin(phi)
         for j in 1:np
             pt = points[j]
-            push!(positions, pt.x*c, pt.y, -pt.x*s)
+            vi = i * np + j
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = pt.x * c
+            positions[pbase + 1] = pt.y
+            positions[pbase + 2] = -pt.x * s
             jm = max(j-1, 1); jp = min(j+1, np)
             dx = points[jp].x - points[jm].x; dy = points[jp].y - points[jm].y
             nr = dy; nh = -dx                      # outward profile normal
             nx = nr*c; ny = nh; nz = -nr*s
             nl = sqrt(nx^2 + ny^2 + nz^2); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
-            push!(normals, nx, ny, nz)
-            push!(uvs, i/segments, (j-1)/(np-1))
+            normals[pbase] = nx
+            normals[pbase + 1] = ny
+            normals[pbase + 2] = nz
+            uvs[ubase] = u
+            uvs[ubase + 1] = (j - 1) / (np - 1)
         end
     end
+    out = 1
     for i in 0:segments-1, j in 0:np-2
         a = i*np + j + 1; b = (i+1)*np + j + 1
         c = (i+1)*np + j + 2; d = i*np + j + 2
-        push!(indices, a, b, d, b, c, d)
+        indices[out] = a
+        indices[out + 1] = b
+        indices[out + 2] = d
+        indices[out + 3] = b
+        indices[out + 4] = c
+        indices[out + 5] = d
+        out += 6
     end
-    BufferGeometry(positions, normals, uvs, indices, (segments+1)*np, length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 # ========================== TubeGeometry ==========================

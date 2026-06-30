@@ -5790,12 +5790,14 @@ end
     end
 
     @testset "LatheGeometry — vertical profile is a cylinder" begin
-        lat = LatheGeometry([Vec2(1.0,0.0), Vec2(1.0,2.0)], segments=16)
+        profile = [Vec2(1.0,0.0), Vec2(1.0,2.0)]
+        lat = LatheGeometry(profile, segments=16)
         for vi in 1:lat.n_vertices
             v = get_vertex(lat, vi)
             @test sqrt(v.x^2 + v.z^2) ≈ 1.0 atol=1e-9
         end
         @test lat.n_faces == 16 * 1 * 2
+        @test_opt_alloc 8192 LatheGeometry(profile, segments=16)
     end
 
     @testset "TubeGeometry — straight path is a cylinder" begin
