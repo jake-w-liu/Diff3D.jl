@@ -719,10 +719,16 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 3, "CylinderGeometry radial_segments")
     height_segments = _clamp_seg(height_segments, 1, "CylinderGeometry height_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    side_vertices = (height_segments + 1) * (radial_segments + 1)
+    top_cap = !open_ended && radius_top > 0
+    bottom_cap = !open_ended && radius_bottom > 0
+    cap_count = (top_cap ? 1 : 0) + (bottom_cap ? 1 : 0)
+    n_verts = side_vertices + cap_count * (radial_segments + 2)
+    n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
     vi = 0
 
     half_h = height / 2
@@ -739,68 +745,107 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
         for x_seg in 0:radial_segments
             u = x_seg / radial_segments
             θ = u * 2π
+            sinθ = sin(θ)
+            cosθ = cos(θ)
 
-            x = r * sin(θ)
-            z = r * cos(θ)
+            x = r * sinθ
+            z = r * cosθ
 
-            nx = sin(θ)
+            nx = sinθ
             ny = slope
-            nz = cos(θ)
+            nz = cosθ
             nl = sqrt(nx^2 + ny^2 + nz^2)
             nx /= nl; ny /= nl; nz /= nl
 
-            append!(positions, [x, y_pos, z])
-            append!(normals_arr, [nx, ny, nz])
-            append!(uvs_arr, [u, 1.0 - v])
             vi += 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = x
+            positions[pbase + 1] = y_pos
+            positions[pbase + 2] = z
+            normals_arr[pbase] = nx
+            normals_arr[pbase + 1] = ny
+            normals_arr[pbase + 2] = nz
+            uvs_arr[ubase] = u
+            uvs_arr[ubase + 1] = 1.0 - v
         end
     end
 
+    out = 1
     for y_seg in 0:height_segments-1
         for x_seg in 0:radial_segments-1
             a = y_seg * (radial_segments + 1) + x_seg + 1
             b = a + 1
             c = a + (radial_segments + 1)
             d = c + 1
-            append!(indices, [a, d, b, a, c, d])
+            indices[out] = a
+            indices[out + 1] = d
+            indices[out + 2] = b
+            indices[out + 3] = a
+            indices[out + 4] = c
+            indices[out + 5] = d
+            out += 6
         end
     end
 
     # Caps
     if !open_ended
-        for (cap_y, cap_r, cap_ny) in [(half_h, radius_top, 1.0), (-half_h, radius_bottom, -1.0)]
+        for cap_index in 1:2
+            cap_y = cap_index == 1 ? half_h : -half_h
+            cap_r = cap_index == 1 ? radius_top : radius_bottom
+            cap_ny = cap_index == 1 ? 1.0 : -1.0
             cap_r > 0 || continue   # skip degenerate zero-radius cap (e.g. cone apex)
             center_idx = vi + 1
-            append!(positions, [0.0, cap_y, 0.0])
-            append!(normals_arr, [0.0, cap_ny, 0.0])
-            append!(uvs_arr, [0.5, 0.5])
             vi += 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = 0.0
+            positions[pbase + 1] = cap_y
+            positions[pbase + 2] = 0.0
+            normals_arr[pbase] = 0.0
+            normals_arr[pbase + 1] = cap_ny
+            normals_arr[pbase + 2] = 0.0
+            uvs_arr[ubase] = 0.5
+            uvs_arr[ubase + 1] = 0.5
 
             for x_seg in 0:radial_segments
                 u = x_seg / radial_segments
                 θ = u * 2π
-                x = cap_r * sin(θ)
-                z = cap_r * cos(θ)
+                sinθ = sin(θ)
+                cosθ = cos(θ)
+                x = cap_r * sinθ
+                z = cap_r * cosθ
 
-                append!(positions, [x, cap_y, z])
-                append!(normals_arr, [0.0, cap_ny, 0.0])
-                append!(uvs_arr, [sin(θ)*0.5+0.5, cos(θ)*0.5+0.5])
                 vi += 1
+                pbase = 3vi - 2
+                ubase = 2vi - 1
+                positions[pbase] = x
+                positions[pbase + 1] = cap_y
+                positions[pbase + 2] = z
+                normals_arr[pbase] = 0.0
+                normals_arr[pbase + 1] = cap_ny
+                normals_arr[pbase + 2] = 0.0
+                uvs_arr[ubase] = sinθ * 0.5 + 0.5
+                uvs_arr[ubase + 1] = cosθ * 0.5 + 0.5
             end
 
             for x_seg in 0:radial_segments-1
                 curr = center_idx + 1 + x_seg
                 next_v = curr + 1
                 if cap_ny > 0
-                    append!(indices, [center_idx, curr, next_v])
+                    indices[out] = center_idx
+                    indices[out + 1] = curr
+                    indices[out + 2] = next_v
                 else
-                    append!(indices, [center_idx, next_v, curr])
+                    indices[out] = center_idx
+                    indices[out + 1] = next_v
+                    indices[out + 2] = curr
                 end
+                out += 3
             end
         end
     end
 
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, vi, n_faces)
 end
 

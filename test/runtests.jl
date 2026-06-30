@@ -2297,6 +2297,9 @@ end
         geo = CylinderGeometry(radius_top=1.0, radius_bottom=1.0, height=2.0)
         @test geo.n_faces > 0
         @test geo.n_vertices > 0
+        @test_opt_alloc 16384 CylinderGeometry(radius_top=1.0, radius_bottom=1.0,
+                                               height=2.0)
+        @test_opt_alloc 12288 ConeGeometry(radius=1.0, height=2.0)
     end
 
     @testset "TorusGeometry" begin
