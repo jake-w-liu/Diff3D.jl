@@ -5790,6 +5790,7 @@ end
         @test geo.n_faces == 0
         @test get_vertex(geo, 1) == Vec3(0.0, 0.0, 0.0)
         @test get_vertex(geo, 10) == Vec3(3.0, 1.0, 0.0)
+        @test_opt_alloc 1024 CatmullRomCurveGeometry(curve; segments=9)
 
         for mode in (:centripetal, :chordal)
             mode_curve = CatmullRomCurve(points; curve_type=mode)

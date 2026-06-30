@@ -464,16 +464,24 @@ end
 
 function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
     segs = _geometry_positive_int(segments, "catmull_rom_points segments")
-    return [catmull_rom_point(curve, i / segs) for i in 0:segs]
+    pts = Vector{Vec3{Float64}}(undef, segs + 1)
+    for i in 0:segs
+        pts[i + 1] = catmull_rom_point(curve, i / segs)
+    end
+    return pts
 end
 
 function CatmullRomCurveGeometry(curve::CatmullRomCurve; segments::Integer=200)
-    pts = catmull_rom_points(curve; segments=segments)
-    positions = Float64[]
-    for p in pts
-        push!(positions, p.x, p.y, p.z)
+    segs = _geometry_positive_int(segments, "catmull_rom_points segments")
+    positions = Vector{Float64}(undef, 3 * (segs + 1))
+    for i in 0:segs
+        p = catmull_rom_point(curve, i / segs)
+        base = 3i + 1
+        positions[base] = p.x
+        positions[base + 1] = p.y
+        positions[base + 2] = p.z
     end
-    return BufferGeometry(positions, Float64[], Float64[], Int[], length(pts), 0)
+    return BufferGeometry(positions, Float64[], Float64[], Int[], segs + 1, 0)
 end
 
 # ========================== NURBS / Parametric Geometry ==========================
