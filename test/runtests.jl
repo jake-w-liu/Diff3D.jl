@@ -2251,6 +2251,7 @@ end
         @test get_vertex(geo, 1) == Vec3(-1.0, -1.0, 1.0)
         @test get_vertex(geo, 2) == Vec3(1.0, -1.0, 1.0)
         @test get_vertex(geo, 3) == Vec3(1.0, 1.0, 1.0)
+        @test_opt_alloc 4096 BoxGeometry(width=2.0, height=2.0, depth=2.0)
 
         seg = BoxGeometry(width=2.0, height=4.0, depth=6.0,
                           width_segments=2, height_segments=3, depth_segments=4)
@@ -2268,6 +2269,9 @@ end
                 @test dot(fn, get_normal(seg, vi)) > 0.99
             end
         end
+        @test_opt_alloc 65536 BoxGeometry(width=2.0, height=4.0, depth=6.0,
+                                          width_segments=8, height_segments=8,
+                                          depth_segments=8)
         @test_throws ArgumentError BoxGeometry(width_segments=0)
         @test_throws ArgumentError BoxGeometry(height_segments=1.5)
     end
