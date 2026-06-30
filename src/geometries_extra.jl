@@ -619,24 +619,34 @@ function _nurbs_span(degree::Int, knots::Vector{Float64}, npoints::Int, u::Float
     return mid
 end
 
-function _nurbs_basis(span::Int, u::Float64, degree::Int, knots::Vector{Float64})
-    basis = zeros(Float64, degree + 1)
-    left = zeros(Float64, degree + 1)
-    right = zeros(Float64, degree + 1)
-    basis[1] = 1.0
+_nurbs_basis_scratch(degree::Int) = Vector{Float64}(undef, 3 * (degree + 1))
+
+function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
+                       degree::Int, knots::Vector{Float64})
+    n = degree + 1
+    length(scratch) >= 3n || resize!(scratch, 3n)
+    left0 = n
+    right0 = 2n
+    scratch[1] = 1.0
     for j in 1:degree
-        left[j + 1] = u - knots[span - j + 2]
-        right[j + 1] = knots[span + j + 1] - u
+        scratch[left0 + j + 1] = u - knots[span - j + 2]
+        scratch[right0 + j + 1] = knots[span + j + 1] - u
         saved = 0.0
         for r in 0:(j - 1)
-            denom = right[r + 2] + left[j - r + 1]
-            temp = abs(denom) > eps(Float64) ? basis[r + 1] / denom : 0.0
-            basis[r + 1] = saved + right[r + 2] * temp
-            saved = left[j - r + 1] * temp
+            denom = scratch[right0 + r + 2] + scratch[left0 + j - r + 1]
+            temp = abs(denom) > eps(Float64) ? scratch[r + 1] / denom : 0.0
+            scratch[r + 1] = saved + scratch[right0 + r + 2] * temp
+            saved = scratch[left0 + j - r + 1] * temp
         end
-        basis[j + 1] = saved
+        scratch[j + 1] = saved
     end
-    return basis
+    return scratch
+end
+
+function _nurbs_basis(span::Int, u::Float64, degree::Int, knots::Vector{Float64})
+    scratch = _nurbs_basis_scratch(degree)
+    _nurbs_basis!(scratch, span, u, degree, knots)
+    return scratch[1:(degree + 1)]
 end
 
 function _nurbs_parameter(t, knots::Vector{Float64}, degree::Int, npoints::Int,
@@ -654,12 +664,12 @@ function _nurbs_finish_point(x::Float64, y::Float64, z::Float64, w::Float64)
     return Vec3(x / w, y / w, z / w)
 end
 
-function nurbs_point(curve::NURBSCurve, t::Real)
+function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     npoints = length(curve.control_points)
     u = _nurbs_parameter(t, curve.knots, curve.degree, npoints,
                          "NURBS curve parameter t")
     span = _nurbs_span(curve.degree, curve.knots, npoints, u)
-    basis = _nurbs_basis(span, u, curve.degree, curve.knots)
+    _nurbs_basis!(basis, span, u, curve.degree, curve.knots)
     x = 0.0; y = 0.0; z = 0.0; w = 0.0
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
@@ -672,7 +682,12 @@ function nurbs_point(curve::NURBSCurve, t::Real)
     return _nurbs_finish_point(x, y, z, w)
 end
 
-function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
+function nurbs_point(curve::NURBSCurve, t::Real)
+    return _nurbs_point(curve, t, _nurbs_basis_scratch(curve.degree))
+end
+
+function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
+                      basis_u::Vector{Float64}, basis_v::Vector{Float64})
     nu = length(surface.control_points)
     nv = length(surface.control_points[1])
     uu = _nurbs_parameter(u, surface.knots_u, surface.degree_u, nu,
@@ -681,8 +696,8 @@ function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
                           "NURBS surface parameter v")
     span_u = _nurbs_span(surface.degree_u, surface.knots_u, nu, uu)
     span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
-    basis_u = _nurbs_basis(span_u, uu, surface.degree_u, surface.knots_u)
-    basis_v = _nurbs_basis(span_v, vv, surface.degree_v, surface.knots_v)
+    _nurbs_basis!(basis_u, span_u, uu, surface.degree_u, surface.knots_u)
+    _nurbs_basis!(basis_v, span_v, vv, surface.degree_v, surface.knots_v)
     x = 0.0; y = 0.0; z = 0.0; w = 0.0
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
@@ -695,7 +710,14 @@ function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
     return _nurbs_finish_point(x, y, z, w)
 end
 
-function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
+function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
+    return _nurbs_point(surface, u, v, _nurbs_basis_scratch(surface.degree_u),
+                        _nurbs_basis_scratch(surface.degree_v))
+end
+
+function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
+                      basis_u::Vector{Float64}, basis_v::Vector{Float64},
+                      basis_w::Vector{Float64})
     nu = length(volume.control_points)
     nv = length(volume.control_points[1])
     nw = length(volume.control_points[1][1])
@@ -708,9 +730,9 @@ function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
     span_u = _nurbs_span(volume.degree_u, volume.knots_u, nu, uu)
     span_v = _nurbs_span(volume.degree_v, volume.knots_v, nv, vv)
     span_w = _nurbs_span(volume.degree_w, volume.knots_w, nw, ww)
-    basis_u = _nurbs_basis(span_u, uu, volume.degree_u, volume.knots_u)
-    basis_v = _nurbs_basis(span_v, vv, volume.degree_v, volume.knots_v)
-    basis_w = _nurbs_basis(span_w, ww, volume.degree_w, volume.knots_w)
+    _nurbs_basis!(basis_u, span_u, uu, volume.degree_u, volume.knots_u)
+    _nurbs_basis!(basis_v, span_v, vv, volume.degree_v, volume.knots_v)
+    _nurbs_basis!(basis_w, span_w, ww, volume.degree_w, volume.knots_w)
     x = 0.0; y = 0.0; z = 0.0; weight = 0.0
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
@@ -723,12 +745,22 @@ function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
     return _nurbs_finish_point(x, y, z, weight)
 end
 
+function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)
+    return _nurbs_point(volume, u, v, wparam, _nurbs_basis_scratch(volume.degree_u),
+                        _nurbs_basis_scratch(volume.degree_v),
+                        _nurbs_basis_scratch(volume.degree_w))
+end
+
 function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
     segs = _geometry_positive_int(segments, "NURBSCurveGeometry segments")
-    positions = Float64[]
+    positions = Vector{Float64}(undef, 3 * (segs + 1))
+    basis = _nurbs_basis_scratch(curve.degree)
     for i in 0:segs
-        p = nurbs_point(curve, i / segs)
-        push!(positions, p.x, p.y, p.z)
+        p = _nurbs_point(curve, i / segs, basis)
+        base = 3i + 1
+        positions[base] = p.x
+        positions[base + 1] = p.y
+        positions[base + 2] = p.z
     end
     return BufferGeometry(positions, Float64[], Float64[], Int[], segs + 1, 0)
 end
@@ -763,9 +795,10 @@ end
 function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20)
     us = _geometry_positive_int(slices, "ParametricGeometry slices")
     vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
-    positions = Float64[]
-    uvs = Float64[]
-    indices = Int[]
+    row = us + 1
+    nvertices = row * (vs + 1)
+    positions = Vector{Float64}(undef, 3 * nvertices)
+    uvs = Vector{Float64}(undef, 2 * nvertices)
     for j in 0:vs, i in 0:us
         u = i / us
         v = j / vs
@@ -774,26 +807,74 @@ function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20
         x = _geometry_finite_float(p.x, "ParametricGeometry callback returned a non-finite point")
         y = _geometry_finite_float(p.y, "ParametricGeometry callback returned a non-finite point")
         z = _geometry_finite_float(p.z, "ParametricGeometry callback returned a non-finite point")
-        push!(positions, x, y, z)
-        push!(uvs, u, 1.0 - v)
+        vi = j * row + i + 1
+        pbase = 3vi - 2
+        ubase = 2vi - 1
+        positions[pbase] = x
+        positions[pbase + 1] = y
+        positions[pbase + 2] = z
+        uvs[ubase] = u
+        uvs[ubase + 1] = 1.0 - v
     end
-    row = us + 1
+    indices = Vector{Int}(undef, 6 * us * vs)
+    out = 1
     for j in 0:(vs - 1), i in 0:(us - 1)
         a = j * row + i + 1
         b = a + 1
         c = a + row
         d = c + 1
-        push!(indices, a, b, d, a, d, c)
+        indices[out] = a
+        indices[out + 1] = b
+        indices[out + 2] = d
+        indices[out + 3] = a
+        indices[out + 4] = d
+        indices[out + 5] = c
+        out += 6
     end
-    nvertices = row * (vs + 1)
     normals = _parametric_normals(positions, indices, nvertices)
-    return BufferGeometry(positions, normals, uvs, indices, nvertices,
-                          length(indices) ÷ 3)
+    return BufferGeometry(positions, normals, uvs, indices, nvertices, 2 * us * vs)
 end
 
 function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
                               stacks::Integer=20)
-    ParametricGeometry((u, v) -> nurbs_point(surface, u, v), slices, stacks)
+    us = _geometry_positive_int(slices, "ParametricGeometry slices")
+    vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
+    row = us + 1
+    nvertices = row * (vs + 1)
+    positions = Vector{Float64}(undef, 3 * nvertices)
+    uvs = Vector{Float64}(undef, 2 * nvertices)
+    basis_u = _nurbs_basis_scratch(surface.degree_u)
+    basis_v = _nurbs_basis_scratch(surface.degree_v)
+    for j in 0:vs, i in 0:us
+        u = i / us
+        v = j / vs
+        p = _nurbs_point(surface, u, v, basis_u, basis_v)
+        vi = j * row + i + 1
+        pbase = 3vi - 2
+        ubase = 2vi - 1
+        positions[pbase] = p.x
+        positions[pbase + 1] = p.y
+        positions[pbase + 2] = p.z
+        uvs[ubase] = u
+        uvs[ubase + 1] = 1.0 - v
+    end
+    indices = Vector{Int}(undef, 6 * us * vs)
+    out = 1
+    for j in 0:(vs - 1), i in 0:(us - 1)
+        a = j * row + i + 1
+        b = a + 1
+        c = a + row
+        d = c + 1
+        indices[out] = a
+        indices[out + 1] = b
+        indices[out + 2] = d
+        indices[out + 3] = a
+        indices[out + 4] = d
+        indices[out + 5] = c
+        out += 6
+    end
+    normals = _parametric_normals(positions, indices, nvertices)
+    return BufferGeometry(positions, normals, uvs, indices, nvertices, 2 * us * vs)
 end
 
 # ========================== Shape / Extrude ==========================

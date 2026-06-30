@@ -5912,6 +5912,9 @@ end
         @test param.n_vertices == 12
         @test param.n_faces == 12
         @test length(param.uvs) == 24
+        @test_opt_alloc 1024 NURBSCurveGeometry(line_curve; segments=4)
+        @test_opt_alloc 4096 NURBSSurfaceGeometry(surface; slices=4, stacks=2)
+        @test_opt_alloc 3072 ParametricGeometry((u, v) -> Vec3(u, v, u + v), 3, 2)
         @test_throws ArgumentError NURBSCurve(2, [0.0, 0.0, 1.0, 1.0],
                                              [Vec4(0.0, 0.0, 0.0, 1.0)])
         @test_throws ArgumentError NURBSCurve(1, [0.0, 1.0, 0.0, 1.0],
