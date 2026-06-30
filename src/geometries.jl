@@ -1035,10 +1035,13 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     theta_segments = _clamp_seg(theta_segments, 3, "RingGeometry theta_segments")
     phi_segments = _clamp_seg(phi_segments, 1, "RingGeometry phi_segments")
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_verts = (phi_segments + 1) * (theta_segments + 1)
+    n_faces = 2 * theta_segments * phi_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    uvd = outer_radius == 0 ? 1.0 : outer_radius
 
     for j in 0:phi_segments
         v = j / phi_segments
@@ -1048,26 +1051,38 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
             θ = u * 2π
             x = r * cos(θ)
             y = r * sin(θ)
-            append!(positions, [x, y, 0.0])
-            append!(normals_arr, [0.0, 0.0, 1.0])
+            vi = j * (theta_segments + 1) + i + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = x
+            positions[pbase + 1] = y
+            positions[pbase + 2] = 0.0
+            normals_arr[pbase] = 0.0
+            normals_arr[pbase + 1] = 0.0
+            normals_arr[pbase + 2] = 1.0
             # outer_radius==0 is a degenerate ring (x=y=0); avoid 0/0=NaN UVs.
-            uvd = outer_radius == 0 ? 1.0 : outer_radius
-            append!(uvs_arr, [(x / uvd + 1) / 2, (y / uvd + 1) / 2])
+            uvs_arr[ubase] = (x / uvd + 1) / 2
+            uvs_arr[ubase + 1] = (y / uvd + 1) / 2
         end
     end
 
+    out = 1
     for j in 0:phi_segments-1
         for i in 0:theta_segments-1
             a = j * (theta_segments + 1) + i + 1
             b = a + 1
             c = a + (theta_segments + 1)
             d = c + 1
-            append!(indices, [a, d, b, a, c, d])
+            indices[out] = a
+            indices[out + 1] = d
+            indices[out + 2] = b
+            indices[out + 3] = a
+            indices[out + 4] = c
+            indices[out + 5] = d
+            out += 6
         end
     end
 
-    n_verts = (phi_segments + 1) * (theta_segments + 1)
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 
