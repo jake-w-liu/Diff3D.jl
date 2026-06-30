@@ -5799,12 +5799,13 @@ end
     end
 
     @testset "TubeGeometry — straight path is a cylinder" begin
-        tub = TubeGeometry([Vec3(0.0,0,0), Vec3(0.0,0,1.0), Vec3(0.0,0,2.0)];
-                           radius=0.5, radial_segments=12)
+        path = [Vec3(0.0,0,0), Vec3(0.0,0,1.0), Vec3(0.0,0,2.0)]
+        tub = TubeGeometry(path; radius=0.5, radial_segments=12)
         for vi in 1:tub.n_vertices
             v = get_vertex(tub, vi)
             @test sqrt(v.x^2 + v.y^2) ≈ 0.5 atol=1e-9     # distance from the z-axis
         end
+        @test_opt_alloc 8192 TubeGeometry(path; radius=0.5, radial_segments=12)
     end
 
     @testset "CatmullRomCurve and CatmullRomCurveGeometry" begin

@@ -365,8 +365,18 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     radius = _geometry_finite_scalar(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
-    tangents = [normalize(path[min(i+1,n)] - path[max(i-1,1)]) for i in 1:n]
-    positions = Float64[]; normals = Float64[]; uvs = Float64[]; indices = Int[]
+    rs1 = radial_segments + 1
+    n_verts = n * rs1
+    n_faces = 2 * (n - 1) * radial_segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    tangents = Vector{Vec3{Float64}}(undef, n)
+    for i in 1:n
+        tangents[i] = normalize(path[min(i + 1, n)] - path[max(i - 1, 1)])
+    end
+
     # Initial frame from the first tangent, parallel-transported along the path
     # (as in three.js computeFrenetFrames) so the frame never flips between rings.
     T1 = tangents[1]
@@ -380,21 +390,37 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             B = cross(T, N)
         end
         for j in 0:radial_segments
-            v = j/radial_segments * 2π
-            normal = N*cos(v) + B*sin(v)
-            p = path[i] + normal*radius
-            push!(positions, p.x, p.y, p.z)
-            push!(normals, normal.x, normal.y, normal.z)
-            push!(uvs, (i-1)/(n-1), j/radial_segments)
+            vj = j / radial_segments
+            v = vj * 2π
+            normal = N * cos(v) + B * sin(v)
+            p = path[i] + normal * radius
+            vi = (i - 1) * rs1 + j + 1
+            pbase = 3vi - 2
+            ubase = 2vi - 1
+            positions[pbase] = p.x
+            positions[pbase + 1] = p.y
+            positions[pbase + 2] = p.z
+            normals[pbase] = normal.x
+            normals[pbase + 1] = normal.y
+            normals[pbase + 2] = normal.z
+            uvs[ubase] = (i - 1) / (n - 1)
+            uvs[ubase + 1] = vj
         end
     end
-    rs1 = radial_segments + 1
+
+    out = 1
     for i in 0:n-2, j in 0:radial_segments-1
         a = i*rs1 + j + 1; b = (i+1)*rs1 + j + 1
         c = (i+1)*rs1 + j + 2; d = i*rs1 + j + 2
-        push!(indices, a, d, b, b, d, c)
+        indices[out] = a
+        indices[out + 1] = d
+        indices[out + 2] = b
+        indices[out + 3] = b
+        indices[out + 4] = d
+        indices[out + 5] = c
+        out += 6
     end
-    BufferGeometry(positions, normals, uvs, indices, n*rs1, length(indices) ÷ 3)
+    BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 # ========================== CatmullRomCurve ==========================
