@@ -2060,6 +2060,44 @@ bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
 
 # ========================== Tiled / parallel rasterization ==========================
 
+function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
+                             instanced::Vector{InstancedMesh}, lights,
+                             camera::AbstractCamera, proj::Mat4, view::Mat4,
+                             near, ortho_dir, thread_caches::Vector{RenderCache},
+                             thread_count::Int, ylo::Int, yhi::Int)
+    ylo > yhi && return nothing
+    cache_idx = mod1(Threads.threadid() - 1, thread_count)
+    thread_cache = thread_caches[cache_idx]
+    tri = thread_cache.tri
+    clipped = thread_cache.clipped
+    empty!(clipped)
+    sx = thread_cache.sx
+    sy = thread_cache.sy
+    sz = thread_cache.sz
+    colorbuf = thread_cache.colors
+    for mesh in meshes
+        is_visible(mesh) || continue
+        mat = _mesh_material(mesh)
+        is_transparent_material(mat) && continue
+        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+                                               lights, proj, view, near, camera.position,
+                                               tri, clipped, sx, sy, sz, colorbuf,
+                                               1, rt.width, ylo, yhi, ortho_dir)
+    end
+    for im in instanced
+        _visible_in_tree(im) || continue
+        _instanced_triangle_drawable(im) || continue
+        base = compute_world_matrix(im)
+        _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im),
+                                              _instanced_material(im),
+                                              im.instance_colors, im.instance_matrices,
+                                              base, lights, proj, view, near,
+                                              camera.position, tri, clipped, sx, sy, sz,
+                                              colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
+    end
+    return nothing
+end
+
 """
     render_tiled!(rt, scene, camera; tiles=Threads.nthreads(), shading=:flat, cache=nothing)
 
@@ -2104,36 +2142,19 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     instanced = shared_cache.instanced
     _collect_instanced_into!(instanced, scene)
     band = cld(H, tiles)
-    Threads.@threads for t in 1:tiles
-        ylo = (t-1)*band + 1
-        yhi = min(t*band, H)
-        ylo > yhi && continue
-        cache_idx = mod1(Threads.threadid() - 1, thread_count)
-        thread_cache = thread_caches[cache_idx]
-        tri = thread_cache.tri
-        clipped = thread_cache.clipped
-        empty!(clipped)
-        sx = thread_cache.sx
-        sy = thread_cache.sy
-        sz = thread_cache.sz
-        colorbuf = thread_cache.colors
-        for mesh in meshes
-            is_visible(mesh) || continue
-            mat = _mesh_material(mesh)
-            is_transparent_material(mat) && continue
-            _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
-                                                   lights, proj, view, near, camera.position,
-                                                   tri, clipped, sx, sy, sz, colorbuf,
-                                                   1, rt.width, ylo, yhi, ortho_dir)
+    if thread_count == 1
+        for t in 1:tiles
+            ylo = (t - 1) * band + 1
+            yhi = min(t * band, H)
+            _render_tiled_band!(rt, meshes, instanced, lights, camera, proj, view,
+                                near, ortho_dir, thread_caches, thread_count, ylo, yhi)
         end
-        for im in instanced
-            _visible_in_tree(im) || continue
-            _instanced_triangle_drawable(im) || continue
-            base = compute_world_matrix(im)
-            _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im), _instanced_material(im), im.instance_colors,
-                                                  im.instance_matrices, base, lights, proj, view, near,
-                                                  camera.position, tri, clipped, sx, sy, sz,
-                                                  colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
+    else
+        Threads.@threads for t in 1:tiles
+            ylo = (t - 1) * band + 1
+            yhi = min(t * band, H)
+            _render_tiled_band!(rt, meshes, instanced, lights, camera, proj, view,
+                                near, ortho_dir, thread_caches, thread_count, ylo, yhi)
         end
     end
     return rt

@@ -10344,6 +10344,11 @@ end
         r5 = RenderTarget(64,64)
         render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
         @test maximum(abs.(r1.color .- r5.color)) < 1e-12
+        render_tiled!(r5, scene, cam; tiles=1, cache=tile_caches)
+        @test maximum(abs.(r1.color .- r5.color)) < 1e-12
+        if Threads.nthreads() == 1
+            @test_opt_alloc 1024 render_tiled!(r5, scene, cam; tiles=1, cache=tile_caches)
+        end
         cached_tiled1 = @allocated render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
         cached_tiled2 = @allocated render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
         @test_opt_alloc 32768 render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
