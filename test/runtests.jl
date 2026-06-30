@@ -2327,6 +2327,16 @@ end
         @test_opt_alloc 8192 RingGeometry(inner_radius=0.5, outer_radius=1.0)
     end
 
+    @testset "CircleGeometry" begin
+        geo = CircleGeometry(radius=1.0)
+        @test geo.n_faces == 32
+        @test geo.n_vertices == 34
+        @test all(isfinite, geo.positions)
+        @test all(isfinite, geo.normals)
+        @test all(isfinite, geo.uvs)
+        @test_opt_alloc 4096 CircleGeometry(radius=1.0)
+    end
+
     @testset "Scene graph" begin
         scene = Scene()
         geo = BoxGeometry()

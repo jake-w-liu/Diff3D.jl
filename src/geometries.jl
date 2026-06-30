@@ -1141,26 +1141,46 @@ function CircleGeometry(; radius=1.0, segments=32)
     radius = _geometry_finite_scalar(radius, "CircleGeometry radius")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
     segments = _clamp_seg(segments, 3, "CircleGeometry segments")
-    positions = Float64[0.0, 0.0, 0.0]  # center
-    normals_arr = Float64[0.0, 0.0, 1.0]
-    uvs_arr = Float64[0.5, 0.5]
-    indices = Int[]
+    n_verts = segments + 2
+    n_faces = segments
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals_arr = Vector{Float64}(undef, 3 * n_verts)
+    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, 3 * n_faces)
+    positions[1] = 0.0
+    positions[2] = 0.0
+    positions[3] = 0.0
+    normals_arr[1] = 0.0
+    normals_arr[2] = 0.0
+    normals_arr[3] = 1.0
+    uvs_arr[1] = 0.5
+    uvs_arr[2] = 0.5
 
     for i in 0:segments
         θ = i / segments * 2π
-        x = radius * cos(θ)
-        y = radius * sin(θ)
-        append!(positions, [x, y, 0.0])
-        append!(normals_arr, [0.0, 0.0, 1.0])
-        append!(uvs_arr, [cos(θ)*0.5+0.5, sin(θ)*0.5+0.5])
+        cosθ = cos(θ)
+        sinθ = sin(θ)
+        vi = i + 2
+        pbase = 3vi - 2
+        ubase = 2vi - 1
+        positions[pbase] = radius * cosθ
+        positions[pbase + 1] = radius * sinθ
+        positions[pbase + 2] = 0.0
+        normals_arr[pbase] = 0.0
+        normals_arr[pbase + 1] = 0.0
+        normals_arr[pbase + 2] = 1.0
+        uvs_arr[ubase] = cosθ * 0.5 + 0.5
+        uvs_arr[ubase + 1] = sinθ * 0.5 + 0.5
     end
 
+    out = 1
     for i in 1:segments
-        append!(indices, [1, i+1, i+2])
+        indices[out] = 1
+        indices[out + 1] = i + 1
+        indices[out + 2] = i + 2
+        out += 3
     end
 
-    n_verts = segments + 2
-    n_faces = length(indices) ÷ 3
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
 
