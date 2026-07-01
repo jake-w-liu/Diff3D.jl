@@ -1669,8 +1669,15 @@ mixer_update!(mixer::AnimationMixer, dt) = mixer_set_time!(mixer, mixer.time + d
 # ========================== Helpers ==========================
 
 _line_geo(positions::Vector{Float64}) =
-    BufferGeometry(positions, Float64[], Float64[], collect(1:length(positions)÷3),
-                   length(positions) ÷ 3, 0)
+    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+
+@inline function _write_line_vertex!(positions::Vector{Float64}, vi::Int, x, y, z)
+    base = 3vi - 2
+    positions[base] = x
+    positions[base + 1] = y
+    positions[base + 2] = z
+    return nothing
+end
 
 """Diff3D line segments along +x (red), +y (green), +z (blue)."""
 function AxesHelper(size=1.0)
@@ -1683,12 +1690,16 @@ end
 """A `divisions`×`divisions` grid of size `size` on the xz-plane."""
 function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
-    pos = Float64[]
+    pos = Vector{Float64}(undef, 12 * (divisions + 1))
     step = size / divisions; half = size / 2
+    vi = 1
     for i in 0:divisions
         c = -half + i*step
-        append!(pos, [c,0,-half, c,0,half])     # parallel to z
-        append!(pos, [-half,0,c, half,0,c])     # parallel to x
+        _write_line_vertex!(pos, vi, c, 0.0, -half)
+        _write_line_vertex!(pos, vi + 1, c, 0.0, half)      # parallel to z
+        _write_line_vertex!(pos, vi + 2, -half, 0.0, c)
+        _write_line_vertex!(pos, vi + 3, half, 0.0, c)      # parallel to x
+        vi += 4
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
 end

@@ -10168,6 +10168,9 @@ end
         @test get_children(loop) == AbstractObject3D[]
         @test has_attribute(ax.geometry, :color)
         @test GridHelper(10.0, 5).geometry.n_vertices == 24      # 6 lines × 2 dirs × 2 verts
+        grid64 = GridHelper(10.0, 64)
+        @test grid64.geometry.n_vertices == 260                  # 65 lines × 2 dirs × 2 verts
+        @test_opt_alloc 12000 GridHelper(10.0, 64)
         bh = BoxHelper(Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshBasicMaterial()))
         @test bh.geometry.n_vertices == 24                       # 12 edges × 2 verts
         @test CameraHelper(PerspectiveCamera()).geometry.n_vertices == 24
