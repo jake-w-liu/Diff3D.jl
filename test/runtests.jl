@@ -5910,6 +5910,9 @@ end
         @test csg_evaluate(cube, shifted, :addition).n_faces == union_geo.n_faces
         @test csg_evaluate(cube, shifted, :subtraction).n_faces == subtract_geo.n_faces
         @test csg_evaluate(cube, shifted, :intersection).n_faces == intersect_geo.n_faces
+        @test_opt_alloc 112000 csg_union(cube, shifted)
+        @test_opt_alloc 103000 csg_subtract(cube, shifted)
+        @test_opt_alloc 103000 csg_intersect(cube, shifted)
         @test_throws ArgumentError csg_evaluate(cube, shifted, :xor)
     end
 

@@ -84,12 +84,14 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     back_type = 2
     spanning = 3
     polygon_type = 0
-    types = Int[]
-    for v in polygon.vertices
+    n = length(polygon.vertices)
+    types = Vector{Int}(undef, n)
+    @inbounds for i in 1:n
+        v = polygon.vertices[i]
         t = dot(plane.normal, v.pos) - plane.w
         ty = t < -_CSG_EPS ? back_type : (t > _CSG_EPS ? front_type : coplanar)
         polygon_type |= ty
-        push!(types, ty)
+        types[i] = ty
     end
 
     if polygon_type == coplanar
@@ -105,7 +107,8 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     elseif polygon_type == spanning
         f = CSGVertex[]
         b = CSGVertex[]
-        n = length(polygon.vertices)
+        sizehint!(f, n + 1)
+        sizehint!(b, n + 1)
         for i in 1:n
             j = i == n ? 1 : i + 1
             ti = types[i]
@@ -137,6 +140,8 @@ function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon})
     node.plane === nothing && (node.plane = polygons[1].plane)
     front = CSGPolygon[]
     back = CSGPolygon[]
+    sizehint!(front, length(polygons))
+    sizehint!(back, length(polygons))
     for p in polygons
         _csg_split_polygon(node.plane::CSGPlane, p, node.polygons,
                            node.polygons, front, back)
@@ -178,6 +183,8 @@ function _csg_clip_polygons(node::CSGNode, polygons::Vector{CSGPolygon})
     node.plane === nothing && return copy(polygons)
     front = CSGPolygon[]
     back = CSGPolygon[]
+    sizehint!(front, length(polygons))
+    sizehint!(back, length(polygons))
     for p in polygons
         _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back)
     end
@@ -197,17 +204,18 @@ end
 
 function _csg_geometry_polygons(geo::BufferGeometry)
     polygons = CSGPolygon[]
+    sizehint!(polygons, geo.n_faces)
     for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         face_normal = compute_face_normal(geo, fi)
-        vertices = CSGVertex[]
-        for idx in (i1, i2, i3)
+        vertices = Vector{CSGVertex}(undef, 3)
+        @inbounds for (out, idx) in enumerate((i1, i2, i3))
             p = get_vertex(geo, idx)
             n = length(geo.normals) >= 3idx ? get_normal(geo, idx) : face_normal
             norm(n) <= _CSG_EPS && (n = face_normal)
             uv = length(geo.uvs) >= 2idx ? Vec2(geo.uvs[2idx - 1], geo.uvs[2idx]) :
                  Vec2(0.0, 0.0)
-            push!(vertices, _csg_vertex(p, n, uv))
+            vertices[out] = _csg_vertex(p, n, uv)
         end
         polygon = _csg_polygon(vertices)
         polygon !== nothing && push!(polygons, polygon)
@@ -216,27 +224,47 @@ function _csg_geometry_polygons(geo::BufferGeometry)
 end
 
 function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon})
-    positions = Float64[]
-    normals = Float64[]
-    uvs = Float64[]
-    indices = Int[]
-    vi = 0
+    n_faces = 0
     for poly in polygons
         length(poly.vertices) >= 3 || continue
         for i in 2:(length(poly.vertices) - 1)
             tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
             norm(cross(tri[2].pos - tri[1].pos, tri[3].pos - tri[1].pos)) > _CSG_EPS ||
                 continue
+            n_faces += 1
+        end
+    end
+    n_faces == 0 && return BufferGeometry(Float64[], Float64[], Float64[], Int[], 0, 0)
+
+    n_verts = 3 * n_faces
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, n_verts)
+    vi = 0
+    @inbounds for poly in polygons
+        length(poly.vertices) >= 3 || continue
+        for i in 2:(length(poly.vertices) - 1)
+            tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
+            norm(cross(tri[2].pos - tri[1].pos, tri[3].pos - tri[1].pos)) > _CSG_EPS ||
+                continue
             for v in tri
-                push!(positions, v.pos.x, v.pos.y, v.pos.z)
-                push!(normals, v.normal.x, v.normal.y, v.normal.z)
-                push!(uvs, v.uv.x, v.uv.y)
                 vi += 1
-                push!(indices, vi)
+                pbase = 3vi - 2
+                positions[pbase] = v.pos.x
+                positions[pbase + 1] = v.pos.y
+                positions[pbase + 2] = v.pos.z
+                normals[pbase] = v.normal.x
+                normals[pbase + 1] = v.normal.y
+                normals[pbase + 2] = v.normal.z
+                ubase = 2vi - 1
+                uvs[ubase] = v.uv.x
+                uvs[ubase + 1] = v.uv.y
+                indices[vi] = vi
             end
         end
     end
-    return BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+    return BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 function _csg_clone_polygons(polygons::Vector{CSGPolygon})
