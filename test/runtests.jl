@@ -6020,12 +6020,15 @@ end
 
     @testset "Wireframe and Edges geometry" begin
         # EdgesGeometry of a cube: 12 feature edges (coplanar diagonals excluded).
-        eg = edges_geometry(BoxGeometry())
+        box_for_lines = BoxGeometry()
+        eg = edges_geometry(box_for_lines)
         @test eg.n_faces == 0
         @test eg.n_vertices ÷ 2 == 12
+        @test_opt_alloc 10240 edges_geometry(box_for_lines)
         # WireframeGeometry shows all triangle edges including the quad diagonal.
-        wf = wireframe_geometry(BoxGeometry())
+        wf = wireframe_geometry(box_for_lines)
         @test wf.n_vertices ÷ 2 == 30                     # 6 faces × (4 border + 1 diagonal)
+        @test_opt_alloc 5120 wireframe_geometry(box_for_lines)
         # Flat quad: 4 boundary edges (edges) vs 5 triangle edges (wireframe).
         @test edges_geometry(PlaneGeometry()).n_vertices ÷ 2 == 4
         @test wireframe_geometry(PlaneGeometry()).n_vertices ÷ 2 == 5

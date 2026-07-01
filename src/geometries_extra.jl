@@ -1396,19 +1396,36 @@ end
 Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
 function wireframe_geometry(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
+    max_edges = 3 * geo.n_faces
     seen = Set{Tuple{Int,Int}}()
-    positions = Float64[]; indices = Int[]; vi = 0
-    for fi in 1:geo.n_faces
+    sizehint!(seen, max_edges)
+    positions = Vector{Float64}(undef, 6 * max_edges)
+    indices = Vector{Int}(undef, 2 * max_edges)
+    vi = 0
+    pout = 1
+    iout = 1
+    @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         for (a, b) in ((i1,i2), (i2,i3), (i3,i1))
             key = a < b ? (a, b) : (b, a)
             key in seen && continue
             push!(seen, key)
             va = get_vertex(geo, a); vb = get_vertex(geo, b)
-            push!(positions, va.x, va.y, va.z, vb.x, vb.y, vb.z)
-            push!(indices, vi+1, vi+2); vi += 2
+            positions[pout] = va.x
+            positions[pout + 1] = va.y
+            positions[pout + 2] = va.z
+            positions[pout + 3] = vb.x
+            positions[pout + 4] = vb.y
+            positions[pout + 5] = vb.z
+            indices[iout] = vi + 1
+            indices[iout + 1] = vi + 2
+            vi += 2
+            pout += 6
+            iout += 2
         end
     end
+    resize!(positions, pout - 1)
+    resize!(indices, iout - 1)
     BufferGeometry(positions, Float64[], Float64[], indices, vi, 0)
 end
 
@@ -1424,29 +1441,72 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     cosT = cos(threshold_angle)
     # Canonicalize vertices by position.
     canon = Dict{Tuple{Float64,Float64,Float64}, Int}()
-    cpos = Vec3{Float64}[]
-    cidx(v) = get!(canon, _pkey(v)) do
-        push!(cpos, v); length(cpos)
-    end
-    # edge (lo,hi) -> list of face normals
-    edge_faces = Dict{Tuple{Int,Int}, Vector{Vec3{Float64}}}()
-    for fi in 1:geo.n_faces
+    sizehint!(canon, geo.n_vertices)
+    cpos = Vector{Vec3{Float64}}(undef, geo.n_vertices)
+    cpos_len = 0
+    # edge (lo,hi) -> (first normal, second normal, adjacent face count)
+    edge_faces = Dict{Tuple{Int,Int}, Tuple{Vec3{Float64},Vec3{Float64},Int}}()
+    sizehint!(edge_faces, 3 * geo.n_faces)
+    @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         n = cross(v2 - v1, v3 - v1); nl = norm(n); nl > 0 && (n = n / nl)
-        c1 = cidx(v1); c2 = cidx(v2); c3 = cidx(v3)
+        key1 = _pkey(v1)
+        c1 = get(canon, key1, 0)
+        if c1 == 0
+            cpos_len += 1
+            cpos[cpos_len] = v1
+            canon[key1] = cpos_len
+            c1 = cpos_len
+        end
+        key2 = _pkey(v2)
+        c2 = get(canon, key2, 0)
+        if c2 == 0
+            cpos_len += 1
+            cpos[cpos_len] = v2
+            canon[key2] = cpos_len
+            c2 = cpos_len
+        end
+        key3 = _pkey(v3)
+        c3 = get(canon, key3, 0)
+        if c3 == 0
+            cpos_len += 1
+            cpos[cpos_len] = v3
+            canon[key3] = cpos_len
+            c3 = cpos_len
+        end
         for (a, b) in ((c1,c2), (c2,c3), (c3,c1))
             key = a < b ? (a, b) : (b, a)
-            push!(get!(edge_faces, key, Vec3{Float64}[]), n)
+            if haskey(edge_faces, key)
+                n1, n2, count = edge_faces[key]
+                edge_faces[key] = count == 1 ? (n1, n, 2) : (n1, n2, count + 1)
+            else
+                edge_faces[key] = (n, n, 1)
+            end
         end
     end
-    positions = Float64[]; indices = Int[]; vi = 0
-    for (key, nlist) in edge_faces
-        feature = length(nlist) == 1 || dot(nlist[1], nlist[2]) < cosT
+    positions = Vector{Float64}(undef, 6 * length(edge_faces))
+    indices = Vector{Int}(undef, 2 * length(edge_faces))
+    vi = 0
+    pout = 1
+    iout = 1
+    @inbounds for (key, (n1, n2, count)) in edge_faces
+        feature = count == 1 || dot(n1, n2) < cosT
         feature || continue
         a = cpos[key[1]]; b = cpos[key[2]]
-        push!(positions, a.x, a.y, a.z, b.x, b.y, b.z)
-        push!(indices, vi+1, vi+2); vi += 2
+        positions[pout] = a.x
+        positions[pout + 1] = a.y
+        positions[pout + 2] = a.z
+        positions[pout + 3] = b.x
+        positions[pout + 4] = b.y
+        positions[pout + 5] = b.z
+        indices[iout] = vi + 1
+        indices[iout + 1] = vi + 2
+        vi += 2
+        pout += 6
+        iout += 2
     end
+    resize!(positions, pout - 1)
+    resize!(indices, iout - 1)
     BufferGeometry(positions, Float64[], Float64[], indices, vi, 0)
 end
