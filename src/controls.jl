@@ -1795,19 +1795,20 @@ function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
     base = apex + dir * len
     r = len * tan(light.angle)              # cone base radius at the target plane
     u, v = _perp_basis(dir)
-    pos = Float64[]
+    pos = Vector{Float64}(undef, 6 * (max(segments, 0) + 4))
+    vi = 1
     # Base ring.
     prev = base + u * r
     for k in 1:segments
         φ = 2π * k / segments
         cur = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        _push_seg!(pos, prev, cur)
+        vi = _write_line_segment!(pos, vi, prev, cur)
         prev = cur
     end
     # Four spokes from apex to the rim.
     for φ in (0.0, π/2, π, 3π/2)
         rim = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        _push_seg!(pos, apex, rim)
+        vi = _write_line_segment!(pos, vi, apex, rim)
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SpotLightHelper")
 end

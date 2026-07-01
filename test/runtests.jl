@@ -12194,6 +12194,7 @@ end
             @test sh isa LineSegments
             @test sh.geometry.n_vertices == 40
             @test iseven(sh.geometry.n_vertices)
+            @test_opt_alloc 4096 SpotLightHelper(sl)
 
             # HemisphereLightHelper: octahedron (4 equator + 8 spoke segs = 12 segs = 24 verts) with colors.
             hl = HemisphereLight(color=Color3(0.1,0.2,0.9), ground_color=Color3(0.3,0.2,0.1))
