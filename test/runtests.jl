@@ -5851,6 +5851,8 @@ end
         @test teapot.n_faces == (8 * 2 - 4) * 2 + (16 * 2 - 4) * 2 + 40 * 2^2
         @test length(teapot.normals) == 3 * teapot.n_vertices
         @test length(teapot.uvs) == 2 * teapot.n_vertices
+        @test_opt_alloc 65536 TeapotGeometry(2.0, 2)
+        @test_opt_alloc 85000 TeapotGeometry(2.0, 3)
         bb = compute_bounding_box(teapot)
         @test bb.min.y ≈ -2.0 atol=1e-10
         @test bb.max.y ≈ 2.0 atol=1e-10

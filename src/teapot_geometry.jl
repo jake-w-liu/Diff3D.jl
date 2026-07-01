@@ -175,16 +175,22 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
     min_patch = body ? 0 : 20
     max_patch = bottom ? 32 : 28
     row = segs + 1
-
-    positions = Float64[]
-    normals = Float64[]
-    uvs = Float64[]
-    indices = Int[]
+    patch_count = 0
+    for surf0 in min_patch:(max_patch - 1)
+        (lid || (surf0 < 20 || surf0 >= 28)) && (patch_count += 1)
+    end
+    nvertices = patch_count * row * row
+    positions = Vector{Float64}(undef, 3 * nvertices)
+    normals = Vector{Float64}(undef, 3 * nvertices)
+    uvs = Vector{Float64}(undef, 2 * nvertices)
+    indices = Vector{Int}(undef, 6 * patch_count * segs * segs)
+    vi = 0
+    iout = 1
 
     for surf0 in min_patch:(max_patch - 1)
         if lid || (surf0 < 20 || surf0 >= 28)
             control = _teapot_patch_control(surf0; fit_lid=fit_lid, blinn=blinn)
-            first_vertex = length(positions) ÷ 3 + 1
+            first_vertex = vi + 1
 
             for sstep in 0:segs
                 s = sstep / segs
@@ -197,11 +203,19 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
                     p = _teapot_eval(control, bs, bt)
                     sdir = _teapot_eval(control, dbs, bt)
                     tdir = _teapot_eval(control, bs, dbt)
-                    out = _teapot_transformed_point(p, true_size, max_height2)
+                    transformed = _teapot_transformed_point(p, true_size, max_height2)
                     n = _teapot_output_normal(p, sdir, tdir, max_height2)
-                    push!(positions, out.x, out.y, out.z)
-                    push!(normals, n.x, n.y, n.z)
-                    push!(uvs, 1.0 - t, 1.0 - s)
+                    vi += 1
+                    pbase = 3vi - 2
+                    positions[pbase] = transformed.x
+                    positions[pbase + 1] = transformed.y
+                    positions[pbase + 2] = transformed.z
+                    normals[pbase] = n.x
+                    normals[pbase + 1] = n.y
+                    normals[pbase + 2] = n.z
+                    ubase = 2vi - 1
+                    uvs[ubase] = 1.0 - t
+                    uvs[ubase + 1] = 1.0 - s
                 end
             end
 
@@ -215,13 +229,23 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
                 p2 = _teapot_output_vertex(positions, v2)
                 p3 = _teapot_output_vertex(positions, v3)
                 p4 = _teapot_output_vertex(positions, v4)
-                !_teapot_degenerate(p1, p2, p3, eps_pos) && append!(indices, (v1, v2, v3))
-                !_teapot_degenerate(p1, p3, p4, eps_pos) && append!(indices, (v1, v3, v4))
+                if !_teapot_degenerate(p1, p2, p3, eps_pos)
+                    indices[iout] = v1
+                    indices[iout + 1] = v2
+                    indices[iout + 2] = v3
+                    iout += 3
+                end
+                if !_teapot_degenerate(p1, p3, p4, eps_pos)
+                    indices[iout] = v1
+                    indices[iout + 1] = v3
+                    indices[iout + 2] = v4
+                    iout += 3
+                end
             end
         end
     end
 
-    nvertices = length(positions) ÷ 3
+    resize!(indices, iout - 1)
     return BufferGeometry(positions, normals, uvs, indices,
                           nvertices, length(indices) ÷ 3)
 end
