@@ -23,8 +23,15 @@ end
 # nested reverse_gradient records onto its own tape without wiping the enclosing
 # pass's graph. ADVars reference their parents directly via `args`, so the tape
 # is only an ordering for the backward pass — a fresh per-call tape is sufficient.
-_ad_tape_stack() = get!(() -> Vector{ADVar}[], task_local_storage(),
-                        :diff3d_ad_tape_stack)::Vector{Vector{ADVar}}
+function _ad_tape_stack()
+    tls = task_local_storage()
+    stack = get(tls, :diff3d_ad_tape_stack, nothing)
+    if stack === nothing
+        stack = Vector{ADVar}[]
+        tls[:diff3d_ad_tape_stack] = stack
+    end
+    return stack::Vector{Vector{ADVar}}
+end
 
 function _ad_record(val::Float64, args::Tuple, partials::Tuple)
     v = ADVar(val, 0.0, args, partials)
@@ -158,20 +165,18 @@ Base.sind(x::ADVar) = sin(deg2rad(x))
 Base.cosd(x::ADVar) = cos(deg2rad(x))
 Base.tand(x::ADVar) = tan(deg2rad(x))
 
-"""
-    reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}
-
-Gradient of scalar `f(x)` via one reverse-mode pass. `f` must accept a vector of
-`ADVar` and return a single `ADVar`. Validated against ForwardDiff in tests.
-"""
-function reverse_gradient(f, x::AbstractVector{<:Real})
+function _reverse_value_gradient(f, x::AbstractVector{<:Real})
     stack = _ad_tape_stack()
+    n = length(x)
     tape = ADVar[]
+    sizehint!(tape, n <= typemax(Int) ÷ 3 ? max(16, 3n) : n)
     push!(stack, tape)                    # this pass records onto its own tape
     try
-        inputs = ADVar[]
-        for xi in x
-            push!(inputs, ADVar(Float64(xi)))   # leaf (recorded on `tape`)
+        inputs = Vector{ADVar}(undef, n)
+        input_index = 1
+        @inbounds for i in eachindex(x)
+            inputs[input_index] = ADVar(Float64(x[i]))   # leaf (recorded on `tape`)
+            input_index += 1
         end
         y = f(inputs)
         y isa ADVar || error("reverse_gradient: f must return a scalar ADVar")
@@ -188,14 +193,27 @@ function reverse_gradient(f, x::AbstractVector{<:Real})
                 v.args[i].adj += a * v.partials[i]
             end
         end
-        return [inp.adj for inp in inputs]
+        grad = Vector{Float64}(undef, n)
+        @inbounds for i in 1:n
+            grad[i] = inputs[i].adj
+        end
+        return (Float64(y.val), grad)
     finally
         pop!(stack)                       # always release this pass's tape
     end
 end
 
+"""
+    reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}
+
+Gradient of scalar `f(x)` via one reverse-mode pass. `f` must accept a vector of
+`ADVar` and return a single `ADVar`. Validated against ForwardDiff in tests.
+"""
+function reverse_gradient(f, x::AbstractVector{<:Real})
+    return _reverse_value_gradient(f, x)[2]
+end
+
 """Value and gradient of `f` at `x` in one reverse pass."""
 function reverse_value_gradient(f, x::AbstractVector{<:Real})
-    g = reverse_gradient(f, x)
-    return (f(Float64.(x)), g)
+    return _reverse_value_gradient(f, x)
 end

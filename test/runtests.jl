@@ -10882,6 +10882,17 @@ end
     @testset "Reverse-mode AD — matches ForwardDiff" begin
         # Analytic: ∇ Σxᵢ² = 2x.
         @test reverse_gradient(x -> sum(x.^2), [1.0,2.0,3.0,4.0]) == [2.0,4.0,6.0,8.0]
+        calls = Ref(0)
+        val, vg = reverse_value_gradient(x -> (calls[] += 1; sum(x.^2)), [1.0,2.0,3.0,4.0])
+        @test calls[] == 1
+        @test val ≈ 30.0
+        @test vg == [2.0,4.0,6.0,8.0]
+        wide_ad = collect(range(0.1, 1.0; length=64))
+        reverse_ad_sum_abs2(x) = sum(abs2, x)
+        reverse_gradient(reverse_ad_sum_abs2, wide_ad)
+        reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
+        @test_opt_alloc 56000 reverse_gradient(reverse_ad_sum_abs2, wide_ad)
+        @test_opt_alloc 56000 reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
         # Non-trivial scalar function (exp/sqrt/max) vs ForwardDiff.
         hfun(x) = exp(x[1]) * sqrt(abs(x[2]) + 1) + max(x[1], x[3]) - x[2]/x[3]
         x0 = [0.4, -1.3, 2.1]
