@@ -135,17 +135,20 @@ end
 # emitted non-indexed so each hull triangle keeps a flat outward normal.
 
 function _convex_clean_points(points::AbstractVector{<:Vec3})
-    raw = Vec3{Float64}[]
+    raw = Vector{Vec3{Float64}}(undef, length(points))
+    out = 0
     for p in points
+        out += 1
         q = Vec3(_geometry_finite_float(p.x, "ConvexGeometry points"),
                  _geometry_finite_float(p.y, "ConvexGeometry points"),
                  _geometry_finite_float(p.z, "ConvexGeometry points"))
-        push!(raw, q)
+        raw[out] = q
     end
     isempty(raw) && throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
     scale = max(1.0, maximum(max(abs(p.x), abs(p.y), abs(p.z)) for p in raw))
     eps = 1e-9 * scale
     deduped = Vec3{Float64}[]
+    sizehint!(deduped, length(raw))
     for p in raw
         any(q -> norm(p - q) <= eps, deduped) || push!(deduped, p)
     end
@@ -170,7 +173,9 @@ end
 function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     faces = Tuple{Vector{Int},Vec3{Float64}}[]
+    sizehint!(faces, n)
     seen = Set{Tuple{Vararg{Int}}}()
+    sizehint!(seen, n)
     plane_eps = 64 * eps
     for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
         normal = cross(points[j] - points[i], points[k] - points[i])
@@ -188,6 +193,7 @@ function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
         pos && neg && continue
         pos && (normal = -normal)
         coplanar = Int[]
+        sizehint!(coplanar, n)
         for idx in eachindex(points)
             abs(dot(normal, points[idx] - points[i])) <= plane_eps &&
                 push!(coplanar, idx)
@@ -221,6 +227,7 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     v = cross(normal, u)
 
     projected = Tuple{Float64,Float64,Int}[]
+    sizehint!(projected, length(face_indices))
     for idx in face_indices
         d = points[idx] - center
         push!(projected, (dot(d, u), dot(d, v), idx))
@@ -228,6 +235,7 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     sort!(projected, by=t -> (t[1], t[2], t[3]))
 
     filtered = Tuple{Float64,Float64,Int}[]
+    sizehint!(filtered, length(projected))
     for p in projected
         if isempty(filtered) ||
            hypot(p[1] - filtered[end][1], p[2] - filtered[end][2]) > eps
@@ -238,6 +246,7 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     cross2(o, a, b) = (a[1] - o[1]) * (b[2] - o[2]) -
                       (a[2] - o[2]) * (b[1] - o[1])
     lower = Tuple{Float64,Float64,Int}[]
+    sizehint!(lower, length(filtered))
     for p in filtered
         while length(lower) >= 2 &&
               cross2(lower[end - 1], lower[end], p) <= eps
@@ -246,6 +255,7 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
         push!(lower, p)
     end
     upper = Tuple{Float64,Float64,Int}[]
+    sizehint!(upper, length(filtered))
     for p in Iterators.reverse(filtered)
         while length(upper) >= 2 &&
               cross2(upper[end - 1], upper[end], p) <= eps
@@ -253,7 +263,14 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
         end
         push!(upper, p)
     end
-    hull = [p[3] for p in vcat(lower[1:end - 1], upper[1:end - 1])]
+    hull = Int[]
+    sizehint!(hull, length(lower) + length(upper) - 2)
+    for i in 1:(length(lower) - 1)
+        push!(hull, lower[i][3])
+    end
+    for i in 1:(length(upper) - 1)
+        push!(hull, upper[i][3])
+    end
     length(hull) >= 3 || return Int[]
     face_normal = cross(points[hull[2]] - points[hull[1]],
                         points[hull[3]] - points[hull[1]])
@@ -275,32 +292,52 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     isempty(support_faces) &&
         throw(ArgumentError("ConvexGeometry could not find hull support faces"))
 
-    positions = Float64[]
-    normals = Float64[]
-    uvs = Float64[]
-    indices = Int[]
-    vi = 0
+    hulls = Tuple{Vector{Int},Vec3{Float64}}[]
+    sizehint!(hulls, length(support_faces))
+    n_faces = 0
     for (face_indices, normal) in support_faces
         hull = _convex_face_hull(clean, face_indices, normal, eps)
         length(hull) >= 3 || continue
+        push!(hulls, (hull, normal))
+        n_faces += length(hull) - 2
+    end
+    n_faces >= 4 ||
+        throw(ArgumentError("ConvexGeometry produced no non-degenerate hull volume"))
+
+    n_verts = 3 * n_faces
+    positions = Vector{Float64}(undef, 3 * n_verts)
+    normals = Vector{Float64}(undef, 3 * n_verts)
+    uvs = Vector{Float64}(undef, 2 * n_verts)
+    indices = Vector{Int}(undef, n_verts)
+    vi = 0
+    @inbounds for (hull, normal) in hulls
         origin = clean[hull[1]]
         for k in 2:(length(hull) - 1)
-            tri = (origin, clean[hull[k]], clean[hull[k + 1]])
-            face_normal = normalize(cross(tri[2] - tri[1], tri[3] - tri[1]))
-            dot(face_normal, normal) < 0.0 &&
-                (tri = (tri[1], tri[3], tri[2]); face_normal = -face_normal)
-            for p in tri
-                push!(positions, p.x, p.y, p.z)
-                push!(normals, face_normal.x, face_normal.y, face_normal.z)
-                push!(uvs, p.x, p.y)
+            p1 = origin
+            p2 = clean[hull[k]]
+            p3 = clean[hull[k + 1]]
+            face_normal = normalize(cross(p2 - p1, p3 - p1))
+            if dot(face_normal, normal) < 0.0
+                p2, p3 = p3, p2
+                face_normal = -face_normal
+            end
+            for p in (p1, p2, p3)
                 vi += 1
-                push!(indices, vi)
+                pbase = 3vi - 2
+                positions[pbase] = p.x
+                positions[pbase + 1] = p.y
+                positions[pbase + 2] = p.z
+                normals[pbase] = face_normal.x
+                normals[pbase + 1] = face_normal.y
+                normals[pbase + 2] = face_normal.z
+                ubase = 2vi - 1
+                uvs[ubase] = p.x
+                uvs[ubase + 1] = p.y
+                indices[vi] = vi
             end
         end
     end
-    length(indices) >= 12 ||
-        throw(ArgumentError("ConvexGeometry produced no non-degenerate hull volume"))
-    return BufferGeometry(positions, normals, uvs, indices, vi, length(indices) ÷ 3)
+    return BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
 # ========================== LatheGeometry ==========================

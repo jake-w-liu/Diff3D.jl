@@ -5751,6 +5751,7 @@ end
         cube_hull = ConvexGeometry(cube_points)
         @test cube_hull.n_faces == 12
         @test cube_hull.n_vertices == 36
+        @test_opt_alloc 18000 ConvexGeometry(cube_points)
         cube_box = compute_bounding_box(cube_hull)
         @test cube_box.min == Vec3(-1.0, -1.0, -1.0)
         @test cube_box.max == Vec3(1.0, 1.0, 1.0)
