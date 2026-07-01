@@ -10171,9 +10171,13 @@ end
         grid64 = GridHelper(10.0, 64)
         @test grid64.geometry.n_vertices == 260                  # 65 lines × 2 dirs × 2 verts
         @test_opt_alloc 12000 GridHelper(10.0, 64)
-        bh = BoxHelper(Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshBasicMaterial()))
+        helper_mesh = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshBasicMaterial())
+        bh = BoxHelper(helper_mesh)
         @test bh.geometry.n_vertices == 24                       # 12 edges × 2 verts
-        @test CameraHelper(PerspectiveCamera()).geometry.n_vertices == 24
+        @test_opt_alloc 2048 BoxHelper(helper_mesh)
+        helper_camera = PerspectiveCamera()
+        @test CameraHelper(helper_camera).geometry.n_vertices == 24
+        @test_opt_alloc 2048 CameraHelper(helper_camera)
         @test DirectionalLightHelper(DirectionalLight(position=Vec3(5.0,5,5))).geometry.n_vertices == 2
         @test PointLightHelper(PointLight(position=Vec3(1.0,1,1))).geometry.n_vertices == 6
     end

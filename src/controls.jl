@@ -1719,16 +1719,33 @@ function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
 end
 
+function _box_edge_positions(c1::Vec3, c2::Vec3, c3::Vec3, c4::Vec3,
+                             c5::Vec3, c6::Vec3, c7::Vec3, c8::Vec3)
+    pos = Vector{Float64}(undef, 72)
+    vi = 1
+    vi = _write_line_segment!(pos, vi, c1, c2)
+    vi = _write_line_segment!(pos, vi, c2, c3)
+    vi = _write_line_segment!(pos, vi, c3, c4)
+    vi = _write_line_segment!(pos, vi, c4, c1)
+    vi = _write_line_segment!(pos, vi, c5, c6)
+    vi = _write_line_segment!(pos, vi, c6, c7)
+    vi = _write_line_segment!(pos, vi, c7, c8)
+    vi = _write_line_segment!(pos, vi, c8, c5)
+    vi = _write_line_segment!(pos, vi, c1, c5)
+    vi = _write_line_segment!(pos, vi, c2, c6)
+    vi = _write_line_segment!(pos, vi, c3, c7)
+    _write_line_segment!(pos, vi, c4, c8)
+    return pos
+end
+
 # 12 edges of an axis-aligned box given as min/max corners.
 function _box_edges(mn::Vec3, mx::Vec3)
-    c = [Vec3(mn.x,mn.y,mn.z), Vec3(mx.x,mn.y,mn.z), Vec3(mx.x,mx.y,mn.z), Vec3(mn.x,mx.y,mn.z),
-         Vec3(mn.x,mn.y,mx.z), Vec3(mx.x,mn.y,mx.z), Vec3(mx.x,mx.y,mx.z), Vec3(mn.x,mx.y,mx.z)]
-    edges = [(1,2),(2,3),(3,4),(4,1), (5,6),(6,7),(7,8),(8,5), (1,5),(2,6),(3,7),(4,8)]
-    pos = Float64[]
-    for (a,b) in edges
-        append!(pos, [c[a].x,c[a].y,c[a].z, c[b].x,c[b].y,c[b].z])
-    end
-    return pos
+    return _box_edge_positions(
+        Vec3(mn.x,mn.y,mn.z), Vec3(mx.x,mn.y,mn.z),
+        Vec3(mx.x,mx.y,mn.z), Vec3(mn.x,mx.y,mn.z),
+        Vec3(mn.x,mn.y,mx.z), Vec3(mx.x,mn.y,mx.z),
+        Vec3(mx.x,mx.y,mx.z), Vec3(mn.x,mx.y,mx.z),
+    )
 end
 
 """Wireframe of a mesh's (local) bounding box."""
@@ -1741,13 +1758,12 @@ end
 function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
     inv = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
     corner(x,y,z) = mat4_transform_point(inv, Vec3(x,y,z))
-    c = [corner(-1,-1,-1), corner(1,-1,-1), corner(1,1,-1), corner(-1,1,-1),
-         corner(-1,-1, 1), corner(1,-1, 1), corner(1,1, 1), corner(-1,1, 1)]
-    edges = [(1,2),(2,3),(3,4),(4,1), (5,6),(6,7),(7,8),(8,5), (1,5),(2,6),(3,7),(4,8)]
-    pos = Float64[]
-    for (a,b) in edges
-        append!(pos, [c[a].x,c[a].y,c[a].z, c[b].x,c[b].y,c[b].z])
-    end
+    pos = _box_edge_positions(
+        corner(-1,-1,-1), corner(1,-1,-1),
+        corner(1,1,-1), corner(-1,1,-1),
+        corner(-1,-1, 1), corner(1,-1, 1),
+        corner(1,1, 1), corner(-1,1, 1),
+    )
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
 end
 
