@@ -417,6 +417,9 @@ function _validate_tube_path(path::Vector{<:Vec3})
     return nothing
 end
 
+@inline _tube_tangent(path::Vector{<:Vec3}, i::Int, n::Int) =
+    normalize(path[min(i + 1, n)] - path[max(i - 1, 1)])
+
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     _validate_tube_path(path)
@@ -430,18 +433,14 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     normals = Vector{Float64}(undef, 3 * n_verts)
     uvs = Vector{Float64}(undef, 2 * n_verts)
     indices = Vector{Int}(undef, 3 * n_faces)
-    tangents = Vector{Vec3{Float64}}(undef, n)
-    for i in 1:n
-        tangents[i] = normalize(path[min(i + 1, n)] - path[max(i - 1, 1)])
-    end
 
     # Initial frame from the first tangent, parallel-transported along the path
     # (as in three.js computeFrenetFrames) so the frame never flips between rings.
-    T1 = tangents[1]
+    T1 = _tube_tangent(path, 1, n)
     refv = abs(T1.y) < 0.99 ? Vec3(0.0,1.0,0.0) : Vec3(1.0,0.0,0.0)
     N = normalize(cross(refv, T1)); B = cross(T1, N)
     for i in 1:n
-        T = tangents[i]
+        T = i == 1 ? T1 : _tube_tangent(path, i, n)
         if i > 1
             Np = N - T*dot(N, T)               # project previous N off the new tangent
             N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))

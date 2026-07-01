@@ -5825,7 +5825,7 @@ end
             v = get_vertex(tub, vi)
             @test sqrt(v.x^2 + v.y^2) ≈ 0.5 atol=1e-9     # distance from the z-axis
         end
-        @test_opt_alloc 8192 TubeGeometry(path; radius=0.5, radial_segments=12)
+        @test_opt_alloc 7500 TubeGeometry(path; radius=0.5, radial_segments=12)
     end
 
     @testset "CatmullRomCurve and CatmullRomCurveGeometry" begin
