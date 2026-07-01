@@ -1679,6 +1679,13 @@ _line_geo(positions::Vector{Float64}) =
     return nothing
 end
 
+@inline function _write_line_segment!(positions::Vector{Float64}, vi::Int,
+                                      a::Vec3, b::Vec3)
+    _write_line_vertex!(positions, vi, a.x, a.y, a.z)
+    _write_line_vertex!(positions, vi + 1, b.x, b.y, b.z)
+    return vi + 2
+end
+
 """Diff3D line segments along +x (red), +y (green), +z (blue)."""
 function AxesHelper(size=1.0)
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
@@ -1892,12 +1899,14 @@ approximated by `circle_segments` chords each.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                          circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
-    pos = Float64[]
+    n_segments = max(sectors, 0) + max(rings, 0) * max(circle_segments, 0)
+    pos = Vector{Float64}(undef, 6 * n_segments)
+    vi = 1
     # Radial spokes.
     for k in 0:sectors-1
         φ = 2π * k / sectors
         x = radius * cos(φ); z = radius * sin(φ)
-        _push_seg!(pos, Vec3(0.0, 0.0, 0.0), Vec3(x, 0.0, z))
+        vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0), Vec3(x, 0.0, z))
     end
     # Concentric rings.
     for ri in 1:rings
@@ -1906,7 +1915,7 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
         for k in 1:circle_segments
             φ = 2π * k / circle_segments
             cur = Vec3(r * cos(φ), 0.0, r * sin(φ))
-            _push_seg!(pos, prev, cur)
+            vi = _write_line_segment!(pos, vi, prev, cur)
             prev = cur
         end
     end

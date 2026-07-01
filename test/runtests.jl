@@ -12233,6 +12233,7 @@ end
             @test pg isa LineSegments
             @test pg.geometry.n_vertices == 1056
             @test iseven(pg.geometry.n_vertices)
+            @test_opt_alloc 35000 PolarGridHelper(10.0, 16, 8)
         end
 
         # [RAY:raycaster] Raycaster Points/Line thresholds + Layers filtering + recursive flag (three.js R
