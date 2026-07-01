@@ -12217,6 +12217,7 @@ end
             sk = SkeletonHelper(skel)
             @test sk isa LineSegments
             @test sk.geometry.n_vertices == 2          # exactly one connecting segment
+            @test_opt_alloc 4096 SkeletonHelper(skel)
             px = sk.geometry.positions
             @test isapprox(px[4]-px[1], 0.0; atol=1e-9) # parent->child spans +y by 1
             @test isapprox(px[5]-px[2], 1.0; atol=1e-9)
@@ -12228,6 +12229,16 @@ end
             sk_from_mesh = SkeletonHelper(helper_mesh)
             @test sk_from_mesh isa LineSegments
             @test sk_from_mesh.geometry.positions == sk.geometry.positions
+            deep_bones = [Bone() for _ in 1:128]
+            for i in 2:length(deep_bones)
+                deep_bones[i].position = Vec3(0.0, 1.0, 0.0)
+                add!(deep_bones[i - 1], deep_bones[i])
+            end
+            deep_skel = Skeleton(deep_bones, fill(Mat4{Float64}(), length(deep_bones)))
+            deep_sk = SkeletonHelper(deep_skel)
+            @test deep_sk.geometry.n_vertices == 254
+            @test deep_sk.geometry.positions[end-5:end] == [0.0, 126.0, 0.0, 0.0, 127.0, 0.0]
+            @test_opt_alloc 80000 SkeletonHelper(deep_skel)
 
             # PlaneHelper: 4 square edges + 1 normal = 5 segs = 10 verts.
             pl = Plane(Vec3(0.0,1.0,0.0), 0.0)

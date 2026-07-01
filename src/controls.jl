@@ -1872,21 +1872,69 @@ end
 @inline _mat4_translation_vec(m::Mat4) =
     Vec3(mat4_get(m, 1, 4), mat4_get(m, 2, 4), mat4_get(m, 3, 4))
 
+function _skeleton_world_matrix!(worlds::Vector{Mat4{Float64}}, computed::Vector{Bool},
+                                 bone_index::Dict{UInt,Int}, bones::Vector{Bone},
+                                 i::Int)::Mat4{Float64}
+    computed[i] && return worlds[i]
+    bone = bones[i]
+    local_mat = compute_local_matrix(bone)
+    parent = get_parent(bone)
+    world = if parent isa Bone
+        parent_i = get(bone_index, objectid(parent), 0)
+        parent_i == 0 ? compute_world_matrix(parent) * local_mat :
+                         _skeleton_world_matrix!(worlds, computed, bone_index, bones, parent_i) * local_mat
+    elseif parent === nothing
+        local_mat
+    else
+        compute_world_matrix(parent) * local_mat
+    end
+    worlds[i] = world
+    computed[i] = true
+    return world
+end
+
 """
 Line segments connecting each bone to its parent bone in world space
 (three.js `SkeletonHelper`). Bones whose parent is not itself a bone in the
 skeleton are skipped, matching three.js which only links bone-to-bone.
 """
 function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
-    boneset = Set(objectid(b) for b in skeleton.bones)
-    pos = Float64[]
-    for bone in skeleton.bones
-        par = get_parent(bone)
-        (par isa Bone && objectid(par) in boneset) || continue
-        cw = _mat4_translation_vec(compute_world_matrix(bone))
-        pw = _mat4_translation_vec(compute_world_matrix(par))
-        _push_seg!(pos, pw, cw)
+    bones = skeleton.bones
+    n_bones = length(bones)
+    pos = Vector{Float64}(undef, 6 * n_bones)
+    vi = 1
+    if n_bones < 16
+        boneids = Set{UInt}()
+        sizehint!(boneids, n_bones)
+        for bone in bones
+            push!(boneids, objectid(bone))
+        end
+        for bone in bones
+            par = get_parent(bone)
+            (par isa Bone && objectid(par) in boneids) || continue
+            cw = _mat4_translation_vec(compute_world_matrix(bone))
+            pw = _mat4_translation_vec(compute_world_matrix(par))
+            vi = _write_line_segment!(pos, vi, pw, cw)
+        end
+    else
+        bone_index = Dict{UInt,Int}()
+        sizehint!(bone_index, n_bones)
+        for (i, bone) in pairs(bones)
+            bone_index[objectid(bone)] = i
+        end
+        worlds = Vector{Mat4{Float64}}(undef, n_bones)
+        computed = fill(false, n_bones)
+        for (i, bone) in pairs(bones)
+            par = get_parent(bone)
+            par isa Bone || continue
+            parent_i = get(bone_index, objectid(par), 0)
+            parent_i == 0 && continue
+            cw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, i))
+            pw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, parent_i))
+            vi = _write_line_segment!(pos, vi, pw, cw)
+        end
     end
+    resize!(pos, 3 * (vi - 1))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SkeletonHelper")
 end
 
