@@ -2692,6 +2692,7 @@ end
         merged = merge_geometries([g1, g2])
         @test merged.n_vertices == g1.n_vertices + g2.n_vertices
         @test merged.n_faces == g1.n_faces + g2.n_faces
+        @test_opt_alloc 8192 merge_geometries([g1, g2])
     end
 
     @testset "PNG/PDF checksum oracles" begin
@@ -16072,6 +16073,7 @@ end
             t = transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
             t.attributes[:foo].data[1] = 99.0
             @test g.attributes[:foo].data[1] == 5.0
+            @test_opt_alloc 4096 transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
         end
 
         # SphereGeometry must clamp degenerate segment counts (was empty/NaN mesh).

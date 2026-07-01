@@ -1227,26 +1227,39 @@ input's face count, and `material_index` equal to its 0-based position in `geos`
 Inputs that contribute no faces are skipped so empty groups are not emitted.
 """
 function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
-    positions = Float64[]
-    normals_arr = Float64[]
-    uvs_arr = Float64[]
-    indices = Int[]
+    n_positions = sum((length(g.positions) for g in geos); init=0)
+    n_normals = sum((length(g.normals) for g in geos); init=0)
+    n_uvs = sum((length(g.uvs) for g in geos); init=0)
+    n_indices = sum((length(g.indices) for g in geos); init=0)
+    positions = Vector{Float64}(undef, n_positions)
+    normals_arr = Vector{Float64}(undef, n_normals)
+    uvs_arr = Vector{Float64}(undef, n_uvs)
+    indices = Vector{Int}(undef, n_indices)
     offset = 0
     total_verts = 0
     total_faces = 0
     groups = NTuple{3,Int}[]
+    with_groups && sizehint!(groups, length(geos))
+    pout = 1
+    nout = 1
+    uout = 1
+    iout = 1
 
     for (mat_idx, g) in enumerate(geos)
-        append!(positions, g.positions)
-        append!(normals_arr, g.normals)
-        append!(uvs_arr, g.uvs)
-        for idx in g.indices
-            push!(indices, idx + offset)
+        copyto!(positions, pout, g.positions, 1, length(g.positions))
+        copyto!(normals_arr, nout, g.normals, 1, length(g.normals))
+        copyto!(uvs_arr, uout, g.uvs, 1, length(g.uvs))
+        @inbounds for idx in g.indices
+            indices[iout] = idx + offset
+            iout += 1
         end
         if with_groups && g.n_faces > 0
             # mat_idx is 1-based; material_index is 0-based (three.js convention).
             push!(groups, (total_faces + 1, g.n_faces, mat_idx - 1))
         end
+        pout += length(g.positions)
+        nout += length(g.normals)
+        uout += length(g.uvs)
         offset += g.n_vertices
         total_verts += g.n_vertices
         total_faces += g.n_faces
@@ -1263,9 +1276,12 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
             keep = all(g -> has_attribute(g, name) &&
                             get_attribute(g, name).item_size == attr.item_size, geos)
             keep || continue
-            data = similar(attr.data, 0)
+            data = similar(attr.data, sum(length(get_attribute(g, name).data) for g in geos))
+            out = 1
             for g in geos
-                append!(data, get_attribute(g, name).data)
+                src = get_attribute(g, name).data
+                copyto!(data, out, src, 1, length(src))
+                out += length(src)
             end
             set_attribute!(merged, name, data, attr.item_size)
         end

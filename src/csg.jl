@@ -340,14 +340,19 @@ end
 
 function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     normal_matrix = mat4_transpose(mat4_inverse(matrix))
-    positions = Float64[]
-    normals = Float64[]
-    for vi in 1:geo.n_vertices
+    positions = Vector{Float64}(undef, 3 * geo.n_vertices)
+    normals = Vector{Float64}(undef, 3 * geo.n_vertices)
+    @inbounds for vi in 1:geo.n_vertices
         p = mat4_transform_point(matrix, get_vertex(geo, vi))
-        push!(positions, p.x, p.y, p.z)
+        pbase = 3vi - 2
+        positions[pbase] = p.x
+        positions[pbase + 1] = p.y
+        positions[pbase + 2] = p.z
         n = length(geo.normals) >= 3vi ? get_normal(geo, vi) : Vec3(0.0, 1.0, 0.0)
         tn = normalize(mat4_transform_direction(normal_matrix, n))
-        push!(normals, tn.x, tn.y, tn.z)
+        normals[pbase] = tn.x
+        normals[pbase + 1] = tn.y
+        normals[pbase + 2] = tn.z
     end
     # deepcopy the attributes: copy(Dict) shares the BufferAttribute values' data
     # arrays, so the transformed geometry would alias the source's custom attributes.
