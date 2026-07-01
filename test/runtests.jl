@@ -12245,6 +12245,7 @@ end
             ph = PlaneHelper(pl, 2.0)
             @test ph isa LineSegments
             @test ph.geometry.n_vertices == 10
+            @test_opt_alloc 1536 PlaneHelper(pl, 2.0)
 
             # PolarGridHelper: 16 spokes + 8 rings * 64 chords = 528 segs = 1056 verts.
             pg = PolarGridHelper(10.0, 16, 8)

@@ -1956,10 +1956,13 @@ function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0))
     c2 = center + (u * -h + v *  h)
     c3 = center + (u * -h + v * -h)
     c4 = center + (u *  h + v * -h)
-    pos = Float64[]
-    _push_seg!(pos, c1, c2); _push_seg!(pos, c2, c3)
-    _push_seg!(pos, c3, c4); _push_seg!(pos, c4, c1)
-    _push_seg!(pos, center, center + n * h) # normal indicator
+    pos = Vector{Float64}(undef, 30)
+    vi = 1
+    vi = _write_line_segment!(pos, vi, c1, c2)
+    vi = _write_line_segment!(pos, vi, c2, c3)
+    vi = _write_line_segment!(pos, vi, c3, c4)
+    vi = _write_line_segment!(pos, vi, c4, c1)
+    _write_line_segment!(pos, vi, center, center + n * h)
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PlaneHelper")
 end
 
