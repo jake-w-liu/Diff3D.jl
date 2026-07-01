@@ -1452,11 +1452,11 @@ end
 end
 
 @inline function _write_wireframe_edge!(
-    seen::Set{UInt128}, positions::Vector{Float64}, indices::Vector{Int},
-    geo::BufferGeometry, a::Int, b::Int, vi::Int, pout::Int, iout::Int,
+    seen::Set{UInt128}, positions::Vector{Float64}, geo::BufferGeometry,
+    a::Int, b::Int, vi::Int, pout::Int,
 )
     key = _edge_key(a, b)
-    key in seen && return vi, pout, iout
+    key in seen && return vi, pout
     push!(seen, key)
     va = get_vertex(geo, a)
     vb = get_vertex(geo, b)
@@ -1466,9 +1466,7 @@ end
     positions[pout + 3] = vb.x
     positions[pout + 4] = vb.y
     positions[pout + 5] = vb.z
-    indices[iout] = vi + 1
-    indices[iout + 1] = vi + 2
-    return vi + 2, pout + 6, iout + 2
+    return vi + 2, pout + 6
 end
 
 """All unique triangle edges as line segments (three.js `WireframeGeometry`).
@@ -1479,19 +1477,16 @@ function wireframe_geometry(geo::BufferGeometry)
     seen = Set{UInt128}()
     sizehint!(seen, max_edges)
     positions = Vector{Float64}(undef, 6 * max_edges)
-    indices = Vector{Int}(undef, 2 * max_edges)
     vi = 0
     pout = 1
-    iout = 1
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        vi, pout, iout = _write_wireframe_edge!(seen, positions, indices, geo, i1, i2, vi, pout, iout)
-        vi, pout, iout = _write_wireframe_edge!(seen, positions, indices, geo, i2, i3, vi, pout, iout)
-        vi, pout, iout = _write_wireframe_edge!(seen, positions, indices, geo, i3, i1, vi, pout, iout)
+        vi, pout = _write_wireframe_edge!(seen, positions, geo, i1, i2, vi, pout)
+        vi, pout = _write_wireframe_edge!(seen, positions, geo, i2, i3, vi, pout)
+        vi, pout = _write_wireframe_edge!(seen, positions, geo, i3, i1, vi, pout)
     end
     resize!(positions, pout - 1)
-    resize!(indices, iout - 1)
-    BufferGeometry(positions, Float64[], Float64[], indices, vi, 0)
+    BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
 
 # Round a position to merge coincident (duplicated) vertices for adjacency.
@@ -1545,10 +1540,8 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         _record_edge_face!(edge_faces, c3, c1, n)
     end
     positions = Vector{Float64}(undef, 6 * length(edge_faces))
-    indices = Vector{Int}(undef, 2 * length(edge_faces))
     vi = 0
     pout = 1
-    iout = 1
     @inbounds for (key, (n1, n2, count)) in edge_faces
         feature = count == 1 || dot(n1, n2) < cosT
         feature || continue
@@ -1560,13 +1553,9 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         positions[pout + 3] = b.x
         positions[pout + 4] = b.y
         positions[pout + 5] = b.z
-        indices[iout] = vi + 1
-        indices[iout + 1] = vi + 2
         vi += 2
         pout += 6
-        iout += 2
     end
     resize!(positions, pout - 1)
-    resize!(indices, iout - 1)
-    BufferGeometry(positions, Float64[], Float64[], indices, vi, 0)
+    BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
