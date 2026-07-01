@@ -237,6 +237,12 @@ function _line_distance_write!(distances::Vector{Float64}, seen::Vector{Bool},
     return nothing
 end
 
+@inline function _line_distance_checked_index(geo::BufferGeometry, idx::Int)
+    1 <= idx <= geo.n_vertices ||
+        throw(ArgumentError("geometry indices must be within 1:n_vertices"))
+    return idx
+end
+
 """
     compute_line_distances!(geo; mode=:line_strip)
 
@@ -250,39 +256,55 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
     length(geo.positions) == 3 * geo.n_vertices ||
         throw(ArgumentError("geometry positions length must equal 3 * n_vertices"))
 
-    order = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
-    any(i -> i < 1 || i > geo.n_vertices, order) &&
-        throw(ArgumentError("geometry indices must be within 1:n_vertices"))
+    if isempty(geo.indices)
+        draw_distances = zeros(Float64, geo.n_vertices)
+        if mode === :lines
+            iseven(geo.n_vertices) ||
+                throw(ArgumentError("LineSegments distance computation requires an even vertex count"))
+            i = 1
+            while i <= geo.n_vertices
+                draw_distances[i] = 0.0
+                draw_distances[i + 1] = distance(get_vertex(geo, i),
+                                                 get_vertex(geo, i + 1))
+                i += 2
+            end
+        elseif geo.n_vertices > 0
+            total = 0.0
+            draw_distances[1] = 0.0
+            for i in 2:geo.n_vertices
+                total += distance(get_vertex(geo, i - 1), get_vertex(geo, i))
+                draw_distances[i] = total
+            end
+        end
+        set_attribute!(geo, :lineDistance, draw_distances, 1)
+        return geo
+    end
 
-    draw_distances = zeros(Float64, length(order))
+    order = geo.indices
+    distances = zeros(Float64, geo.n_vertices)
+    seen = fill(false, geo.n_vertices)
     if mode === :lines
         iseven(length(order)) ||
             throw(ArgumentError("LineSegments distance computation requires an even vertex count"))
         i = 1
         while i <= length(order)
-            draw_distances[i] = 0.0
-            draw_distances[i + 1] = distance(get_vertex(geo, order[i]),
-                                             get_vertex(geo, order[i + 1]))
+            a = _line_distance_checked_index(geo, order[i])
+            b = _line_distance_checked_index(geo, order[i + 1])
+            _line_distance_write!(distances, seen, a, 0.0)
+            _line_distance_write!(distances, seen, b, distance(get_vertex(geo, a),
+                                                               get_vertex(geo, b)))
             i += 2
         end
     elseif !isempty(order)
+        prev = _line_distance_checked_index(geo, order[1])
+        _line_distance_write!(distances, seen, prev, 0.0)
         total = 0.0
-        draw_distances[1] = 0.0
         for i in 2:length(order)
-            total += distance(get_vertex(geo, order[i - 1]), get_vertex(geo, order[i]))
-            draw_distances[i] = total
+            curr = _line_distance_checked_index(geo, order[i])
+            total += distance(get_vertex(geo, prev), get_vertex(geo, curr))
+            _line_distance_write!(distances, seen, curr, total)
+            prev = curr
         end
-    end
-
-    if isempty(geo.indices)
-        set_attribute!(geo, :lineDistance, draw_distances, 1)
-        return geo
-    end
-
-    distances = zeros(Float64, geo.n_vertices)
-    seen = fill(false, geo.n_vertices)
-    for (idx, value) in zip(order, draw_distances)
-        _line_distance_write!(distances, seen, idx, value)
     end
     set_attribute!(geo, :lineDistance, distances, 1)
     return geo

@@ -2430,6 +2430,22 @@ end
                                  Float64[], Float64[], Int[1, 2, 2, 3], 3, 0)
         @test_throws ArgumentError compute_line_distances!(indexed; mode=:lines)
         @test_throws ArgumentError compute_line_distances!(strip; mode=:bad)
+
+        function line_distance_test_geo(n; indexed=false)
+            positions = Vector{Float64}(undef, 3n)
+            for i in 1:n
+                positions[3i - 2] = i
+                positions[3i - 1] = 0.0
+                positions[3i] = 0.0
+            end
+            BufferGeometry(positions, Float64[], Float64[], indexed ? collect(1:n) : Int[], n, 0)
+        end
+        unindexed_alloc = line_distance_test_geo(100)
+        indexed_alloc = line_distance_test_geo(100; indexed=true)
+        compute_line_distances!(unindexed_alloc; mode=:line_strip)
+        compute_line_distances!(indexed_alloc; mode=:line_strip)
+        @test_opt_alloc 2048 compute_line_distances!(unindexed_alloc; mode=:line_strip)
+        @test_opt_alloc 2048 compute_line_distances!(indexed_alloc; mode=:line_strip)
     end
 
     @testset "Shading — Lambert" begin
