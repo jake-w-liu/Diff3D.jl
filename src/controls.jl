@@ -1686,6 +1686,14 @@ end
     return vi + 2
 end
 
+@inline function _write_line_color!(colors::Vector{Float64}, vi::Int, c::Color3)
+    base = 3vi - 2
+    colors[base] = c.r
+    colors[base + 1] = c.g
+    colors[base + 2] = c.b
+    return nothing
+end
+
 """Diff3D line segments along +x (red), +y (green), +z (blue)."""
 function AxesHelper(size=1.0)
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
@@ -1816,30 +1824,28 @@ function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.col
     px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
     pz = Vec3(p.x, p.y, p.z+s); nz = Vec3(p.x, p.y, p.z-s)
     eq = (px, pz, nx, nz)
-    pos = Float64[]
+    pos = Vector{Float64}(undef, 72)
+    vi = 1
     # Equator ring.
     for k in 1:4
-        _push_seg!(pos, eq[k], eq[mod1(k+1, 4)])
+        vi = _write_line_segment!(pos, vi, eq[k], eq[mod1(k+1, 4)])
     end
     # Spokes to the two apices.
     for e in eq
-        _push_seg!(pos, top, e)
-        _push_seg!(pos, bot, e)
+        vi = _write_line_segment!(pos, vi, top, e)
+        vi = _write_line_segment!(pos, vi, bot, e)
     end
     geo = _line_geo(pos)
     sky = light.color; grd = light.ground_color
-    cols = Float64[]
-    nseg = length(pos) ÷ 6
+    cols = Vector{Float64}(undef, 72)
+    blend = Color3((sky.r + grd.r) / 2, (sky.g + grd.g) / 2, (sky.b + grd.b) / 2)
     # First 4 segments are the (mid-latitude) equator: blend; the remaining
     # spokes inherit the apex colour (sky for top spokes, ground for bottom).
-    for seg in 1:nseg
-        if seg <= 4
-            for _ in 1:2; push!(cols, (sky.r+grd.r)/2, (sky.g+grd.g)/2, (sky.b+grd.b)/2); end
-        elseif (seg - 5) % 2 == 0          # top-apex spoke
-            push!(cols, sky.r, sky.g, sky.b, sky.r, sky.g, sky.b)
-        else                                # bottom-apex spoke
-            push!(cols, grd.r, grd.g, grd.b, grd.r, grd.g, grd.b)
-        end
+    for seg in 1:12
+        c = seg <= 4 ? blend : ((seg - 5) % 2 == 0 ? sky : grd)
+        vi = 2seg - 1
+        _write_line_color!(cols, vi, c)
+        _write_line_color!(cols, vi + 1, c)
     end
     set_attribute!(geo, :color, cols, 3)
     LineSegments(geo, LineBasicMaterial(color=color); name="HemisphereLightHelper")

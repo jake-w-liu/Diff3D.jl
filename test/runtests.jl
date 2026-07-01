@@ -12201,6 +12201,8 @@ end
             @test hh isa LineSegments
             @test hh.geometry.n_vertices == 24
             @test has_attribute(hh.geometry, :color)
+            @test length(get_attribute(hh.geometry, :color).data) == 72
+            @test_opt_alloc 4096 HemisphereLightHelper(hl, 1.0)
 
             # SkeletonHelper: two bones, child offset from parent; one bone-to-parent segment.
             root = Bone(); child = Bone()
