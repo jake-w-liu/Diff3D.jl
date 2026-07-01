@@ -16121,6 +16121,11 @@ end
         # transform_geometry must deepcopy custom attributes (copy(Dict) aliased
         # the BufferAttribute data arrays).
         let g = BoxGeometry()
+            t_plain = transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
+            @test isempty(t_plain.attributes)
+            @test isempty(t_plain.groups)
+            @test t_plain.draw_range === nothing
+            @test_opt_alloc 3072 transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
             g.attributes[:foo] = BufferAttribute([5.0, 6.0, 7.0], 1)
             t = transform_geometry(g, mat4_translation(1.0, 0.0, 0.0))
             t.attributes[:foo].data[1] = 99.0

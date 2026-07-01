@@ -354,9 +354,13 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
         normals[pbase + 1] = tn.y
         normals[pbase + 2] = tn.z
     end
+    uvs = copy(geo.uvs)
+    indices = copy(geo.indices)
+    if isempty(geo.attributes) && isempty(geo.groups) && geo.draw_range === nothing
+        return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces)
+    end
     # deepcopy the attributes: copy(Dict) shares the BufferAttribute values' data
     # arrays, so the transformed geometry would alias the source's custom attributes.
-    return BufferGeometry(positions, normals, copy(geo.uvs), copy(geo.indices),
-                          geo.n_vertices, geo.n_faces,
+    return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces,
                           deepcopy(geo.attributes), copy(geo.groups), geo.draw_range)
 end
