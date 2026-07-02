@@ -3722,6 +3722,13 @@ end
               "[0,1,2,3,3,2,1,0]"
         @test Diff3D._js_skin_weights_array([(1.0, 0.0, 0.5, 0.25)]) ==
               "[1,0,0.5,0.25]"
+        @test Diff3D._web_visibility_states_json([1, 2], [true, false]) ==
+              "[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
+        @test Diff3D._web_visibility_states_json([1], [true];
+                                                  extra_id=2, extra_value=false) ==
+              "[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
+        @test Diff3D._web_morph_target_ids_json([1, 2, 1], 2) == "[1,2]"
+        @test Diff3D._web_morph_target_ids_json([1, 2], 3) == "[1,2,3]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
         @test occursin("\"data\":[0,0,0,128]", Diff3D._web_texture_json(malformed_tex))
         sampler_tex = Texture(ones(Float64, 2, 2, 3);
