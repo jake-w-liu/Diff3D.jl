@@ -507,6 +507,27 @@ const SceneLight = Union{
 
 # Visibility-aware traversal: invisible nodes are skipped along with their
 # entire subtree, matching three.js hierarchical visibility semantics.
+function _count_lights(obj::AbstractObject3D)
+    is_visible(obj) || return 0
+    n = obj isa AbstractLight ? 1 : 0
+    @inbounds for child in get_children(obj)
+        n += _count_lights(child)
+    end
+    return n
+end
+
+function _fill_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D, i::Int)
+    is_visible(obj) || return i
+    if obj isa AbstractLight
+        lights[i] = obj
+        i += 1
+    end
+    @inbounds for child in get_children(obj)
+        i = _fill_lights!(lights, child, i)
+    end
+    return i
+end
+
 function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
     is_visible(obj) || return nothing
     obj isa AbstractLight && push!(lights, obj)
@@ -517,7 +538,7 @@ function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
 end
 
 function collect_lights(scene::AbstractObject3D)
-    lights = SceneLight[]
-    _collect_lights!(lights, scene)
+    lights = Vector{SceneLight}(undef, _count_lights(scene))
+    _fill_lights!(lights, scene, 1)
     return lights
 end

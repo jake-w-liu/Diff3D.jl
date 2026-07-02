@@ -15292,6 +15292,16 @@ end
             dl.visible = true
             g.visible = true
             @test length(collect_lights(scene)) == 3
+            light_collect_scene = Scene()
+            for _ in 1:64
+                add!(light_collect_scene, PointLight())
+            end
+            hidden_light_group = Group()
+            hidden_light_group.visible = false
+            add!(hidden_light_group, PointLight())
+            add!(light_collect_scene, hidden_light_group)
+            @test length(collect_lights(light_collect_scene)) == 64
+            @test_opt_alloc 2048 collect_lights(light_collect_scene)
             # an invisible root prunes everything
             g.visible = false
             scene.visible = false
