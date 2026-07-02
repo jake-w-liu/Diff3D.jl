@@ -514,10 +514,28 @@ _skinned_bind_matrix_inverse(sm::SkinnedMesh) =
     sm.bind_mode === :attached ? mat4_inverse(compute_world_matrix(sm)) :
     sm.bind_matrix_inverse
 
+@inline function _skinned_buffer_geometry(sm::SkinnedMesh)
+    geo = sm.geometry
+    geo isa BufferGeometry ||
+        throw(ArgumentError("SkinnedMesh geometry must be a BufferGeometry"))
+    return geo
+end
+
 function _skinning_matrices(sm::SkinnedMesh)
     bind = sm.bind_matrix
     bind_inv = _skinned_bind_matrix_inverse(sm)
     [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
+end
+
+@inline function _skin_position(mats, idx::NTuple{4,Int},
+                               w::NTuple{4,Float64}, p::Vec3)
+    acc = Vec3(0.0, 0.0, 0.0)
+    @inbounds for k in 1:4
+        wk = w[k]
+        wk == 0 && continue
+        acc = acc + mat4_transform_point(mats[idx[k]], p) * wk
+    end
+    return acc
 end
 
 """
@@ -526,19 +544,12 @@ bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 """
 function apply_skinning(sm::SkinnedMesh)
     mats = _skinning_matrices(sm)
-    geo = sm.geometry
+    geo = _skinned_buffer_geometry(sm)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     @inbounds for vi in 1:geo.n_vertices
         p = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
-        idx = sm.skin_indices[vi]; w = sm.skin_weights[vi]
-        acc = Vec3(0.0, 0.0, 0.0)
-        for k in 1:4
-            wk = w[k]
-            wk == 0 && continue
-            acc = acc + mat4_transform_point(mats[idx[k]], p) * wk
-        end
-        out[vi] = acc
+        out[vi] = _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p)
     end
     return out
 end
@@ -554,7 +565,7 @@ function _skin_direction(mats, idx::NTuple{4,Int}, w::NTuple{4,Float64}, d::Vec3
 end
 
 function _skin_normal_buffer(sm::SkinnedMesh, mats)
-    geo = sm.geometry
+    geo = _skinned_buffer_geometry(sm)
     normals = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_normals(sm) : geo.normals
     length(normals) >= geo.n_vertices * 3 || return copy(normals)
     out = Vector{Float64}(undef, geo.n_vertices * 3)
@@ -571,7 +582,7 @@ end
 
 function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats,
                                  tangent_data=attr.data)
-    geo = sm.geometry
+    geo = _skinned_buffer_geometry(sm)
     attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
         return copy(tangent_data)
     out = Float64.(copy(tangent_data))
@@ -588,7 +599,8 @@ end
 
 function _copy_skinned_attributes(sm::SkinnedMesh, mats)
     attrs = Dict{Symbol, BufferAttribute}()
-    for (name, attr) in sm.geometry.attributes
+    geo = _skinned_buffer_geometry(sm)
+    for (name, attr) in geo.attributes
         data = if name === :tangent
             tangent_data = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_tangents(sm) : attr.data
             _skin_tangent_attribute(sm, attr, mats, tangent_data)
@@ -601,13 +613,14 @@ function _copy_skinned_attributes(sm::SkinnedMesh, mats)
 end
 
 function _skinned_render_geometry(sm::SkinnedMesh)
-    geo = sm.geometry
+    geo = _skinned_buffer_geometry(sm)
     mats = _skinning_matrices(sm)
     positions = Vector{Float64}(undef, geo.n_vertices * 3)
-    skinned = apply_skinning(sm)
+    morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     @inbounds for vi in 1:geo.n_vertices
         base = 3vi - 2
-        p = skinned[vi]
+        p0 = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
+        p = _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
         positions[base] = p.x
         positions[base + 1] = p.y
         positions[base + 2] = p.z

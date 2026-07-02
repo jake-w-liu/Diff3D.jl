@@ -5525,6 +5525,18 @@ end
         @test get_vertex(proxy.geometry, 1).x ≈ get_vertex(render_geo, 1).x + 0.35 atol=1e-10
         @test get_normal(proxy.geometry, 1).z ≈ 1.0 atol=1e-10
 
+        skin_alloc_geo = BoxGeometry(width_segments=8, height_segments=8,
+                                     depth_segments=8)
+        skin_alloc_idx = fill((1,1,1,1), skin_alloc_geo.n_vertices)
+        skin_alloc_wts = fill((1.0,0.0,0.0,0.0), skin_alloc_geo.n_vertices)
+        skin_alloc_mesh = SkinnedMesh(skin_alloc_geo, MeshBasicMaterial(),
+                                      Skeleton([Bone()]), skin_alloc_idx,
+                                      skin_alloc_wts)
+        Diff3D._skinned_render_geometry(skin_alloc_mesh)
+        apply_skinning(skin_alloc_mesh)
+        @test_opt_alloc 65536 Diff3D._skinned_render_geometry(skin_alloc_mesh)
+        @test_opt_alloc 16384 apply_skinning(skin_alloc_mesh)
+
         morph_dir_geo = PlaneGeometry(width=1.0, height=1.0)
         set_attribute!(morph_dir_geo, :tangent,
                        [1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0, 1.0,0,0,1.0], 4)
