@@ -604,7 +604,7 @@ function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats,
     geo = _skinned_buffer_geometry(sm)
     attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
         return copy(tangent_data)
-    out = Float64.(copy(tangent_data))
+    out = _float64_copy(tangent_data)
     @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * attr.item_size + 1
         t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))

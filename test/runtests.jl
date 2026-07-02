@@ -18154,6 +18154,42 @@ end
                                  morph_target_influences=[1.0])
         @test Diff3D._object_morph_positions(active_morph_mesh, morph_geo)[1] ==
               Vec3(1.0, 0.0, 0.0)
+
+        morph_alloc_n = 64
+        morph_alloc_pos = Vector{Float64}(undef, 3 * morph_alloc_n)
+        morph_alloc_delta = similar(morph_alloc_pos)
+        morph_alloc_normals = similar(morph_alloc_pos)
+        morph_alloc_normal_delta = similar(morph_alloc_pos)
+        for vi in 1:morph_alloc_n
+            base = 3vi - 2
+            morph_alloc_pos[base] = vi
+            morph_alloc_pos[base + 1] = 0.0
+            morph_alloc_pos[base + 2] = 0.0
+            morph_alloc_delta[base] = 0.0
+            morph_alloc_delta[base + 1] = 0.0
+            morph_alloc_delta[base + 2] = 1.0
+            morph_alloc_normals[base] = 0.0
+            morph_alloc_normals[base + 1] = 0.0
+            morph_alloc_normals[base + 2] = 1.0
+            morph_alloc_normal_delta[base] = 0.0
+            morph_alloc_normal_delta[base + 1] = 1.0
+            morph_alloc_normal_delta[base + 2] = 0.0
+        end
+        morph_alloc_geo = BufferGeometry(morph_alloc_pos, morph_alloc_normals,
+                                         Float64[], Int[], morph_alloc_n, 0)
+        set_attribute!(morph_alloc_geo, :morphPosition0, morph_alloc_delta, 3)
+        set_attribute!(morph_alloc_geo, :morphNormal0, morph_alloc_normal_delta, 3)
+        set_attribute!(morph_alloc_geo, :tangent, repeat([1.0, 0.0, 0.0, 1.0],
+                                                        morph_alloc_n), 4)
+        set_attribute!(morph_alloc_geo, :morphTangent0,
+                       repeat([0.0, 1.0, 0.0], morph_alloc_n), 3)
+        morph_alloc_influences = [0.5]
+        @test apply_morph_targets(morph_alloc_geo, morph_alloc_influences)[1] ==
+              Vec3(1.0, 0.0, 0.5)
+        @test_opt_alloc 4096 apply_morph_targets(morph_alloc_geo, morph_alloc_influences)
+        @test_opt_alloc 4096 apply_morph_normals(morph_alloc_geo, morph_alloc_influences)
+        @test_opt_alloc 4096 apply_morph_tangents(morph_alloc_geo, morph_alloc_influences)
+
         invalid_morph_mesh = Mesh(morph_geo, MeshBasicMaterial();
                                   morph_target_influences=[NaN])
         @test_throws "morph target influence 1 must be finite" Diff3D._object_morph_positions(

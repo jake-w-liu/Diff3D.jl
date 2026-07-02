@@ -339,27 +339,60 @@ _morph_finite_float(value, label::String) =
 @inline _morph_influence(weight::Real, ti::Int) =
     _morph_finite_float(weight, "morph target influence $ti")
 
-@inline _morph_attribute_value(attr::BufferAttribute, idx::Int, name::Symbol) =
-    _morph_finite_float(attr.data[idx], "$name attribute data")
+_float64_copy(data::Vector{Float64}) = copy(data)
+_float64_copy(data) = Float64.(data)
+
+@noinline function _throw_morph_attribute_value(name::Symbol)
+    throw(ArgumentError("$name attribute data must be finite"))
+end
+
+@inline function _morph_attribute_value(attr::BufferAttribute{Float64}, idx::Int, name::Symbol)
+    out = attr.data[idx]
+    isfinite(out) || _throw_morph_attribute_value(name)
+    return out
+end
+
+@inline function _morph_attribute_value(attr::BufferAttribute, idx::Int, name::Symbol)
+    value = attr.data[idx]
+    value isa Bool && _throw_morph_attribute_value(name)
+    out = try
+        Float64(value)
+    catch
+        _throw_morph_attribute_value(name)
+    end
+    isfinite(out) || _throw_morph_attribute_value(name)
+    return out
+end
+
+function _apply_morph_position_attr!(out::Vector{Vec3{Float64}}, attr::BufferAttribute,
+                                     w::Float64, name::Symbol, n_vertices::Int)
+    attr.item_size == 3 || error("$name attribute must have item size 3")
+    length(attr.data) == n_vertices * 3 || error("$name count does not match geometry")
+    @inbounds for vi in 1:n_vertices
+        base = 3vi - 2
+        delta = Vec3(_morph_attribute_value(attr, base, name),
+                     _morph_attribute_value(attr, base + 1, name),
+                     _morph_attribute_value(attr, base + 2, name))
+        out[vi] = out[vi] + delta * w
+    end
+    return out
+end
 
 function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
     _validate_geometry_vertices(g, "apply_morph_targets")
-    out = [get_vertex(g, vi) for vi in 1:g.n_vertices]
+    out = Vector{Vec3{Float64}}(undef, g.n_vertices)
+    positions = g.positions
+    @inbounds for vi in 1:g.n_vertices
+        base = 3vi - 2
+        out[vi] = Vec3(positions[base], positions[base + 1], positions[base + 2])
+    end
     for (ti, weight) in enumerate(influences)
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
         name = Symbol("morphPosition$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        attr.item_size == 3 || error("$name attribute must have item size 3")
-        length(attr.data) == g.n_vertices * 3 || error("$name count does not match geometry")
-        @inbounds for vi in 1:g.n_vertices
-            base = 3vi - 2
-            delta = Vec3(_morph_attribute_value(attr, base, name),
-                         _morph_attribute_value(attr, base + 1, name),
-                         _morph_attribute_value(attr, base + 2, name))
-            out[vi] = out[vi] + delta * w
-        end
+        _apply_morph_position_attr!(out, attr, w, name, g.n_vertices)
     end
     return out
 end
@@ -394,6 +427,21 @@ function _normalize_attribute3!(data::Vector{Float64}, n_vertices::Int, item_siz
     return data
 end
 
+function _apply_morph_attribute3_attr!(out::Vector{Float64}, attr::BufferAttribute,
+                                       w::Float64, name::Symbol, n_vertices::Int,
+                                       dst_item_size::Int)
+    attr.item_size >= 3 || error("$name attribute must have at least 3 components")
+    length(attr.data) >= n_vertices * attr.item_size || error("$name count does not match geometry")
+    @inbounds for vi in 1:n_vertices
+        dst = (vi - 1) * dst_item_size + 1
+        src = (vi - 1) * attr.item_size + 1
+        out[dst] += _morph_attribute_value(attr, src, name) * w
+        out[dst + 1] += _morph_attribute_value(attr, src + 1, name) * w
+        out[dst + 2] += _morph_attribute_value(attr, src + 2, name) * w
+    end
+    return out
+end
+
 """
     apply_morph_normals(geo, influences)
 
@@ -410,15 +458,7 @@ function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Rea
         name = Symbol("morphNormal$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        attr.item_size >= 3 || error("$name attribute must have at least 3 components")
-        length(attr.data) >= g.n_vertices * attr.item_size || error("$name count does not match geometry")
-        @inbounds for vi in 1:g.n_vertices
-            dst = 3vi - 2
-            src = (vi - 1) * attr.item_size + 1
-            out[dst] += _morph_attribute_value(attr, src, name) * w
-            out[dst + 1] += _morph_attribute_value(attr, src + 1, name) * w
-            out[dst + 2] += _morph_attribute_value(attr, src + 2, name) * w
-        end
+        _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, 3)
     end
     return _normalize_attribute3!(out, g.n_vertices, 3)
 end
@@ -436,23 +476,15 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
     has_attribute(g, :tangent) || return Float64[]
     base_attr = get_attribute(g, :tangent)
     base_attr.item_size >= 3 && length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
-        return copy(Float64.(base_attr.data))
-    out = Float64.(copy(base_attr.data))
+        return _float64_copy(base_attr.data)
+    out = _float64_copy(base_attr.data)
     for (ti, weight) in enumerate(influences)
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
         name = Symbol("morphTangent$(ti - 1)")
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        attr.item_size >= 3 || error("$name attribute must have at least 3 components")
-        length(attr.data) >= g.n_vertices * attr.item_size || error("$name count does not match geometry")
-        @inbounds for vi in 1:g.n_vertices
-            dst = (vi - 1) * base_attr.item_size + 1
-            src = (vi - 1) * attr.item_size + 1
-            out[dst] += _morph_attribute_value(attr, src, name) * w
-            out[dst + 1] += _morph_attribute_value(attr, src + 1, name) * w
-            out[dst + 2] += _morph_attribute_value(attr, src + 2, name) * w
-        end
+        _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, base_attr.item_size)
     end
     return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)
 end
