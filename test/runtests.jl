@@ -6141,6 +6141,9 @@ end
         segmented_plane_for_edges = PlaneGeometry(width_segments=64, height_segments=64)
         @test edges_geometry(segmented_plane_for_edges).n_vertices ÷ 2 == 256
         @test_opt_alloc 5450000 edges_geometry(segmented_plane_for_edges)
+        segmented_plane_for_wireframe = PlaneGeometry(width_segments=64, height_segments=64)
+        @test wireframe_geometry(segmented_plane_for_wireframe).n_vertices ÷ 2 == 12_416
+        @test_opt_alloc 2250000 wireframe_geometry(segmented_plane_for_wireframe)
     end
 
     @testset "MeshToonMaterial — banded diffuse" begin

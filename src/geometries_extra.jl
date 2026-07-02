@@ -1450,15 +1450,21 @@ end
     return nothing
 end
 
-@inline function _write_wireframe_edge!(
-    seen::Set{UInt128}, positions::Vector{Float64}, geo::BufferGeometry,
-    a::Int, b::Int, vi::Int, pout::Int,
+@inline function _remember_wireframe_edge!(
+    seen::Set{UInt128}, ordered_edges::Vector{UInt128}, a::Int, b::Int,
 )
     key = _edge_key(a, b)
-    key in seen && return vi, pout
+    key in seen && return nothing
     push!(seen, key)
-    va = get_vertex(geo, a)
-    vb = get_vertex(geo, b)
+    push!(ordered_edges, key)
+    return nothing
+end
+
+@inline function _write_wireframe_key!(
+    positions::Vector{Float64}, geo::BufferGeometry, key::UInt128, vi::Int, pout::Int,
+)
+    va = get_vertex(geo, _edge_key_first(key))
+    vb = get_vertex(geo, _edge_key_second(key))
     positions[pout] = va.x
     positions[pout + 1] = va.y
     positions[pout + 2] = va.z
@@ -1475,16 +1481,20 @@ function wireframe_geometry(geo::BufferGeometry)
     max_edges = 3 * geo.n_faces
     seen = Set{UInt128}()
     sizehint!(seen, max_edges)
-    positions = Vector{Float64}(undef, 6 * max_edges)
-    vi = 0
-    pout = 1
+    ordered_edges = Vector{UInt128}()
+    sizehint!(ordered_edges, max_edges)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        vi, pout = _write_wireframe_edge!(seen, positions, geo, i1, i2, vi, pout)
-        vi, pout = _write_wireframe_edge!(seen, positions, geo, i2, i3, vi, pout)
-        vi, pout = _write_wireframe_edge!(seen, positions, geo, i3, i1, vi, pout)
+        _remember_wireframe_edge!(seen, ordered_edges, i1, i2)
+        _remember_wireframe_edge!(seen, ordered_edges, i2, i3)
+        _remember_wireframe_edge!(seen, ordered_edges, i3, i1)
     end
-    resize!(positions, pout - 1)
+    positions = Vector{Float64}(undef, 6 * length(ordered_edges))
+    vi = 0
+    pout = 1
+    @inbounds for key in ordered_edges
+        vi, pout = _write_wireframe_key!(positions, geo, key, vi, pout)
+    end
     BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
 
