@@ -18,18 +18,22 @@ end
 
 """Total renderable triangles in a scene (hierarchically visible drawables
 only), including InstancedMesh instances."""
-function scene_triangle_count(scene::AbstractObject3D)
+function _scene_triangle_count_visible(obj::AbstractObject3D)
+    is_visible(obj) || return 0
     n = 0
-    for m in collect_meshes(scene)
-        n += count_triangles(m.geometry)
+    if obj isa Mesh
+        n += count_triangles(_mesh_geometry(obj))
+    elseif obj isa InstancedMesh
+        n += instanced_count(obj) * count_triangles(_instanced_geometry(obj))
     end
-    for im in collect_instanced(scene)
-        # collect_instanced traverses without pruning invisible subtrees;
-        # match collect_meshes' hierarchical visibility.
-        _visible_in_tree(im) || continue
-        n += instanced_count(im) * count_triangles(im.geometry)
+    for child in get_children(obj)
+        n += _scene_triangle_count_visible(child)
     end
     return n
+end
+
+function scene_triangle_count(scene::AbstractObject3D)
+    return _scene_triangle_count_visible(scene)
 end
 
 """
@@ -71,11 +75,11 @@ function benchmark_render(scene::Scene, camera::AbstractCamera, W::Int, H::Int;
     for _ in 1:warmup
         render!(rt, scene, camera; shading=shading)
     end
-    times = Float64[]
+    times = Vector{Float64}(undef, reps)
     alloc = 0
     for r in 1:reps
         res = @timed render!(rt, scene, camera; shading=shading)
-        push!(times, res.time)
+        times[r] = res.time
         r == 1 && (alloc = res.bytes)
     end
     sort!(times)

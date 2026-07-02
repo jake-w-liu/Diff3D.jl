@@ -10306,6 +10306,17 @@ end
         @test br.iqr_s >= 0.0
         @test br.min_s <= br.median_s                    # min ≤ median by construction
         @test br.triangles == scene_triangle_count(scene)
+        count_scene = Scene()
+        for _ in 1:64
+            add!(count_scene, Mesh(BoxGeometry(), MeshBasicMaterial()))
+        end
+        hidden_group = Group()
+        add!(hidden_group, Mesh(BoxGeometry(), MeshBasicMaterial()))
+        hidden_group.visible = false
+        add!(count_scene, hidden_group)
+        scene_triangle_count(count_scene)
+        @test scene_triangle_count(count_scene) == 64 * BoxGeometry().n_faces
+        @test_opt_alloc 256 scene_triangle_count(count_scene)
     end
 
     @testset "ShaderMaterial — executable fragment program" begin
