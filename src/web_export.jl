@@ -603,21 +603,38 @@ function _web_visibility_chain(obj::AbstractObject3D)
 end
 
 function _web_visible_or_forced(obj::AbstractObject3D, force_ids::Set{Int})
-    ids, values = _web_visibility_chain(obj)
-    return all(values) || any(id -> id in force_ids, ids)
+    all_visible = true
+    current = obj
+    while current !== nothing
+        all_visible &= is_visible(current)
+        current.id in force_ids && return true
+        current = get_parent(current)
+    end
+    return all_visible
 end
 
 function _web_light_visibility_json(light::AbstractLight,
                                     visibility_target_ids::AbstractVector{Int},
-                                    visibility_values::AbstractVector{Bool})
-    ids = isempty(visibility_target_ids) ? [light.id] : visibility_target_ids
-    values = isempty(visibility_values) ? [is_visible(light)] : visibility_values
-    return ",\"visibilityStates\":" * _web_visibility_states_json(ids, values)
+                                    visibility_values::AbstractVector{Bool};
+                                    visibility_extra_id::Int=0,
+                                    visibility_extra_value::Bool=false)
+    visibility_json = if isempty(visibility_target_ids)
+        id = visibility_extra_id == 0 ? light.id : visibility_extra_id
+        visible = visibility_extra_id == 0 ? is_visible(light) : visibility_extra_value
+        _web_visibility_states_json(Int[], Bool[]; extra_id=id, extra_value=visible)
+    else
+        _web_visibility_states_json(visibility_target_ids, visibility_values;
+                                    extra_id=visibility_extra_id,
+                                    extra_value=visibility_extra_value)
+    end
+    return ",\"visibilityStates\":" * visibility_json
 end
 
 function _web_light_json(light::AmbientLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     return "{" *
@@ -627,13 +644,17 @@ function _web_light_json(light::AmbientLight;
            ",\"visible\":" * (is_visible(light) ? "true" : "false") *
            ",\"color\":" * _js_color(light.color) *
            ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::DirectionalLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     pos = get_position(light)
@@ -652,13 +673,17 @@ function _web_light_json(light::DirectionalLight, scene::Scene;
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
                                              clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::PointLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     return "{" *
@@ -674,13 +699,17 @@ function _web_light_json(light::PointLight, scene::Scene;
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
                                              clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::SpotLight, scene::Scene;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     pos = get_position(light)
@@ -708,13 +737,17 @@ function _web_light_json(light::SpotLight, scene::Scene;
            ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
            ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
                                              clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::HemisphereLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     return "{" *
@@ -725,13 +758,17 @@ function _web_light_json(light::HemisphereLight;
            ",\"color\":" * _js_color(light.color) *
            ",\"groundColor\":" * _js_color(light.ground_color) *
            ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::RectAreaLight;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     pos = get_position(light)
@@ -753,13 +790,17 @@ function _web_light_json(light::RectAreaLight;
            ",\"v\":" * _js_vec(v) *
            ",\"width\":" * _js_num(light.width) *
            ",\"height\":" * _js_num(light.height) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
 function _web_light_json(light::LightProbe;
                          visibility_target_ids::AbstractVector{Int}=Int[],
                          visibility_values::AbstractVector{Bool}=Bool[],
+                         visibility_extra_id::Int=0,
+                         visibility_extra_value::Bool=false,
                          shadow_mode::Symbol=:static,
                          clipping_planes=_NO_PLANES)
     coeffs = "[" * join((_js_color(c) for c in light.coeffs), ",") * "]"
@@ -771,7 +812,9 @@ function _web_light_json(light::LightProbe;
            ",\"position\":" * _js_vec(get_position(light)) *
            ",\"coeffs\":" * coeffs *
            ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values) *
+           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
+                                      visibility_extra_id=visibility_extra_id,
+                                      visibility_extra_value=visibility_extra_value) *
            "}"
 end
 
@@ -784,35 +827,54 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
                           dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
                           dynamic_point_shadow_ids::Set{Int}=Set{Int}();
                           clipping_planes=_NO_PLANES)
-    lights = String[]
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
     # own visibility or ancestor visibility is animated (force_ids) must be
     # exported even while currently hidden. Statically hidden lights are dropped
     # to match the CPU renderer's hierarchical visibility.
-    all_lights = SceneLight[]
-    traverse(scene, o -> o isa AbstractLight && push!(all_lights, o))
-    for light in all_lights
-        _web_visible_or_forced(light, force_ids) || continue
-        visibility_ids, visibility_values = _web_visibility_chain(light)
-        shadow_mode = if light.id in dynamic_shadow_ids
-            :directional_dynamic
-        elseif light.id in dynamic_spot_shadow_ids
-            :spot_dynamic
-        elseif light.id in dynamic_point_shadow_ids
-            :point_dynamic
-        elseif light.id in stale_shadow_ids
-            :none
-        else
-            :static
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    ancestor_ids = Int[]
+    ancestor_visibility = Bool[]
+    function visit(obj::AbstractObject3D, ancestors_visible::Bool, ancestor_forced::Bool)
+        obj_visible = is_visible(obj)
+        forced = ancestor_forced || obj.id in force_ids
+        if obj isa AbstractLight && ((ancestors_visible && obj_visible) || forced)
+            shadow_mode = if obj.id in dynamic_shadow_ids
+                :directional_dynamic
+            elseif obj.id in dynamic_spot_shadow_ids
+                :spot_dynamic
+            elseif obj.id in dynamic_point_shadow_ids
+                :point_dynamic
+            elseif obj.id in stale_shadow_ids
+                :none
+            else
+                :static
+            end
+            item = _web_light_json(obj, scene;
+                                   visibility_target_ids=ancestor_ids,
+                                   visibility_values=ancestor_visibility,
+                                   visibility_extra_id=obj.id,
+                                   visibility_extra_value=obj_visible,
+                                   shadow_mode=shadow_mode,
+                                   clipping_planes=clipping_planes)
+            if item !== nothing
+                first ? (first = false) : write(io, ',')
+                write(io, item)
+            end
         end
-        item = _web_light_json(light, scene;
-                               visibility_target_ids=visibility_ids,
-                               visibility_values=visibility_values,
-                               shadow_mode=shadow_mode,
-                               clipping_planes=clipping_planes)
-        item !== nothing && push!(lights, item)
+        push!(ancestor_ids, obj.id)
+        push!(ancestor_visibility, obj_visible)
+        child_ancestors_visible = ancestors_visible && obj_visible
+        for child in get_children(obj)
+            visit(child, child_ancestors_visible, forced)
+        end
+        pop!(ancestor_ids)
+        pop!(ancestor_visibility)
     end
-    return "[" * join(lights, ",") * "]"
+    visit(scene, true, false)
+    write(io, ']')
+    return String(take!(io))
 end
 
 function _web_flatten_vec3(vs::AbstractVector{<:Vec3})

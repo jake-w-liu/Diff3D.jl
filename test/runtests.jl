@@ -3727,6 +3727,14 @@ end
         @test Diff3D._web_visibility_states_json([1], [true];
                                                   extra_id=2, extra_value=false) ==
               "[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
+        let light = AmbientLight()
+            @test Diff3D._web_light_visibility_json(light, Int[], Bool[]) ==
+                  ",\"visibilityStates\":[{\"id\":$(light.id),\"visible\":true}]"
+            @test Diff3D._web_light_visibility_json(light, [1], [true];
+                                                    visibility_extra_id=2,
+                                                    visibility_extra_value=false) ==
+                  ",\"visibilityStates\":[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
+        end
         @test Diff3D._web_morph_target_ids_json([1, 2, 1], 2) == "[1,2]"
         @test Diff3D._web_morph_target_ids_json([1, 2], 3) == "[1,2,3]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
