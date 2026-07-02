@@ -18044,6 +18044,18 @@ end
         set_attribute!(morph_geo, :morphPosition0, [1.0, 0.0, 0.0], 3)
         @test_throws "morph target influence 1 must be finite" apply_morph_targets(
             morph_geo, [NaN])
+        zero_morph_mesh = Mesh(morph_geo, MeshBasicMaterial();
+                               morph_target_influences=[0.0, -0.0])
+        @test Diff3D._object_morph_positions(zero_morph_mesh, morph_geo) === nothing
+        @test_opt_alloc 64 Diff3D._object_morph_positions(zero_morph_mesh, morph_geo)
+        active_morph_mesh = Mesh(morph_geo, MeshBasicMaterial();
+                                 morph_target_influences=[1.0])
+        @test Diff3D._object_morph_positions(active_morph_mesh, morph_geo)[1] ==
+              Vec3(1.0, 0.0, 0.0)
+        invalid_morph_mesh = Mesh(morph_geo, MeshBasicMaterial();
+                                  morph_target_influences=[NaN])
+        @test_throws "morph target influence 1 must be finite" Diff3D._object_morph_positions(
+            invalid_morph_mesh, morph_geo)
 
         set_attribute!(morph_geo, :morphPosition0, [NaN, 0.0, 0.0], 3)
         @test_throws "morphPosition0 attribute data must be finite" apply_morph_targets(

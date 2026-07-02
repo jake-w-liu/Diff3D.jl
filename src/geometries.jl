@@ -354,8 +354,15 @@ end
 function _object_morph_positions(obj, geo::BufferGeometry)
     hasproperty(obj, :morph_target_influences) || return nothing
     influences = getproperty(obj, :morph_target_influences)
-    isempty(influences) && return nothing
+    _has_active_morph_influences(influences) || return nothing
     return apply_morph_targets(geo, influences)
+end
+
+function _has_active_morph_influences(influences::AbstractVector{<:Real})
+    @inbounds for i in eachindex(influences)
+        iszero(influences[i]) || return true
+    end
+    return false
 end
 
 @inline _geometry_vertex(geo::BufferGeometry, morphed_positions::Nothing, i::Int) =

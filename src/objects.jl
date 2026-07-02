@@ -527,7 +527,7 @@ bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 function apply_skinning(sm::SkinnedMesh)
     mats = _skinning_matrices(sm)
     geo = sm.geometry
-    morphed = !isempty(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
+    morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     @inbounds for vi in 1:geo.n_vertices
         p = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
@@ -555,7 +555,7 @@ end
 
 function _skin_normal_buffer(sm::SkinnedMesh, mats)
     geo = sm.geometry
-    normals = isempty(sm.morph_target_influences) ? geo.normals : apply_morph_normals(sm)
+    normals = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_normals(sm) : geo.normals
     length(normals) >= geo.n_vertices * 3 || return copy(normals)
     out = Vector{Float64}(undef, geo.n_vertices * 3)
     @inbounds for vi in 1:geo.n_vertices
@@ -590,7 +590,7 @@ function _copy_skinned_attributes(sm::SkinnedMesh, mats)
     attrs = Dict{Symbol, BufferAttribute}()
     for (name, attr) in sm.geometry.attributes
         data = if name === :tangent
-            tangent_data = isempty(sm.morph_target_influences) ? attr.data : apply_morph_tangents(sm)
+            tangent_data = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_tangents(sm) : attr.data
             _skin_tangent_attribute(sm, attr, mats, tangent_data)
         else
             copy(attr.data)
