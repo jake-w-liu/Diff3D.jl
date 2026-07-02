@@ -189,14 +189,14 @@ function numerical_gradient(f, params::Vector{Float64}; δ=1e-5)
         throw(ArgumentError("numerical_gradient δ must be finite and non-zero"))
     n = length(params)
     grad = Vector{Float64}(undef, n)
-    p_plus = copy(params)
-    p_minus = copy(params)
+    work = copy(params)
     for i in 1:n
-        copyto!(p_plus, params)
-        copyto!(p_minus, params)
-        p_plus[i] += δ
-        p_minus[i] -= δ
-        grad[i] = (f(p_plus) - f(p_minus)) / (2 * δ)
+        copyto!(work, params)
+        work[i] += δ
+        f_plus = f(work)
+        copyto!(work, params)
+        work[i] -= δ
+        grad[i] = (f_plus - f(work)) / (2 * δ)
     end
     return grad
 end

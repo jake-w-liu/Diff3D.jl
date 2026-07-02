@@ -2691,7 +2691,7 @@ end
         @test p == [1.0, 2.0, 3.0]
         @test_throws ArgumentError numerical_gradient(f, p; δ=0.0)
         wide = collect(range(0.1, 1.0; length=64))
-        @test_opt_alloc 8192 numerical_gradient(x -> sum(abs2, x), wide)
+        @test_opt_alloc 1536 numerical_gradient(x -> sum(abs2, x), wide)
     end
 
     @testset "Inverse optimizers — descent and bounded workspace" begin
