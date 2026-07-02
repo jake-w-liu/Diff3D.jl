@@ -16,18 +16,9 @@ hit, or `nothing` if the ray misses. `dir` need not be normalised; `t` is then
 in units of `dir`. `side` culls by winding like three.js `Ray.intersectTriangle`:
 `:front` rejects backfaces, `:back` rejects frontfaces, `:double` accepts both.
 """
-function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3;
-                                eps=1e-9, side::Symbol=:double)
-    side in (:front, :back, :double) ||
-        throw(ArgumentError("ray_triangle_intersect side must be one of :front, :back, or :double"))
-    isfinite(eps) && eps >= 0 ||
-        throw(ArgumentError("ray_triangle_intersect eps must be finite and non-negative"))
-    _finite_vec3(origin) || throw(ArgumentError("ray_triangle_intersect origin must be finite"))
-    _finite_vec3(dir) || throw(ArgumentError("ray_triangle_intersect direction must be finite"))
-    dot(dir, dir) > zero(dot(dir, dir)) ||
-        throw(ArgumentError("ray_triangle_intersect direction must be non-zero"))
-    (_finite_vec3(a) && _finite_vec3(b) && _finite_vec3(c)) ||
-        throw(ArgumentError("ray_triangle_intersect triangle vertices must be finite"))
+@inline function _ray_triangle_intersect_unchecked(origin::Vec3, dir::Vec3,
+                                                   a::Vec3, b::Vec3, c::Vec3,
+                                                   eps, side::Symbol)
     e1 = b - a; e2 = c - a
     p = cross(dir, e2)
     det = dot(e1, p)                             # det = -dot(dir, cross(e1, e2))
@@ -47,6 +38,21 @@ function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Ve
     (v < 0 || u + v > 1) && return nothing
     t = dot(e2, q) * inv_det
     return t > eps ? t : nothing
+end
+
+function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3;
+                                eps=1e-9, side::Symbol=:double)
+    side in (:front, :back, :double) ||
+        throw(ArgumentError("ray_triangle_intersect side must be one of :front, :back, or :double"))
+    isfinite(eps) && eps >= 0 ||
+        throw(ArgumentError("ray_triangle_intersect eps must be finite and non-negative"))
+    _finite_vec3(origin) || throw(ArgumentError("ray_triangle_intersect origin must be finite"))
+    _finite_vec3(dir) || throw(ArgumentError("ray_triangle_intersect direction must be finite"))
+    dot(dir, dir) > zero(dot(dir, dir)) ||
+        throw(ArgumentError("ray_triangle_intersect direction must be non-zero"))
+    (_finite_vec3(a) && _finite_vec3(b) && _finite_vec3(c)) ||
+        throw(ArgumentError("ray_triangle_intersect triangle vertices must be finite"))
+    return _ray_triangle_intersect_unchecked(origin, dir, a, b, c, eps, side)
 end
 
 mutable struct Raycaster
@@ -173,6 +179,12 @@ function _ray_segment_distance(o::Vec3, d::Vec3, a::Vec3, b::Vec3)
     return (t_ray, norm(ray_pt - seg_pt), seg_pt)
 end
 
+@inline function _raycast_morph_positions(obj, geo::BufferGeometry)
+    _has_active_morph_influences(obj.morph_target_influences) ||
+        return nothing
+    return apply_morph_targets(geo, obj.morph_target_influences)
+end
+
 # Build the world-space ray through normalized device coords (x,y ∈ [-1,1]).
 function _camera_ray(camera::AbstractCamera, ndc_x, ndc_y)
     inv_vp = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
@@ -203,15 +215,15 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     o = rc.ray.origin; d = rc.ray.direction
     if obj isa Mesh
         wm = compute_world_matrix(obj)
-        geo = obj.geometry
+        geo = _mesh_geometry(obj)
         # Cull by material side like three.js Mesh.raycast (default :front).
-        side = material_side(obj.material)
+        side = material_side(_mesh_material(obj))
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
             a = mat4_transform_point(wm, get_vertex(geo, i1))
             b = mat4_transform_point(wm, get_vertex(geo, i2))
             c = mat4_transform_point(wm, get_vertex(geo, i3))
-            t = ray_triangle_intersect(o, d, a, b, c; side=side)
+            t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
             end
@@ -220,8 +232,8 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         # Each instance is the geometry under world_matrix * instance_matrix; test
         # all of them (was silently skipped, so instanced scenes returned no hits).
         wm = compute_world_matrix(obj)
-        geo = obj.geometry
-        side = material_side(obj.material)
+        geo = _instanced_geometry(obj)
+        side = material_side(_instanced_material(obj))
         @inbounds for im in obj.instance_matrices
             m = wm * im
             for fi in _draw_face_range(geo)
@@ -229,7 +241,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
                 a = mat4_transform_point(m, get_vertex(geo, i1))
                 b = mat4_transform_point(m, get_vertex(geo, i2))
                 c = mat4_transform_point(m, get_vertex(geo, i3))
-                t = ray_triangle_intersect(o, d, a, b, c; side=side)
+                t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
                 if t !== nothing && rc.near <= t <= rc.far
                     push!(hits, Intersection(t, o + d * t, obj, fi))
                 end
@@ -246,15 +258,15 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
             a = mat4_transform_point(wm, get_vertex(geo, i1))
             b = mat4_transform_point(wm, get_vertex(geo, i2))
             c = mat4_transform_point(wm, get_vertex(geo, i3))
-            t = ray_triangle_intersect(o, d, a, b, c; side=side)
+            t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
             end
         end
     elseif obj isa PointsObject
         wm = compute_world_matrix(obj)
-        geo = obj.geometry
-        morphed_positions = _object_morph_positions(obj, geo)
+        geo = _points_geometry(obj)
+        morphed_positions = _raycast_morph_positions(obj, geo)
         thr = rc.point_threshold
         @inbounds for entry in _draw_entry_range(geo)
             vi = _draw_vertex_index(geo, entry)
@@ -267,8 +279,8 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         end
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         wm = compute_world_matrix(obj)
-        geo = obj.geometry
-        morphed_positions = _object_morph_positions(obj, geo)
+        geo = _line_geometry(obj)
+        morphed_positions = _raycast_morph_positions(obj, geo)
         thr = rc.line_threshold
         # LineSegments: disjoint pairs. LineObject: consecutive vertices.
         # LineLoop closes the final vertex back to the first, matching three.js.
@@ -302,6 +314,19 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     return hits
 end
 
+function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
+                             obj::AbstractObject3D)
+    is_visible(obj) || return hits
+    layers_test(object_layers(obj), rc.layers) && _raycast_object!(hits, rc, obj)
+    for child in get_children(obj)
+        _raycast_recursive!(hits, rc, child)
+    end
+    return hits
+end
+
+_intersection_distance_lt(a::Intersection, b::Intersection) =
+    a.distance < b.distance
+
 """
     raycast(rc, root; recursive=true)
 
@@ -319,15 +344,12 @@ ancestor is not pickable.
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     hits = Intersection[]
     if recursive
-        traverse(root, obj -> begin
-            (_visible_in_tree(obj) && layers_test(object_layers(obj), rc.layers)) &&
-                _raycast_object!(hits, rc, obj)
-        end)
+        _visible_in_tree(root) && _raycast_recursive!(hits, rc, root)
     else
         if _visible_in_tree(root) && layers_test(object_layers(root), rc.layers)
             _raycast_object!(hits, rc, root)
         end
     end
-    sort!(hits, by = h -> h.distance)
+    sort!(hits; lt=_intersection_distance_lt)
     return hits
 end

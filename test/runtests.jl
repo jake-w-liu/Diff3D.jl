@@ -5451,6 +5451,18 @@ end
         cam.position = Vec3(0.0,0,5); cam.target = Vec3(0.0,0,0)
         set_from_camera!(rc, cam, 0.0, 0.0)
         @test !isempty(raycast(rc, scene))
+
+        ray_alloc_scene = Scene()
+        ray_alloc_geo = BoxGeometry(width_segments=8, height_segments=8,
+                                    depth_segments=8)
+        ray_alloc_box = Mesh(ray_alloc_geo, MeshBasicMaterial())
+        add!(ray_alloc_scene, ray_alloc_box)
+        ray_alloc_hit = Raycaster(Vec3(0.2, 0.2, 5.0), Vec3(0.0, 0.0, -1.0))
+        ray_alloc_miss = Raycaster(Vec3(5.0, 5.0, 5.0), Vec3(0.0, 0.0, -1.0))
+        raycast(ray_alloc_hit, ray_alloc_scene)
+        raycast(ray_alloc_miss, ray_alloc_scene)
+        @test_opt_alloc 1024 raycast(ray_alloc_hit, ray_alloc_scene)
+        @test_opt_alloc 1024 raycast(ray_alloc_miss, ray_alloc_scene)
     end
 
     @testset "Sprite billboard faces camera" begin
