@@ -3712,6 +3712,9 @@ end
                                             clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])];
                         title="A & <B>")
         html = read(f, String)
+        @test Diff3D._js_array([0.0, NaN, Inf, -Inf, 0.1]) ==
+              "[0,0,0,0,0.10000000000000001]"
+        @test Diff3D._js_index_array_zero_based(1:3) == "[0,1,2]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
         @test occursin("\"data\":[0,0,0,128]", Diff3D._web_texture_json(malformed_tex))
         sampler_tex = Texture(ones(Float64, 2, 2, 3);

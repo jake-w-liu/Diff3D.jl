@@ -70,7 +70,37 @@ _js_str(s::AbstractString) = "\"" * replace(s,
     "\\"=>"\\\\", "\""=>"\\\"", "\b"=>"\\b", "\f"=>"\\f", "\n"=>"\\n",
     "\r"=>"\\r", "\t"=>"\\t", "<"=>"\\u003c") * "\""
 _js_num(x::Real) = isfinite(Float64(x)) ? @sprintf("%.17g", Float64(x)) : "0"
-_js_array(xs) = "[" * join((_js_num(x) for x in xs), ",") * "]"
+function _js_write_num(io::IO, x::Real)
+    xf = Float64(x)
+    if isfinite(xf)
+        @printf(io, "%.17g", xf)
+    else
+        write(io, '0')
+    end
+    return nothing
+end
+function _js_array(xs)
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    for x in xs
+        first ? (first = false) : write(io, ',')
+        _js_write_num(io, x)
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    for index in indices
+        first ? (first = false) : write(io, ',')
+        _js_write_num(io, index - 1)
+    end
+    write(io, ']')
+    return String(take!(io))
+end
 _js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"
 _js_vec(v::Vec3) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "," * _js_num(v.z) * "]"
 _js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
@@ -877,7 +907,7 @@ function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=
     end
     colors = _web_color_data(geo, use_vertex_colors)
     line_distances = _web_line_distance_data(geo)
-    indices = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    indices = isempty(geo.indices) ? (1:geo.n_vertices) : geo.indices
     draw_start, draw_count = _web_draw_range_values(geo)
     return "\"positions\":" * _js_array(positions) *
            ",\"normals\":" * _js_array(normals) *
@@ -887,7 +917,7 @@ function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=
            ",\"uv2s\":" * _js_array(uv2s) *
            ",\"colors\":" * _js_array(colors) *
            ",\"lineDistances\":" * _js_array(line_distances) *
-           ",\"indices\":" * _js_array(indices .- 1) *
+           ",\"indices\":" * _js_index_array_zero_based(indices) *
            ",\"drawStart\":" * string(draw_start) *
            ",\"drawCount\":" * string(draw_count)
 end
