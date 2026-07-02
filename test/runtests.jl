@@ -3718,6 +3718,10 @@ end
         @test Diff3D._js_repeated_array(1.0, 3) == "[1,1,1]"
         @test Diff3D._js_repeated_pattern_array((1.0, 0.0, 0.0, 1.0), 2) ==
               "[1,0,0,1,1,0,0,1]"
+        @test Diff3D._js_skin_indices_array([(1, 2, 3, 4), (4, 3, 2, 1)]) ==
+              "[0,1,2,3,3,2,1,0]"
+        @test Diff3D._js_skin_weights_array([(1.0, 0.0, 0.5, 0.25)]) ==
+              "[1,0,0.5,0.25]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
         @test occursin("\"data\":[0,0,0,128]", Diff3D._web_texture_json(malformed_tex))
         sampler_tex = Texture(ones(Float64, 2, 2, 3);

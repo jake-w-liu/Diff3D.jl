@@ -141,6 +141,32 @@ function _js_attribute_components_array(data::AbstractVector, stride::Int,
     write(io, ']')
     return String(take!(io))
 end
+function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    @inbounds for idx in indices
+        for k in 1:4
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, idx[k] - 1)
+        end
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    @inbounds for w in weights
+        for k in 1:4
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, w[k])
+        end
+    end
+    write(io, ']')
+    return String(take!(io))
+end
 _js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"
 _js_vec(v::Vec3) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "," * _js_num(v.z) * "]"
 _js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
@@ -863,14 +889,6 @@ function _web_skin_json(obj, geo::BufferGeometry)
     obj isa SkinnedMesh || return "\"skin\":null"
     length(obj.skin_indices) == geo.n_vertices || error("skinned mesh skin_indices length must match vertex count")
     length(obj.skin_weights) == geo.n_vertices || error("skinned mesh skin_weights length must match vertex count")
-    indices = Int[]
-    weights = Float64[]
-    sizehint!(indices, 4 * geo.n_vertices)
-    sizehint!(weights, 4 * geo.n_vertices)
-    for vi in 1:geo.n_vertices
-        append!(indices, obj.skin_indices[vi] .- 1)
-        append!(weights, obj.skin_weights[vi])
-    end
     bones = String[]
     bind_inverses = String[]
     for (i, bone) in enumerate(obj.skeleton.bones)
@@ -896,8 +914,8 @@ function _web_skin_json(obj, geo::BufferGeometry)
            ",\"bindMode\":" * _js_str(String(obj.bind_mode)) *
            ",\"bindMatrix\":" * _js_mat(obj.bind_matrix) *
            ",\"bindMatrixInverse\":" * _js_mat(_skinned_bind_matrix_inverse(obj)) *
-           ",\"skin\":{\"indices\":" * _js_array(indices) *
-           ",\"weights\":" * _js_array(weights) *
+           ",\"skin\":{\"indices\":" * _js_skin_indices_array(obj.skin_indices) *
+           ",\"weights\":" * _js_skin_weights_array(obj.skin_weights) *
            ",\"bones\":[" * join(bones, ",") * "]" *
            ",\"bindInverses\":[" * join(bind_inverses, ",") * "]}"
 end
