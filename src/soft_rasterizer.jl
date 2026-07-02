@@ -443,32 +443,46 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     meshes = collect_meshes(scene)
     lights = collect_lights(scene)
 
-    all_verts = Vec3{Float64}[]
-    all_faces = NTuple{3,Int}[]
-    all_colors = Color3{Float64}[]
+    total_vertices = 0
+    total_faces = 0
+    max_mesh_faces = 0
+    for mesh in meshes
+        geo = _mesh_geometry(mesh)
+        total_vertices += geo.n_vertices
+        total_faces += geo.n_faces
+        max_mesh_faces = max(max_mesh_faces, geo.n_faces)
+    end
+
+    all_verts = Vector{Vec3{Float64}}(undef, total_vertices)
+    all_faces = Vector{NTuple{3,Int}}(undef, total_faces)
+    all_colors = Vector{Color3{Float64}}(undef, total_faces)
+    face_colors = Vector{Color3{Float64}}(undef, max_mesh_faces)
     vert_offset = 0
+    face_offset = 0
 
     for mesh in meshes
-        !is_visible(mesh) && continue
         world_mat = compute_world_matrix(mesh)
-        geo = mesh.geometry
+        geo = _mesh_geometry(mesh)
 
         # Transform vertices to world space
         for vi in 1:geo.n_vertices
             v = get_vertex(geo, vi)
             wv = mat4_transform_point(world_mat, v)
-            push!(all_verts, wv)
+            all_verts[vert_offset + vi] = wv
         end
 
         # Compute face colors
-        face_colors = shade_mesh_faces(geo, world_mat, mesh.material, lights, camera.position)
+        shade_mesh_faces!(face_colors, geo, world_mat, _mesh_material(mesh),
+                          lights, camera.position)
 
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
-            push!(all_faces, (i1 + vert_offset, i2 + vert_offset, i3 + vert_offset))
-            push!(all_colors, face_colors[fi])
+            out_fi = face_offset + fi
+            all_faces[out_fi] = (i1 + vert_offset, i2 + vert_offset, i3 + vert_offset)
+            all_colors[out_fi] = face_colors[fi]
         end
         vert_offset += geo.n_vertices
+        face_offset += geo.n_faces
     end
 
     soft_render(all_verts, all_faces, all_colors, vp, width, height, config)

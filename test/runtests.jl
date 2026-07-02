@@ -2586,6 +2586,22 @@ end
         soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(), 16, 16, config)
         @test_opt_alloc 85000 soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(),
                                           16, 16, config)
+
+        soft_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(soft_scene, AmbientLight(intensity=0.2))
+        for i in 1:12
+            mesh = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                        MeshLambertMaterial(color=Color3(0.8, 0.2, 0.1)))
+            mesh.position = Vec3((i % 6) * 1.3, (i ÷ 6) * 1.3, 0.0)
+            add!(soft_scene, mesh)
+        end
+        soft_scene_cam = PerspectiveCamera(aspect=1.0)
+        soft_scene_cam.position = Vec3(4.0, 4.0, 16.0)
+        soft_scene_cam.target = Vec3(3.0, 1.0, 0.0)
+        soft_scene_img = soft_render_scene(soft_scene, soft_scene_cam, 12, 12)
+        @test size(soft_scene_img) == (12, 12, 3)
+        @test all(isfinite, soft_scene_img)
+        @test_opt_alloc 65536 soft_render_scene(soft_scene, soft_scene_cam, 12, 12)
     end
 
     @testset "Loss functions" begin
