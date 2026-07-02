@@ -6138,6 +6138,9 @@ end
         # Flat quad: 4 boundary edges (edges) vs 5 triangle edges (wireframe).
         @test edges_geometry(PlaneGeometry()).n_vertices ÷ 2 == 4
         @test wireframe_geometry(PlaneGeometry()).n_vertices ÷ 2 == 5
+        segmented_plane_for_edges = PlaneGeometry(width_segments=64, height_segments=64)
+        @test edges_geometry(segmented_plane_for_edges).n_vertices ÷ 2 == 256
+        @test_opt_alloc 5450000 edges_geometry(segmented_plane_for_edges)
     end
 
     @testset "MeshToonMaterial — banded diffuse" begin

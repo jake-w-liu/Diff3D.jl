@@ -1538,7 +1538,11 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         _record_edge_face!(edge_faces, c2, c3, n)
         _record_edge_face!(edge_faces, c3, c1, n)
     end
-    positions = Vector{Float64}(undef, 6 * length(edge_faces))
+    feature_edges = 0
+    @inbounds for (_, (n1, n2, count)) in edge_faces
+        (count == 1 || dot(n1, n2) < cosT) && (feature_edges += 1)
+    end
+    positions = Vector{Float64}(undef, 6 * feature_edges)
     vi = 0
     pout = 1
     @inbounds for (key, (n1, n2, count)) in edge_faces
@@ -1555,6 +1559,5 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         vi += 2
         pout += 6
     end
-    resize!(positions, pout - 1)
     BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
