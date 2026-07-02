@@ -243,6 +243,18 @@ end
     return idx
 end
 
+function _line_distance_output!(geo::BufferGeometry)
+    attr = get(geo.attributes, :lineDistance, nothing)
+    if attr isa BufferAttribute{Float64} && attr.item_size == 1 &&
+       length(attr.data) == geo.n_vertices
+        fill!(attr.data, 0.0)
+        return attr.data
+    end
+    distances = zeros(Float64, geo.n_vertices)
+    geo.attributes[:lineDistance] = BufferAttribute(distances, 1)
+    return distances
+end
+
 """
     compute_line_distances!(geo; mode=:line_strip)
 
@@ -257,10 +269,12 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
         throw(ArgumentError("geometry positions length must equal 3 * n_vertices"))
 
     if isempty(geo.indices)
-        draw_distances = zeros(Float64, geo.n_vertices)
         if mode === :lines
             iseven(geo.n_vertices) ||
                 throw(ArgumentError("LineSegments distance computation requires an even vertex count"))
+        end
+        draw_distances = _line_distance_output!(geo)
+        if mode === :lines
             i = 1
             while i <= geo.n_vertices
                 draw_distances[i] = 0.0
@@ -276,7 +290,6 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
                 draw_distances[i] = total
             end
         end
-        set_attribute!(geo, :lineDistance, draw_distances, 1)
         return geo
     end
 

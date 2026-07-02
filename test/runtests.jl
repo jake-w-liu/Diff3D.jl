@@ -2469,8 +2469,10 @@ end
         unindexed_alloc = line_distance_test_geo(100)
         indexed_alloc = line_distance_test_geo(100; indexed=true)
         compute_line_distances!(unindexed_alloc; mode=:line_strip)
+        unindexed_attr = get_attribute(unindexed_alloc, :lineDistance)
         compute_line_distances!(indexed_alloc; mode=:line_strip)
-        @test_opt_alloc 2048 compute_line_distances!(unindexed_alloc; mode=:line_strip)
+        @test_opt_alloc 256 compute_line_distances!(unindexed_alloc; mode=:line_strip)
+        @test get_attribute(unindexed_alloc, :lineDistance) === unindexed_attr
         @test_opt_alloc 2048 compute_line_distances!(indexed_alloc; mode=:line_strip)
     end
 
