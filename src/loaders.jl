@@ -13,7 +13,12 @@ normals (smooth normals).  Overwrites `geo.normals`.
 function compute_vertex_normals!(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "compute_vertex_normals!")
     nv = geo.n_vertices
-    acc = zeros(Float64, nv * 3)
+    acc = if length(geo.normals) == nv * 3 &&
+             geo.normals !== geo.positions && geo.normals !== geo.uvs
+        fill!(geo.normals, 0.0)
+    else
+        zeros(Float64, nv * 3)
+    end
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)

@@ -5167,6 +5167,19 @@ end
         meandot = sum(dot(get_normal(geo, vi), normalize(get_vertex(geo, vi)))
                       for vi in 1:geo.n_vertices) / geo.n_vertices
         @test meandot > 0.95
+
+        previous_normals = geo.normals
+        compute_vertex_normals!(geo)
+        @test geo.normals === previous_normals
+        @test_opt_alloc 64 compute_vertex_normals!(geo)
+
+        aliased = BufferGeometry([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                                 Float64[], Float64[], [1, 2, 3], 3, 1)
+        aliased.normals = aliased.positions
+        original_positions = copy(aliased.positions)
+        compute_vertex_normals!(aliased)
+        @test aliased.positions == original_positions
+        @test aliased.normals !== aliased.positions
     end
 
     @testset "STL binary round-trip" begin
