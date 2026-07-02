@@ -101,6 +101,46 @@ function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
     write(io, ']')
     return String(take!(io))
 end
+function _js_repeated_array(value::Real, n::Integer)
+    lit = _js_num(value)
+    io = IOBuffer()
+    write(io, '[')
+    for i in 1:n
+        i == 1 || write(io, ',')
+        write(io, lit)
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) where {N}
+    lits = ntuple(i -> _js_num(pattern[i]), Val(N))
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    for _ in 1:count
+        for lit in lits
+            first ? (first = false) : write(io, ',')
+            write(io, lit)
+        end
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_attribute_components_array(data::AbstractVector, stride::Int,
+                                        components::Int, n_items::Int)
+    io = IOBuffer()
+    write(io, '[')
+    first = true
+    @inbounds for i in 1:n_items
+        base = (i - 1) * stride
+        for j in 1:components
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, data[base + j])
+        end
+    end
+    write(io, ']')
+    return String(take!(io))
+end
 _js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"
 _js_vec(v::Vec3) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "," * _js_num(v.z) * "]"
 _js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
@@ -769,15 +809,13 @@ function _web_positions(obj, geo::BufferGeometry)
     return geo.positions
 end
 
-function _web_tangent_data(geo::BufferGeometry)
-    fallback = [j == 1 || j == 4 ? 1.0 : 0.0 for _ in 1:geo.n_vertices for j in 1:4]
-    has_attribute(geo, :tangent) || return false, fallback
+function _web_tangent_json(geo::BufferGeometry)
+    has_attribute(geo, :tangent) ||
+        return false, _js_repeated_pattern_array((1.0, 0.0, 0.0, 1.0), geo.n_vertices)
     attr = get_attribute(geo, :tangent)
     attr.item_size >= 4 && length(attr.data) >= attr.item_size * geo.n_vertices ||
-        return false, fallback
-    tangents = [Float64(attr.data[(i - 1) * attr.item_size + j])
-                for i in 1:geo.n_vertices for j in 1:4]
-    return true, tangents
+        return false, _js_repeated_pattern_array((1.0, 0.0, 0.0, 1.0), geo.n_vertices)
+    return true, _js_attribute_components_array(attr.data, attr.item_size, 4, geo.n_vertices)
 end
 
 function _web_morph_vec3_targets(geo::BufferGeometry, prefix::String)
@@ -867,24 +905,24 @@ end
 _web_material_vertex_colors(mat) =
     hasproperty(mat, :vertex_colors) && Bool(getproperty(mat, :vertex_colors))
 
-function _web_color_data(geo::BufferGeometry, use_vertex_colors::Bool)
+function _web_color_json(geo::BufferGeometry, use_vertex_colors::Bool)
     if use_vertex_colors && has_attribute(geo, :color)
         attr = get_attribute(geo, :color)
         if attr.item_size >= 3 && length(attr.data) >= attr.item_size * geo.n_vertices
-            return [attr.data[(i - 1) * attr.item_size + j] for i in 1:geo.n_vertices for j in 1:3]
+            return _js_attribute_components_array(attr.data, attr.item_size, 3, geo.n_vertices)
         end
     end
-    return ones(Float64, 3 * geo.n_vertices)
+    return _js_repeated_array(1.0, 3 * geo.n_vertices)
 end
 
-function _web_line_distance_data(geo::BufferGeometry)
+function _web_line_distance_json(geo::BufferGeometry)
     if has_attribute(geo, :lineDistance)
         attr = get_attribute(geo, :lineDistance)
         if attr.item_size >= 1 && length(attr.data) >= attr.item_size * geo.n_vertices
-            return [Float64(attr.data[(i - 1) * attr.item_size + 1]) for i in 1:geo.n_vertices]
+            return _js_attribute_components_array(attr.data, attr.item_size, 1, geo.n_vertices)
         end
     end
-    return zeros(Float64, geo.n_vertices)
+    return _js_repeated_array(0.0, geo.n_vertices)
 end
 
 function _web_draw_range_values(geo::BufferGeometry)
@@ -895,28 +933,30 @@ end
 
 function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
                          use_vertex_colors::Bool=true)
-    normals = length(geo.normals) == length(geo.positions) ? geo.normals : zeros(Float64, length(geo.positions))
-    has_tangents, tangents = _web_tangent_data(geo)
-    uvs = length(geo.uvs) == 2 * geo.n_vertices ? geo.uvs : zeros(Float64, 2 * geo.n_vertices)
-    uv2s = if has_attribute(geo, :uv2)
+    normals_json = length(geo.normals) == length(geo.positions) ?
+                   _js_array(geo.normals) : _js_repeated_array(0.0, length(geo.positions))
+    has_tangents, tangents_json = _web_tangent_json(geo)
+    uvs_json = length(geo.uvs) == 2 * geo.n_vertices ?
+               _js_array(geo.uvs) : _js_repeated_array(0.0, 2 * geo.n_vertices)
+    uv2s_json = if has_attribute(geo, :uv2)
         attr = get_attribute(geo, :uv2)
         attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices ?
-            [attr.data[(i-1)*attr.item_size + j] for i in 1:geo.n_vertices for j in 1:2] : uvs
+            _js_attribute_components_array(attr.data, attr.item_size, 2, geo.n_vertices) : uvs_json
     else
-        uvs
+        uvs_json
     end
-    colors = _web_color_data(geo, use_vertex_colors)
-    line_distances = _web_line_distance_data(geo)
+    colors_json = _web_color_json(geo, use_vertex_colors)
+    line_distances_json = _web_line_distance_json(geo)
     indices = isempty(geo.indices) ? (1:geo.n_vertices) : geo.indices
     draw_start, draw_count = _web_draw_range_values(geo)
     return "\"positions\":" * _js_array(positions) *
-           ",\"normals\":" * _js_array(normals) *
-           ",\"tangents\":" * _js_array(tangents) *
+           ",\"normals\":" * normals_json *
+           ",\"tangents\":" * tangents_json *
            ",\"hasTangents\":" * (has_tangents ? "true" : "false") *
-           ",\"uvs\":" * _js_array(uvs) *
-           ",\"uv2s\":" * _js_array(uv2s) *
-           ",\"colors\":" * _js_array(colors) *
-           ",\"lineDistances\":" * _js_array(line_distances) *
+           ",\"uvs\":" * uvs_json *
+           ",\"uv2s\":" * uv2s_json *
+           ",\"colors\":" * colors_json *
+           ",\"lineDistances\":" * line_distances_json *
            ",\"indices\":" * _js_index_array_zero_based(indices) *
            ",\"drawStart\":" * string(draw_start) *
            ",\"drawCount\":" * string(draw_count)
