@@ -2352,6 +2352,18 @@ end
         @test length(meshes) == 1
         @test meshes[1] === mesh
 
+        mesh_collect_scene = Scene()
+        for _ in 1:64
+            add!(mesh_collect_scene, Mesh(geo, mat))
+        end
+        hidden_mesh_group = Group()
+        hidden_mesh_group.visible = false
+        add!(hidden_mesh_group, Mesh(geo, mat))
+        add!(mesh_collect_scene, hidden_mesh_group)
+        mesh_collection = collect_meshes(mesh_collect_scene)
+        @test length(mesh_collection) == 64
+        @test_opt_alloc 2048 collect_meshes(mesh_collect_scene)
+
         instanced_scene = Scene()
         for _ in 1:64
             add!(instanced_scene, InstancedMesh(geo, mat, 1))

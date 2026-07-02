@@ -346,6 +346,27 @@ end
 
 # Visibility-aware traversal: invisible nodes are skipped along with their
 # entire subtree, matching three.js hierarchical visibility semantics.
+function _count_meshes(obj::AbstractObject3D)
+    is_visible(obj) || return 0
+    n = obj isa Mesh ? 1 : 0
+    @inbounds for child in get_children(obj)
+        n += _count_meshes(child)
+    end
+    return n
+end
+
+function _fill_meshes!(meshes::Vector{Mesh}, obj::AbstractObject3D, i::Int)
+    is_visible(obj) || return i
+    if obj isa Mesh
+        meshes[i] = obj
+        i += 1
+    end
+    @inbounds for child in get_children(obj)
+        i = _fill_meshes!(meshes, child, i)
+    end
+    return i
+end
+
 function _collect_meshes!(meshes::Vector{Mesh}, obj::AbstractObject3D)
     is_visible(obj) || return nothing
     obj isa Mesh && push!(meshes, obj)
@@ -356,7 +377,7 @@ function _collect_meshes!(meshes::Vector{Mesh}, obj::AbstractObject3D)
 end
 
 function collect_meshes(scene::AbstractObject3D)
-    meshes = Mesh[]
-    _collect_meshes!(meshes, scene)
+    meshes = Vector{Mesh}(undef, _count_meshes(scene))
+    _fill_meshes!(meshes, scene, 1)
     return meshes
 end
