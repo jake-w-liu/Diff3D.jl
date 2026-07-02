@@ -129,9 +129,28 @@ _instanced_line_drawable(o::InstancedMesh) =
     o.draw_mode === :lines || o.draw_mode === :line_loop || o.draw_mode === :line_strip
 
 """Collect every `InstancedMesh` under `root` (used by the rasterizer)."""
+function _count_instanced(root::AbstractObject3D)
+    n = root isa InstancedMesh ? 1 : 0
+    @inbounds for child in get_children(root)
+        n += _count_instanced(child)
+    end
+    return n
+end
+
+function _fill_instanced!(out::Vector{InstancedMesh}, root::AbstractObject3D, i::Int)
+    if root isa InstancedMesh
+        out[i] = root
+        i += 1
+    end
+    @inbounds for child in get_children(root)
+        i = _fill_instanced!(out, child, i)
+    end
+    return i
+end
+
 function collect_instanced(root::AbstractObject3D)
-    out = InstancedMesh[]
-    traverse(root, o -> o isa InstancedMesh && push!(out, o))
+    out = Vector{InstancedMesh}(undef, _count_instanced(root))
+    _fill_instanced!(out, root, 1)
     return out
 end
 

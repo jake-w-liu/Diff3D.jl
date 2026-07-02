@@ -2352,6 +2352,20 @@ end
         @test length(meshes) == 1
         @test meshes[1] === mesh
 
+        instanced_scene = Scene()
+        for _ in 1:64
+            add!(instanced_scene, InstancedMesh(geo, mat, 1))
+        end
+        hidden_instanced = Group()
+        hidden_instanced.visible = false
+        hidden_mesh = InstancedMesh(geo, mat, 1)
+        add!(hidden_instanced, hidden_mesh)
+        add!(instanced_scene, hidden_instanced)
+        instanced = collect_instanced(instanced_scene)
+        @test length(instanced) == 65
+        @test instanced[end] === hidden_mesh
+        @test_opt_alloc 2048 collect_instanced(instanced_scene)
+
         parent = Group()
         parent.position = Vec3(1.0, 2.0, 3.0)
         child = Mesh(BoxGeometry(), MeshBasicMaterial())
