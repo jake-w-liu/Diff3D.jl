@@ -2531,6 +2531,16 @@ function _web_light_caps(cases::AbstractVector{WebGLExportCase})
             hemi=max(1, max_hemi), rect=max(1, max_rect))
 end
 
+function _web_write_data_json(io::IO, cases::AbstractVector{WebGLExportCase})
+    write(io, "{\"cases\":[")
+    for (i, case) in enumerate(cases)
+        i == 1 || write(io, ',')
+        write(io, _web_case_json(case))
+    end
+    write(io, "]}")
+    return nothing
+end
+
 function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4))
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
@@ -3449,10 +3459,24 @@ Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase")
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
-    data = "{\"cases\":[" * join((_web_case_json(c) for c in cases), ",") * "]}"
     light_caps = _web_light_caps(cases)
+    data_marker = "__DIFF3D_DATA_JSON__"
+    data_statement = "  const DATA = $data_marker;"
+    html = _webgl_html(data_marker, title; light_caps)
+    marker = findfirst(data_statement, html)
+    marker === nothing && error("WebGL HTML data insertion marker missing")
     open(path, "w") do io
-        write(io, _webgl_html(data, title; light_caps))
+        marker_start = first(marker)
+        marker_stop = last(marker)
+        if marker_start > firstindex(html)
+            write(io, html[firstindex(html):prevind(html, marker_start)])
+        end
+        write(io, "  const DATA = ")
+        _web_write_data_json(io, cases)
+        write(io, ';')
+        if marker_stop < lastindex(html)
+            write(io, html[nextind(html, marker_stop):lastindex(html)])
+        end
     end
     return path
 end

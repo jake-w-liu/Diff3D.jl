@@ -3705,13 +3705,33 @@ end
         @test occursin("\"lodDistance\":10", lod_near_drawables)
         @test occursin("\"lodHysteresis\":0.25", lod_near_drawables)
         f = tempname() * ".html"
-        save_webgl_html(f, [WebGLExportCase("case", "Case", "Generated from </script><script>alert(1)</script>", scene;
-                                            target=Vec3(0.0,0.0,0.0), animations=[clip],
-                                            tone_mapping=:aces, tone_exposure=1.35,
-                                            output_color_space=:srgb,
-                                            clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])];
-                        title="A & <B>")
+        web_case = WebGLExportCase("case", "Case", "Generated from </script><script>alert(1)</script>", scene;
+                                   target=Vec3(0.0,0.0,0.0), animations=[clip],
+                                   tone_mapping=:aces, tone_exposure=1.35,
+                                   output_color_space=:srgb,
+                                   clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])
+        save_webgl_html(f, [web_case]; title="A & <B>")
         html = read(f, String)
+        data_io = IOBuffer()
+        Diff3D._web_write_data_json(data_io, [web_case])
+        expected_html = Diff3D._webgl_html(String(take!(data_io)), "A & <B>";
+                                           light_caps=Diff3D._web_light_caps([web_case]))
+        @test html == expected_html
+        if DIFF3D_ALLOC_ASSERTIONS_ENABLED
+            save_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+            for i in 1:2
+                add!(save_alloc_scene,
+                     Mesh(SphereGeometry(radius=1.0, width_segments=16, height_segments=8),
+                          MeshBasicMaterial(); name="save_alloc_$i"))
+            end
+            save_alloc_case = WebGLExportCase("save_alloc", "Save Alloc", "streamed",
+                                             save_alloc_scene; radius=4.0)
+            save_alloc_file = tempname() * ".html"
+            save_webgl_html(save_alloc_file, [save_alloc_case]; title="Save Alloc")
+            @test_opt_alloc 1250000 save_webgl_html(save_alloc_file, [save_alloc_case];
+                                                    title="Save Alloc")
+            rm(save_alloc_file; force=true)
+        end
         @test Diff3D._js_array([0.0, NaN, Inf, -Inf, 0.1]) ==
               "[0,0,0,0,0.10000000000000001]"
         @test Diff3D._js_index_array_zero_based(1:3) == "[0,1,2]"
