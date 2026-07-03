@@ -2709,9 +2709,7 @@ function _web_clip_json_sizehint(clip::AnimationClip)
     return sizehint
 end
 
-function _web_clip_json(clip::AnimationClip)
-    io = IOBuffer(sizehint=_web_clip_json_sizehint(clip))
-    num_buf = _web_num_buffer()
+function _web_write_clip_json(io::IO, clip::AnimationClip, num_buf::Vector{UInt8})
     write(io, "{\"name\":")
     _js_write_str(io, clip.name)
     write(io, ",\"duration\":")
@@ -2730,10 +2728,32 @@ function _web_clip_json(clip::AnimationClip)
         _web_write_track_json(io, track, num_buf)
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_write_clip_json(io::IO, clip::AnimationClip)
+    return _web_write_clip_json(io, clip, _web_num_buffer())
+end
+
+function _web_clip_json(clip::AnimationClip)
+    io = IOBuffer(sizehint=_web_clip_json_sizehint(clip))
+    _web_write_clip_json(io, clip)
     return String(take!(io))
 end
 
-function _web_case_json(case::WebGLExportCase)
+function _web_case_json_sizehint(lights_json::AbstractString,
+                                 nodes::AbstractVector{<:AbstractString},
+                                 objects::AbstractVector{<:AbstractString},
+                                 animations::AbstractVector{AnimationClip})
+    sizehint = length(lights_json) + sum(length, nodes; init=0) +
+               sum(length, objects; init=0) + 1024
+    for clip in animations
+        sizehint = _web_sizehint_add(sizehint, _web_clip_json_sizehint(clip))
+    end
+    return sizehint
+end
+
+function _web_collect_case_json_parts(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
     stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
     dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
@@ -2745,44 +2765,48 @@ function _web_case_json(case::WebGLExportCase)
                                    clipping_planes=case.clipping_planes)
     nodes = _web_collect_transform_nodes(case.scene, animation_target_ids)
     objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius)
-    clips = [_web_clip_json(clip) for clip in case.animations]
-    sizehint = length(lights_json) + sum(length, nodes; init=0) +
-               sum(length, objects; init=0) + sum(length, clips; init=0) + 1024
-    io = IOBuffer(sizehint=sizehint)
+    return lights_json, nodes, objects
+end
+
+function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
+                                    lights_json::AbstractString,
+                                    nodes::AbstractVector{<:AbstractString},
+                                    objects::AbstractVector{<:AbstractString},
+                                    num_buf::Vector{UInt8})
     write(io, "{\"id\":")
-    write(io, _js_str(case.id))
+    _js_write_str(io, case.id)
     write(io, ",\"title\":")
-    write(io, _js_str(case.title))
+    _js_write_str(io, case.title)
     write(io, ",\"subtitle\":")
-    write(io, _js_str(case.subtitle))
+    _js_write_str(io, case.subtitle)
     write(io, ",\"background\":")
-    write(io, _js_color(case.scene.background))
+    _js_write_color(io, case.scene.background, num_buf)
     write(io, ",\"fog\":")
     write(io, _web_fog_json(case.scene.fog))
     write(io, ",\"target\":")
-    write(io, _js_vec(case.target))
+    _js_write_vec(io, case.target, num_buf)
     write(io, ",\"radius\":")
-    write(io, _js_num(case.radius))
+    _js_write_num(io, case.radius, num_buf)
     write(io, ",\"height\":")
-    write(io, _js_num(case.height))
+    _js_write_num(io, case.height, num_buf)
     write(io, ",\"fov\":")
-    write(io, _js_num(case.fov))
+    _js_write_num(io, case.fov, num_buf)
     write(io, ",\"camera\":")
     write(io, _web_camera_json(case.camera))
     write(io, ",\"toneMapping\":")
-    write(io, _js_str(String(case.tone_mapping)))
+    _js_write_str(io, String(case.tone_mapping))
     write(io, ",\"toneMappingMode\":")
-    write(io, string(_web_tone_mapping_id(case.tone_mapping)))
+    print(io, _web_tone_mapping_id(case.tone_mapping))
     write(io, ",\"toneExposure\":")
-    write(io, _js_num(case.tone_exposure))
+    _js_write_num(io, case.tone_exposure, num_buf)
     write(io, ",\"outputColorSpace\":")
-    write(io, _js_str(String(case.output_color_space)))
+    _js_write_str(io, String(case.output_color_space))
     write(io, ",\"outputColorSpaceMode\":")
-    write(io, string(_web_output_color_space_id(case.output_color_space)))
+    print(io, _web_output_color_space_id(case.output_color_space))
     write(io, ",\"clippingPlanes\":[")
     for (i, plane) in enumerate(case.clipping_planes)
         i == 1 || write(io, ',')
-        write(io, _js_plane(plane))
+        _js_write_plane(io, plane, num_buf)
     end
     write(io, "],\"lights\":")
     write(io, lights_json)
@@ -2797,12 +2821,26 @@ function _web_case_json(case::WebGLExportCase)
         write(io, obj)
     end
     write(io, "],\"animations\":[")
-    for (i, clip) in enumerate(clips)
+    for (i, clip) in enumerate(case.animations)
         i == 1 || write(io, ',')
-        write(io, clip)
+        _web_write_clip_json(io, clip, num_buf)
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_case_json(case::WebGLExportCase)
+    lights_json, nodes, objects = _web_collect_case_json_parts(case)
+    io = IOBuffer(sizehint=_web_case_json_sizehint(lights_json, nodes, objects,
+                                                   case.animations))
+    _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
     return String(take!(io))
+end
+
+function _web_write_case_json(io::IO, case::WebGLExportCase)
+    lights_json, nodes, objects = _web_collect_case_json_parts(case)
+    _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
+    return nothing
 end
 
 function _web_light_caps(cases::AbstractVector{WebGLExportCase})
@@ -2839,7 +2877,7 @@ function _web_write_data_json(io::IO, cases::AbstractVector{WebGLExportCase})
     write(io, "{\"cases\":[")
     for (i, case) in enumerate(cases)
         i == 1 || write(io, ',')
-        write(io, _web_case_json(case))
+        _web_write_case_json(io, case)
     end
     write(io, "]}")
     return nothing
