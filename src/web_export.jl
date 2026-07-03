@@ -182,17 +182,31 @@ function _js_array(xs)
     _js_write_array(io, xs)
     return String(take!(io))
 end
-function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
-    io = IOBuffer(sizehint=_web_num_array_sizehint(length(indices)))
+function _js_write_index_array_zero_based(io::IO, indices::AbstractVector{<:Integer},
+                                          num_buf::Vector{UInt8})
     write(io, '[')
     first = true
-    num_buf = _web_num_buffer()
     for index in indices
         first ? (first = false) : write(io, ',')
         _js_write_num(io, index - 1, num_buf)
     end
     write(io, ']')
+    return nothing
+end
+function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
+    io = IOBuffer(sizehint=_web_num_array_sizehint(length(indices)))
+    _js_write_index_array_zero_based(io, indices, _web_num_buffer())
     return String(take!(io))
+end
+function _js_write_repeated_array(io::IO, value::Real, n::Integer,
+                                  num_buf::Vector{UInt8})
+    write(io, '[')
+    for i in 1:n
+        i == 1 || write(io, ',')
+        _js_write_num(io, value, num_buf)
+    end
+    write(io, ']')
+    return nothing
 end
 function _js_repeated_array(value::Real, n::Integer)
     lit = _js_num(value)
@@ -204,6 +218,19 @@ function _js_repeated_array(value::Real, n::Integer)
     end
     write(io, ']')
     return String(take!(io))
+end
+function _js_write_repeated_pattern_array(io::IO, pattern::NTuple{N,<:Real},
+                                          count::Integer, num_buf::Vector{UInt8}) where {N}
+    write(io, '[')
+    first = true
+    for _ in 1:count
+        for value in pattern
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, value, num_buf)
+        end
+    end
+    write(io, ']')
+    return nothing
 end
 function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) where {N}
     lits = ntuple(i -> _js_num(pattern[i]), Val(N))
@@ -1270,13 +1297,23 @@ function _web_positions(obj, geo::BufferGeometry)
     return geo.positions
 end
 
+function _web_write_tangent_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
+    if has_attribute(geo, :tangent)
+        attr = get_attribute(geo, :tangent)
+        if attr.item_size >= 4 && length(attr.data) >= attr.item_size * geo.n_vertices
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 4,
+                                                 geo.n_vertices)
+            return true
+        end
+    end
+    _js_write_repeated_pattern_array(io, (1.0, 0.0, 0.0, 1.0), geo.n_vertices, num_buf)
+    return false
+end
+
 function _web_tangent_json(geo::BufferGeometry)
-    has_attribute(geo, :tangent) ||
-        return false, _js_repeated_pattern_array((1.0, 0.0, 0.0, 1.0), geo.n_vertices)
-    attr = get_attribute(geo, :tangent)
-    attr.item_size >= 4 && length(attr.data) >= attr.item_size * geo.n_vertices ||
-        return false, _js_repeated_pattern_array((1.0, 0.0, 0.0, 1.0), geo.n_vertices)
-    return true, _js_attribute_components_array(attr.data, attr.item_size, 4, geo.n_vertices)
+    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * geo.n_vertices))
+    has_tangents = _web_write_tangent_json(io, geo, _web_num_buffer())
+    return has_tangents, String(take!(io))
 end
 
 function _web_morph_position_target_count(geo::BufferGeometry)
@@ -1438,24 +1475,43 @@ end
 _web_material_vertex_colors(mat) =
     hasproperty(mat, :vertex_colors) && Bool(getproperty(mat, :vertex_colors))
 
-function _web_color_json(geo::BufferGeometry, use_vertex_colors::Bool)
+function _web_write_color_json(io::IO, geo::BufferGeometry, use_vertex_colors::Bool,
+                               num_buf::Vector{UInt8})
     if use_vertex_colors && has_attribute(geo, :color)
         attr = get_attribute(geo, :color)
         if attr.item_size >= 3 && length(attr.data) >= attr.item_size * geo.n_vertices
-            return _js_attribute_components_array(attr.data, attr.item_size, 3, geo.n_vertices)
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                                 geo.n_vertices)
+            return nothing
         end
     end
-    return _js_repeated_array(1.0, 3 * geo.n_vertices)
+    _js_write_repeated_array(io, 1.0, 3 * geo.n_vertices, num_buf)
+    return nothing
 end
 
-function _web_line_distance_json(geo::BufferGeometry)
+function _web_color_json(geo::BufferGeometry, use_vertex_colors::Bool)
+    io = IOBuffer(sizehint=_web_num_array_sizehint(3 * geo.n_vertices))
+    _web_write_color_json(io, geo, use_vertex_colors, _web_num_buffer())
+    return String(take!(io))
+end
+
+function _web_write_line_distance_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
     if has_attribute(geo, :lineDistance)
         attr = get_attribute(geo, :lineDistance)
         if attr.item_size >= 1 && length(attr.data) >= attr.item_size * geo.n_vertices
-            return _js_attribute_components_array(attr.data, attr.item_size, 1, geo.n_vertices)
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 1,
+                                                 geo.n_vertices)
+            return nothing
         end
     end
-    return _js_repeated_array(0.0, geo.n_vertices)
+    _js_write_repeated_array(io, 0.0, geo.n_vertices, num_buf)
+    return nothing
+end
+
+function _web_line_distance_json(geo::BufferGeometry)
+    io = IOBuffer(sizehint=_web_num_array_sizehint(geo.n_vertices))
+    _web_write_line_distance_json(io, geo, _web_num_buffer())
+    return String(take!(io))
 end
 
 function _web_draw_range_values(geo::BufferGeometry)
@@ -1464,35 +1520,80 @@ function _web_draw_range_values(geo::BufferGeometry)
     return (clamp(first(entries) - 1, 0, total), length(entries))
 end
 
-function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
-                         use_vertex_colors::Bool=true)
-    normals_json = length(geo.normals) == length(geo.positions) ?
-                   _js_array(geo.normals) : _js_repeated_array(0.0, length(geo.positions))
-    has_tangents, tangents_json = _web_tangent_json(geo)
-    uvs_json = length(geo.uvs) == 2 * geo.n_vertices ?
-               _js_array(geo.uvs) : _js_repeated_array(0.0, 2 * geo.n_vertices)
-    uv2s_json = if has_attribute(geo, :uv2)
-        attr = get_attribute(geo, :uv2)
-        attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices ?
-            _js_attribute_components_array(attr.data, attr.item_size, 2, geo.n_vertices) : uvs_json
+function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real})
+    n_float = length(positions)
+    n_float = _web_sizehint_add(n_float, length(geo.positions))
+    n_float = _web_sizehint_add(n_float, _web_sizehint_mul(4, geo.n_vertices))
+    n_float = _web_sizehint_add(n_float, _web_sizehint_mul(7, geo.n_vertices))
+    indices = isempty(geo.indices) ? (1:geo.n_vertices) : geo.indices
+    hint = 512
+    hint = _web_sizehint_add(hint, _web_sizehint_mul(10, n_float))
+    hint = _web_sizehint_add(hint, _web_sizehint_mul(8, length(indices)))
+    return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
+end
+
+function _web_write_uv_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
+    if length(geo.uvs) == 2 * geo.n_vertices
+        _js_write_array(io, geo.uvs, num_buf)
     else
-        uvs_json
+        _js_write_repeated_array(io, 0.0, 2 * geo.n_vertices, num_buf)
     end
-    colors_json = _web_color_json(geo, use_vertex_colors)
-    line_distances_json = _web_line_distance_json(geo)
+    return nothing
+end
+
+function _web_write_uv2_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
+    if has_attribute(geo, :uv2)
+        attr = get_attribute(geo, :uv2)
+        if attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 2,
+                                                 geo.n_vertices)
+            return nothing
+        end
+    end
+    _web_write_uv_json(io, geo, num_buf)
+    return nothing
+end
+
+function _web_write_geo_object(io::IO, geo::BufferGeometry,
+                               positions::AbstractVector{<:Real}=geo.positions;
+                               use_vertex_colors::Bool=true)
+    num_buf = _web_num_buffer()
+    write(io, "\"positions\":")
+    _js_write_array(io, positions, num_buf)
+    write(io, ",\"normals\":")
+    if length(geo.normals) == length(geo.positions)
+        _js_write_array(io, geo.normals, num_buf)
+    else
+        _js_write_repeated_array(io, 0.0, length(geo.positions), num_buf)
+    end
+    write(io, ",\"tangents\":")
+    has_tangents = _web_write_tangent_json(io, geo, num_buf)
+    write(io, ",\"hasTangents\":")
+    write(io, has_tangents ? "true" : "false")
+    write(io, ",\"uvs\":")
+    _web_write_uv_json(io, geo, num_buf)
+    write(io, ",\"uv2s\":")
+    _web_write_uv2_json(io, geo, num_buf)
+    write(io, ",\"colors\":")
+    _web_write_color_json(io, geo, use_vertex_colors, num_buf)
+    write(io, ",\"lineDistances\":")
+    _web_write_line_distance_json(io, geo, num_buf)
     indices = isempty(geo.indices) ? (1:geo.n_vertices) : geo.indices
     draw_start, draw_count = _web_draw_range_values(geo)
-    return "\"positions\":" * _js_array(positions) *
-           ",\"normals\":" * normals_json *
-           ",\"tangents\":" * tangents_json *
-           ",\"hasTangents\":" * (has_tangents ? "true" : "false") *
-           ",\"uvs\":" * uvs_json *
-           ",\"uv2s\":" * uv2s_json *
-           ",\"colors\":" * colors_json *
-           ",\"lineDistances\":" * line_distances_json *
-           ",\"indices\":" * _js_index_array_zero_based(indices) *
-           ",\"drawStart\":" * string(draw_start) *
-           ",\"drawCount\":" * string(draw_count)
+    write(io, ",\"indices\":")
+    _js_write_index_array_zero_based(io, indices, num_buf)
+    write(io, ",\"drawStart\":")
+    print(io, draw_start)
+    write(io, ",\"drawCount\":")
+    print(io, draw_count)
+    return nothing
+end
+
+function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
+                         use_vertex_colors::Bool=true)
+    io = IOBuffer(sizehint=_web_geo_object_sizehint(geo, positions))
+    _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors)
+    return String(take!(io))
 end
 
 function _web_write_visibility_state(io::IO, id::Int, visible::Bool)

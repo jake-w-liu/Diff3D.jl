@@ -3742,6 +3742,10 @@ end
               "[0,1,2,3,3,2,1,0]"
         @test Diff3D._js_skin_weights_array([(1.0, 0.0, 0.5, 0.25)]) ==
               "[1,0,0.5,0.25]"
+        geo_export_alloc = SphereGeometry(radius=1.0, width_segments=32,
+                                          height_segments=16)
+        Diff3D._web_geo_object(geo_export_alloc)
+        @test_opt_alloc 160000 Diff3D._web_geo_object(geo_export_alloc)
         @test Diff3D._web_visibility_states_json([1, 2], [true, false]) ==
               "[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
         @test Diff3D._web_visibility_states_json([1], [true];
