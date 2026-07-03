@@ -52,7 +52,7 @@ end
 
 function make_sphere_part(name, radius, color::Color3; position=Vec3(), roughness=0.36, metalness=0.08)
     mesh = Mesh(
-        SphereGeometry(radius=radius, width_segments=28, height_segments=16),
+        SphereGeometry(radius=radius, width_segments=40, height_segments=24),
         MeshStandardMaterial(color=color, roughness=roughness, metalness=metalness);
         name=name,
         cast_shadow=true,
@@ -224,7 +224,7 @@ function build_instancing_case()
     add!(scene, make_floor(width=20.0, depth=20.0, color=Color3(0.18, 0.28, 0.25)))
 
     stem_geo = CylinderGeometry(radius_top=0.035, radius_bottom=0.045, height=0.75, radial_segments=8)
-    flower_geo = IcosahedronGeometry(radius=0.22, detail=1)
+    flower_geo = IcosahedronGeometry(radius=0.22, detail=3)
     stems = InstancedMesh(stem_geo, MeshStandardMaterial(color=Color3(0.22, 0.62, 0.36), roughness=0.72), 121; name="garden_stems")
     flowers = InstancedMesh(flower_geo, MeshStandardMaterial(color=Color3(0.92, 0.44, 0.74), roughness=0.46), 121; name="garden_flowers")
     k = 0
@@ -555,20 +555,20 @@ function build_clipping_case()
     geode.position = Vec3(0.0, center_y, 0.0)
     add!(scene, geode)
     add!(geode, _clip_solid("geode_shell",
-                            SphereGeometry(radius=1.05, width_segments=16, height_segments=10),
+                            SphereGeometry(radius=1.05, width_segments=48, height_segments=28),
                             Color3(0.60, 0.64, 0.72); roughness=0.55, metalness=0.18))
     add!(geode, _clip_solid("geode_core",
-                            SphereGeometry(radius=0.56, width_segments=10, height_segments=7),
+                            SphereGeometry(radius=0.56, width_segments=36, height_segments=20),
                             Color3(1.00, 0.52, 0.16); roughness=0.38, metalness=0.0,
                             emissive=Color3(1.00, 0.42, 0.10), emissive_intensity=1.7))
 
     # Left and right props: knots that tumble through the same plane so the
     # exposed cross-section keeps changing.
     left = _clip_solid("section_knot_left",
-                       TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=30, radial_segments=6),
+                       TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=120, radial_segments=16),
                        Color3(0.20, 0.74, 0.78); position=Vec3(-3.3, center_y, 0.0), roughness=0.34, metalness=0.20)
     right = _clip_solid("section_knot_right",
-                        TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=30, radial_segments=6),
+                        TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=120, radial_segments=16),
                         Color3(0.92, 0.36, 0.62); position=Vec3(3.3, center_y, 0.0), roughness=0.34, metalness=0.20)
     add!(scene, left); add!(scene, right)
 
@@ -623,30 +623,30 @@ function build_csg_case()
     end
 
     # --- Boolean operands (positioned with transform_geometry) -------------
-    # Operand tessellation is kept intentionally low: CSG output is non-indexed
+    # Operand tessellation is chosen so the curved boolean results read as
+    # smoothly rounded, while staying moderate: CSG output is non-indexed
     # triangle soup, so serialized size scales with the result triangle count.
-    # These coarse operands keep the union/subtract/intersect clearly visible
-    # while holding the exported case small.
+    # ~24-32 segments looks round without the multi-MB blowup of 48+.
 
     # 1. Intersection: a cube clipped by a sphere -> a cushioned cube.
     cube = BoxGeometry(width=1.5, height=1.5, depth=1.5)
-    ball = SphereGeometry(radius=1.0, width_segments=5, height_segments=4)
+    ball = SphereGeometry(radius=1.0, width_segments=28, height_segments=18)
     cushion = csg_intersect(cube, ball)
 
     # 2. Subtraction: a sphere drilled through by a horizontal cylinder.
-    sphere = SphereGeometry(radius=0.95, width_segments=5, height_segments=4)
+    sphere = SphereGeometry(radius=0.95, width_segments=28, height_segments=18)
     drill = transform_geometry(
         CylinderGeometry(radius_top=0.4, radius_bottom=0.4, height=2.4,
-                         radial_segments=4, height_segments=1),
+                         radial_segments=28, height_segments=1),
         mat4_rotation_z(pi / 2))
     bead = csg_subtract(sphere, drill)
 
     # 3. Union: two crossed cylinders fused into a plus.
     up_bar = CylinderGeometry(radius_top=0.34, radius_bottom=0.34, height=1.7,
-                              radial_segments=4, height_segments=1)
+                              radial_segments=28, height_segments=1)
     side_bar = transform_geometry(
         CylinderGeometry(radius_top=0.34, radius_bottom=0.34, height=1.7,
-                         radial_segments=4, height_segments=1),
+                         radial_segments=28, height_segments=1),
         mat4_rotation_z(pi / 2))
     cross = csg_union(up_bar, side_bar)
 
@@ -823,10 +823,17 @@ function build_text_case()
     add_studio_lights!(scene)
     add!(scene, make_floor(width=18.0, depth=18.0, color=Color3(0.17, 0.19, 0.24)))
 
-    # Extruded 3D text built like webgl_geometry_text.jl. Kept lightweight for the
-    # live gallery: minimal curve tessellation and no bevel ring so the serialized
-    # buffers stay small, while the depth extrusion keeps the word clearly 3D.
-    geo = TextGeometry(font, "Diff3D"; size=1.1, depth=0.34, curve_segments=1,
+    # Extruded 3D text built like webgl_geometry_text.jl. Curve outlines are
+    # tessellated finely (curve_segments=8) so the letter curves read as smoothly
+    # rounded rather than coarse polygonal facets. Beveling stays disabled on
+    # purpose: TextGeometry's bevel offset (_font_offset_loop) uses an unbounded
+    # miter join, so at any curve_segments>=2 it produces degenerate cross-scene
+    # spikes on the tessellated glyph outlines (verified: the beveled bounding box
+    # explodes to x=[-9.8, 4.4], y=[-13.2, 1.5] at curve_segments=2, versus the
+    # correct x=[0.1, 4.4], y=[0.0, 1.1]). Smooth curves require the fine
+    # tessellation, so the bevel -- which is only geometrically valid at the
+    # polygonal curve_segments=1 -- is left off rather than shipping broken geometry.
+    geo = TextGeometry(font, "Diff3D"; size=1.1, depth=0.34, curve_segments=8,
                        bevel_enabled=false)
     geo.n_vertices > 0 || error("TextGeometry produced no vertices")
     bbox = compute_bounding_box(geo)
@@ -867,7 +874,7 @@ end
 
 function build_terrain_case()
     # ---- Height field for a small rolling island (plane-space u,v in [0,1]) ----
-    segments = 18
+    segments = 96
     ncols = segments + 1
 
     # Smooth rolling relief with a radial edge fade so the island falls to the
@@ -1078,8 +1085,8 @@ function build_curves_case()
         (0.72, 0.55), (0.69, 0.60),
     ])
 
-    # Slimmed: lathe revolution segments 44 -> 14 (vases stay clearly round).
-    lathe_segments = 14
+    # Lathe revolution segments -> 64 so the rim/profile reads as smoothly round.
+    lathe_segments = 64
     vase_a = Mesh(LatheGeometry(amphora; segments=lathe_segments),
                   MeshPhysicalMaterial(color=terracotta, roughness=0.34, metalness=0.0,
                                        clearcoat=0.6, clearcoat_roughness=0.22, side=:double);
@@ -1104,12 +1111,12 @@ function build_curves_case()
     brass = MeshStandardMaterial(color=Color3(0.83, 0.68, 0.28),
                                  roughness=0.30, metalness=0.85, side=:double)
 
-    # Slimmed: fewer path samples (tubular segments) 132/150 -> 36 and
-    # tube radial_segments 8 -> 5; both pipes stay visibly swept along curves.
-    _add_floor_tube!(turntable, _helix_coil_path(samples=36), "copper_coil", copper;
-                     radius=0.06, radial_segments=5, x=1.5, z=-1.7)
-    _add_floor_tube!(turntable, _trefoil_path(samples=36), "brass_knot", brass;
-                     radius=0.055, radial_segments=5, x=0.55, z=0.7)
+    # Tubular segments (path samples) -> 160 and tube radial_segments -> 16 so the
+    # round cross-section and the swept path both read as smooth metal pipes.
+    _add_floor_tube!(turntable, _helix_coil_path(samples=160), "copper_coil", copper;
+                     radius=0.06, radial_segments=16, x=1.5, z=-1.7)
+    _add_floor_tube!(turntable, _trefoil_path(samples=160), "brass_knot", brass;
+                     radius=0.055, radial_segments=16, x=0.55, z=0.7)
 
     # Slow turntable rotation about the vertical axis (one turn every 16 s).
     clip = AnimationClip("vessel_turntable_spin", 16.0, AbstractKeyframeTrack[
@@ -1131,6 +1138,47 @@ function build_curves_case()
         animations=[clip],
     )
 end
+
+# --- Unchanged private helpers that build_curves_case depends on (already present
+#     in example_gallery.jl above this function; shown here for completeness, do
+#     NOT paste a second copy). ---
+#
+# function _vessel_profile(rys)
+#     return Vec2{Float64}[Vec2(Float64(r), Float64(y)) for (r, y) in rys]
+# end
+#
+# function _add_floor_tube!(parent, path::Vector{<:Vec3}, name, material;
+#                           radius, radial_segments, x, z, lift_extra=0.04)
+#     geo = TubeGeometry(path; radius=radius, radial_segments=radial_segments)
+#     geo.n_vertices > 0 || error("TubeGeometry produced no vertices for $name")
+#     min_y = minimum(p.y for p in path) - radius
+#     mesh = Mesh(geo, material; name=name, cast_shadow=true, receive_shadow=true)
+#     mesh.position = Vec3(x, -min_y + lift_extra, z)
+#     add!(parent, mesh)
+#     return mesh
+# end
+#
+# function _helix_coil_path(; samples=132, turns=4, coil_radius=0.5, height=1.7)
+#     pts = Vec3{Float64}[]
+#     for i in 0:samples
+#         t = 2pi * turns * i / samples
+#         y = height * i / samples
+#         push!(pts, Vec3(coil_radius * cos(t), y, coil_radius * sin(t)))
+#     end
+#     return pts
+# end
+#
+# function _trefoil_path(; samples=150, scale=0.42)
+#     pts = Vec3{Float64}[]
+#     for i in 0:samples
+#         t = 2pi * i / samples
+#         x = sin(t) + 2sin(2t)
+#         y = cos(t) - 2cos(2t)
+#         z = -sin(3t)
+#         push!(pts, Vec3(scale * x, scale * z, scale * y))
+#     end
+#     return pts
+# end
 
 function build_lines_case()
     scene = Scene(background=Color3(0.015, 0.012, 0.028),
@@ -1318,7 +1366,10 @@ function build_texture_case()
     end
 
     # A textured globe floating above the crates showing UV mapping on a sphere.
-    globe = Mesh(SphereGeometry(radius=1.0, width_segments=20, height_segments=12),
+    # Raised tessellation (48x28) so the silhouette reads as a smooth sphere instead
+    # of a faceted polyhedron; the UV parameterization is unchanged so the texture
+    # still maps correctly.
+    globe = Mesh(SphereGeometry(radius=1.0, width_segments=48, height_segments=28),
                  MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0), map=uv_globe_texture(),
                                       roughness=0.42, metalness=0.08);
                  name="uv_globe", cast_shadow=true, receive_shadow=true)
