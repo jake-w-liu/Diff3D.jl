@@ -3746,6 +3746,25 @@ end
                                           height_segments=16)
         Diff3D._web_geo_object(geo_export_alloc)
         @test_opt_alloc 160000 Diff3D._web_geo_object(geo_export_alloc)
+        clip_alloc_mesh = Mesh(BoxGeometry(), MeshBasicMaterial();
+                               name="clip_export_alloc")
+        clip_alloc_times = collect(range(0.0, 2.0; length=64))
+        clip_alloc_tracks = AbstractKeyframeTrack[]
+        for i in 1:8
+            push!(clip_alloc_tracks,
+                  NumberKeyframeTrack(clip_alloc_mesh, "position.x",
+                                      copy(clip_alloc_times),
+                                      [sin(t + i) for t in clip_alloc_times]))
+            push!(clip_alloc_tracks,
+                  KeyframeTrack(clip_alloc_mesh, :position,
+                                copy(clip_alloc_times),
+                                [Vec3(sin(t + i), cos(t + i), 0.01i)
+                                 for t in clip_alloc_times]))
+        end
+        clip_export_alloc = AnimationClip("clip_export_alloc", 2.0,
+                                          clip_alloc_tracks)
+        Diff3D._web_clip_json(clip_export_alloc)
+        @test_opt_alloc 140000 Diff3D._web_clip_json(clip_export_alloc)
         @test Diff3D._web_visibility_states_json([1, 2], [true, false]) ==
               "[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
         @test Diff3D._web_visibility_states_json([1], [true];
