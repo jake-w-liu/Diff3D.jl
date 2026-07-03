@@ -823,17 +823,15 @@ function build_text_case()
     add_studio_lights!(scene)
     add!(scene, make_floor(width=18.0, depth=18.0, color=Color3(0.17, 0.19, 0.24)))
 
-    # Extruded 3D text built like webgl_geometry_text.jl. Curve outlines are
-    # tessellated finely (curve_segments=8) so the letter curves read as smoothly
-    # rounded rather than coarse polygonal facets. Beveling stays disabled on
-    # purpose: TextGeometry's bevel offset (_font_offset_loop) uses an unbounded
-    # miter join, so at any curve_segments>=2 it produces degenerate cross-scene
-    # spikes on the tessellated glyph outlines (verified: the beveled bounding box
-    # explodes to x=[-9.8, 4.4], y=[-13.2, 1.5] at curve_segments=2, versus the
-    # correct x=[0.1, 4.4], y=[0.0, 1.1]). Smooth curves require the fine
-    # tessellation, so the bevel -- which is only geometrically valid at the
-    # polygonal curve_segments=1 -- is left off rather than shipping broken geometry.
-    geo = TextGeometry(font, "Diff3D"; size=1.1, depth=0.34, curve_segments=8,
+    # Extruded 3D text built like webgl_geometry_text.jl. curve_segments is kept
+    # at 1 on purpose: the glyph triangulator (_font_bridge_one_hole hole-bridging
+    # + _font_triangulate_simple ear-clipping) is not robust to finely tessellated
+    # outlines -- at curve_segments >= 2 the bridged glyph polygon self-intersects
+    # and the ear-clip stalls, shattering the letter fills (front-cap area collapses
+    # from ~54% of the glyph bbox to ~25%). curve_segments=1 gives correct, solid
+    # letterforms (slightly faceted curves). Bevel is likewise left off (its offset
+    # loop self-intersects at >=2 segments). Bumping this needs a robust triangulator.
+    geo = TextGeometry(font, "Diff3D"; size=1.1, depth=0.34, curve_segments=1,
                        bevel_enabled=false)
     geo.n_vertices > 0 || error("TextGeometry produced no vertices")
     bbox = compute_bounding_box(geo)
