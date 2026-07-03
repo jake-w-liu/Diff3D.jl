@@ -3746,6 +3746,11 @@ end
                                           height_segments=16)
         Diff3D._web_geo_object(geo_export_alloc)
         @test_opt_alloc 160000 Diff3D._web_geo_object(geo_export_alloc)
+        drawable_export_alloc = Mesh(geo_export_alloc, MeshBasicMaterial();
+                                     name="drawable_export_alloc")
+        Diff3D._web_drawable_json(drawable_export_alloc, Mat4())
+        @test_opt_alloc 260000 Diff3D._web_drawable_json(drawable_export_alloc,
+                                                         Mat4())
         clip_alloc_mesh = Mesh(BoxGeometry(), MeshBasicMaterial();
                                name="clip_export_alloc")
         clip_alloc_times = collect(range(0.0, 2.0; length=64))

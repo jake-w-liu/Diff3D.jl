@@ -1723,6 +1723,25 @@ function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int
     return out
 end
 
+function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
+                                     positions::AbstractVector{<:Real})
+    hint = _web_sizehint_add(8192, _web_geo_object_sizehint(geo, positions))
+    if hasproperty(obj, :morph_target_influences)
+        target_count = _web_morph_position_target_count(geo)
+        normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
+        tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+        has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
+        hint = _web_sizehint_add(hint,
+                                 _web_morph_targets_sizehint(obj, geo, target_count,
+                                                             normal_count, tangent_count,
+                                                             has_morph_channels))
+    else
+        hint = _web_sizehint_add(hint, 64)
+    end
+    hint = _web_sizehint_add(hint, obj isa SkinnedMesh ? _web_skin_json_sizehint(obj, geo) : 64)
+    return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
+end
+
 function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles",
                             transform_obj::AbstractObject3D=obj,
                             color_override::Union{Nothing,Color3}=nothing,
@@ -1764,116 +1783,240 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
                                     extra_id=visibility_extra_id,
                                     extra_value=visibility_extra_value)
     end
-    return "{" *
-           "\"id\":" * string(transform_obj.id) *
-           ",\"name\":" * _js_str(getproperty(obj, :name)) *
-           ",\"mode\":" * _js_str(mode) *
-           ",\"visible\":" * (is_visible(obj) ? "true" : "false") *
-           ",\"castShadow\":" * (object_casts_shadow(obj) ? "true" : "false") *
-           ",\"receiveShadow\":" * (object_receives_shadow(obj) ? "true" : "false") *
-           ",\"visibilityStates\":" * visibility_json *
-           ",\"lodGroup\":" * string(lod_group_id) *
-           ",\"lodDistance\":" * _js_num(lod_distance) *
-           ",\"lodHysteresis\":" * _js_num(lod_hysteresis) *
-           ",\"parentId\":" * string(parent_id) *
-           ",\"matrix\":" * _js_mat(m) *
-           ",\"parentMatrix\":" * _js_mat(parent_matrix) *
-           ",\"instanceMatrix\":" * (instance_matrix === nothing ? "null" : _js_mat(instance_matrix)) *
-           ",\"instanceMatrices\":" * (isempty(instance_matrices) ? "null" : _js_mat_array(instance_matrices)) *
-           ",\"instanceColors\":" * (isempty(instance_colors) ? "null" : _js_color_array(instance_colors)) *
-           ",\"basePosition\":" * _js_vec(get_position(transform_obj)) *
-           ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
-           ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
-           ",\"baseScale\":" * _js_vec(get_scale(transform_obj)) *
-           ",\"baseQuaternion\":" *
-               _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
-           ",\"materialType\":" * _js_str(_web_material_type(mat)) *
-           ",\"depthNear\":" * _js_num(_web_material_depth_near(mat)) *
-           ",\"depthFar\":" * _js_num(_web_material_depth_far(mat)) *
-           ",\"depthPacking\":" * _js_str(_web_material_depth_packing(mat)) *
-           ",\"depthPackingMode\":" * string(_web_material_depth_packing_id(mat)) *
-           ",\"toonSteps\":" * _js_num(_web_material_toon_steps(mat)) *
-           ",\"color\":" * _js_color(color_override === nothing ? _web_material_color(mat) : color_override) *
-           ",\"opacity\":" * _js_num(_web_material_opacity(mat)) *
-           ",\"alphaTest\":" * _js_num(_web_material_alpha_test(mat)) *
-           ",\"transparent\":" * (_web_material_transparent(mat) ? "true" : "false") *
-           ",\"side\":" * _js_str(_web_material_side(mat)) *
-           ",\"depthTest\":" * (_web_material_depth_test(mat) ? "true" : "false") *
-           ",\"depthWrite\":" * (_web_material_depth_write(mat) ? "true" : "false") *
-           ",\"clippingPlanes\":[" *
-               join((_js_plane(p) for p in _web_material_clipping_planes(mat)), ",") *
-           "]" *
-           ",\"pointSize\":" * _js_num(_web_material_size(mat)) *
-           ",\"pointSizeAttenuation\":" * (_web_material_point_size_attenuation(mat) ? "true" : "false") *
-           ",\"linewidth\":" * _js_num(_web_material_linewidth(mat)) *
-           ",\"lineDashed\":" * (_web_material_line_dashed(mat) ? "true" : "false") *
-           ",\"dashSize\":" * _js_num(_web_material_dash_size(mat)) *
-           ",\"gapSize\":" * _js_num(_web_material_gap_size(mat)) *
-           ",\"dashScale\":" * _js_num(_web_material_dash_scale(mat)) *
-           ",\"spriteCenter\":" * _js_vec(sprite_center) *
-           ",\"spriteRotation\":" * _js_num(sprite_rotation) *
-           ",\"spriteSizeAttenuation\":" * (sprite_size_attenuation ? "true" : "false") *
-           ",\"glow\":" * _js_num(_web_material_glow(mat)) *
-           ",\"texture\":" * _web_texture_json(_web_material_texture(mat)) *
-           ",\"alphaTexture\":" * _web_texture_json(_web_material_alpha_texture(mat)) *
-           ",\"emissiveTexture\":" * _web_texture_json(_web_material_emissive_texture(mat)) *
-           ",\"aoTexture\":" * _web_texture_json(_web_material_ao_texture(mat)) *
-           ",\"lightTexture\":" * _web_texture_json(_web_material_light_texture(mat)) *
-           ",\"roughnessTexture\":" * _web_texture_json(_web_material_roughness_texture(mat)) *
-           ",\"metalnessTexture\":" * _web_texture_json(_web_material_metalness_texture(mat)) *
-           ",\"normalTexture\":" * _web_texture_json(_web_material_normal_texture(mat)) *
-           ",\"normalScale\":" * _js_num(_web_material_normal_scale(mat)) *
-           ",\"matcapTexture\":" * _web_texture_json(_web_material_matcap_texture(mat)) *
-           ",\"gradientTexture\":" * _web_texture_json(_web_material_gradient_texture(mat)) *
-           ",\"clearcoatTexture\":" * _web_texture_json(_web_material_clearcoat_texture(mat)) *
-           ",\"clearcoatRoughnessTexture\":" * _web_texture_json(_web_material_clearcoat_roughness_texture(mat)) *
-           ",\"clearcoatNormalTexture\":" * _web_texture_json(_web_material_clearcoat_normal_texture(mat)) *
-           ",\"clearcoatNormalScale\":" * _js_num(_web_material_clearcoat_normal_scale(mat)) *
-           ",\"transmissionTexture\":" * _web_texture_json(_web_material_transmission_texture(mat)) *
-           ",\"thicknessTexture\":" * _web_texture_json(_web_material_thickness_texture(mat)) *
-           ",\"sheenColorTexture\":" * _web_texture_json(_web_material_sheen_color_texture(mat)) *
-           ",\"sheenRoughnessTexture\":" * _web_texture_json(_web_material_sheen_roughness_texture(mat)) *
-           ",\"iridescenceTexture\":" * _web_texture_json(_web_material_iridescence_texture(mat)) *
-           ",\"iridescenceThicknessTexture\":" * _web_texture_json(_web_material_iridescence_thickness_texture(mat)) *
-           ",\"specularIntensityTexture\":" * _web_texture_json(_web_material_specular_intensity_texture(mat)) *
-           ",\"specularColorTexture\":" * _web_texture_json(_web_material_specular_color_texture(mat)) *
-           ",\"anisotropyTexture\":" * _web_texture_json(_web_material_anisotropy_texture(mat)) *
-           ",\"envTexture\":" * _web_env_json(_web_material_env_texture(mat)) *
-           ",\"emissive\":" * _js_color(_web_material_emissive_color(mat)) *
-           ",\"emissiveIntensity\":" * _js_num(_web_material_emissive_intensity(mat)) *
-           ",\"aoIntensity\":" * _js_num(_web_material_ao_intensity(mat)) *
-           ",\"lightMapIntensity\":" * _js_num(_web_material_light_intensity(mat)) *
-           ",\"roughness\":" * _js_num(_web_material_roughness(mat)) *
-           ",\"metalness\":" * _js_num(_web_material_metalness(mat)) *
-           ",\"envMapIntensity\":" * _js_num(_web_material_env_intensity(mat)) *
-           ",\"clearcoat\":" * _js_num(_web_material_clearcoat(mat)) *
-           ",\"clearcoatRoughness\":" * _js_num(_web_material_clearcoat_roughness(mat)) *
-           ",\"transmission\":" * _js_num(_web_material_transmission(mat)) *
-           ",\"thickness\":" * _js_num(_web_material_thickness(mat)) *
-           ",\"attenuationDistance\":" * _js_num(_web_material_attenuation_distance(mat)) *
-           ",\"attenuationColor\":" * _js_color(_web_material_attenuation_color(mat)) *
-           ",\"ior\":" * _js_num(_web_material_ior(mat)) *
-           ",\"sheen\":" * _js_num(_web_material_sheen(mat)) *
-           ",\"sheenColor\":" * _js_color(_web_material_sheen_color(mat)) *
-           ",\"sheenRoughness\":" * _js_num(_web_material_sheen_roughness(mat)) *
-           ",\"iridescence\":" * _js_num(_web_material_iridescence(mat)) *
-           ",\"iridescenceIor\":" * _js_num(_web_material_iridescence_ior(mat)) *
-           ",\"iridescenceThickness\":" * _js_num(_web_material_iridescence_thickness(mat)) *
-           ",\"specularIntensity\":" * _js_num(_web_material_specular_intensity(mat)) *
-           ",\"specularColor\":" * _js_color(_web_material_specular_color(mat)) *
-           ",\"anisotropy\":" * _js_num(_web_material_anisotropy(mat)) *
-           ",\"anisotropyRotation\":" * _js_num(_web_material_anisotropy_rotation(mat)) *
-           ",\"dispersion\":" * _js_num(_web_material_dispersion(mat)) *
-           ",\"shininess\":" * _js_num(_web_material_shininess(mat)) *
-           ",\"glossiness\":" * _js_num(_web_material_glossiness(mat)) *
-           ",\"glossinessPacked\":" * (_web_material_glossiness_packed(mat) ? "true" : "false") *
-           ",\"morphTargetIds\":" * _web_morph_target_ids_json(morph_target_ids, transform_obj.id) *
-           "," * _web_morph_targets_json(obj, geo) *
-           "," * _web_skin_json(obj, geo) *
-           "," * _web_geo_object(geo, _web_positions(obj, geo);
-                                  use_vertex_colors=(mode != "triangles" ||
-                                                     _web_material_vertex_colors(mat))) *
-           "}"
+    positions = _web_positions(obj, geo)
+    use_vertex_colors = mode != "triangles" || _web_material_vertex_colors(mat)
+    io = IOBuffer(sizehint=_web_drawable_json_sizehint(obj, geo, positions))
+    num_buf = _web_num_buffer()
+    write(io, "{\"id\":")
+    print(io, transform_obj.id)
+    write(io, ",\"name\":")
+    _js_write_str(io, getproperty(obj, :name))
+    write(io, ",\"mode\":")
+    _js_write_str(io, mode)
+    write(io, ",\"visible\":")
+    write(io, is_visible(obj) ? "true" : "false")
+    write(io, ",\"castShadow\":")
+    write(io, object_casts_shadow(obj) ? "true" : "false")
+    write(io, ",\"receiveShadow\":")
+    write(io, object_receives_shadow(obj) ? "true" : "false")
+    write(io, ",\"visibilityStates\":")
+    write(io, visibility_json)
+    write(io, ",\"lodGroup\":")
+    print(io, lod_group_id)
+    write(io, ",\"lodDistance\":")
+    _js_write_num(io, lod_distance, num_buf)
+    write(io, ",\"lodHysteresis\":")
+    _js_write_num(io, lod_hysteresis, num_buf)
+    write(io, ",\"parentId\":")
+    print(io, parent_id)
+    write(io, ",\"matrix\":")
+    _js_write_mat(io, m, num_buf)
+    write(io, ",\"parentMatrix\":")
+    _js_write_mat(io, parent_matrix, num_buf)
+    write(io, ",\"instanceMatrix\":")
+    instance_matrix === nothing ? write(io, "null") : _js_write_mat(io, instance_matrix, num_buf)
+    write(io, ",\"instanceMatrices\":")
+    if isempty(instance_matrices)
+        write(io, "null")
+    else
+        write(io, '[')
+        for (i, im) in enumerate(instance_matrices)
+            i == 1 || write(io, ',')
+            _js_write_mat(io, im, num_buf)
+        end
+        write(io, ']')
+    end
+    write(io, ",\"instanceColors\":")
+    if isempty(instance_colors)
+        write(io, "null")
+    else
+        write(io, '[')
+        for (i, color) in enumerate(instance_colors)
+            i == 1 || write(io, ',')
+            _js_write_color(io, color, num_buf)
+        end
+        write(io, ']')
+    end
+    write(io, ",\"basePosition\":")
+    _js_write_vec(io, get_position(transform_obj), num_buf)
+    write(io, ",\"baseEuler\":")
+    _js_write_vec(io, Vec3(rot.x, rot.y, rot.z), num_buf)
+    write(io, ",\"baseEulerOrder\":")
+    _js_write_str(io, String(rot.order))
+    write(io, ",\"baseScale\":")
+    _js_write_vec(io, get_scale(transform_obj), num_buf)
+    write(io, ",\"baseQuaternion\":")
+    _js_write_quat(io, quat_from_euler(rot.x, rot.y, rot.z; order=rot.order), num_buf)
+    write(io, ",\"materialType\":")
+    _js_write_str(io, _web_material_type(mat))
+    write(io, ",\"depthNear\":")
+    _js_write_num(io, _web_material_depth_near(mat), num_buf)
+    write(io, ",\"depthFar\":")
+    _js_write_num(io, _web_material_depth_far(mat), num_buf)
+    write(io, ",\"depthPacking\":")
+    _js_write_str(io, _web_material_depth_packing(mat))
+    write(io, ",\"depthPackingMode\":")
+    print(io, _web_material_depth_packing_id(mat))
+    write(io, ",\"toonSteps\":")
+    _js_write_num(io, _web_material_toon_steps(mat), num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, color_override === nothing ? _web_material_color(mat) : color_override, num_buf)
+    write(io, ",\"opacity\":")
+    _js_write_num(io, _web_material_opacity(mat), num_buf)
+    write(io, ",\"alphaTest\":")
+    _js_write_num(io, _web_material_alpha_test(mat), num_buf)
+    write(io, ",\"transparent\":")
+    write(io, _web_material_transparent(mat) ? "true" : "false")
+    write(io, ",\"side\":")
+    _js_write_str(io, _web_material_side(mat))
+    write(io, ",\"depthTest\":")
+    write(io, _web_material_depth_test(mat) ? "true" : "false")
+    write(io, ",\"depthWrite\":")
+    write(io, _web_material_depth_write(mat) ? "true" : "false")
+    write(io, ",\"clippingPlanes\":[")
+    for (i, plane) in enumerate(_web_material_clipping_planes(mat))
+        i == 1 || write(io, ',')
+        _js_write_plane(io, plane, num_buf)
+    end
+    write(io, ']')
+    write(io, ",\"pointSize\":")
+    _js_write_num(io, _web_material_size(mat), num_buf)
+    write(io, ",\"pointSizeAttenuation\":")
+    write(io, _web_material_point_size_attenuation(mat) ? "true" : "false")
+    write(io, ",\"linewidth\":")
+    _js_write_num(io, _web_material_linewidth(mat), num_buf)
+    write(io, ",\"lineDashed\":")
+    write(io, _web_material_line_dashed(mat) ? "true" : "false")
+    write(io, ",\"dashSize\":")
+    _js_write_num(io, _web_material_dash_size(mat), num_buf)
+    write(io, ",\"gapSize\":")
+    _js_write_num(io, _web_material_gap_size(mat), num_buf)
+    write(io, ",\"dashScale\":")
+    _js_write_num(io, _web_material_dash_scale(mat), num_buf)
+    write(io, ",\"spriteCenter\":")
+    _js_write_vec(io, sprite_center, num_buf)
+    write(io, ",\"spriteRotation\":")
+    _js_write_num(io, sprite_rotation, num_buf)
+    write(io, ",\"spriteSizeAttenuation\":")
+    write(io, sprite_size_attenuation ? "true" : "false")
+    write(io, ",\"glow\":")
+    _js_write_num(io, _web_material_glow(mat), num_buf)
+    write(io, ",\"texture\":")
+    write(io, _web_texture_json(_web_material_texture(mat)))
+    write(io, ",\"alphaTexture\":")
+    write(io, _web_texture_json(_web_material_alpha_texture(mat)))
+    write(io, ",\"emissiveTexture\":")
+    write(io, _web_texture_json(_web_material_emissive_texture(mat)))
+    write(io, ",\"aoTexture\":")
+    write(io, _web_texture_json(_web_material_ao_texture(mat)))
+    write(io, ",\"lightTexture\":")
+    write(io, _web_texture_json(_web_material_light_texture(mat)))
+    write(io, ",\"roughnessTexture\":")
+    write(io, _web_texture_json(_web_material_roughness_texture(mat)))
+    write(io, ",\"metalnessTexture\":")
+    write(io, _web_texture_json(_web_material_metalness_texture(mat)))
+    write(io, ",\"normalTexture\":")
+    write(io, _web_texture_json(_web_material_normal_texture(mat)))
+    write(io, ",\"normalScale\":")
+    _js_write_num(io, _web_material_normal_scale(mat), num_buf)
+    write(io, ",\"matcapTexture\":")
+    write(io, _web_texture_json(_web_material_matcap_texture(mat)))
+    write(io, ",\"gradientTexture\":")
+    write(io, _web_texture_json(_web_material_gradient_texture(mat)))
+    write(io, ",\"clearcoatTexture\":")
+    write(io, _web_texture_json(_web_material_clearcoat_texture(mat)))
+    write(io, ",\"clearcoatRoughnessTexture\":")
+    write(io, _web_texture_json(_web_material_clearcoat_roughness_texture(mat)))
+    write(io, ",\"clearcoatNormalTexture\":")
+    write(io, _web_texture_json(_web_material_clearcoat_normal_texture(mat)))
+    write(io, ",\"clearcoatNormalScale\":")
+    _js_write_num(io, _web_material_clearcoat_normal_scale(mat), num_buf)
+    write(io, ",\"transmissionTexture\":")
+    write(io, _web_texture_json(_web_material_transmission_texture(mat)))
+    write(io, ",\"thicknessTexture\":")
+    write(io, _web_texture_json(_web_material_thickness_texture(mat)))
+    write(io, ",\"sheenColorTexture\":")
+    write(io, _web_texture_json(_web_material_sheen_color_texture(mat)))
+    write(io, ",\"sheenRoughnessTexture\":")
+    write(io, _web_texture_json(_web_material_sheen_roughness_texture(mat)))
+    write(io, ",\"iridescenceTexture\":")
+    write(io, _web_texture_json(_web_material_iridescence_texture(mat)))
+    write(io, ",\"iridescenceThicknessTexture\":")
+    write(io, _web_texture_json(_web_material_iridescence_thickness_texture(mat)))
+    write(io, ",\"specularIntensityTexture\":")
+    write(io, _web_texture_json(_web_material_specular_intensity_texture(mat)))
+    write(io, ",\"specularColorTexture\":")
+    write(io, _web_texture_json(_web_material_specular_color_texture(mat)))
+    write(io, ",\"anisotropyTexture\":")
+    write(io, _web_texture_json(_web_material_anisotropy_texture(mat)))
+    write(io, ",\"envTexture\":")
+    write(io, _web_env_json(_web_material_env_texture(mat)))
+    write(io, ",\"emissive\":")
+    _js_write_color(io, _web_material_emissive_color(mat), num_buf)
+    write(io, ",\"emissiveIntensity\":")
+    _js_write_num(io, _web_material_emissive_intensity(mat), num_buf)
+    write(io, ",\"aoIntensity\":")
+    _js_write_num(io, _web_material_ao_intensity(mat), num_buf)
+    write(io, ",\"lightMapIntensity\":")
+    _js_write_num(io, _web_material_light_intensity(mat), num_buf)
+    write(io, ",\"roughness\":")
+    _js_write_num(io, _web_material_roughness(mat), num_buf)
+    write(io, ",\"metalness\":")
+    _js_write_num(io, _web_material_metalness(mat), num_buf)
+    write(io, ",\"envMapIntensity\":")
+    _js_write_num(io, _web_material_env_intensity(mat), num_buf)
+    write(io, ",\"clearcoat\":")
+    _js_write_num(io, _web_material_clearcoat(mat), num_buf)
+    write(io, ",\"clearcoatRoughness\":")
+    _js_write_num(io, _web_material_clearcoat_roughness(mat), num_buf)
+    write(io, ",\"transmission\":")
+    _js_write_num(io, _web_material_transmission(mat), num_buf)
+    write(io, ",\"thickness\":")
+    _js_write_num(io, _web_material_thickness(mat), num_buf)
+    write(io, ",\"attenuationDistance\":")
+    _js_write_num(io, _web_material_attenuation_distance(mat), num_buf)
+    write(io, ",\"attenuationColor\":")
+    _js_write_color(io, _web_material_attenuation_color(mat), num_buf)
+    write(io, ",\"ior\":")
+    _js_write_num(io, _web_material_ior(mat), num_buf)
+    write(io, ",\"sheen\":")
+    _js_write_num(io, _web_material_sheen(mat), num_buf)
+    write(io, ",\"sheenColor\":")
+    _js_write_color(io, _web_material_sheen_color(mat), num_buf)
+    write(io, ",\"sheenRoughness\":")
+    _js_write_num(io, _web_material_sheen_roughness(mat), num_buf)
+    write(io, ",\"iridescence\":")
+    _js_write_num(io, _web_material_iridescence(mat), num_buf)
+    write(io, ",\"iridescenceIor\":")
+    _js_write_num(io, _web_material_iridescence_ior(mat), num_buf)
+    write(io, ",\"iridescenceThickness\":")
+    _js_write_num(io, _web_material_iridescence_thickness(mat), num_buf)
+    write(io, ",\"specularIntensity\":")
+    _js_write_num(io, _web_material_specular_intensity(mat), num_buf)
+    write(io, ",\"specularColor\":")
+    _js_write_color(io, _web_material_specular_color(mat), num_buf)
+    write(io, ",\"anisotropy\":")
+    _js_write_num(io, _web_material_anisotropy(mat), num_buf)
+    write(io, ",\"anisotropyRotation\":")
+    _js_write_num(io, _web_material_anisotropy_rotation(mat), num_buf)
+    write(io, ",\"dispersion\":")
+    _js_write_num(io, _web_material_dispersion(mat), num_buf)
+    write(io, ",\"shininess\":")
+    _js_write_num(io, _web_material_shininess(mat), num_buf)
+    write(io, ",\"glossiness\":")
+    _js_write_num(io, _web_material_glossiness(mat), num_buf)
+    write(io, ",\"glossinessPacked\":")
+    write(io, _web_material_glossiness_packed(mat) ? "true" : "false")
+    write(io, ",\"morphTargetIds\":")
+    write(io, _web_morph_target_ids_json(morph_target_ids, transform_obj.id))
+    write(io, ',')
+    write(io, _web_morph_targets_json(obj, geo))
+    write(io, ',')
+    write(io, _web_skin_json(obj, geo))
+    write(io, ',')
+    _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors)
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
