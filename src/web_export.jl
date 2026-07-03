@@ -157,6 +157,13 @@ function _web_byte_array_sizehint(n::Integer)
     return 2 + 4 * capped
 end
 
+@inline _web_sizehint_mul(a::Integer, b::Integer) =
+    (a <= 0 || b <= 0) ? 0 :
+    (a > typemax(Int) ÷ b ? typemax(Int) : Int(a) * Int(b))
+
+@inline _web_sizehint_add(a::Integer, b::Integer) =
+    a > typemax(Int) - b ? typemax(Int) : Int(a) + Int(b)
+
 function _js_write_array(io::IO, xs, num_buf::Vector{UInt8})
     write(io, '[')
     first = true
@@ -233,11 +240,10 @@ function _js_attribute_components_array(data::AbstractVector, stride::Int,
     _js_write_attribute_components_array(io, data, stride, components, n_items)
     return String(take!(io))
 end
-function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
-    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(indices)))
+function _js_write_skin_indices_array(io::IO, indices::AbstractVector{<:NTuple{4,Int}},
+                                      num_buf::Vector{UInt8})
     write(io, '[')
     first = true
-    num_buf = _web_num_buffer()
     @inbounds for idx in indices
         for k in 1:4
             first ? (first = false) : write(io, ',')
@@ -245,13 +251,18 @@ function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
         end
     end
     write(io, ']')
+    return nothing
+end
+function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
+    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(indices)))
+    _js_write_skin_indices_array(io, indices, _web_num_buffer())
     return String(take!(io))
 end
-function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
-    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(weights)))
+function _js_write_skin_weights_array(io::IO,
+                                      weights::AbstractVector{<:NTuple{4,Float64}},
+                                      num_buf::Vector{UInt8})
     write(io, '[')
     first = true
-    num_buf = _web_num_buffer()
     @inbounds for w in weights
         for k in 1:4
             first ? (first = false) : write(io, ',')
@@ -259,6 +270,11 @@ function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
         end
     end
     write(io, ']')
+    return nothing
+end
+function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
+    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(weights)))
+    _js_write_skin_weights_array(io, weights, _web_num_buffer())
     return String(take!(io))
 end
 function _web_nested_num_array_sizehint(n_items::Integer, components::Integer)
@@ -1346,39 +1362,77 @@ function _web_morph_targets_json(obj, geo::BufferGeometry)
     return String(take!(io))
 end
 
+function _web_skin_json_sizehint(obj::SkinnedMesh, geo::BufferGeometry)
+    n_bones = length(obj.skeleton.bones)
+    n_float_nums = length(geo.positions)
+    n_float_nums = _web_sizehint_add(n_float_nums, _web_sizehint_mul(4, geo.n_vertices))
+    n_float_nums = _web_sizehint_add(n_float_nums, _web_sizehint_mul(32, n_bones))
+    n_float_nums = _web_sizehint_add(n_float_nums, 32)
+    n_index_nums = _web_sizehint_mul(4, geo.n_vertices)
+    overhead = _web_sizehint_add(1024, _web_sizehint_mul(96, n_bones))
+    return _web_sizehint_add(_web_sizehint_add(overhead, _web_num_array_sizehint(n_float_nums)),
+                             _web_byte_array_sizehint(n_index_nums))
+end
+
+function _web_write_bone_json(io::IO, bone::Bone, num_buf::Vector{UInt8})
+    rot = get_rotation(bone)
+    parent = get_parent(bone)
+    parent_id = parent === nothing ? 0 : parent.id
+    parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
+    write(io, "{\"id\":")
+    print(io, bone.id)
+    write(io, ",\"name\":")
+    _js_write_str(io, bone.name)
+    write(io, ",\"parentId\":")
+    print(io, parent_id)
+    write(io, ",\"matrix\":")
+    _js_write_mat(io, compute_world_matrix(bone), num_buf)
+    write(io, ",\"parentMatrix\":")
+    _js_write_mat(io, parent_matrix, num_buf)
+    write(io, ",\"basePosition\":")
+    _js_write_vec(io, get_position(bone), num_buf)
+    write(io, ",\"baseEuler\":")
+    _js_write_vec(io, Vec3(rot.x, rot.y, rot.z), num_buf)
+    write(io, ",\"baseEulerOrder\":")
+    _js_write_str(io, String(rot.order))
+    write(io, ",\"baseScale\":")
+    _js_write_vec(io, get_scale(bone), num_buf)
+    write(io, ",\"baseQuaternion\":")
+    _js_write_quat(io, quat_from_euler(rot.x, rot.y, rot.z; order=rot.order), num_buf)
+    write(io, '}')
+    return nothing
+end
+
 function _web_skin_json(obj, geo::BufferGeometry)
     obj isa SkinnedMesh || return "\"skin\":null"
     length(obj.skin_indices) == geo.n_vertices || error("skinned mesh skin_indices length must match vertex count")
     length(obj.skin_weights) == geo.n_vertices || error("skinned mesh skin_weights length must match vertex count")
-    bones = String[]
-    bind_inverses = String[]
+    io = IOBuffer(sizehint=_web_skin_json_sizehint(obj, geo))
+    num_buf = _web_num_buffer()
+    write(io, "\"basePositions\":")
+    _js_write_array(io, geo.positions, num_buf)
+    write(io, ",\"bindMode\":")
+    _js_write_str(io, String(obj.bind_mode))
+    write(io, ",\"bindMatrix\":")
+    _js_write_mat(io, obj.bind_matrix, num_buf)
+    write(io, ",\"bindMatrixInverse\":")
+    _js_write_mat(io, _skinned_bind_matrix_inverse(obj), num_buf)
+    write(io, ",\"skin\":{\"indices\":")
+    _js_write_skin_indices_array(io, obj.skin_indices, num_buf)
+    write(io, ",\"weights\":")
+    _js_write_skin_weights_array(io, obj.skin_weights, num_buf)
+    write(io, ",\"bones\":[")
     for (i, bone) in enumerate(obj.skeleton.bones)
-        rot = get_rotation(bone)
-        parent = get_parent(bone)
-        parent_id = parent === nothing ? 0 : parent.id
-        parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
-        push!(bones, "{\"id\":" * string(bone.id) *
-                     ",\"name\":" * _js_str(bone.name) *
-                     ",\"parentId\":" * string(parent_id) *
-                     ",\"matrix\":" * _js_mat(compute_world_matrix(bone)) *
-                     ",\"parentMatrix\":" * _js_mat(parent_matrix) *
-                     ",\"basePosition\":" * _js_vec(get_position(bone)) *
-                     ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
-                     ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
-                     ",\"baseScale\":" * _js_vec(get_scale(bone)) *
-                     ",\"baseQuaternion\":" *
-                         _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
-                     "}")
-        push!(bind_inverses, _js_mat(obj.skeleton.bind_inverses[i]))
+        i == 1 || write(io, ',')
+        _web_write_bone_json(io, bone, num_buf)
     end
-    return "\"basePositions\":" * _js_array(geo.positions) *
-           ",\"bindMode\":" * _js_str(String(obj.bind_mode)) *
-           ",\"bindMatrix\":" * _js_mat(obj.bind_matrix) *
-           ",\"bindMatrixInverse\":" * _js_mat(_skinned_bind_matrix_inverse(obj)) *
-           ",\"skin\":{\"indices\":" * _js_skin_indices_array(obj.skin_indices) *
-           ",\"weights\":" * _js_skin_weights_array(obj.skin_weights) *
-           ",\"bones\":[" * join(bones, ",") * "]" *
-           ",\"bindInverses\":[" * join(bind_inverses, ",") * "]}"
+    write(io, "],\"bindInverses\":[")
+    for i in eachindex(obj.skeleton.bones)
+        i == 1 || write(io, ',')
+        _js_write_mat(io, obj.skeleton.bind_inverses[i], num_buf)
+    end
+    write(io, "]}")
+    return String(take!(io))
 end
 
 _web_material_vertex_colors(mat) =

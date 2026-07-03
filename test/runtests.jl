@@ -5639,6 +5639,18 @@ end
         apply_skinning(skin_alloc_mesh)
         @test_opt_alloc 65536 Diff3D._skinned_render_geometry(skin_alloc_mesh)
         @test_opt_alloc 16384 apply_skinning(skin_alloc_mesh)
+        skin_export_bones = [Bone(name="alloc_export_bone_$i") for i in 1:32]
+        for i in 2:length(skin_export_bones)
+            add!(skin_export_bones[i - 1], skin_export_bones[i])
+            skin_export_bones[i].position = Vec3(0.01 * i, 0.02 * i, 0.03 * i)
+        end
+        skin_export_mesh = SkinnedMesh(skin_alloc_geo, MeshBasicMaterial(),
+                                       Skeleton(skin_export_bones),
+                                       fill((1,2,3,4), skin_alloc_geo.n_vertices),
+                                       fill((0.4,0.3,0.2,0.1), skin_alloc_geo.n_vertices);
+                                       bind_mode=:detached)
+        Diff3D._web_skin_json(skin_export_mesh, skin_alloc_geo)
+        @test_opt_alloc 196608 Diff3D._web_skin_json(skin_export_mesh, skin_alloc_geo)
 
         morph_dir_geo = PlaneGeometry(width=1.0, height=1.0)
         set_attribute!(morph_dir_geo, :tangent,
