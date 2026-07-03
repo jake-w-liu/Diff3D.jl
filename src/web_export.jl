@@ -97,15 +97,49 @@ function _js_str(s::AbstractString)
     _js_write_str(io, s)
     return String(take!(io))
 end
-_js_num(x::Real) = isfinite(Float64(x)) ? @sprintf("%.17g", Float64(x)) : "0"
-function _js_write_num(io::IO, x::Real)
+const _WEB_NUM_BUFFER_BYTES = 64
+const _WEB_NUM_PRINTF_FORMAT = "%.17g"
+
+_web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
+
+function _js_num(x::Real)
+    io = IOBuffer(sizehint=32)
+    _js_write_num(io, x)
+    return String(take!(io))
+end
+
+# Use libc snprintf into a reusable caller-owned buffer: Printf.@printf keeps
+# exact formatting but allocates heavily in large numeric JSON arrays.
+@inline function _js_write_finite_num(io::IO, x::Float64, buf::Vector{UInt8})
+    n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
+                                         length(buf)::Csize_t,
+                                         _WEB_NUM_PRINTF_FORMAT::Cstring;
+                                         x::Cdouble)::Cint
+    n >= 0 || error("failed to format finite WebGL JSON number")
+    if n >= length(buf)
+        resize!(buf, Int(n) + 1)
+        n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
+                                             length(buf)::Csize_t,
+                                             _WEB_NUM_PRINTF_FORMAT::Cstring;
+                                             x::Cdouble)::Cint
+        n >= 0 || error("failed to format finite WebGL JSON number")
+    end
+    GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
+    return nothing
+end
+
+@inline function _js_write_num(io::IO, x::Real, buf::Vector{UInt8})
     xf = Float64(x)
     if isfinite(xf)
-        @printf(io, "%.17g", xf)
+        _js_write_finite_num(io, xf, buf)
     else
         write(io, '0')
     end
     return nothing
+end
+
+function _js_write_num(io::IO, x::Real)
+    return _js_write_num(io, x, _web_num_buffer())
 end
 const _WEB_JSON_ARRAY_SIZEHINT_LIMIT = 64 * 1024 * 1024
 
@@ -126,25 +160,27 @@ end
 function _js_write_array(io::IO, xs)
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     for x in xs
         first ? (first = false) : write(io, ',')
-        _js_write_num(io, x)
+        _js_write_num(io, x, num_buf)
     end
     write(io, ']')
     return nothing
 end
 function _js_array(xs)
-    io = IOBuffer()
+    io = IOBuffer(sizehint=_web_num_array_sizehint(length(xs)))
     _js_write_array(io, xs)
     return String(take!(io))
 end
 function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
-    io = IOBuffer()
+    io = IOBuffer(sizehint=_web_num_array_sizehint(length(indices)))
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     for index in indices
         first ? (first = false) : write(io, ',')
-        _js_write_num(io, index - 1)
+        _js_write_num(io, index - 1, num_buf)
     end
     write(io, ']')
     return String(take!(io))
@@ -178,11 +214,12 @@ function _js_write_attribute_components_array(io::IO, data::AbstractVector, stri
                                               components::Int, n_items::Int)
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     @inbounds for i in 1:n_items
         base = (i - 1) * stride
         for j in 1:components
             first ? (first = false) : write(io, ',')
-            _js_write_num(io, data[base + j])
+            _js_write_num(io, data[base + j], num_buf)
         end
     end
     write(io, ']')
@@ -190,31 +227,33 @@ function _js_write_attribute_components_array(io::IO, data::AbstractVector, stri
 end
 function _js_attribute_components_array(data::AbstractVector, stride::Int,
                                         components::Int, n_items::Int)
-    io = IOBuffer()
+    io = IOBuffer(sizehint=_web_num_array_sizehint(components * n_items))
     _js_write_attribute_components_array(io, data, stride, components, n_items)
     return String(take!(io))
 end
 function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
-    io = IOBuffer()
+    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(indices)))
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     @inbounds for idx in indices
         for k in 1:4
             first ? (first = false) : write(io, ',')
-            _js_write_num(io, idx[k] - 1)
+            _js_write_num(io, idx[k] - 1, num_buf)
         end
     end
     write(io, ']')
     return String(take!(io))
 end
 function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
-    io = IOBuffer()
+    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * length(weights)))
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     @inbounds for w in weights
         for k in 1:4
             first ? (first = false) : write(io, ',')
-            _js_write_num(io, w[k])
+            _js_write_num(io, w[k], num_buf)
         end
     end
     write(io, ']')
@@ -1951,13 +1990,14 @@ end
 function _js_write_vec3_components_array(io::IO, values::AbstractVector{<:Vec3})
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     for v in values
         first ? (first = false) : write(io, ',')
-        _js_write_num(io, v.x)
+        _js_write_num(io, v.x, num_buf)
         write(io, ',')
-        _js_write_num(io, v.y)
+        _js_write_num(io, v.y, num_buf)
         write(io, ',')
-        _js_write_num(io, v.z)
+        _js_write_num(io, v.z, num_buf)
     end
     write(io, ']')
     return nothing
@@ -1966,15 +2006,16 @@ end
 function _js_write_quat_components_array(io::IO, values::AbstractVector{<:Quaternion})
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     for q in values
         first ? (first = false) : write(io, ',')
-        _js_write_num(io, q.x)
+        _js_write_num(io, q.x, num_buf)
         write(io, ',')
-        _js_write_num(io, q.y)
+        _js_write_num(io, q.y, num_buf)
         write(io, ',')
-        _js_write_num(io, q.z)
+        _js_write_num(io, q.z, num_buf)
         write(io, ',')
-        _js_write_num(io, q.w)
+        _js_write_num(io, q.w, num_buf)
     end
     write(io, ']')
     return nothing
@@ -1986,11 +2027,12 @@ function _js_write_morph_weight_components_array(io::IO,
                                                  mismatch_message::AbstractString)
     write(io, '[')
     first = true
+    num_buf = _web_num_buffer()
     for v in values
         length(v) == stride || error(mismatch_message)
         for x in v
             first ? (first = false) : write(io, ',')
-            _js_write_num(io, x)
+            _js_write_num(io, x, num_buf)
         end
     end
     write(io, ']')
