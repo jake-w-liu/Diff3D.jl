@@ -613,53 +613,112 @@ function _web_fog_json(fog)
     return "null"
 end
 
-function _web_camera_json(camera)
-    camera === nothing && return "null"
+function _web_camera_json_sizehint(camera)
+    camera === nothing && return 4
+    if camera isa PerspectiveCamera || camera isa OrthographicCamera
+        return 256 + length(camera.name)
+    elseif camera isa ArrayCamera
+        sizehint = 64
+        for cam in camera.cameras
+            sizehint = _web_sizehint_add(sizehint, _web_camera_json_sizehint(cam))
+        end
+        for viewport in camera.viewports
+            sizehint = _web_sizehint_add(sizehint, _web_num_array_sizehint(length(viewport)))
+        end
+        return sizehint
+    end
+    return 256
+end
+
+function _web_write_camera_json(io::IO, camera, num_buf::Vector{UInt8})
+    if camera === nothing
+        write(io, "null")
+        return nothing
+    end
     if camera isa PerspectiveCamera
-        return "{" *
-               "\"type\":\"perspective\"" *
-               ",\"id\":" * string(camera.id) *
-               ",\"name\":" * _js_str(camera.name) *
-               ",\"position\":" * _js_vec(camera.position) *
-               ",\"target\":" * _js_vec(camera.target) *
-               ",\"up\":" * _js_vec(camera.up) *
-               ",\"fov\":" * _js_num(camera.fov) *
-               ",\"aspect\":" * _js_num(camera.aspect) *
-               ",\"near\":" * _js_num(camera.near) *
-               # _js_num maps Inf -> "0"; emit the JS literal Infinity instead so
-               # an infinite far clip plane (CPU-supported) is not silently turned
-               # into far=0, which collapses the JS depth range.
-               ",\"far\":" * (camera.far == Inf ? "Infinity" : _js_num(camera.far)) *
-               ",\"zoom\":" * _js_num(camera.zoom) *
-               "}"
+        write(io, "{\"type\":\"perspective\",\"id\":")
+        print(io, camera.id)
+        write(io, ",\"name\":")
+        _js_write_str(io, camera.name)
+        write(io, ",\"position\":")
+        _js_write_vec(io, camera.position, num_buf)
+        write(io, ",\"target\":")
+        _js_write_vec(io, camera.target, num_buf)
+        write(io, ",\"up\":")
+        _js_write_vec(io, camera.up, num_buf)
+        write(io, ",\"fov\":")
+        _js_write_num(io, camera.fov, num_buf)
+        write(io, ",\"aspect\":")
+        _js_write_num(io, camera.aspect, num_buf)
+        write(io, ",\"near\":")
+        _js_write_num(io, camera.near, num_buf)
+        # _js_num maps Inf -> "0"; emit the JS literal Infinity instead so
+        # an infinite far clip plane (CPU-supported) is not silently turned
+        # into far=0, which collapses the JS depth range.
+        write(io, ",\"far\":")
+        if camera.far == Inf
+            write(io, "Infinity")
+        else
+            _js_write_num(io, camera.far, num_buf)
+        end
+        write(io, ",\"zoom\":")
+        _js_write_num(io, camera.zoom, num_buf)
+        write(io, '}')
+        return nothing
     elseif camera isa OrthographicCamera
-        return "{" *
-               "\"type\":\"orthographic\"" *
-               ",\"id\":" * string(camera.id) *
-               ",\"name\":" * _js_str(camera.name) *
-               ",\"position\":" * _js_vec(camera.position) *
-               ",\"target\":" * _js_vec(camera.target) *
-               ",\"up\":" * _js_vec(camera.up) *
-               ",\"left\":" * _js_num(camera.left) *
-               ",\"right\":" * _js_num(camera.right) *
-               ",\"bottom\":" * _js_num(camera.bottom) *
-               ",\"top\":" * _js_num(camera.top) *
-               ",\"near\":" * _js_num(camera.near) *
-               ",\"far\":" * _js_num(camera.far) *
-               ",\"zoom\":" * _js_num(camera.zoom) *
-               "}"
+        write(io, "{\"type\":\"orthographic\",\"id\":")
+        print(io, camera.id)
+        write(io, ",\"name\":")
+        _js_write_str(io, camera.name)
+        write(io, ",\"position\":")
+        _js_write_vec(io, camera.position, num_buf)
+        write(io, ",\"target\":")
+        _js_write_vec(io, camera.target, num_buf)
+        write(io, ",\"up\":")
+        _js_write_vec(io, camera.up, num_buf)
+        write(io, ",\"left\":")
+        _js_write_num(io, camera.left, num_buf)
+        write(io, ",\"right\":")
+        _js_write_num(io, camera.right, num_buf)
+        write(io, ",\"bottom\":")
+        _js_write_num(io, camera.bottom, num_buf)
+        write(io, ",\"top\":")
+        _js_write_num(io, camera.top, num_buf)
+        write(io, ",\"near\":")
+        _js_write_num(io, camera.near, num_buf)
+        write(io, ",\"far\":")
+        _js_write_num(io, camera.far, num_buf)
+        write(io, ",\"zoom\":")
+        _js_write_num(io, camera.zoom, num_buf)
+        write(io, '}')
+        return nothing
     elseif camera isa ArrayCamera
         length(camera.cameras) == length(camera.viewports) ||
             throw(ArgumentError("ArrayCamera cameras and viewports lengths must match"))
-        cameras_json = join((_web_camera_json(cam) for cam in camera.cameras), ",")
-        viewports_json = join((_js_array(viewport) for viewport in camera.viewports), ",")
-        return "{" *
-               "\"type\":\"array\"" *
-               ",\"cameras\":[" * cameras_json * "]" *
-               ",\"viewports\":[" * viewports_json * "]" *
-               "}"
+        write(io, "{\"type\":\"array\",\"cameras\":[")
+        for (i, cam) in enumerate(camera.cameras)
+            i == 1 || write(io, ',')
+            _web_write_camera_json(io, cam, num_buf)
+        end
+        write(io, "],\"viewports\":[")
+        for (i, viewport) in enumerate(camera.viewports)
+            i == 1 || write(io, ',')
+            _js_write_array(io, viewport, num_buf)
+        end
+        write(io, "]}")
+        return nothing
     end
     throw(ArgumentError("unsupported WebGL export camera type: $(typeof(camera))"))
+end
+
+function _web_write_camera_json(io::IO, camera)
+    return _web_write_camera_json(io, camera, _web_num_buffer())
+end
+
+function _web_camera_json(camera)
+    io = IOBuffer(sizehint=_web_camera_json_sizehint(camera))
+    _web_write_camera_json(io, camera)
+    return String(take!(io))
 end
 
 _web_material_transparent(mat) =
@@ -2792,7 +2851,7 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, ",\"fov\":")
     _js_write_num(io, case.fov, num_buf)
     write(io, ",\"camera\":")
-    write(io, _web_camera_json(case.camera))
+    _web_write_camera_json(io, case.camera, num_buf)
     write(io, ",\"toneMapping\":")
     _js_write_str(io, String(case.tone_mapping))
     write(io, ",\"toneMappingMode\":")

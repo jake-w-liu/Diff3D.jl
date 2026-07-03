@@ -4977,6 +4977,23 @@ end
         @test occursin("gl.enable(gl.SCISSOR_TEST)", array_html)
         @test occursin("currentDrawCamera&&currentDrawCamera.type===\"orthographic\"", array_html)
         @test occursin("currentDrawDistance", array_html)
+        if DIFF3D_ALLOC_ASSERTIONS_ENABLED
+            alloc_cameras = PerspectiveCamera[]
+            alloc_viewports = NTuple{4,Int}[]
+            for i in 1:24
+                alloc_camera = PerspectiveCamera(fov=0.5 + 0.001i,
+                                                 aspect=1.0 + 0.01i,
+                                                 near=0.1, far=100.0 + i,
+                                                 name="array_alloc_$i")
+                alloc_camera.position = Vec3(Float64(i), Float64(i % 5), 6.0)
+                alloc_camera.target = Vec3(0.1i, 0.0, 0.0)
+                push!(alloc_cameras, alloc_camera)
+                push!(alloc_viewports, (10i, 20i, 320, 180))
+            end
+            alloc_array_camera = ArrayCamera(alloc_cameras, alloc_viewports)
+            Diff3D._web_camera_json(alloc_array_camera)
+            @test_opt_alloc 24576 Diff3D._web_camera_json(alloc_array_camera)
+        end
         bad_array_camera = ArrayCamera([array_left, array_right], [(0, 0, 400, 300)])
         bad_array_file = tempname() * ".html"
         @test_throws ArgumentError save_webgl_html(
