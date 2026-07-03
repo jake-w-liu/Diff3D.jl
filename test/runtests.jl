@@ -4450,6 +4450,13 @@ end
         @test occursin("\"name\":\"export_instanced_motion\"", html)
         @test occursin("\"instanceMatrices\":[[1,0,0,0,0,1,0,0,0,0,1,0,-0.59999999999999998,0,0,1],[1,0,0,0,0,1,0,0,0,0,1,0,0.59999999999999998,0,0,1]]", html)
         @test occursin("\"instanceColors\":[[1,0.25,0.10000000000000001],[0.10000000000000001,0.45000000000000001,1]]", html)
+        alloc_mats = [mat4_translation(Float64(i), Float64(i % 7), Float64(i % 11)) for i in 1:128]
+        alloc_colors = [Color3((i % 255) / 255, ((i + 41) % 255) / 255,
+                               ((i + 83) % 255) / 255) for i in 1:128]
+        Diff3D._js_mat_array(alloc_mats)
+        Diff3D._js_color_array(alloc_colors)
+        @test_opt_alloc 65536 Diff3D._js_mat_array(alloc_mats)
+        @test_opt_alloc 16384 Diff3D._js_color_array(alloc_colors)
         @test occursin("ANGLE_instanced_arrays", html)
         @test occursin("function instanceAttribs", html)
         @test occursin("attribute vec3 aInstanceColor", html)

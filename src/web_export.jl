@@ -157,16 +157,18 @@ function _web_byte_array_sizehint(n::Integer)
     return 2 + 4 * capped
 end
 
-function _js_write_array(io::IO, xs)
+function _js_write_array(io::IO, xs, num_buf::Vector{UInt8})
     write(io, '[')
     first = true
-    num_buf = _web_num_buffer()
     for x in xs
         first ? (first = false) : write(io, ',')
         _js_write_num(io, x, num_buf)
     end
     write(io, ']')
     return nothing
+end
+function _js_write_array(io::IO, xs)
+    return _js_write_array(io, xs, _web_num_buffer())
 end
 function _js_array(xs)
     io = IOBuffer(sizehint=_web_num_array_sizehint(length(xs)))
@@ -259,17 +261,125 @@ function _js_skin_weights_array(weights::AbstractVector{<:NTuple{4,Float64}})
     write(io, ']')
     return String(take!(io))
 end
-_js_vec(v::Vec2) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "]"
-_js_vec(v::Vec3) = "[" * _js_num(v.x) * "," * _js_num(v.y) * "," * _js_num(v.z) * "]"
-_js_quat(q::Quaternion) = "[" * _js_num(q.x) * "," * _js_num(q.y) * "," *
-                          _js_num(q.z) * "," * _js_num(q.w) * "]"
-_js_color(c::Color3) = "[" * _js_num(c.r) * "," * _js_num(c.g) * "," * _js_num(c.b) * "]"
-_js_color_array(colors::AbstractVector{<:Color3}) =
-    "[" * join((_js_color(c) for c in colors), ",") * "]"
-_js_mat(m::Mat4) = _js_array(m.e)
-_js_mat_array(ms::AbstractVector{<:Mat4}) = "[" * join((_js_mat(m) for m in ms), ",") * "]"
-_js_plane(p::Plane) = "[" * _js_num(p.normal.x) * "," * _js_num(p.normal.y) * "," *
-                      _js_num(p.normal.z) * "," * _js_num(p.constant) * "]"
+function _web_nested_num_array_sizehint(n_items::Integer, components::Integer)
+    (n_items <= 0 || components <= 0) && return 2
+    n_nums = (n_items > typemax(Int) || components > typemax(Int) ||
+              n_items > typemax(Int) ÷ components) ? typemax(Int) : Int(n_items) * Int(components)
+    item_limit = _WEB_JSON_ARRAY_SIZEHINT_LIMIT ÷ 3
+    capped_items = n_items > item_limit ? item_limit : Int(n_items)
+    base = _web_num_array_sizehint(n_nums)
+    extra = 3 * capped_items
+    return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, base + extra)
+end
+function _js_write_vec(io::IO, v::Vec2, num_buf::Vector{UInt8})
+    write(io, '[')
+    _js_write_num(io, v.x, num_buf)
+    write(io, ',')
+    _js_write_num(io, v.y, num_buf)
+    write(io, ']')
+    return nothing
+end
+function _js_write_vec(io::IO, v::Vec3, num_buf::Vector{UInt8})
+    write(io, '[')
+    _js_write_num(io, v.x, num_buf)
+    write(io, ',')
+    _js_write_num(io, v.y, num_buf)
+    write(io, ',')
+    _js_write_num(io, v.z, num_buf)
+    write(io, ']')
+    return nothing
+end
+function _js_write_quat(io::IO, q::Quaternion, num_buf::Vector{UInt8})
+    write(io, '[')
+    _js_write_num(io, q.x, num_buf)
+    write(io, ',')
+    _js_write_num(io, q.y, num_buf)
+    write(io, ',')
+    _js_write_num(io, q.z, num_buf)
+    write(io, ',')
+    _js_write_num(io, q.w, num_buf)
+    write(io, ']')
+    return nothing
+end
+function _js_write_color(io::IO, c::Color3, num_buf::Vector{UInt8})
+    write(io, '[')
+    _js_write_num(io, c.r, num_buf)
+    write(io, ',')
+    _js_write_num(io, c.g, num_buf)
+    write(io, ',')
+    _js_write_num(io, c.b, num_buf)
+    write(io, ']')
+    return nothing
+end
+function _js_write_mat(io::IO, m::Mat4, num_buf::Vector{UInt8})
+    return _js_write_array(io, m.e, num_buf)
+end
+function _js_write_plane(io::IO, p::Plane, num_buf::Vector{UInt8})
+    write(io, '[')
+    _js_write_num(io, p.normal.x, num_buf)
+    write(io, ',')
+    _js_write_num(io, p.normal.y, num_buf)
+    write(io, ',')
+    _js_write_num(io, p.normal.z, num_buf)
+    write(io, ',')
+    _js_write_num(io, p.constant, num_buf)
+    write(io, ']')
+    return nothing
+end
+function _js_vec(v::Vec2)
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 2))
+    _js_write_vec(io, v, _web_num_buffer())
+    return String(take!(io))
+end
+function _js_vec(v::Vec3)
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
+    _js_write_vec(io, v, _web_num_buffer())
+    return String(take!(io))
+end
+function _js_quat(q::Quaternion)
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
+    _js_write_quat(io, q, _web_num_buffer())
+    return String(take!(io))
+end
+function _js_color(c::Color3)
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
+    _js_write_color(io, c, _web_num_buffer())
+    return String(take!(io))
+end
+function _js_color_array(colors::AbstractVector{<:Color3})
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(length(colors), 3))
+    write(io, '[')
+    first = true
+    num_buf = _web_num_buffer()
+    for color in colors
+        first ? (first = false) : write(io, ',')
+        _js_write_color(io, color, num_buf)
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_mat(m::Mat4)
+    io = IOBuffer(sizehint=_web_num_array_sizehint(16))
+    _js_write_mat(io, m, _web_num_buffer())
+    return String(take!(io))
+end
+function _js_mat_array(ms::AbstractVector{<:Mat4})
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(length(ms), 16))
+    write(io, '[')
+    first = true
+    num_buf = _web_num_buffer()
+    for m in ms
+        first ? (first = false) : write(io, ',')
+        _js_write_mat(io, m, num_buf)
+    end
+    write(io, ']')
+    return String(take!(io))
+end
+function _js_plane(p::Plane)
+    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
+    _js_write_plane(io, p, _web_num_buffer())
+    return String(take!(io))
+end
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
 # Component-wise color product (three.js InstancedMesh per-instance color
 # multiplies the material color).
