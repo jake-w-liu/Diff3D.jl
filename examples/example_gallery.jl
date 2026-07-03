@@ -52,7 +52,7 @@ end
 
 function make_sphere_part(name, radius, color::Color3; position=Vec3(), roughness=0.36, metalness=0.08)
     mesh = Mesh(
-        SphereGeometry(radius=radius, width_segments=40, height_segments=24),
+        SphereGeometry(radius=radius, width_segments=32, height_segments=20),
         MeshStandardMaterial(color=color, roughness=roughness, metalness=metalness);
         name=name,
         cast_shadow=true,
@@ -224,7 +224,7 @@ function build_instancing_case()
     add!(scene, make_floor(width=20.0, depth=20.0, color=Color3(0.18, 0.28, 0.25)))
 
     stem_geo = CylinderGeometry(radius_top=0.035, radius_bottom=0.045, height=0.75, radial_segments=8)
-    flower_geo = IcosahedronGeometry(radius=0.22, detail=3)
+    flower_geo = IcosahedronGeometry(radius=0.22, detail=2)
     stems = InstancedMesh(stem_geo, MeshStandardMaterial(color=Color3(0.22, 0.62, 0.36), roughness=0.72), 121; name="garden_stems")
     flowers = InstancedMesh(flower_geo, MeshStandardMaterial(color=Color3(0.92, 0.44, 0.74), roughness=0.46), 121; name="garden_flowers")
     k = 0
@@ -555,7 +555,7 @@ function build_clipping_case()
     geode.position = Vec3(0.0, center_y, 0.0)
     add!(scene, geode)
     add!(geode, _clip_solid("geode_shell",
-                            SphereGeometry(radius=1.05, width_segments=48, height_segments=28),
+                            SphereGeometry(radius=1.05, width_segments=40, height_segments=24),
                             Color3(0.60, 0.64, 0.72); roughness=0.55, metalness=0.18))
     add!(geode, _clip_solid("geode_core",
                             SphereGeometry(radius=0.56, width_segments=36, height_segments=20),
@@ -565,10 +565,10 @@ function build_clipping_case()
     # Left and right props: knots that tumble through the same plane so the
     # exposed cross-section keeps changing.
     left = _clip_solid("section_knot_left",
-                       TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=120, radial_segments=16),
+                       TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=80, radial_segments=12),
                        Color3(0.20, 0.74, 0.78); position=Vec3(-3.3, center_y, 0.0), roughness=0.34, metalness=0.20)
     right = _clip_solid("section_knot_right",
-                        TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=120, radial_segments=16),
+                        TorusKnotGeometry(radius=0.52, tube=0.19, tubular_segments=80, radial_segments=12),
                         Color3(0.92, 0.36, 0.62); position=Vec3(3.3, center_y, 0.0), roughness=0.34, metalness=0.20)
     add!(scene, left); add!(scene, right)
 
@@ -630,23 +630,23 @@ function build_csg_case()
 
     # 1. Intersection: a cube clipped by a sphere -> a cushioned cube.
     cube = BoxGeometry(width=1.5, height=1.5, depth=1.5)
-    ball = SphereGeometry(radius=1.0, width_segments=28, height_segments=18)
+    ball = SphereGeometry(radius=1.0, width_segments=22, height_segments=14)
     cushion = csg_intersect(cube, ball)
 
     # 2. Subtraction: a sphere drilled through by a horizontal cylinder.
-    sphere = SphereGeometry(radius=0.95, width_segments=28, height_segments=18)
+    sphere = SphereGeometry(radius=0.95, width_segments=22, height_segments=14)
     drill = transform_geometry(
         CylinderGeometry(radius_top=0.4, radius_bottom=0.4, height=2.4,
-                         radial_segments=28, height_segments=1),
+                         radial_segments=18, height_segments=1),
         mat4_rotation_z(pi / 2))
     bead = csg_subtract(sphere, drill)
 
     # 3. Union: two crossed cylinders fused into a plus.
     up_bar = CylinderGeometry(radius_top=0.34, radius_bottom=0.34, height=1.7,
-                              radial_segments=28, height_segments=1)
+                              radial_segments=18, height_segments=1)
     side_bar = transform_geometry(
         CylinderGeometry(radius_top=0.34, radius_bottom=0.34, height=1.7,
-                         radial_segments=28, height_segments=1),
+                         radial_segments=18, height_segments=1),
         mat4_rotation_z(pi / 2))
     cross = csg_union(up_bar, side_bar)
 
@@ -872,7 +872,7 @@ end
 
 function build_terrain_case()
     # ---- Height field for a small rolling island (plane-space u,v in [0,1]) ----
-    segments = 96
+    segments = 72
     ncols = segments + 1
 
     # Smooth rolling relief with a radial edge fade so the island falls to the
@@ -1367,7 +1367,7 @@ function build_texture_case()
     # Raised tessellation (48x28) so the silhouette reads as a smooth sphere instead
     # of a faceted polyhedron; the UV parameterization is unchanged so the texture
     # still maps correctly.
-    globe = Mesh(SphereGeometry(radius=1.0, width_segments=48, height_segments=28),
+    globe = Mesh(SphereGeometry(radius=1.0, width_segments=40, height_segments=24),
                  MeshStandardMaterial(color=Color3(1.0, 1.0, 1.0), map=uv_globe_texture(),
                                       roughness=0.42, metalness=0.08);
                  name="uv_globe", cast_shadow=true, receive_shadow=true)
