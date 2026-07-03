@@ -1914,33 +1914,70 @@ function _web_case_json(case::WebGLExportCase)
     dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
     dynamic_spot_shadow_ids = _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
     dynamic_point_shadow_ids = _web_dynamic_point_shadow_light_ids(case.scene, case.animations)
-    return "{" *
-           "\"id\":" * _js_str(case.id) *
-           ",\"title\":" * _js_str(case.title) *
-           ",\"subtitle\":" * _js_str(case.subtitle) *
-           ",\"background\":" * _js_color(case.scene.background) *
-           ",\"fog\":" * _web_fog_json(case.scene.fog) *
-           ",\"target\":" * _js_vec(case.target) *
-           ",\"radius\":" * _js_num(case.radius) *
-           ",\"height\":" * _js_num(case.height) *
-           ",\"fov\":" * _js_num(case.fov) *
-           ",\"camera\":" * _web_camera_json(case.camera) *
-           ",\"toneMapping\":" * _js_str(String(case.tone_mapping)) *
-           ",\"toneMappingMode\":" * string(_web_tone_mapping_id(case.tone_mapping)) *
-           ",\"toneExposure\":" * _js_num(case.tone_exposure) *
-           ",\"outputColorSpace\":" * _js_str(String(case.output_color_space)) *
-           ",\"outputColorSpaceMode\":" * string(_web_output_color_space_id(case.output_color_space)) *
-           ",\"clippingPlanes\":[" * join((_js_plane(p) for p in case.clipping_planes), ",") * "]" *
-           ",\"lights\":" * _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
-                                             dynamic_shadow_ids,
-                                             dynamic_spot_shadow_ids,
-                                             dynamic_point_shadow_ids;
-                                             clipping_planes=case.clipping_planes) *
-           ",\"nodes\":[" * join(_web_collect_transform_nodes(case.scene, animation_target_ids), ",") * "]" *
-           ",\"objects\":[" * join(_web_collect_drawables(case.scene, animation_target_ids,
-                                                          case.radius), ",") * "]" *
-           ",\"animations\":[" * join((_web_clip_json(c) for c in case.animations), ",") * "]" *
-           "}"
+    lights_json = _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
+                                   dynamic_shadow_ids, dynamic_spot_shadow_ids,
+                                   dynamic_point_shadow_ids;
+                                   clipping_planes=case.clipping_planes)
+    nodes = _web_collect_transform_nodes(case.scene, animation_target_ids)
+    objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius)
+    clips = [_web_clip_json(clip) for clip in case.animations]
+    sizehint = length(lights_json) + sum(length, nodes; init=0) +
+               sum(length, objects; init=0) + sum(length, clips; init=0) + 1024
+    io = IOBuffer(sizehint=sizehint)
+    write(io, "{\"id\":")
+    write(io, _js_str(case.id))
+    write(io, ",\"title\":")
+    write(io, _js_str(case.title))
+    write(io, ",\"subtitle\":")
+    write(io, _js_str(case.subtitle))
+    write(io, ",\"background\":")
+    write(io, _js_color(case.scene.background))
+    write(io, ",\"fog\":")
+    write(io, _web_fog_json(case.scene.fog))
+    write(io, ",\"target\":")
+    write(io, _js_vec(case.target))
+    write(io, ",\"radius\":")
+    write(io, _js_num(case.radius))
+    write(io, ",\"height\":")
+    write(io, _js_num(case.height))
+    write(io, ",\"fov\":")
+    write(io, _js_num(case.fov))
+    write(io, ",\"camera\":")
+    write(io, _web_camera_json(case.camera))
+    write(io, ",\"toneMapping\":")
+    write(io, _js_str(String(case.tone_mapping)))
+    write(io, ",\"toneMappingMode\":")
+    write(io, string(_web_tone_mapping_id(case.tone_mapping)))
+    write(io, ",\"toneExposure\":")
+    write(io, _js_num(case.tone_exposure))
+    write(io, ",\"outputColorSpace\":")
+    write(io, _js_str(String(case.output_color_space)))
+    write(io, ",\"outputColorSpaceMode\":")
+    write(io, string(_web_output_color_space_id(case.output_color_space)))
+    write(io, ",\"clippingPlanes\":[")
+    for (i, plane) in enumerate(case.clipping_planes)
+        i == 1 || write(io, ',')
+        write(io, _js_plane(plane))
+    end
+    write(io, "],\"lights\":")
+    write(io, lights_json)
+    write(io, ",\"nodes\":[")
+    for (i, node) in enumerate(nodes)
+        i == 1 || write(io, ',')
+        write(io, node)
+    end
+    write(io, "],\"objects\":[")
+    for (i, obj) in enumerate(objects)
+        i == 1 || write(io, ',')
+        write(io, obj)
+    end
+    write(io, "],\"animations\":[")
+    for (i, clip) in enumerate(clips)
+        i == 1 || write(io, ',')
+        write(io, clip)
+    end
+    write(io, "]}")
+    return String(take!(io))
 end
 
 function _web_light_caps(cases::AbstractVector{WebGLExportCase})
