@@ -66,9 +66,37 @@ end
 # script-data tokenizer (`</script`, or the `<!--<script` double-escape entry)
 # and break the surrounding <script> block. `<` is exactly `<` inside a JS
 # string literal, so the decoded value is preserved.
-_js_str(s::AbstractString) = "\"" * replace(s,
-    "\\"=>"\\\\", "\""=>"\\\"", "\b"=>"\\b", "\f"=>"\\f", "\n"=>"\\n",
-    "\r"=>"\\r", "\t"=>"\\t", "<"=>"\\u003c") * "\""
+function _js_write_str(io::IO, s::AbstractString)
+    write(io, '"')
+    for c in s
+        if c == '\\'
+            write(io, "\\\\")
+        elseif c == '"'
+            write(io, "\\\"")
+        elseif c == '\b'
+            write(io, "\\b")
+        elseif c == '\f'
+            write(io, "\\f")
+        elseif c == '\n'
+            write(io, "\\n")
+        elseif c == '\r'
+            write(io, "\\r")
+        elseif c == '\t'
+            write(io, "\\t")
+        elseif c == '<'
+            write(io, "\\u003c")
+        else
+            write(io, c)
+        end
+    end
+    write(io, '"')
+    return nothing
+end
+function _js_str(s::AbstractString)
+    io = IOBuffer()
+    _js_write_str(io, s)
+    return String(take!(io))
+end
 _js_num(x::Real) = isfinite(Float64(x)) ? @sprintf("%.17g", Float64(x)) : "0"
 function _js_write_num(io::IO, x::Real)
     xf = Float64(x)
@@ -79,8 +107,7 @@ function _js_write_num(io::IO, x::Real)
     end
     return nothing
 end
-function _js_array(xs)
-    io = IOBuffer()
+function _js_write_array(io::IO, xs)
     write(io, '[')
     first = true
     for x in xs
@@ -88,6 +115,11 @@ function _js_array(xs)
         _js_write_num(io, x)
     end
     write(io, ']')
+    return nothing
+end
+function _js_array(xs)
+    io = IOBuffer()
+    _js_write_array(io, xs)
     return String(take!(io))
 end
 function _js_index_array_zero_based(indices::AbstractVector{<:Integer})
@@ -1755,157 +1787,230 @@ function _web_track_property_name(tr::AbstractKeyframeTrack)
     return _web_track_property_name(tr.property)
 end
 
-function _web_track_json(tr::KeyframeTrack)
-    values = Float64[]
-    for v in tr.values
-        append!(values, (v.x, v.y, v.z))
+const _WEB_JSON_ARRAY_SIZEHINT_LIMIT = 64 * 1024 * 1024
+
+function _web_num_array_sizehint(n::Integer)
+    n <= 0 && return 2
+    capped = min(Int(n), (_WEB_JSON_ARRAY_SIZEHINT_LIMIT - 2) ÷ 26)
+    return 2 + 26 * capped
+end
+
+function _web_track_json_buffer(tr::AbstractKeyframeTrack, value_components::Integer...)
+    n_nums = length(tr.times)
+    for n in value_components
+        n_int = Int(n)
+        n_nums = n_nums > typemax(Int) - n_int ? typemax(Int) : n_nums + n_int
     end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"vec3\"" *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
-           "}"
+    return IOBuffer(sizehint=256 + _web_num_array_sizehint(n_nums))
+end
+
+function _js_write_vec3_components_array(io::IO, values::AbstractVector{<:Vec3})
+    write(io, '[')
+    first = true
+    for v in values
+        first ? (first = false) : write(io, ',')
+        _js_write_num(io, v.x)
+        write(io, ',')
+        _js_write_num(io, v.y)
+        write(io, ',')
+        _js_write_num(io, v.z)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _js_write_quat_components_array(io::IO, values::AbstractVector{<:Quaternion})
+    write(io, '[')
+    first = true
+    for q in values
+        first ? (first = false) : write(io, ',')
+        _js_write_num(io, q.x)
+        write(io, ',')
+        _js_write_num(io, q.y)
+        write(io, ',')
+        _js_write_num(io, q.z)
+        write(io, ',')
+        _js_write_num(io, q.w)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _js_write_morph_weight_components_array(io::IO,
+                                                 values::AbstractVector{<:AbstractVector},
+                                                 stride::Integer,
+                                                 mismatch_message::AbstractString)
+    write(io, '[')
+    first = true
+    for v in values
+        length(v) == stride || error(mismatch_message)
+        for x in v
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, x)
+        end
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_track_json(tr::KeyframeTrack)
+    io = _web_track_json_buffer(tr, 3 * length(tr.values))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"vec3\",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_vec3_components_array(io, tr.values)
+    write(io, ",\"interpolation\":")
+    _js_write_str(io, String(tr.interpolation))
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_track_json(tr::NumberKeyframeTrack)
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"component\":" * string(tr.component) *
-           ",\"kind\":\"number\"" *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(tr.values) *
-           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
-           "}"
+    io = _web_track_json_buffer(tr, length(tr.values))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"component\":")
+    print(io, tr.component)
+    write(io, ",\"kind\":\"number\",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_array(io, tr.values)
+    write(io, ",\"interpolation\":")
+    _js_write_str(io, String(tr.interpolation))
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_track_json(tr::QuaternionKeyframeTrack)
-    values = Float64[]
-    for q in tr.values
-        append!(values, (q.x, q.y, q.z, q.w))
-    end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"quat\"" *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
-           "}"
+    io = _web_track_json_buffer(tr, 4 * length(tr.values))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"quat\",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_quat_components_array(io, tr.values)
+    write(io, ",\"interpolation\":")
+    _js_write_str(io, String(tr.interpolation))
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_track_json(tr::MorphWeightsKeyframeTrack)
-    values = Float64[]
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
-    for v in tr.values
-        length(v) == stride || error("morph-weight keyframes must have matching lengths")
-        append!(values, v)
-    end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"weights\"" *
-           ",\"stride\":" * string(stride) *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"interpolation\":" * _js_str(String(tr.interpolation)) *
-           "}"
+    io = _web_track_json_buffer(tr, stride * length(tr.values))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"weights\",\"stride\":")
+    print(io, stride)
+    write(io, ",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_morph_weight_components_array(io, tr.values, stride,
+                                            "morph-weight keyframes must have matching lengths")
+    write(io, ",\"interpolation\":")
+    _js_write_str(io, String(tr.interpolation))
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_track_json(tr::CubicSplineMorphWeightsKeyframeTrack)
-    values = Float64[]
-    in_tangents = Float64[]
-    out_tangents = Float64[]
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
-    for v in tr.values
-        length(v) == stride || error("morph-weight keyframes must have matching lengths")
-        append!(values, v)
-    end
-    for v in tr.in_tangents
-        length(v) == stride || error("morph-weight in-tangents must match keyframe length")
-        append!(in_tangents, v)
-    end
-    for v in tr.out_tangents
-        length(v) == stride || error("morph-weight out-tangents must match keyframe length")
-        append!(out_tangents, v)
-    end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"weights\"" *
-           ",\"stride\":" * string(stride) *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"inTangents\":" * _js_array(in_tangents) *
-           ",\"outTangents\":" * _js_array(out_tangents) *
-           ",\"interpolation\":\"cubicspline\"" *
-           "}"
+    io = _web_track_json_buffer(tr, stride * length(tr.values),
+                                stride * length(tr.in_tangents),
+                                stride * length(tr.out_tangents))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"weights\",\"stride\":")
+    print(io, stride)
+    write(io, ",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_morph_weight_components_array(io, tr.values, stride,
+                                            "morph-weight keyframes must have matching lengths")
+    write(io, ",\"inTangents\":")
+    _js_write_morph_weight_components_array(io, tr.in_tangents, stride,
+                                            "morph-weight in-tangents must match keyframe length")
+    write(io, ",\"outTangents\":")
+    _js_write_morph_weight_components_array(io, tr.out_tangents, stride,
+                                            "morph-weight out-tangents must match keyframe length")
+    write(io, ",\"interpolation\":\"cubicspline\"}")
+    return String(take!(io))
 end
 
 function _web_track_json(tr::CubicSplineKeyframeTrack)
-    values = Float64[]
-    in_tangents = Float64[]
-    out_tangents = Float64[]
-    for v in tr.values
-        append!(values, (v.x, v.y, v.z))
-    end
-    for v in tr.in_tangents
-        append!(in_tangents, (v.x, v.y, v.z))
-    end
-    for v in tr.out_tangents
-        append!(out_tangents, (v.x, v.y, v.z))
-    end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"vec3\"" *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"inTangents\":" * _js_array(in_tangents) *
-           ",\"outTangents\":" * _js_array(out_tangents) *
-           ",\"interpolation\":\"cubicspline\"" *
-           "}"
+    io = _web_track_json_buffer(tr, 3 * length(tr.values),
+                                3 * length(tr.in_tangents),
+                                3 * length(tr.out_tangents))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"vec3\",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_vec3_components_array(io, tr.values)
+    write(io, ",\"inTangents\":")
+    _js_write_vec3_components_array(io, tr.in_tangents)
+    write(io, ",\"outTangents\":")
+    _js_write_vec3_components_array(io, tr.out_tangents)
+    write(io, ",\"interpolation\":\"cubicspline\"}")
+    return String(take!(io))
 end
 
 function _web_track_json(tr::CubicSplineQuaternionKeyframeTrack)
-    values = Float64[]
-    in_tangents = Float64[]
-    out_tangents = Float64[]
-    for q in tr.values
-        append!(values, (q.x, q.y, q.z, q.w))
-    end
-    for q in tr.in_tangents
-        append!(in_tangents, (q.x, q.y, q.z, q.w))
-    end
-    for q in tr.out_tangents
-        append!(out_tangents, (q.x, q.y, q.z, q.w))
-    end
-    return "{" *
-           "\"target\":" * string(tr.target.id) *
-           ",\"property\":" * _js_str(_web_track_property_name(tr)) *
-           ",\"kind\":\"quat\"" *
-           ",\"times\":" * _js_array(tr.times) *
-           ",\"values\":" * _js_array(values) *
-           ",\"inTangents\":" * _js_array(in_tangents) *
-           ",\"outTangents\":" * _js_array(out_tangents) *
-           ",\"interpolation\":\"cubicspline\"" *
-           "}"
+    io = _web_track_json_buffer(tr, 4 * length(tr.values),
+                                4 * length(tr.in_tangents),
+                                4 * length(tr.out_tangents))
+    write(io, "{\"target\":")
+    print(io, tr.target.id)
+    write(io, ",\"property\":")
+    _js_write_str(io, _web_track_property_name(tr))
+    write(io, ",\"kind\":\"quat\",\"times\":")
+    _js_write_array(io, tr.times)
+    write(io, ",\"values\":")
+    _js_write_quat_components_array(io, tr.values)
+    write(io, ",\"inTangents\":")
+    _js_write_quat_components_array(io, tr.in_tangents)
+    write(io, ",\"outTangents\":")
+    _js_write_quat_components_array(io, tr.out_tangents)
+    write(io, ",\"interpolation\":\"cubicspline\"}")
+    return String(take!(io))
 end
 
 function _web_clip_json(clip::AnimationClip)
-    tracks = join((_web_track_json(t) for t in clip.tracks), ",")
-    return "{" *
-           "\"name\":" * _js_str(clip.name) *
-           ",\"duration\":" * _js_num(clip.duration) *
-           ",\"loop\":" * _js_str(String(clip.loop)) *
-           ",\"repetitions\":" * string(clip.repetitions) *
-           ",\"clampWhenFinished\":" * (clip.clamp_when_finished ? "true" : "false") *
-           ",\"timeScale\":" * _js_num(clip.time_scale) *
-           ",\"tracks\":[" * tracks * "]" *
-           "}"
+    track_json = [_web_track_json(t) for t in clip.tracks]
+    io = IOBuffer(sizehint=sum(length, track_json; init=0) + 256)
+    write(io, "{\"name\":")
+    _js_write_str(io, clip.name)
+    write(io, ",\"duration\":")
+    _js_write_num(io, clip.duration)
+    write(io, ",\"loop\":")
+    _js_write_str(io, String(clip.loop))
+    write(io, ",\"repetitions\":")
+    print(io, clip.repetitions)
+    write(io, ",\"clampWhenFinished\":")
+    write(io, clip.clamp_when_finished ? "true" : "false")
+    write(io, ",\"timeScale\":")
+    _js_write_num(io, clip.time_scale)
+    write(io, ",\"tracks\":[")
+    for (i, track) in enumerate(track_json)
+        i == 1 || write(io, ',')
+        write(io, track)
+    end
+    write(io, "]}")
+    return String(take!(io))
 end
 
 function _web_case_json(case::WebGLExportCase)
