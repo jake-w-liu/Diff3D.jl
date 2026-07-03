@@ -870,6 +870,27 @@ function _web_shadow_pcf_radius(light, fallback::Integer)
     return r
 end
 
+function _web_shadow_json_sizehint(depth::AbstractMatrix)
+    return 512 + _web_num_array_sizehint(16) + _web_byte_array_sizehint(length(depth))
+end
+
+@inline function _web_shadow_depth_byte(depth)
+    z = isfinite(depth) ? clamp((depth + 1.0) * 0.5, 0.0, 1.0) : 1.0
+    return round(Int, 255z)
+end
+
+function _web_write_shadow_depth_data(io::IO, depth::AbstractMatrix)
+    H, W = size(depth)
+    write(io, '[')
+    first = true
+    @inbounds for y in H:-1:1, x in 1:W
+        first ? (first = false) : write(io, ',')
+        _web_write_byte(io, _web_shadow_depth_byte(depth[y, x]))
+    end
+    write(io, ']')
+    return nothing
+end
+
 function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight,SpotLight};
                           shadow_mode::Symbol=:static,
                           clipping_planes=_NO_PLANES)
@@ -902,23 +923,24 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
     sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION,
                             bias=_light_shadow_bias(light, 3e-3), pcf_radius=pcf,
                             clipping_planes=clipping_planes)
-    H, W = size(sm.depth)
-    data = Int[]
-    sizehint!(data, H * W)
-    @inbounds for y in H:-1:1, x in 1:W
-        d = sm.depth[y, x]
-        z = isfinite(d) ? clamp((d + 1.0) * 0.5, 0.0, 1.0) : 1.0
-        push!(data, round(Int, 255z))
-    end
-    return "{" *
-           "\"type\":" * _js_str(light isa DirectionalLight ? "directionalStatic" :
-                                 light isa PointLight ? "pointStatic" : "spotStatic") *
-           ",\"size\":" * string(W) *
-           ",\"bias\":" * _js_num(sm.bias * 0.5) *
-           ",\"pcfRadius\":" * string(sm.pcf_radius) *
-           ",\"matrix\":" * _js_mat(sm.light_vp) *
-           ",\"data\":[" * join(data, ",") * "]" *
-           "}"
+    W = size(sm.depth, 2)
+    io = IOBuffer(sizehint=_web_shadow_json_sizehint(sm.depth))
+    num_buf = _web_num_buffer()
+    write(io, "{\"type\":")
+    _js_write_str(io, light isa DirectionalLight ? "directionalStatic" :
+                      light isa PointLight ? "pointStatic" : "spotStatic")
+    write(io, ",\"size\":")
+    print(io, W)
+    write(io, ",\"bias\":")
+    _js_write_num(io, sm.bias * 0.5, num_buf)
+    write(io, ",\"pcfRadius\":")
+    print(io, sm.pcf_radius)
+    write(io, ",\"matrix\":")
+    _js_write_mat(io, sm.light_vp, num_buf)
+    write(io, ",\"data\":")
+    _web_write_shadow_depth_data(io, sm.depth)
+    write(io, '}')
+    return String(take!(io))
 end
 
 function _web_visibility_chain(obj::AbstractObject3D)

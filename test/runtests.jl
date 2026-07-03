@@ -4616,6 +4616,8 @@ end
         static_shadow_json = Diff3D._web_shadow_json(static_shadow_scene, static_shadow_light)
         @test occursin("\"type\":\"directionalStatic\",\"size\":64,\"bias\":0.01,\"pcfRadius\":2",
                        static_shadow_json)
+        Diff3D._web_shadow_json(static_shadow_scene, static_shadow_light)
+        @test_opt_alloc 131072 Diff3D._web_shadow_json(static_shadow_scene, static_shadow_light)
         @test_throws ArgumentError Diff3D._web_shadow_json(
             static_shadow_scene,
             DirectionalLight(cast_shadow=true, shadow_pcf_radius=5))
