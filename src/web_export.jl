@@ -541,9 +541,20 @@ end
 
 function _web_env_json(env)
     env isa CubeTexture || return "null"
-    colors = join((_js_color(_web_texture_average_color(face)) for face in env.faces), ",")
-    faces = join((_web_cube_face_json(face) for face in env.faces), ",")
-    return "{\"colors\":[" * colors * "],\"faces\":[" * faces * "]}"
+    io = IOBuffer(sizehint=_web_env_json_sizehint(env))
+    num_buf = _web_num_buffer()
+    write(io, "{\"colors\":[")
+    for (i, face) in enumerate(env.faces)
+        i == 1 || write(io, ',')
+        _js_write_color(io, _web_texture_average_color(face), num_buf)
+    end
+    write(io, "],\"faces\":[")
+    for (i, face) in enumerate(env.faces)
+        i == 1 || write(io, ',')
+        _web_write_cube_face_json(io, face)
+    end
+    write(io, "]}")
+    return String(take!(io))
 end
 
 function _web_fog_json(fog)
@@ -775,11 +786,38 @@ function _web_cube_level_json(data::Array{Float64,3})
     return String(take!(io))
 end
 
-function _web_cube_face_json(tex)
-    tex isa Texture || return "null"
+function _web_cube_face_json_sizehint(tex)
+    tex isa Texture || return 4
     H, W, C = size(tex.data)
-    (H > 0 && W > 0 && C > 0) || return "null"
-    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
+    (H > 0 && W > 0 && C > 0) || return 4
+    hint = _web_texture_json_sizehint(H, W)
+    for mip in tex.mipmaps
+        if ndims(mip) == 3 && all(size(mip) .> 0)
+            hint = min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT,
+                       hint + _web_texture_json_sizehint(size(mip, 1), size(mip, 2)) + 1)
+        end
+    end
+    return hint
+end
+
+function _web_env_json_sizehint(env::CubeTexture)
+    hint = 64 + _web_nested_num_array_sizehint(length(env.faces), 3)
+    for face in env.faces
+        hint = min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint + _web_cube_face_json_sizehint(face))
+    end
+    return hint
+end
+
+function _web_write_cube_face_json(io::IO, tex)
+    if !(tex isa Texture)
+        write(io, "null")
+        return nothing
+    end
+    H, W, C = size(tex.data)
+    if !(H > 0 && W > 0 && C > 0)
+        write(io, "null")
+        return nothing
+    end
     write(io, "{\"width\":")
     print(io, W)
     write(io, ",\"height\":")
@@ -805,6 +843,12 @@ function _web_cube_face_json(tex)
         end
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_cube_face_json(tex)
+    io = IOBuffer(sizehint=_web_cube_face_json_sizehint(tex))
+    _web_write_cube_face_json(io, tex)
     return String(take!(io))
 end
 

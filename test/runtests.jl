@@ -6934,6 +6934,19 @@ end
         lod_env_json = Diff3D._web_env_json(lod_cube)
         @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", lod_env_json)
         @test occursin("{\"width\":1,\"height\":1", lod_env_json)
+        env_alloc_faces = ntuple(i -> begin
+            data = Array{Float64,3}(undef, 32, 32, 4)
+            @inbounds for y in 1:32, x in 1:32, c in 1:4
+                data[y, x, c] = mod(i + 3y + 5x + 7c, 257) / 256
+            end
+            tex = Texture(data; filter=:nearest, min_filter=:linear_mipmap_linear,
+                          mag_filter=:linear, colorspace=:linear)
+            generate_mipmaps!(tex)
+            tex
+        end, 6)
+        env_alloc_cube = CubeTexture(env_alloc_faces)
+        Diff3D._web_env_json(env_alloc_cube)
+        @test_opt_alloc 196608 Diff3D._web_env_json(env_alloc_cube)
         eq_h, eq_w = 64, 128
         eq_data = Array{Float64}(undef, eq_h, eq_w, 3)
         for row in 1:eq_h, col in 1:eq_w
