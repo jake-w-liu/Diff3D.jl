@@ -116,6 +116,13 @@ function _web_num_array_sizehint(n::Integer)
     return 2 + 26 * capped
 end
 
+function _web_byte_array_sizehint(n::Integer)
+    n <= 0 && return 2
+    limit = (_WEB_JSON_ARRAY_SIZEHINT_LIMIT - 2) ÷ 4
+    capped = n > limit ? limit : Int(n)
+    return 2 + 4 * capped
+end
+
 function _js_write_array(io::IO, xs)
     write(io, '[')
     first = true
@@ -488,79 +495,168 @@ _web_material_sprite_size_attenuation(mat) =
 _web_material_point_size_attenuation(mat) =
     hasproperty(mat, :size_attenuation) ? Bool(getproperty(mat, :size_attenuation)) : true
 
+@inline _web_texture_unit_byte(v) =
+    round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
+
+@inline function _web_write_byte(io::IO, b::Int)
+    if b >= 100
+        h = b ÷ 100
+        r = b - 100h
+        write(io, UInt8(0x30 + h))
+        write(io, UInt8(0x30 + r ÷ 10))
+        write(io, UInt8(0x30 + r % 10))
+    elseif b >= 10
+        write(io, UInt8(0x30 + b ÷ 10))
+        write(io, UInt8(0x30 + b % 10))
+    else
+        write(io, UInt8(0x30 + b))
+    end
+    return nothing
+end
+
+@inline function _web_write_texture_pixel!(io::IO, data::Array{Float64,3},
+                                           y::Int, x::Int, channels::Int,
+                                           first::Bool)
+    r = data[y, x, 1]
+    g = channels >= 2 ? data[y, x, 2] : r
+    b = channels >= 3 ? data[y, x, 3] : r
+    a = channels >= 4 ? data[y, x, 4] : 1.0
+    first || write(io, ',')
+    _web_write_byte(io, _web_texture_unit_byte(r))
+    write(io, ',')
+    _web_write_byte(io, _web_texture_unit_byte(g))
+    write(io, ',')
+    _web_write_byte(io, _web_texture_unit_byte(b))
+    write(io, ',')
+    _web_write_byte(io, _web_texture_unit_byte(a))
+    return false
+end
+
+function _web_write_texture_rgba_data(io::IO, data::Array{Float64,3};
+                                      flip_y::Bool)
+    H, W, C = size(data)
+    write(io, '[')
+    first = true
+    if flip_y
+        @inbounds for y in H:-1:1, x in 1:W
+            first = _web_write_texture_pixel!(io, data, y, x, C, first)
+        end
+    else
+        @inbounds for y in 1:H, x in 1:W
+            first = _web_write_texture_pixel!(io, data, y, x, C, first)
+        end
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_texture_json_sizehint(H::Int, W::Int)
+    return 512 + _web_byte_array_sizehint(4 * H * W)
+end
+
 function _web_texture_json(tex)
     tex isa Texture || return "null"
     tex.matrix_auto_update && texture_update_matrix!(tex)
     H, W, C = size(tex.data)
     (H > 0 && W > 0 && C > 0) || return "null"
-    unit_byte(v) = round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
-    rgba = Int[]
-    sizehint!(rgba, 4 * H * W)
-    @inbounds for y in H:-1:1, x in 1:W
-        r = tex.data[y, x, 1]
-        g = C >= 2 ? tex.data[y, x, 2] : r
-        b = C >= 3 ? tex.data[y, x, 3] : r
-        a = C >= 4 ? tex.data[y, x, 4] : 1.0
-        append!(rgba, (unit_byte(r), unit_byte(g), unit_byte(b), unit_byte(a)))
-    end
-    return "{" *
-           "\"width\":" * string(W) *
-           ",\"height\":" * string(H) *
-           ",\"wrapS\":" * _js_str(String(tex.wrap_s)) *
-           ",\"wrapT\":" * _js_str(String(tex.wrap_t)) *
-           ",\"filter\":" * _js_str(String(tex.filter)) *
-           ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
-           ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
-           ",\"maxAnisotropy\":" * _js_num(tex.max_anisotropy) *
-           ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
-           ",\"offset\":[" * _js_num(tex.offset.x) * "," * _js_num(tex.offset.y) * "]" *
-           ",\"repeat\":[" * _js_num(tex.repeat.x) * "," * _js_num(tex.repeat.y) * "]" *
-           ",\"rotation\":" * _js_num(tex.rotation) *
-           ",\"center\":[" * _js_num(tex.center.x) * "," * _js_num(tex.center.y) * "]" *
-           ",\"matrix\":[" * join((_js_num(x) for x in tex.matrix.e), ",") * "]" *
-           ",\"matrixAutoUpdate\":" * (tex.matrix_auto_update ? "true" : "false") *
-           ",\"texCoord\":" * string(tex.tex_coord) *
-           ",\"needsUpdate\":" * (tex.needs_update ? "true" : "false") *
-           ",\"data\":[" * join(rgba, ",") * "]" *
-           "}"
+    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
+    write(io, "{\"width\":")
+    print(io, W)
+    write(io, ",\"height\":")
+    print(io, H)
+    write(io, ",\"wrapS\":")
+    _js_write_str(io, String(tex.wrap_s))
+    write(io, ",\"wrapT\":")
+    _js_write_str(io, String(tex.wrap_t))
+    write(io, ",\"filter\":")
+    _js_write_str(io, String(tex.filter))
+    write(io, ",\"minFilter\":")
+    _js_write_str(io, String(tex.min_filter))
+    write(io, ",\"magFilter\":")
+    _js_write_str(io, String(tex.mag_filter))
+    write(io, ",\"maxAnisotropy\":")
+    _js_write_num(io, tex.max_anisotropy)
+    write(io, ",\"colorspace\":")
+    _js_write_str(io, String(tex.colorspace))
+    write(io, ",\"offset\":[")
+    _js_write_num(io, tex.offset.x)
+    write(io, ',')
+    _js_write_num(io, tex.offset.y)
+    write(io, "],\"repeat\":[")
+    _js_write_num(io, tex.repeat.x)
+    write(io, ',')
+    _js_write_num(io, tex.repeat.y)
+    write(io, "],\"rotation\":")
+    _js_write_num(io, tex.rotation)
+    write(io, ",\"center\":[")
+    _js_write_num(io, tex.center.x)
+    write(io, ',')
+    _js_write_num(io, tex.center.y)
+    write(io, "],\"matrix\":")
+    _js_write_array(io, tex.matrix.e)
+    write(io, ",\"matrixAutoUpdate\":")
+    write(io, tex.matrix_auto_update ? "true" : "false")
+    write(io, ",\"texCoord\":")
+    print(io, tex.tex_coord)
+    write(io, ",\"needsUpdate\":")
+    write(io, tex.needs_update ? "true" : "false")
+    write(io, ",\"data\":")
+    _web_write_texture_rgba_data(io, tex.data; flip_y=true)
+    write(io, '}')
+    return String(take!(io))
+end
+
+function _web_write_cube_level_json(io::IO, data::Array{Float64,3})
+    H, W, C = size(data)
+    write(io, "{\"width\":")
+    print(io, W)
+    write(io, ",\"height\":")
+    print(io, H)
+    write(io, ",\"data\":")
+    _web_write_texture_rgba_data(io, data; flip_y=false)
+    write(io, '}')
+    return nothing
 end
 
 function _web_cube_level_json(data::Array{Float64,3})
     H, W, C = size(data)
     (H > 0 && W > 0 && C > 0) || return "null"
-    unit_byte(v) = round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
-    rgba = Int[]
-    sizehint!(rgba, 4 * H * W)
-    @inbounds for y in 1:H, x in 1:W
-        r = data[y, x, 1]
-        g = C >= 2 ? data[y, x, 2] : r
-        b = C >= 3 ? data[y, x, 3] : r
-        a = C >= 4 ? data[y, x, 4] : 1.0
-        append!(rgba, (unit_byte(r), unit_byte(g), unit_byte(b), unit_byte(a)))
-    end
-    return "{" *
-           "\"width\":" * string(W) *
-           ",\"height\":" * string(H) *
-           ",\"data\":[" * join(rgba, ",") * "]" *
-           "}"
+    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
+    _web_write_cube_level_json(io, data)
+    return String(take!(io))
 end
 
 function _web_cube_face_json(tex)
     tex isa Texture || return "null"
     H, W, C = size(tex.data)
     (H > 0 && W > 0 && C > 0) || return "null"
-    base = _web_cube_level_json(tex.data)
-    base == "null" && return "null"
-    mipmaps = join((_web_cube_level_json(mip) for mip in tex.mipmaps
-                    if ndims(mip) == 3 && all(size(mip) .> 0)), ",")
-    return base[1:end-1] *
-           ",\"filter\":" * _js_str(String(tex.filter)) *
-           ",\"minFilter\":" * _js_str(String(tex.min_filter)) *
-           ",\"magFilter\":" * _js_str(String(tex.mag_filter)) *
-           ",\"maxAnisotropy\":" * _js_num(tex.max_anisotropy) *
-           ",\"colorspace\":" * _js_str(String(tex.colorspace)) *
-           ",\"mipmaps\":[" * mipmaps * "]" *
-           "}"
+    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
+    write(io, "{\"width\":")
+    print(io, W)
+    write(io, ",\"height\":")
+    print(io, H)
+    write(io, ",\"data\":")
+    _web_write_texture_rgba_data(io, tex.data; flip_y=false)
+    write(io, ",\"filter\":")
+    _js_write_str(io, String(tex.filter))
+    write(io, ",\"minFilter\":")
+    _js_write_str(io, String(tex.min_filter))
+    write(io, ",\"magFilter\":")
+    _js_write_str(io, String(tex.mag_filter))
+    write(io, ",\"maxAnisotropy\":")
+    _js_write_num(io, tex.max_anisotropy)
+    write(io, ",\"colorspace\":")
+    _js_write_str(io, String(tex.colorspace))
+    write(io, ",\"mipmaps\":[")
+    first = true
+    for mip in tex.mipmaps
+        if ndims(mip) == 3 && all(size(mip) .> 0)
+            first ? (first = false) : write(io, ',')
+            _web_write_cube_level_json(io, mip)
+        end
+    end
+    write(io, "]}")
+    return String(take!(io))
 end
 
 function _web_material_texture(mat)
