@@ -107,6 +107,15 @@ function _js_write_num(io::IO, x::Real)
     end
     return nothing
 end
+const _WEB_JSON_ARRAY_SIZEHINT_LIMIT = 64 * 1024 * 1024
+
+function _web_num_array_sizehint(n::Integer)
+    n <= 0 && return 2
+    limit = (_WEB_JSON_ARRAY_SIZEHINT_LIMIT - 2) ÷ 26
+    capped = n > limit ? limit : Int(n)
+    return 2 + 26 * capped
+end
+
 function _js_write_array(io::IO, xs)
     write(io, '[')
     first = true
@@ -158,9 +167,8 @@ function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) w
     write(io, ']')
     return String(take!(io))
 end
-function _js_attribute_components_array(data::AbstractVector, stride::Int,
-                                        components::Int, n_items::Int)
-    io = IOBuffer()
+function _js_write_attribute_components_array(io::IO, data::AbstractVector, stride::Int,
+                                              components::Int, n_items::Int)
     write(io, '[')
     first = true
     @inbounds for i in 1:n_items
@@ -171,6 +179,12 @@ function _js_attribute_components_array(data::AbstractVector, stride::Int,
         end
     end
     write(io, ']')
+    return nothing
+end
+function _js_attribute_components_array(data::AbstractVector, stride::Int,
+                                        components::Int, n_items::Int)
+    io = IOBuffer()
+    _js_write_attribute_components_array(io, data, stride, components, n_items)
     return String(take!(io))
 end
 function _js_skin_indices_array(indices::AbstractVector{<:NTuple{4,Int}})
@@ -938,45 +952,87 @@ function _web_tangent_json(geo::BufferGeometry)
     return true, _js_attribute_components_array(attr.data, attr.item_size, 4, geo.n_vertices)
 end
 
-function _web_morph_vec3_targets(geo::BufferGeometry, prefix::String)
-    targets = String[]
-    i = 0
-    while true
-        name = Symbol(prefix * string(i))
-        has_attribute(geo, name) || break
-        attr = get_attribute(geo, name)
-        attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
-        data = [Float64(attr.data[(vi - 1) * attr.item_size + j])
-                for vi in 1:geo.n_vertices for j in 1:3]
-        push!(targets, _js_array(data))
-        i += 1
-    end
-    return targets
-end
-
-function _web_morph_targets_json(obj, geo::BufferGeometry)
-    hasproperty(obj, :morph_target_influences) ||
-        return "\"morphTargets\":[],\"morphWeights\":[]"
-    targets = String[]
+function _web_morph_position_target_count(geo::BufferGeometry)
     i = 0
     while true
         name = Symbol("morphPosition$i")
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
         attr.item_size == 3 && length(attr.data) == length(geo.positions) || break
-        push!(targets, _js_array(attr.data))
         i += 1
     end
-    normals = _web_morph_vec3_targets(geo, "morphNormal")
-    tangents = _web_morph_vec3_targets(geo, "morphTangent")
-    has_morph_channels = !(isempty(targets) && isempty(normals) && isempty(tangents))
-    weights = has_morph_channels ? Float64.(obj.morph_target_influences) : Float64[]
-    morph_json = "\"morphTargets\":[" * join(targets, ",") * "]" *
-                 ",\"morphNormals\":[" * join(normals, ",") * "]" *
-                 ",\"morphTangents\":[" * join(tangents, ",") * "]" *
-                 ",\"morphWeights\":" * _js_array(weights)
-    return obj isa SkinnedMesh ? morph_json :
-           "\"basePositions\":" * _js_array(geo.positions) * "," * morph_json
+    return i
+end
+
+function _web_morph_vec3_target_count(geo::BufferGeometry, prefix::String)
+    i = 0
+    while true
+        name = Symbol(prefix * string(i))
+        has_attribute(geo, name) || break
+        attr = get_attribute(geo, name)
+        attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
+        i += 1
+    end
+    return i
+end
+
+function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::Int)
+    write(io, '[')
+    for i in 0:(count - 1)
+        i == 0 || write(io, ',')
+        attr = get_attribute(geo, Symbol("morphPosition$i"))
+        _js_write_array(io, attr.data)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
+                                       prefix::String, count::Int)
+    write(io, '[')
+    for i in 0:(count - 1)
+        i == 0 || write(io, ',')
+        attr = get_attribute(geo, Symbol(prefix * string(i)))
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                             geo.n_vertices)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_morph_targets_sizehint(obj, geo::BufferGeometry, target_count::Int,
+                                     normal_count::Int, tangent_count::Int,
+                                     has_morph_channels::Bool)
+    n_nums = obj isa SkinnedMesh ? 0 : length(geo.positions)
+    n_nums += 3 * geo.n_vertices * (target_count + normal_count + tangent_count)
+    has_morph_channels && (n_nums += length(obj.morph_target_influences))
+    return 256 + _web_num_array_sizehint(n_nums)
+end
+
+function _web_morph_targets_json(obj, geo::BufferGeometry)
+    hasproperty(obj, :morph_target_influences) ||
+        return "\"morphTargets\":[],\"morphWeights\":[]"
+    target_count = _web_morph_position_target_count(geo)
+    normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
+    tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+    has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
+    io = IOBuffer(sizehint=_web_morph_targets_sizehint(obj, geo, target_count,
+                                                       normal_count, tangent_count,
+                                                       has_morph_channels))
+    if !(obj isa SkinnedMesh)
+        write(io, "\"basePositions\":")
+        _js_write_array(io, geo.positions)
+        write(io, ',')
+    end
+    write(io, "\"morphTargets\":")
+    _web_write_morph_position_targets(io, geo, target_count)
+    write(io, ",\"morphNormals\":")
+    _web_write_morph_vec3_targets(io, geo, "morphNormal", normal_count)
+    write(io, ",\"morphTangents\":")
+    _web_write_morph_vec3_targets(io, geo, "morphTangent", tangent_count)
+    write(io, ",\"morphWeights\":")
+    _js_write_array(io, has_morph_channels ? obj.morph_target_influences : Float64[])
+    return String(take!(io))
 end
 
 function _web_skin_json(obj, geo::BufferGeometry)
@@ -1787,14 +1843,6 @@ function _web_track_property_name(tr::AbstractKeyframeTrack)
     return _web_track_property_name(tr.property)
 end
 
-const _WEB_JSON_ARRAY_SIZEHINT_LIMIT = 64 * 1024 * 1024
-
-function _web_num_array_sizehint(n::Integer)
-    n <= 0 && return 2
-    capped = min(Int(n), (_WEB_JSON_ARRAY_SIZEHINT_LIMIT - 2) ÷ 26)
-    return 2 + 26 * capped
-end
-
 function _web_track_json_buffer(tr::AbstractKeyframeTrack, value_components::Integer...)
     n_nums = length(tr.times)
     for n in value_components
@@ -2143,7 +2191,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     .controls input { width:116px; accent-color:var(--accent); }
     .controls output { min-width:32px; color:var(--text); font-variant-numeric:tabular-nums; text-align:right; }
     .layout { display:grid; grid-template-columns:minmax(0, 1fr) 300px; gap:16px; align-items:start; }
-    .stage { border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#020305; }
+    .stage { position:sticky; top:16px; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#020305; }
     canvas { display:block; width:100%; aspect-ratio:16 / 10; touch-action:none; cursor:grab; }
     canvas:active { cursor:grabbing; }
     .bar { display:flex; justify-content:space-between; gap:12px; padding:12px 14px; background:var(--panel); border-top:1px solid var(--edge); }
