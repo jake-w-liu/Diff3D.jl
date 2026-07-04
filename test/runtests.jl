@@ -3783,6 +3783,45 @@ end
                                                     visibility_extra_value=false) ==
                   ",\"visibilityStates\":[{\"id\":1,\"visible\":true},{\"id\":2,\"visible\":false}]"
         end
+        light_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        for i in 1:28
+            k = mod(i, 7)
+            light = if k == 0
+                AmbientLight(color=Color3(0.1, 0.2, 0.3), intensity=0.1i,
+                             name="light_alloc_ambient_$i")
+            elseif k == 1
+                l = DirectionalLight(color=Color3(1.0, 0.9, 0.8),
+                                     intensity=0.2i, name="light_alloc_dir_$i")
+                l.position = Vec3(i, 3.0, 2.0); l.cast_shadow = false; l
+            elseif k == 2
+                l = PointLight(color=Color3(0.5, 0.8, 1.0), intensity=0.2i,
+                               distance=10.0 + i, decay=2.0,
+                               name="light_alloc_point_$i")
+                l.position = Vec3(i, 1.0, 2.0); l.cast_shadow = false; l
+            elseif k == 3
+                l = SpotLight(color=Color3(0.9, 0.7, 0.5), intensity=0.2i,
+                              distance=20.0, angle=0.5, penumbra=0.25,
+                              decay=1.5, name="light_alloc_spot_$i")
+                l.position = Vec3(i, 2.0, 3.0); l.cast_shadow = false; l
+            elseif k == 4
+                HemisphereLight(color=Color3(0.2, 0.4, 0.8),
+                                ground_color=Color3(0.1, 0.08, 0.05),
+                                intensity=0.3i, name="light_alloc_hemi_$i")
+            elseif k == 5
+                RectAreaLight(color=Color3(1.0, 0.5, 0.25), intensity=0.15i,
+                              width=2.0 + i / 10, height=1.0 + i / 20,
+                              name="light_alloc_rect_$i")
+            else
+                LightProbe(coeffs=(Color3(0.01, 0.02, 0.03),
+                                   Color3(0.04, 0.05, 0.06),
+                                   Color3(0.07, 0.08, 0.09),
+                                   Color3(0.1, 0.11, 0.12)),
+                           intensity=0.2i, name="light_alloc_probe_$i")
+            end
+            add!(light_alloc_scene, light)
+        end
+        Diff3D._web_lights_json(light_alloc_scene)
+        @test_opt_alloc 60000 Diff3D._web_lights_json(light_alloc_scene)
         @test Diff3D._web_morph_target_ids_json([1, 2, 1], 2) == "[1,2]"
         @test Diff3D._web_morph_target_ids_json([1, 2], 3) == "[1,2,3]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)

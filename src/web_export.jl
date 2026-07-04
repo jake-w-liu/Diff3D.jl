@@ -1077,208 +1077,279 @@ function _web_light_visibility_json(light::AbstractLight,
                                     visibility_values::AbstractVector{Bool};
                                     visibility_extra_id::Int=0,
                                     visibility_extra_value::Bool=false)
-    visibility_json = if isempty(visibility_target_ids)
+    io = IOBuffer(sizehint=128)
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    return String(take!(io))
+end
+
+function _web_write_light_visibility_json(io::IO, light::AbstractLight,
+                                          visibility_target_ids::AbstractVector{Int},
+                                          visibility_values::AbstractVector{Bool};
+                                          visibility_extra_id::Int=0,
+                                          visibility_extra_value::Bool=false)
+    write(io, ",\"visibilityStates\":")
+    if isempty(visibility_target_ids)
         id = visibility_extra_id == 0 ? light.id : visibility_extra_id
         visible = visibility_extra_id == 0 ? is_visible(light) : visibility_extra_value
-        _web_visibility_states_json(Int[], Bool[]; extra_id=id, extra_value=visible)
+        _web_write_visibility_states_json(io, Int[], Bool[]; extra_id=id,
+                                          extra_value=visible)
     else
-        _web_visibility_states_json(visibility_target_ids, visibility_values;
-                                    extra_id=visibility_extra_id,
-                                    extra_value=visibility_extra_value)
+        _web_write_visibility_states_json(io, visibility_target_ids, visibility_values;
+                                          extra_id=visibility_extra_id,
+                                          extra_value=visibility_extra_value)
     end
-    return ",\"visibilityStates\":" * visibility_json
+    return nothing
 end
 
-function _web_light_json(light::AmbientLight;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
-    return "{" *
-           "\"type\":\"ambient\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+function _web_write_light_common_json(io::IO, typ::AbstractString, light::AbstractLight,
+                                      num_buf::Vector{UInt8})
+    write(io, "{\"type\":")
+    _js_write_str(io, typ)
+    write(io, ",\"id\":")
+    print(io, light.id)
+    write(io, ",\"name\":")
+    _js_write_str(io, light.name)
+    write(io, ",\"visible\":")
+    write(io, is_visible(light) ? "true" : "false")
+    return nothing
 end
 
-function _web_light_json(light::DirectionalLight, scene::Scene;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
+function _web_write_light_json(io::IO, light::AmbientLight;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "ambient", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
+end
+
+function _web_write_light_json(io::IO, light::DirectionalLight, scene::Scene;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
     pos = get_position(light)
     target = light.target
     dir = normalize(pos - target)
-    return "{" *
-           "\"type\":\"directional\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           ",\"position\":" * _js_vec(pos) *
-           ",\"target\":" * _js_vec(target) *
-           ",\"direction\":" * _js_vec(dir) *
-           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
-                                             clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "directional", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    write(io, ",\"position\":")
+    _js_write_vec(io, pos, num_buf)
+    write(io, ",\"target\":")
+    _js_write_vec(io, target, num_buf)
+    write(io, ",\"direction\":")
+    _js_write_vec(io, dir, num_buf)
+    write(io, ",\"castShadow\":")
+    write(io, light.cast_shadow ? "true" : "false")
+    write(io, ",\"shadow\":")
+    write(io, _web_shadow_json(scene, light; shadow_mode=shadow_mode,
+                               clipping_planes=clipping_planes))
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-function _web_light_json(light::PointLight, scene::Scene;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
-    return "{" *
-           "\"type\":\"point\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           ",\"position\":" * _js_vec(get_position(light)) *
-           ",\"distance\":" * _js_num(light.distance) *
-           ",\"decay\":" * _js_num(light.decay) *
-           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
-                                             clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+function _web_write_light_json(io::IO, light::PointLight, scene::Scene;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "point", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    write(io, ",\"position\":")
+    _js_write_vec(io, get_position(light), num_buf)
+    write(io, ",\"distance\":")
+    _js_write_num(io, light.distance, num_buf)
+    write(io, ",\"decay\":")
+    _js_write_num(io, light.decay, num_buf)
+    write(io, ",\"castShadow\":")
+    write(io, light.cast_shadow ? "true" : "false")
+    write(io, ",\"shadow\":")
+    write(io, _web_shadow_json(scene, light; shadow_mode=shadow_mode,
+                               clipping_planes=clipping_planes))
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-function _web_light_json(light::SpotLight, scene::Scene;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
+function _web_write_light_json(io::IO, light::SpotLight, scene::Scene;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
     pos = get_position(light)
     target = light.target
     dir = normalize(target - pos)
     penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
     cone = clamp(Float64(light.angle), 0.0, pi)
     inner = cone * (1.0 - penumbra)
-    return "{" *
-           "\"type\":\"spot\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           ",\"position\":" * _js_vec(pos) *
-           ",\"target\":" * _js_vec(target) *
-           ",\"direction\":" * _js_vec(dir) *
-           ",\"distance\":" * _js_num(light.distance) *
-           ",\"decay\":" * _js_num(light.decay) *
-           ",\"angle\":" * _js_num(light.angle) *
-           ",\"penumbra\":" * _js_num(light.penumbra) *
-           ",\"coneCos\":" * _js_num(cos(cone)) *
-           ",\"penumbraCos\":" * _js_num(cos(inner)) *
-           ",\"castShadow\":" * (light.cast_shadow ? "true" : "false") *
-           ",\"shadow\":" * _web_shadow_json(scene, light; shadow_mode=shadow_mode,
-                                             clipping_planes=clipping_planes) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "spot", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    write(io, ",\"position\":")
+    _js_write_vec(io, pos, num_buf)
+    write(io, ",\"target\":")
+    _js_write_vec(io, target, num_buf)
+    write(io, ",\"direction\":")
+    _js_write_vec(io, dir, num_buf)
+    write(io, ",\"distance\":")
+    _js_write_num(io, light.distance, num_buf)
+    write(io, ",\"decay\":")
+    _js_write_num(io, light.decay, num_buf)
+    write(io, ",\"angle\":")
+    _js_write_num(io, light.angle, num_buf)
+    write(io, ",\"penumbra\":")
+    _js_write_num(io, light.penumbra, num_buf)
+    write(io, ",\"coneCos\":")
+    _js_write_num(io, cos(cone), num_buf)
+    write(io, ",\"penumbraCos\":")
+    _js_write_num(io, cos(inner), num_buf)
+    write(io, ",\"castShadow\":")
+    write(io, light.cast_shadow ? "true" : "false")
+    write(io, ",\"shadow\":")
+    write(io, _web_shadow_json(scene, light; shadow_mode=shadow_mode,
+                               clipping_planes=clipping_planes))
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-function _web_light_json(light::HemisphereLight;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
-    return "{" *
-           "\"type\":\"hemisphere\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"groundColor\":" * _js_color(light.ground_color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+function _web_write_light_json(io::IO, light::HemisphereLight;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "hemisphere", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"groundColor\":")
+    _js_write_color(io, light.ground_color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-function _web_light_json(light::RectAreaLight;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
+function _web_write_light_json(io::IO, light::RectAreaLight;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
     pos = get_position(light)
     forward = normalize(light.target - pos)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, forward))
     v = cross(forward, u)
-    return "{" *
-           "\"type\":\"rectArea\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"color\":" * _js_color(light.color) *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           ",\"position\":" * _js_vec(pos) *
-           ",\"target\":" * _js_vec(light.target) *
-           ",\"forward\":" * _js_vec(forward) *
-           ",\"u\":" * _js_vec(u) *
-           ",\"v\":" * _js_vec(v) *
-           ",\"width\":" * _js_num(light.width) *
-           ",\"height\":" * _js_num(light.height) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "rectArea", light, num_buf)
+    write(io, ",\"color\":")
+    _js_write_color(io, light.color, num_buf)
+    write(io, ",\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    write(io, ",\"position\":")
+    _js_write_vec(io, pos, num_buf)
+    write(io, ",\"target\":")
+    _js_write_vec(io, light.target, num_buf)
+    write(io, ",\"forward\":")
+    _js_write_vec(io, forward, num_buf)
+    write(io, ",\"u\":")
+    _js_write_vec(io, u, num_buf)
+    write(io, ",\"v\":")
+    _js_write_vec(io, v, num_buf)
+    write(io, ",\"width\":")
+    _js_write_num(io, light.width, num_buf)
+    write(io, ",\"height\":")
+    _js_write_num(io, light.height, num_buf)
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-function _web_light_json(light::LightProbe;
-                         visibility_target_ids::AbstractVector{Int}=Int[],
-                         visibility_values::AbstractVector{Bool}=Bool[],
-                         visibility_extra_id::Int=0,
-                         visibility_extra_value::Bool=false,
-                         shadow_mode::Symbol=:static,
-                         clipping_planes=_NO_PLANES)
-    coeffs = "[" * join((_js_color(c) for c in light.coeffs), ",") * "]"
-    return "{" *
-           "\"type\":\"lightProbe\"" *
-           ",\"id\":" * string(light.id) *
-           ",\"name\":" * _js_str(light.name) *
-           ",\"visible\":" * (is_visible(light) ? "true" : "false") *
-           ",\"position\":" * _js_vec(get_position(light)) *
-           ",\"coeffs\":" * coeffs *
-           ",\"intensity\":" * _js_num(light.intensity) *
-           _web_light_visibility_json(light, visibility_target_ids, visibility_values;
-                                      visibility_extra_id=visibility_extra_id,
-                                      visibility_extra_value=visibility_extra_value) *
-           "}"
+function _web_write_light_json(io::IO, light::LightProbe;
+                               visibility_target_ids::AbstractVector{Int}=Int[],
+                               visibility_values::AbstractVector{Bool}=Bool[],
+                               visibility_extra_id::Int=0,
+                               visibility_extra_value::Bool=false,
+                               shadow_mode::Symbol=:static,
+                               clipping_planes=_NO_PLANES)
+    num_buf = _web_num_buffer()
+    _web_write_light_common_json(io, "lightProbe", light, num_buf)
+    write(io, ",\"position\":")
+    _js_write_vec(io, get_position(light), num_buf)
+    write(io, ",\"coeffs\":[")
+    for (i, coeff) in enumerate(light.coeffs)
+        i == 1 || write(io, ',')
+        _js_write_color(io, coeff, num_buf)
+    end
+    write(io, "],\"intensity\":")
+    _js_write_num(io, light.intensity, num_buf)
+    _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
+                                     visibility_extra_id=visibility_extra_id,
+                                     visibility_extra_value=visibility_extra_value)
+    write(io, '}')
+    return true
 end
 
-_web_light_json(light::AbstractLight; kwargs...) = nothing
-_web_light_json(light::AbstractLight, scene::Scene; kwargs...) = _web_light_json(light; kwargs...)
+_web_write_light_json(io::IO, light::AbstractLight; kwargs...) = false
+_web_write_light_json(io::IO, light::AbstractLight, scene::Scene; kwargs...) =
+    _web_write_light_json(io, light; kwargs...)
+
+_web_light_exported(light::AbstractLight) =
+    light isa AmbientLight || light isa DirectionalLight || light isa PointLight ||
+    light isa SpotLight || light isa HemisphereLight || light isa RectAreaLight ||
+    light isa LightProbe
+
+function _web_light_json(light::AbstractLight, args...; kwargs...)
+    io = IOBuffer(sizehint=1024)
+    _web_write_light_json(io, light, args...; kwargs...) || return nothing
+    return String(take!(io))
+end
 
 function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
                           stale_shadow_ids::Set{Int}=Set{Int}(),
@@ -1310,16 +1381,15 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
             else
                 :static
             end
-            item = _web_light_json(obj, scene;
-                                   visibility_target_ids=ancestor_ids,
-                                   visibility_values=ancestor_visibility,
-                                   visibility_extra_id=obj.id,
-                                   visibility_extra_value=obj_visible,
-                                   shadow_mode=shadow_mode,
-                                   clipping_planes=clipping_planes)
-            if item !== nothing
+            if _web_light_exported(obj)
                 first ? (first = false) : write(io, ',')
-                write(io, item)
+                _web_write_light_json(io, obj, scene;
+                                      visibility_target_ids=ancestor_ids,
+                                      visibility_values=ancestor_visibility,
+                                      visibility_extra_id=obj.id,
+                                      visibility_extra_value=obj_visible,
+                                      shadow_mode=shadow_mode,
+                                      clipping_planes=clipping_planes)
             end
         end
         push!(ancestor_ids, obj.id)
@@ -1657,16 +1727,17 @@ end
 
 function _web_write_visibility_state(io::IO, id::Int, visible::Bool)
     write(io, "{\"id\":")
-    write(io, string(id))
+    print(io, id)
     write(io, ",\"visible\":")
     write(io, visible ? "true" : "false")
     write(io, '}')
     return nothing
 end
 
-function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractVector{Bool};
-                                     extra_id::Int=0, extra_value::Bool=false)
-    io = IOBuffer()
+function _web_write_visibility_states_json(io::IO, ids::AbstractVector{Int},
+                                           values::AbstractVector{Bool};
+                                           extra_id::Int=0,
+                                           extra_value::Bool=false)
     write(io, '[')
     first = true
     for (id, visible) in zip(ids, values)
@@ -1678,6 +1749,14 @@ function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractV
         _web_write_visibility_state(io, extra_id, extra_value)
     end
     write(io, ']')
+    return nothing
+end
+
+function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractVector{Bool};
+                                     extra_id::Int=0, extra_value::Bool=false)
+    io = IOBuffer()
+    _web_write_visibility_states_json(io, ids, values; extra_id=extra_id,
+                                      extra_value=extra_value)
     return String(take!(io))
 end
 
