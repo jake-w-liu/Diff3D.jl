@@ -599,12 +599,61 @@ function _skin_normal_buffer(sm::SkinnedMesh, mats)
     return out
 end
 
+function _skin_positions!(out::Vector{Float64}, sm::SkinnedMesh, mats, morphed)
+    geo = _skinned_buffer_geometry(sm)
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        p0 = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
+        p = _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
+        out[base] = p.x
+        out[base + 1] = p.y
+        out[base + 2] = p.z
+    end
+    return out
+end
+
+function _skin_normal_buffer!(out::Vector{Float64}, sm::SkinnedMesh, mats)
+    geo = _skinned_buffer_geometry(sm)
+    normals = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_normals(sm) : geo.normals
+    if length(normals) < geo.n_vertices * 3
+        copyto!(out, 1, normals, 1, length(normals))
+        return out
+    end
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        n = Vec3(normals[base], normals[base + 1], normals[base + 2])
+        sn = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], n)
+        out[base] = sn.x
+        out[base + 1] = sn.y
+        out[base + 2] = sn.z
+    end
+    return out
+end
+
 function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats,
                                  tangent_data=attr.data)
     geo = _skinned_buffer_geometry(sm)
     attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
         return copy(tangent_data)
     out = _float64_copy(tangent_data)
+    @inbounds for vi in 1:geo.n_vertices
+        base = (vi - 1) * attr.item_size + 1
+        t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))
+        st = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], t)
+        out[base] = st.x
+        out[base + 1] = st.y
+        out[base + 2] = st.z
+    end
+    return out
+end
+
+function _skin_tangent_attribute!(out::Vector{Float64}, sm::SkinnedMesh,
+                                  attr::BufferAttribute, mats,
+                                  tangent_data=attr.data)
+    geo = _skinned_buffer_geometry(sm)
+    copyto!(out, 1, tangent_data, 1, length(tangent_data))
+    attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
+        return out
     @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * attr.item_size + 1
         t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))
@@ -636,14 +685,7 @@ function _skinned_render_geometry(sm::SkinnedMesh)
     mats = _skinning_matrices(sm)
     positions = Vector{Float64}(undef, geo.n_vertices * 3)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
-    @inbounds for vi in 1:geo.n_vertices
-        base = 3vi - 2
-        p0 = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
-        p = _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
-        positions[base] = p.x
-        positions[base + 1] = p.y
-        positions[base + 2] = p.z
-    end
+    _skin_positions!(positions, sm, mats, morphed)
     BufferGeometry(positions, _skin_normal_buffer(sm, mats), copy(geo.uvs),
                    copy(geo.indices), geo.n_vertices, geo.n_faces,
                    _copy_skinned_attributes(sm, mats), copy(geo.groups),
@@ -654,6 +696,89 @@ function _skinned_render_mesh(sm::SkinnedMesh)
     Mesh(sm.position, sm.rotation, sm.scale, sm.parent, AbstractObject3D[],
          sm.visible, sm.name, sm.id, _skinned_render_geometry(sm), sm.material,
          nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
+end
+
+function _skinned_normal_output_length(geo::BufferGeometry)
+    return length(geo.normals) >= geo.n_vertices * 3 ? geo.n_vertices * 3 :
+           length(geo.normals)
+end
+
+function _skinned_attr_eltype(name::Symbol, attr::BufferAttribute)
+    return name === :tangent ? Float64 : eltype(attr.data)
+end
+
+function _skinned_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeometry)
+    proxy.n_vertices == geo.n_vertices || return false
+    proxy.n_faces == geo.n_faces || return false
+    length(proxy.positions) == 3 * geo.n_vertices || return false
+    length(proxy.normals) == _skinned_normal_output_length(geo) || return false
+    length(proxy.uvs) == length(geo.uvs) || return false
+    length(proxy.indices) == length(geo.indices) || return false
+    length(proxy.attributes) == length(geo.attributes) || return false
+    for (name, attr) in geo.attributes
+        haskey(proxy.attributes, name) || return false
+        pattr = proxy.attributes[name]
+        pattr.item_size == attr.item_size || return false
+        length(pattr.data) == length(attr.data) || return false
+        eltype(pattr.data) === _skinned_attr_eltype(name, attr) || return false
+    end
+    return true
+end
+
+function _copy_skinned_attributes!(out::Dict{Symbol,BufferAttribute}, sm::SkinnedMesh, mats)
+    geo = _skinned_buffer_geometry(sm)
+    for (name, attr) in geo.attributes
+        pattr = out[name]
+        if name === :tangent
+            tangent_data = _has_active_morph_influences(sm.morph_target_influences) ?
+                           apply_morph_tangents(sm) : attr.data
+            _skin_tangent_attribute!(pattr.data, sm, attr, mats, tangent_data)
+        else
+            copyto!(pattr.data, 1, attr.data, 1, length(attr.data))
+        end
+    end
+    return out
+end
+
+function _copy_groups!(out::Vector{NTuple{3,Int}}, groups::Vector{NTuple{3,Int}})
+    resize!(out, length(groups))
+    length(groups) > 0 && copyto!(out, 1, groups, 1, length(groups))
+    return out
+end
+
+function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh)
+    geo = _skinned_buffer_geometry(sm)
+    _skinned_proxy_geometry_matches(proxy, geo) || return _skinned_render_geometry(sm)
+    mats = _skinning_matrices(sm)
+    morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
+    _skin_positions!(proxy.positions, sm, mats, morphed)
+    _skin_normal_buffer!(proxy.normals, sm, mats)
+    copyto!(proxy.uvs, 1, geo.uvs, 1, length(geo.uvs))
+    copyto!(proxy.indices, 1, geo.indices, 1, length(geo.indices))
+    proxy.n_vertices = geo.n_vertices
+    proxy.n_faces = geo.n_faces
+    _copy_skinned_attributes!(proxy.attributes, sm, mats)
+    _copy_groups!(proxy.groups, geo.groups)
+    proxy.draw_range = geo.draw_range
+    return proxy
+end
+
+function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh)
+    proxy.position = sm.position
+    proxy.rotation = sm.rotation
+    proxy.scale = sm.scale
+    proxy.parent = sm.parent
+    proxy.visible = sm.visible
+    proxy.name = sm.name
+    proxy.id = sm.id
+    proxy.geometry = _update_skinned_render_geometry!(proxy.geometry, sm)
+    proxy.material = sm.material
+    proxy.flat_shading = nothing
+    proxy.cast_shadow = sm.cast_shadow
+    proxy.receive_shadow = sm.receive_shadow
+    empty!(proxy.morph_target_influences)
+    empty!(proxy.morph_target_names)
+    return proxy
 end
 
 function _collect_skinned_meshes!(out::Vector{SkinnedMesh}, obj::AbstractObject3D)
@@ -671,6 +796,23 @@ function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObj
     _collect_skinned_meshes!(skinned, scene)
     for sm in skinned
         push!(meshes, _skinned_render_mesh(sm))
+    end
+    return meshes
+end
+
+function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D,
+                                        skinned::Vector{SkinnedMesh},
+                                        proxies::Vector{Mesh})
+    empty!(skinned)
+    _collect_skinned_meshes!(skinned, scene)
+    for i in eachindex(skinned)
+        sm = skinned[i]
+        if i > length(proxies)
+            push!(proxies, _skinned_render_mesh(sm))
+        else
+            _update_skinned_render_mesh!(proxies[i], sm)
+        end
+        push!(meshes, proxies[i])
     end
     return meshes
 end

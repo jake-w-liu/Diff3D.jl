@@ -5855,10 +5855,19 @@ end
         rt_smooth = RenderTarget(48, 48); render!(rt_smooth, skinned_scene, skin_cam; shading=:smooth)
         rt_cached = RenderTarget(48, 48); render!(rt_cached, skinned_scene, skin_cam; cache=RenderCache())
         rt_tiled = RenderTarget(48, 48); render_tiled!(rt_tiled, skinned_scene, skin_cam; tiles=2)
+        pooled_skin_cache = RenderCache()
+        rt_pooled_skin = RenderTarget(48, 48); render_pooled!(rt_pooled_skin, skinned_scene, skin_cam,
+                                                              pooled_skin_cache)
         @test red_pixels(rt_flat) > 50
         @test red_pixels(rt_smooth) > 50
         @test red_pixels(rt_cached) > 50
         @test red_pixels(rt_tiled) > 50
+        @test red_pixels(rt_pooled_skin) > 50
+        render_bone.position = Vec3(0.55, 0.0, 0.0)
+        rt_moved_flat = RenderTarget(48, 48); render!(rt_moved_flat, skinned_scene, skin_cam; shading=:flat)
+        rt_moved_pooled = RenderTarget(48, 48); render_pooled!(rt_moved_pooled, skinned_scene, skin_cam,
+                                                               pooled_skin_cache)
+        @test maximum(abs.(rt_moved_flat.color .- rt_moved_pooled.color)) < 1e-12
 
         transparent_sm = SkinnedMesh(render_geo,
                                      MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
@@ -10759,6 +10768,25 @@ end
         cached_instanced_call(r3, im, base, cache2, proj, view, near, cam.position)
         @test_opt_alloc 4096 cached_instanced_call(r3, im, base, cache2, proj, view, near,
                                                    cam.position)
+
+        skin_cache_geo = BoxGeometry(width_segments=12, height_segments=12,
+                                     depth_segments=12)
+        skin_cache_bone = Bone()
+        skin_cache_mesh = SkinnedMesh(skin_cache_geo,
+                                      MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                        side=:double),
+                                      Skeleton([skin_cache_bone]),
+                                      fill((1, 1, 1, 1), skin_cache_geo.n_vertices),
+                                      fill((1.0, 0.0, 0.0, 0.0), skin_cache_geo.n_vertices))
+        skin_cache_scene = Scene()
+        add!(skin_cache_scene, skin_cache_mesh)
+        skin_cache_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+        skin_cache_cam.position = Vec3(0.0, 0.0, 8.0)
+        skin_cache = RenderCache()
+        skin_cache_rt = RenderTarget(32, 32)
+        render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam, skin_cache)
+        @test_opt_alloc 2048 render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam,
+                                            skin_cache)
         @test_opt_alloc 32768 render!(r1, scene, cam)
         default_alloc = @allocated render!(r1, scene, cam)
         cached_alloc1 = @allocated render!(r3, scene, cam; cache=cache2)

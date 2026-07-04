@@ -127,6 +127,7 @@ mutable struct RenderCache
     lights::Vector{SceneLight}
     instanced::Vector{InstancedMesh}
     skinned::Vector{SkinnedMesh}
+    skinned_meshes::Vector{Mesh}
     transparent::Vector{Mesh}
     opaque_flat::Vector{Mesh}
     smooth_meshes::Vector{Mesh}
@@ -151,7 +152,7 @@ function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
     scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
     RenderCache(Mesh[], SceneLight[], InstancedMesh[], SkinnedMesh[],
-                Mesh[], Mesh[], Mesh[], Mesh[],
+                Mesh[], Mesh[], Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
@@ -632,7 +633,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
     _collect_meshes_into!(cache.meshes, scene)
-    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned)
+    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned, cache.skinned_meshes)
     _collect_lights_into!(cache.lights, scene)
     _collect_instanced_into!(cache.instanced, scene)
     for mesh in cache.meshes
@@ -2139,7 +2140,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
     _collect_meshes_into!(meshes, scene)
-    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned)
+    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned, shared_cache.skinned_meshes)
     lights = shared_cache.lights
     _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced

@@ -1116,7 +1116,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     if cache === nothing
         _append_skinned_render_meshes!(meshes, scene)
     else
-        _append_skinned_render_meshes!(meshes, scene, cache.skinned)
+        _append_skinned_render_meshes!(meshes, scene, cache.skinned, cache.skinned_meshes)
     end
     shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution,
                                               clipping_planes=clipping_planes) : nothing
