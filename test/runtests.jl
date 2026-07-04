@@ -3762,6 +3762,27 @@ end
                                           stream_scene; radius=8.0)
             Diff3D._web_write_case_json(devnull, stream_case)
             @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull, stream_case)
+
+            texture_n = 128
+            texture_data = Array{Float64}(undef, texture_n, texture_n, 4)
+            for y in 1:texture_n, x in 1:texture_n
+                texture_data[y, x, 1] = (x % 17) / 16
+                texture_data[y, x, 2] = (y % 19) / 18
+                texture_data[y, x, 3] = ((x + y) % 23) / 22
+                texture_data[y, x, 4] = 1.0
+            end
+            texture_alloc = Texture(texture_data; filter=:nearest, colorspace=:srgb)
+            texture_io = IOBuffer()
+            Diff3D._web_write_texture_json(texture_io, texture_alloc)
+            @test String(take!(texture_io)) == Diff3D._web_texture_json(texture_alloc)
+            texture_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+            add!(texture_scene,
+                 Mesh(BoxGeometry(), MeshBasicMaterial(map=texture_alloc);
+                      name="texture_case_alloc"))
+            texture_case = WebGLExportCase("texture_alloc", "Texture Alloc", "streamed",
+                                           texture_scene; radius=4.0)
+            Diff3D._web_write_case_json(devnull, texture_case)
+            @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull, texture_case)
         end
         @test Diff3D._js_array([0.0, NaN, Inf, -Inf, 0.1]) ==
               "[0,0,0,0,0.10000000000000001]"
