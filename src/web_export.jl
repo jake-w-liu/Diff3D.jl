@@ -247,10 +247,10 @@ function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) w
     return String(take!(io))
 end
 function _js_write_attribute_components_array(io::IO, data::AbstractVector, stride::Int,
-                                              components::Int, n_items::Int)
+                                              components::Int, n_items::Int,
+                                              num_buf::Vector{UInt8})
     write(io, '[')
     first = true
-    num_buf = _web_num_buffer()
     @inbounds for i in 1:n_items
         base = (i - 1) * stride
         for j in 1:components
@@ -260,6 +260,11 @@ function _js_write_attribute_components_array(io::IO, data::AbstractVector, stri
     end
     write(io, ']')
     return nothing
+end
+function _js_write_attribute_components_array(io::IO, data::AbstractVector, stride::Int,
+                                              components::Int, n_items::Int)
+    return _js_write_attribute_components_array(io, data, stride, components, n_items,
+                                                _web_num_buffer())
 end
 function _js_attribute_components_array(data::AbstractVector, stride::Int,
                                         components::Int, n_items::Int)
@@ -1469,12 +1474,31 @@ function _web_morph_vec3_target_count(geo::BufferGeometry, prefix::String)
     return i
 end
 
-function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::Int)
+function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::Int,
+                                           num_buf::Vector{UInt8})
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
         attr = get_attribute(geo, Symbol("morphPosition$i"))
-        _js_write_array(io, attr.data)
+        _js_write_array(io, attr.data, num_buf)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::Int)
+    return _web_write_morph_position_targets(io, geo, count, _web_num_buffer())
+end
+
+function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
+                                       prefix::String, count::Int,
+                                       num_buf::Vector{UInt8})
+    write(io, '[')
+    for i in 0:(count - 1)
+        i == 0 || write(io, ',')
+        attr = get_attribute(geo, Symbol(prefix * string(i)))
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                             geo.n_vertices, num_buf)
     end
     write(io, ']')
     return nothing
@@ -1482,15 +1506,7 @@ end
 
 function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
                                        prefix::String, count::Int)
-    write(io, '[')
-    for i in 0:(count - 1)
-        i == 0 || write(io, ',')
-        attr = get_attribute(geo, Symbol(prefix * string(i)))
-        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
-                                             geo.n_vertices)
-    end
-    write(io, ']')
-    return nothing
+    return _web_write_morph_vec3_targets(io, geo, prefix, count, _web_num_buffer())
 end
 
 function _web_morph_targets_sizehint(obj, geo::BufferGeometry, target_count::Int,
@@ -1500,6 +1516,31 @@ function _web_morph_targets_sizehint(obj, geo::BufferGeometry, target_count::Int
     n_nums += 3 * geo.n_vertices * (target_count + normal_count + tangent_count)
     has_morph_channels && (n_nums += length(obj.morph_target_influences))
     return 256 + _web_num_array_sizehint(n_nums)
+end
+
+function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
+                                       num_buf::Vector{UInt8})
+    hasproperty(obj, :morph_target_influences) ||
+        (write(io, "\"morphTargets\":[],\"morphWeights\":[]"); return nothing)
+    target_count = _web_morph_position_target_count(geo)
+    normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
+    tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+    has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
+    if !(obj isa SkinnedMesh)
+        write(io, "\"basePositions\":")
+        _js_write_array(io, geo.positions, num_buf)
+        write(io, ',')
+    end
+    write(io, "\"morphTargets\":")
+    _web_write_morph_position_targets(io, geo, target_count, num_buf)
+    write(io, ",\"morphNormals\":")
+    _web_write_morph_vec3_targets(io, geo, "morphNormal", normal_count, num_buf)
+    write(io, ",\"morphTangents\":")
+    _web_write_morph_vec3_targets(io, geo, "morphTangent", tangent_count, num_buf)
+    write(io, ",\"morphWeights\":")
+    _js_write_array(io, has_morph_channels ? obj.morph_target_influences : Float64[],
+                    num_buf)
+    return nothing
 end
 
 function _web_morph_targets_json(obj, geo::BufferGeometry)
@@ -1512,19 +1553,7 @@ function _web_morph_targets_json(obj, geo::BufferGeometry)
     io = IOBuffer(sizehint=_web_morph_targets_sizehint(obj, geo, target_count,
                                                        normal_count, tangent_count,
                                                        has_morph_channels))
-    if !(obj isa SkinnedMesh)
-        write(io, "\"basePositions\":")
-        _js_write_array(io, geo.positions)
-        write(io, ',')
-    end
-    write(io, "\"morphTargets\":")
-    _web_write_morph_position_targets(io, geo, target_count)
-    write(io, ",\"morphNormals\":")
-    _web_write_morph_vec3_targets(io, geo, "morphNormal", normal_count)
-    write(io, ",\"morphTangents\":")
-    _web_write_morph_vec3_targets(io, geo, "morphTangent", tangent_count)
-    write(io, ",\"morphWeights\":")
-    _js_write_array(io, has_morph_channels ? obj.morph_target_influences : Float64[])
+    _web_write_morph_targets_json(io, obj, geo, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -1569,12 +1598,10 @@ function _web_write_bone_json(io::IO, bone::Bone, num_buf::Vector{UInt8})
     return nothing
 end
 
-function _web_skin_json(obj, geo::BufferGeometry)
-    obj isa SkinnedMesh || return "\"skin\":null"
+function _web_write_skin_json(io::IO, obj, geo::BufferGeometry, num_buf::Vector{UInt8})
+    obj isa SkinnedMesh || (write(io, "\"skin\":null"); return nothing)
     length(obj.skin_indices) == geo.n_vertices || error("skinned mesh skin_indices length must match vertex count")
     length(obj.skin_weights) == geo.n_vertices || error("skinned mesh skin_weights length must match vertex count")
-    io = IOBuffer(sizehint=_web_skin_json_sizehint(obj, geo))
-    num_buf = _web_num_buffer()
     write(io, "\"basePositions\":")
     _js_write_array(io, geo.positions, num_buf)
     write(io, ",\"bindMode\":")
@@ -1598,6 +1625,13 @@ function _web_skin_json(obj, geo::BufferGeometry)
         _js_write_mat(io, obj.skeleton.bind_inverses[i], num_buf)
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_skin_json(obj, geo::BufferGeometry)
+    obj isa SkinnedMesh || return "\"skin\":null"
+    io = IOBuffer(sizehint=_web_skin_json_sizehint(obj, geo))
+    _web_write_skin_json(io, obj, geo, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -1760,8 +1794,7 @@ function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractV
     return String(take!(io))
 end
 
-function _web_morph_target_ids_json(ids::AbstractVector{Int}, own_id::Int)
-    io = IOBuffer()
+function _web_write_morph_target_ids_json(io::IO, ids::AbstractVector{Int}, own_id::Int)
     write(io, '[')
     first = true
     own_seen = false
@@ -1784,6 +1817,12 @@ function _web_morph_target_ids_json(ids::AbstractVector{Int}, own_id::Int)
         _js_write_num(io, own_id)
     end
     write(io, ']')
+    return nothing
+end
+
+function _web_morph_target_ids_json(ids::AbstractVector{Int}, own_id::Int)
+    io = IOBuffer()
+    _web_write_morph_target_ids_json(io, ids, own_id)
     return String(take!(io))
 end
 
@@ -1900,23 +1939,25 @@ function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
     return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
 end
 
-function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="triangles",
-                            transform_obj::AbstractObject3D=obj,
-                            color_override::Union{Nothing,Color3}=nothing,
-                            instance_matrix=nothing,
-                            instance_matrices::AbstractVector{<:Mat4}=Mat4{Float64}[],
-                            instance_colors::AbstractVector{<:Color3}=Color3{Float64}[],
-                            morph_target_ids::AbstractVector{Int}=Int[],
-                            visibility_target_ids::AbstractVector{Int}=Int[],
-                            visibility_values::AbstractVector{Bool}=Bool[],
-                            visibility_extra_id::Int=0,
-                            visibility_extra_value::Bool=false,
-                            lod_group_id::Int=0,
-                            lod_distance::Real=0.0,
-                            lod_hysteresis::Real=0.0,
-                            sprite_center::Vec2{Float64}=Vec2(0.5, 0.5),
-                            sprite_rotation::Real=0.0,
-                            sprite_size_attenuation::Bool=true)
+function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt8};
+                                  matrix=nothing, mode::String="triangles",
+                                  transform_obj::AbstractObject3D=obj,
+                                  color_override::Union{Nothing,Color3}=nothing,
+                                  instance_matrix=nothing,
+                                  instance_matrices::AbstractVector{<:Mat4}=Mat4{Float64}[],
+                                  instance_colors::AbstractVector{<:Color3}=Color3{Float64}[],
+                                  morph_target_ids::AbstractVector{Int}=Int[],
+                                  visibility_target_ids::AbstractVector{Int}=Int[],
+                                  visibility_values::AbstractVector{Bool}=Bool[],
+                                  visibility_extra_id::Int=0,
+                                  visibility_extra_value::Bool=false,
+                                  lod_group_id::Int=0,
+                                  lod_distance::Real=0.0,
+                                  lod_hysteresis::Real=0.0,
+                                  sprite_center::Vec2{Float64}=Vec2(0.5, 0.5),
+                                  sprite_rotation::Real=0.0,
+                                  sprite_size_attenuation::Bool=true,
+                                  positions_override=nothing)
     geo = obj.geometry
     mat = obj.material
     mat isa ShaderMaterial &&
@@ -1930,21 +1971,8 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
     else
         Mat4()
     end
-    visibility_json = if isempty(visibility_target_ids)
-        id = visibility_extra_id == 0 ? obj.id : visibility_extra_id
-        visible = visibility_extra_id == 0 ? is_visible(obj) : visibility_extra_value
-        _web_visibility_states_json(Int[], Bool[];
-                                    extra_id=id,
-                                    extra_value=visible)
-    else
-        _web_visibility_states_json(visibility_target_ids, visibility_values;
-                                    extra_id=visibility_extra_id,
-                                    extra_value=visibility_extra_value)
-    end
-    positions = _web_positions(obj, geo)
+    positions = positions_override === nothing ? _web_positions(obj, geo) : positions_override
     use_vertex_colors = mode != "triangles" || _web_material_vertex_colors(mat)
-    io = IOBuffer(sizehint=_web_drawable_json_sizehint(obj, geo, positions))
-    num_buf = _web_num_buffer()
     write(io, "{\"id\":")
     print(io, transform_obj.id)
     write(io, ",\"name\":")
@@ -1958,7 +1986,17 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
     write(io, ",\"receiveShadow\":")
     write(io, object_receives_shadow(obj) ? "true" : "false")
     write(io, ",\"visibilityStates\":")
-    write(io, visibility_json)
+    if isempty(visibility_target_ids)
+        id = visibility_extra_id == 0 ? obj.id : visibility_extra_id
+        visible = visibility_extra_id == 0 ? is_visible(obj) : visibility_extra_value
+        write(io, '[')
+        _web_write_visibility_state(io, id, visible)
+        write(io, ']')
+    else
+        _web_write_visibility_states_json(io, visibility_target_ids, visibility_values;
+                                          extra_id=visibility_extra_id,
+                                          extra_value=visibility_extra_value)
+    end
     write(io, ",\"lodGroup\":")
     print(io, lod_group_id)
     write(io, ",\"lodDistance\":")
@@ -2166,14 +2204,27 @@ function _web_drawable_json(obj, world::Mat4; matrix=nothing, mode::String="tria
     write(io, ",\"glossinessPacked\":")
     write(io, _web_material_glossiness_packed(mat) ? "true" : "false")
     write(io, ",\"morphTargetIds\":")
-    write(io, _web_morph_target_ids_json(morph_target_ids, transform_obj.id))
+    _web_write_morph_target_ids_json(io, morph_target_ids, transform_obj.id)
     write(io, ',')
-    write(io, _web_morph_targets_json(obj, geo))
+    _web_write_morph_targets_json(io, obj, geo, num_buf)
     write(io, ',')
-    write(io, _web_skin_json(obj, geo))
+    _web_write_skin_json(io, obj, geo, num_buf)
     write(io, ',')
     _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors)
     write(io, '}')
+    return nothing
+end
+
+function _web_write_drawable_json(io::IO, obj, world::Mat4; kwargs...)
+    return _web_write_drawable_json(io, obj, world, _web_num_buffer(); kwargs...)
+end
+
+function _web_drawable_json(obj, world::Mat4; kwargs...)
+    geo = obj.geometry
+    positions = _web_positions(obj, geo)
+    io = IOBuffer(sizehint=_web_drawable_json_sizehint(obj, geo, positions))
+    _web_write_drawable_json(io, obj, world, _web_num_buffer();
+                             kwargs..., positions_override=positions)
     return String(take!(io))
 end
 
@@ -2346,9 +2397,9 @@ function _web_wireframe_proxy(obj)
     return LineSegments(wireframe_geometry(obj.geometry), proxy_mat; name=obj.name)
 end
 
-function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
-                                camera_distance::Real=0.0)
-    out = String[]
+function _web_visit_drawables(emit::F, root::AbstractObject3D,
+                              force_ids::Set{Int}=Set{Int}(),
+                              camera_distance::Real=0.0) where {F}
     function forced_subtree(obj::AbstractObject3D)
         obj.id in force_ids && return true
         for child in get_children(obj)
@@ -2376,26 +2427,26 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
         if obj isa Mesh || obj isa SkinnedMesh
             if material_wireframe(obj.material)
                 proxy = _web_wireframe_proxy(obj)
-                push!(out, _web_drawable_json(proxy, world; mode="lines",
-                                              transform_obj=obj,
-                                              morph_target_ids=ancestor_ids,
-                                              visibility_target_ids=ancestor_ids,
-                                              visibility_values=ancestor_visibility,
-                                              visibility_extra_id=obj.id,
-                                              visibility_extra_value=obj_visible,
-                                              lod_group_id=lod_group_id,
-                                              lod_distance=lod_distance,
-                                              lod_hysteresis=lod_hysteresis))
+                emit(proxy, world; mode="lines",
+                     transform_obj=obj,
+                     morph_target_ids=ancestor_ids,
+                     visibility_target_ids=ancestor_ids,
+                     visibility_values=ancestor_visibility,
+                     visibility_extra_id=obj.id,
+                     visibility_extra_value=obj_visible,
+                     lod_group_id=lod_group_id,
+                     lod_distance=lod_distance,
+                     lod_hysteresis=lod_hysteresis)
             else
-                push!(out, _web_drawable_json(obj, world; mode="triangles",
-                                              morph_target_ids=ancestor_ids,
-                                              visibility_target_ids=ancestor_ids,
-                                              visibility_values=ancestor_visibility,
-                                              visibility_extra_id=obj.id,
-                                              visibility_extra_value=obj_visible,
-                                              lod_group_id=lod_group_id,
-                                              lod_distance=lod_distance,
-                                              lod_hysteresis=lod_hysteresis))
+                emit(obj, world; mode="triangles",
+                     morph_target_ids=ancestor_ids,
+                     visibility_target_ids=ancestor_ids,
+                     visibility_values=ancestor_visibility,
+                     visibility_extra_id=obj.id,
+                     visibility_extra_value=obj_visible,
+                     lod_group_id=lod_group_id,
+                     lod_distance=lod_distance,
+                     lod_hysteresis=lod_hysteresis)
             end
         elseif obj isa InstancedMesh
             parent = compute_world_matrix(obj)
@@ -2404,30 +2455,30 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
             if !_web_material_transparent(obj.material)
                 if wire_triangles
                     proxy = _web_wireframe_proxy(obj)
-                    push!(out, _web_drawable_json(proxy, parent; mode="lines",
-                                                  transform_obj=obj,
-                                                  instance_matrices=obj.instance_matrices,
-                                                  instance_colors=obj.instance_colors,
-                                                  morph_target_ids=ancestor_ids,
-                                                  visibility_target_ids=ancestor_ids,
-                                                  visibility_values=ancestor_visibility,
-                                                  visibility_extra_id=obj.id,
-                                                  visibility_extra_value=obj_visible,
-                                                  lod_group_id=lod_group_id,
-                                                  lod_distance=lod_distance,
-                                                  lod_hysteresis=lod_hysteresis))
+                    emit(proxy, parent; mode="lines",
+                         transform_obj=obj,
+                         instance_matrices=obj.instance_matrices,
+                         instance_colors=obj.instance_colors,
+                         morph_target_ids=ancestor_ids,
+                         visibility_target_ids=ancestor_ids,
+                         visibility_values=ancestor_visibility,
+                         visibility_extra_id=obj.id,
+                         visibility_extra_value=obj_visible,
+                         lod_group_id=lod_group_id,
+                         lod_distance=lod_distance,
+                         lod_hysteresis=lod_hysteresis)
                 else
-                    push!(out, _web_drawable_json(obj, parent; mode=draw_mode,
-                                                  instance_matrices=obj.instance_matrices,
-                                                  instance_colors=obj.instance_colors,
-                                                  morph_target_ids=ancestor_ids,
-                                                  visibility_target_ids=ancestor_ids,
-                                                  visibility_values=ancestor_visibility,
-                                                  visibility_extra_id=obj.id,
-                                                  visibility_extra_value=obj_visible,
-                                                  lod_group_id=lod_group_id,
-                                                  lod_distance=lod_distance,
-                                                  lod_hysteresis=lod_hysteresis))
+                    emit(obj, parent; mode=draw_mode,
+                         instance_matrices=obj.instance_matrices,
+                         instance_colors=obj.instance_colors,
+                         morph_target_ids=ancestor_ids,
+                         visibility_target_ids=ancestor_ids,
+                         visibility_values=ancestor_visibility,
+                         visibility_extra_id=obj.id,
+                         visibility_extra_value=obj_visible,
+                         lod_group_id=lod_group_id,
+                         lod_distance=lod_distance,
+                         lod_hysteresis=lod_hysteresis)
                 end
             else
                 # Transparent instanced meshes are split into one draw per
@@ -2442,75 +2493,75 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                         proxy = _web_wireframe_proxy(obj)
                         ov = ic === nothing ? nothing :
                              _web_color_mul(_web_material_color(proxy.material), ic)
-                        push!(out, _web_drawable_json(proxy, parent * im; mode="lines",
-                                                      transform_obj=obj,
-                                                      color_override=ov,
-                                                      instance_matrix=im,
-                                                      morph_target_ids=ancestor_ids,
-                                                      visibility_target_ids=ancestor_ids,
-                                                      visibility_values=ancestor_visibility,
-                                                      visibility_extra_id=obj.id,
-                                                      visibility_extra_value=obj_visible,
-                                                      lod_group_id=lod_group_id,
-                                                      lod_distance=lod_distance,
-                                                      lod_hysteresis=lod_hysteresis))
+                        emit(proxy, parent * im; mode="lines",
+                             transform_obj=obj,
+                             color_override=ov,
+                             instance_matrix=im,
+                             morph_target_ids=ancestor_ids,
+                             visibility_target_ids=ancestor_ids,
+                             visibility_values=ancestor_visibility,
+                             visibility_extra_id=obj.id,
+                             visibility_extra_value=obj_visible,
+                             lod_group_id=lod_group_id,
+                             lod_distance=lod_distance,
+                             lod_hysteresis=lod_hysteresis)
                     else
                         ov = ic === nothing ? nothing :
                              _web_color_mul(_web_material_color(obj.material), ic)
-                        push!(out, _web_drawable_json(obj, parent * im; mode=draw_mode,
-                                                      color_override=ov,
-                                                      instance_matrix=im,
-                                                      morph_target_ids=ancestor_ids,
-                                                      visibility_target_ids=ancestor_ids,
-                                                      visibility_values=ancestor_visibility,
-                                                      visibility_extra_id=obj.id,
-                                                      visibility_extra_value=obj_visible,
-                                                      lod_group_id=lod_group_id,
-                                                      lod_distance=lod_distance,
-                                                      lod_hysteresis=lod_hysteresis))
+                        emit(obj, parent * im; mode=draw_mode,
+                             color_override=ov,
+                             instance_matrix=im,
+                             morph_target_ids=ancestor_ids,
+                             visibility_target_ids=ancestor_ids,
+                             visibility_values=ancestor_visibility,
+                             visibility_extra_id=obj.id,
+                             visibility_extra_value=obj_visible,
+                             lod_group_id=lod_group_id,
+                             lod_distance=lod_distance,
+                             lod_hysteresis=lod_hysteresis)
                     end
                 end
             end
         elseif obj isa PointsObject
-            push!(out, _web_drawable_json(obj, world; mode="points",
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=ancestor_ids,
-                                          visibility_values=ancestor_visibility,
-                                          visibility_extra_id=obj.id,
-                                          visibility_extra_value=obj_visible,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis))
+            emit(obj, world; mode="points",
+                 morph_target_ids=ancestor_ids,
+                 visibility_target_ids=ancestor_ids,
+                 visibility_values=ancestor_visibility,
+                 visibility_extra_id=obj.id,
+                 visibility_extra_value=obj_visible,
+                 lod_group_id=lod_group_id,
+                 lod_distance=lod_distance,
+                 lod_hysteresis=lod_hysteresis)
         elseif obj isa LineObject
-            push!(out, _web_drawable_json(obj, world; mode="line_strip",
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=ancestor_ids,
-                                          visibility_values=ancestor_visibility,
-                                          visibility_extra_id=obj.id,
-                                          visibility_extra_value=obj_visible,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis))
+            emit(obj, world; mode="line_strip",
+                 morph_target_ids=ancestor_ids,
+                 visibility_target_ids=ancestor_ids,
+                 visibility_values=ancestor_visibility,
+                 visibility_extra_id=obj.id,
+                 visibility_extra_value=obj_visible,
+                 lod_group_id=lod_group_id,
+                 lod_distance=lod_distance,
+                 lod_hysteresis=lod_hysteresis)
         elseif obj isa LineLoop
-            push!(out, _web_drawable_json(obj, world; mode="line_loop",
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=ancestor_ids,
-                                          visibility_values=ancestor_visibility,
-                                          visibility_extra_id=obj.id,
-                                          visibility_extra_value=obj_visible,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis))
+            emit(obj, world; mode="line_loop",
+                 morph_target_ids=ancestor_ids,
+                 visibility_target_ids=ancestor_ids,
+                 visibility_values=ancestor_visibility,
+                 visibility_extra_id=obj.id,
+                 visibility_extra_value=obj_visible,
+                 lod_group_id=lod_group_id,
+                 lod_distance=lod_distance,
+                 lod_hysteresis=lod_hysteresis)
         elseif obj isa LineSegments
-            push!(out, _web_drawable_json(obj, world; mode="lines",
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=ancestor_ids,
-                                          visibility_values=ancestor_visibility,
-                                          visibility_extra_id=obj.id,
-                                          visibility_extra_value=obj_visible,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis))
+            emit(obj, world; mode="lines",
+                 morph_target_ids=ancestor_ids,
+                 visibility_target_ids=ancestor_ids,
+                 visibility_values=ancestor_visibility,
+                 visibility_extra_id=obj.id,
+                 visibility_extra_value=obj_visible,
+                 lod_group_id=lod_group_id,
+                 lod_distance=lod_distance,
+                 lod_hysteresis=lod_hysteresis)
         elseif obj isa Sprite
             mat = obj.material
             geo = BufferGeometry(Float64[0.0, 0.0, 0.0,
@@ -2538,19 +2589,19 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
                                                 depth_test=_web_material_depth_test(mat),
                                                 depth_write=_web_material_depth_write(mat));
                          name=obj.name)
-            push!(out, _web_drawable_json(proxy, world; mode="sprite",
-                                          transform_obj=obj,
-                                          morph_target_ids=ancestor_ids,
-                                          visibility_target_ids=ancestor_ids,
-                                          visibility_values=ancestor_visibility,
-                                          visibility_extra_id=obj.id,
-                                          visibility_extra_value=obj_visible,
-                                          lod_group_id=lod_group_id,
-                                          lod_distance=lod_distance,
-                                          lod_hysteresis=lod_hysteresis,
-                                          sprite_center=obj.center,
-                                          sprite_rotation=_web_material_sprite_rotation(mat),
-                                          sprite_size_attenuation=_web_material_sprite_size_attenuation(mat)))
+            emit(proxy, world; mode="sprite",
+                 transform_obj=obj,
+                 morph_target_ids=ancestor_ids,
+                 visibility_target_ids=ancestor_ids,
+                 visibility_values=ancestor_visibility,
+                 visibility_extra_id=obj.id,
+                 visibility_extra_value=obj_visible,
+                 lod_group_id=lod_group_id,
+                 lod_distance=lod_distance,
+                 lod_hysteresis=lod_hysteresis,
+                 sprite_center=obj.center,
+                 sprite_rotation=_web_material_sprite_rotation(mat),
+                 sprite_size_attenuation=_web_material_sprite_size_attenuation(mat))
         end
         push!(ancestor_ids, obj.id)
         push!(ancestor_visibility, obj_visible)
@@ -2561,7 +2612,34 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
         pop!(ancestor_visibility)
     end
     visit(root)
+    return nothing
+end
+
+function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
+                                camera_distance::Real=0.0)
+    out = String[]
+    function emit(obj, world; kwargs...)
+        push!(out, _web_drawable_json(obj, world; kwargs...))
+        return nothing
+    end
+    _web_visit_drawables(emit, root, force_ids, camera_distance)
     return out
+end
+
+function _web_write_drawables_json(io::IO, root::AbstractObject3D,
+                                   force_ids::Set{Int}=Set{Int}(),
+                                   camera_distance::Real=0.0,
+                                   num_buf::Vector{UInt8}=_web_num_buffer())
+    write(io, '[')
+    first = true
+    function emit(obj, world; kwargs...)
+        first ? (first = false) : write(io, ',')
+        _web_write_drawable_json(io, obj, world, num_buf; kwargs...)
+        return nothing
+    end
+    _web_visit_drawables(emit, root, force_ids, camera_distance)
+    write(io, ']')
+    return nothing
 end
 
 function _web_track_property_name(prop::Symbol)
@@ -2911,7 +2989,30 @@ function _web_case_json_sizehint(lights_json::AbstractString,
     return sizehint
 end
 
-function _web_collect_case_json_parts(case::WebGLExportCase)
+struct _WebDrawableStream{T<:AbstractObject3D,S<:Set{Int},R<:Real}
+    root::T
+    force_ids::S
+    camera_distance::R
+end
+
+function _web_write_objects_json(io::IO, objects::AbstractVector{<:AbstractString},
+                                 num_buf::Vector{UInt8})
+    write(io, '[')
+    for (i, obj) in enumerate(objects)
+        i == 1 || write(io, ',')
+        write(io, obj)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_write_objects_json(io::IO, objects::_WebDrawableStream,
+                                 num_buf::Vector{UInt8})
+    return _web_write_drawables_json(io, objects.root, objects.force_ids,
+                                     objects.camera_distance, num_buf)
+end
+
+function _web_collect_case_light_node_parts(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
     stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
     dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
@@ -2922,6 +3023,11 @@ function _web_collect_case_json_parts(case::WebGLExportCase)
                                    dynamic_point_shadow_ids;
                                    clipping_planes=case.clipping_planes)
     nodes = _web_collect_transform_nodes(case.scene, animation_target_ids)
+    return animation_target_ids, lights_json, nodes
+end
+
+function _web_collect_case_json_parts(case::WebGLExportCase)
+    animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
     objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius)
     return lights_json, nodes, objects
 end
@@ -2929,7 +3035,7 @@ end
 function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
                                     lights_json::AbstractString,
                                     nodes::AbstractVector{<:AbstractString},
-                                    objects::AbstractVector{<:AbstractString},
+                                    objects,
                                     num_buf::Vector{UInt8})
     write(io, "{\"id\":")
     _js_write_str(io, case.id)
@@ -2973,12 +3079,9 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
         i == 1 || write(io, ',')
         write(io, node)
     end
-    write(io, "],\"objects\":[")
-    for (i, obj) in enumerate(objects)
-        i == 1 || write(io, ',')
-        write(io, obj)
-    end
-    write(io, "],\"animations\":[")
+    write(io, "],\"objects\":")
+    _web_write_objects_json(io, objects, num_buf)
+    write(io, ",\"animations\":[")
     for (i, clip) in enumerate(case.animations)
         i == 1 || write(io, ',')
         _web_write_clip_json(io, clip, num_buf)
@@ -2996,7 +3099,8 @@ function _web_case_json(case::WebGLExportCase)
 end
 
 function _web_write_case_json(io::IO, case::WebGLExportCase)
-    lights_json, nodes, objects = _web_collect_case_json_parts(case)
+    animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
+    objects = _WebDrawableStream(case.scene, animation_target_ids, case.radius)
     _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
     return nothing
 end
