@@ -1118,6 +1118,51 @@ function _direct_response(m::MeshToonMaterial, n, v, lc, li, ldir)
     m.color * lc * (irradiance * li)
 end
 
+_fill_response_vertex_color(m::MeshLambertMaterial,  n, fc, albedo::Color3) = albedo * fc
+_fill_response_vertex_color(m::MeshPhongMaterial,    n, fc, albedo::Color3) = albedo * fc
+_fill_response_vertex_color(m::MeshToonMaterial,     n, fc, albedo::Color3) = albedo * fc
+_fill_response_vertex_color(m::MeshStandardMaterial, n, fc, albedo::Color3) =
+    _pbr_ambient(n, albedo, m.metalness, m.roughness, fc)
+_fill_response_vertex_color(m::MeshPhysicalMaterial, n, fc, albedo::Color3) =
+    _pbr_ambient(n, albedo, m.metalness, _physical_roughness(m), fc)
+
+_direct_response_vertex_color(m::MeshLambertMaterial, n, v, lc, li, ldir,
+                              albedo::Color3) =
+    shade_lambert(n, ldir, lc, li, albedo)
+_direct_response_vertex_color(m::MeshPhongMaterial, n, v, lc, li, ldir,
+                              albedo::Color3) =
+    shade_phong(n, ldir, v, lc, li, albedo, m.specular, m.shininess)
+_direct_response_vertex_color(m::MeshStandardMaterial, n, v, lc, li, ldir,
+                              albedo::Color3) =
+    shade_pbr(n, ldir, v, lc, li, albedo, m.metalness, m.roughness)
+function _direct_response_vertex_color(m::MeshPhysicalMaterial, n, v, lc, li, ldir,
+                                       albedo::Color3)
+    roughness = _physical_roughness(m)
+    base = shade_pbr(n, ldir, v, lc, li, albedo, m.metalness, roughness,
+                     m.specular_intensity, m.specular_color)
+    cc = m.clearcoat * _clearcoat_spec(n, ldir, v, m.clearcoat_roughness) * max(dot(n, ldir), 0.0)
+    result = base + lc * (cc * li)
+    if m.sheen > 0.0
+        result = result + _sheen_lobe(m, n, ldir, v) * lc * li
+    end
+    if m.iridescence > 0.0
+        result = result + _iridescence_spec(m, n, ldir, v) * lc * li
+    end
+    return result
+end
+function _direct_response_vertex_color(m::MeshToonMaterial, n, v, lc, li, ldir,
+                                       albedo::Color3)
+    dotnl = dot(n, ldir)
+    irradiance = if m.gradient_map isa Texture
+        coord = clamp(dotnl * 0.5 + 0.5, 0.0, 1.0)
+        sample_texture(m.gradient_map, coord, 0.0).r
+    else
+        ndotl = max(dotnl, 0.0)
+        ceil(ndotl * m.gradient_steps) / m.gradient_steps
+    end
+    albedo * lc * (irradiance * li)
+end
+
 # Per-light accumulation, factored into a function barrier so that once a light
 # is dispatched to its concrete type the inner work (light_contribution, fill
 # response, direct response) stays type-stable when called from the concrete
@@ -1133,6 +1178,35 @@ end
 @inline _transmission_response(m, n::Vec3, v::Vec3, fc::Color3) = Color3(0.0, 0.0, 0.0)
 @inline _transmission_response(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, fc::Color3) =
     m.transmission > 0.0 ? _transmission_fill(m, n, v, fc) : Color3(0.0, 0.0, 0.0)
+
+@inline function _transmission_fill_color(m::MeshPhysicalMaterial, albedo::Color3,
+                                          normal::Vec3, view_dir::Vec3,
+                                          background::Color3)
+    m.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
+    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
+    r0 = ((m.ior - 1) / (m.ior + 1))^2
+    refl = r0 + (1 - r0) * (1 - ndotv)^5
+    transmit = (1 - refl) * m.transmission
+    path = 1.0 / max(ndotv, 1e-3)
+    att = Color3(albedo.r^path, albedo.g^path, albedo.b^path)
+    if m.thickness > 0.0 && m.attenuation_distance > 0.0
+        volume_path = path * m.thickness / m.attenuation_distance
+        att = att * Color3(m.attenuation_color.r^volume_path,
+                           m.attenuation_color.g^volume_path,
+                           m.attenuation_color.b^volume_path)
+    end
+    Color3(background.r * att.r * transmit,
+           background.g * att.g * transmit,
+           background.b * att.b * transmit)
+end
+
+@inline _transmission_response_vertex_color(m, n::Vec3, v::Vec3, fc::Color3,
+                                            albedo::Color3) = Color3(0.0, 0.0, 0.0)
+@inline _transmission_response_vertex_color(m::MeshPhysicalMaterial, n::Vec3,
+                                            v::Vec3, fc::Color3,
+                                            albedo::Color3) =
+    m.transmission > 0.0 ? _transmission_fill_color(m, albedo, n, v, fc) :
+    Color3(0.0, 0.0, 0.0)
 
 @inline function _rect_area_basis(light::RectAreaLight)
     f = normalize(light.target - light.position)
@@ -1165,6 +1239,32 @@ function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
     return result
 end
 
+function _rect_area_response_vertex_color(m, normal::Vec3, view_dir::Vec3,
+                                          position::Vec3, light::RectAreaLight,
+                                          albedo::Color3)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + _direct_response_vertex_color(m, normal, view_dir,
+                                                        light.color, li, ldir,
+                                                        albedo)
+    end
+    return result
+end
+
 function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
                                       view_dir::Vec3, position::Vec3,
                                       light::RectAreaLight,
@@ -1187,6 +1287,35 @@ function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
         result = result + shade_pbr(normal, ldir, view_dir, light.color, li,
                                     m.color, metalness, roughness)
+    end
+    return result
+end
+
+function _rect_area_standard_response_color(m::MeshStandardMaterial,
+                                            normal::Vec3, view_dir::Vec3,
+                                            position::Vec3,
+                                            light::RectAreaLight,
+                                            metalness::Float64,
+                                            roughness::Float64,
+                                            albedo::Color3)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + shade_pbr(normal, ldir, view_dir, light.color, li,
+                                    albedo, metalness, roughness)
     end
     return result
 end
@@ -1229,6 +1358,38 @@ function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
     return result
 end
 
+function _shade_standard_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
+                                             position::Vec3,
+                                             material::MeshStandardMaterial,
+                                             lights, shadow_fn,
+                                             metalness::Float64,
+                                             roughness::Float64,
+                                             vertex_color::Color3)
+    albedo = _modulate(material.color, vertex_color)
+    result = material.emissive * material.emissive_intensity
+    for light in lights
+        if light isa RectAreaLight
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + _rect_area_standard_response_color(material, normal,
+                                                                 view_dir, position,
+                                                                 light, metalness,
+                                                                 roughness, albedo) *
+                              vis
+        elseif _is_fill_light(light)
+            fc = _fill_color(normal, light)
+            result = result + _pbr_ambient(normal, albedo, metalness, roughness, fc)
+        else
+            lc, li, ldir = light_contribution(light, position)
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + shade_pbr(normal, ldir, view_dir, lc, li, albedo,
+                                        metalness, roughness) * vis
+        end
+    end
+    return result
+end
+
 function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
                            position::Vec3, light::RectAreaLight, shadow_fn)
     vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
@@ -1250,6 +1411,31 @@ function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
     end
 end
 
+function _accumulate_light_vertex_color(result, m, normal::Vec3, view_dir::Vec3,
+                                        position::Vec3, light::RectAreaLight,
+                                        shadow_fn, albedo::Color3)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_response_vertex_color(m, normal, view_dir,
+                                                     position, light, albedo) * vis
+end
+
+function _accumulate_light_vertex_color(result, m, normal::Vec3, view_dir::Vec3,
+                                        position::Vec3, light, shadow_fn,
+                                        albedo::Color3)
+    if _is_fill_light(light)
+        fc = _fill_color(normal, light)
+        return result + _fill_response_vertex_color(m, normal, fc, albedo) +
+               _transmission_response_vertex_color(m, normal, view_dir, fc, albedo)
+    else
+        lc, li, ldir = light_contribution(light, position)
+        vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+        vis <= 0.0 && return result
+        return result + _direct_response_vertex_color(m, normal, view_dir, lc,
+                                                      li, ldir, albedo) * vis
+    end
+end
+
 function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights, shadow_fn)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     for light in lights
@@ -1260,6 +1446,48 @@ end
 
 shade_face(normal::Vec3, view_dir::Vec3, position::Vec3, material::LitMaterial, lights;
            shadow_fn=nothing) = _shade_lit(material, normal, view_dir, position, lights, shadow_fn)
+
+function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
+                                 lights, shadow_fn, vertex_color::Color3)
+    albedo = _modulate(m.color, vertex_color)
+    result = m.emissive * _material_scalar(m, :emissive_intensity)
+    for light in lights
+        result = _accumulate_light_vertex_color(result, m, normal, view_dir,
+                                                position, light, shadow_fn,
+                                                albedo)
+    end
+    return result
+end
+
+@inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
+                                          position::Vec3,
+                                          material::MeshBasicMaterial, lights,
+                                          vertex_color::Color3; shadow_fn=nothing)
+    _modulate(material.color, vertex_color)
+end
+
+@inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
+                                          position::Vec3,
+                                          material::LitMaterial, lights,
+                                          vertex_color::Color3; shadow_fn=nothing)
+    _shade_lit_vertex_color(material, normal, view_dir, position, lights,
+                            shadow_fn, vertex_color)
+end
+
+@inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
+                                          position::Vec3,
+                                          material::MeshToonMaterial, lights,
+                                          vertex_color::Color3; shadow_fn=nothing)
+    shade_face(normal, view_dir, position, material, lights; shadow_fn=shadow_fn)
+end
+
+@inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
+                                          position::Vec3,
+                                          material::AbstractMaterial, lights,
+                                          vertex_color::Color3; shadow_fn=nothing)
+    shade_face(normal, view_dir, position, _with_vertex_color(material, vertex_color),
+               lights; shadow_fn=shadow_fn)
+end
 
 function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
                     material::MeshNormalMaterial, lights; shadow_fn=nothing)

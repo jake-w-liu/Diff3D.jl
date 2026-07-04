@@ -458,9 +458,12 @@ end
                     eff_mat = _apply_phong_maps(material, specular_map, glossiness_map,
                                                 u, v, u2, v2)
                     vd = normalize(cam_pos - wp)
-                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
-                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
-                elseif material isa MeshStandardMaterial && !UseVertexColors &&
+                    col = UseVertexColors ?
+                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
+                                                   shadow_fn=shadow_fn) :
+                          shade_face(wn, vd, wp, eff_mat, lights;
+                                     shadow_fn=shadow_fn)
+                elseif material isa MeshStandardMaterial &&
                        (has_roughness || has_metalness) && !has_physical_pbr
                     ru, rv = roughness_map === nothing ? (u, v) :
                              _map_uv(roughness_map, u, v, u2, v2)
@@ -471,19 +474,30 @@ end
                     metalness = metalness_map === nothing ? material.metalness :
                                material.metalness * sample_texture(metalness_map, mu, mv).b
                     vd = normalize(cam_pos - wp)
-                    col = _shade_standard_mapped(wn, vd, wp, material, lights, shadow_fn,
+                    col = UseVertexColors ?
+                          _shade_standard_mapped_vertex_color(wn, vd, wp, material,
+                                                              lights, shadow_fn,
+                                                              Float64(metalness),
+                                                              Float64(roughness), vc) :
+                          _shade_standard_mapped(wn, vd, wp, material, lights, shadow_fn,
                                                  Float64(metalness), Float64(roughness))
                 elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
                                               u, v, u2, v2)
                     vd = normalize(cam_pos - wp)
-                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
-                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
+                    col = UseVertexColors ?
+                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
+                                                   shadow_fn=shadow_fn) :
+                          shade_face(wn, vd, wp, eff_mat, lights;
+                                     shadow_fn=shadow_fn)
                 else
                     eff_mat = material
                     vd = normalize(cam_pos - wp)
-                    shade_mat = UseVertexColors ? _with_vertex_color(eff_mat, vc) : eff_mat
-                    col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
+                    col = UseVertexColors ?
+                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
+                                                   shadow_fn=shadow_fn) :
+                          shade_face(wn, vd, wp, eff_mat, lights;
+                                     shadow_fn=shadow_fn)
                 end
                 # three.js keeps emission OUT of the diffuse map chain: remove the
                 # base `emissive · intensity` added by `shade_face` before the
@@ -623,14 +637,15 @@ end
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
             vd = normalize(cam_pos - wp)
-            shade_mat = material
             if UseVertexColors
                 vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                             a0*vc1.g + a1*vc2.g + a2*vc3.g,
                             a0*vc1.b + a1*vc2.b + a2*vc3.b)
-                shade_mat = _with_vertex_color(material, vc)
+                col = _shade_face_vertex_color(wn, vd, wp, material, lights, vc;
+                                               shadow_fn=shadow_fn)
+            else
+                col = shade_face(wn, vd, wp, material, lights; shadow_fn=shadow_fn)
             end
-            col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
             col = clamp_color(col)
             if use_stamp
                 ia = 1.0 - alpha_base

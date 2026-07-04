@@ -5281,6 +5281,11 @@ end
         scene_on = Scene(background=Color3(0.0, 0.0, 0.0))
         add!(scene_on, Mesh(geo, MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), vertex_colors=true)))
         rt_on = RenderTarget(32, 32); render!(rt_on, scene_on, cam; shading=:smooth)
+        rt_on_cached = RenderTarget(32, 32); smooth_vc_cache = RenderCache()
+        render!(rt_on_cached, scene_on, cam; shading=:smooth, cache=smooth_vc_cache)
+        @test maximum(abs.(rt_on.color .- rt_on_cached.color)) < 1e-12
+        @test_opt_alloc 2048 render!(rt_on_cached, scene_on, cam; shading=:smooth,
+                                     cache=smooth_vc_cache)
         @test rt_on.color[16, 16, 1] ≈ 0.0 atol=1e-6
         @test rt_on.color[16, 16, 2] ≈ 0.35 atol=1e-6
         @test rt_on.color[16, 16, 3] ≈ 0.0 atol=1e-6
@@ -5299,6 +5304,12 @@ end
                                                       shininess=0.0,
                                                       vertex_colors=true)))
         rt_phong = RenderTarget(32, 32); render!(rt_phong, scene_phong, cam; shading=:smooth)
+        rt_phong_cached = RenderTarget(32, 32); smooth_vc_phong_cache = RenderCache()
+        render!(rt_phong_cached, scene_phong, cam; shading=:smooth,
+                cache=smooth_vc_phong_cache)
+        @test maximum(abs.(rt_phong.color .- rt_phong_cached.color)) < 1e-12
+        @test_opt_alloc 2048 render!(rt_phong_cached, scene_phong, cam;
+                                     shading=:smooth, cache=smooth_vc_phong_cache)
         @test rt_phong.color[16, 16, 1] ≈ 0.0 atol=1e-6
         @test rt_phong.color[16, 16, 2] ≈ 0.35 atol=1e-6
         @test rt_phong.color[16, 16, 3] ≈ 0.0 atol=1e-6
