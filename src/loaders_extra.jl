@@ -283,15 +283,16 @@ function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
                                     bpp::Int, norm::Float64)
     stride = W * bpp
     prev = zeros(UInt8, stride)
+    cur = Vector{UInt8}(undef, stride)
     p = 1
     for row in 1:H
         p <= length(raw) || error("PNG image data is truncated")
         ftype = raw[p]; p += 1
         p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+        copyto!(cur, 1, raw, p, stride); p += stride
         _png_unfilter_scanline!(cur, prev, bpp, ftype)
         _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm)
-        prev = cur
+        cur, prev = prev, cur
     end
     return img
 end
@@ -306,11 +307,12 @@ function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
         (pass_w == 0 || pass_h == 0) && continue
         stride = pass_w * bpp
         prev = zeros(UInt8, stride)
+        cur = Vector{UInt8}(undef, stride)
         for prow in 0:(pass_h - 1)
             p <= length(raw) || error("PNG image data is truncated")
             ftype = raw[p]; p += 1
             p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+            copyto!(cur, 1, raw, p, stride); p += stride
             _png_unfilter_scanline!(cur, prev, bpp, ftype)
             row = y0 + prow * ystep + 1
             for pcol in 0:(pass_w - 1), c in 1:channels
@@ -318,7 +320,7 @@ function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
                 base = pcol * bpp + (c - 1) * bps + 1
                 img[row, col, c] = _png_channel_value(cur, base, bps, norm)
             end
-            prev = cur
+            cur, prev = prev, cur
         end
     end
     return img
@@ -362,18 +364,19 @@ function _png_decode_palette_noninterlaced!(img::Array{Float64,3}, raw::Vector{U
                                             trns::Vector{UInt8}, channels::Int)
     stride = cld(W * bitdepth, 8)
     prev = zeros(UInt8, stride)
+    cur = Vector{UInt8}(undef, stride)
     p = 1
     for row in 1:H
         p <= length(raw) || error("PNG image data is truncated")
         ftype = raw[p]; p += 1
         p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+        copyto!(cur, 1, raw, p, stride); p += stride
         _png_unfilter_scanline!(cur, prev, 1, ftype)
         for pcol in 0:(W - 1)
             idx = _png_packed_index(cur, pcol, bitdepth)
             _png_store_palette_pixel!(img, row, pcol + 1, idx, palette, trns, channels)
         end
-        prev = cur
+        cur, prev = prev, cur
     end
     return img
 end
@@ -389,11 +392,12 @@ function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
         (pass_w == 0 || pass_h == 0) && continue
         stride = cld(pass_w * bitdepth, 8)
         prev = zeros(UInt8, stride)
+        cur = Vector{UInt8}(undef, stride)
         for prow in 0:(pass_h - 1)
             p <= length(raw) || error("PNG image data is truncated")
             ftype = raw[p]; p += 1
             p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            cur = Vector{UInt8}(raw[p:p+stride-1]); p += stride
+            copyto!(cur, 1, raw, p, stride); p += stride
             _png_unfilter_scanline!(cur, prev, 1, ftype)
             row = y0 + prow * ystep + 1
             for pcol in 0:(pass_w - 1)
@@ -401,7 +405,7 @@ function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
                 idx = _png_packed_index(cur, pcol, bitdepth)
                 _png_store_palette_pixel!(img, row, col, idx, palette, trns, channels)
             end
-            prev = cur
+            cur, prev = prev, cur
         end
     end
     return img

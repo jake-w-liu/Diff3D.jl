@@ -7246,6 +7246,17 @@ end
         @test tex isa Texture
         @test size(tex.data) == (12, 20, 3)
 
+        png_alloc_img = fill(0.5, 128, 128, 3)
+        png_alloc_file = tempname() * ".png"
+        try
+            save_png(png_alloc_file, png_alloc_img)
+            png_alloc_bytes = read(png_alloc_file)
+            @test maximum(abs.(Diff3D._decode_png(png_alloc_bytes) .- png_alloc_img)) <= 1/255 + 1e-9
+            @test_opt_alloc 800000 Diff3D._decode_png(png_alloc_bytes)
+        finally
+            rm(png_alloc_file; force=true)
+        end
+
         jpeg64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8APnAOP//Z"
         jpeg_bytes = base64decode(jpeg64)
         jf = tempname() * ".jpg"
