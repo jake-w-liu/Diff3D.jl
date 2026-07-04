@@ -10769,6 +10769,7 @@ end
         @test br.iqr_s >= 0.0
         @test br.min_s <= br.median_s                    # min ≤ median by construction
         @test br.triangles == scene_triangle_count(scene)
+        @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || br.alloc_bytes <= 4096
         count_scene = Scene()
         for _ in 1:64
             add!(count_scene, Mesh(BoxGeometry(), MeshBasicMaterial()))

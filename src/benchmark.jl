@@ -72,13 +72,14 @@ function benchmark_render(scene::Scene, camera::AbstractCamera, W::Int, H::Int;
     warmup >= 0 || throw(ArgumentError("benchmark_render warmup must be non-negative"))
     reps > 0 || throw(ArgumentError("benchmark_render reps must be positive"))
     rt = RenderTarget(W, H)
+    cache = RenderCache()
     for _ in 1:warmup
-        render!(rt, scene, camera; shading=shading)
+        render!(rt, scene, camera; shading=shading, cache=cache)
     end
     times = Vector{Float64}(undef, reps)
     alloc = 0
     for r in 1:reps
-        res = @timed render!(rt, scene, camera; shading=shading)
+        res = @timed render!(rt, scene, camera; shading=shading, cache=cache)
         times[r] = res.time
         r == 1 && (alloc = res.bytes)
     end
