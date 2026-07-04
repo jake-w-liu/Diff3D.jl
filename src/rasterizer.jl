@@ -455,14 +455,16 @@ end
                                            normal_scale)
                 end
                 if has_specular || has_glossiness
-                    eff_mat = _apply_phong_maps(material, specular_map, glossiness_map,
-                                                u, v, u2, v2)
+                    specular, shininess = _phong_mapped_terms(
+                        material, specular_map, glossiness_map, u, v, u2, v2)
                     vd = normalize(cam_pos - wp)
                     col = UseVertexColors ?
-                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
-                                                   shadow_fn=shadow_fn) :
-                          shade_face(wn, vd, wp, eff_mat, lights;
-                                     shadow_fn=shadow_fn)
+                          _shade_phong_mapped_vertex_color(
+                              wn, vd, wp, material, lights, shadow_fn, specular,
+                              Float64(shininess), vc) :
+                          _shade_phong_mapped(wn, vd, wp, material, lights,
+                                              shadow_fn, specular,
+                                              Float64(shininess))
                 elseif material isa MeshStandardMaterial &&
                        (has_roughness || has_metalness) && !has_physical_pbr
                     ru, rv = roughness_map === nothing ? (u, v) :
@@ -481,6 +483,16 @@ end
                                                               Float64(roughness), vc) :
                           _shade_standard_mapped(wn, vd, wp, material, lights, shadow_fn,
                                                  Float64(metalness), Float64(roughness))
+                elseif material isa MeshPhysicalMaterial &&
+                       (has_roughness || has_metalness || has_physical_pbr)
+                    terms = _physical_mapped_terms(material, roughness_map,
+                                                   metalness_map, u, v, u2, v2)
+                    vd = normalize(cam_pos - wp)
+                    col = UseVertexColors ?
+                          _shade_physical_mapped_vertex_color(
+                              wn, vd, wp, material, lights, shadow_fn, terms, vc) :
+                          _shade_physical_mapped(wn, vd, wp, material, lights,
+                                                 shadow_fn, terms)
                 elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
                                               u, v, u2, v2)

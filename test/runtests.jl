@@ -5314,6 +5314,106 @@ end
         @test rt_phong.color[16, 16, 2] ≈ 0.35 atol=1e-6
         @test rt_phong.color[16, 16, 3] ≈ 0.0 atol=1e-6
 
+        phong_map_data = fill(0.6, 4, 4, 4)
+        phong_map_data[:, :, 4] .= 0.75
+        phong_map = Texture(phong_map_data; filter=:nearest, colorspace=:linear)
+        phong_map_mat = MeshPhongMaterial(color=Color3(0.8, 0.6, 0.4),
+                                          specular=Color3(0.5, 0.4, 0.3),
+                                          specular_map=phong_map,
+                                          glossiness_map=phong_map,
+                                          vertex_colors=true)
+        phong_specular, phong_shininess =
+            Diff3D._phong_mapped_terms(phong_map_mat, phong_map, phong_map,
+                                       0.5, 0.5, 0.5, 0.5)
+        mapped_mat = Diff3D._apply_phong_maps(phong_map_mat, phong_map, phong_map,
+                                              0.5, 0.5, 0.5, 0.5)
+        n = Vec3(0.0, 0.0, 1.0)
+        vd = Vec3(0.0, 0.0, 1.0)
+        p = Vec3(0.0, 0.0, 0.0)
+        vc = Color3(0.25, 0.5, 0.75)
+        phong_lights = AbstractLight[
+            AmbientLight(intensity=0.35),
+            DirectionalLight(intensity=0.8, position=Vec3(0.0, 0.0, 2.0)),
+            RectAreaLight(width=1.5, height=1.0, intensity=0.4,
+                          position=Vec3(0.0, 0.0, 2.0))
+        ]
+        legacy_phong = shade_face(n, vd, p, Diff3D._with_vertex_color(mapped_mat, vc),
+                                  phong_lights)
+        fast_phong = Diff3D._shade_phong_mapped_vertex_color(
+            n, vd, p, phong_map_mat, phong_lights, nothing, phong_specular,
+            Float64(phong_shininess), vc)
+        @test maximum(abs, (legacy_phong.r - fast_phong.r,
+                            legacy_phong.g - fast_phong.g,
+                            legacy_phong.b - fast_phong.b)) < 1e-12
+
+        scene_phong_maps = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene_phong_maps, AmbientLight(color=Color3(1.0, 1.0, 1.0),
+                                            intensity=1.0))
+        add!(scene_phong_maps, Mesh(geo, phong_map_mat))
+        rt_phong_maps = RenderTarget(32, 32)
+        render!(rt_phong_maps, scene_phong_maps, cam; shading=:smooth)
+        rt_phong_maps_cached = RenderTarget(32, 32)
+        smooth_phong_maps_cache = RenderCache()
+        render!(rt_phong_maps_cached, scene_phong_maps, cam; shading=:smooth,
+                cache=smooth_phong_maps_cache)
+        @test maximum(abs.(rt_phong_maps.color .- rt_phong_maps_cached.color)) < 1e-12
+        @test_opt_alloc 2048 render!(rt_phong_maps_cached, scene_phong_maps, cam;
+                                     shading=:smooth,
+                                     cache=smooth_phong_maps_cache)
+
+        physical_map_data = fill(0.65, 4, 4, 4)
+        physical_map_data[:, :, 2] .= 0.45
+        physical_map_data[:, :, 3] .= 0.35
+        physical_map_data[:, :, 4] .= 0.55
+        physical_map = Texture(physical_map_data; filter=:nearest,
+                               colorspace=:linear)
+        physical_map_mat = MeshPhysicalMaterial(
+            color=Color3(0.8, 0.6, 0.4),
+            roughness=0.7, metalness=0.3, clearcoat=0.4,
+            clearcoat_roughness=0.5, transmission=0.25,
+            thickness=0.3, attenuation_distance=2.0,
+            sheen=0.2, sheen_color=Color3(0.4, 0.5, 0.6),
+            sheen_roughness=0.8, iridescence=0.3,
+            iridescence_thickness=450.0, specular_intensity=0.7,
+            specular_color=Color3(0.5, 0.6, 0.7), anisotropy=0.2,
+            roughness_map=physical_map, metalness_map=physical_map,
+            clearcoat_map=physical_map, clearcoat_roughness_map=physical_map,
+            transmission_map=physical_map, thickness_map=physical_map,
+            sheen_color_map=physical_map, sheen_roughness_map=physical_map,
+            iridescence_map=physical_map,
+            iridescence_thickness_map=physical_map,
+            specular_intensity_map=physical_map,
+            specular_color_map=physical_map, anisotropy_map=physical_map,
+            vertex_colors=true)
+        physical_terms = Diff3D._physical_mapped_terms(
+            physical_map_mat, physical_map, physical_map, 0.5, 0.5, 0.5, 0.5)
+        physical_mapped_mat = Diff3D._apply_pbr_maps(
+            physical_map_mat, physical_map, physical_map, 0.5, 0.5, 0.5, 0.5)
+        legacy_physical = shade_face(n, vd, p,
+                                     Diff3D._with_vertex_color(physical_mapped_mat, vc),
+                                     phong_lights)
+        fast_physical = Diff3D._shade_physical_mapped_vertex_color(
+            n, vd, p, physical_map_mat, phong_lights, nothing, physical_terms, vc)
+        @test maximum(abs, (legacy_physical.r - fast_physical.r,
+                            legacy_physical.g - fast_physical.g,
+                            legacy_physical.b - fast_physical.b)) < 1e-12
+
+        scene_physical_maps = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene_physical_maps, AmbientLight(color=Color3(1.0, 1.0, 1.0),
+                                               intensity=1.0))
+        add!(scene_physical_maps, Mesh(geo, physical_map_mat))
+        rt_physical_maps = RenderTarget(32, 32)
+        render!(rt_physical_maps, scene_physical_maps, cam; shading=:smooth)
+        rt_physical_maps_cached = RenderTarget(32, 32)
+        smooth_physical_maps_cache = RenderCache()
+        render!(rt_physical_maps_cached, scene_physical_maps, cam;
+                shading=:smooth, cache=smooth_physical_maps_cache)
+        @test maximum(abs.(rt_physical_maps.color .- rt_physical_maps_cached.color)) < 1e-12
+        @test_opt_alloc 2048 render!(rt_physical_maps_cached,
+                                     scene_physical_maps, cam;
+                                     shading=:smooth,
+                                     cache=smooth_physical_maps_cache)
+
         spec_geo = PlaneGeometry(width=2.0, height=2.0)
         set_attribute!(spec_geo, :color, fill(0.0, 3 * spec_geo.n_vertices), 3)
         spec_scene = Scene(background=Color3(0.0, 0.0, 0.0))

@@ -364,6 +364,19 @@ function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u
                  m.glossiness * sample_texture_channel(glossiness_map, gu, gv, 4)
     return _phong_with_maps(m, specular, glossiness)
 end
+
+function _phong_mapped_terms(m::MeshPhongMaterial, specular_map, glossiness_map,
+                             u, v, u2, v2)
+    su, sv = specular_map === nothing ? (u, v) : _map_uv(specular_map, u, v, u2, v2)
+    gu, gv = glossiness_map === nothing ? (u, v) : _map_uv(glossiness_map, u, v, u2, v2)
+    specular = specular_map === nothing ? m.specular : begin
+        s = sample_texture_linear(specular_map, su, sv)
+        Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
+    end
+    glossiness = glossiness_map === nothing ? m.glossiness :
+                 m.glossiness * sample_texture_channel(glossiness_map, gu, gv, 4)
+    return specular, _phong_shininess_from_glossiness(glossiness)
+end
 function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
     _is_identity_vertex_color(vc) && return m
     MeshPhysicalMaterial(color=_modulate(m.color, vc), emissive=m.emissive,
@@ -640,6 +653,67 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                          attenuation_color=m.attenuation_color,
                          depth_test=m.depth_test, depth_write=m.depth_write,
                          clipping_planes=m.clipping_planes)
+end
+
+struct _PhysicalMappedTerms
+    metalness::Float64
+    roughness::Float64
+    clearcoat::Float64
+    clearcoat_roughness::Float64
+    transmission::Float64
+    thickness::Float64
+    sheen_color::Color3{Float64}
+    sheen_roughness::Float64
+    iridescence::Float64
+    iridescence_thickness::Float64
+    specular_intensity::Float64
+    specular_color::Color3{Float64}
+    anisotropy::Float64
+end
+
+function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
+                                metalness_map, u, v, u2, v2)
+    uv_for(tex) = tex === nothing ? (u, v) : _map_uv(tex, u, v, u2, v2)
+    ru, rv = uv_for(roughness_map)
+    mu, mv = uv_for(metalness_map)
+    cu, cv = uv_for(m.clearcoat_map)
+    cru, crv = uv_for(m.clearcoat_roughness_map)
+    tu, tv = uv_for(m.transmission_map)
+    thu, thv = uv_for(m.thickness_map)
+    scu, scv = uv_for(m.sheen_color_map)
+    sru, srv = uv_for(m.sheen_roughness_map)
+    iu, iv = uv_for(m.iridescence_map)
+    itu, itv = uv_for(m.iridescence_thickness_map)
+    siu, siv = uv_for(m.specular_intensity_map)
+    spcu, spcv = uv_for(m.specular_color_map)
+    au, av = uv_for(m.anisotropy_map)
+    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
+    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, cu, cv, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, cru, crv, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, tu, tv, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, thu, thv, 2)
+    sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
+        c = sample_texture_linear(m.sheen_color_map, scu, scv)
+        Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
+    end
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, sru, srv, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, iu, iv, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, itu, itv, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, siu, siv, 4)
+    specular_color = m.specular_color_map === nothing ? m.specular_color : begin
+        c = sample_texture_linear(m.specular_color_map, spcu, spcv)
+        Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
+    end
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, au, av, 3)
+    return _PhysicalMappedTerms(Float64(metalness), Float64(roughness),
+                                Float64(clearcoat), Float64(clearcoat_roughness),
+                                Float64(transmission), Float64(thickness),
+                                sheen_color, Float64(sheen_roughness),
+                                Float64(iridescence),
+                                Float64(iridescence_thickness),
+                                Float64(specular_intensity), specular_color,
+                                Float64(anisotropy))
 end
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m
@@ -1208,6 +1282,74 @@ end
     m.transmission > 0.0 ? _transmission_fill_color(m, albedo, n, v, fc) :
     Color3(0.0, 0.0, 0.0)
 
+@inline _physical_mapped_roughness(t::_PhysicalMappedTerms) =
+    _anisotropic_effective_roughness(t.roughness, t.anisotropy)
+
+@inline function _transmission_fill_terms(m::MeshPhysicalMaterial,
+                                          t::_PhysicalMappedTerms,
+                                          albedo::Color3,
+                                          normal::Vec3, view_dir::Vec3,
+                                          background::Color3)
+    t.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
+    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
+    r0 = ((m.ior - 1) / (m.ior + 1))^2
+    refl = r0 + (1 - r0) * (1 - ndotv)^5
+    transmit = (1 - refl) * t.transmission
+    path = 1.0 / max(ndotv, 1e-3)
+    att = Color3(albedo.r^path, albedo.g^path, albedo.b^path)
+    if t.thickness > 0.0 && m.attenuation_distance > 0.0
+        volume_path = path * t.thickness / m.attenuation_distance
+        att = att * Color3(m.attenuation_color.r^volume_path,
+                           m.attenuation_color.g^volume_path,
+                           m.attenuation_color.b^volume_path)
+    end
+    Color3(background.r * att.r * transmit,
+           background.g * att.g * transmit,
+           background.b * att.b * transmit)
+end
+
+@inline function _sheen_lobe_terms(m::MeshPhysicalMaterial,
+                                   t::_PhysicalMappedTerms,
+                                   normal::Vec3, light_dir::Vec3,
+                                   view_dir::Vec3)
+    ndotl = max(dot(normal, light_dir), 0.0)
+    ndotl <= 0.0 && return Color3(0.0, 0.0, 0.0)
+    h = _half_vec(light_dir, view_dir)
+    ndoth = max(dot(normal, h), 0.0)
+    d = _d_charlie(ndoth, t.sheen_roughness)
+    return t.sheen_color * (m.sheen * d * ndotl)
+end
+
+@inline function _iridescence_spec_terms(m::MeshPhysicalMaterial,
+                                         t::_PhysicalMappedTerms,
+                                         normal::Vec3, light_dir::Vec3,
+                                         view_dir::Vec3)
+    ndotl = max(dot(normal, light_dir), 0.0)
+    ndotv = max(dot(normal, view_dir), 0.0)
+    (ndotl <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    h = _half_vec(light_dir, view_dir)
+    ndoth = max(dot(normal, h), 0.0)
+    vdoth = max(dot(view_dir, h), 0.0)
+    base_f0 = Color3(0.04, 0.04, 0.04)
+    tinted = _iridescent_f0(base_f0, ndotv, m.iridescence_ior,
+                            t.iridescence_thickness, t.iridescence)
+    fres = (1 - vdoth)^5
+    Ft = Color3(tinted.r + (1 - tinted.r) * fres,
+                tinted.g + (1 - tinted.g) * fres,
+                tinted.b + (1 - tinted.b) * fres)
+    Fb = Color3(base_f0.r + (1 - base_f0.r) * fres,
+                base_f0.g + (1 - base_f0.g) * fres,
+                base_f0.b + (1 - base_f0.b) * fres)
+    roughness = _physical_mapped_roughness(t)
+    α = roughness * roughness
+    α2 = α * α
+    denom_d = ndoth * ndoth * (α2 - 1) + 1
+    D = α2 / (π * denom_d * denom_d + 1e-7)
+    lobe = D / (4 * ndotv * ndotl + 1e-7) * ndotl
+    Color3((Ft.r - Fb.r) * lobe, (Ft.g - Fb.g) * lobe,
+           (Ft.b - Fb.b) * lobe)
+end
+
 @inline function _rect_area_basis(light::RectAreaLight)
     f = normalize(light.target - light.position)
     ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -1320,6 +1462,34 @@ function _rect_area_standard_response_color(m::MeshStandardMaterial,
     return result
 end
 
+function _rect_area_phong_response_color(normal::Vec3, view_dir::Vec3,
+                                         position::Vec3,
+                                         light::RectAreaLight,
+                                         albedo::Color3,
+                                         specular::Color3,
+                                         shininess::Float64)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + shade_phong(normal, ldir, view_dir, light.color, li,
+                                      albedo, specular, shininess)
+    end
+    return result
+end
+
 function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
                                     normal::Vec3, view_dir::Vec3, position::Vec3,
                                     light::RectAreaLight, shadow_fn,
@@ -1344,6 +1514,148 @@ function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
         return result + shade_pbr(normal, ldir, view_dir, lc, li, m.color,
                                   metalness, roughness) * vis
     end
+end
+
+function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
+                                   position::Vec3,
+                                   material::MeshPhongMaterial, lights, shadow_fn,
+                                   specular::Color3, shininess::Float64,
+                                   albedo::Color3)
+    result = material.emissive * material.emissive_intensity
+    for light in lights
+        if light isa RectAreaLight
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + _rect_area_phong_response_color(normal, view_dir,
+                                                              position, light,
+                                                              albedo, specular,
+                                                              shininess) * vis
+        elseif _is_fill_light(light)
+            fc = _fill_color(normal, light)
+            result = result + albedo * fc
+        else
+            lc, li, ldir = light_contribution(light, position)
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + shade_phong(normal, ldir, view_dir, lc, li,
+                                          albedo, specular, shininess) * vis
+        end
+    end
+    return result
+end
+
+function _shade_phong_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
+                             material::MeshPhongMaterial, lights, shadow_fn,
+                             specular::Color3, shininess::Float64)
+    _shade_phong_mapped_color(normal, view_dir, position, material, lights,
+                              shadow_fn, specular, shininess, material.color)
+end
+
+function _shade_phong_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
+                                          position::Vec3,
+                                          material::MeshPhongMaterial,
+                                          lights, shadow_fn,
+                                          specular::Color3,
+                                          shininess::Float64,
+                                          vertex_color::Color3)
+    albedo = _modulate(material.color, vertex_color)
+    _shade_phong_mapped_color(normal, view_dir, position, material, lights,
+                              shadow_fn, specular, shininess, albedo)
+end
+
+function _direct_response_physical_terms(m::MeshPhysicalMaterial,
+                                         t::_PhysicalMappedTerms,
+                                         n::Vec3, v::Vec3, lc::Color3, li,
+                                         ldir::Vec3, albedo::Color3)
+    roughness = _physical_mapped_roughness(t)
+    base = shade_pbr(n, ldir, v, lc, li, albedo, t.metalness, roughness,
+                     t.specular_intensity, t.specular_color)
+    cc = t.clearcoat * _clearcoat_spec(n, ldir, v, t.clearcoat_roughness) * max(dot(n, ldir), 0.0)
+    result = base + lc * (cc * li)
+    if m.sheen > 0.0
+        result = result + _sheen_lobe_terms(m, t, n, ldir, v) * lc * li
+    end
+    if t.iridescence > 0.0
+        result = result + _iridescence_spec_terms(m, t, n, ldir, v) * lc * li
+    end
+    return result
+end
+
+function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
+                                            t::_PhysicalMappedTerms,
+                                            normal::Vec3, view_dir::Vec3,
+                                            position::Vec3,
+                                            light::RectAreaLight,
+                                            albedo::Color3)
+    f, u, v = _rect_area_basis(light)
+    hx = max(light.width, 0.0) * 0.5
+    hy = max(light.height, 0.0) * 0.5
+    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
+    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
+    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
+    area_scale = hx * hy
+    result = Color3(0.0, 0.0, 0.0)
+    @inbounds for ix in 1:3, iy in 1:3
+        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        diff = sample_pos - position
+        dist2 = max(dot(diff, diff), 1e-10)
+        ldir = diff / sqrt(dist2)
+        emit = max(dot(-ldir, f), 0.0)
+        emit <= 0.0 && continue
+        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
+        result = result + _direct_response_physical_terms(
+            m, t, normal, view_dir, light.color, li, ldir, albedo)
+    end
+    return result
+end
+
+function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
+                                      position::Vec3,
+                                      material::MeshPhysicalMaterial,
+                                      lights, shadow_fn,
+                                      terms::_PhysicalMappedTerms,
+                                      albedo::Color3)
+    result = material.emissive * material.emissive_intensity
+    roughness = _physical_mapped_roughness(terms)
+    for light in lights
+        if light isa RectAreaLight
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + _rect_area_physical_response_color(
+                material, terms, normal, view_dir, position, light, albedo) * vis
+        elseif _is_fill_light(light)
+            fc = _fill_color(normal, light)
+            result = result + _pbr_ambient(normal, albedo, terms.metalness,
+                                           roughness, fc) +
+                     _transmission_fill_terms(material, terms, albedo, normal,
+                                              view_dir, fc)
+        else
+            lc, li, ldir = light_contribution(light, position)
+            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+            vis <= 0.0 && continue
+            result = result + _direct_response_physical_terms(
+                material, terms, normal, view_dir, lc, li, ldir, albedo) * vis
+        end
+    end
+    return result
+end
+
+function _shade_physical_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
+                                material::MeshPhysicalMaterial, lights,
+                                shadow_fn, terms::_PhysicalMappedTerms)
+    _shade_physical_mapped_color(normal, view_dir, position, material, lights,
+                                 shadow_fn, terms, material.color)
+end
+
+function _shade_physical_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
+                                             position::Vec3,
+                                             material::MeshPhysicalMaterial,
+                                             lights, shadow_fn,
+                                             terms::_PhysicalMappedTerms,
+                                             vertex_color::Color3)
+    albedo = _modulate(material.color, vertex_color)
+    _shade_physical_mapped_color(normal, view_dir, position, material, lights,
+                                 shadow_fn, terms, albedo)
 end
 
 function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
