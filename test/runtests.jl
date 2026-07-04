@@ -3751,6 +3751,18 @@ end
         Diff3D._web_drawable_json(drawable_export_alloc, Mat4())
         @test_opt_alloc 260000 Diff3D._web_drawable_json(drawable_export_alloc,
                                                          Mat4())
+        transform_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        transform_alloc_parent = transform_alloc_scene
+        for i in 1:80
+            node = Group(name="transform_alloc_$i")
+            node.position = Vec3(sin(i), cos(i), i / 100)
+            node.rotation = Euler(0.01i, 0.02i, 0.03i)
+            node.scale = Vec3(1.0 + i / 1000, 1.0, 1.0)
+            add!(transform_alloc_parent, node)
+            transform_alloc_parent = node
+        end
+        Diff3D._web_collect_transform_nodes(transform_alloc_scene)
+        @test_opt_alloc 180000 Diff3D._web_collect_transform_nodes(transform_alloc_scene)
         clip_alloc_mesh = Mesh(BoxGeometry(), MeshBasicMaterial();
                                name="clip_export_alloc")
         clip_alloc_times = collect(range(0.0, 2.0; length=64))

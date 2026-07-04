@@ -1798,24 +1798,44 @@ function _web_material_type(mat)
     return "lit"
 end
 
-function _web_transform_node_json(obj::AbstractObject3D)
+function _web_transform_node_json_sizehint(obj::AbstractObject3D)
+    return 1024 + length(String(getproperty(obj, :name)))
+end
+
+function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
+                                        num_buf::Vector{UInt8})
     rot = get_rotation(obj)
     parent = get_parent(obj)
     parent_id = parent === nothing ? 0 : parent.id
     parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
-    return "{" *
-           "\"id\":" * string(obj.id) *
-           ",\"name\":" * _js_str(getproperty(obj, :name)) *
-           ",\"parentId\":" * string(parent_id) *
-           ",\"matrix\":" * _js_mat(compute_world_matrix(obj)) *
-           ",\"parentMatrix\":" * _js_mat(parent_matrix) *
-           ",\"basePosition\":" * _js_vec(get_position(obj)) *
-           ",\"baseEuler\":" * _js_vec(Vec3(rot.x, rot.y, rot.z)) *
-           ",\"baseEulerOrder\":" * _js_str(String(rot.order)) *
-           ",\"baseScale\":" * _js_vec(get_scale(obj)) *
-           ",\"baseQuaternion\":" *
-               _js_quat(quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)) *
-           "}"
+    write(io, "{\"id\":")
+    print(io, obj.id)
+    write(io, ",\"name\":")
+    _js_write_str(io, getproperty(obj, :name))
+    write(io, ",\"parentId\":")
+    print(io, parent_id)
+    write(io, ",\"matrix\":")
+    _js_write_mat(io, compute_world_matrix(obj), num_buf)
+    write(io, ",\"parentMatrix\":")
+    _js_write_mat(io, parent_matrix, num_buf)
+    write(io, ",\"basePosition\":")
+    _js_write_vec(io, get_position(obj), num_buf)
+    write(io, ",\"baseEuler\":")
+    _js_write_vec(io, Vec3(rot.x, rot.y, rot.z), num_buf)
+    write(io, ",\"baseEulerOrder\":")
+    _js_write_str(io, String(rot.order))
+    write(io, ",\"baseScale\":")
+    _js_write_vec(io, get_scale(obj), num_buf)
+    write(io, ",\"baseQuaternion\":")
+    _js_write_quat(io, quat_from_euler(rot.x, rot.y, rot.z; order=rot.order), num_buf)
+    write(io, '}')
+    return nothing
+end
+
+function _web_transform_node_json(obj::AbstractObject3D)
+    io = IOBuffer(sizehint=_web_transform_node_json_sizehint(obj))
+    _web_write_transform_node_json(io, obj, _web_num_buffer())
+    return String(take!(io))
 end
 
 function _web_is_drawable(obj::AbstractObject3D)
