@@ -117,6 +117,16 @@ mutable struct _SpriteRenderState
     stamp_id::Int
 end
 
+mutable struct _InstancedMaterialState
+    mesh::Union{Nothing,InstancedMesh}
+    base_material::Any
+    colors::Vector{Color3{Float64}}
+    materials::Any
+end
+
+_InstancedMaterialState() =
+    _InstancedMaterialState(nothing, nothing, Color3{Float64}[], AbstractMaterial[])
+
 """
 Reusable scratch buffers for the flat opaque path, so repeated frames allocate a
 bounded amount (independent of frame count). Mesh/light lists and the per-face
@@ -126,6 +136,7 @@ mutable struct RenderCache
     meshes::Vector{Mesh}
     lights::Vector{SceneLight}
     instanced::Vector{InstancedMesh}
+    instanced_materials::Vector{_InstancedMaterialState}
     skinned::Vector{SkinnedMesh}
     skinned_meshes::Vector{Mesh}
     transparent::Vector{Mesh}
@@ -151,7 +162,8 @@ end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
     scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
-    RenderCache(Mesh[], SceneLight[], InstancedMesh[], SkinnedMesh[],
+    RenderCache(Mesh[], SceneLight[], InstancedMesh[], _InstancedMaterialState[],
+                SkinnedMesh[],
                 Mesh[], Mesh[], Mesh[], Mesh[], Mesh[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
@@ -176,6 +188,51 @@ end
 @inline _line_geometry(obj::LineSegments)::BufferGeometry = obj.geometry
 @inline _line_geometry(obj::LineLoop)::BufferGeometry = obj.geometry
 @inline _points_geometry(obj::PointsObject)::BufferGeometry = obj.geometry
+
+@inline _same_instanced_base_material(a, b) = a === b || a == b
+
+function _instanced_material_state!(states::Vector{_InstancedMaterialState}, slot::Int)
+    @inbounds while length(states) < slot
+        push!(states, _InstancedMaterialState())
+    end
+    return states[slot]
+end
+
+function _instanced_materials!(states::Vector{_InstancedMaterialState}, slot::Int,
+                               mesh::InstancedMesh, mat,
+                               colors::Vector{Color3{Float64}})
+    state = _instanced_material_state!(states, slot)
+    n = length(colors)
+    M = typeof(mat)
+    same_base = state.mesh === mesh &&
+                _same_instanced_base_material(state.base_material, mat) &&
+                state.materials isa Vector{M}
+    if !same_base
+        state.mesh = mesh
+        state.base_material = mat
+        resize!(state.colors, n)
+        materials = Vector{M}(undef, n)
+        state.materials = materials
+        @inbounds for i in 1:n
+            c = colors[i]
+            state.colors[i] = c
+            materials[i] = _with_vertex_color(mat, c)
+        end
+        return materials
+    end
+    materials = state.materials::Vector{M}
+    initialized_n = min(length(state.colors), length(materials))
+    length(state.colors) == n || resize!(state.colors, n)
+    length(materials) == n || resize!(materials, n)
+    @inbounds for i in 1:n
+        c = colors[i]
+        if i > initialized_n || state.colors[i] != c
+            state.colors[i] = c
+            materials[i] = _with_vertex_color(mat, c)
+        end
+    end
+    return materials
+end
 
 function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
                                       mat::AbstractMaterial, mesh::Mesh, world::Mat4,
@@ -617,6 +674,28 @@ function _rasterize_instanced_geo_flat_pooled!(rt::RenderTarget, geo, mat,
     return nothing
 end
 
+function _rasterize_instanced_geo_flat_pooled_materials!(rt::RenderTarget, geo,
+                                                         instance_materials::AbstractVector,
+                                                         instance_matrices::Vector{Mat4{Float64}},
+                                                         base::Mat4, lights, proj::Mat4,
+                                                         view::Mat4, near, cam_pos::Vec3,
+                                                         tri, clipped, sx, sy, sz,
+                                                         colorbuf::Vector{Color3{Float64}},
+                                                         ortho_dir;
+                                                         xlo::Int=1, xhi::Int=rt.width,
+                                                         ylo::Int=1, yhi::Int=rt.height)
+    @boundscheck length(instance_materials) == length(instance_matrices) ||
+        throw(ArgumentError("instance material count must match instance matrix count"))
+    @inbounds for instance_index in eachindex(instance_matrices)
+        _rasterize_geo_flat_pooled!(rt, geo, base * instance_matrices[instance_index],
+                                    instance_materials[instance_index], lights, proj, view,
+                                    near, cam_pos, tri, clipped, sx, sy, sz, colorbuf;
+                                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                    ortho_dir=ortho_dir)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
@@ -646,15 +725,17 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                cache.sx, cache.sy, cache.sz, cache.colors,
                                                1, rt.width, 1, rt.height, ortho_dir)
     end
-    for im in cache.instanced
+    for (instanced_slot, im) in pairs(cache.instanced)
         mat = _instanced_material(im)
         (_visible_in_tree(im) && !material_wireframe(mat)) || continue
         base = compute_world_matrix(im)
-        _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im), mat, im.instance_colors,
-                                              im.instance_matrices, base, cache.lights, proj, view, near,
-                                              camera.position, cache.tri, cache.clipped,
-                                              cache.sx, cache.sy, cache.sz, cache.colors,
-                                              ortho_dir)
+        instance_materials = _instanced_materials!(cache.instanced_materials,
+                                                   instanced_slot, im, mat,
+                                                   im.instance_colors)
+        _rasterize_instanced_geo_flat_pooled_materials!(
+            rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
+            base, cache.lights, proj, view, near, camera.position, cache.tri,
+            cache.clipped, cache.sx, cache.sy, cache.sz, cache.colors, ortho_dir)
     end
     return rt
 end
@@ -2065,7 +2146,8 @@ bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
 # ========================== Tiled / parallel rasterization ==========================
 
 function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
-                             instanced::Vector{InstancedMesh}, lights,
+                             instanced::Vector{InstancedMesh}, instanced_material_states,
+                             lights,
                              camera::AbstractCamera, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
                              thread_count::Int, ylo::Int, yhi::Int)
@@ -2088,16 +2170,15 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                                                tri, clipped, sx, sy, sz, colorbuf,
                                                1, rt.width, ylo, yhi, ortho_dir)
     end
-    for im in instanced
+    for (instanced_slot, im) in pairs(instanced)
         _visible_in_tree(im) || continue
         _instanced_triangle_drawable(im) || continue
         base = compute_world_matrix(im)
-        _rasterize_instanced_geo_flat_pooled!(rt, _instanced_geometry(im),
-                                              _instanced_material(im),
-                                              im.instance_colors, im.instance_matrices,
-                                              base, lights, proj, view, near,
-                                              camera.position, tri, clipped, sx, sy, sz,
-                                              colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
+        instance_materials = instanced_material_states[instanced_slot].materials
+        _rasterize_instanced_geo_flat_pooled_materials!(
+            rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
+            base, lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz,
+            colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
     end
     return nothing
 end
@@ -2145,19 +2226,27 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced
     _collect_instanced_into!(instanced, scene)
+    instanced_material_states = shared_cache.instanced_materials
+    for (instanced_slot, im) in pairs(instanced)
+        (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
+        _instanced_materials!(instanced_material_states, instanced_slot, im,
+                              _instanced_material(im), im.instance_colors)
+    end
     band = cld(H, tiles)
     if thread_count == 1
         for t in 1:tiles
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
-            _render_tiled_band!(rt, meshes, instanced, lights, camera, proj, view,
+            _render_tiled_band!(rt, meshes, instanced, instanced_material_states,
+                                lights, camera, proj, view,
                                 near, ortho_dir, thread_caches, thread_count, ylo, yhi)
         end
     else
         Threads.@threads for t in 1:tiles
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
-            _render_tiled_band!(rt, meshes, instanced, lights, camera, proj, view,
+            _render_tiled_band!(rt, meshes, instanced, instanced_material_states,
+                                lights, camera, proj, view,
                                 near, ortho_dir, thread_caches, thread_count, ylo, yhi)
         end
     end

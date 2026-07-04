@@ -11250,6 +11250,62 @@ end
         @test maximum(abs.(rt_colored.color .- rt_colored_tiled.color)) < 1e-12
         white_mat = MeshLambertMaterial(color=Color3(0.7,0.45,0.30))
         @test Diff3D._with_vertex_color(white_mat, Color3(1.0,1.0,1.0)) === white_mat
+
+        colored_alloc_scene = Scene(background=Color3(0.0,0.0,0.0))
+        colored_alloc_im = InstancedMesh(BoxGeometry(width=0.18, height=0.18, depth=0.18),
+                                         MeshLambertMaterial(color=Color3(0.8,0.7,0.6)),
+                                         80)
+        for i in 1:instanced_count(colored_alloc_im)
+            x = -2.0 + 4.0 * ((i - 1) % 10) / 9
+            y = -1.5 + 3.0 * ((i - 1) ÷ 10) / 7
+            set_instance_matrix!(colored_alloc_im, i, mat4_translation(x, y, 0.0))
+            set_instance_color!(colored_alloc_im, i,
+                                Color3(mod(i, 3) == 1 ? 1.0 : 0.3,
+                                       mod(i, 3) == 2 ? 1.0 : 0.25,
+                                       mod(i, 3) == 0 ? 1.0 : 0.2))
+        end
+        add!(colored_alloc_scene, colored_alloc_im)
+        add!(colored_alloc_scene, AmbientLight(intensity=1.0))
+        colored_alloc_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1,
+                                              far=100.0)
+        colored_alloc_cam.position = Vec3(0.0, 0.0, 7.0)
+        colored_alloc_expected = RenderTarget(48,48)
+        colored_alloc_rt = RenderTarget(48,48)
+        colored_alloc_cache = RenderCache()
+        render!(colored_alloc_expected, colored_alloc_scene, colored_alloc_cam)
+        render_pooled!(colored_alloc_rt, colored_alloc_scene, colored_alloc_cam,
+                       colored_alloc_cache)
+        @test maximum(abs.(colored_alloc_expected.color .- colored_alloc_rt.color)) < 1e-12
+        @test_opt_alloc 2048 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+                                            colored_alloc_cam, colored_alloc_cache)
+        colored_tiled_cache = [RenderCache() for _ in 1:Threads.nthreads()]
+        colored_tiled_rt = RenderTarget(48,48)
+        render_tiled!(colored_tiled_rt, colored_alloc_scene, colored_alloc_cam;
+                      tiles=1, cache=colored_tiled_cache)
+        @test maximum(abs.(colored_alloc_expected.color .- colored_tiled_rt.color)) < 1e-12
+        if Threads.nthreads() == 1
+            @test_opt_alloc 2048 render_tiled!(colored_tiled_rt, colored_alloc_scene,
+                                               colored_alloc_cam; tiles=1,
+                                               cache=colored_tiled_cache)
+        end
+        set_instance_color!(colored_alloc_im, 1, Color3(0.1, 1.0, 0.1))
+        render!(colored_alloc_expected, colored_alloc_scene, colored_alloc_cam)
+        render_pooled!(colored_alloc_rt, colored_alloc_scene, colored_alloc_cam,
+                       colored_alloc_cache)
+        @test maximum(abs.(colored_alloc_expected.color .- colored_alloc_rt.color)) < 1e-12
+        render_tiled!(colored_tiled_rt, colored_alloc_scene, colored_alloc_cam;
+                      tiles=1, cache=colored_tiled_cache)
+        @test maximum(abs.(colored_alloc_expected.color .- colored_tiled_rt.color)) < 1e-12
+        @test_opt_alloc 2048 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+                                            colored_alloc_cam, colored_alloc_cache)
+
+        colored_cached_rt = RenderTarget(48,48)
+        colored_cached_cache = RenderCache()
+        render!(colored_cached_rt, colored_alloc_scene, colored_alloc_cam;
+                cache=colored_cached_cache)
+        @test maximum(abs.(colored_alloc_expected.color .- colored_cached_rt.color)) < 1e-12
+        @test_opt_alloc 2048 render!(colored_cached_rt, colored_alloc_scene,
+                                     colored_alloc_cam; cache=colored_cached_cache)
     end
 
     @testset "Flat rasterizer scratch — bounded allocation" begin

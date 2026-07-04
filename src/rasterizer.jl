@@ -1032,7 +1032,8 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
                                       log_depth::Bool=false,
                                       inv_log_far=1.0,
                                       ortho_dir=nothing,
-                                      stamp_cache=nothing)
+                                      stamp_cache=nothing,
+                                      instance_materials=nothing)
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
@@ -1041,7 +1042,9 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
     flat_iw = stamp_cache === nothing ? nothing : stamp_cache.smooth_iw
     @inbounds for instance_index in eachindex(instance_matrices)
         world = base * instance_matrices[instance_index]
-        instance_material = _with_vertex_color(mat, instance_colors[instance_index])
+        instance_material = instance_materials === nothing ?
+                            _with_vertex_color(mat, instance_colors[instance_index]) :
+                            instance_materials[instance_index]
         if wireframe
             _render_wireframe_mesh_cached!(rt, geo, instance_material, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp_cache)
@@ -1207,13 +1210,17 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
     instanced = cache === nothing ? collect_instanced(scene) :
                 _collect_instanced_into!(cache.instanced, scene)
-    for im in instanced
+    for (instanced_slot, im) in pairs(instanced)
         !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue
         base = compute_world_matrix(im)
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
+        instance_materials = cache === nothing ? nothing :
+                             _instanced_materials!(cache.instanced_materials,
+                                                   instanced_slot, im, mat,
+                                                   im.instance_colors)
         _render_instanced_mesh_flat!(rt, geo, mat, im.instance_colors,
                                      im.instance_matrices, base, lights, proj, view, near,
                                      camera.position, tri, clipped, sx, sy, sz;
@@ -1221,7 +1228,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                      colorbuf=colorbuf,
                                      xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                      log_depth=log_depth, inv_log_far=inv_log_far,
-                                     ortho_dir=ortho_dir, stamp_cache=cache)
+                                     ortho_dir=ortho_dir, stamp_cache=cache,
+                                     instance_materials=instance_materials)
     end
 
     # Smooth (per-pixel) opaque meshes share the same depth buffer.
