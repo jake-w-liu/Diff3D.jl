@@ -1854,11 +1854,11 @@ function _web_transform_node_json_sizehint(obj::AbstractObject3D)
 end
 
 function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
+                                        world::Mat4, parent_world::Mat4,
                                         num_buf::Vector{UInt8})
     rot = get_rotation(obj)
     parent = get_parent(obj)
     parent_id = parent === nothing ? 0 : parent.id
-    parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
     write(io, "{\"id\":")
     print(io, obj.id)
     write(io, ",\"name\":")
@@ -1866,9 +1866,9 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
     write(io, ",\"parentId\":")
     print(io, parent_id)
     write(io, ",\"matrix\":")
-    _js_write_mat(io, compute_world_matrix(obj), num_buf)
+    _js_write_mat(io, world, num_buf)
     write(io, ",\"parentMatrix\":")
-    _js_write_mat(io, parent_matrix, num_buf)
+    _js_write_mat(io, parent_world, num_buf)
     write(io, ",\"basePosition\":")
     _js_write_vec(io, get_position(obj), num_buf)
     write(io, ",\"baseEuler\":")
@@ -1881,6 +1881,21 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
     _js_write_quat(io, quat_from_euler(rot.x, rot.y, rot.z; order=rot.order), num_buf)
     write(io, '}')
     return nothing
+end
+
+function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
+                                        num_buf::Vector{UInt8})
+    parent = get_parent(obj)
+    parent_world = parent === nothing ? Mat4() : compute_world_matrix(parent)
+    _web_write_transform_node_json(io, obj, compute_world_matrix(obj), parent_world, num_buf)
+    return nothing
+end
+
+function _web_transform_node_json(obj::AbstractObject3D, world::Mat4,
+                                  parent_world::Mat4, num_buf::Vector{UInt8})
+    io = IOBuffer(sizehint=_web_transform_node_json_sizehint(obj))
+    _web_write_transform_node_json(io, obj, world, parent_world, num_buf)
+    return String(take!(io))
 end
 
 function _web_transform_node_json(obj::AbstractObject3D)
@@ -1897,17 +1912,22 @@ end
 
 function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}())
     out = String[]
-    function forced_subtree(obj::AbstractObject3D)
-        obj.id in force_ids && return true
-        for child in get_children(obj)
-            forced_subtree(child) && return true
+    forced_subtree_ids = Set{Int}()
+    function collect_forced_subtrees!(obj::AbstractObject3D)
+        forced = obj.id in force_ids
+        @inbounds for child in get_children(obj)
+            forced |= collect_forced_subtrees!(child)
         end
-        return false
+        forced && push!(forced_subtree_ids, obj.id)
+        return forced
     end
-    function visit(obj::AbstractObject3D)
-        (is_visible(obj) || forced_subtree(obj)) || return
+    collect_forced_subtrees!(root)
+    num_buf = _web_num_buffer()
+    function visit(obj::AbstractObject3D, parent_world::Mat4)
+        world = parent_world * compute_local_matrix(obj)
+        (is_visible(obj) || obj.id in forced_subtree_ids) || return
         if !(obj isa Scene) && !_web_is_drawable(obj) && !(obj isa AbstractLight)
-            push!(out, _web_transform_node_json(obj))
+            push!(out, _web_transform_node_json(obj, world, parent_world, num_buf))
         end
         if obj isa LOD
             # LOD level objects are also registered as children (add_lod_level! ->
@@ -1917,18 +1937,18 @@ function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int
             level_ids = Set{Int}()
             for (_, _, child) in obj.levels
                 push!(level_ids, child.id)
-                visit(child)
+                visit(child, world)
             end
             for child in get_children(obj)
-                child.id in level_ids || visit(child)
+                child.id in level_ids || visit(child, world)
             end
         else
             for child in get_children(obj)
-                visit(child)
+                visit(child, world)
             end
         end
     end
-    visit(root)
+    visit(root, Mat4())
     return out
 end
 

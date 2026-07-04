@@ -13,6 +13,7 @@ jobs:
     permissions: write-all
     steps:
       - name: Delete deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: strumwolf/delete-deployment-environment@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,5 +43,6 @@ jobs:
       - name: Build and deploy
         run: julia --project=docs docs/make.jl
         env:
+          DOCUMENTER_DEPLOY: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

@@ -111,6 +111,14 @@ const _NO_PLANES = Plane{Float64}[]
 const _ZERO_V3 = Vec3(0.0, 0.0, 0.0)
 const _ZERO_V2 = Vec2(0.0, 0.0)
 
+struct _CombinedClippingPlanes{G,M}
+    global_planes::G
+    material_planes::M
+end
+
+Base.isempty(planes::_CombinedClippingPlanes) =
+    isempty(planes.global_planes) && isempty(planes.material_planes)
+
 # A fragment lies on the "kept" side of every clipping plane when its signed
 # distance is non-negative for all of them (three.js `clippingPlanes`: a plane
 # clips away the half-space on the negative side of its normal). With no planes
@@ -120,6 +128,11 @@ const _ZERO_V2 = Vec2(0.0, 0.0)
         plane_distance_to_point(pl, wp) < 0 && return false
     end
     return true
+end
+
+@inline function _clip_keep(planes::_CombinedClippingPlanes, wp::Vec3)
+    return _clip_keep(planes.global_planes, wp) &&
+           _clip_keep(planes.material_planes, wp)
 end
 
 # Rasterize one screen-space triangle (flat color) with z-buffer. `ylo`/`yhi`
@@ -1468,7 +1481,7 @@ material_clipping_planes(m::AbstractMaterial) =
 function _combined_clipping_planes(global_planes, material_planes)
     isempty(material_planes) && return global_planes
     isempty(global_planes) && return material_planes
-    return Plane{Float64}[global_planes...; material_planes...]
+    return _CombinedClippingPlanes(global_planes, material_planes)
 end
 
 @inline _has_texture_alpha(tex) = tex isa Texture && size(tex.data, 3) >= 4

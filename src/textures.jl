@@ -62,9 +62,13 @@ function _texture_max_anisotropy(v)::Float64
 end
 
 @inline function _checked_texture_data_size(tex::Texture, label::String)
-    H, W, C = size(tex.data)
+    return _checked_texture_data_size(tex.data, label)
+end
+
+@inline function _checked_texture_data_size(data::Array{Float64,3}, label::String)
+    H, W, C = size(data)
     (H > 0 && W > 0 && C > 0) ||
-        throw(ArgumentError("$label texture dimensions must be positive; got $(size(tex.data))"))
+        throw(ArgumentError("$label texture dimensions must be positive; got $(size(data))"))
     return H, W, C
 end
 
@@ -153,6 +157,19 @@ end
     Color3(tex.data[y, x, 1], tex.data[y, x, 2], tex.data[y, x, 3])
 end
 
+@inline function _texel_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
+                            ix::Int, iy::Int)
+    H, W, C = size(data)
+    x = _wrap_coord(ix, W, wrap_s) + 1
+    y = _wrap_coord(iy, H, wrap_t) + 1
+    if C == 1
+        g = data[y, x, 1]; return Color3(g, g, g)
+    elseif C == 2
+        g = data[y, x, 1]; return Color3(g, g, g)
+    end
+    return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
+end
+
 @inline function texture_transform_uv(tex::Texture, u, v)
     tex.matrix_auto_update && texture_update_matrix!(tex)
     e = tex.matrix.e
@@ -200,22 +217,36 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
     return x
 end
 
-function sample_texture(tex::Texture, u, v)
-    H, W, _ = _checked_texture_data_size(tex, "sample_texture")
+@inline function _texture_sample_uv(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
+    return _sanitize_uv(u), _sanitize_uv(v)
+end
+
+function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
+                              filter::Symbol, u, v, label::String)
+    H, W, _ = _checked_texture_data_size(data, label)
     u = _sanitize_uv(u); v = _sanitize_uv(v)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
-    if tex.filter === :nearest
-        return _texel(tex, round(Int, fx), round(Int, fy))
+    if filter === :nearest
+        return _texel_data(data, wrap_s, wrap_t, round(Int, fx), round(Int, fy))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
-    c00 = _texel(tex, x0,   y0);   c10 = _texel(tex, x0+1, y0)
-    c01 = _texel(tex, x0,   y0+1); c11 = _texel(tex, x0+1, y0+1)
+    c00 = _texel_data(data, wrap_s, wrap_t, x0,   y0)
+    c10 = _texel_data(data, wrap_s, wrap_t, x0+1, y0)
+    c01 = _texel_data(data, wrap_s, wrap_t, x0,   y0+1)
+    c11 = _texel_data(data, wrap_s, wrap_t, x0+1, y0+1)
     top = c00 * (1 - tx) + c10 * tx
     bot = c01 * (1 - tx) + c11 * tx
     return top * (1 - ty) + bot * ty
+end
+
+function sample_texture(tex::Texture, u, v)
+    _checked_texture_data_size(tex, "sample_texture")
+    tu, tv = _texture_sample_uv(tex, u, v)
+    return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, tex.filter, tu, tv,
+                                "sample_texture")
 end
 
 @inline function _texel_channel(tex::Texture, ix::Int, iy::Int, channel::Int, default=1.0)
@@ -327,15 +358,7 @@ end
 """Sample a discrete mip level (0 = base). Clamped to the available levels."""
 function sample_texture_lod(tex::Texture, u, v, lod::Int)
     _checked_texture_data_size(tex, "sample_texture_lod")
-    lod <= 0 && return sample_texture(tex, u, v)
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
-    lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
-    tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=tex.filter,
-                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
-                  colorspace=tex.colorspace, offset=tex.offset, repeat=tex.repeat,
-                  rotation=tex.rotation, center=tex.center, matrix=tex.matrix,
-                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord)
-    return sample_texture(tmp, u, v)
+    return _sample_texture_lod_filtered(tex, u, v, lod, tex.filter)
 end
 
 @inline _texture_min_filter_uses_mipmaps(filter::Symbol) =
@@ -352,24 +375,16 @@ function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symb
     lod <= 0 && return _sample_texture_filtered(tex, u, v, filter)
     isempty(tex.mipmaps) && return _sample_texture_filtered(tex, u, v, filter)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
-    tmp = Texture(lvl; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=filter,
-                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
-                  colorspace=tex.colorspace, offset=tex.offset, repeat=tex.repeat,
-                  rotation=tex.rotation, center=tex.center, matrix=tex.matrix,
-                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord,
-                  max_anisotropy=tex.max_anisotropy)
-    return sample_texture(tmp, u, v)
+    tu, tv = _texture_sample_uv(tex, u, v)
+    return _sample_texture_data(lvl, tex.wrap_s, tex.wrap_t, filter, tu, tv,
+                                "sample_texture_lod")
 end
 
 function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol)
-    tmp = Texture(tex.data; wrap_s=tex.wrap_s, wrap_t=tex.wrap_t, filter=filter,
-                  min_filter=tex.min_filter, mag_filter=tex.mag_filter,
-                  mipmaps=tex.mipmaps, colorspace=tex.colorspace,
-                  offset=tex.offset, repeat=tex.repeat, rotation=tex.rotation,
-                  center=tex.center, matrix=tex.matrix,
-                  matrix_auto_update=tex.matrix_auto_update, tex_coord=tex.tex_coord,
-                  max_anisotropy=tex.max_anisotropy)
-    return sample_texture(tmp, u, v)
+    _checked_texture_data_size(tex, "sample_texture")
+    tu, tv = _texture_sample_uv(tex, u, v)
+    return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, filter, tu, tv,
+                                "sample_texture")
 end
 
 """

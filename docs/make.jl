@@ -24,7 +24,7 @@ makedocs(
     warnonly = false,
 )
 
-if get(ENV, "CI", "false") == "true"
+if get(ENV, "DOCUMENTER_DEPLOY", "false") == "true"
     deploydocs(
         repo = "github.com/jake-w-liu/Diff3D.jl.git",
         devbranch = "main",

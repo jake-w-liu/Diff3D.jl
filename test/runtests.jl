@@ -3819,6 +3819,38 @@ end
         end
         Diff3D._web_collect_transform_nodes(transform_alloc_scene)
         @test_opt_alloc 180000 Diff3D._web_collect_transform_nodes(transform_alloc_scene)
+        forced_hidden_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        forced_hidden_parent = forced_hidden_scene
+        forced_hidden_leaf = forced_hidden_scene
+        for i in 1:100
+            node = Group(name="forced_hidden_$i")
+            node.visible = false
+            node.position = Vec3(i / 100, 0.0, 0.0)
+            add!(forced_hidden_parent, node)
+            forced_hidden_parent = node
+            forced_hidden_leaf = node
+        end
+        forced_hidden_ids = Set([forced_hidden_leaf.id])
+        forced_hidden_nodes = Diff3D._web_collect_transform_nodes(forced_hidden_scene,
+                                                                  forced_hidden_ids)
+        @test length(forced_hidden_nodes) == 100
+        @test_opt_alloc 500000 Diff3D._web_collect_transform_nodes(forced_hidden_scene,
+                                                                   forced_hidden_ids)
+        matrix_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        matrix_parent = Group(name="matrix_parent")
+        matrix_child = Group(name="matrix_child")
+        matrix_parent.position = Vec3(1.0, 2.0, 3.0)
+        matrix_child.position = Vec3(0.5, 0.25, 0.125)
+        add!(matrix_scene, matrix_parent); add!(matrix_parent, matrix_child)
+        matrix_nodes = Diff3D._web_collect_transform_nodes(matrix_scene)
+        matrix_child_json = only(filter(n -> occursin("\"id\":$(matrix_child.id)", n),
+                                        matrix_nodes))
+        @test occursin("\"matrix\":" *
+                       Diff3D._js_mat(Diff3D.compute_world_matrix(matrix_child)),
+                       matrix_child_json)
+        @test occursin("\"parentMatrix\":" *
+                       Diff3D._js_mat(Diff3D.compute_world_matrix(matrix_parent)),
+                       matrix_child_json)
         clip_alloc_mesh = Mesh(BoxGeometry(), MeshBasicMaterial();
                                name="clip_export_alloc")
         clip_alloc_times = collect(range(0.0, 2.0; length=64))
@@ -7220,6 +7252,7 @@ end
         @test size(t.mipmaps[3]) == (1,1,3)
         # LOD 0 equals the base sample.
         @test sample_texture_lod(t, 0.5, 0.5, 0).r ≈ sample_texture(t, 0.5, 0.5).r
+        @test_opt_alloc 64 sample_texture_lod(t, 0.5, 0.5, 2)
     end
 
     @testset "CubeTexture and DepthTexture" begin
@@ -7236,6 +7269,7 @@ end
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 0).r ≈ 1.0
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 2).r ≈ 1 / 16
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5).r ≈ 1 / 32
+        @test_opt_alloc 64 sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5)
         @test_throws ArgumentError sample_cube_lod(lod_cube, Vec3(1.0,0,0), NaN)
         lod_env_json = Diff3D._web_env_json(lod_cube)
         @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", lod_env_json)
@@ -12928,6 +12962,7 @@ end
             # Intermediate footprint stays a convex blend within the channel range.
             mid = sample_texture_auto(tex, 0.3, 0.7, 0.25)
             @test 0.0 <= mid.r <= 1.0
+            @test_opt_alloc 64 sample_texture_auto(tex, 0.3, 0.7, 0.25)
 
             # The minification filter controls both texel filtering and mip-level
             # selection, matching WebGL/three.js sampler semantics.
@@ -13283,6 +13318,13 @@ end
             rt_local_half = RenderTarget(32, 32); render!(rt_local_half, local_half_scene, cam)
             local_half_px = count(i -> rt_local_half.color[i] > 0.0, eachindex(rt_local_half.color))
             @test 0 < local_half_px < full_px
+            combined_clip_rt = RenderTarget(32, 32)
+            combined_clip_cache = RenderCache()
+            render!(combined_clip_rt, local_half_scene, cam; cache=combined_clip_cache,
+                    clipping_planes=keep_pos)
+            @test_opt_alloc 2048 render!(combined_clip_rt, local_half_scene, cam;
+                                         cache=combined_clip_cache,
+                                         clipping_planes=keep_pos)
 
             smooth_scene = Scene()
             add!(smooth_scene, AmbientLight(intensity=1.0))
@@ -13802,6 +13844,7 @@ end
             @test abs(aniso.r - iso.r) > 1e-6
             # Result stays a valid color in [0,1] (averaged samples).
             @test 0.0 <= aniso.r <= 1.0 && 0.0 <= aniso.g <= 1.0 && 0.0 <= aniso.b <= 1.0
+            @test_opt_alloc 128 sample_texture_aniso(tex, uq, 0.5, du, dv; max_aniso=8)
 
             # 3) Near-isotropic footprint (ratio < 1.5) -> falls back to the single
             #    isotropic auto-LOD sample exactly.
