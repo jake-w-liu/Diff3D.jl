@@ -1161,8 +1161,21 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     else
         _append_skinned_render_meshes!(meshes, scene, cache.skinned, cache.skinned_meshes)
     end
-    shadow_fn = shadows ? _build_shadow_query(scene, lights; resolution=shadow_resolution,
-                                              clipping_planes=clipping_planes) : nothing
+    instanced = cache === nothing ? collect_instanced(scene) :
+                _collect_instanced_into!(cache.instanced, scene)
+    shadow_fn = if shadows
+        if cache === nothing
+            _build_shadow_query_from_drawables!(IdDict{AbstractLight,ShadowMap}(), nothing,
+                lights, meshes, instanced; resolution=shadow_resolution,
+                clipping_planes=clipping_planes)
+        else
+            _build_shadow_query_from_drawables!(cache.shadow_maps, cache.shadow_depths,
+                lights, meshes, instanced; resolution=shadow_resolution,
+                clipping_planes=clipping_planes)
+        end
+    else
+        nothing
+    end
 
     # View-projection frustum for culling whole meshes that fall offscreen.
     frustum = frustum_cull ? frustum_from_matrix(proj * view) : nothing
@@ -1248,8 +1261,6 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
 
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
-    instanced = cache === nothing ? collect_instanced(scene) :
-                _collect_instanced_into!(cache.instanced, scene)
     for (instanced_slot, im) in pairs(instanced)
         !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue

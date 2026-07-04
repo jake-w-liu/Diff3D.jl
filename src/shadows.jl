@@ -26,6 +26,15 @@ end
 ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias::Float64) =
     ShadowMap(depth, light_vp, bias, 0)
 
+struct _ShadowQuery{M}
+    maps::M
+end
+
+@inline function (query::_ShadowQuery)(light, p::Vec3)
+    maps = query.maps
+    return haskey(maps, light) ? shadow_visibility(maps[light], p) : 1.0
+end
+
 function _validated_shadow_resolution(resolution::Int)
     resolution > 0 || throw(ArgumentError("shadow resolution must be positive"))
     return resolution
@@ -228,26 +237,28 @@ neighbourhood of the depth map and returns the lit fraction in `[0,1]`. When
 or `shadow_bias` settings are used when present; otherwise the historical hard
 shadow (`pcf_radius=0`) and `bias=3e-3` defaults are preserved.
 """
-function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf_radius=nothing,
-                            clipping_planes=_NO_PLANES)
+function _compute_shadow_map_from_drawables(meshes, instanced, light,
+                                            depth::Matrix{Float64};
+                                            resolution::Int=512, bias=nothing,
+                                            pcf_radius=nothing,
+                                            clipping_planes=_NO_PLANES)
     res = _validated_shadow_resolution(resolution)
+    size(depth) == (res, res) ||
+        throw(ArgumentError("shadow depth scratch must match resolution"))
+    fill!(depth, Inf)
     shadow_bias = bias === nothing ? _light_shadow_bias(light, 3e-3) :
                   _validated_shadow_bias(bias)
     pcf = pcf_radius === nothing ? _light_shadow_pcf_radius(light, 0) :
           _validated_shadow_pcf_radius(pcf_radius)
     pcf === nothing && (pcf = 0)
-    meshes = collect_meshes(scene)
-    _append_skinned_render_meshes!(meshes, scene)
-    instanced = collect_instanced(scene)
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
                  any(im -> _visible_in_tree(im) && _instanced_triangle_drawable(im) &&
                            object_casts_shadow(im), instanced)
     has_caster ||
-        return ShadowMap(fill(Inf, res, res), Mat4{Float64}(), shadow_bias, pcf)
+        return ShadowMap(depth, Mat4{Float64}(), shadow_bias, pcf)
     center, radius = _scene_bounds(meshes, instanced)
     vp = _light_view_proj(light, center, radius)
     W = H = res
-    depth = fill(Inf, H, W)
     for mesh in meshes
         is_visible(mesh) || continue
         object_casts_shadow(mesh) || continue
@@ -271,6 +282,17 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf
         end
     end
     return ShadowMap(depth, vp, shadow_bias, pcf)
+end
+
+function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf_radius=nothing,
+                            clipping_planes=_NO_PLANES)
+    res = _validated_shadow_resolution(resolution)
+    meshes = collect_meshes(scene)
+    _append_skinned_render_meshes!(meshes, scene)
+    instanced = collect_instanced(scene)
+    depth = Matrix{Float64}(undef, res, res)
+    return _compute_shadow_map_from_drawables(meshes, instanced, light, depth;
+        resolution=res, bias=bias, pcf_radius=pcf_radius, clipping_planes=clipping_planes)
 end
 
 @inline _vh(v::Vec3) = Vec4(v.x, v.y, v.z, 1.0)
@@ -328,17 +350,53 @@ end
 # `pcf_radius=0` keeps the original hard-shadow behaviour; a positive radius bakes
 # percentage-closer soft shadows into every map, so the query closure returns the
 # lit fraction in [0,1] via the radius stored on each `ShadowMap`.
-function _build_shadow_query(scene, lights; resolution::Int=512, bias=nothing, pcf_radius=nothing,
-                             clipping_planes=_NO_PLANES)
+@inline function _light_casts_shadow(light)
+    return !_is_fill_light(light) && hasfield(typeof(light), :cast_shadow) &&
+           getfield(light, :cast_shadow)
+end
+
+function _shadow_depth!(depths::Vector{Matrix{Float64}}, slot::Int, res::Int)
+    while length(depths) < slot
+        push!(depths, Matrix{Float64}(undef, 0, 0))
+    end
+    depth = depths[slot]
+    if size(depth) != (res, res)
+        depth = Matrix{Float64}(undef, res, res)
+        depths[slot] = depth
+    end
+    return depth
+end
+
+function _build_shadow_query_from_drawables!(maps::IdDict{AbstractLight,ShadowMap},
+                                             depths::Union{Nothing,Vector{Matrix{Float64}}},
+                                             lights, meshes, instanced;
+                                             resolution::Int=512, bias=nothing,
+                                             pcf_radius=nothing,
+                                             clipping_planes=_NO_PLANES)
     res = _validated_shadow_resolution(resolution)
-    maps = IdDict{AbstractLight, ShadowMap}()
+    empty!(maps)
+    shadow_slot = 0
     for light in lights
-        if !_is_fill_light(light) && hasfield(typeof(light), :cast_shadow) && getfield(light, :cast_shadow)
-            maps[light] = compute_shadow_map(scene, light; resolution=res,
-                                             bias=bias, pcf_radius=pcf_radius,
-                                             clipping_planes=clipping_planes)
+        if _light_casts_shadow(light)
+            shadow_slot += 1
+            depth = depths === nothing ? Matrix{Float64}(undef, res, res) :
+                    _shadow_depth!(depths, shadow_slot, res)
+            maps[light] = _compute_shadow_map_from_drawables(meshes, instanced, light, depth;
+                resolution=res, bias=bias, pcf_radius=pcf_radius,
+                clipping_planes=clipping_planes)
         end
     end
     isempty(maps) && return nothing
-    return (light, p) -> haskey(maps, light) ? shadow_visibility(maps[light], p) : 1.0
+    return _ShadowQuery(maps)
+end
+
+function _build_shadow_query(scene, lights; resolution::Int=512, bias=nothing, pcf_radius=nothing,
+                             clipping_planes=_NO_PLANES)
+    meshes = collect_meshes(scene)
+    _append_skinned_render_meshes!(meshes, scene)
+    instanced = collect_instanced(scene)
+    maps = IdDict{AbstractLight, ShadowMap}()
+    return _build_shadow_query_from_drawables!(maps, nothing, lights, meshes, instanced;
+        resolution=resolution, bias=bias, pcf_radius=pcf_radius,
+        clipping_planes=clipping_planes)
 end

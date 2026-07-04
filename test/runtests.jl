@@ -7019,6 +7019,17 @@ end
         @test shadow_visibility(sm, Vec3(0.5, 0.0, 0.5)) == 0.0
         @test shadow_visibility(sm, Vec3(10.0, 0.0, 0.0)) == 1.0     # open ground
         @test shadow_visibility(sm, Vec3(0.0, 0.0, 10.0)) == 1.0
+        key.cast_shadow = true
+        shadow_cam = PerspectiveCamera(aspect=1.0)
+        shadow_cam.position = Vec3(0.0, 0.0, 30.0)
+        shadow_cam.target = Vec3(0.0, 0.0, 0.0)
+        shadow_rt = RenderTarget(32, 32)
+        shadow_cache = RenderCache()
+        render!(shadow_rt, scene, shadow_cam; cache=shadow_cache, shadows=true,
+                shadow_resolution=32)
+        @test_opt_alloc 12000 render!(shadow_rt, scene, shadow_cam;
+                                      cache=shadow_cache, shadows=true,
+                                      shadow_resolution=32)
 
         # End-to-end: an angled key light casts the box's shadow onto visible
         # ground beside it. Enabling shadows can only darken, and darkens a region.

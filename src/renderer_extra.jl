@@ -158,6 +158,8 @@ mutable struct RenderCache
     msaa_target::Union{Nothing,RenderTarget{Float64}}
     bound_geometries::Vector{BufferGeometry}
     bounds::Vector{BoundingSphere{Float64}}
+    shadow_depths::Vector{Matrix{Float64}}
+    shadow_maps::IdDict{AbstractLight,ShadowMap}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
@@ -170,7 +172,8 @@ function RenderCache()
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
                 _SpriteRenderState(nothing, 0),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
-                BufferGeometry[], BoundingSphere{Float64}[])
+                BufferGeometry[], BoundingSphere{Float64}[],
+                Matrix{Float64}[], IdDict{AbstractLight,ShadowMap}())
 end
 
 function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)
