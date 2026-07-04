@@ -1123,6 +1123,13 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     # View-projection frustum for culling whole meshes that fall offscreen.
     frustum = frustum_cull ? frustum_from_matrix(proj * view) : nothing
+    bounds_cache = if frustum === nothing || cache === nothing
+        nothing
+    else
+        empty!(cache.bound_geometries)
+        empty!(cache.bounds)
+        (cache.bound_geometries, cache.bounds)
+    end
 
     # Reused scratch buffers (bounded allocation per frame).
     if cache === nothing
@@ -1166,7 +1173,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         wm = compute_world_matrix(mesh)
         geo = _mesh_geometry(mesh)
         mat = _mesh_material(mesh)
-        (frustum === nothing || _mesh_in_frustum(frustum, geo, wm)) || continue
+        (frustum === nothing || _mesh_in_frustum(frustum, geo, wm, bounds_cache)) || continue
         if material_wireframe(mat)
             push!(wireframe_meshes, mesh)
         elseif is_transparent_material(mat)
@@ -1320,8 +1327,26 @@ end
 # against the frustum. The sphere centre is the geometry centre transformed to
 # world; the radius scales by the largest axis scale extracted from `world_mat`
 # (a conservative bound for non-uniform scale that never culls a visible mesh).
-@inline function _mesh_in_frustum(frustum::Frustum, geo, world_mat::Mat4)
+@inline function _mesh_local_bounding_sphere(geo::BufferGeometry, ::Nothing)
+    return compute_bounding_sphere(geo)
+end
+
+@inline function _mesh_local_bounding_sphere(geo::BufferGeometry,
+                                             bounds_cache::Tuple{Vector{BufferGeometry},
+                                                                 Vector{BoundingSphere{Float64}}})
+    bound_geometries, bounds = bounds_cache
+    @inbounds for i in eachindex(bound_geometries)
+        bound_geometries[i] === geo && return bounds[i]
+    end
     bs = compute_bounding_sphere(geo)
+    push!(bound_geometries, geo)
+    push!(bounds, bs)
+    return bs
+end
+
+@inline function _mesh_in_frustum(frustum::Frustum, geo::BufferGeometry,
+                                  world_mat::Mat4, bounds_cache=nothing)
+    bs = _mesh_local_bounding_sphere(geo, bounds_cache)
     bs.radius == 0 && geo.n_vertices == 0 && return false
     center = mat4_transform_point(world_mat, bs.center)
     # Column lengths of the upper-left 3×3 give the per-axis scale factors.

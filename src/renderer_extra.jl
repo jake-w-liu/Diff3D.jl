@@ -144,6 +144,8 @@ mutable struct RenderCache
     smooth_clipped::Vector{ShadeVtx}
     smooth_iw::Vector{Float64}
     msaa_target::Union{Nothing,RenderTarget{Float64}}
+    bound_geometries::Vector{BufferGeometry}
+    bounds::Vector{BoundingSphere{Float64}}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
@@ -154,7 +156,8 @@ function RenderCache()
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
                 _SpriteRenderState(nothing, 0),
-                Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing)
+                Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
+                BufferGeometry[], BoundingSphere{Float64}[])
 end
 
 function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)

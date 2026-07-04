@@ -12952,6 +12952,34 @@ end
             rt_far = RenderTarget(32, 32); render!(rt_far, s2, cam; frustum_cull=true)
             rt_empty = RenderTarget(32, 32); render!(rt_empty, Scene(), cam)
             @test rt_far.color == rt_empty.color
+
+            shared_geo = BufferGeometry([0.0, 0.0, 0.0,
+                                         1.0, 0.0, 0.0,
+                                         0.0, 1.0, 0.0],
+                                        [0.0, 0.0, 1.0,
+                                         0.0, 0.0, 1.0,
+                                         0.0, 0.0, 1.0],
+                                        [0.0, 0.0,
+                                         1.0, 0.0,
+                                         0.0, 1.0],
+                                        [1, 2, 3], 3, 1)
+            shared_scene = Scene()
+            for i in 1:24
+                m = Mesh(shared_geo, MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)))
+                m.position = Vec3(1000.0 + i, 0.0, 0.0)
+                add!(shared_scene, m)
+            end
+            shared_cache = RenderCache()
+            rt_shared = RenderTarget(8, 8)
+            render!(rt_shared, shared_scene, cam; cache=shared_cache, frustum_cull=true)
+            @test length(shared_cache.bounds) == 1
+            first_center = first(shared_cache.bounds).center
+            shared_geo.positions[1] = 10.0
+            render!(rt_shared, shared_scene, cam; cache=shared_cache, frustum_cull=true)
+            @test length(shared_cache.bounds) == 1
+            @test first(shared_cache.bounds).center != first_center
+            @test_opt_alloc 4096 render!(rt_shared, shared_scene, cam;
+                                          cache=shared_cache, frustum_cull=true)
         end
 
         # [RAS:rasterizer+renderer] World-space clipping planes in render!
