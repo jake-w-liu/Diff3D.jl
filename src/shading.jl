@@ -681,6 +681,11 @@ struct _PhysicalMappedTerms
     anisotropy::Float64
 end
 
+const _PHYSICAL_MAPPED_TERMS_ZERO =
+    _PhysicalMappedTerms(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                         Color3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0,
+                         0.0, Color3(0.0, 0.0, 0.0), 0.0)
+
 function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
                                 metalness_map, u, v, u2, v2)
     uv_for(tex) = tex === nothing ? (u, v) : _map_uv(tex, u, v, u2, v2)
@@ -859,9 +864,12 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         view_dir = normalize(cam_pos - center)
         eff_mat = material
-        standard_mapped = false
+        mapped_kind = 0
+        phong_specular = Color3(0.0, 0.0, 0.0)
+        phong_shininess = 0.0
         standard_metalness = 0.0
         standard_roughness = 0.0
+        physical_terms = _PHYSICAL_MAPPED_TERMS_ZERO
         vertex_color = Color3(1.0, 1.0, 1.0)
 
         # normalMap perturbs the shading normal and roughnessMap overrides the
@@ -879,14 +887,24 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                                            normal_uvs[1], normal_uvs[2], normal_uvs[3],
                                            normal_scale)
             end
-            if specular_map !== nothing || glossiness_map !== nothing
-                eff_mat = _apply_phong_maps(material, specular_map, glossiness_map, u, v, u2, v2uv)
+            if material isa MeshPhongMaterial &&
+               (specular_map !== nothing || glossiness_map !== nothing)
+                phong_specular, phong_shininess =
+                    _phong_mapped_terms(material, specular_map, glossiness_map,
+                                        u, v, u2, v2uv)
+                mapped_kind = 1
             elseif material isa MeshStandardMaterial &&
                    (roughness_map !== nothing || metalness_map !== nothing)
                 standard_metalness, standard_roughness =
                     _standard_mapped_terms(material, roughness_map, metalness_map,
                                            u, v, u2, v2uv)
-                standard_mapped = true
+                mapped_kind = 2
+            elseif material isa MeshPhysicalMaterial &&
+                   (roughness_map !== nothing || metalness_map !== nothing ||
+                    physical_pbr_map !== nothing)
+                physical_terms = _physical_mapped_terms(material, roughness_map,
+                                                        metalness_map, u, v, u2, v2uv)
+                mapped_kind = 3
             elseif roughness_map !== nothing || metalness_map !== nothing || physical_pbr_map !== nothing
                 eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2uv)
             end
@@ -894,7 +912,15 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
 
         use_vertex_colors && (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
         shade_mat = eff_mat
-        color = if standard_mapped
+        color = if mapped_kind == 1
+            use_vertex_colors ?
+                _shade_phong_mapped_vertex_color(face_n, view_dir, center,
+                                                 material, lights, shadow_fn,
+                                                 phong_specular, phong_shininess,
+                                                 vertex_color) :
+                _shade_phong_mapped(face_n, view_dir, center, material, lights,
+                                    shadow_fn, phong_specular, phong_shininess)
+        elseif mapped_kind == 2
             use_vertex_colors ?
                 _shade_standard_mapped_vertex_color(face_n, view_dir, center,
                                                     material, lights, shadow_fn,
@@ -904,6 +930,13 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 _shade_standard_mapped(face_n, view_dir, center, material,
                                        lights, shadow_fn, standard_metalness,
                                        standard_roughness)
+        elseif mapped_kind == 3
+            use_vertex_colors ?
+                _shade_physical_mapped_vertex_color(face_n, view_dir, center,
+                                                    material, lights, shadow_fn,
+                                                    physical_terms, vertex_color) :
+                _shade_physical_mapped(face_n, view_dir, center, material,
+                                       lights, shadow_fn, physical_terms)
         else
             shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, vertex_color) : eff_mat
             shade_face(face_n, view_dir, center, shade_mat, lights; shadow_fn=shadow_fn)

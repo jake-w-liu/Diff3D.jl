@@ -1954,6 +1954,13 @@ end
 
 function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}())
     out = String[]
+    _web_for_each_transform_node(root, force_ids) do obj, world, parent_world, num_buf
+        push!(out, _web_transform_node_json(obj, world, parent_world, num_buf))
+    end
+    return out
+end
+
+function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{Int})
     forced_subtree_ids = Set{Int}()
     function collect_forced_subtrees!(obj::AbstractObject3D)
         forced = obj.id in force_ids
@@ -1969,7 +1976,7 @@ function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int
         world = parent_world * compute_local_matrix(obj)
         (is_visible(obj) || obj.id in forced_subtree_ids) || return
         if !(obj isa Scene) && !_web_is_drawable(obj) && !(obj isa AbstractLight)
-            push!(out, _web_transform_node_json(obj, world, parent_world, num_buf))
+            f(obj, world, parent_world, num_buf)
         end
         if obj isa LOD
             # LOD level objects are also registered as children (add_lod_level! ->
@@ -1991,7 +1998,7 @@ function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int
         end
     end
     visit(root, Mat4())
-    return out
+    return nothing
 end
 
 function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
@@ -3077,6 +3084,38 @@ struct _WebDrawableStream{T<:AbstractObject3D,S<:Set{Int},R<:Real}
     camera_distance::R
 end
 
+struct _WebTransformNodeStream{T<:AbstractObject3D,S<:Set{Int}}
+    root::T
+    force_ids::S
+end
+
+function _web_write_transform_nodes_json(io::IO, nodes::AbstractVector{<:AbstractString},
+                                         num_buf::Vector{UInt8})
+    write(io, '[')
+    for (i, node) in enumerate(nodes)
+        i == 1 || write(io, ',')
+        write(io, node)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_write_transform_nodes_json(io::IO, nodes::_WebTransformNodeStream,
+                                         num_buf::Vector{UInt8})
+    write(io, '[')
+    first_node = Ref(true)
+    _web_for_each_transform_node(nodes.root, nodes.force_ids) do obj, world, parent_world, node_num_buf
+        if first_node[]
+            first_node[] = false
+        else
+            write(io, ',')
+        end
+        _web_write_transform_node_json(io, obj, world, parent_world, node_num_buf)
+    end
+    write(io, ']')
+    return nothing
+end
+
 function _web_write_objects_json(io::IO, objects::AbstractVector{<:AbstractString},
                                  num_buf::Vector{UInt8})
     write(io, '[')
@@ -3095,6 +3134,12 @@ function _web_write_objects_json(io::IO, objects::_WebDrawableStream,
 end
 
 function _web_collect_case_light_node_parts(case::WebGLExportCase)
+    animation_target_ids, lights_json = _web_collect_case_light_parts(case)
+    nodes = _web_collect_transform_nodes(case.scene, animation_target_ids)
+    return animation_target_ids, lights_json, nodes
+end
+
+function _web_collect_case_light_parts(case::WebGLExportCase)
     animation_target_ids = _web_animation_target_ids(case.animations)
     stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
     dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
@@ -3104,8 +3149,7 @@ function _web_collect_case_light_node_parts(case::WebGLExportCase)
                                    dynamic_shadow_ids, dynamic_spot_shadow_ids,
                                    dynamic_point_shadow_ids;
                                    clipping_planes=case.clipping_planes)
-    nodes = _web_collect_transform_nodes(case.scene, animation_target_ids)
-    return animation_target_ids, lights_json, nodes
+    return animation_target_ids, lights_json
 end
 
 function _web_collect_case_json_parts(case::WebGLExportCase)
@@ -3116,7 +3160,7 @@ end
 
 function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
                                     lights_json::AbstractString,
-                                    nodes::AbstractVector{<:AbstractString},
+                                    nodes,
                                     objects,
                                     num_buf::Vector{UInt8})
     write(io, "{\"id\":")
@@ -3156,12 +3200,9 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     end
     write(io, "],\"lights\":")
     write(io, lights_json)
-    write(io, ",\"nodes\":[")
-    for (i, node) in enumerate(nodes)
-        i == 1 || write(io, ',')
-        write(io, node)
-    end
-    write(io, "],\"objects\":")
+    write(io, ",\"nodes\":")
+    _web_write_transform_nodes_json(io, nodes, num_buf)
+    write(io, ",\"objects\":")
     _web_write_objects_json(io, objects, num_buf)
     write(io, ",\"animations\":[")
     for (i, clip) in enumerate(case.animations)
@@ -3181,7 +3222,8 @@ function _web_case_json(case::WebGLExportCase)
 end
 
 function _web_write_case_json(io::IO, case::WebGLExportCase)
-    animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
+    animation_target_ids, lights_json = _web_collect_case_light_parts(case)
+    nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
     objects = _WebDrawableStream(case.scene, animation_target_ids, case.radius)
     _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
     return nothing
@@ -3224,6 +3266,33 @@ function _web_write_data_json(io::IO, cases::AbstractVector{WebGLExportCase})
         _web_write_case_json(io, case)
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_write_rewritten(io::IO, text::AbstractString, rewrites)
+    i = firstindex(text)
+    stop = lastindex(text)
+    while i <= stop
+        best_range = nothing
+        best_replacement = nothing
+        for (needle, replacement) in rewrites
+            range = findnext(needle, text, i)
+            range === nothing && continue
+            if best_range === nothing || first(range) < first(best_range)
+                best_range = range
+                best_replacement = replacement
+            end
+        end
+        if best_range === nothing
+            write(io, SubString(text, i, stop))
+            break
+        end
+        if first(best_range) > i
+            write(io, SubString(text, i, prevind(text, first(best_range))))
+        end
+        write(io, best_replacement)
+        i = nextind(text, last(best_range))
+    end
     return nothing
 end
 
@@ -4115,7 +4184,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
 </body>
 </html>
 """
-    return replace(html,
+    rewrites = (
         "uniform vec3 uColor,uCamera,uAmbientColor;" =>
             "uniform vec3 uColor,uCamera,uAmbientColor,uProbeCoeff[4];",
         "uniform vec3 uColor,uCamera,uAmbientColor,uEmissive,uFogColor;" =>
@@ -4139,7 +4208,11 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
         "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4;" =>
             "const int MAX_DIR=$max_dir; const int MAX_POINT=$max_point; const int MAX_SPOT=$max_spot; const int MAX_HEMI=$max_hemi;",
         "const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;" =>
-            "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;")
+            "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;",
+    )
+    io = IOBuffer(sizehint=sizeof(html) + 1024)
+    _web_write_rewritten(io, html, rewrites)
+    return String(take!(io))
 end
 
 """

@@ -7163,6 +7163,10 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
         work_points = _svg_square_cap_points(work_points, half_width)
     end
     segment_count = closed_path ? length(work_points) : length(work_points) - 1
+    sizehint!(positions, 12 * segment_count)
+    sizehint!(normals, 12 * segment_count)
+    sizehint!(uvs, 8 * segment_count)
+    sizehint!(indices, 6 * segment_count)
     for i in 1:segment_count
         a = work_points[i]
         b = work_points[i == length(work_points) ? 1 : i + 1]
@@ -7176,14 +7180,12 @@ function _svg_stroke_outline_geometry(points::Vector{Vec2{Float64}},
                 Vec2(a.x - nx, a.y - ny),
                 Vec2(b.x - nx, b.y - ny),
                 Vec2(b.x + nx, b.y + ny))
-        quad_indices = Int[]
-        for (u, p) in zip((0.0, 0.0, 1.0, 1.0), quad)
-            push!(quad_indices,
-                  _svg_push_stroke_vertex!(positions, normals, uvs, p, u,
-                                           i == 1 ? 0.0 : 1.0))
-        end
-        push!(indices, quad_indices[1], quad_indices[2], quad_indices[3],
-              quad_indices[1], quad_indices[3], quad_indices[4])
+        v = i == 1 ? 0.0 : 1.0
+        i1 = _svg_push_stroke_vertex!(positions, normals, uvs, quad[1], 0.0, v)
+        i2 = _svg_push_stroke_vertex!(positions, normals, uvs, quad[2], 0.0, v)
+        i3 = _svg_push_stroke_vertex!(positions, normals, uvs, quad[3], 1.0, v)
+        i4 = _svg_push_stroke_vertex!(positions, normals, uvs, quad[4], 1.0, v)
+        push!(indices, i1, i2, i3, i1, i3, i4)
     end
     if closed_path
         for i in 1:length(work_points)
@@ -7240,6 +7242,7 @@ function points_to_stroke_geometry(points::AbstractVector{<:Vec2};
     isfinite(limit) && limit >= 1.0 ||
         throw(ArgumentError("miterlimit must be finite and at least 1"))
     clean = Vec2{Float64}[]
+    sizehint!(clean, length(points))
     for point in points
         x = Float64(point.x)
         y = Float64(point.y)
@@ -7499,6 +7502,7 @@ function _gltf_trim_declared_buffer(buf::Dict, data::Vector{UInt8}, label::Strin
     expected = _gltf_checked_declared_byte_length(declared, label)
     length(data) >= expected ||
         error("$label byteLength $expected exceeds available bytes $(length(data))")
+    length(data) == expected && return data
     return data[1:expected]
 end
 

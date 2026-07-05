@@ -1536,6 +1536,15 @@ end
 @inline _sprite_subtree_may_draw(obj::AbstractObject3D) =
     is_visible(obj) && (_object_has_children(obj) || obj isa Sprite)
 
+function _sprite_subtree_has_drawable(obj::AbstractObject3D)
+    is_visible(obj) || return false
+    obj isa Sprite && return true
+    for child in get_children(obj)
+        _sprite_subtree_has_drawable(child) && return true
+    end
+    return false
+end
+
 function _render_sprites_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                        camera::AbstractCamera, view::Mat4, vp::Mat4,
                                        W::Int, H::Int, clipping_planes,
@@ -1608,6 +1617,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
                          xlo::Int=1, xhi::Int=rt.width,
                          ylo::Int=1, yhi::Int=rt.height,
                          cache::Union{Nothing,RenderCache}=nothing)
+    _sprite_subtree_has_drawable(scene) || return rt
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
@@ -2252,7 +2262,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
     H = rt.height
-    thread_count = Threads.nthreads()
+    thread_count = tiles == 1 ? 1 : Threads.nthreads()
     thread_caches = if cache === nothing
         [RenderCache() for _ in 1:thread_count]
     else
