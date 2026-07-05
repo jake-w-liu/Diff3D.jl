@@ -991,7 +991,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         # textured result. Metals reflect albedo-tinted env; dielectrics a small
         # Fresnel reflection. Uses `eff_mat` so a roughness-map override applies.
         if env_map !== nothing
-            if standard_mapped
+            if mapped_kind == 2
                 env_color = use_vertex_colors ? _modulate(material.color, vertex_color) :
                             material.color
                 color = color + _envmap_reflection(env_map, face_n, view_dir,
