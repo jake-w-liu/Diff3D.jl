@@ -187,8 +187,9 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                         tri.valid || continue
                         !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
 
-                        d = signed_distance_to_triangle(cx, cy,
-                            tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y)
+                        d = _signed_distance_to_triangle_area(cx, cy,
+                            tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
+                            tri.area)
                         coverage = sigmoid_approx(d / σ)
                         z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
                         depth_weight = exp(-z_face / γ - m)
@@ -319,8 +320,9 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                     !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
 
                     # Signed distance to triangle (minimum distance to any edge)
-                    d = signed_distance_to_triangle(cx, cy,
-                        tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y)
+                    d = _signed_distance_to_triangle_area(cx, cy,
+                        tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
+                        tri.area)
 
                     # Soft coverage via sigmoid
                     coverage = sigmoid_approx(d / σ)
@@ -367,9 +369,8 @@ end
 Signed distance from point (px,py) to triangle defined by (ax,ay), (bx,by), (cx,cy).
 Positive inside, negative outside.
 """
-function signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
+function _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
     # Barycentric test
-    area = edge_function(ax, ay, bx, by, cx, cy)
     if abs(area) < 1e-20
         return typeof(px)(-1e10)
     end
@@ -391,6 +392,11 @@ function signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
         d3 = point_segment_distance(px, py, cx, cy, ax, ay)
         return -min(d1, d2, d3)
     end
+end
+
+function signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
+    area = edge_function(ax, ay, bx, by, cx, cy)
+    return _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
 end
 
 """
