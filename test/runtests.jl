@@ -16610,6 +16610,18 @@ end
             rt_msaa = RenderTarget(32, 32)
             render_msaa!(rt_msaa, msaa_scene, msaa_cam; samples=2)
             @test count(v -> 0.05 < v < 0.95, rt_msaa.color[:, :, 1]) > 5   # fractional edge coverage
+            rt_single_direct = RenderTarget(32, 32)
+            rt_single_msaa = RenderTarget(32, 32)
+            render!(rt_single_direct, msaa_scene, msaa_cam)
+            single_cache = RenderCache()
+            render_msaa!(rt_single_msaa, msaa_scene, msaa_cam; samples=1,
+                         cache=single_cache)
+            @test maximum(abs.(rt_single_direct.color .- rt_single_msaa.color)) < 1e-12
+            @test_opt_alloc 128 render_msaa!(rt_single_msaa, msaa_scene, msaa_cam;
+                                             samples=1, cache=single_cache)
+            render_msaa!(rt_single_msaa, msaa_scene, msaa_cam; samples=1)
+            @test_opt_alloc 50000 render_msaa!(rt_single_msaa, msaa_scene, msaa_cam;
+                                               samples=1)
 
             # render_pooled! rejects unsupported shading instead of silently ignoring it
             @test_throws ArgumentError render_pooled!(RenderTarget(16, 16), msaa_scene, msaa_cam,

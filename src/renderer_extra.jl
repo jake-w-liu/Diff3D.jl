@@ -100,6 +100,8 @@ function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                       cache=nothing)
     samples > 0 || throw(ArgumentError("render_msaa! samples must be positive"))
     ss = max(ceil(Int, sqrt(samples)), 1)
+    ss == 1 && return render!(rt, scene, camera; shading=shading, shadows=shadows,
+                              cache=cache)
     big_w = rt.width * ss
     big_h = rt.height * ss
     big = cache === nothing ? RenderTarget(big_w, big_h) :
