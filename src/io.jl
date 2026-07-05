@@ -115,6 +115,14 @@ end
 
 @inline _be32(x::Integer) = UInt8[(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
 
+@inline function _write_be32(io::IO, x::Integer)
+    write(io, UInt8((x >> 24) & 0xff))
+    write(io, UInt8((x >> 16) & 0xff))
+    write(io, UInt8((x >> 8) & 0xff))
+    write(io, UInt8(x & 0xff))
+    return nothing
+end
+
 # Coerce an image (Float in [0,1] or UInt8) to a UInt8 RGB array. A grayscale or
 # luminance(+alpha) image (1 or 2 channels) broadcasts its first channel across
 # RGB instead of reading past the end of a hardcoded 3-channel loop.
@@ -151,6 +159,9 @@ function _crc32_update(c::UInt32, data)
     return c
 end
 
+@inline _crc32_update_byte(c::UInt32, byte::UInt8) =
+    _CRC32_TABLE[((c ⊻ UInt32(byte)) & 0xff) + 1] ⊻ (c >> 8)
+
 _crc32_finish(c::UInt32) = c ⊻ UInt32(0xffffffff)
 
 function _crc32(data)
@@ -172,6 +183,12 @@ function _adler32(data)
         b = (b + a) % 65521
     end
     return (b << 16) | a
+end
+
+@inline function _adler32_update_byte(a::UInt32, b::UInt32, byte::UInt8)
+    a = (a + UInt32(byte)) % UInt32(65521)
+    b = (b + a) % UInt32(65521)
+    return a, b
 end
 
 # Wrap raw bytes in a zlib stream using DEFLATE stored (BTYPE=00) blocks.
@@ -202,11 +219,118 @@ function _zlib_store(data::Vector{UInt8})
 end
 
 function _png_chunk(io::IO, ctype::String, data::Vector{UInt8})
-    write(io, _be32(length(data)))
+    _write_be32(io, length(data))
     tb = codeunits(ctype)
     write(io, tb)
     write(io, data)
-    write(io, _be32(_crc32_concat(tb, data)))
+    _write_be32(io, _crc32_concat(tb, data))
+    return nothing
+end
+
+@inline function _png_write_crc_byte(io::IO, byte::UInt8, crc::UInt32)
+    write(io, byte)
+    return _crc32_update_byte(crc, byte)
+end
+
+function _png_write_crc_adler_slice(io::IO, data::Vector{UInt8}, pos::Int,
+                                    len::Int, crc::UInt32,
+                                    adler_a::UInt32, adler_b::UInt32)
+    @inbounds for k in pos:(pos + len - 1)
+        byte = data[k]
+        crc = _crc32_update_byte(crc, byte)
+        adler_a, adler_b = _adler32_update_byte(adler_a, adler_b, byte)
+    end
+    GC.@preserve data unsafe_write(io, pointer(data, pos), len)
+    return crc, adler_a, adler_b
+end
+
+@inline _zlib_store_length(raw_len::Int) =
+    2 + (raw_len == 0 ? 1 : cld(raw_len, 65535)) * 5 + raw_len + 4
+
+@inline _png_u8(v, isu8::Bool) =
+    isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
+
+function _png_fill_rgb_scanline!(line::Vector{UInt8}, img::AbstractArray,
+                                 row::Int, width::Int, channels::Int,
+                                 isgray2d::Bool, isu8::Bool)
+    line[1] = 0x00
+    k = 2
+    if isgray2d
+        @inbounds for col in 1:width
+            px = _png_u8(img[row, col], isu8)
+            line[k] = px
+            line[k + 1] = px
+            line[k + 2] = px
+            k += 3
+        end
+    elseif channels >= 3
+        @inbounds for col in 1:width
+            line[k] = _png_u8(img[row, col, 1], isu8)
+            line[k + 1] = _png_u8(img[row, col, 2], isu8)
+            line[k + 2] = _png_u8(img[row, col, 3], isu8)
+            k += 3
+        end
+    else
+        @inbounds for col in 1:width
+            px = _png_u8(img[row, col, 1], isu8)
+            line[k] = px
+            line[k + 1] = px
+            line[k + 2] = px
+            k += 3
+        end
+    end
+    return line
+end
+
+function _png_write_idat_rgb(io::IO, img::AbstractArray, height::Int, width::Int,
+                             channels::Int, isgray2d::Bool, isu8::Bool)
+    raw_len = height * (1 + width * 3)
+    _write_be32(io, _zlib_store_length(raw_len))
+    tb = codeunits("IDAT")
+    write(io, tb)
+    crc = _crc32_update(UInt32(0xffffffff), tb)
+
+    crc = _png_write_crc_byte(io, 0x78, crc)
+    crc = _png_write_crc_byte(io, 0x01, crc)
+
+    line = Vector{UInt8}(undef, 1 + width * 3)
+    remaining = raw_len
+    block_remaining = 0
+    adler_a = UInt32(1)
+    adler_b = UInt32(0)
+
+    for row in 1:height
+        _png_fill_rgb_scanline!(line, img, row, width, channels, isgray2d, isu8)
+        pos = 1
+        line_remaining = length(line)
+        while line_remaining > 0
+            if block_remaining == 0
+                block = min(65535, remaining)
+                final = block == remaining
+                crc = _png_write_crc_byte(io, final ? 0x01 : 0x00, crc)
+                crc = _png_write_crc_byte(io, UInt8(block & 0xff), crc)
+                crc = _png_write_crc_byte(io, UInt8((block >> 8) & 0xff), crc)
+                nlen = UInt16(block) ⊻ 0xffff
+                crc = _png_write_crc_byte(io, UInt8(nlen & 0xff), crc)
+                crc = _png_write_crc_byte(io, UInt8((nlen >> 8) & 0xff), crc)
+                block_remaining = block
+            end
+            n = min(line_remaining, block_remaining)
+            crc, adler_a, adler_b =
+                _png_write_crc_adler_slice(io, line, pos, n, crc, adler_a, adler_b)
+            pos += n
+            line_remaining -= n
+            block_remaining -= n
+            remaining -= n
+        end
+    end
+
+    adler = (adler_b << 16) | adler_a
+    crc = _png_write_crc_byte(io, UInt8((adler >> 24) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8((adler >> 16) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8((adler >> 8) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8(adler & 0xff), crc)
+    _write_be32(io, _crc32_finish(crc))
     return nothing
 end
 
@@ -217,25 +341,16 @@ Write an H×W×3 image (Float in [0,1], UInt8, or a `RenderTarget`) as an 8-bit
 RGB PNG. Pure Julia; no external dependencies.
 """
 function save_png(filename::String, img::AbstractArray)
-    buf = image_to_uint8(img)
-    H, W = size(buf, 1), size(buf, 2)
-    raw = Vector{UInt8}(undef, H * (1 + W * 3))
-    k = 1
-    @inbounds for i in 1:H
-        raw[k] = 0x00; k += 1                      # filter type 0 (None) per scanline
-        for j in 1:W
-            raw[k] = buf[i, j, 1]; k += 1
-            raw[k] = buf[i, j, 2]; k += 1
-            raw[k] = buf[i, j, 3]; k += 1
-        end
-    end
+    H, W, C = _image_size_and_channels(img, "image")
+    isgray2d = ndims(img) == 2
+    isu8 = eltype(img) === UInt8
     open(filename, "w") do io
         write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])   # PNG signature
         ihdr = UInt8[]
         append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
         push!(ihdr, 0x08, 0x02, 0x00, 0x00, 0x00)           # 8-bit, RGB, deflate, no filter/interlace
         _png_chunk(io, "IHDR", ihdr)
-        _png_chunk(io, "IDAT", _zlib_store(raw))
+        _png_write_idat_rgb(io, img, H, W, C, isgray2d, isu8)
         _png_chunk(io, "IEND", UInt8[])
     end
     return filename
