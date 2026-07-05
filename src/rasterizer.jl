@@ -168,8 +168,8 @@ end
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
-    @inbounds for py in min_y:max_y
-        for px in min_x:max_x
+    @inbounds for px in min_x:max_x
+        for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
             w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
@@ -229,8 +229,8 @@ end
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
-    @inbounds for py in min_y:max_y
-        for px in min_x:max_x
+    @inbounds for px in min_x:max_x
+        for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
             w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
@@ -420,8 +420,8 @@ end
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
-    @inbounds for py in min_y:max_y
-        for px in min_x:max_x
+    @inbounds for px in min_x:max_x
+        for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
             b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
@@ -640,8 +640,8 @@ end
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
-    @inbounds for py in min_y:max_y
-        for px in min_x:max_x
+    @inbounds for px in min_x:max_x
+        for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
             b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
@@ -1804,8 +1804,8 @@ end
     use_stamp = stamp !== nothing
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), albedo_map, alpha_map)
-    @inbounds for py in min_y:max_y
-        for px in min_x:max_x
+    @inbounds for px in min_x:max_x
+        for py in min_y:max_y
             cx = px - 0.5; cy = py - 0.5
             w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
             w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
