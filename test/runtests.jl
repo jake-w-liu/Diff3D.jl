@@ -10864,6 +10864,9 @@ end
         dec = load_png(f); rm(f)
         @test size(dec) == (8, 10, 4)
         @test maximum(abs.(dec .- rgba)) <= 1/255 + 1e-9
+        rgba_alloc_file = tempname() * ".png"
+        @test_opt_alloc 10000 save_png_rgba(rgba_alloc_file, rgba)
+        rm(rgba_alloc_file; force=true)
     end
 
     @testset "16-bit PNG round-trip" begin
@@ -10872,6 +10875,9 @@ end
         dec = load_png(f); rm(f)
         @test size(dec) == (8, 10, 1)
         @test maximum(abs.(dec[:,:,1] .- gray)) <= 1/65535 + 1e-9   # finer than 8-bit's 1/255
+        gray_alloc_file = tempname() * ".png"
+        @test_opt_alloc 10000 save_png16(gray_alloc_file, gray)
+        rm(gray_alloc_file; force=true)
     end
 
     @testset "Differentiable — high-dim vertex gradient" begin

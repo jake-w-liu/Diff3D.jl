@@ -282,9 +282,47 @@ function _png_fill_rgb_scanline!(line::Vector{UInt8}, img::AbstractArray,
     return line
 end
 
-function _png_write_idat_rgb(io::IO, img::AbstractArray, height::Int, width::Int,
-                             channels::Int, isgray2d::Bool, isu8::Bool)
-    raw_len = height * (1 + width * 3)
+function _png_fill_rgba_scanline!(line::Vector{UInt8}, img::AbstractArray,
+                                  row::Int, width::Int, isu8::Bool)
+    line[1] = 0x00
+    k = 2
+    @inbounds for col in 1:width
+        line[k] = _png_u8(img[row, col, 1], isu8)
+        line[k + 1] = _png_u8(img[row, col, 2], isu8)
+        line[k + 2] = _png_u8(img[row, col, 3], isu8)
+        line[k + 3] = _png_u8(img[row, col, 4], isu8)
+        k += 4
+    end
+    return line
+end
+
+@inline _png_u16(v) = round(UInt16, _clamp01(v) * 65535)
+
+function _png_fill_gray16_scanline!(line::Vector{UInt8}, img::AbstractArray,
+                                    row::Int, width::Int, isgray3d::Bool)
+    line[1] = 0x00
+    k = 2
+    if isgray3d
+        @inbounds for col in 1:width
+            v = _png_u16(img[row, col, 1])
+            line[k] = UInt8(v >> 8)
+            line[k + 1] = UInt8(v & 0xff)
+            k += 2
+        end
+    else
+        @inbounds for col in 1:width
+            v = _png_u16(img[row, col])
+            line[k] = UInt8(v >> 8)
+            line[k + 1] = UInt8(v & 0xff)
+            k += 2
+        end
+    end
+    return line
+end
+
+function _png_write_idat_scanlines(fill_scanline!::F, io::IO, height::Int,
+                                   line::Vector{UInt8}) where {F}
+    raw_len = height * length(line)
     _write_be32(io, _zlib_store_length(raw_len))
     tb = codeunits("IDAT")
     write(io, tb)
@@ -293,14 +331,13 @@ function _png_write_idat_rgb(io::IO, img::AbstractArray, height::Int, width::Int
     crc = _png_write_crc_byte(io, 0x78, crc)
     crc = _png_write_crc_byte(io, 0x01, crc)
 
-    line = Vector{UInt8}(undef, 1 + width * 3)
     remaining = raw_len
     block_remaining = 0
     adler_a = UInt32(1)
     adler_b = UInt32(0)
 
     for row in 1:height
-        _png_fill_rgb_scanline!(line, img, row, width, channels, isgray2d, isu8)
+        fill_scanline!(line, row)
         pos = 1
         line_remaining = length(line)
         while line_remaining > 0
@@ -334,6 +371,30 @@ function _png_write_idat_rgb(io::IO, img::AbstractArray, height::Int, width::Int
     return nothing
 end
 
+function _png_write_idat_rgb(io::IO, img::AbstractArray, height::Int, width::Int,
+                             channels::Int, isgray2d::Bool, isu8::Bool)
+    line = Vector{UInt8}(undef, 1 + width * 3)
+    return _png_write_idat_scanlines(io, height, line) do dst, row
+        _png_fill_rgb_scanline!(dst, img, row, width, channels, isgray2d, isu8)
+    end
+end
+
+function _png_write_idat_rgba(io::IO, img::AbstractArray, height::Int,
+                              width::Int, isu8::Bool)
+    line = Vector{UInt8}(undef, 1 + width * 4)
+    return _png_write_idat_scanlines(io, height, line) do dst, row
+        _png_fill_rgba_scanline!(dst, img, row, width, isu8)
+    end
+end
+
+function _png_write_idat_gray16(io::IO, img::AbstractArray, height::Int,
+                                width::Int, isgray3d::Bool)
+    line = Vector{UInt8}(undef, 1 + width * 2)
+    return _png_write_idat_scanlines(io, height, line) do dst, row
+        _png_fill_gray16_scanline!(dst, img, row, width, isgray3d)
+    end
+end
+
 """
     save_png(filename, img)
 
@@ -365,21 +426,13 @@ Write an H×W×4 image (Float in [0,1] or UInt8) as an 8-bit RGBA PNG (color typ
 function save_png_rgba(filename::String, img::AbstractArray)
     H, W, C = _image_size_and_channels(img, "RGBA image")
     C == 4 || throw(ArgumentError("save_png_rgba expects an H×W×4 image"))
-    raw = Vector{UInt8}(undef, H * (1 + W * 4))
-    k = 1
-    @inbounds for i in 1:H
-        raw[k] = 0x00; k += 1                       # filter None
-        for j in 1:W, c in 1:4
-            raw[k] = eltype(img) === UInt8 ? img[i,j,c] :
-                     round(UInt8, _clamp01(img[i,j,c]) * 255); k += 1
-        end
-    end
+    isu8 = eltype(img) === UInt8
     open(filename, "w") do io
         write(io, UInt8[137,80,78,71,13,10,26,10])
         ihdr = UInt8[]; append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
         push!(ihdr, 0x08, 0x06, 0x00, 0x00, 0x00)   # 8-bit, RGBA
         _png_chunk(io, "IHDR", ihdr)
-        _png_chunk(io, "IDAT", _zlib_store(raw))
+        _png_write_idat_rgba(io, img, H, W, isu8)
         _png_chunk(io, "IEND", UInt8[])
     end
     return filename
@@ -393,22 +446,13 @@ Write a 16-bit grayscale PNG from an H×W (or H×W×1) image of values in [0,1].
 function save_png16(filename::String, img::AbstractArray)
     H, W, C = _image_size_and_channels(img, "16-bit grayscale image")
     C == 1 || throw(ArgumentError("save_png16 expects an H×W or H×W×1 image"))
-    gray = ndims(img) == 3 ? @view(img[:, :, 1]) : img
-    raw = Vector{UInt8}(undef, H * (1 + W * 2))
-    k = 1
-    @inbounds for i in 1:H
-        raw[k] = 0x00; k += 1
-        for j in 1:W
-            v = round(UInt16, _clamp01(gray[i, j]) * 65535)
-            raw[k] = UInt8(v >> 8); raw[k+1] = UInt8(v & 0xff); k += 2   # big-endian
-        end
-    end
+    isgray3d = ndims(img) == 3
     open(filename, "w") do io
         write(io, UInt8[137,80,78,71,13,10,26,10])
         ihdr = UInt8[]; append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
         push!(ihdr, 0x10, 0x00, 0x00, 0x00, 0x00)   # 16-bit grayscale
         _png_chunk(io, "IHDR", ihdr)
-        _png_chunk(io, "IDAT", _zlib_store(raw))
+        _png_write_idat_gray16(io, img, H, W, isgray3d)
         _png_chunk(io, "IEND", UInt8[])
     end
     return filename
