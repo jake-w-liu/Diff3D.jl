@@ -4,17 +4,19 @@ import sys
 from playwright.sync_api import sync_playwright
 
 
-def smoke_html(path: Path) -> int:
-    url = path.resolve().as_uri()
-    args = [
+def _chromium_args() -> list[str]:
+    return [
         "--use-angle=swiftshader",
         "--use-gl=angle",
         "--enable-unsafe-swiftshader",
         "--ignore-gpu-blocklist",
     ]
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=args)
-        page = browser.new_page(viewport={"width": 1280, "height": 800})
+
+
+def smoke_html(browser, path: Path) -> int:
+    url = path.resolve().as_uri()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    try:
         # CI uses a software (swiftshader) renderer that is ~50-100x slower than a
         # local GPU. WebGL init and per-frame layout settle slowly, so the default
         # 30s action timeout is too tight for slow runners.
@@ -178,7 +180,8 @@ def smoke_html(path: Path) -> int:
             )
             if pixels[3] == 0:
                 errors.append(f"{path}: center alpha zero after case {i}")
-        browser.close()
+    finally:
+        page.close()
     if errors:
         print("BROWSER_WEBGL_ERRORS", file=sys.stderr)
         for err in errors:
@@ -193,8 +196,13 @@ def main() -> int:
         print("usage: python examples/browser_webgl_smoke.py <html> [<html> ...]", file=sys.stderr)
         return 2
     rc = 0
-    for arg in sys.argv[1:]:
-        rc = max(rc, smoke_html(Path(arg)))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=_chromium_args())
+        try:
+            for arg in sys.argv[1:]:
+                rc = max(rc, smoke_html(browser, Path(arg)))
+        finally:
+            browser.close()
     return rc
 
 

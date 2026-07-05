@@ -142,7 +142,7 @@ def main() -> int:
     examples = selected_examples(load_examples(args.registry), args.only)
     examples = apply_shard(examples, args.shard)
     generated = 0
-    smoked = 0
+    smoke_paths: list[Path] = []
     for entry in examples:
         script, html = validate_entry(entry)
         if not args.skip_generate:
@@ -152,12 +152,14 @@ def main() -> int:
         if not args.skip_browser:
             if not html.is_file():
                 raise RuntimeError(f"{entry['upstream_id']}: missing generated HTML {html}")
-            run_checked([args.python, SMOKE_SCRIPT, str(html.relative_to(REPO_ROOT))],
-                        label="REGISTRY_SMOKE")
-            smoked += 1
+            smoke_paths.append(html.relative_to(REPO_ROOT))
+
+    if smoke_paths:
+        run_checked([args.python, SMOKE_SCRIPT, *(str(path) for path in smoke_paths)],
+                    label="REGISTRY_SMOKE")
 
     print(
-        f"REGISTRY_VERIFICATION_OK examples={len(examples)} generated={generated} smoked={smoked}",
+        f"REGISTRY_VERIFICATION_OK examples={len(examples)} generated={generated} smoked={len(smoke_paths)}",
         flush=True,
     )
     return 0
