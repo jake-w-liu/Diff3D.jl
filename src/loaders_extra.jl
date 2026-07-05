@@ -6,13 +6,13 @@
 
 # ========================== DEFLATE / INFLATE ==========================
 
-mutable struct _BitReader
-    data::Vector{UInt8}
+mutable struct _BitReader{D<:AbstractVector{UInt8}}
+    data::D
     pos::Int
     bitbuf::UInt32
     bitcnt::Int
 end
-_BitReader(d::Vector{UInt8}) = _BitReader(d, 1, UInt32(0), 0)
+_BitReader(d::AbstractVector{UInt8}) = _BitReader{typeof(d)}(d, 1, UInt32(0), 0)
 
 @inline function _getbit(br::_BitReader)
     if br.bitcnt == 0
@@ -171,7 +171,7 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist)
 end
 
 """Inflate a raw DEFLATE stream (no zlib header) to bytes."""
-function inflate(data::Vector{UInt8})
+function inflate(data::AbstractVector{UInt8})
     br = _BitReader(data); out = UInt8[]
     while true
         bfinal = _getbit(br); btype = _getbits(br, 2)
@@ -208,7 +208,7 @@ function zlib_inflate(data::Vector{UInt8})
         error("zlib stream has an invalid header check")
     (flg & 0x20) == 0x00 || error("zlib streams with preset dictionaries are not supported")
 
-    out = inflate(data[3:end - 4])
+    out = inflate(@view data[3:end - 4])
     expected = (UInt32(data[end - 3]) << 24) | (UInt32(data[end - 2]) << 16) |
                (UInt32(data[end - 1]) << 8) | UInt32(data[end])
     actual = _adler32(out)
@@ -229,6 +229,14 @@ end
 const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
 _is_png_bytes(bytes::Vector{UInt8}) =
     length(bytes) >= length(_PNG_SIGNATURE) && bytes[1:length(_PNG_SIGNATURE)] == _PNG_SIGNATURE
+
+function _png_crc_matches(bytes::Vector{UInt8}, ctype_start::Int,
+                          data_start::Int, data_stop::Int, expected::UInt32)
+    c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
+    data_start <= data_stop &&
+        (c = _crc32_update(c, @view bytes[data_start:data_stop]))
+    return _crc32_finish(c) == expected
+end
 
 const _PNG_ADAM7_PASSES = (
     (0, 0, 8, 8),
@@ -440,12 +448,7 @@ function _decode_png(bytes::Vector{UInt8})
         crc_pos + 3 <= length(bytes) ||
             error("PNG chunk '$ctype' CRC is truncated")
         expected_crc = UInt32(_rd_be32(bytes, crc_pos))
-        crc_data = Vector{UInt8}(undef, 4 + len)
-        copyto!(crc_data, 1, bytes, ctype_start, 4)
-        if len > 0
-            copyto!(crc_data, 5, bytes, pos, len)
-        end
-        _crc32(crc_data) == expected_crc ||
+        _png_crc_matches(bytes, ctype_start, pos, data_stop, expected_crc) ||
             error("PNG chunk '$ctype' CRC mismatch")
         seen_ihdr || ctype == "IHDR" || error("PNG first chunk must be IHDR")
         if ctype == "IHDR"

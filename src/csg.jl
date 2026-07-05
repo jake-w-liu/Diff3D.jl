@@ -163,11 +163,24 @@ function _csg_node(polygons::Vector{CSGPolygon})
     return node
 end
 
-function _csg_all_polygons(node::CSGNode)
-    out = copy(node.polygons)
-    node.front !== nothing && append!(out, _csg_all_polygons(node.front))
-    node.back !== nothing && append!(out, _csg_all_polygons(node.back))
+function _csg_polygon_count(node::CSGNode)
+    n = length(node.polygons)
+    node.front !== nothing && (n += _csg_polygon_count(node.front::CSGNode))
+    node.back !== nothing && (n += _csg_polygon_count(node.back::CSGNode))
+    return n
+end
+
+function _csg_collect_polygons!(out::Vector{CSGPolygon}, node::CSGNode)
+    append!(out, node.polygons)
+    node.front !== nothing && _csg_collect_polygons!(out, node.front::CSGNode)
+    node.back !== nothing && _csg_collect_polygons!(out, node.back::CSGNode)
     return out
+end
+
+function _csg_all_polygons(node::CSGNode)
+    out = CSGPolygon[]
+    sizehint!(out, _csg_polygon_count(node))
+    return _csg_collect_polygons!(out, node)
 end
 
 function _csg_invert!(node::CSGNode)

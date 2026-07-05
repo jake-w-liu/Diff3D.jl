@@ -425,10 +425,111 @@ function _ply_parse_element_count(tok)
 end
 
 function _ply_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, String(tok))
+    value = tryparse(Float64, tok)
     value === nothing && error("PLY $context must be a number")
     isfinite(value) || error("PLY $context must be finite")
     return value
+end
+
+@inline _ply_ascii_space(b::UInt8) =
+    b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') || b == UInt8('\n')
+@inline _ply_ascii_digit(b::UInt8) = UInt8('0') <= b <= UInt8('9')
+@inline _ply_ascii_lower(b::UInt8) =
+    UInt8('A') <= b <= UInt8('Z') ? UInt8(b + 0x20) : b
+
+function _ply_ascii_token_eq(bytes::Vector{UInt8}, first::Int, last::Int,
+                             word::String)
+    n = last - first + 1
+    n == ncodeunits(word) || return false
+    @inbounds for j in 1:n
+        _ply_ascii_lower(bytes[first + j - 1]) == codeunit(word, j) ||
+            return false
+    end
+    return true
+end
+
+function _ply_parse_ascii_float(bytes::Vector{UInt8}, first::Int, last::Int,
+                                context::String)
+    sign = 1.0
+    p = first
+    if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
+        bytes[p] == UInt8('-') && (sign = -1.0)
+        p += 1
+    end
+    if p <= last
+        if _ply_ascii_token_eq(bytes, p, last, "nan")
+            error("PLY $context must be finite")
+        elseif _ply_ascii_token_eq(bytes, p, last, "inf") ||
+               _ply_ascii_token_eq(bytes, p, last, "infinity")
+            error("PLY $context must be finite")
+        end
+    end
+
+    value = 0.0
+    digits = 0
+    @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+        value = value * 10.0 + Float64(bytes[p] - UInt8('0'))
+        p += 1
+        digits += 1
+    end
+    if p <= last && bytes[p] == UInt8('.')
+        p += 1
+        scale = 0.1
+        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+            value += Float64(bytes[p] - UInt8('0')) * scale
+            scale *= 0.1
+            p += 1
+            digits += 1
+        end
+    end
+    digits > 0 || error("PLY $context must be a number")
+    if p <= last && (bytes[p] == UInt8('e') || bytes[p] == UInt8('E'))
+        p += 1
+        exp_sign = 1
+        if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
+            bytes[p] == UInt8('-') && (exp_sign = -1)
+            p += 1
+        end
+        exp_value = 0
+        exp_digits = 0
+        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+            exp_value = min(exp_value * 10 + Int(bytes[p] - UInt8('0')), 10_000)
+            p += 1
+            exp_digits += 1
+        end
+        exp_digits > 0 || error("PLY $context must be a number")
+        exp_value *= exp_sign
+        value = exp_value > 308 ? Inf :
+                exp_value < -324 ? 0.0 :
+                value * (10.0 ^ exp_value)
+    end
+    p == last + 1 || error("PLY $context must be a number")
+    value *= sign
+    isfinite(value) || error("PLY $context must be finite")
+    return value
+end
+
+function _ply_line_bounds(bytes::Vector{UInt8}, i::Int, n::Int)
+    i <= n || error("PLY ASCII element data is truncated")
+    j = i
+    while j <= n && bytes[j] != UInt8('\n')
+        j += 1
+    end
+    last = j - 1
+    last >= i && bytes[last] == UInt8('\r') && (last -= 1)
+    return i, last, j + 1
+end
+
+function _ply_next_ascii_token(bytes::Vector{UInt8}, p::Int, line_stop::Int)
+    while p <= line_stop && _ply_ascii_space(bytes[p])
+        p += 1
+    end
+    p > line_stop && return 0, -1, p
+    first = p
+    while p <= line_stop && !_ply_ascii_space(bytes[p])
+        p += 1
+    end
+    return first, p - 1, p
 end
 
 function _ply_checked_finite(value, context::String)
@@ -627,21 +728,30 @@ function load_ply(path::String)
 
             if format == :ascii
                 for v in 0:ecount-1
-                    toks = split(strip(next_line()))
-                    length(toks) >= length(props) ||
-                        error("PLY vertex data is truncated: expected $ecount vertices, row $(v+1) has $(length(toks)) of $(length(props)) values")
-                    row = [
-                        _ply_parse_ascii_float(tok, "vertex row $(v+1) $(j <= length(props) ? "property $(props[j][2])" : "value $j")")
-                        for (j, tok) in enumerate(toks)
-                    ]
+                    line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
                     b3 = v * 3
-                    positions[b3+1] = row[ix]; positions[b3+2] = row[iy]; positions[b3+3] = row[iz]
-                    if have_normals
-                        normals[b3+1] = row[inx]; normals[b3+2] = row[iny]; normals[b3+3] = row[inz]
+                    p = line_start
+                    token_count = 0
+                    while true
+                        first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+                        first == 0 && break
+                        c = (token_count += 1)
+                        context = c <= length(props) ? "property $(props[c][2])" : "value $c"
+                        val = _ply_parse_ascii_float(bytes, first, last,
+                                                     "vertex row $(v+1) $context")
+                        if c == ix; positions[b3+1] = val
+                        elseif c == iy; positions[b3+2] = val
+                        elseif c == iz; positions[b3+3] = val
+                        elseif have_normals && c == inx; normals[b3+1] = val
+                        elseif have_normals && c == iny; normals[b3+2] = val
+                        elseif have_normals && c == inz; normals[b3+3] = val
+                        elseif have_color && c == ir; colors[b3+1] = val / cnorm
+                        elseif have_color && c == ig; colors[b3+2] = val / cnorm
+                        elseif have_color && c == ib; colors[b3+3] = val / cnorm
+                        end
                     end
-                    if have_color
-                        colors[b3+1] = row[ir]/cnorm; colors[b3+2] = row[ig]/cnorm; colors[b3+3] = row[ib]/cnorm
-                    end
+                    token_count >= length(props) ||
+                        error("PLY vertex data is truncated: expected $ecount vertices, row $(v+1) has $token_count of $(length(props)) values")
                 end
             else
                 # Binary: read every property in declared order; keep the roles.
@@ -681,23 +791,36 @@ function load_ply(path::String)
             end
             listp === nothing && error("PLY face element has no list property")
             ct = listp[3]; it = listp[4]
+            sizehint!(indices, length(indices) + 3 * ecount)
             if format == :ascii
                 nverts = length(positions) ÷ 3
                 for face_row in 1:ecount
-                    toks = split(strip(next_line()))
-                    !isempty(toks) || error("PLY face data is truncated: row $face_row has no list count")
-                    nidx = checked_list_count(_ply_parse_ascii_float(toks[1], "face row $face_row list count"))
-                    length(toks) >= 1 + nidx ||
-                        error("PLY face data is truncated: row $face_row declares $nidx indices but has $(length(toks) - 1)")
-                    fan = [
-                        checked_vertex_index(
-                            _ply_parse_ascii_float(toks[1+k], "face row $face_row vertex index $k"),
+                    line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
+                    p = line_start
+                    first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+                    first != 0 || error("PLY face data is truncated: row $face_row has no list count")
+                    nidx = checked_list_count(
+                        _ply_parse_ascii_float(bytes, first, last,
+                                               "face row $face_row list count"))
+                    first_idx = 0
+                    prev_idx = 0
+                    for k in 1:nidx
+                        first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+                        first != 0 ||
+                            error("PLY face data is truncated: row $face_row declares $nidx indices but has $(k - 1)")
+                        idx = checked_vertex_index(
+                            _ply_parse_ascii_float(bytes, first, last,
+                                                   "face row $face_row vertex index $k"),
                             nverts,
                         )
-                        for k in 1:nidx
-                    ]   # 0-based vertex indices
-                    for k in 2:(nidx - 1)
-                        push!(indices, fan[1] + 1, fan[k] + 1, fan[k+1] + 1)
+                        if k == 1
+                            first_idx = idx
+                        elseif k == 2
+                            prev_idx = idx
+                        else
+                            push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
+                            prev_idx = idx
+                        end
                     end
                 end
             else
@@ -708,20 +831,28 @@ function load_ply(path::String)
                     # before allocating so a corrupt count yields a clear loader
                     # error rather than `invalid GenericMemory size`.
                     nidx = checked_list_count(cnt)
-                    fan = Vector{Int}(undef, nidx)
+                    first_idx = 0
+                    prev_idx = 0
                     for k in 1:nidx
                         val, i = read_binary(bytes, i, it)
-                        fan[k] = checked_vertex_index(val, nverts)        # 0-based
-                    end
-                    for k in 2:(nidx - 1)
-                        push!(indices, fan[1] + 1, fan[k] + 1, fan[k+1] + 1)
+                        idx = checked_vertex_index(val, nverts)        # 0-based
+                        if k == 1
+                            first_idx = idx
+                        elseif k == 2
+                            prev_idx = idx
+                        else
+                            push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
+                            prev_idx = idx
+                        end
                     end
                 end
             end
         else
             # Unknown element: skip its rows so the byte cursor stays aligned.
             if format == :ascii
-                for _ in 0:ecount-1; next_line(); end
+                for _ in 0:ecount-1
+                    _, _, i = _ply_line_bounds(bytes, i, n)
+                end
             else
                 for _ in 0:ecount-1
                     for p in props

@@ -6410,6 +6410,11 @@ end
         @test_opt_alloc 112000 csg_union(cube, shifted)
         @test_opt_alloc 103000 csg_subtract(cube, shifted)
         @test_opt_alloc 103000 csg_intersect(cube, shifted)
+        csg_alloc_polys = Diff3D._csg_geometry_polygons(SphereGeometry(width_segments=32,
+                                                                        height_segments=16))
+        csg_alloc_node = Diff3D._csg_node(Diff3D._csg_clone_polygons(csg_alloc_polys))
+        @test length(Diff3D._csg_all_polygons(csg_alloc_node)) == length(csg_alloc_polys)
+        @test_opt_alloc 100000 Diff3D._csg_all_polygons(csg_alloc_node)
         @test_throws ArgumentError csg_evaluate(cube, shifted, :xor)
     end
 
@@ -7057,6 +7062,18 @@ end
         @test_opt_alloc 12000 render!(shadow_rt, scene, shadow_cam;
                                       cache=shadow_cache, shadows=true,
                                       shadow_resolution=32)
+        shadow_alloc_geo = SphereGeometry(width_segments=16, height_segments=8)
+        shadow_alloc_depth = fill(Inf, 64, 64)
+        shadow_alloc_mvp = mat4_perspective(π / 4, 1.0, 0.1, 100.0) *
+                           mat4_look_at(Vec3(0.0, 0.0, 5.0),
+                                        Vec3(0.0, 0.0, 0.0),
+                                        Vec3(0.0, 1.0, 0.0))
+        Diff3D._raster_shadow_geometry!(shadow_alloc_depth, 64, 64,
+                                         shadow_alloc_geo, Mat4(), shadow_alloc_mvp,
+                                         MeshBasicMaterial())
+        @test_opt_alloc 1024 Diff3D._raster_shadow_geometry!(
+            shadow_alloc_depth, 64, 64, shadow_alloc_geo, Mat4(), shadow_alloc_mvp,
+            MeshBasicMaterial())
 
         # End-to-end: an angled key light casts the box's shadow onto visible
         # ground beside it. Enabling shadows can only darken, and darkens a region.
@@ -7454,7 +7471,8 @@ end
             save_png(png_alloc_file, png_alloc_img)
             png_alloc_bytes = read(png_alloc_file)
             @test maximum(abs.(Diff3D._decode_png(png_alloc_bytes) .- png_alloc_img)) <= 1/255 + 1e-9
-            @test_opt_alloc 800000 Diff3D._decode_png(png_alloc_bytes)
+            @test_opt_alloc 350000 save_png(png_alloc_file, png_alloc_img)
+            @test_opt_alloc 650000 Diff3D._decode_png(png_alloc_bytes)
         finally
             rm(png_alloc_file; force=true)
         end
@@ -10921,6 +10939,15 @@ end
 
         Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
         @test_opt_alloc 64 Diff3D.shade_mesh_faces!(actual, geo, wm, mat, lights, campos)
+
+        standard_tex = DataTexture(fill(1.0, 2, 2, 3))
+        standard_mat = MeshStandardMaterial(roughness_map=standard_tex,
+                                            metalness_map=standard_tex)
+        standard_lights = [AmbientLight(intensity=0.4)]
+        Diff3D.shade_mesh_faces!(actual, geo, wm, standard_mat, standard_lights, campos)
+        @test_opt_alloc 4096 Diff3D.shade_mesh_faces!(actual, geo, wm,
+                                                      standard_mat, standard_lights,
+                                                      campos)
     end
 
     @testset "In-renderer MSAA" begin
@@ -15049,6 +15076,27 @@ end
             @test Diff3D.has_attribute(ga, :color)
             @test Diff3D.get_attribute(ga, :color).data == expect_col
             rm(pa; force=true)
+
+            grid_ply = tempname() * ".ply"
+            open(grid_ply, "w") do io
+                nx = 16; ny = 16
+                write(io, "ply\nformat ascii 1.0\nelement vertex $(nx * ny)\n")
+                write(io, "property float x\nproperty float y\nproperty float z\n")
+                write(io, "property uchar red\nproperty uchar green\nproperty uchar blue\n")
+                write(io, "element face $((nx - 1) * (ny - 1))\n")
+                write(io, "property list uchar int vertex_indices\nend_header\n")
+                for y in 0:(ny - 1), x in 0:(nx - 1)
+                    write(io, "$x $y 0 255 128 0\n")
+                end
+                for y in 0:(ny - 2), x in 0:(nx - 2)
+                    v0 = y * nx + x
+                    write(io, "4 $v0 $(v0 + 1) $(v0 + nx + 1) $(v0 + nx)\n")
+                end
+            end
+            @test Diff3D.load_ply(grid_ply).n_faces == 2 * 15 * 15
+            @test_opt_alloc 2_000_000 Diff3D.load_ply(grid_ply)
+            rm(grid_ply; force=true)
+
             # --- binary_little_endian ---
             hdr = "ply\nformat binary_little_endian 1.0\nelement vertex 3\n" *
                 "property float x\nproperty float y\nproperty float z\n" *
@@ -16366,6 +16414,10 @@ end
             primitive_cache = RenderCache()
             rt_empty_primitives = RenderTarget(16, 16)
             render_sprites!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
+            render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=RenderCache())
+            fresh_line_cache = RenderCache()
+            @test_opt_alloc 512 render_lines!(rt_empty_primitives, mesh_only_scene,
+                                              pers_cam; cache=fresh_line_cache)
             render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
             render_points!(rt_empty_primitives, mesh_only_scene, pers_cam)
             @test_opt_alloc 1024 render_sprites!(rt_empty_primitives, mesh_only_scene, pers_cam;

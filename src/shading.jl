@@ -519,6 +519,16 @@ function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, 
                          depth_test=m.depth_test, depth_write=m.depth_write,
                          clipping_planes=m.clipping_planes)
 end
+function _standard_mapped_terms(m::MeshStandardMaterial, roughness_map, metalness_map,
+                                u, v, u2, v2)
+    ru, rv = roughness_map === nothing ? (u, v) : _map_uv(roughness_map, u, v, u2, v2)
+    mu, mv = metalness_map === nothing ? (u, v) : _map_uv(metalness_map, u, v, u2, v2)
+    roughness = roughness_map === nothing ? Float64(m.roughness) :
+                Float64(m.roughness * sample_texture(roughness_map, ru, rv).g)
+    metalness = metalness_map === nothing ? Float64(m.metalness) :
+                Float64(m.metalness * sample_texture(metalness_map, mu, mv).b)
+    return metalness, roughness
+end
 function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v)
     roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
     metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, u, v).b
@@ -849,6 +859,10 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         view_dir = normalize(cam_pos - center)
         eff_mat = material
+        standard_mapped = false
+        standard_metalness = 0.0
+        standard_roughness = 0.0
+        vertex_color = Color3(1.0, 1.0, 1.0)
 
         # normalMap perturbs the shading normal and roughnessMap overrides the
         # material roughness — both must apply BEFORE shading. Albedo/AO/emissive
@@ -867,13 +881,33 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             end
             if specular_map !== nothing || glossiness_map !== nothing
                 eff_mat = _apply_phong_maps(material, specular_map, glossiness_map, u, v, u2, v2uv)
+            elseif material isa MeshStandardMaterial &&
+                   (roughness_map !== nothing || metalness_map !== nothing)
+                standard_metalness, standard_roughness =
+                    _standard_mapped_terms(material, roughness_map, metalness_map,
+                                           u, v, u2, v2uv)
+                standard_mapped = true
             elseif roughness_map !== nothing || metalness_map !== nothing || physical_pbr_map !== nothing
                 eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map, u, v, u2, v2uv)
             end
         end
 
-        shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, _face_vertex_color(color_attr, i1, i2, i3)) : eff_mat
-        color = shade_face(face_n, view_dir, center, shade_mat, lights; shadow_fn=shadow_fn)
+        use_vertex_colors && (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
+        shade_mat = eff_mat
+        color = if standard_mapped
+            use_vertex_colors ?
+                _shade_standard_mapped_vertex_color(face_n, view_dir, center,
+                                                    material, lights, shadow_fn,
+                                                    standard_metalness,
+                                                    standard_roughness,
+                                                    vertex_color) :
+                _shade_standard_mapped(face_n, view_dir, center, material,
+                                       lights, shadow_fn, standard_metalness,
+                                       standard_roughness)
+        else
+            shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, vertex_color) : eff_mat
+            shade_face(face_n, view_dir, center, shade_mat, lights; shadow_fn=shadow_fn)
+        end
 
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
@@ -924,9 +958,18 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         # textured result. Metals reflect albedo-tinted env; dielectrics a small
         # Fresnel reflection. Uses `eff_mat` so a roughness-map override applies.
         if env_map !== nothing
-            color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                               shade_mat.color, shade_mat.metalness, shade_mat.roughness) *
-                            _material_scalar(shade_mat, :env_map_intensity)
+            if standard_mapped
+                env_color = use_vertex_colors ? _modulate(material.color, vertex_color) :
+                            material.color
+                color = color + _envmap_reflection(env_map, face_n, view_dir,
+                                                   env_color, standard_metalness,
+                                                   standard_roughness) *
+                                material.env_map_intensity
+            else
+                color = color + _envmap_reflection(env_map, face_n, view_dir,
+                                                   shade_mat.color, shade_mat.metalness, shade_mat.roughness) *
+                                _material_scalar(shade_mat, :env_map_intensity)
+            end
         end
 
         colors[fi] = clamp_color(color)

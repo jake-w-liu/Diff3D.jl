@@ -179,6 +179,32 @@ end
     return nothing
 end
 
+@inline function _raster_depth_plain!(depth::Matrix{Float64}, W, H,
+                                      s1x, s1y, z1, s2x, s2y, z2,
+                                      s3x, s3y, z3)
+    (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
+     isfinite(s3x) && isfinite(s3y)) || return nothing
+    area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
+    (isfinite(area) && abs(area) >= 1e-12) || return nothing
+    inv_area = 1.0 / area
+    fW = Float64(W); fH = Float64(H)
+    min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1)
+    max_x = min(ceil(Int,  clamp(max(s1x, s2x, s3x), 1.0, fW)), W)
+    min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1)
+    max_y = min(ceil(Int,  clamp(max(s1y, s2y, s3y), 1.0, fH)), H)
+    @inbounds for py in min_y:max_y, px in min_x:max_x
+        cx = px - 0.5; cy = py - 0.5
+        w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
+        w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
+        w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+        if w0 >= 0 && w1 >= 0 && w2 >= 0
+            z = w0 * z1 + w1 * z2 + w2 * z3
+            z < depth[py, px] && (depth[py, px] = z)
+        end
+    end
+    return nothing
+end
+
 function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
                                   geo, world_mat::Mat4, mvp::Mat4, mat;
                                   clipping_planes=_NO_PLANES)
@@ -210,17 +236,22 @@ function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
         wp1 = has_clip ? mat4_transform_point(world_mat, v1) : _ZERO_V3
         wp2 = has_clip ? mat4_transform_point(world_mat, v2) : _ZERO_V3
         wp3 = has_clip ? mat4_transform_point(world_mat, v3) : _ZERO_V3
-        _raster_depth!(depth, W, H,
-            (c1.x/c1.w+1)*0.5*W, (1-c1.y/c1.w)*0.5*H, c1.z/c1.w,
-            (c2.x/c2.w+1)*0.5*W, (1-c2.y/c2.w)*0.5*H, c2.z/c2.w,
-            (c3.x/c3.w+1)*0.5*W, (1-c3.y/c3.w)*0.5*H, c3.z/c3.w;
-            clipping_planes=clipping_planes,
-            wp1=wp1, wp2=wp2, wp3=wp3,
-            iw1=1.0/c1.w, iw2=1.0/c2.w, iw3=1.0/c3.w,
-            alpha_test=alpha_test, alpha_base=alpha_base,
-            albedo_map=albedo_map, alpha_map=alpha_map,
-            uv1=uv1, uv2=uv2v, uv3=uv3,
-            uv2_1=uv2_1, uv2_2=uv2_2, uv2_3=uv2_3)
+        s1x = (c1.x/c1.w+1)*0.5*W; s1y = (1-c1.y/c1.w)*0.5*H; z1 = c1.z/c1.w
+        s2x = (c2.x/c2.w+1)*0.5*W; s2y = (1-c2.y/c2.w)*0.5*H; z2 = c2.z/c2.w
+        s3x = (c3.x/c3.w+1)*0.5*W; s3y = (1-c3.y/c3.w)*0.5*H; z3 = c3.z/c3.w
+        if has_clip || use_fragment_alpha
+            _raster_depth!(depth, W, H, s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3;
+                clipping_planes=clipping_planes,
+                wp1=wp1, wp2=wp2, wp3=wp3,
+                iw1=1.0/c1.w, iw2=1.0/c2.w, iw3=1.0/c3.w,
+                alpha_test=alpha_test, alpha_base=alpha_base,
+                albedo_map=albedo_map, alpha_map=alpha_map,
+                uv1=uv1, uv2=uv2v, uv3=uv3,
+                uv2_1=uv2_1, uv2_2=uv2_2, uv2_3=uv2_3)
+        else
+            _raster_depth_plain!(depth, W, H, s1x, s1y, z1, s2x, s2y, z2,
+                                 s3x, s3y, z3)
+        end
     end
     return depth
 end

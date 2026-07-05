@@ -144,12 +144,24 @@ const _CRC32_TABLE = let tbl = Vector{UInt32}(undef, 256)
     tbl
 end
 
-function _crc32(data)
-    c = 0xffffffff
+function _crc32_update(c::UInt32, data)
     @inbounds for b in data
         c = _CRC32_TABLE[((c ⊻ UInt32(b)) & 0xff) + 1] ⊻ (c >> 8)
     end
-    return c ⊻ 0xffffffff
+    return c
+end
+
+_crc32_finish(c::UInt32) = c ⊻ UInt32(0xffffffff)
+
+function _crc32(data)
+    c = _crc32_update(UInt32(0xffffffff), data)
+    return _crc32_finish(c)
+end
+
+function _crc32_concat(a, b)
+    c = _crc32_update(UInt32(0xffffffff), a)
+    c = _crc32_update(c, b)
+    return _crc32_finish(c)
 end
 
 function _adler32(data)
@@ -191,10 +203,10 @@ end
 
 function _png_chunk(io::IO, ctype::String, data::Vector{UInt8})
     write(io, _be32(length(data)))
-    tb = Vector{UInt8}(codeunits(ctype))
+    tb = codeunits(ctype)
     write(io, tb)
     write(io, data)
-    write(io, _be32(_crc32(vcat(tb, data))))
+    write(io, _be32(_crc32_concat(tb, data)))
     return nothing
 end
 

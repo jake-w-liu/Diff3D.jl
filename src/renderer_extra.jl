@@ -1085,6 +1085,23 @@ end
                         obj isa LineSegments || obj isa LineLoop ||
                         (obj isa InstancedMesh && _instanced_line_drawable(obj)))
 
+function _line_subtree_has_drawable(obj::AbstractObject3D)
+    is_visible(obj) || return false
+    if obj isa LineObject
+        _line_geometry_has_segment(_line_geometry(obj), :line_strip) && return true
+    elseif obj isa LineSegments
+        _line_geometry_has_segment(_line_geometry(obj), :lines) && return true
+    elseif obj isa LineLoop
+        _line_geometry_has_segment(_line_geometry(obj), :line_loop) && return true
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+        _line_geometry_has_segment(_instanced_geometry(obj), obj.draw_mode) && return true
+    end
+    for child in get_children(obj)
+        _line_subtree_has_drawable(child) && return true
+    end
+    return false
+end
+
 function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                      proj::Mat4, view::Mat4, near,
                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
@@ -1184,6 +1201,7 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height,
                        cache::Union{Nothing,RenderCache}=nothing)
+    _line_subtree_has_drawable(scene) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
