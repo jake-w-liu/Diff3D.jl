@@ -941,7 +941,6 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         end
 
         use_vertex_colors && (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
-        shade_mat = eff_mat
         color = if mapped_kind == 1
             use_vertex_colors ?
                 _shade_phong_mapped_vertex_color(face_n, view_dir, center,
@@ -968,8 +967,12 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 _shade_physical_mapped(face_n, view_dir, center, material,
                                        lights, shadow_fn, physical_terms)
         else
-            shade_mat = use_vertex_colors ? _with_vertex_color(eff_mat, vertex_color) : eff_mat
-            shade_face(face_n, view_dir, center, shade_mat, lights; shadow_fn=shadow_fn)
+            if use_vertex_colors
+                _shade_face_vertex_color(face_n, view_dir, center, eff_mat, lights,
+                                         vertex_color; shadow_fn=shadow_fn)
+            else
+                shade_face(face_n, view_dir, center, eff_mat, lights; shadow_fn=shadow_fn)
+            end
         end
 
         if use_maps
@@ -1036,9 +1039,12 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                                                    _physical_mapped_roughness(physical_terms)) *
                                 material.env_map_intensity
             else
+                env_color = use_vertex_colors ? _modulate(eff_mat.color, vertex_color) :
+                            eff_mat.color
                 color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                                   shade_mat.color, shade_mat.metalness, shade_mat.roughness) *
-                                _material_scalar(shade_mat, :env_map_intensity)
+                                                   env_color, eff_mat.metalness,
+                                                   eff_mat.roughness) *
+                                _material_scalar(eff_mat, :env_map_intensity)
             end
         end
 

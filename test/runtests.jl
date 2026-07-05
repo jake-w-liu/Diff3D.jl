@@ -2525,6 +2525,40 @@ end
                                                      public_light_material,
                                                      public_abstract_lights,
                                                      public_light_camera)
+
+        mapped_vc_geo = BoxGeometry(width_segments=10, height_segments=10,
+                                    depth_segments=10)
+        set_attribute!(mapped_vc_geo, :color,
+                       fill(0.5, mapped_vc_geo.n_vertices * 3), 3)
+        mapped_vc_tex = Texture(ones(Float64, 1, 1, 3);
+                                filter=:nearest, colorspace=:linear)
+        mapped_vc_dir = DirectionalLight(intensity=0.4,
+                                         position=Vec3(1.0, 2.0, 3.0))
+        mapped_vc_dir.target = Vec3(0.0, 0.0, 0.0)
+        mapped_vc_lights = Diff3D.SceneLight[AmbientLight(intensity=0.7),
+                                             mapped_vc_dir]
+        mapped_vc_world = Mat4()
+        mapped_vc_camera = Vec3(0.0, 0.0, 5.0)
+        mapped_vc_material = MeshLambertMaterial(map=mapped_vc_tex,
+                                                 vertex_colors=true)
+        mapped_vc_equiv_material = MeshLambertMaterial(
+            color=Color3(0.5, 0.5, 0.5), map=mapped_vc_tex)
+        mapped_vc_actual = Vector{Color3{Float64}}(undef,
+                                                   mapped_vc_geo.n_faces)
+        mapped_vc_expected = similar(mapped_vc_actual)
+        Diff3D.shade_mesh_faces!(mapped_vc_actual, mapped_vc_geo,
+                                 mapped_vc_world, mapped_vc_material,
+                                 mapped_vc_lights, mapped_vc_camera)
+        Diff3D.shade_mesh_faces!(mapped_vc_expected, mapped_vc_geo,
+                                 mapped_vc_world, mapped_vc_equiv_material,
+                                 mapped_vc_lights, mapped_vc_camera)
+        @test mapped_vc_actual == mapped_vc_expected
+        @test_opt_alloc 1024 Diff3D.shade_mesh_faces!(mapped_vc_actual,
+                                                      mapped_vc_geo,
+                                                      mapped_vc_world,
+                                                      mapped_vc_material,
+                                                      mapped_vc_lights,
+                                                      mapped_vc_camera)
     end
 
     @testset "Shading — Phong" begin
