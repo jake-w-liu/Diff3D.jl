@@ -74,6 +74,11 @@ end
 
 _csg_plane_flip(plane::CSGPlane) = CSGPlane(-plane.normal, -plane.w)
 
+@inline function _csg_vertex_type(plane::CSGPlane, vertex::CSGVertex)
+    t = dot(plane.normal, vertex.pos) - plane.w
+    return t < -_CSG_EPS ? 2 : (t > _CSG_EPS ? 1 : 0)
+end
+
 function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
                             coplanar_front::Vector{CSGPolygon},
                             coplanar_back::Vector{CSGPolygon},
@@ -85,13 +90,8 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     spanning = 3
     polygon_type = 0
     n = length(polygon.vertices)
-    types = Vector{Int}(undef, n)
     @inbounds for i in 1:n
-        v = polygon.vertices[i]
-        t = dot(plane.normal, v.pos) - plane.w
-        ty = t < -_CSG_EPS ? back_type : (t > _CSG_EPS ? front_type : coplanar)
-        polygon_type |= ty
-        types[i] = ty
+        polygon_type |= _csg_vertex_type(plane, polygon.vertices[i])
     end
 
     if polygon_type == coplanar
@@ -111,10 +111,10 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
         sizehint!(b, n + 1)
         for i in 1:n
             j = i == n ? 1 : i + 1
-            ti = types[i]
-            tj = types[j]
             vi = polygon.vertices[i]
             vj = polygon.vertices[j]
+            ti = _csg_vertex_type(plane, vi)
+            tj = _csg_vertex_type(plane, vj)
             ti != back_type && push!(f, vi)
             ti != front_type && push!(b, vi)
             if (ti | tj) == spanning

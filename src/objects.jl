@@ -624,9 +624,11 @@ function _skin_morph_normals!(out::Vector{Float64}, geo::BufferGeometry,
     end
     copyto!(out, 1, geo.normals, 1, geo.n_vertices * 3)
     for (ti, weight) in enumerate(influences)
+        weight isa Bool && _throw_morph_influence(ti)
+        iszero(weight) && continue
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
-        name = Symbol("morphNormal$(ti - 1)")
+        name = _morph_normal_symbol(ti)
         has_attribute(geo, name) || continue
         attr = get_attribute(geo, name)
         _apply_morph_attribute3_attr!(out, attr, w, name, geo.n_vertices, 3)
@@ -727,9 +729,10 @@ function _skinned_normal_output_length(geo::BufferGeometry)
            length(geo.normals)
 end
 
-function _skinned_attr_eltype(name::Symbol, attr::BufferAttribute)
-    return name === :tangent ? Float64 : eltype(attr.data)
-end
+@inline _skinned_attr_storage_matches(name::Symbol, proxy::BufferAttribute,
+                                      source::BufferAttribute) =
+    name === :tangent ? (proxy.data isa Vector{Float64}) :
+    (typeof(proxy.data) === typeof(source.data))
 
 function _skinned_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeometry)
     proxy.n_vertices == geo.n_vertices || return false
@@ -744,7 +747,7 @@ function _skinned_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeome
         pattr = proxy.attributes[name]
         pattr.item_size == attr.item_size || return false
         length(pattr.data) == length(attr.data) || return false
-        eltype(pattr.data) === _skinned_attr_eltype(name, attr) || return false
+        _skinned_attr_storage_matches(name, pattr, attr) || return false
     end
     return true
 end

@@ -320,18 +320,75 @@ end
 
 # ========================== XYZ ==========================
 
-function _xyz_parse_float(tok::AbstractString, line_no::Int, field::String)
-    value = try
-        parse(Float64, tok)
-    catch err
-        throw(ArgumentError("XYZ line $line_no has invalid $field value $(repr(tok))"))
+@noinline _xyz_invalid_float(line_no::Int, field::String) =
+    throw(ArgumentError("XYZ line $line_no has invalid $field value"))
+@noinline _xyz_nonfinite_float(line_no::Int, field::String) =
+    throw(ArgumentError("XYZ line $line_no has non-finite $field value"))
+
+function _xyz_parse_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                          line_no::Int, field::String)
+    sign = 1.0
+    p = first
+    if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
+        bytes[p] == UInt8('-') && (sign = -1.0)
+        p += 1
     end
-    isfinite(value) || throw(ArgumentError("XYZ line $line_no has non-finite $field value"))
+    if p <= last
+        if _ply_ascii_token_eq(bytes, p, last, "nan")
+            _xyz_nonfinite_float(line_no, field)
+        elseif _ply_ascii_token_eq(bytes, p, last, "inf") ||
+               _ply_ascii_token_eq(bytes, p, last, "infinity")
+            _xyz_nonfinite_float(line_no, field)
+        end
+    end
+
+    value = 0.0
+    digits = 0
+    @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+        value = value * 10.0 + Float64(bytes[p] - UInt8('0'))
+        p += 1
+        digits += 1
+    end
+    if p <= last && bytes[p] == UInt8('.')
+        p += 1
+        scale = 0.1
+        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+            value += Float64(bytes[p] - UInt8('0')) * scale
+            scale *= 0.1
+            p += 1
+            digits += 1
+        end
+    end
+    digits > 0 || _xyz_invalid_float(line_no, field)
+    if p <= last && (bytes[p] == UInt8('e') || bytes[p] == UInt8('E'))
+        p += 1
+        exp_sign = 1
+        if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
+            bytes[p] == UInt8('-') && (exp_sign = -1)
+            p += 1
+        end
+        exp_value = 0
+        exp_digits = 0
+        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
+            exp_value = min(exp_value * 10 + Int(bytes[p] - UInt8('0')), 10_000)
+            p += 1
+            exp_digits += 1
+        end
+        exp_digits > 0 || _xyz_invalid_float(line_no, field)
+        exp_value *= exp_sign
+        value = exp_value > 308 ? Inf :
+                exp_value < -324 ? 0.0 :
+                value * (10.0 ^ exp_value)
+    end
+    p == last + 1 || _xyz_invalid_float(line_no, field)
+    value *= sign
+    isfinite(value) || _xyz_nonfinite_float(line_no, field)
     return value
 end
 
-function _xyz_parse_color(tok::AbstractString, line_no::Int, field::String)
-    value = _xyz_parse_float(tok, line_no, field)
+function _xyz_parse_color(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                          line_no::Int, field::String)
+    value = _xyz_parse_float(bytes, first, last, line_no, field)
     0.0 <= value <= 255.0 ||
         throw(ArgumentError("XYZ line $line_no has $field outside 0-255"))
     return srgb_to_linear(value / 255.0)
@@ -351,19 +408,44 @@ silently ignored or propagated into geometry buffers.
 function parse_xyz(text::AbstractString; source::AbstractString="<string>")
     positions = Float64[]
     colors = Float64[]
+    bytes = codeunits(text)
+    n = length(bytes)
+    row_hint = count(==(UInt8('\n')), bytes) + 1
+    sizehint!(positions, 3 * row_hint)
+    sizehint!(colors, 3 * row_hint)
     layout = nothing
     line_no = 0
-    for raw in split(text, '\n'; keepempty=true)
+    i = 1
+    while i <= n
         line_no += 1
-        line = strip(raw)
-        (isempty(line) || startswith(line, "#")) && continue
-        toks = split(line)
-        record_layout = if length(toks) == 3
+        line_start, line_stop, next_i = _ply_line_bounds(bytes, i, n)
+        i = next_i
+        ntoks = 0
+        skip_line = false
+        f1 = l1 = f2 = l2 = f3 = l3 = f4 = l4 = f5 = l5 = f6 = l6 = 0
+        p = line_start
+        while true
+            first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+            first == 0 && break
+            if ntoks == 0 && bytes[first] == UInt8('#')
+                skip_line = true
+                break
+            end
+            ntoks += 1
+            ntoks == 1 ? (f1 = first; l1 = last) :
+            ntoks == 2 ? (f2 = first; l2 = last) :
+            ntoks == 3 ? (f3 = first; l3 = last) :
+            ntoks == 4 ? (f4 = first; l4 = last) :
+            ntoks == 5 ? (f5 = first; l5 = last) :
+            ntoks == 6 && (f6 = first; l6 = last)
+        end
+        (skip_line || ntoks == 0) && continue
+        record_layout = if ntoks == 3
             :xyz
-        elseif length(toks) == 6
+        elseif ntoks == 6
             :xyzrgb
         else
-            throw(ArgumentError("XYZ line $line_no in $source has $(length(toks)) fields; expected 3 or 6"))
+            throw(ArgumentError("XYZ line $line_no in $source has $ntoks fields; expected 3 or 6"))
         end
         if layout === nothing
             layout = record_layout
@@ -371,14 +453,14 @@ function parse_xyz(text::AbstractString; source::AbstractString="<string>")
             throw(ArgumentError("XYZ line $line_no in $source mixes XYZ and XYZRGB records"))
         end
         push!(positions,
-              _xyz_parse_float(toks[1], line_no, "x"),
-              _xyz_parse_float(toks[2], line_no, "y"),
-              _xyz_parse_float(toks[3], line_no, "z"))
+              _xyz_parse_float(bytes, f1, l1, line_no, "x"),
+              _xyz_parse_float(bytes, f2, l2, line_no, "y"),
+              _xyz_parse_float(bytes, f3, l3, line_no, "z"))
         if record_layout === :xyzrgb
             push!(colors,
-                  _xyz_parse_color(toks[4], line_no, "red"),
-                  _xyz_parse_color(toks[5], line_no, "green"),
-                  _xyz_parse_color(toks[6], line_no, "blue"))
+                  _xyz_parse_color(bytes, f4, l4, line_no, "red"),
+                  _xyz_parse_color(bytes, f5, l5, line_no, "green"),
+                  _xyz_parse_color(bytes, f6, l6, line_no, "blue"))
         end
     end
     nverts = length(positions) ÷ 3
@@ -437,7 +519,7 @@ end
 @inline _ply_ascii_lower(b::UInt8) =
     UInt8('A') <= b <= UInt8('Z') ? UInt8(b + 0x20) : b
 
-function _ply_ascii_token_eq(bytes::Vector{UInt8}, first::Int, last::Int,
+function _ply_ascii_token_eq(bytes::AbstractVector{UInt8}, first::Int, last::Int,
                              word::String)
     n = last - first + 1
     n == ncodeunits(word) || return false
@@ -448,7 +530,7 @@ function _ply_ascii_token_eq(bytes::Vector{UInt8}, first::Int, last::Int,
     return true
 end
 
-function _ply_parse_ascii_float(bytes::Vector{UInt8}, first::Int, last::Int,
+function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
                                 context::String)
     sign = 1.0
     p = first
@@ -509,7 +591,7 @@ function _ply_parse_ascii_float(bytes::Vector{UInt8}, first::Int, last::Int,
     return value
 end
 
-function _ply_line_bounds(bytes::Vector{UInt8}, i::Int, n::Int)
+function _ply_line_bounds(bytes::AbstractVector{UInt8}, i::Int, n::Int)
     i <= n || error("PLY ASCII element data is truncated")
     j = i
     while j <= n && bytes[j] != UInt8('\n')
@@ -520,7 +602,7 @@ function _ply_line_bounds(bytes::Vector{UInt8}, i::Int, n::Int)
     return i, last, j + 1
 end
 
-function _ply_next_ascii_token(bytes::Vector{UInt8}, p::Int, line_stop::Int)
+function _ply_next_ascii_token(bytes::AbstractVector{UInt8}, p::Int, line_stop::Int)
     while p <= line_stop && _ply_ascii_space(bytes[p])
         p += 1
     end

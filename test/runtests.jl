@@ -2471,9 +2471,11 @@ end
         compute_line_distances!(unindexed_alloc; mode=:line_strip)
         unindexed_attr = get_attribute(unindexed_alloc, :lineDistance)
         compute_line_distances!(indexed_alloc; mode=:line_strip)
+        indexed_attr = get_attribute(indexed_alloc, :lineDistance)
         @test_opt_alloc 256 compute_line_distances!(unindexed_alloc; mode=:line_strip)
         @test get_attribute(unindexed_alloc, :lineDistance) === unindexed_attr
-        @test_opt_alloc 2048 compute_line_distances!(indexed_alloc; mode=:line_strip)
+        @test_opt_alloc 64 compute_line_distances!(indexed_alloc; mode=:line_strip)
+        @test get_attribute(indexed_alloc, :lineDistance) === indexed_attr
     end
 
     @testset "Shading — Lambert" begin
@@ -3680,6 +3682,18 @@ end
         @test occursin("\"mode\":\"lines\"", morph_line_drawable)
         @test occursin("\"morphTargets\":[[0,0,0.25,0,0,0.25]]", morph_line_drawable)
         @test occursin("\"morphWeights\":[0.5]", morph_line_drawable)
+        web_morph_num_buf = Diff3D._web_num_buffer()
+        Diff3D._web_morph_position_target_count(morph_geo)
+        Diff3D._web_morph_vec3_target_count(morph_dir_only_geo, Val(:normal))
+        Diff3D._web_write_morph_targets_json(devnull, morph_dir_only, morph_dir_only_geo,
+                                             web_morph_num_buf)
+        @test_opt_alloc 64 Diff3D._web_morph_position_target_count(morph_geo)
+        @test_opt_alloc 64 Diff3D._web_morph_vec3_target_count(morph_dir_only_geo,
+                                                               Val(:normal))
+        @test_opt_alloc 2048 Diff3D._web_write_morph_targets_json(devnull,
+                                                                  morph_dir_only,
+                                                                  morph_dir_only_geo,
+                                                                  web_morph_num_buf)
         skin_drawable = only(filter(d -> occursin("\"name\":\"export_skin\"", d),
                                     Diff3D._web_collect_drawables(scene)))
         @test occursin("\"skin\":{", skin_drawable)
@@ -5656,6 +5670,9 @@ end
         plain = parse_xyz("0 0 0\n1 2 3\n")
         @test plain.n_vertices == 2
         @test !has_attribute(plain, :color)
+        xyz_alloc = join(("$(i) 0 0" for i in 1:1000), "\n") * "\n"
+        parse_xyz(xyz_alloc)
+        @test_opt_alloc 80000 parse_xyz(xyz_alloc)
 
         path = tempname() * ".xyz"
         try
@@ -6415,6 +6432,23 @@ end
         csg_alloc_node = Diff3D._csg_node(Diff3D._csg_clone_polygons(csg_alloc_polys))
         @test length(Diff3D._csg_all_polygons(csg_alloc_node)) == length(csg_alloc_polys)
         @test_opt_alloc 100000 Diff3D._csg_all_polygons(csg_alloc_node)
+        csg_plane = Diff3D.CSGPlane(Vec3(0.0, 0.0, 1.0), 0.0)
+        csg_poly = Diff3D.CSGPolygon([
+            Diff3D.CSGVertex(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec2(0.0, 0.0)),
+            Diff3D.CSGVertex(Vec3(1.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec2(1.0, 0.0)),
+            Diff3D.CSGVertex(Vec3(0.0, 1.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec2(0.0, 1.0)),
+        ], Diff3D.CSGPlane(Vec3(0.0, 0.0, 1.0), 1.0))
+        csg_cf = Diff3D.CSGPolygon[]; csg_cb = Diff3D.CSGPolygon[]
+        csg_front = Diff3D.CSGPolygon[]; csg_back = Diff3D.CSGPolygon[]
+        sizehint!(csg_front, 1)
+        function csg_unsplit_probe(plane, poly, cf, cb, front, back)
+            empty!(cf); empty!(cb); empty!(front); empty!(back)
+            Diff3D._csg_split_polygon(plane, poly, cf, cb, front, back)
+        end
+        csg_unsplit_probe(csg_plane, csg_poly, csg_cf, csg_cb, csg_front, csg_back)
+        @test csg_front == [csg_poly]
+        @test_opt_alloc 64 csg_unsplit_probe(csg_plane, csg_poly, csg_cf, csg_cb,
+                                             csg_front, csg_back)
         @test_throws ArgumentError csg_evaluate(cube, shifted, :xor)
     end
 
@@ -10259,6 +10293,11 @@ end
         transform_apply!(local_tc, Vec3(1.0, 0.0, 0.0))
         @test local_obj.position.x ≈ 1.0 atol=1e-12
         @test local_obj.position.z ≈ -1.0 atol=1e-12
+        alloc_obj = Group()
+        alloc_tc = TransformControls(cam; axis=:XYZ)
+        transform_attach!(alloc_tc, alloc_obj)
+        transform_apply!(alloc_tc, Vec3(1.0, 2.0, 3.0))
+        @test_opt_alloc 256 transform_apply!(alloc_tc, Vec3(1.0, 2.0, 3.0))
         detached_position = obj.position
         transform_detach!(tc)
         transform_set_mode!(tc, :translate)
@@ -11020,6 +11059,23 @@ end
         render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam, skin_cache)
         @test_opt_alloc 2048 render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam,
                                             skin_cache)
+        skin_attr_geo = BoxGeometry(width_segments=2, height_segments=2,
+                                    depth_segments=2)
+        set_attribute!(skin_attr_geo, :color, ones(Float64, 3 * skin_attr_geo.n_vertices), 3)
+        skin_attr_mesh = SkinnedMesh(skin_attr_geo,
+                                     MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0),
+                                                       side=:double),
+                                     Skeleton([Bone()]),
+                                     fill((1, 1, 1, 1), skin_attr_geo.n_vertices),
+                                     fill((1.0, 0.0, 0.0, 0.0), skin_attr_geo.n_vertices))
+        skin_attr_scene = Scene()
+        add!(skin_attr_scene, skin_attr_mesh)
+        skin_attr_cache = RenderCache()
+        skin_attr_rt = RenderTarget(16, 16)
+        render_pooled!(skin_attr_rt, skin_attr_scene, skin_cache_cam, skin_attr_cache)
+        render_pooled!(skin_attr_rt, skin_attr_scene, skin_cache_cam, skin_attr_cache)
+        @test_opt_alloc 1024 render_pooled!(skin_attr_rt, skin_attr_scene, skin_cache_cam,
+                                            skin_attr_cache)
         many_bone_skin = SkinnedMesh(BufferGeometry([0.0, 0.0, 0.0],
                                                     [0.0, 0.0, 1.0],
                                                     Float64[], Int[], 1, 0),
@@ -11632,6 +11688,9 @@ end
         reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
         @test_opt_alloc 56000 reverse_gradient(reverse_ad_sum_abs2, wide_ad)
         @test_opt_alloc 56000 reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
+        reverse_ad_mixed_constants(x) = sum(y -> y + 1.0, x)
+        reverse_value_gradient(reverse_ad_mixed_constants, wide_ad)
+        @test_opt_alloc 45000 reverse_value_gradient(reverse_ad_mixed_constants, wide_ad)
         # Non-trivial scalar function (exp/sqrt/max) vs ForwardDiff.
         hfun(x) = exp(x[1]) * sqrt(abs(x[2]) + 1) + max(x[1], x[3]) - x[2]/x[3]
         x0 = [0.4, -1.3, 2.1]
@@ -18906,6 +18965,28 @@ end
         morph_alloc_influences = [0.5]
         @test apply_morph_targets(morph_alloc_geo, morph_alloc_influences)[1] ==
               Vec3(1.0, 0.0, 0.5)
+        morph_alloc_scratch = Vector{Vec3{Float64}}(undef, 0)
+        morph_alloc_zero_influences = [0.0]
+        Diff3D.apply_morph_targets!(morph_alloc_scratch, morph_alloc_geo,
+                                    morph_alloc_influences)
+        @test_opt_alloc 512 Diff3D.apply_morph_targets!(morph_alloc_scratch,
+                                                        morph_alloc_geo,
+                                                        morph_alloc_influences)
+        @test_opt_alloc 64 Diff3D.apply_morph_targets!(morph_alloc_scratch,
+                                                       morph_alloc_geo,
+                                                       morph_alloc_zero_influences)
+        morph_alloc_normal_out = similar(morph_alloc_normals)
+        morph_alloc_tangent_out = similar(get_attribute(morph_alloc_geo, :tangent).data)
+        Diff3D.apply_morph_normals!(morph_alloc_normal_out, morph_alloc_geo,
+                                    morph_alloc_influences)
+        Diff3D.apply_morph_tangents!(morph_alloc_tangent_out, morph_alloc_geo,
+                                     morph_alloc_influences)
+        @test_opt_alloc 512 Diff3D.apply_morph_normals!(morph_alloc_normal_out,
+                                                        morph_alloc_geo,
+                                                        morph_alloc_influences)
+        @test_opt_alloc 512 Diff3D.apply_morph_tangents!(morph_alloc_tangent_out,
+                                                         morph_alloc_geo,
+                                                         morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_targets(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_normals(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_tangents(morph_alloc_geo, morph_alloc_influences)

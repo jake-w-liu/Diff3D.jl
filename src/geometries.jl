@@ -243,14 +243,14 @@ end
     return idx
 end
 
-function _line_distance_output!(geo::BufferGeometry)
+function _line_distance_output!(geo::BufferGeometry, fill_value::Float64=0.0)
     attr = get(geo.attributes, :lineDistance, nothing)
     if attr isa BufferAttribute{Float64} && attr.item_size == 1 &&
        length(attr.data) == geo.n_vertices
-        fill!(attr.data, 0.0)
+        fill!(attr.data, fill_value)
         return attr.data
     end
-    distances = zeros(Float64, geo.n_vertices)
+    distances = fill(fill_value, geo.n_vertices)
     geo.attributes[:lineDistance] = BufferAttribute(distances, 1)
     return distances
 end
@@ -294,8 +294,7 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
     end
 
     order = geo.indices
-    distances = zeros(Float64, geo.n_vertices)
-    seen = fill(false, geo.n_vertices)
+    distances = _line_distance_output!(geo, NaN)
     if mode === :lines
         iseven(length(order)) ||
             throw(ArgumentError("LineSegments distance computation requires an even vertex count"))
@@ -303,41 +302,82 @@ function compute_line_distances!(geo::BufferGeometry; mode::Symbol=:line_strip)
         while i <= length(order)
             a = _line_distance_checked_index(geo, order[i])
             b = _line_distance_checked_index(geo, order[i + 1])
-            _line_distance_write!(distances, seen, a, 0.0)
-            _line_distance_write!(distances, seen, b, distance(get_vertex(geo, a),
-                                                               get_vertex(geo, b)))
+            _line_distance_write!(distances, a, 0.0)
+            _line_distance_write!(distances, b, distance(get_vertex(geo, a),
+                                                         get_vertex(geo, b)))
             i += 2
         end
     elseif !isempty(order)
         prev = _line_distance_checked_index(geo, order[1])
-        _line_distance_write!(distances, seen, prev, 0.0)
+        _line_distance_write!(distances, prev, 0.0)
         total = 0.0
         for i in 2:length(order)
             curr = _line_distance_checked_index(geo, order[i])
             total += distance(get_vertex(geo, prev), get_vertex(geo, curr))
-            _line_distance_write!(distances, seen, curr, total)
+            _line_distance_write!(distances, curr, total)
             prev = curr
         end
     end
-    set_attribute!(geo, :lineDistance, distances, 1)
+    @inbounds for i in eachindex(distances)
+        isnan(distances[i]) && (distances[i] = 0.0)
+    end
     return geo
 end
 
-function _morph_finite_float(value::Real, label::String)
-    value isa Bool && throw(ArgumentError("$label must be finite"))
+function _line_distance_write!(distances::Vector{Float64},
+                               vertex_index::Int, value::Float64)
+    if isnan(distances[vertex_index])
+        distances[vertex_index] = value
+    else
+        isapprox(distances[vertex_index], value; atol=1e-8, rtol=1e-8) ||
+            throw(ArgumentError("indexed dashed lines require one lineDistance per vertex; duplicate vertex $(vertex_index) needs conflicting distances"))
+    end
+    return nothing
+end
+
+@noinline _throw_morph_influence(ti::Int) =
+    throw(ArgumentError("morph target influence $ti must be finite"))
+
+function _morph_finite_float(value::Real, ti::Int)
+    value isa Bool && _throw_morph_influence(ti)
     out = try
         Float64(value)
     catch
-        throw(ArgumentError("$label must be finite"))
+        _throw_morph_influence(ti)
     end
-    isfinite(out) || throw(ArgumentError("$label must be finite"))
+    isfinite(out) || _throw_morph_influence(ti)
     return out
 end
-_morph_finite_float(value, label::String) =
-    throw(ArgumentError("$label must be finite"))
+_morph_finite_float(value, ti::Int) = _throw_morph_influence(ti)
 
 @inline _morph_influence(weight::Real, ti::Int) =
-    _morph_finite_float(weight, "morph target influence $ti")
+    _morph_finite_float(weight, ti)
+
+const _MORPH_SYMBOL_LOCK = ReentrantLock()
+const _MORPH_POSITION_SYMBOLS = Symbol[]
+const _MORPH_NORMAL_SYMBOLS = Symbol[]
+const _MORPH_TANGENT_SYMBOLS = Symbol[]
+
+function _morph_symbol!(cache::Vector{Symbol}, prefix::Symbol, zero_based_index::Int)
+    zero_based_index >= 0 || throw(ArgumentError("morph target index must be non-negative"))
+    one_based_index = zero_based_index + 1
+    lock(_MORPH_SYMBOL_LOCK)
+    try
+        while length(cache) < one_based_index
+            push!(cache, Symbol(prefix, length(cache)))
+        end
+        return @inbounds cache[one_based_index]
+    finally
+        unlock(_MORPH_SYMBOL_LOCK)
+    end
+end
+
+@inline _morph_position_symbol(ti::Int) =
+    _morph_symbol!(_MORPH_POSITION_SYMBOLS, :morphPosition, ti - 1)
+@inline _morph_normal_symbol(ti::Int) =
+    _morph_symbol!(_MORPH_NORMAL_SYMBOLS, :morphNormal, ti - 1)
+@inline _morph_tangent_symbol(ti::Int) =
+    _morph_symbol!(_MORPH_TANGENT_SYMBOLS, :morphTangent, ti - 1)
 
 _float64_copy(data::Vector{Float64}) = copy(data)
 _float64_copy(data) = Float64.(data)
@@ -388,9 +428,11 @@ function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
         out[vi] = Vec3(positions[base], positions[base + 1], positions[base + 2])
     end
     for (ti, weight) in enumerate(influences)
+        weight isa Bool && _throw_morph_influence(ti)
+        iszero(weight) && continue
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
-        name = Symbol("morphPosition$(ti - 1)")
+        name = _morph_position_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
         _apply_morph_position_attr!(out, attr, w, name, g.n_vertices)
@@ -483,9 +525,11 @@ function apply_morph_normals!(out::Vector{Float64}, g::BufferGeometry,
     resize!(out, length(g.normals))
     copyto!(out, 1, g.normals, 1, length(g.normals))
     for (ti, weight) in enumerate(influences)
+        weight isa Bool && _throw_morph_influence(ti)
+        iszero(weight) && continue
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
-        name = Symbol("morphNormal$(ti - 1)")
+        name = _morph_normal_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
         _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, 3)
@@ -524,9 +568,11 @@ function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
     resize!(out, length(base_attr.data))
     copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
     for (ti, weight) in enumerate(influences)
+        weight isa Bool && _throw_morph_influence(ti)
+        iszero(weight) && continue
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
-        name = Symbol("morphTangent$(ti - 1)")
+        name = _morph_tangent_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
         _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, base_attr.item_size)

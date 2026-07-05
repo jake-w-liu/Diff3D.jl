@@ -40,6 +40,8 @@ function _ad_record(val::Float64, args::Tuple, partials::Tuple)
     return v
 end
 
+_ad_constant(x::Real) = ADVar(Float64(x), 0.0, (), ())
+
 ADVar(x::Real) = _ad_record(Float64(x), (), ())     # leaf / constant
 
 Base.convert(::Type{ADVar}, x::Real) = x isa ADVar ? x : ADVar(x)
@@ -56,11 +58,25 @@ Base.float(::Type{ADVar}) = ADVar
 
 # ---- arithmetic ----
 Base.:+(a::ADVar, b::ADVar) = _ad_record(a.val + b.val, (a, b), (1.0, 1.0))
+Base.:+(a::ADVar, b::Real)  = _ad_record(a.val + Float64(b), (a,), (1.0,))
+Base.:+(a::Real, b::ADVar)  = _ad_record(Float64(a) + b.val, (b,), (1.0,))
 Base.:-(a::ADVar, b::ADVar) = _ad_record(a.val - b.val, (a, b), (1.0, -1.0))
+Base.:-(a::ADVar, b::Real)  = _ad_record(a.val - Float64(b), (a,), (1.0,))
+Base.:-(a::Real, b::ADVar)  = _ad_record(Float64(a) - b.val, (b,), (-1.0,))
 Base.:-(a::ADVar)           = _ad_record(-a.val, (a,), (-1.0,))
 Base.:*(a::ADVar, b::ADVar) = _ad_record(a.val * b.val, (a, b), (b.val, a.val))
+Base.:*(a::ADVar, b::Real)  = (bf = Float64(b); _ad_record(a.val * bf, (a,), (bf,)))
+Base.:*(a::Real, b::ADVar)  = (af = Float64(a); _ad_record(af * b.val, (b,), (af,)))
 function Base.:/(a::ADVar, b::ADVar)
     _ad_record(a.val / b.val, (a, b), (1.0 / b.val, -a.val / (b.val * b.val)))
+end
+function Base.:/(a::ADVar, b::Real)
+    bf = Float64(b)
+    _ad_record(a.val / bf, (a,), (1.0 / bf,))
+end
+function Base.:/(a::Real, b::ADVar)
+    af = Float64(a)
+    _ad_record(af / b.val, (b,), (-af / (b.val * b.val),))
 end
 
 # ---- powers ----
@@ -80,6 +96,12 @@ function Base.:^(a::ADVar, p::Real)
     # the guard must NOT zero those — over-broad `a.val==0 ? 0.0` dropped d/dx x=1.
     d = (a.val == 0 && p <= 0) ? 0.0 : p * a.val^(p - 1)
     _ad_record(v, (a,), (d,))
+end
+function Base.:^(a::Real, b::ADVar)
+    af = Float64(a)
+    v = af^b.val
+    db = af > 0 ? v * log(af) : 0.0
+    _ad_record(v, (b,), (db,))
 end
 # Resolve the dispatch ambiguity between ^(::ADVar, ::Real) above and Base's
 # ^(::Number, ::Rational): a rational exponent (e.g. x^(1//3)) is ordinary input.
@@ -121,14 +143,26 @@ function Base.hypot(a::ADVar, b::ADVar)
     h = hypot(a.val, b.val)
     _ad_record(h, (a, b), (h == 0 ? 0.0 : a.val / h, h == 0 ? 0.0 : b.val / h))
 end
-Base.hypot(a::ADVar, b::Real) = hypot(a, ADVar(b))
-Base.hypot(a::Real, b::ADVar) = hypot(ADVar(a), b)
+function Base.hypot(a::ADVar, b::Real)
+    bf = Float64(b)
+    h = hypot(a.val, bf)
+    _ad_record(h, (a,), (h == 0 ? 0.0 : a.val / h,))
+end
+function Base.hypot(a::Real, b::ADVar)
+    af = Float64(a)
+    h = hypot(af, b.val)
+    _ad_record(h, (b,), (h == 0 ? 0.0 : b.val / h,))
+end
 
 # ---- min/max (gradient flows to the selected argument) ----
 Base.max(a::ADVar, b::ADVar) = a.val >= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
                                                 _ad_record(b.val, (a, b), (0.0, 1.0))
 Base.min(a::ADVar, b::ADVar) = a.val <= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
                                                 _ad_record(b.val, (a, b), (0.0, 1.0))
+Base.max(a::ADVar, b::Real) = (bf = Float64(b); a.val >= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
+Base.max(a::Real, b::ADVar) = (af = Float64(a); af >= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
+Base.min(a::ADVar, b::Real) = (bf = Float64(b); a.val <= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
+Base.min(a::Real, b::ADVar) = (af = Float64(a); af <= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
 
 # ---- comparisons (decided by the value; no gradient) ----
 Base.:<(a::ADVar, b::ADVar)  = a.val < b.val
@@ -136,15 +170,27 @@ Base.:<=(a::ADVar, b::ADVar) = a.val <= b.val
 Base.:>(a::ADVar, b::ADVar)  = a.val > b.val
 Base.:>=(a::ADVar, b::ADVar) = a.val >= b.val
 Base.:(==)(a::ADVar, b::ADVar) = a.val == b.val
+Base.:<(a::ADVar, b::Real)  = a.val < Float64(b)
+Base.:<=(a::ADVar, b::Real) = a.val <= Float64(b)
+Base.:>(a::ADVar, b::Real)  = a.val > Float64(b)
+Base.:>=(a::ADVar, b::Real) = a.val >= Float64(b)
+Base.:(==)(a::ADVar, b::Real) = a.val == Float64(b)
+Base.:<(a::Real, b::ADVar)  = Float64(a) < b.val
+Base.:<=(a::Real, b::ADVar) = Float64(a) <= b.val
+Base.:>(a::Real, b::ADVar)  = Float64(a) > b.val
+Base.:>=(a::Real, b::ADVar) = Float64(a) >= b.val
+Base.:(==)(a::Real, b::ADVar) = Float64(a) == b.val
 Base.isless(a::ADVar, b::ADVar) = a.val < b.val
+Base.isless(a::ADVar, b::Real) = a.val < Float64(b)
+Base.isless(a::Real, b::ADVar) = Float64(a) < b.val
 Base.isfinite(a::ADVar) = isfinite(a.val)
 Base.isnan(a::ADVar) = isnan(a.val)
 
 # ---- identities / rounding (discrete results carry no gradient) ----
-Base.zero(::Type{ADVar}) = ADVar(0.0)
-Base.one(::Type{ADVar})  = ADVar(1.0)
-Base.zero(::ADVar) = ADVar(0.0)
-Base.one(::ADVar)  = ADVar(1.0)
+Base.zero(::Type{ADVar}) = _ad_constant(0.0)
+Base.one(::Type{ADVar})  = _ad_constant(1.0)
+Base.zero(::ADVar) = _ad_constant(0.0)
+Base.one(::ADVar)  = _ad_constant(1.0)
 Base.floor(::Type{T}, a::ADVar) where {T<:Integer} = floor(T, a.val)
 Base.ceil(::Type{T}, a::ADVar) where {T<:Integer}  = ceil(T, a.val)
 Base.round(::Type{T}, a::ADVar) where {T<:Integer} = round(T, a.val)

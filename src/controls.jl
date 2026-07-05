@@ -576,8 +576,17 @@ function _transform_local_delta(obj::AbstractObject3D, delta::Vec3)
     return mat4_transform_direction(quat_to_mat4(q), delta)
 end
 
-_transform_axis_has(axis::Union{Nothing,Symbol}, label::Char) =
-    axis !== nothing && occursin(string(label), String(axis))
+@inline _transform_axis_has(::Nothing, ::Char) = false
+@inline function _transform_axis_has(axis::Symbol, label::Char)
+    if label == 'X'
+        return axis === :X || axis === :XY || axis === :XZ || axis === :XYZ
+    elseif label == 'Y'
+        return axis === :Y || axis === :XY || axis === :YZ || axis === :XYZ
+    elseif label == 'Z'
+        return axis === :Z || axis === :XZ || axis === :YZ || axis === :XYZ
+    end
+    return false
+end
 
 function _transform_axis_vec(axis::Union{Nothing,Symbol}, delta::Vec3;
                              default::Float64=0.0)

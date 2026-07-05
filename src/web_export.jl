@@ -1481,7 +1481,7 @@ end
 function _web_morph_position_target_count(geo::BufferGeometry)
     i = 0
     while true
-        name = Symbol("morphPosition$i")
+        name = _morph_position_symbol(i + 1)
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
         attr.item_size == 3 && length(attr.data) == length(geo.positions) || break
@@ -1490,10 +1490,22 @@ function _web_morph_position_target_count(geo::BufferGeometry)
     return i
 end
 
-function _web_morph_vec3_target_count(geo::BufferGeometry, prefix::String)
+function _web_morph_vec3_target_count(geo::BufferGeometry, ::Val{:normal})
     i = 0
     while true
-        name = Symbol(prefix * string(i))
+        name = _morph_normal_symbol(i + 1)
+        has_attribute(geo, name) || break
+        attr = get_attribute(geo, name)
+        attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
+        i += 1
+    end
+    return i
+end
+
+function _web_morph_vec3_target_count(geo::BufferGeometry, ::Val{:tangent})
+    i = 0
+    while true
+        name = _morph_tangent_symbol(i + 1)
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
         attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
@@ -1507,7 +1519,7 @@ function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::I
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
-        attr = get_attribute(geo, Symbol("morphPosition$i"))
+        attr = get_attribute(geo, _morph_position_symbol(i + 1))
         _js_write_array(io, attr.data, num_buf)
     end
     write(io, ']')
@@ -1519,12 +1531,12 @@ function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::I
 end
 
 function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
-                                       prefix::String, count::Int,
+                                       ::Val{:normal}, count::Int,
                                        num_buf::Vector{UInt8})
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
-        attr = get_attribute(geo, Symbol(prefix * string(i)))
+        attr = get_attribute(geo, _morph_normal_symbol(i + 1))
         _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
                                              geo.n_vertices, num_buf)
     end
@@ -1533,8 +1545,22 @@ function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
 end
 
 function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
-                                       prefix::String, count::Int)
-    return _web_write_morph_vec3_targets(io, geo, prefix, count, _web_num_buffer())
+                                       ::Val{:tangent}, count::Int,
+                                       num_buf::Vector{UInt8})
+    write(io, '[')
+    for i in 0:(count - 1)
+        i == 0 || write(io, ',')
+        attr = get_attribute(geo, _morph_tangent_symbol(i + 1))
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                             geo.n_vertices, num_buf)
+    end
+    write(io, ']')
+    return nothing
+end
+
+function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
+                                       kind::Val, count::Int)
+    return _web_write_morph_vec3_targets(io, geo, kind, count, _web_num_buffer())
 end
 
 function _web_morph_targets_sizehint(obj, geo::BufferGeometry, target_count::Int,
@@ -1551,8 +1577,8 @@ function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
     hasproperty(obj, :morph_target_influences) ||
         (write(io, "\"morphTargets\":[],\"morphWeights\":[]"); return nothing)
     target_count = _web_morph_position_target_count(geo)
-    normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
-    tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+    normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
+    tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
     has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
     if !(obj isa SkinnedMesh)
         write(io, "\"basePositions\":")
@@ -1562,9 +1588,9 @@ function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
     write(io, "\"morphTargets\":")
     _web_write_morph_position_targets(io, geo, target_count, num_buf)
     write(io, ",\"morphNormals\":")
-    _web_write_morph_vec3_targets(io, geo, "morphNormal", normal_count, num_buf)
+    _web_write_morph_vec3_targets(io, geo, Val(:normal), normal_count, num_buf)
     write(io, ",\"morphTangents\":")
-    _web_write_morph_vec3_targets(io, geo, "morphTangent", tangent_count, num_buf)
+    _web_write_morph_vec3_targets(io, geo, Val(:tangent), tangent_count, num_buf)
     write(io, ",\"morphWeights\":")
     _js_write_array(io, has_morph_channels ? obj.morph_target_influences : Float64[],
                     num_buf)
@@ -1575,8 +1601,8 @@ function _web_morph_targets_json(obj, geo::BufferGeometry)
     hasproperty(obj, :morph_target_influences) ||
         return "\"morphTargets\":[],\"morphWeights\":[]"
     target_count = _web_morph_position_target_count(geo)
-    normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
-    tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+    normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
+    tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
     has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
     io = IOBuffer(sizehint=_web_morph_targets_sizehint(obj, geo, target_count,
                                                        normal_count, tangent_count,
@@ -1973,8 +1999,8 @@ function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
     hint = _web_sizehint_add(8192, _web_geo_object_sizehint(geo, positions))
     if hasproperty(obj, :morph_target_influences)
         target_count = _web_morph_position_target_count(geo)
-        normal_count = _web_morph_vec3_target_count(geo, "morphNormal")
-        tangent_count = _web_morph_vec3_target_count(geo, "morphTangent")
+        normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
+        tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
         has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
         hint = _web_sizehint_add(hint,
                                  _web_morph_targets_sizehint(obj, geo, target_count,

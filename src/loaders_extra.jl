@@ -8690,7 +8690,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         isempty(morph_weights) && return geo
         for (ti, weight) in enumerate(morph_weights)
             weight == 0.0 && continue
-            pos_name = Symbol("morphPosition$(ti - 1)")
+            pos_name = _morph_position_symbol(ti)
             if has_attribute(geo, pos_name)
                 attr = get_attribute(geo, pos_name)
                 attr.item_size == 3 && length(attr.data) == length(geo.positions) ||
@@ -8699,7 +8699,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     geo.positions[i] += weight * attr.data[i]
                 end
             end
-            nrm_name = Symbol("morphNormal$(ti - 1)")
+            nrm_name = _morph_normal_symbol(ti)
             if !isempty(geo.normals) && has_attribute(geo, nrm_name)
                 attr = get_attribute(geo, nrm_name)
                 attr.item_size == 3 && length(attr.data) == length(geo.normals) ||
@@ -8767,17 +8767,20 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             set_attribute!(geo, local_name, data, item_size)
         end
         for (ti, target) in enumerate(get(prim, "targets", Any[]))
-            for (gltf_name, local_prefix) in (
-                ("POSITION", "morphPosition"),
-                ("NORMAL", "morphNormal"),
-                ("TANGENT", "morphTangent"),
+            for (gltf_name, local_kind) in (
+                ("POSITION", :position),
+                ("NORMAL", :normal),
+                ("TANGENT", :tangent),
             )
                 haskey(target, gltf_name) || continue
                 target_accessor = _gltf_checked_accessor_index(
                     gltf, target[gltf_name], "morph target $gltf_name")
                 data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
                 attr_count == nverts || error("glTF morph target $gltf_name count does not match POSITION")
-                set_attribute!(geo, Symbol(local_prefix * string(ti - 1)), data, item_size)
+                local_name = local_kind === :position ? _morph_position_symbol(ti) :
+                             local_kind === :normal ? _morph_normal_symbol(ti) :
+                             _morph_tangent_symbol(ti)
+                set_attribute!(geo, local_name, data, item_size)
             end
         end
         if mode in (0, 1, 2, 3)
