@@ -7643,31 +7643,37 @@ function _gltf_component_bytes(ctype::Int)
     error("glTF componentType $ctype")
 end
 
+@inline _gltf_read_u16_le(buf::Vector{UInt8}, i::Int) =
+    UInt16(buf[i]) | (UInt16(buf[i + 1]) << 8)
+
+@inline _gltf_read_u32_le(buf::Vector{UInt8}, i::Int) =
+    UInt32(buf[i]) | (UInt32(buf[i + 1]) << 8) |
+    (UInt32(buf[i + 2]) << 16) | (UInt32(buf[i + 3]) << 24)
+
 function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, normalized::Bool)
     sz = _gltf_component_bytes(ctype)
     (offset >= 0 && offset + sz <= length(buf)) ||
         error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
-    io = IOBuffer(buf)
-    seek(io, offset)
+    i = offset + 1
     if ctype == 5126
-        value = Float64(read(io, Float32))
+        value = Float64(reinterpret(Float32, _gltf_read_u32_le(buf, i)))
         isfinite(value) ||
             error("glTF FLOAT accessor value at byte offset $offset must be finite")
         return value
     elseif ctype == 5125
-        v = read(io, UInt32)
+        v = _gltf_read_u32_le(buf, i)
         return normalized ? Float64(v) / Float64(typemax(UInt32)) : Float64(v)
     elseif ctype == 5123
-        v = read(io, UInt16)
+        v = _gltf_read_u16_le(buf, i)
         return normalized ? Float64(v) / Float64(typemax(UInt16)) : Float64(v)
     elseif ctype == 5121
-        v = read(io, UInt8)
+        v = buf[i]
         return normalized ? Float64(v) / Float64(typemax(UInt8)) : Float64(v)
     elseif ctype == 5122
-        v = read(io, Int16)
+        v = reinterpret(Int16, _gltf_read_u16_le(buf, i))
         return normalized ? max(Float64(v) / Float64(typemax(Int16)), -1.0) : Float64(v)
     elseif ctype == 5120
-        v = read(io, Int8)
+        v = reinterpret(Int8, buf[i])
         return normalized ? max(Float64(v) / Float64(typemax(Int8)), -1.0) : Float64(v)
     end
     error("glTF componentType $ctype")

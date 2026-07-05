@@ -62,7 +62,14 @@ mutable struct Raycaster
     layers::Layers           # only objects sharing a channel are tested (three.js Raycaster.layers)
     point_threshold::Float64 # world-space pick radius for PointsObject vertices (three.js params.Points.threshold)
     line_threshold::Float64  # world-space pick radius for Line/LineSegments segments (three.js params.Line.threshold)
+    skinning_matrices::Vector{Mat4{Float64}}
+    morph_positions::Vector{Vec3{Float64}}
 end
+
+Raycaster(ray::Ray{Float64}, near::Float64, far::Float64, layers::Layers,
+          point_threshold::Float64, line_threshold::Float64) =
+    Raycaster(ray, near, far, layers, point_threshold, line_threshold,
+              Mat4{Float64}[], Vec3{Float64}[])
 
 _finite_vec3(v::Vec3) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
 
@@ -179,10 +186,14 @@ function _ray_segment_distance(o::Vec3, d::Vec3, a::Vec3, b::Vec3)
     return (t_ray, norm(ray_pt - seg_pt), seg_pt)
 end
 
-@inline function _raycast_morph_positions(obj, geo::BufferGeometry)
-    _has_active_morph_influences(obj.morph_target_influences) ||
-        return nothing
-    return apply_morph_targets(geo, obj.morph_target_influences)
+@inline function _raycast_morph_positions(rc::Raycaster, obj, geo::BufferGeometry)
+    return _object_morph_positions(obj, geo, rc.morph_positions)
+end
+
+@inline function _raycast_skinned_vertex(sm::SkinnedMesh, geo::BufferGeometry,
+                                         mats, morphed, vi::Int)
+    p0 = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
+    return _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
 end
 
 # Build the world-space ray through normalized device coords (x,y ∈ [-1,1]).
@@ -250,14 +261,16 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa SkinnedMesh
         # Raycast the posed (skinned) geometry the rasterizer actually renders, so
         # a visibly-rendered skinned mesh is pickable (was silently skipped).
-        geo = _skinned_render_geometry(obj)
+        geo = _skinned_buffer_geometry(obj)
+        mats = _skinning_matrices!(rc.skinning_matrices, obj)
+        morphed_positions = _raycast_morph_positions(rc, obj, geo)
         wm = compute_world_matrix(obj)
         side = material_side(obj.material)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
-            a = mat4_transform_point(wm, get_vertex(geo, i1))
-            b = mat4_transform_point(wm, get_vertex(geo, i2))
-            c = mat4_transform_point(wm, get_vertex(geo, i3))
+            a = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1))
+            b = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i2))
+            c = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i3))
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
@@ -266,7 +279,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa PointsObject
         wm = compute_world_matrix(obj)
         geo = _points_geometry(obj)
-        morphed_positions = _raycast_morph_positions(obj, geo)
+        morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.point_threshold
         @inbounds for entry in _draw_entry_range(geo)
             vi = _draw_vertex_index(geo, entry)
@@ -280,7 +293,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         wm = compute_world_matrix(obj)
         geo = _line_geometry(obj)
-        morphed_positions = _raycast_morph_positions(obj, geo)
+        morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.line_threshold
         # LineSegments: disjoint pairs. LineObject: consecutive vertices.
         # LineLoop closes the final vertex back to the first, matching three.js.

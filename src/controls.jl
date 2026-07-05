@@ -144,9 +144,9 @@ function _orbit_zoom_now!(oc::OrbitControls, factor)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
-function _orbit_pan_basis(oc::OrbitControls)
-    fwd = normalize(oc.target - oc.camera.position)
-    raw_right = cross(fwd, oc.camera.up)
+function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
+    fwd = normalize(target - camera.position)
+    raw_right = cross(fwd, camera.up)
     if norm(raw_right) <= 1e-12
         candidate = abs(fwd.x) < 0.9 ? Vec3(1.0, 0.0, 0.0) : Vec3(0.0, 1.0, 0.0)
         raw_right = candidate - fwd * dot(candidate, fwd)
@@ -155,6 +155,7 @@ function _orbit_pan_basis(oc::OrbitControls)
     up = normalize(cross(right, fwd))
     return right, up
 end
+_orbit_pan_basis(oc::OrbitControls) = _camera_pan_basis(oc.camera, oc.target)
 function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     right, up = _orbit_pan_basis(oc)
     shift = right * dx + up * dy
@@ -294,33 +295,35 @@ function trackball_reset!(tc::TrackballControls)
     return tc
 end
 
-function trackball_rotate!(tc::TrackballControls, dx, dy)
-    tc.enabled || return tc
-    oc = OrbitControls(tc.camera, tc.target)
-    orbit_rotate!(oc, dx, dy)
-    tc.target = oc.target
+function _trackball_apply!(tc::TrackballControls, s::Spherical)
+    radius = max(s.radius, 0.0)
+    phi = clamp(s.phi, 1e-4, π - 1e-4)
+    tc.camera.position = tc.target + spherical_to_cartesian(Spherical(radius, phi, s.theta))
     tc.camera.target = tc.target
     return tc
+end
+
+function trackball_rotate!(tc::TrackballControls, dx, dy)
+    tc.enabled || return tc
+    s = cartesian_to_spherical(tc.camera.position - tc.target)
+    return _trackball_apply!(tc, Spherical(s.radius, s.phi + dy, s.theta + dx))
 end
 
 """Scale the camera distance from the trackball target. `factor < 1` zooms in."""
 function trackball_zoom!(tc::TrackballControls, factor)
     tc.enabled || return tc
-    oc = OrbitControls(tc.camera, tc.target)
-    orbit_zoom!(oc, factor)
-    tc.target = oc.target
-    tc.camera.target = tc.target
-    return tc
+    s = cartesian_to_spherical(tc.camera.position - tc.target)
+    return _trackball_apply!(tc, Spherical(s.radius * factor, s.phi, s.theta))
 end
 
 """Pan the trackball target and camera in the view plane."""
 function trackball_pan!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
-    oc = OrbitControls(tc.camera, tc.target)
-    orbit_pan!(oc, dx, dy)
-    tc.target = oc.target
+    right, up = _camera_pan_basis(tc.camera, tc.target)
+    shift = right * dx + up * dy
+    tc.target = tc.target + shift
+    tc.camera.position = tc.camera.position + shift
     tc.camera.target = tc.target
-    tc.camera = oc.camera
     return tc
 end
 
@@ -1268,6 +1271,64 @@ function _track_value(tr::CubicSplineMorphWeightsKeyframeTrack, t)
             p2[i] * h01 + (m2[i] * h) * h11 for i in eachindex(p1)]
 end
 
+function _copy_morph_weights!(out::Vector{Float64}, src::Vector{Float64})
+    resize!(out, length(src))
+    length(src) > 0 && copyto!(out, 1, src, 1, length(src))
+    return out
+end
+
+function _sample_morph_weights!(out::Vector{Float64}, tr::MorphWeightsKeyframeTrack, t)
+    times = tr.times
+    values = tr.values
+    n = length(times)
+    n == 0 && error("cannot sample an empty MorphWeightsKeyframeTrack")
+    t <= times[1] && return _copy_morph_weights!(out, values[1])
+    t >= times[n] && return _copy_morph_weights!(out, values[n])
+    lo = searchsortedlast(times, t)
+    hi = lo + 1
+    tr.interpolation === :step && return _copy_morph_weights!(out, values[lo])
+    p1 = values[lo]
+    p2 = values[hi]
+    length(p1) == length(p2) ||
+        error("morph-weight keyframes must have matching lengths")
+    resize!(out, length(p1))
+    α = (t - times[lo]) / (times[hi] - times[lo])
+    @inbounds for i in eachindex(p1)
+        out[i] = p1[i] + (p2[i] - p1[i]) * α
+    end
+    return out
+end
+
+function _sample_morph_weights!(out::Vector{Float64},
+                                tr::CubicSplineMorphWeightsKeyframeTrack, t)
+    times = tr.times
+    values = tr.values
+    n = length(times)
+    n == 0 && error("cannot sample an empty CubicSplineMorphWeightsKeyframeTrack")
+    t <= times[1] && return _copy_morph_weights!(out, values[1])
+    t >= times[n] && return _copy_morph_weights!(out, values[n])
+    hi = searchsortedfirst(times, t)
+    lo = hi - 1
+    h = times[hi] - times[lo]
+    α = (t - times[lo]) / h
+    p1 = values[lo]; p2 = values[hi]
+    m1 = tr.out_tangents[lo]; m2 = tr.in_tangents[hi]
+    length(p1) == length(p2) == length(m1) == length(m2) ||
+        error("morph-weight cubic spline keyframes must have matching lengths")
+    resize!(out, length(p1))
+    α2 = α * α
+    α3 = α2 * α
+    h00 = 2α3 - 3α2 + 1
+    h10 = α3 - 2α2 + α
+    h01 = -2α3 + 3α2
+    h11 = α3 - α2
+    @inbounds for i in eachindex(p1)
+        out[i] = p1[i] * h00 + (m1[i] * h) * h10 +
+                 p2[i] * h01 + (m2[i] * h) * h11
+    end
+    return out
+end
+
 """
     sample_track(track, t)
 
@@ -1550,19 +1611,24 @@ function _write_texture_track_value!(target, property::Symbol, value::Vec3)
     return true
 end
 
-function _write_morph_component!(target, property::Symbol, component::Int, v::Real)
+function _write_morph_component_tree!(obj, property::Symbol, component::Int,
+                                      value::Float64)
     wrote = false
-    function write_one!(obj)
-        hasproperty(obj, property) || return false
-        values = copy(getproperty(obj, property))
+    if hasproperty(obj, property)
+        values = getproperty(obj, property)
         1 <= component <= length(values) ||
             throw(ArgumentError("morph influence component $(component - 1) is out of range"))
-        values[component] = Float64(v)
-        setproperty!(obj, property, values)
-        return true
+        values[component] = value
+        wrote = true
     end
-    wrote |= write_one!(target)
-    traverse(target, obj -> obj !== target && (wrote |= write_one!(obj)))
+    for child in get_children(obj)
+        wrote |= _write_morph_component_tree!(child, property, component, value)
+    end
+    return wrote
+end
+
+function _write_morph_component!(target, property::Symbol, component::Int, v::Real)
+    wrote = _write_morph_component_tree!(target, property, component, Float64(v))
     wrote || throw(ArgumentError("target does not expose morph target influences"))
     return target
 end
@@ -1582,20 +1648,33 @@ function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     setproperty!(target, property, _with_component(current, component, v))
     return target
 end
+
+function _copy_morph_track_values!(target, property::Symbol, v::Vector{Float64})
+    values = getproperty(target, property)
+    values === v && return target
+    if length(values) == length(v)
+        length(v) > 0 && copyto!(values, 1, v, 1, length(v))
+    else
+        setproperty!(target, property, copy(v))
+    end
+    return target
+end
+
+function _write_morph_track_values_tree!(target, property::Symbol, v::Vector{Float64})
+    wrote = false
+    if hasproperty(target, property)
+        _copy_morph_track_values!(target, property, v)
+        wrote = true
+    end
+    for child in get_children(target)
+        wrote |= _write_morph_track_values_tree!(child, property, v)
+    end
+    return wrote
+end
+
 function _write_track_value!(target, property::Symbol, v::Vector{Float64})
     if property === :morph_target_influences
-        wrote = false
-        if hasproperty(target, property)
-            setproperty!(target, property, copy(v))
-            wrote = true
-        end
-        traverse(target, child -> begin
-            child === target && return
-            if hasproperty(child, property)
-                setproperty!(child, property, copy(v))
-                wrote = true
-            end
-        end)
+        wrote = _write_morph_track_values_tree!(target, property, v)
         wrote || setproperty!(target, property, copy(v))
     else
         setproperty!(target, property, copy(v))
@@ -1648,6 +1727,79 @@ function _write_track_value!(target, property::Symbol, v::Float64)
     return target
 end
 
+function _morph_buffer_aliases_track(values::Vector{Float64},
+                                     tr::MorphWeightsKeyframeTrack)
+    for frame in tr.values
+        values === frame && return true
+    end
+    return false
+end
+
+function _morph_buffer_aliases_track(values::Vector{Float64},
+                                     tr::CubicSplineMorphWeightsKeyframeTrack)
+    for frame in tr.values
+        values === frame && return true
+    end
+    for frame in tr.in_tangents
+        values === frame && return true
+    end
+    for frame in tr.out_tangents
+        values === frame && return true
+    end
+    return false
+end
+
+function _morph_track_output_buffer!(target, property::Symbol, tr)
+    width = length(tr.values[1])
+    values = getproperty(target, property)
+    if length(values) != width || _morph_buffer_aliases_track(values, tr)
+        values = Vector{Float64}(undef, width)
+        setproperty!(target, property, values)
+    end
+    return values
+end
+
+function _write_morph_track_at_time_tree!(target, property::Symbol, tr, t)
+    wrote = false
+    if hasproperty(target, property)
+        out = _morph_track_output_buffer!(target, property, tr)
+        _sample_morph_weights!(out, tr, t)
+        wrote = true
+    end
+    for child in get_children(target)
+        wrote |= _write_morph_track_at_time_tree!(child, property, tr, t)
+    end
+    return wrote
+end
+
+function _write_track_at_time!(tr::AbstractKeyframeTrack, t)
+    v = _track_value(tr, t)
+    _write_track!(tr, v)
+    return tr
+end
+
+function _write_track_at_time!(tr::MorphWeightsKeyframeTrack, t)
+    if tr.property === :morph_target_influences
+        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
+        wrote || _write_track!(tr, _track_value(tr, t))
+        return tr
+    end
+    v = _track_value(tr, t)
+    _write_track!(tr, v)
+    return tr
+end
+
+function _write_track_at_time!(tr::CubicSplineMorphWeightsKeyframeTrack, t)
+    if tr.property === :morph_target_influences
+        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
+        wrote || _write_track!(tr, _track_value(tr, t))
+        return tr
+    end
+    v = _track_value(tr, t)
+    _write_track!(tr, v)
+    return tr
+end
+
 """Sample the clip at absolute time `t` and write each track's value to its target."""
 function mixer_set_time!(mixer::AnimationMixer, t)
     isnan(Float64(t)) && throw(ArgumentError("mixer_set_time!: time must not be NaN"))
@@ -1658,8 +1810,7 @@ function mixer_set_time!(mixer::AnimationMixer, t)
                                        mixer.repetitions,
                                        mixer.clamp_when_finished)
     for tr in mixer.clip.tracks
-        v = _track_value(tr, sample_time)
-        _write_track!(tr, v)
+        _write_track_at_time!(tr, sample_time)
     end
     return mixer
 end

@@ -3798,6 +3798,24 @@ end
                                           height_segments=16)
         Diff3D._web_geo_object(geo_export_alloc)
         @test_opt_alloc 160000 Diff3D._web_geo_object(geo_export_alloc)
+        attr_export_alloc = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
+                                           Float64[], Float64[], Int[1,2,3], 3, 1)
+        set_attribute!(attr_export_alloc, :tangent,
+                       repeat([1.0, 0.0, 0.0, 1.0], 3), 4)
+        set_attribute!(attr_export_alloc, :color,
+                       repeat([1.0, 0.5, 0.25], 3), 3)
+        set_attribute!(attr_export_alloc, :lineDistance, [0.0, 1.0, 2.0], 1)
+        attr_num_buf = Diff3D._web_num_buffer()
+        Diff3D._web_write_tangent_json(devnull, attr_export_alloc, attr_num_buf)
+        Diff3D._web_write_color_json(devnull, attr_export_alloc, true, attr_num_buf)
+        Diff3D._web_write_line_distance_json(devnull, attr_export_alloc, attr_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_tangent_json(devnull, attr_export_alloc,
+                                                          attr_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_color_json(devnull, attr_export_alloc,
+                                                        true, attr_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_line_distance_json(devnull,
+                                                                attr_export_alloc,
+                                                                attr_num_buf)
         drawable_export_alloc = Mesh(geo_export_alloc, MeshBasicMaterial();
                                      name="drawable_export_alloc")
         drawable_io = IOBuffer()
@@ -7310,6 +7328,11 @@ end
             tex
         end, 6)
         env_alloc_cube = CubeTexture(env_alloc_faces)
+        cube_face_num_buf = Diff3D._web_num_buffer()
+        Diff3D._web_write_cube_face_json(devnull, env_alloc_faces[1], cube_face_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_cube_face_json(devnull,
+                                                            env_alloc_faces[1],
+                                                            cube_face_num_buf)
         Diff3D._web_env_json(env_alloc_cube)
         @test_opt_alloc 196608 Diff3D._web_env_json(env_alloc_cube)
         eq_h, eq_w = 64, 128
@@ -10101,6 +10124,17 @@ end
         trackball_pan!(tc, 1.0, 1.0)
         @test cam.position == disabled_position
         @test tc.target == disabled_target
+
+        alloc_cam = PerspectiveCamera()
+        alloc_cam.position = Vec3(0.0, 0.0, 5.0)
+        alloc_cam.target = Vec3(0.0, 0.0, 0.0)
+        alloc_tc = TrackballControls(alloc_cam)
+        trackball_rotate!(alloc_tc, 0.1, 0.05)
+        trackball_zoom!(alloc_tc, 0.95)
+        trackball_pan!(alloc_tc, 0.01, -0.02)
+        @test_opt_alloc 64 trackball_rotate!(alloc_tc, 0.1, 0.05)
+        @test_opt_alloc 64 trackball_zoom!(alloc_tc, 0.95)
+        @test_opt_alloc 64 trackball_pan!(alloc_tc, 0.01, -0.02)
     end
 
     @testset "DragControls" begin
@@ -11819,6 +11853,16 @@ end
         # [E:loaders] #19 _gltf_accessor ignores bufferView.byteStride; interleaved buffers decode to garbage
         let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteStride"=>12.0)]); out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
 
+        let float_buf = UInt8[0x00, 0x00, 0xa0, 0x3f],
+            int_buf = UInt8[0x80, 0xff, 0xff, 0xff]
+            @test Diff3D._gltf_read_component(float_buf, 0, 5126, false) ≈ 1.25
+            @test Diff3D._gltf_read_component(int_buf, 0, 5120, false) == -128.0
+            @test Diff3D._gltf_read_component(int_buf, 1, 5122, false) == -1.0
+            @test Diff3D._gltf_read_component(int_buf, 0, 5125, false) ==
+                  Float64(0xffffff80)
+            @test_opt_alloc 64 Diff3D._gltf_read_component(float_buf, 0, 5126, false)
+        end
+
         @testset "glTF accessor signed/normalized/sparse decoding" begin
             let buf = UInt8[0x80, 0x00, 0x7f],
                 gltf = Dict{String,Any}(
@@ -12843,6 +12887,28 @@ end
             mixer_set_time!(AnimationMixer(AnimationClip("cubic_weights",
                                                         AbstractKeyframeTrack[tr_cubic])), 0.5)
             @test mesh.morph_target_influences ≈ [0.5, 0.5]
+
+            wide_n = 1000
+            wide_mesh = Mesh(geo, MeshBasicMaterial();
+                             morph_target_influences=zeros(Float64, wide_n))
+            wide_track = MorphWeightsKeyframeTrack(wide_mesh, :morph_target_influences,
+                                                   [0.0, 1.0],
+                                                   [zeros(Float64, wide_n),
+                                                    ones(Float64, wide_n)])
+            wide_mixer = AnimationMixer(AnimationClip("wide_weights",
+                                                      AbstractKeyframeTrack[wide_track]))
+            mixer_set_time!(wide_mixer, 0.5)
+            @test wide_mesh.morph_target_influences[1] ≈ 0.5
+            @test wide_mesh.morph_target_influences[end] ≈ 0.5
+            @test_opt_alloc 2048 mixer_set_time!(wide_mixer, 0.25)
+
+            component_track = NumberKeyframeTrack(wide_mesh, "morphTargetInfluences[0]",
+                                                  [0.0, 1.0], [0.0, 1.0])
+            component_mixer = AnimationMixer(AnimationClip("wide_component",
+                                                          AbstractKeyframeTrack[component_track]))
+            mixer_set_time!(component_mixer, 0.5)
+            @test wide_mesh.morph_target_influences[1] ≈ 0.5
+            @test_opt_alloc 512 mixer_set_time!(component_mixer, 0.25)
         end
 
         # [CTRL:controls] SpotLightHelper / HemisphereLightHelper / SkeletonHelper / PlaneHelper / PolarGr
@@ -17526,10 +17592,14 @@ end
                              [(1.0, 0.0, 0.0, 0.0) for _ in 1:nv]; name = "skinned")
             sm.position = Vec3(3.0, 0.0, 0.0)
             sc = Scene(); add!(sc, bone); add!(sc, sm)
-            hits = raycast(Raycaster(Vec3(-5.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0)), sc)
+            rc = Raycaster(Vec3(-5.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
+            hits = raycast(rc, sc)
             @test !isempty(hits)
             @test hits[1].object === sm
             @test isapprox(hits[1].distance, 4.5; atol = 1e-6)
+            raycast(rc, sc)
+            raycast(rc, sc)
+            @test_opt_alloc 1024 raycast(rc, sc)
         end
     end
 

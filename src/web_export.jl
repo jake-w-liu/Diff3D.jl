@@ -92,6 +92,13 @@ function _js_write_str(io::IO, s::AbstractString)
     write(io, '"')
     return nothing
 end
+
+function _js_write_symbol(io::IO, s::Symbol)
+    write(io, '"')
+    print(io, s)
+    write(io, '"')
+    return nothing
+end
 function _js_str(s::AbstractString)
     io = IOBuffer()
     _js_write_str(io, s)
@@ -599,7 +606,7 @@ function _web_env_json(env)
     write(io, "],\"faces\":[")
     for (i, face) in enumerate(env.faces)
         i == 1 || write(io, ',')
-        _web_write_cube_face_json(io, face)
+        _web_write_cube_face_json(io, face, num_buf)
     end
     write(io, "]}")
     return String(take!(io))
@@ -885,23 +892,28 @@ function _web_texture_json(tex)
     return String(take!(io))
 end
 
-function _web_write_cube_level_json(io::IO, data::Array{Float64,3})
+function _web_write_cube_level_json(io::IO, data::Array{Float64,3},
+                                    num_buf::Vector{UInt8})
     H, W, C = size(data)
     write(io, "{\"width\":")
-    print(io, W)
+    _js_write_num(io, W, num_buf)
     write(io, ",\"height\":")
-    print(io, H)
+    _js_write_num(io, H, num_buf)
     write(io, ",\"data\":")
     _web_write_texture_rgba_data(io, data; flip_y=false)
     write(io, '}')
     return nothing
 end
 
+function _web_write_cube_level_json(io::IO, data::Array{Float64,3})
+    return _web_write_cube_level_json(io, data, _web_num_buffer())
+end
+
 function _web_cube_level_json(data::Array{Float64,3})
     H, W, C = size(data)
     (H > 0 && W > 0 && C > 0) || return "null"
     io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
-    _web_write_cube_level_json(io, data)
+    _web_write_cube_level_json(io, data, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -927,7 +939,7 @@ function _web_env_json_sizehint(env::CubeTexture)
     return hint
 end
 
-function _web_write_cube_face_json(io::IO, tex)
+function _web_write_cube_face_json(io::IO, tex, num_buf::Vector{UInt8})
     if !(tex isa Texture)
         write(io, "null")
         return nothing
@@ -938,36 +950,40 @@ function _web_write_cube_face_json(io::IO, tex)
         return nothing
     end
     write(io, "{\"width\":")
-    print(io, W)
+    _js_write_num(io, W, num_buf)
     write(io, ",\"height\":")
-    print(io, H)
+    _js_write_num(io, H, num_buf)
     write(io, ",\"data\":")
     _web_write_texture_rgba_data(io, tex.data; flip_y=false)
     write(io, ",\"filter\":")
-    _js_write_str(io, String(tex.filter))
+    _js_write_symbol(io, tex.filter)
     write(io, ",\"minFilter\":")
-    _js_write_str(io, String(tex.min_filter))
+    _js_write_symbol(io, tex.min_filter)
     write(io, ",\"magFilter\":")
-    _js_write_str(io, String(tex.mag_filter))
+    _js_write_symbol(io, tex.mag_filter)
     write(io, ",\"maxAnisotropy\":")
-    _js_write_num(io, tex.max_anisotropy)
+    _js_write_num(io, tex.max_anisotropy, num_buf)
     write(io, ",\"colorspace\":")
-    _js_write_str(io, String(tex.colorspace))
+    _js_write_symbol(io, tex.colorspace)
     write(io, ",\"mipmaps\":[")
     first = true
     for mip in tex.mipmaps
         if ndims(mip) == 3 && all(size(mip) .> 0)
             first ? (first = false) : write(io, ',')
-            _web_write_cube_level_json(io, mip)
+            _web_write_cube_level_json(io, mip, num_buf)
         end
     end
     write(io, "]}")
     return nothing
 end
 
+function _web_write_cube_face_json(io::IO, tex)
+    return _web_write_cube_face_json(io, tex, _web_num_buffer())
+end
+
 function _web_cube_face_json(tex)
     io = IOBuffer(sizehint=_web_cube_face_json_sizehint(tex))
-    _web_write_cube_face_json(io, tex)
+    _web_write_cube_face_json(io, tex, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -1448,7 +1464,7 @@ function _web_write_tangent_json(io::IO, geo::BufferGeometry, num_buf::Vector{UI
         attr = get_attribute(geo, :tangent)
         if attr.item_size >= 4 && length(attr.data) >= attr.item_size * geo.n_vertices
             _js_write_attribute_components_array(io, attr.data, attr.item_size, 4,
-                                                 geo.n_vertices)
+                                                 geo.n_vertices, num_buf)
             return true
         end
     end
@@ -1656,7 +1672,7 @@ function _web_write_color_json(io::IO, geo::BufferGeometry, use_vertex_colors::B
         attr = get_attribute(geo, :color)
         if attr.item_size >= 3 && length(attr.data) >= attr.item_size * geo.n_vertices
             _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
-                                                 geo.n_vertices)
+                                                 geo.n_vertices, num_buf)
             return nothing
         end
     end
@@ -1675,7 +1691,7 @@ function _web_write_line_distance_json(io::IO, geo::BufferGeometry, num_buf::Vec
         attr = get_attribute(geo, :lineDistance)
         if attr.item_size >= 1 && length(attr.data) >= attr.item_size * geo.n_vertices
             _js_write_attribute_components_array(io, attr.data, attr.item_size, 1,
-                                                 geo.n_vertices)
+                                                 geo.n_vertices, num_buf)
             return nothing
         end
     end
