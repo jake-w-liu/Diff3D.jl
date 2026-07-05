@@ -2859,6 +2859,7 @@ end
         @test String(bytes[1:8]) == "%PDF-1.4"
         tail = String(bytes[max(1, end-16):end])
         @test occursin("%%EOF", tail)
+        @test_opt_alloc 10000 save_pdf(f, img)
         rm(f)
     end
 

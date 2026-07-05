@@ -395,6 +395,48 @@ function _png_write_idat_gray16(io::IO, img::AbstractArray, height::Int,
     end
 end
 
+function _pdf_fill_rgb_row!(rowbuf::Vector{UInt8}, img::AbstractArray,
+                            row::Int, width::Int, channels::Int,
+                            isgray2d::Bool, isu8::Bool)
+    k = 1
+    if isgray2d
+        @inbounds for col in 1:width
+            px = _png_u8(img[row, col], isu8)
+            rowbuf[k] = px
+            rowbuf[k + 1] = px
+            rowbuf[k + 2] = px
+            k += 3
+        end
+    elseif channels >= 3
+        @inbounds for col in 1:width
+            rowbuf[k] = _png_u8(img[row, col, 1], isu8)
+            rowbuf[k + 1] = _png_u8(img[row, col, 2], isu8)
+            rowbuf[k + 2] = _png_u8(img[row, col, 3], isu8)
+            k += 3
+        end
+    else
+        @inbounds for col in 1:width
+            px = _png_u8(img[row, col, 1], isu8)
+            rowbuf[k] = px
+            rowbuf[k + 1] = px
+            rowbuf[k + 2] = px
+            k += 3
+        end
+    end
+    return rowbuf
+end
+
+function _pdf_write_rgb_stream(io::IO, img::AbstractArray, height::Int,
+                               width::Int, channels::Int, isgray2d::Bool,
+                               isu8::Bool)
+    rowbuf = Vector{UInt8}(undef, 3 * width)
+    for row in 1:height
+        _pdf_fill_rgb_row!(rowbuf, img, row, width, channels, isgray2d, isu8)
+        write(io, rowbuf)
+    end
+    return nothing
+end
+
 """
     save_png(filename, img)
 
@@ -465,37 +507,35 @@ Write an H×W×3 image as a single-page PDF whose page holds the rendered frame
 as a DeviceRGB image XObject. Page size is `pixels / dpi` inches. Pure Julia.
 """
 function save_pdf(filename::String, img::AbstractArray; dpi::Real=144)
-    buf = image_to_uint8(img)
-    H, W = size(buf, 1), size(buf, 2)
+    H, W, C = _image_size_and_channels(img, "image")
+    isgray2d = ndims(img) == 2
+    isu8 = eltype(img) === UInt8
     dpi_value = _checked_positive_finite_number(dpi, "save_pdf dpi")
-    rgb = Vector{UInt8}(undef, H * W * 3)         # PDF image samples: top row first
-    k = 1
-    @inbounds for i in 1:H, j in 1:W
-        rgb[k] = buf[i, j, 1]; rgb[k + 1] = buf[i, j, 2]; rgb[k + 2] = buf[i, j, 3]; k += 3
-    end
     pw = round(W / dpi_value * 72; digits=2)
     ph = round(H / dpi_value * 72; digits=2)
-    content = Vector{UInt8}(codeunits("q $pw 0 0 $ph 0 0 cm /Im0 Do Q"))
+    content = "q $pw 0 0 $ph 0 0 cm /Im0 Do Q"
+    rgb_len = H * W * 3
+    off = Vector{Int}(undef, 5)
 
-    io = IOBuffer()
-    off = Dict{Int,Int}()
-    write(io, "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-    off[1] = position(io); write(io, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
-    off[2] = position(io); write(io, "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
-    off[3] = position(io); write(io, "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pw $ph] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n")
-    off[4] = position(io)
-    write(io, "4 0 obj\n<< /Type /XObject /Subtype /Image /Width $W /Height $H /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length $(length(rgb)) >>\nstream\n")
-    write(io, rgb); write(io, "\nendstream\nendobj\n")
-    off[5] = position(io)
-    write(io, "5 0 obj\n<< /Length $(length(content)) >>\nstream\n")
-    write(io, content); write(io, "\nendstream\nendobj\n")
-    xref_pos = position(io)
-    write(io, "xref\n0 6\n0000000000 65535 f \n")
-    for n in 1:5
-        write(io, @sprintf("%010d 00000 n \n", off[n]))
+    open(filename, "w") do io
+        write(io, "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+        off[1] = position(io); write(io, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+        off[2] = position(io); write(io, "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        off[3] = position(io); write(io, "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pw $ph] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n")
+        off[4] = position(io)
+        write(io, "4 0 obj\n<< /Type /XObject /Subtype /Image /Width $W /Height $H /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length $rgb_len >>\nstream\n")
+        _pdf_write_rgb_stream(io, img, H, W, C, isgray2d, isu8)
+        write(io, "\nendstream\nendobj\n")
+        off[5] = position(io)
+        write(io, "5 0 obj\n<< /Length $(sizeof(content)) >>\nstream\n")
+        write(io, content); write(io, "\nendstream\nendobj\n")
+        xref_pos = position(io)
+        write(io, "xref\n0 6\n0000000000 65535 f \n")
+        for n in 1:5
+            write(io, @sprintf("%010d 00000 n \n", off[n]))
+        end
+        write(io, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n$xref_pos\n%%EOF\n")
     end
-    write(io, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n$xref_pos\n%%EOF\n")
-    open(f -> write(f, take!(io)), filename, "w")
     return filename
 end
 save_pdf(filename::String, rt::RenderTarget; kwargs...) = save_pdf(filename, rt.color; kwargs...)
