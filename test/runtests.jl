@@ -11922,6 +11922,32 @@ end
         end
 
         # [C:shading+rasterizer] #14 Smooth (per-pixel) render path performs no back-face culling, unlike the flat path.
+        @testset "Flat ShaderMaterial culls before invoking program" begin
+            cam = Diff3D.PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            cam.position = Diff3D.Vec3(0.0, 0.0, 4.0)
+            geo = Diff3D.PlaneGeometry(width=4.0, height=4.0)
+
+            front_calls = Ref(0)
+            front_prog = (n, v, p, u) -> (front_calls[] += 1; Diff3D.Color3(1.0, 1.0, 1.0))
+            front_scene = Diff3D.Scene(background=Diff3D.Color3(0.0, 0.0, 0.0))
+            front_mesh = Diff3D.Mesh(geo, Diff3D.ShaderMaterial(program=front_prog, side=:front))
+            front_mesh.rotation = Diff3D.Euler(0.0, π, 0.0)
+            Diff3D.add!(front_scene, front_mesh)
+            Diff3D.render!(Diff3D.RenderTarget(32, 32), front_scene, cam;
+                           shading=:flat, sort_objects=false)
+            @test front_calls[] == 0
+
+            double_calls = Ref(0)
+            double_prog = (n, v, p, u) -> (double_calls[] += 1; Diff3D.Color3(1.0, 1.0, 1.0))
+            double_scene = Diff3D.Scene(background=Diff3D.Color3(0.0, 0.0, 0.0))
+            double_mesh = Diff3D.Mesh(geo, Diff3D.ShaderMaterial(program=double_prog, side=:double))
+            double_mesh.rotation = Diff3D.Euler(0.0, π, 0.0)
+            Diff3D.add!(double_scene, double_mesh)
+            Diff3D.render!(Diff3D.RenderTarget(32, 32), double_scene, cam;
+                           shading=:flat, sort_objects=false)
+            @test double_calls[] == geo.n_faces
+        end
+
         @testset "Bug14 smooth path back-face culling" begin
             cam = Diff3D.PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0); cam.position = Diff3D.Vec3(0.0,0.0,4.0)
             sf = Diff3D.Scene(background=Diff3D.Color3(0.0,0.0,0.0))

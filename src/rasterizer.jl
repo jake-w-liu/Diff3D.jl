@@ -1526,6 +1526,22 @@ material_wireframe(m::AbstractMaterial) = hasfield(typeof(m), :wireframe) ? getf
 material_clipping_planes(m::AbstractMaterial) =
     hasfield(typeof(m), :clipping_planes) ? getfield(m, :clipping_planes) : _NO_PLANES
 
+@inline function _shade_flat_shader_face(geo, fi::Int, world_mat::Mat4,
+                                         mat::ShaderMaterial, lights,
+                                         cam_pos::Vec3, normal_mat::Mat4,
+                                         has_normals::Bool; shadow_fn=nothing)
+    i1, i2, i3 = get_face(geo, fi)
+    v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
+    v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
+    v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
+    center = Vec3((v1.x + v2.x + v3.x) / 3,
+                  (v1.y + v2.y + v3.y) / 3,
+                  (v1.z + v2.z + v3.z) / 3)
+    face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
+    return clamp_color(shade_face(face_n, normalize(cam_pos - center), center,
+                                  mat, lights; shadow_fn=shadow_fn))
+end
+
 function _combined_clipping_planes(global_planes, material_planes)
     isempty(material_planes) && return global_planes
     isempty(global_planes) && return material_planes
@@ -1566,15 +1582,17 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                               flat_iw=nothing)
     W, H = rt.width, rt.height
     modelview = view * world_mat
-    face_colors = colorbuf === nothing ?
-        shade_mesh_faces(geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
-        shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn)
     blend = material_transparent(mat) || alpha < 1.0
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     side = material_side(mat)
     normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
     has_normals = length(geo.normals) >= geo.n_vertices * 3
+    lazy_shader_faces = mat isa ShaderMaterial
+    face_colors = lazy_shader_faces ? nothing :
+        (colorbuf === nothing ?
+         shade_mesh_faces(geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
+         shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn))
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing
     alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
@@ -1676,7 +1694,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                 invw_scratch[k] = invw
             end
 
-            fc = face_colors[fi]
+            fc = lazy_shader_faces ?
+                 _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
+                                         normal_mat, has_normals; shadow_fn=shadow_fn) :
+                 face_colors[fi]
             @inbounds for k in 2:(m - 1)
                 if blend
                     _rasterize_tri_blend!(rt, sx[1], sy[1], sz[1],
@@ -1736,7 +1757,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             sz[k] = log_depth ? _encode_log_depth(cv.w, inv_log_far) : ndcz
         end
 
-        fc = face_colors[fi]
+        fc = lazy_shader_faces ?
+             _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
+                                     normal_mat, has_normals; shadow_fn=shadow_fn) :
+             face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
             if has_clip
                 # World position and 1/w of each clip vertex for the per-fragment

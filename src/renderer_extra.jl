@@ -609,7 +609,9 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     has_normals = length(geo.normals) >= geo.n_vertices * 3
     normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
     modelview = view * world_mat
-    face_colors = shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos)
+    lazy_shader_faces = mat isa ShaderMaterial
+    face_colors = lazy_shader_faces ? nothing :
+                  shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos)
 
     @inbounds for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
@@ -638,7 +640,10 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             sy[k] = (1 - ndcy) * 0.5 * rt.height
             sz[k] = ndcz
         end
-        fc = face_colors[fi]
+        fc = lazy_shader_faces ?
+             _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
+                                     normal_mat, has_normals) :
+             face_colors[fi]
         for k in 2:(m - 1)
             if depth_test && depth_write
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
