@@ -7263,6 +7263,11 @@ end
         manual.matrix_auto_update = true
         texture_update_matrix!(manual)
         @test texture_transform_uv(manual, 0.25, 0.5) == (1.15, 1.4)
+        cached_auto = Texture(copy(data); filter=:nearest)
+        @test texture_transform_uv(cached_auto, 0.25, 0.5) == (0.25, 0.5)
+        cached_auto.offset = Vec2(0.5, 0.0)
+        @test texture_transform_uv(cached_auto, 0.25, 0.5) == (0.75, 0.5)
+        @test_opt_alloc 64 sample_texture(cached_auto, 0.25, 0.5)
     end
 
     @testset "Mipmaps" begin
@@ -10951,8 +10956,66 @@ end
         skin_cache = RenderCache()
         skin_cache_rt = RenderTarget(32, 32)
         render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam, skin_cache)
+        render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam, skin_cache)
         @test_opt_alloc 2048 render_pooled!(skin_cache_rt, skin_cache_scene, skin_cache_cam,
                                             skin_cache)
+        many_bone_skin = SkinnedMesh(BufferGeometry([0.0, 0.0, 0.0],
+                                                    [0.0, 0.0, 1.0],
+                                                    Float64[], Int[], 1, 0),
+                                     MeshBasicMaterial(),
+                                     Skeleton([Bone() for _ in 1:64]),
+                                     [(1, 1, 1, 1)],
+                                     [(1.0, 0.0, 0.0, 0.0)])
+        many_bone_scene = Scene()
+        add!(many_bone_scene, many_bone_skin)
+        many_bone_cache = RenderCache()
+        many_bone_rt = RenderTarget(16, 16)
+        render_pooled!(many_bone_rt, many_bone_scene, skin_cache_cam, many_bone_cache)
+        render_pooled!(many_bone_rt, many_bone_scene, skin_cache_cam, many_bone_cache)
+        @test_opt_alloc 2048 render_pooled!(many_bone_rt, many_bone_scene,
+                                            skin_cache_cam, many_bone_cache)
+
+        morph_line_geo = BufferGeometry([0.0, 0.0, 0.0,
+                                         1.0, 0.0, 0.0],
+                                        Float64[], Float64[], Int[], 2, 0)
+        set_attribute!(morph_line_geo, :morphPosition0,
+                       [0.0, 0.1, 0.0,
+                        0.0, 0.1, 0.0], 3)
+        morph_line_scene = Scene()
+        add!(morph_line_scene,
+             LineSegments(morph_line_geo, LineBasicMaterial();
+                          morph_target_influences=[1.0]))
+        morph_line_rt = RenderTarget(32, 32)
+        morph_line_cache = RenderCache()
+        render!(morph_line_rt, morph_line_scene, skin_cache_cam; cache=morph_line_cache)
+        @test_opt_alloc 1024 render!(morph_line_rt, morph_line_scene,
+                                     skin_cache_cam; cache=morph_line_cache)
+
+        morph_point_scene = Scene()
+        add!(morph_point_scene,
+             PointsObject(morph_line_geo, PointsMaterial(size=2.0);
+                          morph_target_influences=[1.0]))
+        morph_point_rt = RenderTarget(32, 32)
+        morph_point_cache = RenderCache()
+        render_points!(morph_point_rt, morph_point_scene, skin_cache_cam;
+                       cache=morph_point_cache)
+        @test_opt_alloc 1024 render_points!(morph_point_rt, morph_point_scene,
+                                            skin_cache_cam; cache=morph_point_cache)
+
+        sort_meshes = Mesh[]
+        for i in 1:64
+            m = Mesh(BoxGeometry(width=0.02, height=0.02, depth=0.02),
+                     MeshBasicMaterial())
+            m.position = Vec3(0.0, 0.0, i / 10)
+            push!(sort_meshes, m)
+        end
+        sort_depth_cache = RenderCache()
+        sort_view = view_matrix(skin_cache_cam)
+        Diff3D._sort_meshes_by_depth!(sort_meshes, sort_view, true,
+                                      sort_depth_cache.mesh_depths)
+        @test_opt_alloc 512 Diff3D._sort_meshes_by_depth!(sort_meshes,
+                                                          sort_view, true,
+                                                          sort_depth_cache.mesh_depths)
         @test_opt_alloc 32768 render!(r1, scene, cam)
         default_alloc = @allocated render!(r1, scene, cam)
         cached_alloc1 = @allocated render!(r3, scene, cam; cache=cache2)

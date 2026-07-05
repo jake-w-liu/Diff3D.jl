@@ -160,6 +160,9 @@ mutable struct RenderCache
     bounds::Vector{BoundingSphere{Float64}}
     shadow_depths::Vector{Matrix{Float64}}
     shadow_maps::IdDict{AbstractLight,ShadowMap}
+    mesh_depths::Vector{Float64}
+    skinned_matrices::Vector{Mat4{Float64}}
+    morph_positions::Vector{Vec3{Float64}}
 end
 function RenderCache()
     cl = Vector{Vec4{Float64}}(undef, 0); sizehint!(cl, 6)
@@ -173,7 +176,8 @@ function RenderCache()
                 _SpriteRenderState(nothing, 0),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
                 BufferGeometry[], BoundingSphere{Float64}[],
-                Matrix{Float64}[], IdDict{AbstractLight,ShadowMap}())
+                Matrix{Float64}[], IdDict{AbstractLight,ShadowMap}(),
+                Float64[], Mat4{Float64}[], Vec3{Float64}[])
 end
 
 function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)
@@ -715,7 +719,8 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
     _collect_meshes_into!(cache.meshes, scene)
-    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned, cache.skinned_meshes)
+    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned, cache.skinned_meshes,
+                                   cache.skinned_matrices, cache.morph_positions)
     _collect_lights_into!(cache.lights, scene)
     _collect_instanced_into!(cache.instanced, scene)
     for mesh in cache.meshes
@@ -986,33 +991,39 @@ end
 function _draw_line_object!(rt::RenderTarget, obj::LineObject,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                            stamp::Matrix{Int}, stamp_id::Int)
+                            stamp::Matrix{Int}, stamp_id::Int,
+                            morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, compute_world_matrix(obj), :line_strip, proj, view,
-        near, xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        near, xlo, xhi, ylo, yhi, stamp, stamp_id,
+        _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
 end
 
 function _draw_line_object!(rt::RenderTarget, obj::LineSegments,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                            stamp::Matrix{Int}, stamp_id::Int)
+                            stamp::Matrix{Int}, stamp_id::Int,
+                            morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, compute_world_matrix(obj), :lines, proj, view, near,
-        xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        xlo, xhi, ylo, yhi, stamp, stamp_id,
+        _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
 end
 
 function _draw_line_object!(rt::RenderTarget, obj::LineLoop,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                            stamp::Matrix{Int}, stamp_id::Int)
+                            stamp::Matrix{Int}, stamp_id::Int,
+                            morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, compute_world_matrix(obj), :line_loop, proj, view, near,
-        xlo, xhi, ylo, yhi, stamp, stamp_id, _object_morph_positions(obj, geo),
+        xlo, xhi, ylo, yhi, stamp, stamp_id,
+        _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
 end
 
@@ -1089,7 +1100,9 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                 (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
                          _render_cache_stamp!(cache, rt.height, rt.width))
             stamp_id = _draw_line_object!(rt, obj, proj, view, near,
-                                          xlo, xhi, ylo, yhi, stamp, stamp_id)
+                                          xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                          cache === nothing ? nothing :
+                                          cache.morph_positions)
         end
     elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
         if _line_geometry_has_segment(obj.geometry, obj.draw_mode)
@@ -1121,23 +1134,27 @@ end
 function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObject3D,
                                             proj::Mat4, view::Mat4, near,
                                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                                            stamp::Matrix{Int}, stamp_id::Int)
+                                            stamp::Matrix{Int}, stamp_id::Int,
+                                            morph_scratch::Vector{Vec3{Float64}})
     is_visible(obj) || return stamp_id
     if obj isa LineObject
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_strip) &&
             (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
-                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                           morph_scratch))
     elseif obj isa LineSegments
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :lines) &&
             (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
-                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                           morph_scratch))
     elseif obj isa LineLoop
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_loop) &&
             (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
-                                           xlo, xhi, ylo, yhi, stamp, stamp_id))
+                                           xlo, xhi, ylo, yhi, stamp, stamp_id,
+                                           morph_scratch))
     elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
         geo = _instanced_geometry(obj)
         if _line_geometry_has_segment(geo, obj.draw_mode)
@@ -1153,11 +1170,11 @@ function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObjec
            child isa InstancedMesh
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id)
+                                                          stamp_id, morph_scratch)
         else
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id)
+                                                          stamp_id, morph_scratch)
         end
     end
     return stamp_id
@@ -1176,7 +1193,8 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     else
         stamp = _render_cache_stamp!(cache, rt.height, rt.width)
         _render_lines_visible_tree_cached!(rt, scene, proj, view, near,
-                                           xlo, xhi, ylo, yhi, stamp, 0)
+                                           xlo, xhi, ylo, yhi, stamp, 0,
+                                           cache.morph_positions)
     end
     return rt
 end
@@ -1702,11 +1720,13 @@ end
 function _draw_points_object!(rt::RenderTarget, obj::PointsObject,
                               camera::AbstractCamera, proj::Mat4, view::Mat4,
                               near, W::Int, H::Int, xlo::Int, xhi::Int,
-                              ylo::Int, yhi::Int)
+                              ylo::Int, yhi::Int,
+                              morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _points_geometry(obj)
     _draw_points_geometry_from_material!(
         rt, geo, obj.material, compute_world_matrix(obj), camera, proj, view, near,
-        W, H, xlo, xhi, ylo, yhi, _object_morph_positions(obj, geo),
+        W, H, xlo, xhi, ylo, yhi,
+        _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
     return nothing
 end
@@ -1744,10 +1764,12 @@ end
 function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                       camera::AbstractCamera, proj::Mat4, view::Mat4,
                                       near, W::Int, H::Int,
-                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int)
+                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                      morph_scratch::Union{Nothing,Vector{Vec3{Float64}}})
     is_visible(obj) || return nothing
     if obj isa PointsObject
-        _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
+        _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi,
+                             ylo, yhi, morph_scratch)
     elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
         _draw_instanced_points!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
     end
@@ -1757,10 +1779,10 @@ function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
         # in scenes with many primitive objects.
         if child isa PointsObject || child isa InstancedMesh
             _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
-                                         xlo, xhi, ylo, yhi)
+                                         xlo, xhi, ylo, yhi, morph_scratch)
         else
             _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
-                                         xlo, xhi, ylo, yhi)
+                                         xlo, xhi, ylo, yhi, morph_scratch)
         end
     end
     return nothing
@@ -1769,14 +1791,16 @@ end
 """Rasterize `PointsObject` vertices as small point sprites sized by the material."""
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
-                        ylo::Int=1, yhi::Int=rt.height)
+                        ylo::Int=1, yhi::Int=rt.height,
+                        cache::Union{Nothing,RenderCache}=nothing)
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
     W, H = rt.width, rt.height
 
     _render_points_visible_tree!(rt, scene, camera, proj, view, near, W, H,
-                                 xlo, xhi, ylo, yhi)
+                                 xlo, xhi, ylo, yhi,
+                                 cache === nothing ? nothing : cache.morph_positions)
     return rt
 end
 
@@ -2224,7 +2248,9 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
     _collect_meshes_into!(meshes, scene)
-    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned, shared_cache.skinned_meshes)
+    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned, shared_cache.skinned_meshes,
+                                   shared_cache.skinned_matrices,
+                                   shared_cache.morph_positions)
     lights = shared_cache.lights
     _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced

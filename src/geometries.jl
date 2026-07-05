@@ -378,9 +378,10 @@ function _apply_morph_position_attr!(out::Vector{Vec3{Float64}}, attr::BufferAtt
     return out
 end
 
-function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
+function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
+                              influences::AbstractVector{<:Real})
     _validate_geometry_vertices(g, "apply_morph_targets")
-    out = Vector{Vec3{Float64}}(undef, g.n_vertices)
+    resize!(out, g.n_vertices)
     positions = g.positions
     @inbounds for vi in 1:g.n_vertices
         base = 3vi - 2
@@ -397,12 +398,29 @@ function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Rea
     return out
 end
 
+function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
+    _validate_geometry_vertices(g, "apply_morph_targets")
+    return apply_morph_targets!(Vector{Vec3{Float64}}(undef, g.n_vertices),
+                                g, influences)
+end
+
 function _object_morph_positions(obj, geo::BufferGeometry)
     hasproperty(obj, :morph_target_influences) || return nothing
     influences = getproperty(obj, :morph_target_influences)
     _has_active_morph_influences(influences) || return nothing
     return apply_morph_targets(geo, influences)
 end
+
+function _object_morph_positions(obj, geo::BufferGeometry,
+                                 scratch::Vector{Vec3{Float64}})
+    hasproperty(obj, :morph_target_influences) || return nothing
+    influences = getproperty(obj, :morph_target_influences)
+    _has_active_morph_influences(influences) || return nothing
+    return apply_morph_targets!(scratch, geo, influences)
+end
+
+_object_morph_positions(obj, geo::BufferGeometry, ::Nothing) =
+    _object_morph_positions(obj, geo)
 
 function _has_active_morph_influences(influences::AbstractVector{<:Real})
     @inbounds for i in eachindex(influences)
@@ -451,7 +469,19 @@ normal. Returns a flat normal buffer.
 function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Real})
     _validate_geometry_vertex_count(g, "apply_morph_normals")
     length(g.normals) >= g.n_vertices * 3 || return copy(g.normals)
-    out = copy(g.normals)
+    return apply_morph_normals!(_float64_copy(g.normals), g, influences)
+end
+
+function apply_morph_normals!(out::Vector{Float64}, g::BufferGeometry,
+                              influences::AbstractVector{<:Real})
+    _validate_geometry_vertex_count(g, "apply_morph_normals")
+    if length(g.normals) < g.n_vertices * 3
+        resize!(out, length(g.normals))
+        length(g.normals) > 0 && copyto!(out, 1, g.normals, 1, length(g.normals))
+        return out
+    end
+    resize!(out, length(g.normals))
+    copyto!(out, 1, g.normals, 1, length(g.normals))
     for (ti, weight) in enumerate(influences)
         w = _morph_influence(weight, ti)
         w == 0.0 && continue
@@ -477,7 +507,22 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
     base_attr = get_attribute(g, :tangent)
     base_attr.item_size >= 3 && length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
         return _float64_copy(base_attr.data)
-    out = _float64_copy(base_attr.data)
+    return apply_morph_tangents!(_float64_copy(base_attr.data), g, influences)
+end
+
+function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
+                               influences::AbstractVector{<:Real})
+    _validate_geometry_vertex_count(g, "apply_morph_tangents")
+    has_attribute(g, :tangent) || (empty!(out); return out)
+    base_attr = get_attribute(g, :tangent)
+    if !(base_attr.item_size >= 3 &&
+         length(base_attr.data) >= g.n_vertices * base_attr.item_size)
+        resize!(out, length(base_attr.data))
+        length(base_attr.data) > 0 && copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
+        return out
+    end
+    resize!(out, length(base_attr.data))
+    copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
     for (ti, weight) in enumerate(influences)
         w = _morph_influence(weight, ti)
         w == 0.0 && continue

@@ -20,10 +20,14 @@ mutable struct Texture
     center::Vec2{Float64}              # UV transform pivot
     matrix::Mat3{Float64}              # UV transform matrix
     matrix_auto_update::Bool           # recompute matrix from offset/repeat/rotation/center
+    matrix_cache_key::NTuple{7,Float64} # last transform tuple baked into matrix
     tex_coord::Int                     # glTF textureInfo.texCoord / UV set index (0 => uv, 1 => uv2)
     max_anisotropy::Float64            # WebGL anisotropic filtering request (1 = disabled)
     needs_update::Bool                 # browser runtime re-upload marker
 end
+
+const _TEXTURE_MATRIX_INVALID_KEY =
+    (NaN, NaN, NaN, NaN, NaN, NaN, NaN)
 
 function _texture_wrap_symbol(v)::Symbol
     s = Symbol(v)
@@ -92,7 +96,7 @@ function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=
                   Float64(rotation),
                   Vec2(Float64(center.x), Float64(center.y)),
                   Mat3{Float64}(Tuple(Float64(x) for x in matrix.e)),
-                  matrix_auto_update, Int(tex_coord),
+                  matrix_auto_update, _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord),
                   _texture_max_anisotropy(max_anisotropy), needs_update)
     matrix_auto_update ? texture_update_matrix!(tex) : tex
 end
@@ -108,7 +112,7 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
             _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
-            Int(tex_coord), 1.0, false)
+            _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord), 1.0, false)
 end
 function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter::Symbol,
                  min_filter::Symbol, mag_filter::Symbol,
@@ -121,7 +125,8 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
             _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
-            Int(tex_coord), _texture_max_anisotropy(max_anisotropy), false)
+            _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord),
+            _texture_max_anisotropy(max_anisotropy), false)
 end
 DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
@@ -171,7 +176,7 @@ end
 end
 
 @inline function texture_transform_uv(tex::Texture, u, v)
-    tex.matrix_auto_update && texture_update_matrix!(tex)
+    tex.matrix_auto_update && _texture_update_matrix_if_stale!(tex)
     e = tex.matrix.e
     return (e[1] * u + e[2] * v + e[3],
             e[4] * u + e[5] * v + e[6])
@@ -193,6 +198,18 @@ function texture_update_matrix!(tex::Texture)
         sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx,
        -sy * s, sy * c,  sy * (s * cx - c * cy) + cy + ty,
         0.0,    0.0,     1.0))
+    tex.matrix_cache_key = _texture_matrix_key(tex)
+    return tex
+end
+
+@inline function _texture_matrix_key(tex::Texture)
+    return (tex.offset.x, tex.offset.y, tex.repeat.x, tex.repeat.y,
+            tex.rotation, tex.center.x, tex.center.y)
+end
+
+@inline function _texture_update_matrix_if_stale!(tex::Texture)
+    key = _texture_matrix_key(tex)
+    tex.matrix_cache_key == key || texture_update_matrix!(tex)
     return tex
 end
 

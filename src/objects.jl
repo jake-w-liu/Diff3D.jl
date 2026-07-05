@@ -546,6 +546,20 @@ function _skinning_matrices(sm::SkinnedMesh)
     [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
 end
 
+function _skinning_matrices!(out::Vector{Mat4{Float64}}, sm::SkinnedMesh)
+    skel = sm.skeleton
+    length(skel.bind_inverses) == length(skel.bones) ||
+        error("skeleton bind_inverses length must match bones length")
+    resize!(out, length(skel.bones))
+    bind = sm.bind_matrix
+    bind_inv = _skinned_bind_matrix_inverse(sm)
+    @inbounds for i in eachindex(skel.bones)
+        out[i] = bind_inv * compute_world_matrix(skel.bones[i]) *
+                 skel.bind_inverses[i] * bind
+    end
+    return out
+end
+
 @inline function _skin_position(mats, idx::NTuple{4,Int},
                                w::NTuple{4,Float64}, p::Vec3)
     acc = Vec3(0.0, 0.0, 0.0)
@@ -585,18 +599,8 @@ end
 
 function _skin_normal_buffer(sm::SkinnedMesh, mats)
     geo = _skinned_buffer_geometry(sm)
-    normals = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_normals(sm) : geo.normals
-    length(normals) >= geo.n_vertices * 3 || return copy(normals)
-    out = Vector{Float64}(undef, geo.n_vertices * 3)
-    @inbounds for vi in 1:geo.n_vertices
-        base = 3vi - 2
-        n = Vec3(normals[base], normals[base + 1], normals[base + 2])
-        sn = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], n)
-        out[base] = sn.x
-        out[base + 1] = sn.y
-        out[base + 2] = sn.z
-    end
-    return out
+    out = Vector{Float64}(undef, _skinned_normal_output_length(geo))
+    return _skin_normal_buffer!(out, sm, mats)
 end
 
 function _skin_positions!(out::Vector{Float64}, sm::SkinnedMesh, mats, morphed)
@@ -612,9 +616,29 @@ function _skin_positions!(out::Vector{Float64}, sm::SkinnedMesh, mats, morphed)
     return out
 end
 
+function _skin_morph_normals!(out::Vector{Float64}, geo::BufferGeometry,
+                              influences::AbstractVector{<:Real})
+    if length(geo.normals) < geo.n_vertices * 3
+        length(geo.normals) > 0 && copyto!(out, 1, geo.normals, 1, length(geo.normals))
+        return out
+    end
+    copyto!(out, 1, geo.normals, 1, geo.n_vertices * 3)
+    for (ti, weight) in enumerate(influences)
+        w = _morph_influence(weight, ti)
+        w == 0.0 && continue
+        name = Symbol("morphNormal$(ti - 1)")
+        has_attribute(geo, name) || continue
+        attr = get_attribute(geo, name)
+        _apply_morph_attribute3_attr!(out, attr, w, name, geo.n_vertices, 3)
+    end
+    return _normalize_attribute3!(out, geo.n_vertices, 3)
+end
+
 function _skin_normal_buffer!(out::Vector{Float64}, sm::SkinnedMesh, mats)
     geo = _skinned_buffer_geometry(sm)
-    normals = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_normals(sm) : geo.normals
+    active_morph = _has_active_morph_influences(sm.morph_target_influences)
+    normals = active_morph ? _skin_morph_normals!(out, geo, sm.morph_target_influences) :
+              geo.normals
     if length(normals) < geo.n_vertices * 3
         copyto!(out, 1, normals, 1, length(normals))
         return out
@@ -727,11 +751,14 @@ end
 
 function _copy_skinned_attributes!(out::Dict{Symbol,BufferAttribute}, sm::SkinnedMesh, mats)
     geo = _skinned_buffer_geometry(sm)
+    active_morph = _has_active_morph_influences(sm.morph_target_influences)
     for (name, attr) in geo.attributes
         pattr = out[name]
         if name === :tangent
-            tangent_data = _has_active_morph_influences(sm.morph_target_influences) ?
-                           apply_morph_tangents(sm) : attr.data
+            tangent_data = active_morph ?
+                           apply_morph_tangents!(pattr.data, geo,
+                                                 sm.morph_target_influences) :
+                           attr.data
             _skin_tangent_attribute!(pattr.data, sm, attr, mats, tangent_data)
         else
             copyto!(pattr.data, 1, attr.data, 1, length(attr.data))
@@ -746,11 +773,15 @@ function _copy_groups!(out::Vector{NTuple{3,Int}}, groups::Vector{NTuple{3,Int}}
     return out
 end
 
-function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh)
+function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh,
+                                          mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
+                                          morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _skinned_buffer_geometry(sm)
     _skinned_proxy_geometry_matches(proxy, geo) || return _skinned_render_geometry(sm)
-    mats = _skinning_matrices(sm)
-    morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
+    mats = mats_scratch === nothing ? _skinning_matrices(sm) :
+           _skinning_matrices!(mats_scratch, sm)
+    morphed = _has_active_morph_influences(sm.morph_target_influences) ?
+              _object_morph_positions(sm, geo, morph_scratch) : nothing
     _skin_positions!(proxy.positions, sm, mats, morphed)
     _skin_normal_buffer!(proxy.normals, sm, mats)
     copyto!(proxy.uvs, 1, geo.uvs, 1, length(geo.uvs))
@@ -763,7 +794,9 @@ function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh
     return proxy
 end
 
-function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh)
+function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh,
+                                      mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
+                                      morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     proxy.position = sm.position
     proxy.rotation = sm.rotation
     proxy.scale = sm.scale
@@ -771,7 +804,8 @@ function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh)
     proxy.visible = sm.visible
     proxy.name = sm.name
     proxy.id = sm.id
-    proxy.geometry = _update_skinned_render_geometry!(proxy.geometry, sm)
+    proxy.geometry = _update_skinned_render_geometry!(proxy.geometry, sm,
+                                                      mats_scratch, morph_scratch)
     proxy.material = sm.material
     proxy.flat_shading = nothing
     proxy.cast_shadow = sm.cast_shadow
@@ -802,7 +836,9 @@ end
 
 function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D,
                                         skinned::Vector{SkinnedMesh},
-                                        proxies::Vector{Mesh})
+                                        proxies::Vector{Mesh},
+                                        mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
+                                        morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     empty!(skinned)
     _collect_skinned_meshes!(skinned, scene)
     for i in eachindex(skinned)
@@ -810,7 +846,7 @@ function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObj
         if i > length(proxies)
             push!(proxies, _skinned_render_mesh(sm))
         else
-            _update_skinned_render_mesh!(proxies[i], sm)
+            _update_skinned_render_mesh!(proxies[i], sm, mats_scratch, morph_scratch)
         end
         push!(meshes, proxies[i])
     end

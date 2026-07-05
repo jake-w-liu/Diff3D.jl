@@ -1989,6 +1989,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
                                   sprite_center::Vec2{Float64}=Vec2(0.5, 0.5),
                                   sprite_rotation::Real=0.0,
                                   sprite_size_attenuation::Bool=true,
+                                  parent_world=nothing,
                                   positions_override=nothing)
     geo = obj.geometry
     mat = obj.material
@@ -1999,7 +2000,8 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     parent = get_parent(transform_obj)
     parent_id = parent === nothing ? 0 : parent.id
     parent_matrix = if matrix === nothing
-        parent === nothing ? Mat4() : compute_world_matrix(parent)
+        parent_world === nothing ? (parent === nothing ? Mat4() : compute_world_matrix(parent)) :
+        parent_world
     else
         Mat4()
     end
@@ -2432,85 +2434,91 @@ end
 function _web_visit_drawables(emit::F, root::AbstractObject3D,
                               force_ids::Set{Int}=Set{Int}(),
                               camera_distance::Real=0.0) where {F}
-    function forced_subtree(obj::AbstractObject3D)
-        obj.id in force_ids && return true
+    forced_subtree_ids = Set{Int}()
+    function collect_forced_subtrees!(obj::AbstractObject3D)
+        forced = obj.id in force_ids
         for child in get_children(obj)
-            forced_subtree(child) && return true
+            forced |= collect_forced_subtrees!(child)
         end
-        return false
+        forced && push!(forced_subtree_ids, obj.id)
+        return forced
     end
+    isempty(force_ids) || collect_forced_subtrees!(root)
     ancestor_ids = Int[]
     ancestor_visibility = Bool[]
-    function visit(obj::AbstractObject3D, lod_group_id::Int=0, lod_distance::Real=0.0,
+    function visit(obj::AbstractObject3D, parent_world::Mat4,
+                   lod_group_id::Int=0, lod_distance::Real=0.0,
                    lod_hysteresis::Real=0.0)
-        (is_visible(obj) || forced_subtree(obj)) || return
+        (is_visible(obj) || obj.id in forced_subtree_ids) || return
+        world = parent_world * compute_local_matrix(obj)
         if obj isa LOD
             push!(ancestor_ids, obj.id)
             push!(ancestor_visibility, is_visible(obj))
             for (distance, hysteresis, child) in obj.levels
-                visit(child, obj.id, distance, hysteresis)
+                visit(child, world, obj.id, distance, hysteresis)
             end
             pop!(ancestor_ids)
             pop!(ancestor_visibility)
             return
         end
-        world = compute_world_matrix(obj)
         obj_visible = is_visible(obj)
+        emit_drawable(drawable, drawable_world; kwargs...) =
+            emit(drawable, drawable_world; kwargs..., parent_world=parent_world)
         if obj isa Mesh || obj isa SkinnedMesh
             if material_wireframe(obj.material)
                 proxy = _web_wireframe_proxy(obj)
-                emit(proxy, world; mode="lines",
-                     transform_obj=obj,
-                     morph_target_ids=ancestor_ids,
-                     visibility_target_ids=ancestor_ids,
-                     visibility_values=ancestor_visibility,
-                     visibility_extra_id=obj.id,
-                     visibility_extra_value=obj_visible,
-                     lod_group_id=lod_group_id,
-                     lod_distance=lod_distance,
-                     lod_hysteresis=lod_hysteresis)
+                emit_drawable(proxy, world; mode="lines",
+                              transform_obj=obj,
+                              morph_target_ids=ancestor_ids,
+                              visibility_target_ids=ancestor_ids,
+                              visibility_values=ancestor_visibility,
+                              visibility_extra_id=obj.id,
+                              visibility_extra_value=obj_visible,
+                              lod_group_id=lod_group_id,
+                              lod_distance=lod_distance,
+                              lod_hysteresis=lod_hysteresis)
             else
-                emit(obj, world; mode="triangles",
-                     morph_target_ids=ancestor_ids,
-                     visibility_target_ids=ancestor_ids,
-                     visibility_values=ancestor_visibility,
-                     visibility_extra_id=obj.id,
-                     visibility_extra_value=obj_visible,
-                     lod_group_id=lod_group_id,
-                     lod_distance=lod_distance,
-                     lod_hysteresis=lod_hysteresis)
+                emit_drawable(obj, world; mode="triangles",
+                              morph_target_ids=ancestor_ids,
+                              visibility_target_ids=ancestor_ids,
+                              visibility_values=ancestor_visibility,
+                              visibility_extra_id=obj.id,
+                              visibility_extra_value=obj_visible,
+                              lod_group_id=lod_group_id,
+                              lod_distance=lod_distance,
+                              lod_hysteresis=lod_hysteresis)
             end
         elseif obj isa InstancedMesh
-            parent = compute_world_matrix(obj)
+            parent = world
             draw_mode = String(obj.draw_mode)
             wire_triangles = obj.draw_mode === :triangles && material_wireframe(obj.material)
             if !_web_material_transparent(obj.material)
                 if wire_triangles
                     proxy = _web_wireframe_proxy(obj)
-                    emit(proxy, parent; mode="lines",
-                         transform_obj=obj,
-                         instance_matrices=obj.instance_matrices,
-                         instance_colors=obj.instance_colors,
-                         morph_target_ids=ancestor_ids,
-                         visibility_target_ids=ancestor_ids,
-                         visibility_values=ancestor_visibility,
-                         visibility_extra_id=obj.id,
-                         visibility_extra_value=obj_visible,
-                         lod_group_id=lod_group_id,
-                         lod_distance=lod_distance,
-                         lod_hysteresis=lod_hysteresis)
+                    emit_drawable(proxy, parent; mode="lines",
+                                  transform_obj=obj,
+                                  instance_matrices=obj.instance_matrices,
+                                  instance_colors=obj.instance_colors,
+                                  morph_target_ids=ancestor_ids,
+                                  visibility_target_ids=ancestor_ids,
+                                  visibility_values=ancestor_visibility,
+                                  visibility_extra_id=obj.id,
+                                  visibility_extra_value=obj_visible,
+                                  lod_group_id=lod_group_id,
+                                  lod_distance=lod_distance,
+                                  lod_hysteresis=lod_hysteresis)
                 else
-                    emit(obj, parent; mode=draw_mode,
-                         instance_matrices=obj.instance_matrices,
-                         instance_colors=obj.instance_colors,
-                         morph_target_ids=ancestor_ids,
-                         visibility_target_ids=ancestor_ids,
-                         visibility_values=ancestor_visibility,
-                         visibility_extra_id=obj.id,
-                         visibility_extra_value=obj_visible,
-                         lod_group_id=lod_group_id,
-                         lod_distance=lod_distance,
-                         lod_hysteresis=lod_hysteresis)
+                    emit_drawable(obj, parent; mode=draw_mode,
+                                  instance_matrices=obj.instance_matrices,
+                                  instance_colors=obj.instance_colors,
+                                  morph_target_ids=ancestor_ids,
+                                  visibility_target_ids=ancestor_ids,
+                                  visibility_values=ancestor_visibility,
+                                  visibility_extra_id=obj.id,
+                                  visibility_extra_value=obj_visible,
+                                  lod_group_id=lod_group_id,
+                                  lod_distance=lod_distance,
+                                  lod_hysteresis=lod_hysteresis)
                 end
             else
                 # Transparent instanced meshes are split into one draw per
@@ -2525,75 +2533,75 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
                         proxy = _web_wireframe_proxy(obj)
                         ov = ic === nothing ? nothing :
                              _web_color_mul(_web_material_color(proxy.material), ic)
-                        emit(proxy, parent * im; mode="lines",
-                             transform_obj=obj,
-                             color_override=ov,
-                             instance_matrix=im,
-                             morph_target_ids=ancestor_ids,
-                             visibility_target_ids=ancestor_ids,
-                             visibility_values=ancestor_visibility,
-                             visibility_extra_id=obj.id,
-                             visibility_extra_value=obj_visible,
-                             lod_group_id=lod_group_id,
-                             lod_distance=lod_distance,
-                             lod_hysteresis=lod_hysteresis)
+                        emit_drawable(proxy, parent * im; mode="lines",
+                                      transform_obj=obj,
+                                      color_override=ov,
+                                      instance_matrix=im,
+                                      morph_target_ids=ancestor_ids,
+                                      visibility_target_ids=ancestor_ids,
+                                      visibility_values=ancestor_visibility,
+                                      visibility_extra_id=obj.id,
+                                      visibility_extra_value=obj_visible,
+                                      lod_group_id=lod_group_id,
+                                      lod_distance=lod_distance,
+                                      lod_hysteresis=lod_hysteresis)
                     else
                         ov = ic === nothing ? nothing :
                              _web_color_mul(_web_material_color(obj.material), ic)
-                        emit(obj, parent * im; mode=draw_mode,
-                             color_override=ov,
-                             instance_matrix=im,
-                             morph_target_ids=ancestor_ids,
-                             visibility_target_ids=ancestor_ids,
-                             visibility_values=ancestor_visibility,
-                             visibility_extra_id=obj.id,
-                             visibility_extra_value=obj_visible,
-                             lod_group_id=lod_group_id,
-                             lod_distance=lod_distance,
-                             lod_hysteresis=lod_hysteresis)
+                        emit_drawable(obj, parent * im; mode=draw_mode,
+                                      color_override=ov,
+                                      instance_matrix=im,
+                                      morph_target_ids=ancestor_ids,
+                                      visibility_target_ids=ancestor_ids,
+                                      visibility_values=ancestor_visibility,
+                                      visibility_extra_id=obj.id,
+                                      visibility_extra_value=obj_visible,
+                                      lod_group_id=lod_group_id,
+                                      lod_distance=lod_distance,
+                                      lod_hysteresis=lod_hysteresis)
                     end
                 end
             end
         elseif obj isa PointsObject
-            emit(obj, world; mode="points",
-                 morph_target_ids=ancestor_ids,
-                 visibility_target_ids=ancestor_ids,
-                 visibility_values=ancestor_visibility,
-                 visibility_extra_id=obj.id,
-                 visibility_extra_value=obj_visible,
-                 lod_group_id=lod_group_id,
-                 lod_distance=lod_distance,
-                 lod_hysteresis=lod_hysteresis)
+            emit_drawable(obj, world; mode="points",
+                          morph_target_ids=ancestor_ids,
+                          visibility_target_ids=ancestor_ids,
+                          visibility_values=ancestor_visibility,
+                          visibility_extra_id=obj.id,
+                          visibility_extra_value=obj_visible,
+                          lod_group_id=lod_group_id,
+                          lod_distance=lod_distance,
+                          lod_hysteresis=lod_hysteresis)
         elseif obj isa LineObject
-            emit(obj, world; mode="line_strip",
-                 morph_target_ids=ancestor_ids,
-                 visibility_target_ids=ancestor_ids,
-                 visibility_values=ancestor_visibility,
-                 visibility_extra_id=obj.id,
-                 visibility_extra_value=obj_visible,
-                 lod_group_id=lod_group_id,
-                 lod_distance=lod_distance,
-                 lod_hysteresis=lod_hysteresis)
+            emit_drawable(obj, world; mode="line_strip",
+                          morph_target_ids=ancestor_ids,
+                          visibility_target_ids=ancestor_ids,
+                          visibility_values=ancestor_visibility,
+                          visibility_extra_id=obj.id,
+                          visibility_extra_value=obj_visible,
+                          lod_group_id=lod_group_id,
+                          lod_distance=lod_distance,
+                          lod_hysteresis=lod_hysteresis)
         elseif obj isa LineLoop
-            emit(obj, world; mode="line_loop",
-                 morph_target_ids=ancestor_ids,
-                 visibility_target_ids=ancestor_ids,
-                 visibility_values=ancestor_visibility,
-                 visibility_extra_id=obj.id,
-                 visibility_extra_value=obj_visible,
-                 lod_group_id=lod_group_id,
-                 lod_distance=lod_distance,
-                 lod_hysteresis=lod_hysteresis)
+            emit_drawable(obj, world; mode="line_loop",
+                          morph_target_ids=ancestor_ids,
+                          visibility_target_ids=ancestor_ids,
+                          visibility_values=ancestor_visibility,
+                          visibility_extra_id=obj.id,
+                          visibility_extra_value=obj_visible,
+                          lod_group_id=lod_group_id,
+                          lod_distance=lod_distance,
+                          lod_hysteresis=lod_hysteresis)
         elseif obj isa LineSegments
-            emit(obj, world; mode="lines",
-                 morph_target_ids=ancestor_ids,
-                 visibility_target_ids=ancestor_ids,
-                 visibility_values=ancestor_visibility,
-                 visibility_extra_id=obj.id,
-                 visibility_extra_value=obj_visible,
-                 lod_group_id=lod_group_id,
-                 lod_distance=lod_distance,
-                 lod_hysteresis=lod_hysteresis)
+            emit_drawable(obj, world; mode="lines",
+                          morph_target_ids=ancestor_ids,
+                          visibility_target_ids=ancestor_ids,
+                          visibility_values=ancestor_visibility,
+                          visibility_extra_id=obj.id,
+                          visibility_extra_value=obj_visible,
+                          lod_group_id=lod_group_id,
+                          lod_distance=lod_distance,
+                          lod_hysteresis=lod_hysteresis)
         elseif obj isa Sprite
             mat = obj.material
             geo = BufferGeometry(Float64[0.0, 0.0, 0.0,
@@ -2621,29 +2629,29 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
                                                 depth_test=_web_material_depth_test(mat),
                                                 depth_write=_web_material_depth_write(mat));
                          name=obj.name)
-            emit(proxy, world; mode="sprite",
-                 transform_obj=obj,
-                 morph_target_ids=ancestor_ids,
-                 visibility_target_ids=ancestor_ids,
-                 visibility_values=ancestor_visibility,
-                 visibility_extra_id=obj.id,
-                 visibility_extra_value=obj_visible,
-                 lod_group_id=lod_group_id,
-                 lod_distance=lod_distance,
-                 lod_hysteresis=lod_hysteresis,
-                 sprite_center=obj.center,
-                 sprite_rotation=_web_material_sprite_rotation(mat),
-                 sprite_size_attenuation=_web_material_sprite_size_attenuation(mat))
+            emit_drawable(proxy, world; mode="sprite",
+                          transform_obj=obj,
+                          morph_target_ids=ancestor_ids,
+                          visibility_target_ids=ancestor_ids,
+                          visibility_values=ancestor_visibility,
+                          visibility_extra_id=obj.id,
+                          visibility_extra_value=obj_visible,
+                          lod_group_id=lod_group_id,
+                          lod_distance=lod_distance,
+                          lod_hysteresis=lod_hysteresis,
+                          sprite_center=obj.center,
+                          sprite_rotation=_web_material_sprite_rotation(mat),
+                          sprite_size_attenuation=_web_material_sprite_size_attenuation(mat))
         end
         push!(ancestor_ids, obj.id)
         push!(ancestor_visibility, obj_visible)
         for child in get_children(obj)
-            visit(child, lod_group_id, lod_distance, lod_hysteresis)
+            visit(child, world, lod_group_id, lod_distance, lod_hysteresis)
         end
         pop!(ancestor_ids)
         pop!(ancestor_visibility)
     end
-    visit(root)
+    visit(root, Mat4{Float64}())
     return nothing
 end
 

@@ -1159,7 +1159,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     if cache === nothing
         _append_skinned_render_meshes!(meshes, scene)
     else
-        _append_skinned_render_meshes!(meshes, scene, cache.skinned, cache.skinned_meshes)
+        _append_skinned_render_meshes!(meshes, scene, cache.skinned, cache.skinned_meshes,
+                                       cache.skinned_matrices, cache.morph_positions)
     end
     instanced = cache === nothing ? collect_instanced(scene) :
                 _collect_instanced_into!(cache.instanced, scene)
@@ -1244,8 +1245,9 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # Front-to-back draw order for opaque meshes (nearest first = largest, least-
     # negative view-space z). Pure draw-order optimisation; pixels are unchanged.
     if sort_objects
-        _sort_meshes_by_depth!(opaque_flat, view, true)
-        _sort_meshes_by_depth!(smooth_meshes, view, true)
+        depth_scratch = cache === nothing ? nothing : cache.mesh_depths
+        _sort_meshes_by_depth!(opaque_flat, view, true, depth_scratch)
+        _sort_meshes_by_depth!(smooth_meshes, view, true, depth_scratch)
     end
 
     for mesh in opaque_flat
@@ -1301,7 +1303,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # material's `depth_write` field. The back-to-front order is required for
     # correct blending and is kept regardless of `sort_objects`.
     if !isempty(transparent)
-        _sort_meshes_by_depth!(transparent, view, false)
+        _sort_meshes_by_depth!(transparent, view, false,
+                               cache === nothing ? nothing : cache.mesh_depths)
         stamp = cache === nothing ? zeros(Int, H, W) : _render_cache_stamp!(cache, H, W)
         # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
@@ -1346,7 +1349,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     # Line and point primitives (depth-tested against the mesh passes).
     render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
-    render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                   cache=cache)
 
     return rt
 end
@@ -1444,21 +1448,44 @@ function _mesh_view_depth(mesh, view::Mat4)
     return v.z
 end
 
-struct _MeshDepthOrder{T<:Real}
-    view::Mat4{T}
-    nearest_first::Bool
-end
-
-function (order::_MeshDepthOrder)(a, b)
-    da = _mesh_view_depth(a, order.view)
-    db = _mesh_view_depth(b, order.view)
-    return order.nearest_first ? da > db : da < db
-end
-
-function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4, nearest_first::Bool)
+function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Float64},
+                                       view::Mat4, nearest_first::Bool)
     n = length(meshes)
     n <= 1 && return meshes
-    if n <= 32
+    resize!(depths, n)
+    @inbounds for i in 1:n
+        depths[i] = _mesh_view_depth(meshes[i], view)
+    end
+    gap = n >>> 1
+    @inbounds while gap > 0
+        for i in (gap + 1):n
+            mesh = meshes[i]
+            depth = depths[i]
+            j = i
+            while j > gap
+                prev_depth = depths[j - gap]
+                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
+                should_shift || break
+                meshes[j] = meshes[j - gap]
+                depths[j] = prev_depth
+                j -= gap
+            end
+            meshes[j] = mesh
+            depths[j] = depth
+        end
+        gap >>>= 1
+    end
+    return meshes
+end
+
+function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4,
+                                nearest_first::Bool,
+                                depths::Union{Nothing,Vector{Float64}}=nothing)
+    n = length(meshes)
+    n <= 1 && return meshes
+    if depths !== nothing
+        return _sort_meshes_by_cached_depth!(meshes, depths, view, nearest_first)
+    elseif n <= 32
         @inbounds for i in 2:n
             mesh = meshes[i]
             depth = _mesh_view_depth(mesh, view)
@@ -1472,8 +1499,9 @@ function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4, nearest_first:
             end
             meshes[j + 1] = mesh
         end
-    else
-        sort!(meshes, lt=_MeshDepthOrder(view, nearest_first))
+    elseif n > 32
+        local_depths = Vector{Float64}(undef, n)
+        return _sort_meshes_by_cached_depth!(meshes, local_depths, view, nearest_first)
     end
     return meshes
 end
