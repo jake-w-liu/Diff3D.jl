@@ -420,6 +420,17 @@ end
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
+    normal_seed_valid = false
+    normal_tangent = Vec3(0.0, 0.0, 0.0)
+    normal_handedness = 0.0
+    if has_normalmap
+        normal_uvs = _texture_uv_set(normal_map) == 1 ?
+            ((uv2_1.x, uv2_1.y), (uv2_2.x, uv2_2.y), (uv2_3.x, uv2_3.y)) :
+            ((uv1.x, uv1.y), (uv2.x, uv2.y), (uv3.x, uv3.y))
+        normal_seed_valid, normal_tangent, normal_handedness =
+            _normal_map_tangent_seed(wp1, wp2, wp3, normal_uvs[1], normal_uvs[2],
+                                     normal_uvs[3])
+    end
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
             cx = px - 0.5
@@ -458,14 +469,12 @@ end
                 # normalMap perturbs the shading normal before lighting (same
                 # helper as the flat path); the tangent frame uses the UV set
                 # selected by the texture metadata.
-                if has_normalmap
+                if normal_seed_valid
                     nu, nv = _map_uv(normal_map, u, v, u2, v2)
-                    normal_uvs = _texture_uv_set(normal_map) == 1 ?
-                        ((uv2_1.x, uv2_1.y), (uv2_2.x, uv2_2.y), (uv2_3.x, uv2_3.y)) :
-                        ((uv1.x, uv1.y), (uv2.x, uv2.y), (uv3.x, uv3.y))
-                    wn = _apply_normal_map(wn, normal_map, nu, nv, wp1, wp2, wp3,
-                                           normal_uvs[1], normal_uvs[2], normal_uvs[3],
-                                           normal_scale)
+                    wn = _apply_normal_map_tangent_seed(wn, normal_map, nu, nv,
+                                                        normal_tangent,
+                                                        normal_handedness,
+                                                        normal_scale)
                 end
                 if has_specular || has_glossiness
                     specular, shininess = _phong_mapped_terms(

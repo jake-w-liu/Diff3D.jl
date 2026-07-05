@@ -17104,6 +17104,25 @@ end
                                             (0.0, 0.0), (0.0, 1.0), (1.0, 0.0))
             @test isapprox(r_ccw.z, 1.0; atol = 1e-9)
             @test isapprox(r_cw.z, 1.0; atol = 1e-9)
+            ok_ccw, tangent_ccw, handedness_ccw =
+                Diff3D._normal_map_tangent_seed(p1, p2, p3,
+                                                (0.0, 0.0), (1.0, 0.0),
+                                                (0.0, 1.0))
+            ok_cw, _, handedness_cw =
+                Diff3D._normal_map_tangent_seed(p1, p2, p3,
+                                                (0.0, 0.0), (0.0, 1.0),
+                                                (1.0, 0.0))
+            @test ok_ccw && ok_cw
+            @test handedness_ccw == 1.0
+            @test handedness_cw == -1.0
+            @test Diff3D._apply_normal_map_tangent_seed(fn, flat, 0.5, 0.5,
+                                                        tangent_ccw,
+                                                        handedness_ccw) == r_ccw
+            bad_ok, _, _ = Diff3D._normal_map_tangent_seed(p1, p2, p3,
+                                                           (0.0, 0.0),
+                                                           (0.0, 0.0),
+                                                           (0.0, 0.0))
+            @test !bad_ok
         end
 
         # transform_geometry must deepcopy custom attributes (copy(Dict) aliased

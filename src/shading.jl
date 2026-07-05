@@ -438,27 +438,40 @@ end
 # Perturb a face normal by a tangent-space normal map. The tangent frame is
 # derived from the triangle's world positions and UV gradients (standard
 # tangent-from-UV), then the sampled normal `2·texel-1` is rotated into world.
-function _apply_normal_map(face_n::Vec3, nmap, u, v, p1::Vec3, p2::Vec3, p3::Vec3,
-                           uv1, uv2, uv3, normal_scale::Real=1.0)
+function _normal_map_tangent_seed(p1::Vec3, p2::Vec3, p3::Vec3, uv1, uv2, uv3)
     e1 = p2 - p1; e2 = p3 - p1
     du1 = uv2[1]-uv1[1]; dv1 = uv2[2]-uv1[2]
     du2 = uv3[1]-uv1[1]; dv2 = uv3[2]-uv1[2]
+    z = zero(e1.x + e1.y + e1.z + du1 + dv1 + du2 + dv2)
+    fallback = Vec3(z, z, z)
     det = du1*dv2 - du2*dv1
-    abs(det) < 1e-12 && return face_n
+    abs(det) < 1e-12 && return false, fallback, z
     r = 1.0 / det
     T = (e1*dv2 - e2*dv1) * r
-    tl = norm(T); tl < 1e-12 && return face_n
-    T = T / tl
-    T = T - face_n * dot(face_n, T)                  # Gram-Schmidt orthonormalize
+    tl = norm(T); tl < 1e-12 && return false, fallback, z
+    return true, T / tl, sign(det)
+end
+
+function _apply_normal_map_tangent_seed(face_n::Vec3, nmap, u, v, tangent::Vec3,
+                                        handedness, normal_scale::Real=1.0)
+    T = tangent - face_n * dot(face_n, tangent)       # Gram-Schmidt orthonormalize
     tl2 = norm(T); tl2 < 1e-12 && return face_n
     T = T / tl2
     # Bitangent handedness follows the UV winding (sign of det), matching three.js
     # getTangentFrame; otherwise mirrored UVs perturb the normal the wrong way.
-    B = cross(face_n, T) * sign(det)
+    B = cross(face_n, T) * handedness
     s = sample_texture(nmap, u, v)
     ns = Float64(normal_scale)
     tn = Vec3((s.r*2 - 1) * ns, (s.g*2 - 1) * ns, s.b*2 - 1)
     return normalize(T*tn.x + B*tn.y + face_n*tn.z)
+end
+
+function _apply_normal_map(face_n::Vec3, nmap, u, v, p1::Vec3, p2::Vec3, p3::Vec3,
+                           uv1, uv2, uv3, normal_scale::Real=1.0)
+    ok, tangent, handedness = _normal_map_tangent_seed(p1, p2, p3, uv1, uv2, uv3)
+    ok || return face_n
+    return _apply_normal_map_tangent_seed(face_n, nmap, u, v, tangent, handedness,
+                                          normal_scale)
 end
 
 # Per-face PBR overrides from packed metalness/roughness maps
