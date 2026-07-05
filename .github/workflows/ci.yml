@@ -21,7 +21,25 @@ jobs:
       - name: Instantiate package environment
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run package tests
-        run: julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()'
+        run: |
+          set -euo pipefail
+          julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()' &
+          test_pid=$!
+          (
+            while kill -0 "$test_pid" 2>/dev/null; do
+              sleep 60
+              kill -0 "$test_pid" 2>/dev/null || break
+              printf 'DIFF3D_TEST_HEARTBEAT %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            done
+          ) &
+          heartbeat_pid=$!
+          set +e
+          wait "$test_pid"
+          status=$?
+          set -e
+          kill "$heartbeat_pid" 2>/dev/null || true
+          wait "$heartbeat_pid" 2>/dev/null || true
+          exit "$status"
 
   docs:
     name: Documentation
