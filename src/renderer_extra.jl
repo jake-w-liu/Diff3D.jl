@@ -1789,6 +1789,16 @@ end
     is_visible(obj) && (_object_has_children(obj) || obj isa PointsObject ||
                         (obj isa InstancedMesh && _instanced_point_drawable(obj)))
 
+function _point_subtree_has_drawable(obj::AbstractObject3D)
+    is_visible(obj) || return false
+    (obj isa PointsObject || (obj isa InstancedMesh && _instanced_point_drawable(obj))) &&
+        return true
+    for child in get_children(obj)
+        _point_subtree_has_drawable(child) && return true
+    end
+    return false
+end
+
 function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                       camera::AbstractCamera, proj::Mat4, view::Mat4,
                                       near, W::Int, H::Int,
@@ -1821,6 +1831,7 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
                         xlo::Int=1, xhi::Int=rt.width,
                         ylo::Int=1, yhi::Int=rt.height,
                         cache::Union{Nothing,RenderCache}=nothing)
+    _point_subtree_has_drawable(scene) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)

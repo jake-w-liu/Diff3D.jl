@@ -16590,9 +16590,16 @@ end
                                               pers_cam; cache=fresh_line_cache)
             render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
             render_points!(rt_empty_primitives, mesh_only_scene, pers_cam)
+            bad_point_cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
+            bad_point_cam.fov = NaN
+            @test render_points!(rt_empty_primitives, mesh_only_scene, bad_point_cam;
+                                 cache=primitive_cache) === rt_empty_primitives
+            render_points!(rt_empty_primitives, mesh_only_scene, pers_cam; cache=primitive_cache)
             @test_opt_alloc 1024 render_sprites!(rt_empty_primitives, mesh_only_scene, pers_cam;
                                                  cache=primitive_cache)
             @test_opt_alloc 1024 render_lines!(rt_empty_primitives, mesh_only_scene, pers_cam;
+                                               cache=primitive_cache)
+            @test_opt_alloc 128 render_points!(rt_empty_primitives, mesh_only_scene, pers_cam;
                                                cache=primitive_cache)
             @test_opt_alloc 1024 render_points!(rt_empty_primitives, mesh_only_scene, pers_cam)
 
