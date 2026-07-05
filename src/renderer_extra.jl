@@ -52,7 +52,7 @@ function downsample(img::AbstractArray, ss::Int)
     (Hb % ss == 0 && Wb % ss == 0) ||
         throw(ArgumentError("downsample image dimensions must be divisible by scale"))
     H, W = Hb ÷ ss, Wb ÷ ss
-    out = zeros(Float64, H, W, 3)
+    out = Array{Float64}(undef, H, W, 3)
     downsample!(out, img, ss)
     return out
 end

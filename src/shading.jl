@@ -780,19 +780,35 @@ end
 
 # In-place variant: writes one colour per face into `colors` (resized to fit),
 # so a caller can reuse the buffer across frames/meshes (bounded allocation).
+const _EMPTY_SCENE_LIGHTS = SceneLight[]
+
 function _builtin_scene_lights_or_nothing(lights::Vector{AbstractLight})
+    @inbounds for i in eachindex(lights)
+        lights[i] isa SceneLight || return nothing
+    end
     scene_lights = Vector{SceneLight}(undef, length(lights))
     @inbounds for i in eachindex(lights)
-        light = lights[i]
-        light isa SceneLight || return nothing
-        scene_lights[i] = light
+        scene_lights[i] = lights[i]::SceneLight
     end
     return scene_lights
 end
 
+_single_light_vector(light::T) where {T<:AbstractLight} = T[light]
+
 function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                            geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
                            lights::Vector{AbstractLight}, cam_pos::Vec3; shadow_fn=nothing)
+    if !(material isa LitMaterial)
+        return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights,
+                                       cam_pos; shadow_fn=shadow_fn)
+    end
+    length(lights) == 0 &&
+        return _shade_mesh_faces_impl!(colors, geo, world_mat, material, _EMPTY_SCENE_LIGHTS,
+                                       cam_pos; shadow_fn=shadow_fn)
+    length(lights) == 1 && !(lights[1] isa SceneLight) &&
+        return _shade_mesh_faces_impl!(colors, geo, world_mat, material,
+                                       _single_light_vector(lights[1]),
+                                       cam_pos; shadow_fn=shadow_fn)
     scene_lights = _builtin_scene_lights_or_nothing(lights)
     scene_lights === nothing ||
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, scene_lights,

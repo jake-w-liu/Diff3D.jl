@@ -60,6 +60,15 @@ deterministic_array(dims::Int...) =
 deterministic_bytes(n::Int) =
     UInt8[mod(53 * i + 19, 256) for i in 1:n]
 
+struct TestDirectionalLikeLight <: AbstractLight
+    color::Color3{Float64}
+    intensity::Float64
+    direction::Vec3{Float64}
+end
+
+Diff3D.light_contribution(light::TestDirectionalLikeLight, position::Vec3) =
+    (light.color, light.intensity, light.direction)
+
 const TEST_ADAM7_PASSES = (
     (0, 0, 8, 8),
     (4, 0, 8, 8),
@@ -2525,6 +2534,31 @@ end
                                                      public_light_material,
                                                      public_abstract_lights,
                                                      public_light_camera)
+        custom_public_light = TestDirectionalLikeLight(Color3(1.0, 1.0, 1.0),
+                                                       1.0, Vec3(0.0, 0.0, 1.0))
+        custom_public_abstract = AbstractLight[custom_public_light]
+        custom_public_concrete = TestDirectionalLikeLight[custom_public_light]
+        custom_abstract_colors = similar(public_light_scene_colors)
+        custom_concrete_colors = similar(public_light_scene_colors)
+        Diff3D.shade_mesh_faces!(custom_abstract_colors, public_light_geo,
+                                 public_light_world, public_light_material,
+                                 custom_public_abstract, public_light_camera)
+        Diff3D.shade_mesh_faces!(custom_concrete_colors, public_light_geo,
+                                 public_light_world, public_light_material,
+                                 custom_public_concrete, public_light_camera)
+        @test custom_abstract_colors == custom_concrete_colors
+        @test_opt_alloc 2048 Diff3D.shade_mesh_faces!(custom_abstract_colors,
+                                                      public_light_geo,
+                                                      public_light_world,
+                                                      public_light_material,
+                                                      custom_public_abstract,
+                                                      public_light_camera)
+        empty_mapped_material = MeshLambertMaterial(
+            map=Texture(ones(Float64, 1, 1, 3); colorspace=:linear))
+        empty_mapped_lights = AbstractLight[]
+        Diff3D.shade_mesh_faces!(custom_abstract_colors, public_light_geo,
+                                 public_light_world, empty_mapped_material,
+                                 empty_mapped_lights, public_light_camera)
 
         mapped_vc_geo = BoxGeometry(width_segments=10, height_segments=10,
                                     depth_segments=10)
@@ -7267,6 +7301,15 @@ end
     end
 
     @testset "Supersample anti-aliasing" begin
+        img = reshape(Float64.(1:48), 4, 4, 3)
+        ds = downsample(img, 2)
+        @test size(ds) == (2, 2, 3)
+        @test ds[1, 1, 1] == (img[1, 1, 1] + img[2, 1, 1] +
+                              img[1, 2, 1] + img[2, 2, 1]) / 4
+        out = fill(NaN, 2, 2, 3)
+        @test Diff3D.downsample!(out, img, 2) === out
+        @test out == ds
+
         scene = Scene(background=Color3(0.0,0,0))
         add!(scene, Mesh(SphereGeometry(radius=1.0), MeshBasicMaterial(color=Color3(1.0,1,1))))
         cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0); cam.position = Vec3(0.0,0,4.0)
