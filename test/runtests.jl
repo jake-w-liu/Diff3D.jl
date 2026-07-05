@@ -30,6 +30,17 @@ end
 # enforce them only when Julia is running with optimizer passes enabled.
 const DIFF3D_ALLOC_ASSERTIONS_ENABLED = Base.JLOptions().opt_level > 0
 
+function _diff3d_start_ci_test_heartbeat()
+    get(ENV, "CI", "") == "true" || return nothing
+    return @async while true
+        sleep(60)
+        println(stderr, "DIFF3D_TEST_HEARTBEAT ", round(Int, time()))
+        flush(stderr)
+    end
+end
+
+const DIFF3D_CI_TEST_HEARTBEAT = _diff3d_start_ci_test_heartbeat()
+
 macro test_opt_alloc(limit, expr)
     quote
         @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
