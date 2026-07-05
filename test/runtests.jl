@@ -13398,6 +13398,19 @@ end
             rough_zero_data = zeros(Float64, 2, 2, 3)
             rough_zero_data[:, :, 2] .= 0.0
             rough_zero_map = Texture(rough_zero_data; filter=:nearest, colorspace=:linear)
+            m_std_mapped = MeshStandardMaterial(color=Color3(1.0,1.0,1.0),
+                                                metalness=1.0, roughness=1.0,
+                                                roughness_map=rough_zero_map,
+                                                envmap=env)
+            m_std_expected = MeshStandardMaterial(color=Color3(1.0,1.0,1.0),
+                                                  metalness=1.0, roughness=0.0,
+                                                  envmap=env)
+            cols_std_mapped = shade_mesh_faces(geo, world, m_std_mapped, lights, campos)
+            cols_std_expected = shade_mesh_faces(geo, world, m_std_expected, lights, campos)
+            @test all(i -> cols_std_mapped[i].r ≈ cols_std_expected[i].r &&
+                           cols_std_mapped[i].g ≈ cols_std_expected[i].g &&
+                           cols_std_mapped[i].b ≈ cols_std_expected[i].b,
+                      eachindex(cols_std_mapped))
             mp_mapped = MeshPhysicalMaterial(color=Color3(1.0,1.0,1.0),
                                              metalness=1.0, roughness=1.0,
                                              roughness_map=rough_zero_map,
