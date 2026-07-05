@@ -90,6 +90,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     _soft_positive_finite(γ, "SoftRasterizerConfig gamma")
     _soft_positive_finite(eps, "SoftRasterizerConfig eps")
     _soft_finite_color(bg, "SoftRasterizerConfig bg_color")
+    n_faces == 0 && return _soft_background_image(T, H, W, bg)
     n_vertices = length(verts)
     for face in faces
         i1, i2, i3 = face
@@ -131,6 +132,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                 cols[fi], σ, eps, W, H)
         end
     end
+    n_screen_tris == 0 && return _soft_background_image(T, H, W, bg)
 
     if n_screen_tris <= 8
         # Tiny face sets need no spatial index: scanning directly avoids the CSR
@@ -333,6 +335,16 @@ function soft_render(vertices::Vector{Vec3{Tv}},
         end
     end
 
+    return image
+end
+
+function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T}) where {T}
+    image = Array{T}(undef, H, W, 3)
+    @inbounds for j in 1:W, i in 1:H
+        image[i, j, 1] = bg.r
+        image[i, j, 2] = bg.g
+        image[i, j, 3] = bg.b
+    end
     return image
 end
 

@@ -2658,6 +2658,29 @@ end
         padded_img = soft_render(verts, padded_faces, padded_colors, vp, 16, 16, config)
         @test maximum(abs.(img .- padded_img)) < 1e-12
 
+        empty_soft_cfg = SoftRasterizerConfig(sigma=0.5, gamma=0.1,
+                                              bg_color=Color3(0.2, 0.3, 0.4))
+        empty_soft_img = soft_render(Vec3{Float64}[], NTuple{3,Int}[],
+                                     Color3{Float64}[], Mat4{Float64}(),
+                                     32, 32, empty_soft_cfg)
+        @test all(==(0.2), @view empty_soft_img[:, :, 1])
+        @test all(==(0.3), @view empty_soft_img[:, :, 2])
+        @test all(==(0.4), @view empty_soft_img[:, :, 3])
+        @test_opt_alloc 25100 soft_render(Vec3{Float64}[], NTuple{3,Int}[],
+                                          Color3{Float64}[], Mat4{Float64}(),
+                                          32, 32, empty_soft_cfg)
+
+        behind_soft_verts = [Vec3(-0.5, -0.5, 1.0),
+                             Vec3(0.5, -0.5, 1.0),
+                             Vec3(0.0, 0.5, 1.0)]
+        behind_soft_img = soft_render(behind_soft_verts, [(1, 2, 3)],
+                                      [Color3(1.0, 0.0, 0.0)],
+                                      mat4_perspective(π/4, 1.0, 0.1, 100.0),
+                                      32, 32, empty_soft_cfg)
+        @test all(==(0.2), @view behind_soft_img[:, :, 1])
+        @test all(==(0.3), @view behind_soft_img[:, :, 2])
+        @test all(==(0.4), @view behind_soft_img[:, :, 3])
+
         near_cross_verts = [Vec3(-0.6, -0.6, -0.05),
                             Vec3(0.6, -0.6, -1.0),
                             Vec3(0.0, 0.6, -1.0)]
