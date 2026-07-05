@@ -2501,6 +2501,30 @@ end
         lb = Vec3(0.0, 0.0, -1.0)
         cb = shade_lambert(n, lb, lc, 1.0, sc)
         @test cb.r ≈ 0.0  # no illumination
+
+        public_light_geo = BoxGeometry(width_segments=10, height_segments=10,
+                                       depth_segments=10)
+        public_light_scene_colors = Vector{Color3{Float64}}(undef,
+                                                            public_light_geo.n_faces)
+        public_light_abstract_colors = similar(public_light_scene_colors)
+        public_scene_lights = Diff3D.SceneLight[DirectionalLight()]
+        public_abstract_lights = AbstractLight[DirectionalLight()]
+        public_light_world = Mat4()
+        public_light_material = MeshLambertMaterial()
+        public_light_camera = Vec3(0.0, 0.0, 5.0)
+        Diff3D.shade_mesh_faces!(public_light_scene_colors, public_light_geo,
+                                 public_light_world, public_light_material,
+                                 public_scene_lights, public_light_camera)
+        Diff3D.shade_mesh_faces!(public_light_abstract_colors, public_light_geo,
+                                 public_light_world, public_light_material,
+                                 public_abstract_lights, public_light_camera)
+        @test public_light_abstract_colors == public_light_scene_colors
+        @test_opt_alloc 512 Diff3D.shade_mesh_faces!(public_light_abstract_colors,
+                                                     public_light_geo,
+                                                     public_light_world,
+                                                     public_light_material,
+                                                     public_abstract_lights,
+                                                     public_light_camera)
     end
 
     @testset "Shading — Phong" begin

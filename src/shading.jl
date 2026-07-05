@@ -767,9 +767,39 @@ end
 
 # In-place variant: writes one colour per face into `colors` (resized to fit),
 # so a caller can reuse the buffer across frames/meshes (bounded allocation).
+function _builtin_scene_lights_or_nothing(lights::Vector{AbstractLight})
+    scene_lights = Vector{SceneLight}(undef, length(lights))
+    @inbounds for i in eachindex(lights)
+        light = lights[i]
+        light isa SceneLight || return nothing
+        scene_lights[i] = light
+    end
+    return scene_lights
+end
+
+function shade_mesh_faces!(colors::Vector{Color3{Float64}},
+                           geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
+                           lights::Vector{AbstractLight}, cam_pos::Vec3; shadow_fn=nothing)
+    scene_lights = _builtin_scene_lights_or_nothing(lights)
+    scene_lights === nothing ||
+        return _shade_mesh_faces_impl!(colors, geo, world_mat, material, scene_lights,
+                                       cam_pos; shadow_fn=shadow_fn)
+    return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
+                                   shadow_fn=shadow_fn)
+end
+
 function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                            geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
                            lights::Vector{<:AbstractLight}, cam_pos::Vec3; shadow_fn=nothing)
+    return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
+                                   shadow_fn=shadow_fn)
+end
+
+function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
+                                 geo::BufferGeometry, world_mat::Mat4,
+                                 material::AbstractMaterial,
+                                 lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                                 shadow_fn=nothing)
     n_faces = geo.n_faces
     length(colors) == n_faces || resize!(colors, n_faces)
 
