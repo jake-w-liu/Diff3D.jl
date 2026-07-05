@@ -13395,6 +13395,22 @@ end
             mp = MeshPhysicalMaterial(color=Color3(1.0,1.0,1.0), metalness=0.0, roughness=0.2, envmap=env)
             cols_p = shade_mesh_faces(geo, world, mp, lights, campos)
             @test all(c -> isfinite(c.r) && isfinite(c.g) && isfinite(c.b), cols_p)
+            rough_zero_data = zeros(Float64, 2, 2, 3)
+            rough_zero_data[:, :, 2] .= 0.0
+            rough_zero_map = Texture(rough_zero_data; filter=:nearest, colorspace=:linear)
+            mp_mapped = MeshPhysicalMaterial(color=Color3(1.0,1.0,1.0),
+                                             metalness=1.0, roughness=1.0,
+                                             roughness_map=rough_zero_map,
+                                             envmap=env)
+            mp_expected = MeshPhysicalMaterial(color=Color3(1.0,1.0,1.0),
+                                               metalness=1.0, roughness=0.0,
+                                               envmap=env)
+            cols_pmapped = shade_mesh_faces(geo, world, mp_mapped, lights, campos)
+            cols_pexpected = shade_mesh_faces(geo, world, mp_expected, lights, campos)
+            @test all(i -> cols_pmapped[i].r ≈ cols_pexpected[i].r &&
+                           cols_pmapped[i].g ≈ cols_pexpected[i].g &&
+                           cols_pmapped[i].b ≈ cols_pexpected[i].b,
+                      eachindex(cols_pmapped))
             lod_data = zeros(Float64, 4, 4, 3)
             lod_data[3, 3, :] .= 1.0
             lod_faces = ntuple(_ -> Texture(copy(lod_data); filter=:nearest, colorspace=:linear), 6)
