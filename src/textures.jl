@@ -260,7 +260,6 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
 end
 
 function sample_texture(tex::Texture, u, v)
-    _checked_texture_data_size(tex, "sample_texture")
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, tex.filter, tu, tv,
                                 "sample_texture")
