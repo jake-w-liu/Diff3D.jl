@@ -998,6 +998,13 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                                                    env_color, standard_metalness,
                                                    standard_roughness) *
                                 material.env_map_intensity
+            elseif mapped_kind == 3
+                env_color = use_vertex_colors ? _modulate(material.color, vertex_color) :
+                            material.color
+                color = color + _envmap_reflection(env_map, face_n, view_dir,
+                                                   env_color, physical_terms.metalness,
+                                                   _physical_mapped_roughness(physical_terms)) *
+                                material.env_map_intensity
             else
                 color = color + _envmap_reflection(env_map, face_n, view_dir,
                                                    shade_mat.color, shade_mat.metalness, shade_mat.roughness) *
