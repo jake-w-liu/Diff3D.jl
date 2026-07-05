@@ -3694,10 +3694,13 @@ end
         @test occursin("\"morphTargets\":[[0,0,0.25,0,0,0.25]]", morph_line_drawable)
         @test occursin("\"morphWeights\":[0.5]", morph_line_drawable)
         web_morph_num_buf = Diff3D._web_num_buffer()
+        web_morph_ids_alloc = [1, 2, 1]
         Diff3D._web_morph_position_target_count(morph_geo)
         Diff3D._web_morph_vec3_target_count(morph_dir_only_geo, Val(:normal))
         Diff3D._web_write_morph_targets_json(devnull, morph_dir_only, morph_dir_only_geo,
                                              web_morph_num_buf)
+        Diff3D._web_write_morph_target_ids_json(devnull, web_morph_ids_alloc, 3,
+                                                web_morph_num_buf)
         @test_opt_alloc 64 Diff3D._web_morph_position_target_count(morph_geo)
         @test_opt_alloc 64 Diff3D._web_morph_vec3_target_count(morph_dir_only_geo,
                                                                Val(:normal))
@@ -3705,6 +3708,9 @@ end
                                                                   morph_dir_only,
                                                                   morph_dir_only_geo,
                                                                   web_morph_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_morph_target_ids_json(devnull,
+                                                                   web_morph_ids_alloc, 3,
+                                                                   web_morph_num_buf)
         skin_drawable = only(filter(d -> occursin("\"name\":\"export_skin\"", d),
                                     Diff3D._web_collect_drawables(scene)))
         @test occursin("\"skin\":{", skin_drawable)

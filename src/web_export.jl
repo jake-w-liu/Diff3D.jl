@@ -1848,35 +1848,52 @@ function _web_visibility_states_json(ids::AbstractVector{Int}, values::AbstractV
     return String(take!(io))
 end
 
-function _web_write_morph_target_ids_json(io::IO, ids::AbstractVector{Int}, own_id::Int)
+function _web_write_morph_target_ids_json(io::IO, ids::AbstractVector{Int}, own_id::Int,
+                                          num_buf::Vector{UInt8})
     write(io, '[')
     first = true
     own_seen = false
-    for (i, id) in pairs(ids)
-        duplicate = false
-        for (j, prev_id) in pairs(ids)
-            j == i && break
-            if prev_id == id
-                duplicate = true
-                break
+    if length(ids) <= 32
+        for (i, id) in pairs(ids)
+            duplicate = false
+            for (j, prev_id) in pairs(ids)
+                j == i && break
+                if prev_id == id
+                    duplicate = true
+                    break
+                end
             end
+            duplicate && continue
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, id, num_buf)
+            own_seen |= id == own_id
         end
-        duplicate && continue
-        first ? (first = false) : write(io, ',')
-        _js_write_num(io, id)
-        own_seen |= id == own_id
+    else
+        seen = Set{Int}()
+        sizehint!(seen, length(ids) + 1)
+        for id in ids
+            id in seen && continue
+            push!(seen, id)
+            first ? (first = false) : write(io, ',')
+            _js_write_num(io, id, num_buf)
+            own_seen |= id == own_id
+        end
     end
     if !own_seen
         first || write(io, ',')
-        _js_write_num(io, own_id)
+        _js_write_num(io, own_id, num_buf)
     end
     write(io, ']')
     return nothing
 end
 
+function _web_write_morph_target_ids_json(io::IO, ids::AbstractVector{Int}, own_id::Int)
+    return _web_write_morph_target_ids_json(io, ids, own_id, _web_num_buffer())
+end
+
 function _web_morph_target_ids_json(ids::AbstractVector{Int}, own_id::Int)
     io = IOBuffer()
-    _web_write_morph_target_ids_json(io, ids, own_id)
+    _web_write_morph_target_ids_json(io, ids, own_id, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -2287,7 +2304,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"glossinessPacked\":")
     write(io, _web_material_glossiness_packed(mat) ? "true" : "false")
     write(io, ",\"morphTargetIds\":")
-    _web_write_morph_target_ids_json(io, morph_target_ids, transform_obj.id)
+    _web_write_morph_target_ids_json(io, morph_target_ids, transform_obj.id, num_buf)
     write(io, ',')
     _web_write_morph_targets_json(io, obj, geo, num_buf)
     write(io, ',')
