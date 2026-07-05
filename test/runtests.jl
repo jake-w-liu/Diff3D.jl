@@ -2658,6 +2658,25 @@ end
         padded_img = soft_render(verts, padded_faces, padded_colors, vp, 16, 16, config)
         @test maximum(abs.(img .- padded_img)) < 1e-12
 
+        near_cross_verts = [Vec3(-0.6, -0.6, -0.05),
+                            Vec3(0.6, -0.6, -1.0),
+                            Vec3(0.0, 0.6, -1.0)]
+        near_cross_img = soft_render(near_cross_verts, [(1, 2, 3)],
+                                     [Color3(1.0, 1.0, 1.0)],
+                                     mat4_perspective(π/4, 1.0, 0.1, 100.0),
+                                     32, 32,
+                                     SoftRasterizerConfig(sigma=0.5, gamma=0.1))
+        @test sum(near_cross_img) > 1.0
+
+        soft_tail_verts = [Vec3(-1.0, 0.0, 0.0),
+                           Vec3(-0.6, 0.0, 0.0),
+                           Vec3(-1.0, 0.4, 0.0)]
+        soft_tail_img = soft_render(soft_tail_verts, [(1, 2, 3)],
+                                    [Color3(1.0, 1.0, 1.0)],
+                                    Mat4{Float64}(), 256, 256,
+                                    SoftRasterizerConfig(sigma=100.0, gamma=1.0))
+        @test soft_tail_img[50, 200, 1] > 0.01
+
         one_face_verts = [verts[1], verts[2], verts[3]]
         one_face_faces = [(1, 2, 3)]
         one_face_colors = [colors[1]]
@@ -2791,6 +2810,14 @@ end
                                                            n_iters=-1, verbose=false)
         @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
                                                        n_iters=-1, verbose=false)
+        @test_throws ArgumentError inverse_render_optimize(p0, target, linear_image, loss_mse;
+                                                           lr=NaN, n_iters=1, verbose=false)
+        @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
+                                                       β1=1.0, n_iters=1, verbose=false)
+        @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
+                                                       β2=NaN, n_iters=1, verbose=false)
+        @test_throws ArgumentError inverse_render_adam(p0, target, linear_image, loss_mse;
+                                                       ε=0.0, n_iters=1, verbose=false)
         gd_calls = Ref(0)
         gd_counting_image(p) = (gd_calls[] += 1; linear_image(p))
         inverse_render_optimize(p0, target, gd_counting_image, loss_mse;
@@ -10890,6 +10917,7 @@ end
         @test length(g) == 9
         @test all(isfinite, g)
         @test count(!=(0.0), g) >= 6                    # most components respond
+        @test_throws ArgumentError rf([p0; 123.0])
         # AD matches a central finite difference on the first x-coordinate.
         δ = 1e-4
         pp = copy(p0); pp[1] += δ; pm = copy(p0); pm[1] -= δ
@@ -10914,6 +10942,7 @@ end
         verts = [Vec3(-0.5,-0.5,0.0), Vec3(0.5,-0.5,0.0), Vec3(0.0,0.5,0.0)]
         vp = mat4_perspective(π/4,1.0,0.1,100.0) * mat4_look_at(Vec3(0.0,0,3.0), Vec3(0.0,0,0), Vec3(0.0,1,0))
         crf = color_render_fn(verts, faces, vp, 16, 16; sigma=0.5, gamma=1.0)
+        @test_throws ArgumentError crf([1.0, 0.0, 0.0, 0.5])
         target = crf([1.0, 0.0, 0.0])                   # red
         copt, chist = optimize_face_colors([0.0,0.0,1.0], verts, faces, vp, target;
                                            W=16, H=16, sigma=0.5, gamma=1.0, lr=0.1, n_iters=40, verbose=false)
@@ -16481,6 +16510,7 @@ end
         @testset "losses" begin
             # loss_ssim: image smaller than the SSIM window must error, not report a perfect match.
             @test_throws ArgumentError loss_ssim(zeros(6, 6, 3), ones(6, 6, 3))
+            @test_throws ArgumentError loss_ssim(zeros(6, 6, 3), ones(6, 6, 3); window_size=3.0)
             # Valid sizes are unaffected: identical images -> zero loss, dissimilar -> large loss.
             img = reshape(collect(range(0.0, 1.0; length=9*9*3)), 9, 9, 3)
             @test loss_ssim(img, img) ≈ 0.0 atol=1e-12
@@ -16488,6 +16518,8 @@ end
 
             # loss_silhouette_iou: two identical empty (all-black) silhouettes are a perfect match.
             @test loss_silhouette_iou(zeros(8, 8, 3), zeros(8, 8, 3)) < 0.05
+            @test_throws ArgumentError loss_silhouette_iou(zeros(4, 4, 3), zeros(4, 4, 3);
+                                                           threshold=-1.0)
             # Resolution-independent: still ~0 loss for a larger blank pair.
             @test loss_silhouette_iou(zeros(64, 64, 3), zeros(64, 64, 3)) < 0.05
             # Calibration preserved: disjoint silhouettes -> ~1 loss, identical foreground -> ~0.

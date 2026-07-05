@@ -71,6 +71,30 @@ function _forwarddiff_value_and_gradient_chunk!(grad::AbstractVector{Float64},
     return value
 end
 
+function _validate_optimizer_common(lr, n_iters, label::String)
+    n_iters isa Bool && throw(ArgumentError("$label n_iters must be a non-negative integer"))
+    n_iters isa Integer ||
+        throw(ArgumentError("$label n_iters must be a non-negative integer"))
+    n_iters >= 0 ||
+        throw(ArgumentError("$label n_iters must be a non-negative integer"))
+    lr isa Bool && throw(ArgumentError("$label lr must be finite and non-negative"))
+    (isfinite(lr) && lr >= 0) ||
+        throw(ArgumentError("$label lr must be finite and non-negative"))
+    return nothing
+end
+
+function _validate_adam_hyperparams(β1, β2, ε)
+    for (name, value) in ((:β1, β1), (:β2, β2))
+        value isa Bool && throw(ArgumentError("inverse_render_adam $name must satisfy 0 <= $name < 1"))
+        (isfinite(value) && 0 <= value < 1) ||
+            throw(ArgumentError("inverse_render_adam $name must satisfy 0 <= $name < 1"))
+    end
+    ε isa Bool && throw(ArgumentError("inverse_render_adam ε must be finite and positive"))
+    (isfinite(ε) && ε > 0) ||
+        throw(ArgumentError("inverse_render_adam ε must be finite and positive"))
+    return nothing
+end
+
 """
 Gradient descent optimizer for inverse rendering.
 Optimizes `params` to minimize the loss between rendered image and target.
@@ -93,7 +117,7 @@ function inverse_render_optimize(initial_params::Vector{Float64},
                                  lr=0.01,
                                  n_iters=100,
                                  verbose=true)
-    n_iters >= 0 || throw(ArgumentError("n_iters must be non-negative"))
+    _validate_optimizer_common(lr, n_iters, "inverse_render_optimize")
     params = copy(initial_params)
     loss_history = Vector{Float64}(undef, n_iters)
 
@@ -135,7 +159,8 @@ function inverse_render_adam(initial_params::Vector{Float64},
                             ε=1e-8,
                             n_iters=100,
                             verbose=true)
-    n_iters >= 0 || throw(ArgumentError("n_iters must be non-negative"))
+    _validate_optimizer_common(lr, n_iters, "inverse_render_adam")
+    _validate_adam_hyperparams(β1, β2, ε)
     params = copy(initial_params)
     n = length(params)
     m = zeros(n)  # first moment

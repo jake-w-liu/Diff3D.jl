@@ -97,64 +97,42 @@ function soft_render(vertices::Vector{Vec3{Tv}},
             throw(ArgumentError("soft_render face indices must reference vertices"))
     end
 
-    # Project all vertices to screen space
-    screen_verts = Vector{Vec3{T}}(undef, length(verts))
+    # Project all vertices to homogeneous clip space. Faces are clipped against
+    # the clip-space near plane before perspective division, matching the hard
+    # rasterizer's near clipping for triangles crossing the camera plane.
+    clip_verts = Vector{Vec4{T}}(undef, length(verts))
     for (vi, v) in enumerate(verts)
-        clip = mat4_transform_vec4(vp, Vec4(v.x, v.y, v.z, one(T)))
-        if clip.w > eps
-            ndc = Vec3(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w)
-            sx = (ndc.x + 1) * T(0.5) * W
-            sy = (1 - ndc.y) * T(0.5) * H
-            screen_verts[vi] = Vec3(sx, sy, ndc.z)
-        else
-            screen_verts[vi] = Vec3(-T(1000), -T(1000), T(1000))
-        end
+        clip_verts[vi] = mat4_transform_vec4(vp, Vec4(v.x, v.y, v.z, one(T)))
     end
 
     # Precompute screen-space triangles as NamedTuples
     screen_tris = Vector{NamedTuple{(:s1,:s2,:s3,:color,:min_x,:max_x,:min_y,:max_y,:area,:valid),
-                                     Tuple{Vec3{T},Vec3{T},Vec3{T},Color3{T},Int,Int,Int,Int,T,Bool}}}(undef, n_faces)
+                                     Tuple{Vec3{T},Vec3{T},Vec3{T},Color3{T},Int,Int,Int,Int,T,Bool}}}(undef, 2n_faces)
+    n_screen_tris = 0
+    clip_poly = Vector{Vec4{T}}(undef, 3)
+    clipped_poly = Vector{Vec4{T}}(undef, 4)
+    screen_poly = Vector{Vec3{T}}(undef, 4)
 
     for fi in 1:n_faces
         i1, i2, i3 = faces[fi]
-        s1 = screen_verts[i1]
-        s2 = screen_verts[i2]
-        s3 = screen_verts[i3]
-        area = edge_function(s1.x, s1.y, s2.x, s2.y, s3.x, s3.y)
-
-        # Extended bounding box for soft edges. The soft-coverage sigmoid
-        # sigmoid(d/σ) extends ~3σ pixels OUTSIDE the triangle, so the
-        # influence band GROWS with σ. Grow the margin with σ (floor ~1px,
-        # cap 50px) so larger σ is not truncated at the bbox edge.
-        margin = clamp(3.0 * σ, 1.0, 50.0)
-        # Clamp the float extent into [1,W]/[1,H] before the Int conversion (and
-        # reject non-finite projected coords) so a near-camera vertex with a huge
-        # finite screen coordinate cannot overflow floor/ceil(Int, …) — matching
-        # the hard rasterizer. Reachable in inverse rendering when an optimized
-        # vertex transiently slides through the camera.
-        # isfinite works directly on Float64, ForwardDiff.Dual, and ADVar; do NOT
-        # wrap in Float64() — Float64(::ForwardDiff.Dual) is undefined and would
-        # crash the differentiable/inverse-rendering gradient path (its core use).
-        finite = isfinite(s1.x) && isfinite(s1.y) &&
-                 isfinite(s2.x) && isfinite(s2.y) &&
-                 isfinite(s3.x) && isfinite(s3.y)
-        fW = Float64(W); fH = Float64(H)
-        if finite
-            bmin_x = max(floor(Int, clamp(min(s1.x, s2.x, s3.x) - margin, 1.0, fW)), 1)
-            bmax_x = min(ceil(Int,  clamp(max(s1.x, s2.x, s3.x) + margin, 1.0, fW)), W)
-            bmin_y = max(floor(Int, clamp(min(s1.y, s2.y, s3.y) - margin, 1.0, fH)), 1)
-            bmax_y = min(ceil(Int,  clamp(max(s1.y, s2.y, s3.y) + margin, 1.0, fH)), H)
-        else
-            bmin_x = 1; bmax_x = 0; bmin_y = 1; bmax_y = 0   # empty box -> valid=false
+        clip_poly[1] = clip_verts[i1]
+        clip_poly[2] = clip_verts[i2]
+        clip_poly[3] = clip_verts[i3]
+        n_clipped = _soft_clip_near!(clipped_poly, clip_poly, 3, eps)
+        n_clipped < 3 && continue
+        @inbounds for k in 1:n_clipped
+            screen_poly[k] = _soft_project_clip_to_screen(clipped_poly[k], T(W), T(H))
         end
 
-        valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
-        screen_tris[fi] = (s1=s1, s2=s2, s3=s3, color=cols[fi],
-                           min_x=bmin_x, max_x=bmax_x, min_y=bmin_y, max_y=bmax_y,
-                           area=area, valid=valid)
+        @inbounds for k in 2:(n_clipped - 1)
+            n_screen_tris += 1
+            screen_tris[n_screen_tris] = _soft_screen_triangle(
+                screen_poly[1], screen_poly[k], screen_poly[k + 1],
+                cols[fi], σ, eps, W, H)
+        end
     end
 
-    if n_faces <= 8
+    if n_screen_tris <= 8
         # Tiny face sets need no spatial index: scanning directly avoids the CSR
         # tile buffers that dominate small inverse-rendering problems.
         image = Array{T}(undef, H, W, 3)
@@ -165,7 +143,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
 
                 m = -one(T) / γ
                 any_face = false
-                for fi in 1:n_faces
+                for fi in 1:n_screen_tris
                     tri = screen_tris[fi]
                     tri.valid || continue
                     !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
@@ -182,7 +160,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                 color_g = zero(T)
                 color_b = zero(T)
                 if any_face
-                    for fi in 1:n_faces
+                    for fi in 1:n_screen_tris
                         tri = screen_tris[fi]
                         tri.valid || continue
                         !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
@@ -243,7 +221,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     # Bucket faces into tiles. Two-pass CSR build keeps allocation O(faces +
     # tile-overlap entries) and gives contiguous, index-ordered per-tile lists.
     tile_counts = zeros(Int, n_tiles)
-    for fi in 1:n_faces
+    for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
         tx0 = tile_x_of(tri.min_x); tx1 = tile_x_of(tri.max_x)
@@ -259,7 +237,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     end
     tile_faces = Vector{Int}(undef, tile_offsets[n_tiles + 1] - 1)
     tile_cursor = copy(tile_offsets)
-    for fi in 1:n_faces
+    for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
         tx0 = tile_x_of(tri.min_x); tx1 = tile_x_of(tri.max_x)
@@ -356,6 +334,80 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     end
 
     return image
+end
+
+@inline _soft_near_value(v::Vec4, eps) = v.z + v.w - eps
+
+@inline function _soft_lerp_clip(a::Vec4, b::Vec4, t)
+    Vec4(a.x + t * (b.x - a.x),
+         a.y + t * (b.y - a.y),
+         a.z + t * (b.z - a.z),
+         a.w + t * (b.w - a.w))
+end
+
+function _soft_clip_near!(out::Vector{Vec4{T}}, poly::Vector{Vec4{T}},
+                          n::Int, eps) where {T}
+    out_n = 0
+    prev = poly[n]
+    prev_d = _soft_near_value(prev, eps)
+    prev_in = prev_d >= zero(prev_d)
+    @inbounds for i in 1:n
+        curr = poly[i]
+        curr_d = _soft_near_value(curr, eps)
+        curr_in = curr_d >= zero(curr_d)
+        if curr_in != prev_in
+            t = prev_d / (prev_d - curr_d)
+            out_n += 1
+            out[out_n] = _soft_lerp_clip(prev, curr, t)
+        end
+        if curr_in
+            out_n += 1
+            out[out_n] = curr
+        end
+        prev = curr
+        prev_d = curr_d
+        prev_in = curr_in
+    end
+    return out_n
+end
+
+@inline function _soft_project_clip_to_screen(clip::Vec4{T}, W::T, H::T) where {T}
+    invw = one(T) / clip.w
+    ndcx = clip.x * invw
+    ndcy = clip.y * invw
+    ndcz = clip.z * invw
+    Vec3((ndcx + one(T)) * T(0.5) * W,
+         (one(T) - ndcy) * T(0.5) * H,
+         ndcz)
+end
+
+function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
+                               color::Color3{T}, σ, eps, W::Int, H::Int) where {T}
+    area = edge_function(s1.x, s1.y, s2.x, s2.y, s3.x, s3.y)
+
+    # The sigmoid tail extends with sigma. Do not impose a fixed pixel cap here:
+    # very soft silhouettes are expected to influence distant pixels.
+    margin = max(T(3.0) * σ, one(T))
+    finite = isfinite(s1.x) && isfinite(s1.y) &&
+             isfinite(s2.x) && isfinite(s2.y) &&
+             isfinite(s3.x) && isfinite(s3.y)
+    fW = Float64(W)
+    fH = Float64(H)
+    if finite
+        bmin_x = max(floor(Int, clamp(min(s1.x, s2.x, s3.x) - margin, 1.0, fW)), 1)
+        bmax_x = min(ceil(Int,  clamp(max(s1.x, s2.x, s3.x) + margin, 1.0, fW)), W)
+        bmin_y = max(floor(Int, clamp(min(s1.y, s2.y, s3.y) - margin, 1.0, fH)), 1)
+        bmax_y = min(ceil(Int,  clamp(max(s1.y, s2.y, s3.y) + margin, 1.0, fH)), H)
+    else
+        bmin_x = 1
+        bmax_x = 0
+        bmin_y = 1
+        bmax_y = 0
+    end
+    valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
+    return (s1=s1, s2=s2, s3=s3, color=color,
+            min_x=bmin_x, max_x=bmax_x, min_y=bmin_y, max_y=bmax_y,
+            area=area, valid=valid)
 end
 
 """

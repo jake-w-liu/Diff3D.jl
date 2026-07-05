@@ -16,6 +16,24 @@ function _checked_loss_image_size(image::AbstractArray, target::AbstractArray, l
     return H, W, C
 end
 
+function _checked_ssim_window_size(window_size)
+    window_size isa Bool &&
+        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
+    window_size isa Integer ||
+        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
+    window_size >= 2 ||
+        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
+    return window_size
+end
+
+function _checked_silhouette_threshold(threshold)
+    threshold isa Bool &&
+        throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
+    (isfinite(threshold) && 0 <= threshold <= 1) ||
+        throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
+    return threshold
+end
+
 function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_mse")
     total = zero(promote_type(T, S))
@@ -59,8 +77,7 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
     H, W, C = _checked_loss_image_size(image, target, "loss_ssim")
     # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
     # divides the (n-1) Bessel correction by zero, silently returning NaN.
-    window_size >= 2 ||
-        throw(ArgumentError("loss_ssim: window_size must be >= 2 (got $window_size)"))
+    window_size = _checked_ssim_window_size(window_size)
     hw = window_size ÷ 2
     if min(H, W) < 2*hw + 1
         throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))
@@ -134,6 +151,7 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
     R = promote_type(T, S)
     H, W, _ = _checked_loss_image_size(image, target, "loss_silhouette_iou")
+    threshold = _checked_silhouette_threshold(threshold)
 
     # Convert to grayscale silhouettes via soft thresholding
     intersection = zero(R)
