@@ -1937,7 +1937,7 @@ function _blur_separable(img::AbstractArray, radius::Int)
     k = _gaussian_kernel(r)
     tmp = Array{Float64}(undef, H, W, 3)
     out = Array{Float64}(undef, H, W, 3)
-    @inbounds for c in 1:3, i in 1:H, j in 1:W           # horizontal
+    @inbounds for c in 1:3, j in 1:W, i in 1:H           # horizontal
         acc = 0.0
         for t in -r:r
             jj = clamp(j + t, 1, W)
@@ -1945,7 +1945,7 @@ function _blur_separable(img::AbstractArray, radius::Int)
         end
         tmp[i, j, c] = acc
     end
-    @inbounds for c in 1:3, i in 1:H, j in 1:W           # vertical
+    @inbounds for c in 1:3, j in 1:W, i in 1:H           # vertical
         acc = 0.0
         for t in -r:r
             ii = clamp(i + t, 1, H)
@@ -1969,18 +1969,42 @@ function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6, radius::Int=2)
     thr = Float64(threshold); inten = Float64(intensity); rad = max(Int(radius), 0)
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "bloom_pass")
+        if rad == 0
+            out = Array{Float64}(undef, H, W, 3)
+            @inbounds for j in 1:W, i in 1:H
+                scale = _luma(img, i, j) > thr ? inten : 0.0
+                out[i,j,1] = img[i,j,1] + scale * img[i,j,1]
+                out[i,j,2] = img[i,j,2] + scale * img[i,j,2]
+                out[i,j,3] = img[i,j,3] + scale * img[i,j,3]
+            end
+            return out
+        end
         bright = Array{Float64}(undef, H, W, 3)        # bright-pass extraction
-        @inbounds for i in 1:H, j in 1:W
+        @inbounds for j in 1:W, i in 1:H
             if _luma(img, i, j) > thr
                 bright[i,j,1] = img[i,j,1]; bright[i,j,2] = img[i,j,2]; bright[i,j,3] = img[i,j,3]
             else
                 bright[i,j,1] = 0.0; bright[i,j,2] = 0.0; bright[i,j,3] = 0.0
             end
         end
-        glow = _blur_separable(bright, rad)
+        k = _gaussian_kernel(rad)
+        tmp = Array{Float64}(undef, H, W, 3)
         out = Array{Float64}(undef, H, W, 3)
-        @inbounds for idx in eachindex(out)
-            out[idx] = img[idx] + inten * glow[idx]
+        @inbounds for c in 1:3, j in 1:W, i in 1:H
+            acc = 0.0
+            for t in -rad:rad
+                jj = clamp(j + t, 1, W)
+                acc += k[t + rad + 1] * bright[i, jj, c]
+            end
+            tmp[i, j, c] = acc
+        end
+        @inbounds for c in 1:3, j in 1:W, i in 1:H
+            acc = 0.0
+            for t in -rad:rad
+                ii = clamp(i + t, 1, H)
+                acc += k[t + rad + 1] * tmp[ii, j, c]
+            end
+            out[i, j, c] = img[i, j, c] + inten * acc
         end
         return out
     end
@@ -2003,7 +2027,7 @@ function fxaa_pass()
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "fxaa_pass")
         out = Float64.(img)
-        @inbounds for i in 2:H-1, j in 2:W-1
+        @inbounds for j in 2:W-1, i in 2:H-1
             lC = _luma(img, i, j)
             lN = _luma(img, i-1, j); lS = _luma(img, i+1, j)
             lW = _luma(img, i, j-1); lE = _luma(img, i, j+1)

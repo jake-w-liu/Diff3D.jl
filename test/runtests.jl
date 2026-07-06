@@ -14366,6 +14366,11 @@ end
             dark = fill(0.1, 6,6,3)
             out2 = bloom_pass(threshold=0.8, intensity=0.6, radius=2)(dark)
             @test isapprox(out2, dark; atol=1e-12)
+            r0 = bloom_pass(threshold=0.8, intensity=0.6, radius=0)(img)
+            @test r0[5,5,1] ≈ 1.6
+            @test r0[4,5,1] == 0.0
+            @test_opt_alloc 80000 bloom_pass(threshold=0.8, intensity=0.6, radius=2)(img)
+            @test_opt_alloc 30000 bloom_pass(threshold=0.8, intensity=0.6, radius=0)(img)
         end
 
         # [C:postfx] fxaa_pass
@@ -14381,6 +14386,7 @@ end
             # Flat image: no contrast anywhere => unchanged.
             flat = fill(0.5, 5,5,3)
             @test isapprox(fxaa_pass()(flat), flat; atol=1e-12)
+            @test_opt_alloc 30000 fxaa_pass()(img)
         end
 
         # [C:postfx] outline_pass
