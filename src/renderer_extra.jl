@@ -77,6 +77,25 @@ function downsample!(out::AbstractArray, img::AbstractArray, ss::Int)
     return out
 end
 
+function _resolve_min_depth!(out::AbstractMatrix, depth::AbstractMatrix, ss::Int)
+    ss > 0 || throw(ArgumentError("depth resolve scale must be positive"))
+    Hb, Wb = size(depth)
+    (Hb % ss == 0 && Wb % ss == 0) ||
+        throw(ArgumentError("depth dimensions must be divisible by scale"))
+    H, W = Hb ÷ ss, Wb ÷ ss
+    size(out) == (H, W) ||
+        throw(ArgumentError("depth output dimensions must match input ÷ scale"))
+    @inbounds for j in 1:W, i in 1:H
+        d = eltype(out)(Inf)
+        for dj in 0:ss-1, di in 0:ss-1
+            sample = depth[(i - 1) * ss + di + 1, (j - 1) * ss + dj + 1]
+            sample < d && (d = sample)
+        end
+        out[i, j] = d
+    end
+    return out
+end
+
 """Render at `ss`× resolution and box-downsample — supersampled anti-aliasing."""
 function render_aa(scene::Scene, camera::AbstractCamera, width::Int, height::Int;
                    ss::Int=2, shading::Symbol=:flat, shadows::Bool=false)
@@ -109,6 +128,7 @@ function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     render!(big, scene, camera; shading=shading, shadows=shadows,
             cache=cache === nothing ? nothing : cache)
     downsample!(rt.color, big.color, ss)
+    _resolve_min_depth!(rt.depth, big.depth, ss)
     return rt
 end
 

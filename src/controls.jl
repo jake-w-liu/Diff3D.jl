@@ -34,6 +34,23 @@ mutable struct OrbitControls
     target0::Vec3{Float64}
 end
 
+# Damping is a decay factor. Non-finite or >1 values either poison camera state
+# or make residual motion grow/oscillate instead of converging.
+function _checked_damping_factor(value::Real, label::String)
+    value isa Bool && throw(ArgumentError("$label must be finite and between 0 and 1"))
+    f = Float64(value)
+    isfinite(f) && 0.0 <= f <= 1.0 ||
+        throw(ArgumentError("$label must be finite and between 0 and 1"))
+    return f
+end
+
+function _checked_pointer_speed(value::Real, label::String)
+    value isa Bool && throw(ArgumentError("$label must be finite"))
+    f = Float64(value)
+    isfinite(f) || throw(ArgumentError("$label must be finite"))
+    return f
+end
+
 # Positional/keyword constructors. The two original positional forms still work;
 # damping and constraint fields are keyword-only with three.js-matching defaults.
 function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
@@ -49,8 +66,9 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
         throw(ArgumentError("min_polar_angle must be <= max_polar_angle"))
     min_azimuth_angle <= max_azimuth_angle ||
         throw(ArgumentError("min_azimuth_angle must be <= max_azimuth_angle"))
+    damping = _checked_damping_factor(damping_factor, "damping_factor")
     OrbitControls(cam, target, enabled, enable_rotate, enable_zoom, enable_pan,
-                  enable_damping, Float64(damping_factor),
+                  enable_damping, damping,
                   Float64(min_distance), Float64(max_distance),
                   Float64(min_polar_angle), Float64(max_polar_angle),
                   Float64(min_azimuth_angle), Float64(max_azimuth_angle),
@@ -65,8 +83,9 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                        v_azimuth::Real, v_polar::Real, v_zoom::Real,
                        v_pan::Vec3{Float64}, position0::Vec3{Float64},
                        target0::Vec3{Float64})
+    damping = _checked_damping_factor(damping_factor, "damping_factor")
     OrbitControls(camera, target, true, true, true, true, enable_damping,
-                  Float64(damping_factor), Float64(min_distance),
+                  damping, Float64(min_distance),
                   Float64(max_distance), Float64(min_polar_angle),
                   Float64(max_polar_angle), Float64(min_azimuth_angle),
                   Float64(max_azimuth_angle), Float64(v_azimuth),
@@ -367,7 +386,8 @@ function PointerLockControls(cam::PerspectiveCamera; pointer_speed::Real=1.0,
                              min_polar_angle::Real=0.0, max_polar_angle::Real=π)
     min_polar_angle <= max_polar_angle ||
         throw(ArgumentError("min_polar_angle must be <= max_polar_angle"))
-    PointerLockControls(cam, false, Float64(pointer_speed),
+    speed = _checked_pointer_speed(pointer_speed, "pointer_speed")
+    PointerLockControls(cam, false, speed,
                         Float64(min_polar_angle), Float64(max_polar_angle))
 end
 

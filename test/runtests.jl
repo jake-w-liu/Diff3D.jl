@@ -6734,6 +6734,11 @@ end
         # Flat quad: 4 boundary edges (edges) vs 5 triangle edges (wireframe).
         @test edges_geometry(PlaneGeometry()).n_vertices ÷ 2 == 4
         @test wireframe_geometry(PlaneGeometry()).n_vertices ÷ 2 == 5
+        duplicate_vertices = BufferGeometry(
+            [0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,1.0,0.0,
+             0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,-1.0,0.0],
+            Float64[], Float64[], [1,2,3, 4,6,5], 6, 2)
+        @test edges_geometry(duplicate_vertices).n_vertices ÷ 2 == 4
         segmented_plane_for_edges = PlaneGeometry(width_segments=64, height_segments=64)
         @test edges_geometry(segmented_plane_for_edges).n_vertices ÷ 2 == 256
         @test_opt_alloc 5450000 edges_geometry(segmented_plane_for_edges)
@@ -10259,6 +10264,15 @@ end
         orbit_pan!(no_pan, 1.0, 0.0)
         @test no_pan.camera.position == no_pan_pos
         @test no_pan.target == no_pan_target
+        @test_throws ArgumentError OrbitControls(PerspectiveCamera();
+                                                 enable_damping=true,
+                                                 damping_factor=NaN)
+        @test_throws ArgumentError OrbitControls(PerspectiveCamera();
+                                                 enable_damping=true,
+                                                 damping_factor=2.0)
+        @test_throws ArgumentError OrbitControls(PerspectiveCamera();
+                                                 enable_damping=true,
+                                                 damping_factor=true)
     end
 
     @testset "FlyControls" begin
@@ -10313,6 +10327,10 @@ end
         @test_throws ArgumentError PointerLockControls(PerspectiveCamera();
                                                        min_polar_angle=1.0,
                                                        max_polar_angle=0.5)
+        @test_throws ArgumentError PointerLockControls(PerspectiveCamera();
+                                                       pointer_speed=Inf)
+        @test_throws ArgumentError PointerLockControls(PerspectiveCamera();
+                                                       pointer_speed=true)
     end
 
     @testset "TrackballControls" begin
@@ -11180,10 +11198,12 @@ end
         rt = RenderTarget(48, 48); render_msaa!(rt, scene, cam; samples=9)
         @test size(rt.color) == (48, 48, 3)
         @test count(v -> 0.05 < v < 0.95, rt.color[:,:,1]) > 10   # anti-aliased edge band
+        @test count(isfinite, rt.depth) > 0
         rt_cached = RenderTarget(48, 48)
         msaa_cache = RenderCache()
         render_msaa!(rt_cached, scene, cam; samples=9, cache=msaa_cache)
         @test maximum(abs.(rt.color .- rt_cached.color)) < 1e-12
+        @test rt.depth == rt_cached.depth
         @test_opt_alloc 4096 render_msaa!(rt_cached, scene, cam; samples=9, cache=msaa_cache)
     end
 
@@ -12174,6 +12194,19 @@ end
             @test Diff3D._gltf_read_component(int_buf, 0, 5125, false) ==
                   Float64(0xffffff80)
             @test_opt_alloc 64 Diff3D._gltf_read_component(float_buf, 0, 5126, false)
+        end
+
+        let count = 4096, buf = UInt8[]
+            append!(buf, reinterpret(UInt8, UInt32.(0:count-1)))
+            gltf = Dict{String,Any}(
+                "accessors"=>[Dict{String,Any}("bufferView"=>0.0, "count"=>Float64(count),
+                                               "type"=>"SCALAR", "componentType"=>5125.0)],
+                "bufferViews"=>[Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
+                                                 "byteLength"=>length(buf))])
+            primitive_indices = Diff3D._gltf_primitive_indices(gltf, [buf], 0, count)
+            @test primitive_indices[1] == 1
+            @test primitive_indices[end] == count
+            @test_opt_alloc 55000 Diff3D._gltf_primitive_indices(gltf, [buf], 0, count)
         end
 
         @testset "glTF accessor signed/normalized/sparse decoding" begin
@@ -14649,10 +14682,11 @@ end
             bin = UInt8[]
             for f in posf; append!(bin, reinterpret(UInt8, [f])); end
             for u in UInt16[0,1,2]; append!(bin, reinterpret(UInt8, [u])); end
+            bin_declared_len = length(bin)
             while length(bin) % 4 != 0; push!(bin, 0x00); end
             json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}]," *
                    "\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":" *
-                   "{\"POSITION\":0},\"indices\":1}]}],\"buffers\":[{\"byteLength\":$(length(bin))}]," *
+                   "{\"POSITION\":0},\"indices\":1}]}],\"buffers\":[{\"byteLength\":$bin_declared_len}]," *
                    "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}," *
                    "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}],\"accessors\":[" *
                    "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}," *
@@ -14664,6 +14698,8 @@ end
             glb = vcat(le32(0x46546C67), le32(2), le32(12 + length(body)), body)
             path = tempname() * ".glb"
             write(path, glb)
+            _, parsed_buffers, _ = Diff3D._parse_glb(path)
+            @test length(parsed_buffers[1]) == bin_declared_len
             scene = Diff3D.load_glb(path)
             @test scene isa Diff3D.Scene
             # The triangle mesh must be reachable under the scene graph.

@@ -7499,13 +7499,13 @@ function _gltf_read_buffer(buf::Dict, dir::String)
     return _gltf_trim_declared_buffer(buf, data, "glTF buffer")
 end
 
-function _gltf_trim_declared_buffer(buf::Dict, data::Vector{UInt8}, label::String)
+function _gltf_trim_declared_buffer(buf::Dict, data::AbstractVector{UInt8}, label::String)
     declared = get(buf, "byteLength", length(data))
     expected = _gltf_checked_declared_byte_length(declared, label)
     length(data) >= expected ||
         error("$label byteLength $expected exceeds available bytes $(length(data))")
     length(data) == expected && return data
-    return data[1:expected]
+    return expected == 0 ? view(data, 1:0) : @view data[1:expected]
 end
 
 _gltf_document_buffers(gltf) = get(gltf, "buffers", Any[])
@@ -7652,14 +7652,15 @@ function _gltf_component_bytes(ctype::Int)
     error("glTF componentType $ctype")
 end
 
-@inline _gltf_read_u16_le(buf::Vector{UInt8}, i::Int) =
+@inline _gltf_read_u16_le(buf::AbstractVector{UInt8}, i::Int) =
     UInt16(buf[i]) | (UInt16(buf[i + 1]) << 8)
 
-@inline _gltf_read_u32_le(buf::Vector{UInt8}, i::Int) =
+@inline _gltf_read_u32_le(buf::AbstractVector{UInt8}, i::Int) =
     UInt32(buf[i]) | (UInt32(buf[i + 1]) << 8) |
     (UInt32(buf[i + 2]) << 16) | (UInt32(buf[i + 3]) << 24)
 
-function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, normalized::Bool)
+function _gltf_read_component(buf::AbstractVector{UInt8}, offset::Int, ctype::Int,
+                              normalized::Bool)
     sz = _gltf_component_bytes(ctype)
     (offset >= 0 && offset + sz <= length(buf)) ||
         error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
@@ -7688,7 +7689,7 @@ function _gltf_read_component(buf::Vector{UInt8}, offset::Int, ctype::Int, norma
     error("glTF componentType $ctype")
 end
 
-function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::Vector{UInt8}, offset::Int,
+function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::AbstractVector{UInt8}, offset::Int,
                                       count::Int, ncomp::Int, ctype::Int, stride::Int,
                                       normalized::Bool)
     compbytes = _gltf_component_bytes(ctype)
@@ -7699,6 +7700,97 @@ function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::Vector{UInt8}, 
             out[base + c + 1] = _gltf_read_component(buf, base_offset + c * compbytes,
                                                      ctype, normalized)
         end
+    end
+    return out
+end
+
+function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
+    try
+        return Base.checked_add(offset, len)
+    catch err
+        err isa OverflowError || rethrow()
+        error("glTF $label byte range is outside the supported integer range")
+    end
+end
+
+function _gltf_checked_accessor_span(count::Int, element_size::Int, stride::Int,
+                                     label::String)::Int
+    count == 0 && return 0
+    try
+        return Base.checked_add(Base.checked_mul(count - 1, stride), element_size)
+    catch err
+        err isa OverflowError || rethrow()
+        error("glTF $label byte span is outside the supported integer range")
+    end
+end
+
+function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int,
+                                      count::Int, label::String)::Tuple{AbstractVector{UInt8},Int,Int}
+    buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
+    bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views),
+                                          "$label bufferView") + 1]::AbstractDict
+    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
+                                      "bufferView buffer") + 1]::AbstractVector{UInt8}
+    view_offset::Int = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
+                                                         "bufferView byteOffset")
+    view_len::Int = _gltf_checked_nonnegative_integer(bv["byteLength"],
+                                                     "bufferView byteLength")
+    view_end::Int = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
+    view_end <= length(buf) ||
+        error("glTF $label bufferView byteLength $view_len at byteOffset $view_offset exceeds buffer length $(length(buf))")
+    accessor_offset::Int = _gltf_checked_nonnegative_integer(get(acc, "byteOffset", 0.0),
+                                                            "$label accessor byteOffset")
+    accessor_offset <= view_len ||
+        error("glTF $label accessor byteOffset exceeds bufferView byteLength")
+    compbytes::Int = _gltf_component_bytes(ctype)
+    element_size::Int = ncomp * compbytes
+    raw_stride::Int = _gltf_checked_nonnegative_integer(get(bv, "byteStride", 0.0),
+                                                        "bufferView byteStride")
+    stride::Int = raw_stride == 0 ? element_size : raw_stride
+    stride >= element_size ||
+        error("glTF bufferView byteStride is smaller than accessor element size")
+    stride % compbytes == 0 ||
+        error("glTF bufferView byteStride must be a multiple of component size")
+    span::Int = _gltf_checked_accessor_span(count, element_size, stride, label)
+    span <= view_len - accessor_offset ||
+        error("glTF $label accessor exceeds bufferView byteLength")
+    return buf, view_offset + accessor_offset, stride
+end
+
+@inline function _gltf_read_unsigned_index_component(buf::AbstractVector{UInt8},
+                                                     offset::Int, ctype::Int,
+                                                     label::String)::UInt64
+    sz::Int = _gltf_component_bytes(ctype)
+    end_offset::Int = _gltf_checked_byte_end(offset, sz, label)
+    (offset >= 0 && end_offset <= length(buf)) ||
+        error("glTF $label read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
+    i = offset + 1
+    ctype == 5121 && return UInt64(buf[i])
+    ctype == 5123 && return UInt64(_gltf_read_u16_le(buf, i))
+    ctype == 5125 && return UInt64(_gltf_read_u32_le(buf, i))
+    error("glTF $label componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
+end
+
+@inline _gltf_primitive_index_display(raw::UInt64) = string(Float64(raw))
+
+@inline function _gltf_store_primitive_index!(out::Vector{Int}, i::Int,
+                                              raw::UInt64, nverts::Int)
+    raw <= UInt64(typemax(Int)) ||
+        error("glTF primitive index $raw is outside the supported integer range")
+    idx = Int(raw)
+    idx < nverts ||
+        error("glTF primitive index $(_gltf_primitive_index_display(raw)) out of bounds for $nverts vertices")
+    out[i] = idx + 1
+    return nothing
+end
+
+function _gltf_fill_primitive_indices!(out::Vector{Int}, buf::AbstractVector{UInt8},
+                                       offset::Int, stride::Int, ctype::Int,
+                                       nverts::Int)
+    @inbounds for i in eachindex(out)
+        raw = _gltf_read_unsigned_index_component(buf, offset + (i - 1) * stride,
+                                                  ctype, "primitive index")
+        _gltf_store_primitive_index!(out, i, raw, nverts)
     end
     return out
 end
@@ -8343,25 +8435,83 @@ function _gltf_checked_accessor_index(gltf, raw, label::String)
 end
 
 function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int)
-    accessors = gltf["accessors"]
+    accessors = gltf["accessors"]::AbstractVector
     0 <= accessor_index < length(accessors) ||
         error("glTF primitive indices accessor index $accessor_index out of bounds")
-    acc = accessors[accessor_index + 1]
+    acc = accessors[accessor_index + 1]::AbstractDict
     acc["type"] == "SCALAR" ||
         error("glTF primitive indices accessor must be SCALAR")
-    ctype = _gltf_checked_component_type(acc["componentType"],
-                                         "primitive indices accessor")
+    ctype::Int = _gltf_checked_component_type(acc["componentType"],
+                                              "primitive indices accessor")
     ctype in (5121, 5123, 5125) ||
         error("glTF primitive indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
-    idxf, ncomp, _ = _gltf_accessor(gltf, buffers, accessor_index)
-    ncomp == 1 || error("glTF primitive indices accessor must be SCALAR")
-    out = Vector{Int}(undef, length(idxf))
-    @inbounds for (i, idx) in enumerate(idxf)
-        isfinite(idx) && idx == floor(idx) ||
-            error("glTF primitive index must be an integer")
-        0 <= idx < nverts ||
-            error("glTF primitive index $idx out of bounds for $nverts vertices")
-        out[i] = Int(idx) + 1
+    normalized = _gltf_checked_bool(get(acc, "normalized", false),
+                                    "primitive indices accessor normalized")
+    !normalized ||
+        error("glTF primitive indices accessor normalized must be false")
+    count::Int = _gltf_checked_nonnegative_integer(acc["count"],
+                                                  "primitive indices accessor count")
+    out::Vector{Int} = Vector{Int}(undef, count)
+    if haskey(acc, "bufferView")
+        layout = _gltf_accessor_buffer_layout(
+            gltf, buffers, acc, 1, ctype, count, "primitive indices")
+        buf = layout[1]
+        offset::Int = layout[2]
+        stride::Int = layout[3]
+        _gltf_fill_primitive_indices!(out, buf, offset, stride, ctype, nverts)
+    else
+        count == 0 || nverts > 0 ||
+            error("glTF primitive index 0.0 out of bounds for 0 vertices")
+        fill!(out, 1)
+    end
+    if haskey(acc, "sparse")
+        sparse = acc["sparse"]::AbstractDict
+        scount::Int = _gltf_checked_nonnegative_integer(sparse["count"],
+                                                       "sparse accessor count")
+        scount <= count || error("glTF sparse accessor count exceeds accessor count")
+        indices_def = sparse["indices"]::AbstractDict
+        values_def = sparse["values"]::AbstractDict
+        buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
+        ibv = buffer_views[_gltf_checked_index(indices_def["bufferView"],
+                                               length(buffer_views),
+                                               "sparse indices bufferView") + 1]::AbstractDict
+        vbv = buffer_views[_gltf_checked_index(values_def["bufferView"],
+                                               length(buffer_views),
+                                               "sparse values bufferView") + 1]::AbstractDict
+        ibuf = buffers[_gltf_checked_index(ibv["buffer"], length(buffers),
+                                           "sparse indices buffer") + 1]::AbstractVector{UInt8}
+        vbuf = buffers[_gltf_checked_index(vbv["buffer"], length(buffers),
+                                           "sparse values buffer") + 1]::AbstractVector{UInt8}
+        ioffset::Int = _gltf_checked_nonnegative_integer(get(ibv, "byteOffset", 0.0),
+                                                         "sparse indices bufferView byteOffset") +
+                       _gltf_checked_nonnegative_integer(get(indices_def, "byteOffset", 0.0),
+                                                         "sparse indices byteOffset")
+        voffset::Int = _gltf_checked_nonnegative_integer(get(vbv, "byteOffset", 0.0),
+                                                         "sparse values bufferView byteOffset") +
+                       _gltf_checked_nonnegative_integer(get(values_def, "byteOffset", 0.0),
+                                                         "sparse values byteOffset")
+        ictype::Int = _gltf_checked_component_type(indices_def["componentType"],
+                                                  "sparse accessor indices")
+        ictype in (5121, 5123, 5125) ||
+            error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
+        icompbytes::Int = _gltf_component_bytes(ictype)
+        vcompbytes::Int = _gltf_component_bytes(ctype)
+        prev_idx::Int = -1
+        for s in 0:scount-1
+            sparse_raw::UInt64 = _gltf_read_unsigned_index_component(
+                ibuf, ioffset + s * icompbytes, ictype, "sparse accessor index")
+            sparse_raw <= UInt64(typemax(Int)) ||
+                error("glTF sparse accessor index is outside the supported integer range")
+            sparse_idx::Int = Int(sparse_raw)
+            0 <= sparse_idx < count ||
+                error("glTF sparse accessor index $sparse_idx out of bounds")
+            sparse_idx > prev_idx ||
+                error("glTF sparse accessor indices must be strictly increasing")
+            prev_idx = sparse_idx
+            raw::UInt64 = _gltf_read_unsigned_index_component(
+                vbuf, voffset + s * vcompbytes, ctype, "primitive index")
+            _gltf_store_primitive_index!(out, sparse_idx + 1, raw, nverts)
+        end
     end
     return out
 end
@@ -9132,7 +9282,7 @@ end
 # Resolve a glTF buffer that may reference the GLB binary chunk. A buffer with no
 # `uri` is the embedded GLB binary buffer (buffer 0 by spec); otherwise behave
 # exactly like `_gltf_read_buffer`.
-function _glb_read_buffer(buf::Dict, dir::String, bin::Vector{UInt8})
+function _glb_read_buffer(buf::Dict, dir::String, bin::AbstractVector{UInt8})
     uri = get(buf, "uri", nothing)
     uri !== nothing && (uri = String(uri))
     data = if uri === nothing
@@ -9160,8 +9310,8 @@ function _parse_glb(path::String)
     total == length(bytes) ||
         error("GLB declared length $total does not match file length $(length(bytes))")
 
-    json_bytes = UInt8[]
-    bin_bytes = UInt8[]
+    json_bytes = @view bytes[1:0]
+    bin_bytes = @view bytes[1:0]
     have_json = false
     have_bin = false
     pos = 13                                                     # first chunk header
@@ -9175,11 +9325,11 @@ function _parse_glb(path::String)
         dend <= total || error("GLB chunk exceeds file bounds")
         if ctype == 0x4E4F534A          # 'JSON'
             !have_json || error("GLB has multiple JSON chunks")
-            json_bytes = bytes[dstart:dend]
+            json_bytes = @view bytes[dstart:dend]
             have_json = true
         elseif ctype == 0x004E4942      # 'BIN\0'
             !have_bin || error("GLB has multiple BIN chunks")
-            bin_bytes = bytes[dstart:dend]
+            bin_bytes = @view bytes[dstart:dend]
             have_bin = true
         end
         pos = dend + 1

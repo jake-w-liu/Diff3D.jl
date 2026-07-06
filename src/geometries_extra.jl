@@ -1436,16 +1436,21 @@ end
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
 @inline _edge_key_second(key::UInt128) = Int(key & UInt128(typemax(UInt64)))
 
+const _EMPTY_EDGE_FACE_RECORD =
+    (Vec3(0.0, 0.0, 0.0), 0, false)
+
 @inline function _record_edge_face!(
-    edge_faces::Dict{UInt128,Tuple{Vec3{Float64},Vec3{Float64},Int}},
-    a::Int, b::Int, n::Vec3{Float64},
+    edge_faces::Dict{UInt128,Tuple{Vec3{Float64},Int,Bool}},
+    a::Int, b::Int, n::Vec3{Float64}, cosT::Float64,
 )
     key = _edge_key(a, b)
-    if haskey(edge_faces, key)
-        n1, n2, count = edge_faces[key]
-        edge_faces[key] = count == 1 ? (n1, n, 2) : (n1, n2, count + 1)
+    n1, count, feature = get(edge_faces, key, _EMPTY_EDGE_FACE_RECORD)
+    if count == 0
+        edge_faces[key] = (n, 1, false)
+    elseif count == 1
+        edge_faces[key] = (n1, 2, dot(n1, n) < cosT)
     else
-        edge_faces[key] = (n, n, 1)
+        edge_faces[key] = (n1, count + 1, feature)
     end
     return nothing
 end
@@ -1501,6 +1506,29 @@ end
 # Round a position to merge coincident (duplicated) vertices for adjacency.
 @inline _pkey(v::Vec3; nd=6) = (round(v.x, digits=nd), round(v.y, digits=nd), round(v.z, digits=nd))
 
+@inline function _canonical_edge_vertex!(
+    canonical_ids::Vector{Int},
+    canon::Dict{Tuple{Float64,Float64,Float64},Int},
+    cpos::Vector{Vec3{Float64}},
+    cpos_len::Int,
+    geo::BufferGeometry,
+    vi::Int,
+)
+    cached = canonical_ids[vi]
+    cached != 0 && return cached, cpos_len
+    v = get_vertex(geo, vi)
+    key = _pkey(v)
+    c = get(canon, key, 0)
+    if c == 0
+        cpos_len += 1
+        cpos[cpos_len] = v
+        canon[key] = cpos_len
+        c = cpos_len
+    end
+    canonical_ids[vi] = c
+    return c, cpos_len
+end
+
 """Feature edges whose adjacent faces differ in orientation by more than
 `threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
 line BufferGeometry. Coincident vertices are merged by position first."""
@@ -1511,53 +1539,35 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     # Canonicalize vertices by position.
     canon = Dict{Tuple{Float64,Float64,Float64}, Int}()
     sizehint!(canon, geo.n_vertices)
+    canonical_ids = zeros(Int, geo.n_vertices)
     cpos = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     cpos_len = 0
-    # edge (lo,hi) -> (first normal, second normal, adjacent face count)
-    edge_faces = Dict{UInt128, Tuple{Vec3{Float64},Vec3{Float64},Int}}()
+    # edge (lo,hi) -> (first normal, adjacent face count, sharp-on-second-face)
+    edge_faces = Dict{UInt128, Tuple{Vec3{Float64},Int,Bool}}()
     sizehint!(edge_faces, 3 * geo.n_faces)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         n = cross(v2 - v1, v3 - v1); nl = norm(n); nl > 0 && (n = n / nl)
-        key1 = _pkey(v1)
-        c1 = get(canon, key1, 0)
-        if c1 == 0
-            cpos_len += 1
-            cpos[cpos_len] = v1
-            canon[key1] = cpos_len
-            c1 = cpos_len
-        end
-        key2 = _pkey(v2)
-        c2 = get(canon, key2, 0)
-        if c2 == 0
-            cpos_len += 1
-            cpos[cpos_len] = v2
-            canon[key2] = cpos_len
-            c2 = cpos_len
-        end
-        key3 = _pkey(v3)
-        c3 = get(canon, key3, 0)
-        if c3 == 0
-            cpos_len += 1
-            cpos[cpos_len] = v3
-            canon[key3] = cpos_len
-            c3 = cpos_len
-        end
-        _record_edge_face!(edge_faces, c1, c2, n)
-        _record_edge_face!(edge_faces, c2, c3, n)
-        _record_edge_face!(edge_faces, c3, c1, n)
+        c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+                                               cpos_len, geo, i1)
+        c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+                                               cpos_len, geo, i2)
+        c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+                                               cpos_len, geo, i3)
+        _record_edge_face!(edge_faces, c1, c2, n, cosT)
+        _record_edge_face!(edge_faces, c2, c3, n, cosT)
+        _record_edge_face!(edge_faces, c3, c1, n, cosT)
     end
     feature_edges = 0
-    @inbounds for (_, (n1, n2, count)) in edge_faces
-        (count == 1 || dot(n1, n2) < cosT) && (feature_edges += 1)
+    @inbounds for (_, (_, count, feature)) in edge_faces
+        (count == 1 || feature) && (feature_edges += 1)
     end
     positions = Vector{Float64}(undef, 6 * feature_edges)
     vi = 0
     pout = 1
-    @inbounds for (key, (n1, n2, count)) in edge_faces
-        feature = count == 1 || dot(n1, n2) < cosT
-        feature || continue
+    @inbounds for (key, (_, count, feature)) in edge_faces
+        (count == 1 || feature) || continue
         a = cpos[_edge_key_first(key)]
         b = cpos[_edge_key_second(key)]
         positions[pout] = a.x

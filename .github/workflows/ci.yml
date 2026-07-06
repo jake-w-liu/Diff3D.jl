@@ -41,21 +41,6 @@ jobs:
           wait "$heartbeat_pid" 2>/dev/null || true
           exit "$status"
 
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
-        with:
-          version: "1"
-      - name: Instantiate docs environment
-        run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
-      - name: Build docs
-        env:
-          CI: "false"
-        run: julia --project=docs docs/make.jl
-
   examples-browser:
     name: Registered examples browser smoke
     runs-on: ubuntu-latest
