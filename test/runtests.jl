@@ -7698,6 +7698,9 @@ end
     @testset "DEFLATE inflate + base64" begin
         data = deterministic_bytes(1000)
         @test zlib_inflate(Diff3D._zlib_store(data)) == data    # stored-block round-trip
+        fixed_empty = UInt8[0x78, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]
+        @test zlib_inflate(fixed_empty) == UInt8[]
+        @test_opt_alloc 1024 zlib_inflate(fixed_empty)
         @test base64_decode("TWFu") == Vector{UInt8}(codeunits("Man"))
         @test base64_decode("TWE=") == Vector{UInt8}(codeunits("Ma"))
         @test base64_decode("TQ==") == Vector{UInt8}(codeunits("M"))
@@ -9858,6 +9861,9 @@ end
         # Unit: HALF planes for deltas 0x3C00, 0x0400 accumulate to 0x3C00, 0x4000.
         @test Diff3D._exr_pxr24_decode(UInt8[0x3C, 0x04, 0x00, 0x00], 1, [("Y", 1)], 2) ==
               UInt8[0x00, 0x3C, 0x00, 0x40]
+        pxr_alloc_raw = repeat(UInt8[0x00], 1024 * 16 * 9)
+        @test_opt_alloc 250000 Diff3D._exr_pxr24_decode(pxr_alloc_raw, 16,
+                                                         [("B", 2), ("G", 2), ("R", 2)], 1024)
         @test_throws ErrorException Diff3D._exr_pxr24_decode(UInt8[0x00], 1, [("Y", 0)], 1)  # UINT
         # End-to-end: a stored-deflate block of the 3/4-size FLOAT planes stays
         # under the raw-fallback threshold, so the real PXR24 path runs.
@@ -9952,6 +9958,7 @@ end
         # every 16-bit half value in row-major order (decoder-independent truth).
         piz_path = joinpath(@__DIR__, "fixtures", "AllHalfValues.exr")
         piz = load_exr(piz_path)
+        @test_opt_alloc 15000000 load_exr(piz_path)
         @test size(piz) == (256, 256, 3)
         piz_mismatch = 0
         for y in 1:256, x in 1:256
@@ -10017,8 +10024,10 @@ end
                 for i in 1:40; hcode[i] = i; end
                 hcode[41] = 40                                  # complete canonical tree, max len 40
                 Diff3D._piz_canonical!(hcode)
-                hdec = [Diff3D._PizHDec(0, 0, Int[]) for _ in 1:(1 << 14)]
-                Diff3D._piz_build_dec_table!(hcode, 0, 40, hdec)
+                hdec = fill(Diff3D._PizHDec(0, 0, 0), 1 << 14)
+                long_codes = Int[]
+                prefix_counts = zeros(Int, 1 << 14)
+                Diff3D._piz_build_dec_table!(hcode, 0, 40, hdec, long_codes, prefix_counts)
                 sym = 39
                 code = Diff3D._piz_hufcode(hcode[sym + 1]); L = Diff3D._piz_huflength(hcode[sym + 1])
                 @test L > 32
@@ -10033,7 +10042,7 @@ end
                 end
                 append!(bytes, zeros(UInt8, 8))
                 r = Diff3D._PizBR(bytes, 0, UInt128(0), 0); out = zeros(Int, 50); ooff = Ref(0)
-                Diff3D._piz_hufdecode!(hcode, hdec, r, L, 40, 50, out, ooff)
+                Diff3D._piz_hufdecode!(hcode, hdec, long_codes, r, L, 40, 50, out, ooff)
                 @test out[1] == 39 && ooff[] == 1
             end
             # A corrupt raw DEFLATE stream (back-reference distance past the output)
@@ -11400,6 +11409,9 @@ end
         tile_caches = [RenderCache() for _ in 1:Threads.nthreads()]
         r5 = RenderTarget(64,64)
         render_tiled!(r5, scene, cam; tiles=2, cache=tile_caches)
+        @test maximum(abs.(r1.color .- r5.color)) < 1e-12
+        limited_tile_caches = [RenderCache() for _ in 1:min(Threads.nthreads(), 2)]
+        render_tiled!(r5, scene, cam; tiles=2, cache=limited_tile_caches)
         @test maximum(abs.(r1.color .- r5.color)) < 1e-12
         render_tiled!(r5, scene, cam; tiles=1, cache=tile_caches)
         @test maximum(abs.(r1.color .- r5.color)) < 1e-12
@@ -17144,6 +17156,14 @@ end
             @test isapprox(c_top.r, 1.0; atol=1e-6) && isapprox(c_top.b, 0.0; atol=1e-6)
             c_bot = sample_texture(mat.map, 0.5, 0.8)   # glTF v=0.8 is in the BOTTOM (blue) half
             @test isapprox(c_bot.b, 1.0; atol=1e-6) && isapprox(c_bot.r, 0.0; atol=1e-6)
+            shared_tex_json = replace(tex_json,
+                "\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]" =>
+                "\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0},{\"attributes\":{\"POSITION\":0},\"material\":0}]")
+            shared_tex_path = joinpath(dir, "shared_tex.gltf")
+            write(shared_tex_path, shared_tex_json)
+            shared_meshes = collect_meshes(load_gltf(shared_tex_path))
+            @test length(shared_meshes) == 2
+            @test shared_meshes[1].material.map === shared_meshes[2].material.map
 
             save_png(joinpath(dir, "tex space.png"), fill(1.0, 1, 1, 3))
             tex_space_json = """

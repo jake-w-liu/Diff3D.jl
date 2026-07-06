@@ -111,12 +111,17 @@ const _LEN_EXTRA  = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]
 const _DIST_BASE  = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577]
 const _DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]
 
-function _fixed_huffs()
+const _FIXED_LITLEN_HUFF = let
     litlen = Vector{Int}(undef, 288)
     for i in 1:288
         litlen[i] = i <= 144 ? 8 : i <= 256 ? 9 : i <= 280 ? 7 : 8
     end
-    (_build_huff(litlen), _build_huff(fill(5, 30)))
+    _build_huff(litlen)
+end
+const _FIXED_DIST_HUFF = _build_huff(fill(5, 30))
+
+@inline function _fixed_huffs()
+    return _FIXED_LITLEN_HUFF, _FIXED_DIST_HUFF
 end
 
 function _read_dynamic(br::_BitReader)
@@ -1110,7 +1115,13 @@ end
 # bytes of the 32-bit value (the dropped low byte is PXR24's lossy precision).
 # UINT is unsupported (three.js does not handle it either).
 function _exr_pxr24_decode(raw::Vector{UInt8}, nlines::Int, channels, width::Int)
-    out = UInt8[]
+    outsize = 0
+    for (_, pt) in channels
+        pt == 1 || pt == 2 || error("EXR PXR24 does not support UINT channels")
+        outsize += nlines * width * (pt == 1 ? 2 : 4)
+    end
+    out = Vector{UInt8}(undef, outsize)
+    oi = 1
     n = length(raw)
     cur = 1                                       # 1-based plane base cursor
     for _ in 1:nlines
@@ -1122,7 +1133,9 @@ function _exr_pxr24_decode(raw::Vector{UInt8}, nlines::Int, channels, width::Int
                 for j in 0:(width - 1)
                     diff = (UInt32(raw[p0 + j]) << 8) | UInt32(raw[p1 + j])
                     pixel = (pixel + diff) & 0xffff
-                    push!(out, UInt8(pixel & 0xff), UInt8((pixel >> 8) & 0xff))
+                    out[oi] = UInt8(pixel & 0xff)
+                    out[oi + 1] = UInt8((pixel >> 8) & 0xff)
+                    oi += 2
                 end
             elseif pt == 2                        # FLOAT: 3 planes -> u32 (low byte 0)
                 p0 = cur; p1 = cur + width; p2 = cur + 2width; cur = p2 + width
@@ -1131,8 +1144,11 @@ function _exr_pxr24_decode(raw::Vector{UInt8}, nlines::Int, channels, width::Int
                     diff = (UInt32(raw[p0 + j]) << 24) | (UInt32(raw[p1 + j]) << 16) |
                            (UInt32(raw[p2 + j]) << 8)
                     pixel = pixel + diff           # UInt32 wraps mod 2^32
-                    push!(out, UInt8(pixel & 0xff), UInt8((pixel >> 8) & 0xff),
-                          UInt8((pixel >> 16) & 0xff), UInt8((pixel >> 24) & 0xff))
+                    out[oi] = UInt8(pixel & 0xff)
+                    out[oi + 1] = UInt8((pixel >> 8) & 0xff)
+                    out[oi + 2] = UInt8((pixel >> 16) & 0xff)
+                    out[oi + 3] = UInt8((pixel >> 24) & 0xff)
+                    oi += 4
                 end
             else
                 error("EXR PXR24 does not support UINT channels")
@@ -1248,10 +1264,10 @@ const _PIZ_SHORT_ZEROCODE_RUN = 59
 const _PIZ_LONG_ZEROCODE_RUN = 63
 const _PIZ_SHORTEST_LONG_RUN = 2 + _PIZ_LONG_ZEROCODE_RUN - _PIZ_SHORT_ZEROCODE_RUN
 
-mutable struct _PizHDec
+struct _PizHDec
     len::Int
     lit::Int
-    p::Vector{Int}
+    first::Int
 end
 
 mutable struct _PizBR{D<:AbstractVector{UInt8}}
@@ -1369,26 +1385,54 @@ function _piz_unpack_enc_table!(r::_PizBR, im0::Int, iM::Int, hcode::Vector{Int}
     _piz_canonical!(hcode)
 end
 
-function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int, hdec::Vector{_PizHDec})
+function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int,
+                               hdec::Vector{_PizHDec}, long_codes::Vector{Int},
+                               prefix_counts::Vector{Int})
+    fill!(hdec, _PizHDec(0, 0, 0))
+    fill!(prefix_counts, 0)
     im = im0
     @inbounds while im <= iM
         c = _piz_hufcode(hcode[im + 1])
         l = _piz_huflength(hcode[im + 1])
         (c >> l != 0) && error("EXR PIZ invalid table entry")
         if l > _PIZ_HUF_DECBITS
-            pl = hdec[(c >> (l - _PIZ_HUF_DECBITS)) + 1]
+            idx = (c >> (l - _PIZ_HUF_DECBITS)) + 1
+            pl = hdec[idx]
             pl.len != 0 && error("EXR PIZ invalid table entry")
-            pl.lit += 1
-            push!(pl.p, im)
+            prefix_counts[idx] += 1
         elseif l != 0
             ploff = 0
             for _ in 1:(1 << (_PIZ_HUF_DECBITS - l))
-                pl = hdec[(c << (_PIZ_HUF_DECBITS - l)) + ploff + 1]
-                (pl.len != 0 || !isempty(pl.p)) && error("EXR PIZ invalid table entry")
-                pl.len = l
-                pl.lit = im
+                idx = (c << (_PIZ_HUF_DECBITS - l)) + ploff + 1
+                pl = hdec[idx]
+                (pl.len != 0 || prefix_counts[idx] != 0) && error("EXR PIZ invalid table entry")
+                hdec[idx] = _PizHDec(l, im, 0)
                 ploff += 1
             end
+        end
+        im += 1
+    end
+
+    total = 0
+    @inbounds for idx in eachindex(prefix_counts)
+        count = prefix_counts[idx]
+        if count > 0
+            hdec[idx] = _PizHDec(0, count, total + 1)
+            total += count
+            prefix_counts[idx] = hdec[idx].first
+        end
+    end
+    resize!(long_codes, total)
+
+    im = im0
+    @inbounds while im <= iM
+        c = _piz_hufcode(hcode[im + 1])
+        l = _piz_huflength(hcode[im + 1])
+        if l > _PIZ_HUF_DECBITS
+            idx = (c >> (l - _PIZ_HUF_DECBITS)) + 1
+            pos = prefix_counts[idx]
+            long_codes[pos] = im
+            prefix_counts[idx] = pos + 1
         end
         im += 1
     end
@@ -1417,7 +1461,8 @@ function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Bas
     return true
 end
 
-function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni::Int,
+function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
+                         long_codes::Vector{Int}, r::_PizBR, ni::Int,
                          rlc::Int, no::Int, out::Vector{Int}, ooff::Base.RefValue{Int})
     r.c = UInt128(0); r.lc = 0
     oend = no
@@ -1431,17 +1476,18 @@ function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec}, r::_PizBR, ni:
                 r.lc -= pl.len
                 _piz_getcode!(pl.lit, rlc, r, out, ooff, oend)
             else
-                isempty(pl.p) && error("EXR PIZ hufDecode")
+                pl.lit == 0 && error("EXR PIZ hufDecode")
                 matched = false
-                for jj in 1:pl.lit
-                    l = _piz_huflength(enc[pl.p[jj] + 1])
+                for jj in 0:(pl.lit - 1)
+                    po = long_codes[pl.first + jj]
+                    l = _piz_huflength(enc[po + 1])
                     while r.lc < l && r.off < in_end
                         _piz_getchar!(r)
                     end
                     if r.lc >= l
-                        if _piz_hufcode(enc[pl.p[jj] + 1]) == Int((r.c >> (r.lc - l)) & ((UInt128(1) << l) - UInt128(1)))
+                        if _piz_hufcode(enc[po + 1]) == Int((r.c >> (r.lc - l)) & ((UInt128(1) << l) - UInt128(1)))
                             r.lc -= l
-                            _piz_getcode!(pl.p[jj], rlc, r, out, ooff, oend)
+                            _piz_getcode!(po, rlc, r, out, ooff, oend)
                             matched = true
                             break
                         end
@@ -1546,11 +1592,13 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     nBits = _piz_ru32le(r); r.off += 4
     (0 <= im < _PIZ_HUF_ENCSIZE && 0 <= iM < _PIZ_HUF_ENCSIZE) || error("EXR PIZ HUF_ENCSIZE")
     freq = zeros(Int, _PIZ_HUF_ENCSIZE)
-    hdec = [_PizHDec(0, 0, Int[]) for _ in 1:_PIZ_HUF_DECSIZE]
+    hdec = fill(_PizHDec(0, 0, 0), _PIZ_HUF_DECSIZE)
+    long_codes = Int[]
+    prefix_counts = zeros(Int, _PIZ_HUF_DECSIZE)
     _piz_unpack_enc_table!(r, im, iM, freq)
-    _piz_build_dec_table!(freq, im, iM, hdec)
+    _piz_build_dec_table!(freq, im, iM, hdec, long_codes, prefix_counts)
     ooff = Ref(0)
-    _piz_hufdecode!(freq, hdec, r, nBits, iM, outend, outbuf, ooff)
+    _piz_hufdecode!(freq, hdec, long_codes, r, nBits, iM, outend, outbuf, ooff)
 
     for (ci, t) in enumerate(types)
         for jj in 0:(t - 1)
@@ -7987,7 +8035,8 @@ function _decode_jpeg(bytes::AbstractVector{UInt8}; label::AbstractString="glTF 
     end
 end
 
-function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb)
+function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb,
+                       texture_cache=nothing)
     texinfo === nothing && return nothing
     haskey(gltf, "textures") || return nothing
     textures = gltf["textures"]
@@ -8006,13 +8055,6 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     imgdef = images[source_idx + 1]
     bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
     bytes === nothing && return nothing
-    data = _gltf_decode_image(bytes, mime)
-    # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
-    # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
-    # raw glTF UVs sample correctly — the flipY=false equivalent of three.js
-    # GLTFLoader. KHR_texture_transform stays correct because
-    # `texture_transform_uv` runs on the untouched glTF-space UVs.
-    reverse!(data; dims=1)
     sampler = if haskey(texdef, "sampler")
         samplers = get(gltf, "samplers", Any[])
         sampler_idx = _gltf_checked_index(texdef["sampler"], length(samplers),
@@ -8031,9 +8073,24 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     else
         _gltf_filter_mode(raw_min_filter, _GLTF_MIN_FILTERS, "minFilter")
     end
+    wrap_s = _gltf_wrap_mode(get(sampler, "wrapS", 10497.0), "wrapS")
+    wrap_t = _gltf_wrap_mode(get(sampler, "wrapT", 10497.0), "wrapT")
+    cache_key = texture_cache === nothing ? nothing :
+        (ti, colorspace, wrap_s, wrap_t, filter, min_filter, mag_filter,
+         offset.x, offset.y, scale.x, scale.y, rotation, tex_coord)
+    if texture_cache !== nothing && haskey(texture_cache, cache_key)
+        return texture_cache[cache_key]
+    end
+    data = _gltf_decode_image(bytes, mime)
+    # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
+    # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
+    # raw glTF UVs sample correctly — the flipY=false equivalent of three.js
+    # GLTFLoader. KHR_texture_transform stays correct because
+    # `texture_transform_uv` runs on the untouched glTF-space UVs.
+    reverse!(data; dims=1)
     tex = Texture(data;
-                  wrap_s=_gltf_wrap_mode(get(sampler, "wrapS", 10497.0), "wrapS"),
-                  wrap_t=_gltf_wrap_mode(get(sampler, "wrapT", 10497.0), "wrapT"),
+                  wrap_s=wrap_s,
+                  wrap_t=wrap_t,
                   filter=filter,
                   min_filter=min_filter,
                   mag_filter=mag_filter,
@@ -8043,10 +8100,11 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
                   rotation=rotation,
                   tex_coord=tex_coord)
     _gltf_uses_mipmaps(min_filter) && generate_mipmaps!(tex)
+    texture_cache !== nothing && (texture_cache[cache_key] = tex)
     return tex
 end
 
-function _gltf_material(gltf, buffers, dir::String, mi)
+function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
     mi === nothing && return MeshStandardMaterial()
     materials = get(gltf, "materials", Any[])
     material_idx = _gltf_checked_index(mi, length(materials), "material")
@@ -8066,7 +8124,7 @@ function _gltf_material(gltf, buffers, dir::String, mi)
     transparent = alpha_mode == "BLEND"
     side = _gltf_checked_bool(get(m, "doubleSided", false), "doubleSided") ? :double : :front
     base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
-                                       colorspace=:srgb)
+                                       colorspace=:srgb, texture_cache=texture_cache)
     if haskey(extensions, "KHR_materials_unlit")
         return MeshBasicMaterial(color=Color3(bc[1], bc[2], bc[3]),
                                   opacity=opacity,
@@ -8098,10 +8156,10 @@ function _gltf_material(gltf, buffers, dir::String, mi)
             get(specgloss_ext, "glossinessFactor", 1.0), "glossinessFactor")
         diffuse_texture = _gltf_texture(gltf, buffers, dir,
                                         get(specgloss_ext, "diffuseTexture", nothing);
-                                        colorspace=:srgb)
+                                        colorspace=:srgb, texture_cache=texture_cache)
         specgloss_texture = _gltf_texture(gltf, buffers, dir,
                                           get(specgloss_ext, "specularGlossinessTexture", nothing);
-                                          colorspace=:srgb)
+                                          colorspace=:srgb, texture_cache=texture_cache)
         specgloss_opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ?
                             diffuse[4] : 1.0
         return MeshPhongMaterial(color=Color3(diffuse[1], diffuse[2], diffuse[3]),
@@ -8117,18 +8175,18 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                  specular_map=specgloss_texture,
                                  glossiness_map=specgloss_texture,
                                  normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
-                                                          colorspace=:linear),
+                                                          colorspace=:linear, texture_cache=texture_cache),
                                  normal_scale=normal_scale,
                                  ao_map=_gltf_texture(gltf, buffers, dir, occ;
-                                                      colorspace=:linear),
+                                                      colorspace=:linear, texture_cache=texture_cache),
                                  emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
-                                                            colorspace=:srgb),
+                                                            colorspace=:srgb, texture_cache=texture_cache),
                                  emissive_intensity=emissive_strength,
                                  ao_map_intensity=ao_strength)
     end
     metallic_roughness_texture = _gltf_texture(gltf, buffers, dir,
                                                get(pbr, "metallicRoughnessTexture", nothing);
-                                               colorspace=:linear)
+                                               colorspace=:linear, texture_cache=texture_cache)
     physical_extension_keys = ("KHR_materials_clearcoat",
                                "KHR_materials_transmission",
                                "KHR_materials_ior",
@@ -8180,14 +8238,14 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                      side=side,
                                      map=base_color_texture,
                                      normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
-                                                              colorspace=:linear),
+                                                              colorspace=:linear, texture_cache=texture_cache),
                                      normal_scale=normal_scale,
                                      roughness_map=metallic_roughness_texture,
                                     metalness_map=metallic_roughness_texture,
                                     ao_map=_gltf_texture(gltf, buffers, dir, occ;
-                                                         colorspace=:linear),
+                                                         colorspace=:linear, texture_cache=texture_cache),
                                     emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
-                                                               colorspace=:srgb),
+                                                               colorspace=:srgb, texture_cache=texture_cache),
                                     emissive_intensity=emissive_strength,
                                     ao_map_intensity=ao_strength,
                                     clearcoat=_gltf_checked_finite_number(
@@ -8196,21 +8254,21 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                         get(clearcoat_ext, "clearcoatRoughnessFactor", 0.0),
                                         "clearcoatRoughnessFactor"),
                                     clearcoat_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatTexture", nothing);
-                                                                colorspace=:linear),
+                                                                colorspace=:linear, texture_cache=texture_cache),
                                     clearcoat_roughness_map=_gltf_texture(gltf, buffers, dir, get(clearcoat_ext, "clearcoatRoughnessTexture", nothing);
-                                                                          colorspace=:linear),
+                                                                          colorspace=:linear, texture_cache=texture_cache),
                                     clearcoat_normal_map=_gltf_texture(gltf, buffers, dir, clearcoat_normal_info;
-                                                                       colorspace=:linear),
+                                                                       colorspace=:linear, texture_cache=texture_cache),
                                     clearcoat_normal_scale=clearcoat_normal_scale,
                                     transmission=_gltf_checked_finite_number(
                                         get(transmission_ext, "transmissionFactor", 0.0),
                                         "transmissionFactor"),
                                     transmission_map=_gltf_texture(gltf, buffers, dir, get(transmission_ext, "transmissionTexture", nothing);
-                                                                   colorspace=:linear),
+                                                                   colorspace=:linear, texture_cache=texture_cache),
                                     thickness=_gltf_checked_finite_number(
                                         get(volume_ext, "thicknessFactor", 0.0), "thicknessFactor"),
                                     thickness_map=_gltf_texture(gltf, buffers, dir, get(volume_ext, "thicknessTexture", nothing);
-                                                                colorspace=:linear),
+                                                                colorspace=:linear, texture_cache=texture_cache),
                                     attenuation_distance=_gltf_checked_finite_number(
                                         get(volume_ext, "attenuationDistance", 0.0),
                                         "attenuationDistance"),
@@ -8227,9 +8285,9 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                         get(sheen_ext, "sheenRoughnessFactor", 0.0),
                                         "sheenRoughnessFactor"),
                                     sheen_color_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenColorTexture", nothing);
-                                                                  colorspace=:srgb),
+                                                                  colorspace=:srgb, texture_cache=texture_cache),
                                     sheen_roughness_map=_gltf_texture(gltf, buffers, dir, get(sheen_ext, "sheenRoughnessTexture", nothing);
-                                                                      colorspace=:linear),
+                                                                      colorspace=:linear, texture_cache=texture_cache),
                                     iridescence=_gltf_checked_finite_number(
                                         get(iridescence_ext, "iridescenceFactor", 0.0),
                                         "iridescenceFactor"),
@@ -8238,18 +8296,18 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                         "iridescenceIor"),
                                     iridescence_thickness=0.5 * (thickness_min + thickness_max),
                                     iridescence_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceTexture", nothing);
-                                                                  colorspace=:linear),
+                                                                  colorspace=:linear, texture_cache=texture_cache),
                                     iridescence_thickness_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceThicknessTexture", nothing);
-                                                                            colorspace=:linear),
+                                                                            colorspace=:linear, texture_cache=texture_cache),
                                     specular_intensity=_gltf_checked_finite_number(
                                         get(specular_ext, "specularFactor", 1.0), "specularFactor"),
                                     specular_color=Color3(specular_color_factor[1],
                                                           specular_color_factor[2],
                                                           specular_color_factor[3]),
                                     specular_intensity_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularTexture", nothing);
-                                                                         colorspace=:linear),
+                                                                         colorspace=:linear, texture_cache=texture_cache),
                                     specular_color_map=_gltf_texture(gltf, buffers, dir, get(specular_ext, "specularColorTexture", nothing);
-                                                                     colorspace=:srgb),
+                                                                     colorspace=:srgb, texture_cache=texture_cache),
                                     dispersion=_gltf_checked_finite_number(
                                         get(dispersion_ext, "dispersion", 0.0), "dispersion"),
                                     anisotropy=_gltf_checked_finite_number(
@@ -8259,7 +8317,7 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                                         get(anisotropy_ext, "anisotropyRotation", 0.0),
                                         "anisotropyRotation"),
                                     anisotropy_map=_gltf_texture(gltf, buffers, dir, get(anisotropy_ext, "anisotropyTexture", nothing);
-                                                                 colorspace=:linear))
+                                                                 colorspace=:linear, texture_cache=texture_cache))
     end
     MeshStandardMaterial(color=Color3(bc[1], bc[2], bc[3]),
                          emissive=Color3(emissive[1], emissive[2], emissive[3]),
@@ -8273,14 +8331,14 @@ function _gltf_material(gltf, buffers, dir::String, mi)
                           side=side,
                           map=base_color_texture,
                           normal_map=_gltf_texture(gltf, buffers, dir, normal_info;
-                                                   colorspace=:linear),
+                                                   colorspace=:linear, texture_cache=texture_cache),
                           normal_scale=normal_scale,
                           roughness_map=metallic_roughness_texture,
                          metalness_map=metallic_roughness_texture,
                          ao_map=_gltf_texture(gltf, buffers, dir, occ;
-                                              colorspace=:linear),
+                                              colorspace=:linear, texture_cache=texture_cache),
                          emissive_map=_gltf_texture(gltf, buffers, dir, get(m, "emissiveTexture", nothing);
-                                                    colorspace=:srgb),
+                                                    colorspace=:srgb, texture_cache=texture_cache),
                          emissive_intensity=emissive_strength,
                          ao_map_intensity=ao_strength)
 end
@@ -8826,6 +8884,20 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
     pending_skin_binds = SkinnedMesh[]
     pending_inverse_calcs = SkinnedMesh[]
+    texture_cache = Dict{Any, Texture}()
+    material_cache = Dict{Any, AbstractMaterial}()
+
+    function _gltf_cached_material(mi, vertex_colors::Bool)
+        material_key = mi === nothing ? (nothing, vertex_colors) :
+            (_gltf_checked_index(mi, length(get(gltf, "materials", Any[])), "material"), vertex_colors)
+        if haskey(material_cache, material_key)
+            return material_cache[material_key]
+        end
+        mat = _gltf_material(gltf, buffers, dir, mi; texture_cache=texture_cache)
+        vertex_colors && (mat = _gltf_enable_vertex_colors(mat))
+        material_cache[material_key] = mat
+        return mat
+    end
 
     function _gltf_target_names(mesh_def)
         extras = get(mesh_def, "extras", Dict{String,Any}())
@@ -8946,8 +9018,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         elseif isempty(normals)
             compute_vertex_normals!(geo)
         end
-        mat = _gltf_material(gltf, buffers, dir, get(prim, "material", nothing))
-        has_attribute(geo, :color) && (mat = _gltf_enable_vertex_colors(mat))
+        mat = _gltf_cached_material(get(prim, "material", nothing), has_attribute(geo, :color))
         nontriangle_weights = preserve_nontriangle_morphs ? morph_weights : Float64[]
         nontriangle_names = preserve_nontriangle_morphs ? morph_names : String[]
         mode == 0 && return PointsObject(geo, _gltf_points_material(mat);
