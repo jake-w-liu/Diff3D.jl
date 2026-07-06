@@ -7513,9 +7513,16 @@ end
         @test length(t.mipmaps) == 3                       # 8 → 4 → 2 → 1
         @test size(t.mipmaps[1]) == (4,4,3)
         @test size(t.mipmaps[3]) == (1,1,3)
+        @test t.mipmaps[1][1, 1, 1] ≈
+              (t.data[1, 1, 1] + t.data[1, 2, 1] +
+               t.data[2, 1, 1] + t.data[2, 2, 1]) / 4
         # LOD 0 equals the base sample.
         @test sample_texture_lod(t, 0.5, 0.5, 0).r ≈ sample_texture(t, 0.5, 0.5).r
         @test_opt_alloc 64 sample_texture_lod(t, 0.5, 0.5, 2)
+
+        mip_alloc_tex = DataTexture(deterministic_array(64,64,3))
+        generate_mipmaps!(mip_alloc_tex)
+        @test_opt_alloc 140000 generate_mipmaps!(mip_alloc_tex)
     end
 
     @testset "CubeTexture and DepthTexture" begin

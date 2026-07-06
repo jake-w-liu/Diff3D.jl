@@ -343,6 +343,17 @@ function _box_filter_weights(ns::Int, no::Int)
     return weights
 end
 
+function _box_mipmap_even(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
+    nxt = Array{Float64}(undef, nh, nw, C)
+    @inbounds for c in 1:C, i in 1:nh, j in 1:nw
+        si = 2i - 1
+        sj = 2j - 1
+        nxt[i, j, c] = (cur[si, sj, c] + cur[si, sj + 1, c] +
+                        cur[si + 1, sj, c] + cur[si + 1, sj + 1, c]) * 0.25
+    end
+    return nxt
+end
+
 """Build a box-filtered mipmap pyramid down to 1×1 (three.js `generateMipmaps`)."""
 function generate_mipmaps!(tex::Texture)
     _checked_texture_data_size(tex, "generate_mipmaps!")
@@ -351,19 +362,24 @@ function generate_mipmaps!(tex::Texture)
     while size(cur, 1) > 1 || size(cur, 2) > 1
         H, W, C = size(cur)
         nh = max(H ÷ 2, 1); nw = max(W ÷ 2, 1)
-        # Area-average box filter. Using fractional overlap weights means odd
-        # rows/columns contribute instead of being cropped, so the coarsest mip
-        # equals the true image average (was biased toward the top-left corner).
-        rw = _box_filter_weights(H, nh)
-        cw = _box_filter_weights(W, nw)
-        inv_area = (nh / H) * (nw / W)            # 1 / (cell height · cell width)
-        nxt = zeros(Float64, nh, nw, C)
-        @inbounds for c in 1:C, i in 1:nh, j in 1:nw
-            acc = 0.0
-            for (si, wi) in rw[i], (sj, wj) in cw[j]
-                acc += wi * wj * cur[si, sj, c]
+        nxt = if iseven(H) && iseven(W)
+            _box_mipmap_even(cur, nh, nw, C)
+        else
+            # Area-average box filter. Using fractional overlap weights means odd
+            # rows/columns contribute instead of being cropped, so the coarsest mip
+            # equals the true image average (was biased toward the top-left corner).
+            rw = _box_filter_weights(H, nh)
+            cw = _box_filter_weights(W, nw)
+            inv_area = (nh / H) * (nw / W)        # 1 / (cell height · cell width)
+            nxt = Array{Float64}(undef, nh, nw, C)
+            @inbounds for c in 1:C, i in 1:nh, j in 1:nw
+                acc = 0.0
+                for (si, wi) in rw[i], (sj, wj) in cw[j]
+                    acc += wi * wj * cur[si, sj, c]
+                end
+                nxt[i, j, c] = acc * inv_area
             end
-            nxt[i, j, c] = acc * inv_area
+            nxt
         end
         push!(tex.mipmaps, nxt)
         cur = nxt
