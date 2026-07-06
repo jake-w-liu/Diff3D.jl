@@ -823,6 +823,14 @@ const _TEXTURE_ANIMATION_PROPERTY_ALIASES = Dict(
 const _TEXTURE_ANIMATION_FIELDS = Tuple(Symbol(v) for v in
     sort!(unique(collect(values(_TEXTURE_ANIMATION_FIELD_ALIASES)));
           by=length, rev=true))
+const _TEXTURE_ANIMATION_TRACK_PROPERTIES = let
+    props = (:offset, :repeat, :center, :rotation, :matrix_auto_update)
+    pairs = Pair{Symbol,Tuple{Symbol,Symbol}}[]
+    for field in _TEXTURE_ANIMATION_FIELDS, prop in props
+        push!(pairs, Symbol(String(field), "_", String(prop)) => (field, prop))
+    end
+    Dict(pairs)
+end
 
 function _texture_animation_property_symbol(s::AbstractString)
     parts = split(String(s), ".")
@@ -1527,10 +1535,12 @@ end
 
 function _replace_field_value(x, property::Symbol, value)
     hasproperty(x, property) || return nothing
+    current = getproperty(x, property)
+    replacement = current isa Bool && value isa Real ? value >= 0.5 : value
+    isequal(replacement, current) && return x
     names = fieldnames(typeof(x))
     vals = map(names) do name
-        current = getproperty(x, name)
-        name === property ? (current isa Bool && value isa Real ? value >= 0.5 : value) : current
+        name === property ? replacement : getproperty(x, name)
     end
     return typeof(x)(vals...)
 end
@@ -1561,16 +1571,7 @@ function _write_material_track_value!(target, property::Symbol, component::Int, 
 end
 
 function _split_texture_track_property(property::Symbol)
-    name = String(property)
-    for field in _TEXTURE_ANIMATION_FIELDS
-        prefix = String(field) * "_"
-        startswith(name, prefix) || continue
-        texture_property = Symbol(name[(lastindex(prefix) + 1):end])
-        texture_property in (:offset, :repeat, :center, :rotation, :matrix_auto_update) ||
-            return nothing
-        return field, texture_property
-    end
-    return nothing
+    return get(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property, nothing)
 end
 
 function _material_texture_for_track(target, property::Symbol)

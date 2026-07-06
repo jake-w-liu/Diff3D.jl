@@ -13216,6 +13216,31 @@ end
             @test isapprox(obj.position.y, lin_y; atol=1e-12)
         end
 
+        @testset "Material animation no-op updates" begin
+            geo = BufferGeometry([0.0,0,0], [0.0,0,1], Float64[], Int[], 1, 0)
+            mesh = Mesh(geo, MeshBasicMaterial(opacity=0.25,
+                                               color=Color3(0.2, 0.3, 0.4),
+                                               depth_test=false))
+            tracks = AbstractKeyframeTrack[
+                NumberKeyframeTrack(mesh, "material.opacity", [0.0, 1.0], [0.5, 0.5];
+                                    interpolation=:step),
+                NumberKeyframeTrack(mesh, "material.color.g", [0.0, 1.0], [0.6, 0.6];
+                                    interpolation=:step),
+                NumberKeyframeTrack(mesh, "material.depthTest", [0.0, 1.0], [1.0, 1.0];
+                                    interpolation=:step),
+            ]
+            mixer = AnimationMixer(AnimationClip("material_noop", 1.0, tracks))
+            mixer_set_time!(mixer, 0.0)
+            @test mesh.material.opacity ≈ 0.5
+            @test mesh.material.color.g ≈ 0.6
+            @test mesh.material.depth_test
+            @test Diff3D._split_texture_track_property(:opacity) === nothing
+            @test Diff3D._split_texture_track_property(:map_offset) == (:map, :offset)
+            @test_opt_alloc 64 Diff3D._split_texture_track_property(:opacity)
+            @test_opt_alloc 64 Diff3D._split_texture_track_property(:map_offset)
+            @test_opt_alloc 2048 mixer_set_time!(mixer, 0.0)
+        end
+
         # [CTRL:controls] QuaternionKeyframeTrack (slerp rotation track)
         @testset "QuaternionKeyframeTrack slerp" begin
             obj = Group()
