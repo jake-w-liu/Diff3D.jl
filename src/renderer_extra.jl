@@ -161,10 +161,16 @@ mutable struct RenderCache
     instanced_materials::Vector{_InstancedMaterialState}
     skinned::Vector{SkinnedMesh}
     skinned_meshes::Vector{Mesh}
+    mesh_worlds::Vector{Mat4{Float64}}
+    instanced_worlds::Vector{Mat4{Float64}}
     transparent::Vector{Mesh}
+    transparent_worlds::Vector{Mat4{Float64}}
     opaque_flat::Vector{Mesh}
+    opaque_flat_worlds::Vector{Mat4{Float64}}
     smooth_meshes::Vector{Mesh}
+    smooth_worlds::Vector{Mat4{Float64}}
     wireframe_meshes::Vector{Mesh}
+    wireframe_worlds::Vector{Mat4{Float64}}
     tri::Vector{Vec4{Float64}}
     clipped::Vector{Vec4{Float64}}
     sx::Vector{Float64}
@@ -191,7 +197,9 @@ function RenderCache()
     scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
     RenderCache(Mesh[], SceneLight[], InstancedMesh[], _InstancedMaterialState[],
                 SkinnedMesh[],
-                Mesh[], Mesh[], Mesh[], Mesh[], Mesh[],
+                Mesh[], Mat4{Float64}[], Mat4{Float64}[],
+                Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
+                Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
@@ -583,6 +591,63 @@ function _collect_meshes_into!(out::Vector{Mesh}, root::AbstractObject3D)
     return out
 end
 
+function _collect_meshes_worlds_into!(out::Vector{Mesh},
+                                      worlds::Vector{Mat4{Float64}},
+                                      root::AbstractObject3D)
+    empty!(out)
+    empty!(worlds)
+    _collect_meshes_worlds_visit!(out, worlds, root, Mat4{Float64}())
+    return out
+end
+
+function _collect_meshes_worlds_visit!(out::Vector{Mesh},
+                                       worlds::Vector{Mat4{Float64}},
+                                       obj::AbstractObject3D,
+                                       parent_world::Mat4{Float64})
+    is_visible(obj) || return nothing
+    children = get_children(obj)
+    if !(obj isa Mesh) && isempty(children)
+        return nothing
+    end
+    world = parent_world * compute_local_matrix(obj)
+    if obj isa Mesh
+        push!(out, obj)
+        push!(worlds, world)
+    end
+    @inbounds for child in children
+        _collect_meshes_worlds_visit!(out, worlds, child, world)
+    end
+    return nothing
+end
+
+function _append_skinned_render_meshes_worlds!(meshes::Vector{Mesh},
+                                               worlds::Vector{Mat4{Float64}},
+                                               scene::AbstractObject3D)
+    skinned = SkinnedMesh[]
+    start = length(meshes)
+    _append_skinned_render_meshes!(meshes, scene, skinned)
+    @inbounds for i in (start + 1):length(meshes)
+        push!(worlds, compute_world_matrix(meshes[i]))
+    end
+    return meshes
+end
+
+function _append_skinned_render_meshes_worlds!(meshes::Vector{Mesh},
+                                               worlds::Vector{Mat4{Float64}},
+                                               scene::AbstractObject3D,
+                                               skinned::Vector{SkinnedMesh},
+                                               proxies::Vector{Mesh},
+                                               mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
+                                               morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
+    start = length(meshes)
+    _append_skinned_render_meshes!(meshes, scene, skinned, proxies,
+                                   mats_scratch, morph_scratch)
+    @inbounds for i in (start + 1):length(meshes)
+        push!(worlds, compute_world_matrix(meshes[i]))
+    end
+    return meshes
+end
+
 function _collect_lights_into!(out::Vector{SceneLight}, root::AbstractObject3D)
     empty!(out)
     _collect_lights!(out, root)
@@ -593,6 +658,37 @@ function _collect_instanced_into!(out::Vector{InstancedMesh}, root::AbstractObje
     empty!(out)
     _collect_instanced_into_visit!(out, root)
     return out
+end
+
+function _collect_instanced_worlds_into!(out::Vector{InstancedMesh},
+                                         worlds::Vector{Mat4{Float64}},
+                                         root::AbstractObject3D)
+    _collect_instanced_into!(out, root)
+    empty!(worlds)
+    isempty(out) && return out
+    empty!(out)
+    _collect_instanced_worlds_visit!(out, worlds, root, Mat4{Float64}())
+    return out
+end
+
+function _collect_instanced_worlds_visit!(out::Vector{InstancedMesh},
+                                          worlds::Vector{Mat4{Float64}},
+                                          obj::AbstractObject3D,
+                                          parent_world::Mat4{Float64})
+    is_visible(obj) || return nothing
+    children = get_children(obj)
+    if !(obj isa InstancedMesh) && isempty(children)
+        return nothing
+    end
+    world = parent_world * compute_local_matrix(obj)
+    if obj isa InstancedMesh
+        push!(out, obj)
+        push!(worlds, world)
+    end
+    @inbounds for child in children
+        _collect_instanced_worlds_visit!(out, worlds, child, world)
+    end
+    return nothing
 end
 
 function _collect_instanced_into_visit!(out::Vector{InstancedMesh}, obj::AbstractObject3D)
@@ -745,16 +841,17 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
-    _collect_meshes_into!(cache.meshes, scene)
-    _append_skinned_render_meshes!(cache.meshes, scene, cache.skinned, cache.skinned_meshes,
-                                   cache.skinned_matrices, cache.morph_positions)
+    _collect_meshes_worlds_into!(cache.meshes, cache.mesh_worlds, scene)
+    _append_skinned_render_meshes_worlds!(cache.meshes, cache.mesh_worlds, scene,
+                                          cache.skinned, cache.skinned_meshes,
+                                          cache.skinned_matrices, cache.morph_positions)
     _collect_lights_into!(cache.lights, scene)
-    _collect_instanced_into!(cache.instanced, scene)
-    for mesh in cache.meshes
+    _collect_instanced_worlds_into!(cache.instanced, cache.instanced_worlds, scene)
+    for i in eachindex(cache.meshes)
+        mesh = cache.meshes[i]
         mat = _mesh_material(mesh)
-        (_visible_in_tree(mesh) && !is_transparent_material(mat) &&
-         !material_wireframe(mat)) || continue
-        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+        (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
+        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
                                                cache.lights, proj, view, near,
                                                camera.position, cache.tri, cache.clipped,
                                                cache.sx, cache.sy, cache.sz, cache.colors,
@@ -762,9 +859,8 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     end
     for (instanced_slot, im) in pairs(cache.instanced)
         mat = _instanced_material(im)
-        (_visible_in_tree(im) && _instanced_triangle_drawable(im) &&
-         !material_wireframe(mat)) || continue
-        base = compute_world_matrix(im)
+        (_instanced_triangle_drawable(im) && !material_wireframe(mat)) || continue
+        base = cache.instanced_worlds[instanced_slot]
         instance_materials = _instanced_materials!(cache.instanced_materials,
                                                    instanced_slot, im, mat,
                                                    im.instance_colors)
@@ -2264,7 +2360,10 @@ bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
 # ========================== Tiled / parallel rasterization ==========================
 
 function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
-                             instanced::Vector{InstancedMesh}, instanced_material_states,
+                             mesh_worlds::Vector{Mat4{Float64}},
+                             instanced::Vector{InstancedMesh},
+                             instanced_worlds::Vector{Mat4{Float64}},
+                             instanced_material_states,
                              lights,
                              camera::AbstractCamera, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
@@ -2278,19 +2377,18 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     sy = thread_cache.sy
     sz = thread_cache.sz
     colorbuf = thread_cache.colors
-    for mesh in meshes
-        is_visible(mesh) || continue
+    for i in eachindex(meshes)
+        mesh = meshes[i]
         mat = _mesh_material(mesh)
         is_transparent_material(mat) && continue
-        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, compute_world_matrix(mesh),
+        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera.position,
                                                tri, clipped, sx, sy, sz, colorbuf,
                                                1, rt.width, ylo, yhi, ortho_dir)
     end
     for (instanced_slot, im) in pairs(instanced)
-        _visible_in_tree(im) || continue
         _instanced_triangle_drawable(im) || continue
-        base = compute_world_matrix(im)
+        base = instanced_worlds[instanced_slot]
         instance_materials = instanced_material_states[instanced_slot].materials
         _rasterize_instanced_geo_flat_pooled_materials!(
             rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
@@ -2338,14 +2436,17 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # not reallocate mesh/light/instance vectors.
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
-    _collect_meshes_into!(meshes, scene)
-    _append_skinned_render_meshes!(meshes, scene, shared_cache.skinned, shared_cache.skinned_meshes,
-                                   shared_cache.skinned_matrices,
-                                   shared_cache.morph_positions)
+    mesh_worlds = shared_cache.mesh_worlds
+    _collect_meshes_worlds_into!(meshes, mesh_worlds, scene)
+    _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
+                                          shared_cache.skinned, shared_cache.skinned_meshes,
+                                          shared_cache.skinned_matrices,
+                                          shared_cache.morph_positions)
     lights = shared_cache.lights
     _collect_lights_into!(lights, scene)
     instanced = shared_cache.instanced
-    _collect_instanced_into!(instanced, scene)
+    instanced_worlds = shared_cache.instanced_worlds
+    _collect_instanced_worlds_into!(instanced, instanced_worlds, scene)
     instanced_material_states = shared_cache.instanced_materials
     for (instanced_slot, im) in pairs(instanced)
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
@@ -2358,7 +2459,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
             cache_idx = thread_count == tiles ? t : 1
-            _render_tiled_band!(rt, meshes, instanced, instanced_material_states,
+            _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
+                                instanced_material_states,
                                 lights, camera, proj, view,
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end
@@ -2367,7 +2469,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
             cache_idx = thread_count == tiles ? t : mod1(Threads.threadid() - 1, thread_count)
-            _render_tiled_band!(rt, meshes, instanced, instanced_material_states,
+            _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
+                                instanced_material_states,
                                 lights, camera, proj, view,
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end

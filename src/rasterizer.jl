@@ -729,7 +729,8 @@ end
 end
 
 function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
-                              mat::M, lights, proj::Mat4, view::Mat4, near,
+                              mat::M, world_mat::Mat4, lights,
+                              proj::Mat4, view::Mat4, near,
                               cam_pos::Vec3, shadow_fn, tri::Vector{ShadeVtx},
                               clipped::Vector{ShadeVtx}, sx::Vector{Float64},
                               sy::Vector{Float64}, sz::Vector{Float64},
@@ -739,7 +740,6 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                               stamp, stamp_id::Int) where {M<:AbstractMaterial}
     W, H = rt.width, rt.height
     mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
-    world_mat = compute_world_matrix(mesh)
     modelview = view * world_mat
     normal_mat = mat4_transpose(mat4_inverse(world_mat))
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
@@ -965,6 +965,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
 end
 
 @inline function _render_smooth_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh,
+                                                world_mat::Mat4,
                                                 lights, proj::Mat4, view::Mat4, near,
                                                 cam_pos::Vec3, shadow_fn,
                                                 tri::Vector{ShadeVtx},
@@ -982,35 +983,35 @@ end
     geo = _mesh_geometry(mesh)
     mat = _mesh_material(mesh)
     if mat isa MeshBasicMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshBasicMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshBasicMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshLambertMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshLambertMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshLambertMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshPhongMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhongMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhongMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshStandardMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshStandardMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshStandardMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshPhysicalMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhysicalMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshPhysicalMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshToonMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshToonMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshToonMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshNormalMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshNormalMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshNormalMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshMatcapMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshMatcapMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshMatcapMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa MeshDepthMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::MeshDepthMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::MeshDepthMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa ShaderMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::ShaderMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::ShaderMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa SpriteMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::SpriteMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::SpriteMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa LineBasicMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::LineBasicMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::LineBasicMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa LineDashedMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::LineDashedMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::LineDashedMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     elseif mat isa PointsMaterial
-        _render_smooth_mesh!(rt, mesh, geo, mat::PointsMaterial, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat::PointsMaterial, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     else
-        _render_smooth_mesh!(rt, mesh, geo, mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
+        _render_smooth_mesh!(rt, mesh, geo, mat, world_mat, lights, proj, view, near, cam_pos, shadow_fn, tri, clipped, sx, sy, sz, iw, clipping_planes, xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir, stamp, stamp_id)
     end
     return nothing
 end
@@ -1022,7 +1023,8 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
                          stamp=nothing, stamp_id::Int=0,
                          smooth_tri=nothing, smooth_clipped=nothing,
                          smooth_sx=nothing, smooth_sy=nothing,
-                         smooth_sz=nothing, smooth_iw=nothing)
+                         smooth_sz=nothing, smooth_iw=nothing,
+                         worlds=nothing)
     tri = smooth_tri === nothing ? Vector{ShadeVtx}(undef, 3) :
           smooth_tri::Vector{ShadeVtx}
     clipped = if smooth_clipped === nothing
@@ -1042,9 +1044,11 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
          smooth_sz::Vector{Float64}
     iw = smooth_iw === nothing ? Vector{Float64}(undef, 8) :
          smooth_iw::Vector{Float64}
-    for mesh in meshes
+    for i in eachindex(meshes)
+        mesh = meshes[i]
         !is_visible(mesh) && continue
-        _render_smooth_mesh_from_mesh!(rt, mesh, lights, proj, view, near,
+        world_mat = worlds === nothing ? compute_world_matrix(mesh) : worlds[i]
+        _render_smooth_mesh_from_mesh!(rt, mesh, world_mat, lights, proj, view, near,
                                        cam_pos, shadow_fn, tri, clipped,
                                        sx, sy, sz, iw, clipping_planes,
                                        xlo, xhi, ylo, yhi, log_depth,
@@ -1199,20 +1203,32 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         normalize(camera.position - camera.target) : nothing
 
     if cache === nothing
-        meshes = collect_meshes(scene)
+        meshes = Mesh[]
+        mesh_worlds = Mat4{Float64}[]
+        _collect_meshes_worlds_into!(meshes, mesh_worlds, scene)
         lights = collect_lights(scene)
     else
-        meshes = _collect_meshes_into!(cache.meshes, scene)
+        meshes = _collect_meshes_worlds_into!(cache.meshes, cache.mesh_worlds, scene)
+        mesh_worlds = cache.mesh_worlds
         lights = _collect_lights_into!(cache.lights, scene)
     end
     if cache === nothing
-        _append_skinned_render_meshes!(meshes, scene)
+        _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene)
     else
-        _append_skinned_render_meshes!(meshes, scene, cache.skinned, cache.skinned_meshes,
-                                       cache.skinned_matrices, cache.morph_positions)
+        _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
+                                              cache.skinned, cache.skinned_meshes,
+                                              cache.skinned_matrices,
+                                              cache.morph_positions)
     end
-    instanced = cache === nothing ? collect_instanced(scene) :
-                _collect_instanced_into!(cache.instanced, scene)
+    if cache === nothing
+        instanced = InstancedMesh[]
+        instanced_worlds = Mat4{Float64}[]
+        _collect_instanced_worlds_into!(instanced, instanced_worlds, scene)
+    else
+        instanced = _collect_instanced_worlds_into!(cache.instanced,
+                                                    cache.instanced_worlds, scene)
+        instanced_worlds = cache.instanced_worlds
+    end
     shadow_fn = if shadows
         if cache === nothing
             _build_shadow_query_from_drawables!(IdDict{AbstractLight,ShadowMap}(), nothing,
@@ -1264,34 +1280,49 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # only overdraw work, never the final pixels.
     if cache === nothing
         transparent = Mesh[]
+        transparent_worlds = Mat4{Float64}[]
         opaque_flat = Mesh[]
+        opaque_flat_worlds = Mat4{Float64}[]
         smooth_meshes = Mesh[]
+        smooth_worlds = Mat4{Float64}[]
     else
         transparent = cache.transparent
+        transparent_worlds = cache.transparent_worlds
         opaque_flat = cache.opaque_flat
+        opaque_flat_worlds = cache.opaque_flat_worlds
         smooth_meshes = cache.smooth_meshes
+        smooth_worlds = cache.smooth_worlds
         empty!(transparent)
+        empty!(transparent_worlds)
         empty!(opaque_flat)
+        empty!(opaque_flat_worlds)
         empty!(smooth_meshes)
+        empty!(smooth_worlds)
     end
     wireframe_meshes = cache === nothing ? Mesh[] : cache.wireframe_meshes
+    wireframe_worlds = cache === nothing ? Mat4{Float64}[] : cache.wireframe_worlds
     empty!(wireframe_meshes)
-    for mesh in meshes
-        !_visible_in_tree(mesh) && continue
+    empty!(wireframe_worlds)
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        world = mesh_worlds[i]
         geo = _mesh_geometry(mesh)
         mat = _mesh_material(mesh)
         if frustum !== nothing
-            wm = compute_world_matrix(mesh)
-            _mesh_in_frustum(frustum, geo, wm, bounds_cache) || continue
+            _mesh_in_frustum(frustum, geo, world, bounds_cache) || continue
         end
         if material_wireframe(mat)
             push!(wireframe_meshes, mesh)
+            push!(wireframe_worlds, world)
         elseif is_transparent_material(mat)
             push!(transparent, mesh)
+            push!(transparent_worlds, world)
         elseif _mesh_is_flat(mesh, shading)
             push!(opaque_flat, mesh)
+            push!(opaque_flat_worlds, world)
         else
             push!(smooth_meshes, mesh)
+            push!(smooth_worlds, world)
         end
     end
 
@@ -1299,12 +1330,13 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # negative view-space z). Pure draw-order optimisation; pixels are unchanged.
     if sort_objects
         depth_scratch = cache === nothing ? nothing : cache.mesh_depths
-        _sort_meshes_by_depth!(opaque_flat, view, true, depth_scratch)
-        _sort_meshes_by_depth!(smooth_meshes, view, true, depth_scratch)
+        _sort_meshes_by_depth!(opaque_flat, opaque_flat_worlds, view, true, depth_scratch)
+        _sort_meshes_by_depth!(smooth_meshes, smooth_worlds, view, true, depth_scratch)
     end
 
-    for mesh in opaque_flat
-        _rasterize_flat_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh), lights,
+    for i in eachindex(opaque_flat)
+        mesh = opaque_flat[i]
+        _rasterize_flat_mesh_from_mesh!(rt, mesh, opaque_flat_worlds[i], lights,
                                         proj, view, near, camera.position, tri, clipped,
                                         sx, sy, sz, colorbuf, 1.0, nothing, 0,
                                         shadow_fn, xlo, xhi, ylo, yhi,
@@ -1317,9 +1349,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     # InstancedMesh: same geometry/material drawn at each instance transform (flat).
     for (instanced_slot, im) in pairs(instanced)
-        !_visible_in_tree(im) && continue
         _instanced_triangle_drawable(im) || continue
-        base = compute_world_matrix(im)
+        base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
@@ -1349,24 +1380,27 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         smooth_sx=cache === nothing ? nothing : sx,
                         smooth_sy=cache === nothing ? nothing : sy,
                         smooth_sz=cache === nothing ? nothing : sz,
-                        smooth_iw=cache === nothing ? nothing : cache.smooth_iw)
+                        smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
+                        worlds=smooth_worlds)
 
     # Transparent pass: back-to-front, z-tested against the current depth buffer
     # and alpha-blended over the existing colour. Depth writes follow the
     # material's `depth_write` field. The back-to-front order is required for
     # correct blending and is kept regardless of `sort_objects`.
     if !isempty(transparent)
-        _sort_meshes_by_depth!(transparent, view, false,
+        _sort_meshes_by_depth!(transparent, transparent_worlds, view, false,
                                cache === nothing ? nothing : cache.mesh_depths)
         stamp = cache === nothing ? _LazyTransparentStamp(nothing) :
                 _render_cache_stamp!(cache, H, W)
         # `stamp` ensures each pixel blends at most once per mesh.
         sid = 0
-        for mesh in transparent
+        for i in eachindex(transparent)
+            mesh = transparent[i]
+            world = transparent_worlds[i]
             sid += 1
             if _mesh_is_flat(mesh, shading)
                 _rasterize_flat_mesh_material_opacity_from_mesh!(
-                    rt, mesh, compute_world_matrix(mesh), lights, proj, view, near,
+                    rt, mesh, world, lights, proj, view, near,
                     camera.position, tri, clipped, sx, sy, sz, colorbuf, stamp, sid,
                     shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
                     inv_log_far, ortho_dir,
@@ -1387,7 +1421,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                 smooth_sx=cache === nothing ? nothing : sx,
                                 smooth_sy=cache === nothing ? nothing : sy,
                                 smooth_sz=cache === nothing ? nothing : sz,
-                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw)
+                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
+                                worlds=(world,))
             end
         end
     end
@@ -1396,8 +1431,9 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
 
-    for mesh in wireframe_meshes
-        _render_wireframe_mesh_from_mesh!(rt, mesh, compute_world_matrix(mesh), proj, view, near,
+    for i in eachindex(wireframe_meshes)
+        mesh = wireframe_meshes[i]
+        _render_wireframe_mesh_from_mesh!(rt, mesh, wireframe_worlds[i], proj, view, near,
                                           xlo, xhi, ylo, yhi, cache)
     end
 
@@ -1502,6 +1538,12 @@ function _mesh_view_depth(mesh, view::Mat4)
     return v.z
 end
 
+function _mesh_view_depth_world(world::Mat4, view::Mat4)
+    o = mat4_transform_point(world, Vec3(0.0, 0.0, 0.0))
+    v = mat4_transform_vec4(view, Vec4(o.x, o.y, o.z, 1.0))
+    return v.z
+end
+
 function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Float64},
                                        view::Mat4, nearest_first::Bool)
     n = length(meshes)
@@ -1525,6 +1567,41 @@ function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Floa
                 j -= gap
             end
             meshes[j] = mesh
+            depths[j] = depth
+        end
+        gap >>>= 1
+    end
+    return meshes
+end
+
+function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh},
+                                       worlds::Vector{Mat4{Float64}},
+                                       depths::Vector{Float64},
+                                       view::Mat4, nearest_first::Bool)
+    n = length(meshes)
+    n <= 1 && return meshes
+    resize!(depths, n)
+    @inbounds for i in 1:n
+        depths[i] = _mesh_view_depth_world(worlds[i], view)
+    end
+    gap = n >>> 1
+    @inbounds while gap > 0
+        for i in (gap + 1):n
+            mesh = meshes[i]
+            world = worlds[i]
+            depth = depths[i]
+            j = i
+            while j > gap
+                prev_depth = depths[j - gap]
+                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
+                should_shift || break
+                meshes[j] = meshes[j - gap]
+                worlds[j] = worlds[j - gap]
+                depths[j] = prev_depth
+                j -= gap
+            end
+            meshes[j] = mesh
+            worlds[j] = world
             depths[j] = depth
         end
         gap >>>= 1
@@ -1556,6 +1633,38 @@ function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4,
     elseif n > 32
         local_depths = Vector{Float64}(undef, n)
         return _sort_meshes_by_cached_depth!(meshes, local_depths, view, nearest_first)
+    end
+    return meshes
+end
+
+function _sort_meshes_by_depth!(meshes::Vector{Mesh},
+                                worlds::Vector{Mat4{Float64}},
+                                view::Mat4, nearest_first::Bool,
+                                depths::Union{Nothing,Vector{Float64}}=nothing)
+    n = length(meshes)
+    n <= 1 && return meshes
+    if depths !== nothing
+        return _sort_meshes_by_cached_depth!(meshes, worlds, depths, view, nearest_first)
+    elseif n <= 32
+        @inbounds for i in 2:n
+            mesh = meshes[i]
+            world = worlds[i]
+            depth = _mesh_view_depth_world(world, view)
+            j = i - 1
+            while j >= 1
+                prev_depth = _mesh_view_depth_world(worlds[j], view)
+                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
+                should_shift || break
+                meshes[j + 1] = meshes[j]
+                worlds[j + 1] = worlds[j]
+                j -= 1
+            end
+            meshes[j + 1] = mesh
+            worlds[j + 1] = world
+        end
+    else
+        local_depths = Vector{Float64}(undef, n)
+        return _sort_meshes_by_cached_depth!(meshes, worlds, local_depths, view, nearest_first)
     end
     return meshes
 end

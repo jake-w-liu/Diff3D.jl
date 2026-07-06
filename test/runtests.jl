@@ -6050,6 +6050,25 @@ end
                 @test mat4_get(wc, i, j) ≈ mat4_get(wd, i, j) atol=1e-12
             end
         end
+
+        deep = Scene()
+        world_parent = deep
+        for i in 1:16
+            child = Mesh(PlaneGeometry(width=0.1, height=0.1), MeshBasicMaterial())
+            child.position = Vec3(0.01, 0.02, -0.03)
+            add!(world_parent, child)
+            world_parent = child
+        end
+        meshes = Mesh[]
+        worlds = Mat4{Float64}[]
+        Diff3D._collect_meshes_worlds_into!(meshes, worlds, deep)
+        @test length(meshes) == length(worlds) == 16
+        for i in eachindex(meshes)
+            direct = compute_world_matrix(meshes[i])
+            for k in 1:16
+                @test worlds[i].e[k] ≈ direct.e[k] atol=1e-12
+            end
+        end
     end
 
     @testset "LOD level selection" begin
