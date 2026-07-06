@@ -3894,6 +3894,9 @@ end
         expected_html = Diff3D._webgl_html(String(take!(data_io)), "A & <B>";
                                            light_caps=Diff3D._web_light_caps([web_case]))
         @test html == expected_html
+        @test occursin("\"textures\":[", html)
+        @test occursin("function resolveTextureRefs(c)", html)
+        @test occursin("for(const c of DATA.cases) resolveTextureRefs(c)", html)
         if DIFF3D_ALLOC_ASSERTIONS_ENABLED
             save_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
             for i in 1:2
@@ -3957,7 +3960,38 @@ end
                                            texture_scene; radius=4.0)
             Diff3D._web_write_case_json(devnull, texture_case)
             @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull, texture_case)
+
+            shared_texture_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+            add!(shared_texture_scene,
+                 Mesh(BoxGeometry(), MeshBasicMaterial(map=texture_alloc);
+                      name="shared_texture_a"))
+            add!(shared_texture_scene,
+                 Mesh(BoxGeometry(), MeshBasicMaterial(map=texture_alloc);
+                      name="shared_texture_b"))
+            shared_texture_case = WebGLExportCase("shared_texture", "Shared Texture",
+                                                  "dedup", shared_texture_scene;
+                                                  radius=4.0)
+            shared_texture_json = Diff3D._web_case_json(shared_texture_case)
+            @test length(collect(eachmatch(r"\"data\":", shared_texture_json))) == 1
+            @test length(collect(eachmatch(r"\"texture\":\{\"ref\":1\}",
+                                           shared_texture_json))) == 2
         end
+        shared_texture_data = ones(Float64, 4, 4, 4)
+        shared_texture = Texture(shared_texture_data; filter=:nearest, colorspace=:srgb)
+        shared_texture_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(shared_texture_scene,
+             Mesh(BoxGeometry(), MeshBasicMaterial(map=shared_texture);
+                  name="shared_texture_a"))
+        add!(shared_texture_scene,
+             Mesh(BoxGeometry(), MeshBasicMaterial(map=shared_texture);
+                  name="shared_texture_b"))
+        shared_texture_case = WebGLExportCase("shared_texture", "Shared Texture",
+                                              "dedup", shared_texture_scene;
+                                              radius=4.0)
+        shared_texture_json = Diff3D._web_case_json(shared_texture_case)
+        @test length(collect(eachmatch(r"\"data\":", shared_texture_json))) == 1
+        @test length(collect(eachmatch(r"\"texture\":\{\"ref\":1\}",
+                                       shared_texture_json))) == 2
         @test Diff3D._js_array([0.0, NaN, Inf, -Inf, 0.1]) ==
               "[0,0,0,0,0.10000000000000001]"
         @test Diff3D._js_index_array_zero_based(1:3) == "[0,1,2]"
@@ -4229,8 +4263,8 @@ end
         @test occursin("\"depthPackingMode\":1", html)
         @test occursin("\"name\":\"export_depth_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"materialType\":\"depth\".*\"alphaTest\":0\.45000000000000001", html)
-        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"texture\":\{\"width\":2,\"height\":2", html)
-        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"texture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"name\":\"export_depth_alpha_map\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("uMaterialMode==2", html)
         @test occursin("uDepthNear", html)
         @test occursin("uDepthFar", html)
@@ -4255,7 +4289,8 @@ end
         @test occursin("uMaterialMode==3", html)
         @test occursin("uToonSteps", html)
         @test occursin("toonBand", html)
-        @test occursin("\"gradientTexture\":{\"width\":4,\"height\":1", html)
+        @test occursin(r"\"gradientTexture\":\{\"ref\":\d+\}", html)
+        @test occursin("\"texture\":{\"width\":4,\"height\":1", html)
         @test occursin("uUseGradientMap", html)
         @test occursin("uGradientMap", html)
         @test occursin("texture2D(uGradientMap,vec2(clamp(d*.5+.5,0.0,1.0),0.0)).r", html)
@@ -4268,9 +4303,9 @@ end
         @test occursin("\"matcapTexture\":", html)
         @test occursin("\"name\":\"export_matcap_map_alpha_normal\"", html)
         @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"materialType\":\"matcap\".*\"alphaTest\":0\.45000000000000001", html)
-        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"texture\":\{\"width\":2,\"height\":2", html)
-        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
-        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"normalTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"texture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"normalTexture\":\{\"ref\":\d+\}", html)
         @test occursin(r"\"name\":\"export_matcap_map_alpha_normal\".*\"normalScale\":0\.59999999999999998", html)
         @test occursin("uMaterialMode==4", html)
         @test occursin("uUseMatcapMap", html)
@@ -4291,12 +4326,12 @@ end
         @test occursin("o.materialType===\"basic\"?5", html)
         @test occursin("\"name\":\"export_lambert_material\"", html)
         @test occursin("\"materialType\":\"lambert\"", html)
-        @test occursin(r"\"name\":\"export_lambert_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.35", html)
+        @test occursin(r"\"name\":\"export_lambert_material\".*\"emissiveTexture\":\{\"ref\":\d+\}.*\"emissiveIntensity\":1\.35", html)
         @test occursin("uMaterialMode==6", html)
         @test occursin("\"name\":\"export_phong_material\"", html)
         @test occursin("\"materialType\":\"phong\"", html)
         @test occursin("glossinessFromShininess", html)
-        @test occursin(r"\"name\":\"export_phong_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.45", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"emissiveTexture\":\{\"ref\":\d+\}.*\"emissiveIntensity\":1\.45", html)
         @test occursin("\"name\":\"export_phong_local_clipping\"", html)
         @test occursin(r"\"name\":\"export_phong_local_clipping\".*\"materialType\":\"phong\".*\"clippingPlanes\":\[\[0,-1,0,0\.20000000000000001\]\]", html)
         @test occursin("\"name\":\"export_standard_local_clipping\"", html)
@@ -4311,25 +4346,25 @@ end
         @test occursin("uUseGlossinessMap", html)
         @test occursin("phongShininess", html)
         @test occursin("o.materialType===\"phong\"?7", html)
-        @test occursin(r"\"name\":\"export_phong_material\".*\"specularColorTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_phong_material\".*\"specularColorTexture\":\{\"ref\":\d+\}", html)
         @test occursin(r"\"name\":\"export_phong_material\".*\"glossiness\":0\.65", html)
         @test occursin(r"\"name\":\"export_phong_material\".*\"glossinessPacked\":true", html)
-        @test occursin(r"\"name\":\"export_toon_material\".*\"emissiveTexture\":\{\"width\":2,\"height\":2.*\"emissiveIntensity\":1\.25", html)
+        @test occursin(r"\"name\":\"export_toon_material\".*\"emissiveTexture\":\{\"ref\":\d+\}.*\"emissiveIntensity\":1\.25", html)
         @test occursin("\"name\":\"export_alpha_map\"", html)
         @test occursin("\"name\":\"export_basic_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"materialType\":\"basic\".*\"alphaTest\":0\.40000000000000002", html)
-        @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_basic_alpha_map\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"name\":\"export_basic_ao_light_map\"", html)
         @test occursin("\"name\":\"export_lambert_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_lambert_alpha_map\".*\"materialType\":\"lambert\".*\"alphaTest\":0\.34999999999999998", html)
-        @test occursin(r"\"name\":\"export_lambert_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_lambert_alpha_map\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"name\":\"export_phong_alpha_map\"", html)
         @test occursin(r"\"name\":\"export_phong_alpha_map\".*\"materialType\":\"phong\".*\"alphaTest\":0\.45000000000000001", html)
-        @test occursin(r"\"name\":\"export_phong_alpha_map\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_phong_alpha_map\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"name\":\"export_toon_textured_alpha\"", html)
         @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"materialType\":\"toon\".*\"alphaTest\":0\.5", html)
-        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"texture\":\{\"width\":2,\"height\":2", html)
-        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"texture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"name\":\"export_toon_textured_alpha\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"name\":\"export_toon_ao_light_map\"", html)
         @test occursin("\"name\":\"export_wireframe\"", html)
         @test occursin(r"\"name\":\"export_wireframe\".*\"mode\":\"lines\"", html)
@@ -4359,10 +4394,11 @@ end
         @test occursin("\"name\":\"export_env_map\"", html)
         @test occursin("\"name\":\"export_physical_extensions\"", html)
         @test occursin("\"name\":\"export_physical_anisotropy_map\"", html)
-        @test occursin(r"\"name\":\"export_physical_anisotropy_map\".*\"anisotropyTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
+        @test occursin(r"\"name\":\"export_physical_anisotropy_map\".*\"anisotropyTexture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"texture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
         @test occursin("\"name\":\"export_sprite\"", html)
         @test occursin(r"\"name\":\"export_sprite\".*\"alphaTest\":0\.34999999999999998", html)
-        @test occursin(r"\"name\":\"export_sprite\".*\"alphaTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001", html)
+        @test occursin(r"\"name\":\"export_sprite\".*\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"name\":\"export_points_map\"", html)
         @test occursin("spriteProgram", html)
         @test occursin("uCameraRight", html)
@@ -4439,8 +4475,8 @@ end
         if basic_ao_light_range !== nothing
             basic_ao_light_window = html[first(basic_ao_light_range):min(lastindex(html), first(basic_ao_light_range) + 3000)]
             @test occursin("\"materialType\":\"basic\"", basic_ao_light_window)
-            @test occursin("\"aoTexture\":{\"width\":2", basic_ao_light_window)
-            @test occursin("\"lightTexture\":{\"width\":2", basic_ao_light_window)
+            @test occursin(r"\"aoTexture\":\{\"ref\":\d+\}", basic_ao_light_window)
+            @test occursin(r"\"lightTexture\":\{\"ref\":\d+\}", basic_ao_light_window)
             @test occursin("\"aoIntensity\":0.20000000000000001", basic_ao_light_window)
             @test occursin("\"lightMapIntensity\":0.80000000000000004", basic_ao_light_window)
         end
@@ -4449,8 +4485,8 @@ end
         if lambert_ao_light_range !== nothing
             lambert_ao_light_window = html[first(lambert_ao_light_range):min(lastindex(html), first(lambert_ao_light_range) + 3000)]
             @test occursin("\"materialType\":\"lambert\"", lambert_ao_light_window)
-            @test occursin("\"aoTexture\":{\"width\":2", lambert_ao_light_window)
-            @test occursin("\"lightTexture\":{\"width\":2", lambert_ao_light_window)
+            @test occursin(r"\"aoTexture\":\{\"ref\":\d+\}", lambert_ao_light_window)
+            @test occursin(r"\"lightTexture\":\{\"ref\":\d+\}", lambert_ao_light_window)
             @test occursin("\"aoIntensity\":0.40000000000000002", lambert_ao_light_window)
             @test occursin("\"lightMapIntensity\":0.59999999999999998", lambert_ao_light_window)
         end
@@ -4459,8 +4495,8 @@ end
         if phong_ao_light_range !== nothing
             phong_ao_light_window = html[first(phong_ao_light_range):min(lastindex(html), first(phong_ao_light_range) + 3000)]
             @test occursin("\"materialType\":\"phong\"", phong_ao_light_window)
-            @test occursin("\"aoTexture\":{\"width\":2", phong_ao_light_window)
-            @test occursin("\"lightTexture\":{\"width\":2", phong_ao_light_window)
+            @test occursin(r"\"aoTexture\":\{\"ref\":\d+\}", phong_ao_light_window)
+            @test occursin(r"\"lightTexture\":\{\"ref\":\d+\}", phong_ao_light_window)
             @test occursin("\"aoIntensity\":0.29999999999999999", phong_ao_light_window)
             @test occursin("\"lightMapIntensity\":0.69999999999999996", phong_ao_light_window)
         end
@@ -4469,8 +4505,8 @@ end
         if toon_ao_light_range !== nothing
             toon_ao_light_window = html[first(toon_ao_light_range):min(lastindex(html), first(toon_ao_light_range) + 3000)]
             @test occursin("\"materialType\":\"toon\"", toon_ao_light_window)
-            @test occursin("\"aoTexture\":{\"width\":2", toon_ao_light_window)
-            @test occursin("\"lightTexture\":{\"width\":2", toon_ao_light_window)
+            @test occursin(r"\"aoTexture\":\{\"ref\":\d+\}", toon_ao_light_window)
+            @test occursin(r"\"lightTexture\":\{\"ref\":\d+\}", toon_ao_light_window)
             @test occursin("\"aoIntensity\":0.34999999999999998", toon_ao_light_window)
             @test occursin(r"\"lightMapIntensity\":0\.65", toon_ao_light_window)
         end
@@ -4493,8 +4529,7 @@ end
         if lambert_normal_range !== nothing
             lambert_normal_window = html[first(lambert_normal_range):min(lastindex(html), first(lambert_normal_range) + 3000)]
             @test occursin("\"materialType\":\"lambert\"", lambert_normal_window)
-            @test occursin("\"normalTexture\":{\"width\":2", lambert_normal_window)
-            @test occursin("\"data\":[255,0,255,255", lambert_normal_window)
+            @test occursin(r"\"normalTexture\":\{\"ref\":\d+\}", lambert_normal_window)
             @test occursin("\"normalScale\":0.25", lambert_normal_window)
         end
         phong_normal_range = findfirst("\"name\":\"export_phong_normal_map\"", html)
@@ -4502,8 +4537,7 @@ end
         if phong_normal_range !== nothing
             phong_normal_window = html[first(phong_normal_range):min(lastindex(html), first(phong_normal_range) + 3000)]
             @test occursin("\"materialType\":\"phong\"", phong_normal_window)
-            @test occursin("\"normalTexture\":{\"width\":2", phong_normal_window)
-            @test occursin("\"data\":[255,0,255,255", phong_normal_window)
+            @test occursin(r"\"normalTexture\":\{\"ref\":\d+\}", phong_normal_window)
             @test occursin("\"normalScale\":0.45000000000000001", phong_normal_window)
         end
         toon_normal_range = findfirst("\"name\":\"export_toon_normal_map\"", html)
@@ -4511,10 +4545,10 @@ end
         if toon_normal_range !== nothing
             toon_normal_window = html[first(toon_normal_range):min(lastindex(html), first(toon_normal_range) + 3000)]
             @test occursin("\"materialType\":\"toon\"", toon_normal_window)
-            @test occursin("\"normalTexture\":{\"width\":2", toon_normal_window)
-            @test occursin("\"data\":[255,0,255,255", toon_normal_window)
+            @test occursin(r"\"normalTexture\":\{\"ref\":\d+\}", toon_normal_window)
             @test occursin(r"\"normalScale\":0\.55", toon_normal_window)
         end
+        @test occursin("\"data\":[255,0,255,255", html)
         @test occursin("OES_standard_derivatives", html)
         @test occursin("uUseNormalMap", html)
         @test occursin("uNormalScale", html)
@@ -4562,8 +4596,8 @@ end
         @test occursin("\"dispersion\":0.5", html)
         @test occursin("\"clearcoatTexture\":", html)
         @test occursin("\"clearcoatRoughnessTexture\":", html)
-        @test occursin("\"clearcoatNormalTexture\":{\"width\":2,\"height\":2", html)
-        @test occursin(r"\"clearcoatNormalTexture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
+        @test occursin(r"\"clearcoatNormalTexture\":\{\"ref\":\d+\}", html)
+        @test occursin(r"\"texture\":\{\"width\":2,\"height\":2.*\"offset\":\[0.125,0.25\].*\"repeat\":\[0.5,0.75\].*\"rotation\":0.10000000000000001.*\"texCoord\":1", html)
         @test occursin("\"clearcoatNormalScale\":0.40000000000000002", html)
         @test occursin("\"transmissionTexture\":", html)
         @test occursin("\"thicknessTexture\":", html)
@@ -5145,7 +5179,7 @@ end
         @test occursin("\"colors\":[1,1,1,1,1,1]",
                        Diff3D._web_drawable_json(color_mesh_off, Mat4()))
         @test occursin("\"texture\":{\"width\":2,\"height\":2", html)
-        @test occursin("\"alphaTexture\":{\"width\":2,\"height\":2", html)
+        @test occursin(r"\"alphaTexture\":\{\"ref\":\d+\}", html)
         @test occursin("\"alphaTest\":0.40000000000000002", html)
         @test occursin(r"\"name\":\"export_alpha_map\".*\"alphaTest\":0\.40000000000000002.*\"transparent\":false", html)
         @test occursin("uUseAlphaMap", html)

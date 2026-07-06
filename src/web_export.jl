@@ -995,6 +995,83 @@ function _web_material_texture(mat)
     return nothing
 end
 
+const _WEB_MATERIAL_2D_TEXTURE_GETTERS = (
+    _web_material_texture,
+    _web_material_alpha_texture,
+    _web_material_emissive_texture,
+    _web_material_ao_texture,
+    _web_material_light_texture,
+    _web_material_roughness_texture,
+    _web_material_metalness_texture,
+    _web_material_normal_texture,
+    _web_material_matcap_texture,
+    _web_material_gradient_texture,
+    _web_material_clearcoat_texture,
+    _web_material_clearcoat_roughness_texture,
+    _web_material_clearcoat_normal_texture,
+    _web_material_transmission_texture,
+    _web_material_thickness_texture,
+    _web_material_sheen_color_texture,
+    _web_material_sheen_roughness_texture,
+    _web_material_iridescence_texture,
+    _web_material_iridescence_thickness_texture,
+    _web_material_specular_intensity_texture,
+    _web_material_specular_color_texture,
+    _web_material_anisotropy_texture,
+)
+
+struct _WebTextureRegistry
+    ids::IdDict{Texture,Int}
+    textures::Vector{Texture}
+end
+
+_web_texture_registry() = _WebTextureRegistry(IdDict{Texture,Int}(), Texture[])
+
+function _web_register_texture!(registry::_WebTextureRegistry, tex)
+    tex isa Texture || return nothing
+    haskey(registry.ids, tex) && return nothing
+    registry.ids[tex] = length(registry.textures) + 1
+    push!(registry.textures, tex)
+    return nothing
+end
+
+function _web_register_material_textures!(registry::_WebTextureRegistry, mat)
+    for getter in _WEB_MATERIAL_2D_TEXTURE_GETTERS
+        _web_register_texture!(registry, getter(mat))
+    end
+    return nothing
+end
+
+function _web_write_texture_or_ref_json(io::IO, tex, num_buf::Vector{UInt8},
+                                        registry::Union{Nothing,_WebTextureRegistry})
+    if registry !== nothing && tex isa Texture
+        id = get(registry.ids, tex, 0)
+        if id != 0
+            write(io, "{\"ref\":")
+            print(io, id)
+            write(io, '}')
+            return nothing
+        end
+    end
+    _web_write_texture_json(io, tex, num_buf)
+    return nothing
+end
+
+function _web_write_texture_registry_json(io::IO, registry::_WebTextureRegistry,
+                                          num_buf::Vector{UInt8})
+    write(io, '[')
+    for (i, tex) in enumerate(registry.textures)
+        i == 1 || write(io, ',')
+        write(io, "{\"id\":")
+        print(io, i)
+        write(io, ",\"texture\":")
+        _web_write_texture_json(io, tex, num_buf)
+        write(io, '}')
+    end
+    write(io, ']')
+    return nothing
+end
+
 const WEB_SHADOW_RESOLUTION = 64
 const WEB_MAX_SHADOW_PCF_RADIUS = 4
 
@@ -2056,7 +2133,8 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
                                   sprite_rotation::Real=0.0,
                                   sprite_size_attenuation::Bool=true,
                                   parent_world=nothing,
-                                  positions_override=nothing)
+                                  positions_override=nothing,
+                                  texture_registry::Union{Nothing,_WebTextureRegistry}=nothing)
     geo = obj.geometry
     mat = obj.material
     mat isa ShaderMaterial &&
@@ -2198,53 +2276,75 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"glow\":")
     _js_write_num(io, _web_material_glow(mat), num_buf)
     write(io, ",\"texture\":")
-    _web_write_texture_json(io, _web_material_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"alphaTexture\":")
-    _web_write_texture_json(io, _web_material_alpha_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_alpha_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"emissiveTexture\":")
-    _web_write_texture_json(io, _web_material_emissive_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_emissive_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"aoTexture\":")
-    _web_write_texture_json(io, _web_material_ao_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_ao_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"lightTexture\":")
-    _web_write_texture_json(io, _web_material_light_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_light_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"roughnessTexture\":")
-    _web_write_texture_json(io, _web_material_roughness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_roughness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"metalnessTexture\":")
-    _web_write_texture_json(io, _web_material_metalness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_metalness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"normalTexture\":")
-    _web_write_texture_json(io, _web_material_normal_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_normal_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"normalScale\":")
     _js_write_num(io, _web_material_normal_scale(mat), num_buf)
     write(io, ",\"matcapTexture\":")
-    _web_write_texture_json(io, _web_material_matcap_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_matcap_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"gradientTexture\":")
-    _web_write_texture_json(io, _web_material_gradient_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_gradient_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"clearcoatTexture\":")
-    _web_write_texture_json(io, _web_material_clearcoat_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_clearcoat_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"clearcoatRoughnessTexture\":")
-    _web_write_texture_json(io, _web_material_clearcoat_roughness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_clearcoat_roughness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"clearcoatNormalTexture\":")
-    _web_write_texture_json(io, _web_material_clearcoat_normal_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_clearcoat_normal_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"clearcoatNormalScale\":")
     _js_write_num(io, _web_material_clearcoat_normal_scale(mat), num_buf)
     write(io, ",\"transmissionTexture\":")
-    _web_write_texture_json(io, _web_material_transmission_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_transmission_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"thicknessTexture\":")
-    _web_write_texture_json(io, _web_material_thickness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_thickness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"sheenColorTexture\":")
-    _web_write_texture_json(io, _web_material_sheen_color_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_sheen_color_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"sheenRoughnessTexture\":")
-    _web_write_texture_json(io, _web_material_sheen_roughness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_sheen_roughness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"iridescenceTexture\":")
-    _web_write_texture_json(io, _web_material_iridescence_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_iridescence_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"iridescenceThicknessTexture\":")
-    _web_write_texture_json(io, _web_material_iridescence_thickness_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_iridescence_thickness_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"specularIntensityTexture\":")
-    _web_write_texture_json(io, _web_material_specular_intensity_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_specular_intensity_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"specularColorTexture\":")
-    _web_write_texture_json(io, _web_material_specular_color_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_specular_color_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"anisotropyTexture\":")
-    _web_write_texture_json(io, _web_material_anisotropy_texture(mat), num_buf)
+    _web_write_texture_or_ref_json(io, _web_material_anisotropy_texture(mat), num_buf,
+                                   texture_registry)
     write(io, ",\"envTexture\":")
     write(io, _web_env_json(_web_material_env_texture(mat)))
     write(io, ",\"emissive\":")
@@ -2721,11 +2821,25 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
     return nothing
 end
 
+function _web_collect_texture_registry(root::AbstractObject3D,
+                                       force_ids::Set{Int}=Set{Int}(),
+                                       camera_distance::Real=0.0)
+    registry = _web_texture_registry()
+    function emit(obj, world; kwargs...)
+        _web_register_material_textures!(registry, obj.material)
+        return nothing
+    end
+    _web_visit_drawables(emit, root, force_ids, camera_distance)
+    return registry
+end
+
 function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
-                                camera_distance::Real=0.0)
+                                camera_distance::Real=0.0;
+                                texture_registry::Union{Nothing,_WebTextureRegistry}=nothing)
     out = String[]
     function emit(obj, world; kwargs...)
-        push!(out, _web_drawable_json(obj, world; kwargs...))
+        push!(out, _web_drawable_json(obj, world; kwargs...,
+                                      texture_registry=texture_registry))
         return nothing
     end
     _web_visit_drawables(emit, root, force_ids, camera_distance)
@@ -2735,12 +2849,14 @@ end
 function _web_write_drawables_json(io::IO, root::AbstractObject3D,
                                    force_ids::Set{Int}=Set{Int}(),
                                    camera_distance::Real=0.0,
-                                   num_buf::Vector{UInt8}=_web_num_buffer())
+                                   num_buf::Vector{UInt8}=_web_num_buffer();
+                                   texture_registry::Union{Nothing,_WebTextureRegistry}=nothing)
     write(io, '[')
     first = true
     function emit(obj, world; kwargs...)
         first ? (first = false) : write(io, ',')
-        _web_write_drawable_json(io, obj, world, num_buf; kwargs...)
+        _web_write_drawable_json(io, obj, world, num_buf; kwargs...,
+                                 texture_registry=texture_registry)
         return nothing
     end
     _web_visit_drawables(emit, root, force_ids, camera_distance)
@@ -3086,19 +3202,27 @@ end
 function _web_case_json_sizehint(lights_json::AbstractString,
                                  nodes::AbstractVector{<:AbstractString},
                                  objects::AbstractVector{<:AbstractString},
-                                 animations::AbstractVector{AnimationClip})
+                                 animations::AbstractVector{AnimationClip},
+                                 texture_registry::Union{Nothing,_WebTextureRegistry}=nothing)
     sizehint = length(lights_json) + sum(length, nodes; init=0) +
                sum(length, objects; init=0) + 1024
+    if texture_registry !== nothing
+        for tex in texture_registry.textures
+            H, W, _ = size(tex.data)
+            sizehint = _web_sizehint_add(sizehint, _web_texture_json_sizehint(H, W) + 32)
+        end
+    end
     for clip in animations
         sizehint = _web_sizehint_add(sizehint, _web_clip_json_sizehint(clip))
     end
     return sizehint
 end
 
-struct _WebDrawableStream{T<:AbstractObject3D,S<:Set{Int},R<:Real}
+struct _WebDrawableStream{T<:AbstractObject3D,S<:Set{Int},R<:Real,G}
     root::T
     force_ids::S
     camera_distance::R
+    texture_registry::G
 end
 
 struct _WebTransformNodeStream{T<:AbstractObject3D,S<:Set{Int}}
@@ -3147,7 +3271,8 @@ end
 function _web_write_objects_json(io::IO, objects::_WebDrawableStream,
                                  num_buf::Vector{UInt8})
     return _web_write_drawables_json(io, objects.root, objects.force_ids,
-                                     objects.camera_distance, num_buf)
+                                     objects.camera_distance, num_buf;
+                                     texture_registry=objects.texture_registry)
 end
 
 function _web_collect_case_light_node_parts(case::WebGLExportCase)
@@ -3171,14 +3296,18 @@ end
 
 function _web_collect_case_json_parts(case::WebGLExportCase)
     animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
-    objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius)
-    return lights_json, nodes, objects
+    texture_registry = _web_collect_texture_registry(case.scene, animation_target_ids,
+                                                    case.radius)
+    objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius;
+                                    texture_registry=texture_registry)
+    return lights_json, nodes, objects, texture_registry
 end
 
 function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
                                     lights_json::AbstractString,
                                     nodes,
                                     objects,
+                                    texture_registry::_WebTextureRegistry,
                                     num_buf::Vector{UInt8})
     write(io, "{\"id\":")
     _js_write_str(io, case.id)
@@ -3219,6 +3348,8 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, lights_json)
     write(io, ",\"nodes\":")
     _web_write_transform_nodes_json(io, nodes, num_buf)
+    write(io, ",\"textures\":")
+    _web_write_texture_registry_json(io, texture_registry, num_buf)
     write(io, ",\"objects\":")
     _web_write_objects_json(io, objects, num_buf)
     write(io, ",\"animations\":[")
@@ -3231,18 +3362,23 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
 end
 
 function _web_case_json(case::WebGLExportCase)
-    lights_json, nodes, objects = _web_collect_case_json_parts(case)
+    lights_json, nodes, objects, texture_registry = _web_collect_case_json_parts(case)
     io = IOBuffer(sizehint=_web_case_json_sizehint(lights_json, nodes, objects,
-                                                   case.animations))
-    _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
+                                                   case.animations, texture_registry))
+    _web_write_case_json_parts(io, case, lights_json, nodes, objects,
+                               texture_registry, _web_num_buffer())
     return String(take!(io))
 end
 
 function _web_write_case_json(io::IO, case::WebGLExportCase)
     animation_target_ids, lights_json = _web_collect_case_light_parts(case)
     nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
-    objects = _WebDrawableStream(case.scene, animation_target_ids, case.radius)
-    _web_write_case_json_parts(io, case, lights_json, nodes, objects, _web_num_buffer())
+    texture_registry = _web_collect_texture_registry(case.scene, animation_target_ids,
+                                                    case.radius)
+    objects = _WebDrawableStream(case.scene, animation_target_ids, case.radius,
+                                 texture_registry)
+    _web_write_case_json_parts(io, case, lights_json, nodes, objects,
+                               texture_registry, _web_num_buffer())
     return nothing
 end
 
@@ -3595,6 +3731,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   }
   function makeTexture(t){
     if(!t) return null;
+    if(t.__webglTexture) return t.__webglTexture;
     const tex=gl.createTexture();
     uploadTextureData(t,tex);
     t.__webglTexture=tex;
@@ -3723,7 +3860,9 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   function eachCamera(cam,fn){ if(!cam) return; if(cam.type==="array"){ for(const child of cam.cameras||[]) eachCamera(child,fn); } else fn(cam); }
   function primaryCamera(cam){ if(!cam) return null; return cam.type==="array" ? ((cam.cameras||[])[0]||null) : cam; }
   const textureAnimBindings=[["clearcoat_normal_map_","clearcoatNormalTexture"],["clearcoat_roughness_map_","clearcoatRoughnessTexture"],["iridescence_thickness_map_","iridescenceThicknessTexture"],["specular_intensity_map_","specularIntensityTexture"],["specular_color_map_","specularColorTexture"],["specular_map_","specularColorTexture"],["glossiness_map_","specularColorTexture"],["sheen_roughness_map_","sheenRoughnessTexture"],["sheen_color_map_","sheenColorTexture"],["transmission_map_","transmissionTexture"],["thickness_map_","thicknessTexture"],["iridescence_map_","iridescenceTexture"],["anisotropy_map_","anisotropyTexture"],["emissive_map_","emissiveTexture"],["roughness_map_","roughnessTexture"],["metalness_map_","metalnessTexture"],["gradient_map_","gradientTexture"],["normal_map_","normalTexture"],["alpha_map_","alphaTexture"],["light_map_","lightTexture"],["ao_map_","aoTexture"],["clearcoat_map_","clearcoatTexture"],["matcap_","matcapTexture"],["map_","texture"]];
-  function objectTextures(o){ return [o.texture,o.alphaTexture,o.emissiveTexture,o.aoTexture,o.lightTexture,o.roughnessTexture,o.metalnessTexture,o.normalTexture,o.matcapTexture,o.gradientTexture,o.clearcoatTexture,o.clearcoatRoughnessTexture,o.clearcoatNormalTexture,o.transmissionTexture,o.thicknessTexture,o.sheenColorTexture,o.sheenRoughnessTexture,o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.specularColorTexture,o.anisotropyTexture].filter(t=>t); }
+  const textureFields=["texture","alphaTexture","emissiveTexture","aoTexture","lightTexture","roughnessTexture","metalnessTexture","normalTexture","matcapTexture","gradientTexture","clearcoatTexture","clearcoatRoughnessTexture","clearcoatNormalTexture","transmissionTexture","thicknessTexture","sheenColorTexture","sheenRoughnessTexture","iridescenceTexture","iridescenceThicknessTexture","specularIntensityTexture","specularColorTexture","anisotropyTexture"];
+  function resolveTextureRefs(c){ const table=new Map(); for(const e of (c.textures||[])) if(e&&e.id!=null) table.set(e.id,e.texture||null); for(const o of (c.objects||[])) for(const f of textureFields){ const t=o[f]; if(t&&t.ref!=null) o[f]=table.get(t.ref)||null; } }
+  function objectTextures(o){ return textureFields.map(f=>o[f]).filter(t=>t); }
   function refreshTexture(t){ if(t&&t.needsUpdate===true&&t.__webglTexture) uploadTextureData(t,t.__webglTexture); }
   function refreshObjectTextures(o){
     const dirty=objectTextures(o).filter(t=>t.needsUpdate===true);
@@ -3763,6 +3902,7 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
   }
   for(const c of DATA.cases) c.camera=buildCamera(c.camera);
   for(const c of DATA.cases) c.nodes=(c.nodes||[]).map(buildNode);
+  for(const c of DATA.cases) resolveTextureRefs(c);
   for(const c of DATA.cases) c.objects=c.objects.map(buildObj);
   const shadowTextureSlots=shadowTextureUnits.filter(u=>maxTextureUnits>u&&maxCombinedTextureUnits>u);
   const shadowTexturesEnabled=shadowTextureSlots.length>0;
