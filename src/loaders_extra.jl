@@ -198,7 +198,7 @@ function inflate(data::AbstractVector{UInt8})
     return out
 end
 
-function zlib_inflate(data::Vector{UInt8})
+function zlib_inflate(data::AbstractVector{UInt8})
     length(data) >= 6 || error("zlib stream is truncated")
     cmf = data[1]
     flg = data[2]
@@ -227,10 +227,10 @@ end
 end
 
 const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
-_is_png_bytes(bytes::Vector{UInt8}) =
+_is_png_bytes(bytes::AbstractVector{UInt8}) =
     length(bytes) >= length(_PNG_SIGNATURE) && bytes[1:length(_PNG_SIGNATURE)] == _PNG_SIGNATURE
 
-function _png_crc_matches(bytes::Vector{UInt8}, ctype_start::Int,
+function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
     c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
     data_start <= data_stop &&
@@ -426,7 +426,7 @@ Decode an 8-bit or 16-bit PNG (grayscale, grayscale+alpha, RGB, RGBA, or palette
 Implements full INFLATE (stored/fixed/dynamic Huffman), all five PNG filters,
 and Adam7 interlacing for supported 8-bit and 16-bit color types.
 """
-function _decode_png(bytes::Vector{UInt8})
+function _decode_png(bytes::AbstractVector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
     idat = UInt8[]
@@ -520,7 +520,7 @@ function load_png(path::String)
     _decode_png(read(path))
 end
 
-@inline function _is_jpeg_bytes(bytes::Vector{UInt8})
+@inline function _is_jpeg_bytes(bytes::AbstractVector{UInt8})
     length(bytes) >= 4 &&
         bytes[1] == 0xff && bytes[2] == 0xd8 &&
         bytes[end - 1] == 0xff && bytes[end] == 0xd9
@@ -554,14 +554,14 @@ _ktx2_comp_bytes(kind::Symbol) = kind === :unorm8 ? 1 : kind === :sfloat16 ? 2 :
 # Little-endian u64 from two u32 reads (`_rd_le32` is defined later in-module).
 @inline _rd_le64(b, i) = _rd_le32(b, i) | (_rd_le32(b, i + 4) << 32)
 
-@inline function _is_ktx2_bytes(bytes::Vector{UInt8})
+@inline function _is_ktx2_bytes(bytes::AbstractVector{UInt8})
     length(bytes) >= 12 && (@views bytes[1:12]) == _KTX2_IDENTIFIER
 end
 
 # Read the KTXorientation value string from the key/value data section.
 # KVD entries are: keyAndValueByteLength (u32), NUL-terminated key, value bytes,
 # then 0-3 bytes of padding to a 4-byte boundary.
-function _ktx2_orientation(bytes::Vector{UInt8}, kvd_off::Int, kvd_len::Int)
+function _ktx2_orientation(bytes::AbstractVector{UInt8}, kvd_off::Int, kvd_len::Int)
     (kvd_len > 0 && kvd_off >= 0 && kvd_off + kvd_len <= length(bytes)) || return ""
     key = b"KTXorientation"
     pos = kvd_off + 1                              # 1-based start of KVD
@@ -590,7 +590,7 @@ function _ktx2_orientation(bytes::Vector{UInt8}, kvd_off::Int, kvd_len::Int)
     return ""
 end
 
-function _decode_ktx2(bytes::Vector{UInt8})
+function _decode_ktx2(bytes::AbstractVector{UInt8})
     length(bytes) >= 80 ||
         error("KTX2 image is truncated: a valid header needs at least 80 bytes, got $(length(bytes))")
     _is_ktx2_bytes(bytes) ||
@@ -1076,7 +1076,7 @@ end
 # EXR RLE (PackBits-style) decode, verified against OpenEXR internal_rle.c:
 # a non-negative control byte c repeats the next byte c+1 times; a negative
 # control byte (c >= 0x80 as signed) copies -c literal bytes.
-function _exr_rle_decompress(data::Vector{UInt8}, outsize::Int)
+function _exr_rle_decompress(data::AbstractVector{UInt8}, outsize::Int)
     out = Vector{UInt8}(undef, outsize)
     di = 1; p = 1; n = length(data)
     while di <= outsize
@@ -1146,7 +1146,7 @@ end
 # `uncompressB44`. HALF channels use 14-byte blocks (or 3-byte flat blocks for
 # B44A); other pixel types are stored raw. pLinear channels (rare) are
 # unsupported and error clearly. Returns the standard scanline block layout.
-function _exr_b44_decode(src::Vector{UInt8}, nlines::Int, channels, plinear,
+function _exr_b44_decode(src::AbstractVector{UInt8}, nlines::Int, channels, plinear,
                          width::Int, isB44A::Bool)
     row_bytes = sum(width * _exr_chan_size(pt) for (_, pt) in channels)
     out = zeros(UInt8, nlines * row_bytes)
@@ -1254,12 +1254,14 @@ mutable struct _PizHDec
     p::Vector{Int}
 end
 
-mutable struct _PizBR
-    data::Vector{UInt8}
+mutable struct _PizBR{D<:AbstractVector{UInt8}}
+    data::D
     off::Int            # 0-based next-read position (JS inOffset.value)
     c::UInt128          # bit accumulator; wide enough for >32-bit Huffman codes
     lc::Int
 end
+_PizBR(data::AbstractVector{UInt8}, off::Int, c::UInt32, lc::Int) =
+    _PizBR(data, off, UInt128(c), lc)
 
 @inline function _piz_getchar!(r::_PizBR)
     b = (r.off + 1) <= length(r.data) ? r.data[r.off + 1] : 0x00
@@ -1516,7 +1518,7 @@ function _piz_wav2decode!(buffer::Vector{Int}, j::Int, nx::Int, ox::Int, ny::Int
     end
 end
 
-function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width::Int)
+function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels, width::Int)
     types = [pt == 1 ? 1 : 2 for (_, pt) in channels]   # int16 count per sample
     starts = Int[]; s = 0
     for t in types
@@ -1578,7 +1580,7 @@ function _exr_piz_decode(blockdata::Vector{UInt8}, nlines::Int, channels, width:
 end
 
 # Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
-function _exr_decode_block(blockbytes::Vector{UInt8}, nlines::Int, width::Int,
+function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width::Int,
                           compression::Int, channels, plinear)
     uncompressed = nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels)
     dsize = length(blockbytes)
@@ -1611,7 +1613,7 @@ end
 
 # Place a decoded block's pixels into the output image at (startX, startY).
 # `raw` is laid out per line, then per channel, then `cols` samples.
-function _exr_place_block!(img, raw::Vector{UInt8}, startX::Int, startY::Int,
+function _exr_place_block!(img, raw::AbstractVector{UInt8}, startX::Int, startY::Int,
                           cols::Int, lines::Int, channels, is_y::Bool)
     rp = 1
     for ln in 0:(lines - 1)
@@ -1757,7 +1759,7 @@ function _decode_exr(bytes::Vector{UInt8})
                 error("EXR tile coordinate ($tileX,$tileY) is out of range")
             cols = min(tile_x, width - startX)
             lines = min(tile_y, height - startY)
-            raw = _exr_decode_block(bytes[bp:(bp + dsize - 1)], lines, cols, compression, channels, plinear)
+            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols, compression, channels, plinear)
             _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
     else
@@ -1773,7 +1775,7 @@ function _decode_exr(bytes::Vector{UInt8})
             (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
             (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
             nlines = min(lines_per_block, ymax - y0 + 1)
-            raw = _exr_decode_block(bytes[bp:(bp + dsize - 1)], nlines, width, compression, channels, plinear)
+            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width, compression, channels, plinear)
             _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
     end
@@ -7812,7 +7814,7 @@ function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::S
     len = _gltf_checked_nonnegative_integer(bv["byteLength"], "bufferView byteLength")
     offset + len <= length(buf) ||
         error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
-    return len == 0 ? UInt8[] : buf[(offset + 1):(offset + len)]
+    return len == 0 ? view(buf, 1:0) : @view buf[(offset + 1):(offset + len)]
 end
 
 function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
@@ -7837,7 +7839,7 @@ function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
     return nothing, ""
 end
 
-function _gltf_decode_image(bytes::Vector{UInt8}, mime::AbstractString)
+function _gltf_decode_image(bytes::AbstractVector{UInt8}, mime::AbstractString)
     image_mime = lowercase(strip(String(mime)))
     if image_mime == "" || image_mime == "image/png"
         _is_png_bytes(bytes) ||
@@ -7875,9 +7877,10 @@ function _jpeg_bytes_for_jpegturbo(bytes::Vector{UInt8})
     return padded
 end
 
-function _decode_jpeg(bytes::Vector{UInt8}; label::AbstractString="glTF image MIME image/jpeg")
+function _decode_jpeg(bytes::AbstractVector{UInt8}; label::AbstractString="glTF image MIME image/jpeg")
     try
-        img = jpeg_decode(RGB, _jpeg_bytes_for_jpegturbo(bytes))
+        dense = bytes isa Vector{UInt8} ? bytes : collect(bytes)
+        img = jpeg_decode(RGB, _jpeg_bytes_for_jpegturbo(dense))
         H, W = size(img)
         out = Array{Float64}(undef, H, W, 3)
         @inbounds for y in 1:H, x in 1:W
@@ -7917,7 +7920,7 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     # raw glTF UVs sample correctly — the flipY=false equivalent of three.js
     # GLTFLoader. KHR_texture_transform stays correct because
     # `texture_transform_uv` runs on the untouched glTF-space UVs.
-    data = data[end:-1:1, :, :]
+    reverse!(data; dims=1)
     sampler = if haskey(texdef, "sampler")
         samplers = get(gltf, "samplers", Any[])
         sampler_idx = _gltf_checked_index(texdef["sampler"], length(samplers),

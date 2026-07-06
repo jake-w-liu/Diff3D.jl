@@ -345,7 +345,7 @@ end
 
 function _box_mipmap_even(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
     nxt = Array{Float64}(undef, nh, nw, C)
-    @inbounds for c in 1:C, i in 1:nh, j in 1:nw
+    @inbounds for c in 1:C, j in 1:nw, i in 1:nh
         si = 2i - 1
         sj = 2j - 1
         nxt[i, j, c] = (cur[si, sj, c] + cur[si, sj + 1, c] +
@@ -372,7 +372,7 @@ function generate_mipmaps!(tex::Texture)
             cw = _box_filter_weights(W, nw)
             inv_area = (nh / H) * (nw / W)        # 1 / (cell height · cell width)
             nxt = Array{Float64}(undef, nh, nw, C)
-            @inbounds for c in 1:C, i in 1:nh, j in 1:nw
+            @inbounds for c in 1:C, j in 1:nw, i in 1:nh
                 acc = 0.0
                 for (si, wi) in rw[i], (sj, wj) in cw[j]
                     acc += wi * wj * cur[si, sj, c]

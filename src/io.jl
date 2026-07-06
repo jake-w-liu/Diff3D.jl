@@ -132,10 +132,21 @@ function image_to_uint8(img::AbstractArray)
     eltype(img) === UInt8 && C == 3 && !isgray2d && return img
     isu8 = eltype(img) === UInt8
     out = Array{UInt8}(undef, H, W, 3)
-    @inbounds for j in 1:W, i in 1:H, c in 1:3
-        sc = C >= 3 ? c : 1     # broadcast channel 1 for <3-channel (grayscale) input
-        v = isgray2d ? img[i, j] : img[i, j, sc]
-        out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
+    if isgray2d
+        @inbounds for c in 1:3, j in 1:W, i in 1:H
+            v = img[i, j]
+            out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
+        end
+    elseif C >= 3
+        @inbounds for c in 1:3, j in 1:W, i in 1:H
+            v = img[i, j, c]
+            out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
+        end
+    else
+        @inbounds for c in 1:3, j in 1:W, i in 1:H
+            v = img[i, j, 1]     # broadcast channel 1 for <3-channel grayscale input
+            out[i, j, c] = isu8 ? UInt8(v) : round(UInt8, _clamp01(v) * 255)
+        end
     end
     return out
 end

@@ -67,7 +67,7 @@ function downsample!(out::AbstractArray, img::AbstractArray, ss::Int)
     (Ho == H && Wo == W) ||
         throw(ArgumentError("downsample output dimensions must match input ÷ scale"))
     inv = 1.0 / (ss * ss)
-    @inbounds for c in 1:3, i in 1:H, j in 1:W
+    @inbounds for c in 1:3, j in 1:W, i in 1:H
         s = 0.0
         for di in 0:ss-1, dj in 0:ss-1
             s += img[(i-1)*ss + di + 1, (j-1)*ss + dj + 1, c]
@@ -742,7 +742,8 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     end
     for (instanced_slot, im) in pairs(cache.instanced)
         mat = _instanced_material(im)
-        (_visible_in_tree(im) && !material_wireframe(mat)) || continue
+        (_visible_in_tree(im) && _instanced_triangle_drawable(im) &&
+         !material_wireframe(mat)) || continue
         base = compute_world_matrix(im)
         instance_materials = _instanced_materials!(cache.instanced_materials,
                                                    instanced_slot, im, mat,
@@ -1871,7 +1872,7 @@ end
 function grayscale_pass(img::AbstractArray)
     H, W = _rgb_image_size(img, "grayscale_pass")
     out = Array{Float64}(undef, H, W, 3)
-    @inbounds for i in 1:H, j in 1:W
+    @inbounds for j in 1:W, i in 1:H
         g = 0.299*img[i,j,1] + 0.587*img[i,j,2] + 0.114*img[i,j,3]
         out[i,j,1] = g; out[i,j,2] = g; out[i,j,3] = g
     end
@@ -2083,7 +2084,7 @@ function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=
         (H >= 3 && W >= 3) || return out
         # Normalize the gradient by the finite depth range so `threshold` is scale-free.
         dmin = Inf; dmax = -Inf
-        @inbounds for i in 1:H, j in 1:W
+        @inbounds for j in 1:W, i in 1:H
             d = depth[i,j]
             if isfinite(d)
                 d < dmin && (dmin = d); d > dmax && (dmax = d)
@@ -2091,7 +2092,7 @@ function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=
         end
         span = (isfinite(dmin) && dmax > dmin) ? (dmax - dmin) : 1.0
         invspan = 1.0 / span
-        @inbounds for i in 2:H-1, j in 2:W-1
+        @inbounds for j in 2:W-1, i in 2:H-1
             d11 = dval(depth[i-1,j-1]); d12 = dval(depth[i-1,j]); d13 = dval(depth[i-1,j+1])
             d21 = dval(depth[i  ,j-1]);                            d23 = dval(depth[i  ,j+1])
             d31 = dval(depth[i+1,j-1]); d32 = dval(depth[i+1,j]); d33 = dval(depth[i+1,j+1])
@@ -2144,7 +2145,7 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
         out = Float64.(img)
         (H >= 3 && W >= 3) || return out
         @inline df(i, j) = (d = depth[clamp(i,1,H), clamp(j,1,W)]; isfinite(d) ? Float64(d) : NaN)
-        @inbounds for i in 2:H-1, j in 2:W-1
+        @inbounds for j in 2:W-1, i in 2:H-1
             dC = depth[i,j]
             isfinite(dC) || continue
             dc = Float64(dC)
@@ -2213,7 +2214,7 @@ function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMat
         H, W = _rgb_image_size(img, "bokeh_pass")
         _check_depth_size(depth, H, W, "bokeh_pass")
         out = Array{Float64}(undef, H, W, 3)
-        @inbounds for i in 1:H, j in 1:W
+        @inbounds for j in 1:W, i in 1:H
             dC = depth[i,j]
             coc = isfinite(dC) ? abs(Float64(dC) - fd) * ap : Float64(maxr)
             # Clamp the float CoC into [0, maxr] BEFORE the Int conversion: a large

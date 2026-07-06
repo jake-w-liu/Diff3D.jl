@@ -11224,6 +11224,23 @@ end
         @test_opt_alloc 4096 cached_instanced_call(r3, im, base, cache2, proj, view, near,
                                                    cam.position)
 
+        line_geo = BufferGeometry()
+        line_geo.positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        line_geo.n_vertices = 2
+        point_geo = BufferGeometry()
+        point_geo.positions = [0.0, 0.0, 0.0]
+        point_geo.n_vertices = 1
+        line_instanced = InstancedMesh(line_geo, MeshBasicMaterial(), 128;
+                                       draw_mode=:lines)
+        point_instanced = InstancedMesh(point_geo, MeshBasicMaterial(), 128;
+                                        draw_mode=:points)
+        nontri_scene = Scene()
+        add!(nontri_scene, line_instanced)
+        add!(nontri_scene, point_instanced)
+        nontri_cache = RenderCache()
+        render_pooled!(RenderTarget(16, 16), nontri_scene, cam, nontri_cache)
+        @test isempty(nontri_cache.instanced_materials)
+
         skin_cache_geo = BoxGeometry(width_segments=12, height_segments=12,
                                      depth_segments=12)
         skin_cache_bone = Bone()
@@ -12702,6 +12719,11 @@ end
                 @test size(mat.map.data) == (2, 2, 3)
                 @test mat.map.colorspace === :srgb
                 @test all(mat.map.data .≈ 1.0)
+                viewed = Diff3D._gltf_buffer_view_bytes(gltf, [png_bytes], 0,
+                                                        "glTF image bufferView")
+                @test viewed[1] == png_bytes[1]
+                png_bytes[1] ⊻= 0xff
+                @test viewed[1] == png_bytes[1]
             end
 
             let dir = mktempdir()
