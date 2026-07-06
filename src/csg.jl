@@ -285,8 +285,8 @@ function _csg_clone_polygons(polygons::Vector{CSGPolygon})
 end
 
 function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
-    ap = _csg_clone_polygons(_csg_geometry_polygons(a))
-    bp = _csg_clone_polygons(_csg_geometry_polygons(b))
+    ap = _csg_geometry_polygons(a)
+    bp = _csg_geometry_polygons(b)
     # An empty operand has a degenerate BSP (root plane === nothing), which the
     # clip step would otherwise pass through wholesale, returning the other solid.
     # Resolve set-theoretically instead: ∅∪X=X, ∅-X=∅, X-∅=X, ∅∩X=∅.

@@ -530,8 +530,8 @@ function _ply_ascii_token_eq(bytes::AbstractVector{UInt8}, first::Int, last::Int
     return true
 end
 
-function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
-                                context::String)
+@inline function _ply_try_parse_ascii_float(bytes::AbstractVector{UInt8},
+                                            first::Int, last::Int)
     sign = 1.0
     p = first
     if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
@@ -540,10 +540,10 @@ function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::
     end
     if p <= last
         if _ply_ascii_token_eq(bytes, p, last, "nan")
-            error("PLY $context must be finite")
+            return 0.0, UInt8(2)
         elseif _ply_ascii_token_eq(bytes, p, last, "inf") ||
                _ply_ascii_token_eq(bytes, p, last, "infinity")
-            error("PLY $context must be finite")
+            return 0.0, UInt8(2)
         end
     end
 
@@ -564,7 +564,7 @@ function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::
             digits += 1
         end
     end
-    digits > 0 || error("PLY $context must be a number")
+    digits > 0 || return 0.0, UInt8(1)
     if p <= last && (bytes[p] == UInt8('e') || bytes[p] == UInt8('E'))
         p += 1
         exp_sign = 1
@@ -579,15 +579,61 @@ function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::
             p += 1
             exp_digits += 1
         end
-        exp_digits > 0 || error("PLY $context must be a number")
+        exp_digits > 0 || return 0.0, UInt8(1)
         exp_value *= exp_sign
         value = exp_value > 308 ? Inf :
                 exp_value < -324 ? 0.0 :
                 value * (10.0 ^ exp_value)
     end
-    p == last + 1 || error("PLY $context must be a number")
+    p == last + 1 || return 0.0, UInt8(1)
     value *= sign
-    isfinite(value) || error("PLY $context must be finite")
+    isfinite(value) || return 0.0, UInt8(2)
+    return value, UInt8(0)
+end
+
+@noinline function _ply_ascii_float_context_error(context::String, status::UInt8)
+    status == UInt8(2) ? error("PLY $context must be finite") :
+                         error("PLY $context must be a number")
+end
+
+function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                                context::String)
+    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) || _ply_ascii_float_context_error(context, status)
+    return value
+end
+
+@noinline function _ply_vertex_ascii_float_error(row::Int, col::Int, props, status::UInt8)
+    reason = status == UInt8(2) ? "finite" : "a number"
+    if col <= length(props)
+        error("PLY vertex row $row property $(props[col][2]) must be $reason")
+    else
+        error("PLY vertex row $row value $col must be $reason")
+    end
+end
+
+@inline function _ply_parse_ascii_vertex_float(bytes::AbstractVector{UInt8},
+                                               first::Int, last::Int,
+                                               row::Int, col::Int, props)
+    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) || _ply_vertex_ascii_float_error(row, col, props, status)
+    return value
+end
+
+@noinline function _ply_face_ascii_float_error(row::Int, role::Symbol, k::Int, status::UInt8)
+    reason = status == UInt8(2) ? "finite" : "a number"
+    if role === :count
+        error("PLY face row $row list count must be $reason")
+    else
+        error("PLY face row $row vertex index $k must be $reason")
+    end
+end
+
+@inline function _ply_parse_ascii_face_float(bytes::AbstractVector{UInt8},
+                                             first::Int, last::Int,
+                                             row::Int, role::Symbol, k::Int=0)
+    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) || _ply_face_ascii_float_error(row, role, k, status)
     return value
 end
 
@@ -616,6 +662,14 @@ end
 
 function _ply_checked_finite(value, context::String)
     isfinite(value) || error("PLY $context must be finite")
+    return value
+end
+
+@noinline _ply_vertex_finite_error(row::Int, prop) =
+    error("PLY vertex row $row property $prop must be finite")
+
+@inline function _ply_checked_finite_vertex(value, row::Int, prop)
+    isfinite(value) || _ply_vertex_finite_error(row, prop)
     return value
 end
 
@@ -818,9 +872,8 @@ function load_ply(path::String)
                         first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
                         first == 0 && break
                         c = (token_count += 1)
-                        context = c <= length(props) ? "property $(props[c][2])" : "value $c"
-                        val = _ply_parse_ascii_float(bytes, first, last,
-                                                     "vertex row $(v+1) $context")
+                        val = _ply_parse_ascii_vertex_float(bytes, first, last,
+                                                            v + 1, c, props)
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val
                         elseif c == iz; positions[b3+3] = val
@@ -851,7 +904,7 @@ function load_ply(path::String)
                             continue
                         end
                         val, i = read_binary(bytes, i, types[c])
-                        val = _ply_checked_finite(val, "vertex row $(v+1) property $(p[2])")
+                        val = _ply_checked_finite_vertex(val, v + 1, p[2])
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val
                         elseif c == iz; positions[b3+3] = val
@@ -882,8 +935,8 @@ function load_ply(path::String)
                     first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
                     first != 0 || error("PLY face data is truncated: row $face_row has no list count")
                     nidx = checked_list_count(
-                        _ply_parse_ascii_float(bytes, first, last,
-                                               "face row $face_row list count"))
+                        _ply_parse_ascii_face_float(bytes, first, last,
+                                                    face_row, :count))
                     first_idx = 0
                     prev_idx = 0
                     for k in 1:nidx
@@ -891,8 +944,8 @@ function load_ply(path::String)
                         first != 0 ||
                             error("PLY face data is truncated: row $face_row declares $nidx indices but has $(k - 1)")
                         idx = checked_vertex_index(
-                            _ply_parse_ascii_float(bytes, first, last,
-                                                   "face row $face_row vertex index $k"),
+                            _ply_parse_ascii_face_float(bytes, first, last,
+                                                        face_row, :index, k),
                             nverts,
                         )
                         if k == 1

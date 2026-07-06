@@ -2898,6 +2898,7 @@ end
         tmpfile = tempname() * ".ppm"
         save_ppm(tmpfile, img)
         @test isfile(tmpfile)
+        @test_opt_alloc 2048 save_ppm(tmpfile, img)
         rm(tmpfile)
     end
 
@@ -6107,6 +6108,22 @@ end
         raycast(ray_alloc_miss, ray_alloc_scene)
         @test_opt_alloc 1024 raycast(ray_alloc_hit, ray_alloc_scene)
         @test_opt_alloc 1024 raycast(ray_alloc_miss, ray_alloc_scene)
+
+        deep_scene = Scene()
+        ray_parent = deep_scene
+        for i in 1:32
+            g = Group()
+            g.position = Vec3(0.01, 0.0, 0.0)
+            add!(ray_parent, g)
+            ray_parent = g
+        end
+        deep_box = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                        MeshBasicMaterial(side=:double))
+        add!(ray_parent, deep_box)
+        deep_hits = raycast(Raycaster(Vec3(0.32, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)),
+                            deep_scene)
+        @test !isempty(deep_hits)
+        @test deep_hits[1].object === deep_box
     end
 
     @testset "Sprite billboard faces camera" begin
@@ -6618,9 +6635,9 @@ end
         @test csg_evaluate(cube, shifted, :addition).n_faces == union_geo.n_faces
         @test csg_evaluate(cube, shifted, :subtraction).n_faces == subtract_geo.n_faces
         @test csg_evaluate(cube, shifted, :intersection).n_faces == intersect_geo.n_faces
-        @test_opt_alloc 112000 csg_union(cube, shifted)
-        @test_opt_alloc 103000 csg_subtract(cube, shifted)
-        @test_opt_alloc 103000 csg_intersect(cube, shifted)
+        @test_opt_alloc 80000 csg_union(cube, shifted)
+        @test_opt_alloc 78000 csg_subtract(cube, shifted)
+        @test_opt_alloc 78000 csg_intersect(cube, shifted)
         csg_alloc_polys = Diff3D._csg_geometry_polygons(SphereGeometry(width_segments=32,
                                                                         height_segments=16))
         csg_alloc_node = Diff3D._csg_node(Diff3D._csg_clone_polygons(csg_alloc_polys))
@@ -15502,7 +15519,7 @@ end
                 end
             end
             @test Diff3D.load_ply(grid_ply).n_faces == 2 * 15 * 15
-            @test_opt_alloc 2_000_000 Diff3D.load_ply(grid_ply)
+            @test_opt_alloc 100_000 Diff3D.load_ply(grid_ply)
             rm(grid_ply; force=true)
 
             # --- binary_little_endian ---

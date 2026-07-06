@@ -222,10 +222,10 @@ end
 # Möller–Trumbore triangle path; PointsObject uses per-vertex pick radius;
 # LineObject/LineSegments use per-segment pick radius. Other object types (Group,
 # Scene, Bone, Sprite, ...) carry no testable geometry and add nothing.
-function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D)
+function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
+                          obj::AbstractObject3D, wm::Mat4{Float64})
     o = rc.ray.origin; d = rc.ray.direction
     if obj isa Mesh
-        wm = compute_world_matrix(obj)
         geo = _mesh_geometry(obj)
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = material_side(_mesh_material(obj))
@@ -242,7 +242,6 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     elseif obj isa InstancedMesh && _instanced_triangle_drawable(obj)
         # Each instance is the geometry under world_matrix * instance_matrix; test
         # all of them (was silently skipped, so instanced scenes returned no hits).
-        wm = compute_world_matrix(obj)
         geo = _instanced_geometry(obj)
         side = material_side(_instanced_material(obj))
         @inbounds for im in obj.instance_matrices
@@ -264,7 +263,6 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
         geo = _skinned_buffer_geometry(obj)
         mats = _skinning_matrices!(rc.skinning_matrices, obj)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        wm = compute_world_matrix(obj)
         side = material_side(obj.material)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
@@ -277,7 +275,6 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
             end
         end
     elseif obj isa PointsObject
-        wm = compute_world_matrix(obj)
         geo = _points_geometry(obj)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.point_threshold
@@ -291,7 +288,6 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
             end
         end
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
-        wm = compute_world_matrix(obj)
         geo = _line_geometry(obj)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.line_threshold
@@ -327,14 +323,23 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::Abstra
     return hits
 end
 
+_raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D) =
+    _raycast_object!(hits, rc, obj, compute_world_matrix(obj))
+
 function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
-                             obj::AbstractObject3D)
+                             obj::AbstractObject3D, world::Mat4{Float64})
     is_visible(obj) || return hits
-    layers_test(object_layers(obj), rc.layers) && _raycast_object!(hits, rc, obj)
+    layers_test(object_layers(obj), rc.layers) && _raycast_object!(hits, rc, obj, world)
     for child in get_children(obj)
-        _raycast_recursive!(hits, rc, child)
+        is_visible(child) || continue
+        _raycast_recursive!(hits, rc, child, world * compute_local_matrix(child))
     end
     return hits
+end
+
+function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
+                             obj::AbstractObject3D)
+    return _raycast_recursive!(hits, rc, obj, compute_world_matrix(obj))
 end
 
 _intersection_distance_lt(a::Intersection, b::Intersection) =
@@ -357,10 +362,11 @@ ancestor is not pickable.
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     hits = Intersection[]
     if recursive
-        _visible_in_tree(root) && _raycast_recursive!(hits, rc, root)
+        _visible_in_tree(root) &&
+            _raycast_recursive!(hits, rc, root, compute_world_matrix(root))
     else
         if _visible_in_tree(root) && layers_test(object_layers(root), rc.layers)
-            _raycast_object!(hits, rc, root)
+            _raycast_object!(hits, rc, root, compute_world_matrix(root))
         end
     end
     sort!(hits; lt=_intersection_distance_lt)

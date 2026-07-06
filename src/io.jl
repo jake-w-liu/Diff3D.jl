@@ -34,6 +34,22 @@ end
 Save image as PPM (Portable Pixmap) — no dependencies needed.
 `image` is Array{T, 3} of size (H, W, 3), values in [0,1].
 """
+@inline function _write_ppm_u8_ascii(io::IO, value::Int)
+    if value >= 100
+        h = value ÷ 100
+        rem = value - 100h
+        write(io, UInt8('0') + UInt8(h))
+        write(io, UInt8('0') + UInt8(rem ÷ 10))
+        write(io, UInt8('0') + UInt8(rem % 10))
+    elseif value >= 10
+        write(io, UInt8('0') + UInt8(value ÷ 10))
+        write(io, UInt8('0') + UInt8(value % 10))
+    else
+        write(io, UInt8('0') + UInt8(value))
+    end
+    return nothing
+end
+
 function save_ppm(filename::String, image::Array{T, 3}) where T
     H, W, C = _image_size_and_channels(image, "PPM image")
     gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
@@ -47,7 +63,9 @@ function save_ppm(filename::String, image::Array{T, 3}) where T
                 r = round(Int, _clamp01(image[i, j, 1]) * 255)
                 g = round(Int, _clamp01(image[i, j, gi]) * 255)
                 b = round(Int, _clamp01(image[i, j, bi]) * 255)
-                print(f, "$r $g $b ")
+                _write_ppm_u8_ascii(f, r); write(f, UInt8(' '))
+                _write_ppm_u8_ascii(f, g); write(f, UInt8(' '))
+                _write_ppm_u8_ascii(f, b); write(f, UInt8(' '))
             end
             println(f)
         end

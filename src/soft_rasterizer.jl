@@ -44,6 +44,19 @@ function SoftRasterizerConfig(; sigma=1.0, gamma=1.0,
     SoftRasterizerConfig{T}(sigma_t, gamma_t, bg_t, eps_t)
 end
 
+struct _SoftScreenTriangle{T}
+    s1::Vec3{T}
+    s2::Vec3{T}
+    s3::Vec3{T}
+    color::Color3{T}
+    min_x::Int
+    max_x::Int
+    min_y::Int
+    max_y::Int
+    area::T
+    valid::Bool
+end
+
 """
 Differentiable soft rendering.
 Takes explicit arrays rather than scene-graph objects for AD compatibility.
@@ -98,38 +111,31 @@ function soft_render(vertices::Vector{Vec3{Tv}},
             throw(ArgumentError("soft_render face indices must reference vertices"))
     end
 
-    # Project all vertices to homogeneous clip space. Faces are clipped against
-    # the clip-space near plane before perspective division, matching the hard
-    # rasterizer's near clipping for triangles crossing the camera plane.
-    clip_verts = Vector{Vec4{T}}(undef, length(verts))
-    for (vi, v) in enumerate(verts)
-        clip_verts[vi] = mat4_transform_vec4(vp, Vec4(v.x, v.y, v.z, one(T)))
-    end
-
-    # Precompute screen-space triangles as NamedTuples
-    screen_tris = Vector{NamedTuple{(:s1,:s2,:s3,:color,:min_x,:max_x,:min_y,:max_y,:area,:valid),
-                                     Tuple{Vec3{T},Vec3{T},Vec3{T},Color3{T},Int,Int,Int,Int,T,Bool}}}(undef, 2n_faces)
+    # Precompute screen-space triangles. Allocate for the common no-near-clip
+    # case (one emitted triangle per face) and grow only for split triangles.
+    screen_tris = Vector{_SoftScreenTriangle{T}}(undef, n_faces)
     n_screen_tris = 0
-    clip_poly = Vector{Vec4{T}}(undef, 3)
-    clipped_poly = Vector{Vec4{T}}(undef, 4)
-    screen_poly = Vector{Vec3{T}}(undef, 4)
+    max_screen_tris = 2n_faces
 
     for fi in 1:n_faces
         i1, i2, i3 = faces[fi]
-        clip_poly[1] = clip_verts[i1]
-        clip_poly[2] = clip_verts[i2]
-        clip_poly[3] = clip_verts[i3]
-        n_clipped = _soft_clip_near!(clipped_poly, clip_poly, 3, eps)
+        v1 = verts[i1]; v2 = verts[i2]; v3 = verts[i3]
+        c1 = mat4_transform_vec4(vp, Vec4(v1.x, v1.y, v1.z, one(T)))
+        c2 = mat4_transform_vec4(vp, Vec4(v2.x, v2.y, v2.z, one(T)))
+        c3 = mat4_transform_vec4(vp, Vec4(v3.x, v3.y, v3.z, one(T)))
+        n_clipped, c1, c2, c3, c4 = _soft_clip_near_triangle(c1, c2, c3, eps)
         n_clipped < 3 && continue
-        @inbounds for k in 1:n_clipped
-            screen_poly[k] = _soft_project_clip_to_screen(clipped_poly[k], T(W), T(H))
-        end
-
-        @inbounds for k in 2:(n_clipped - 1)
-            n_screen_tris += 1
-            screen_tris[n_screen_tris] = _soft_screen_triangle(
-                screen_poly[1], screen_poly[k], screen_poly[k + 1],
-                cols[fi], σ, eps, W, H)
+        s1 = _soft_project_clip_to_screen(c1, T(W), T(H))
+        s2 = _soft_project_clip_to_screen(c2, T(W), T(H))
+        s3 = _soft_project_clip_to_screen(c3, T(W), T(H))
+        n_screen_tris = _soft_store_screen_triangle!(
+            screen_tris, n_screen_tris, max_screen_tris,
+            s1, s2, s3, cols[fi], σ, eps, W, H)
+        if n_clipped == 4
+            s4 = _soft_project_clip_to_screen(c4, T(W), T(H))
+            n_screen_tris = _soft_store_screen_triangle!(
+                screen_tris, n_screen_tris, max_screen_tris,
+                s1, s3, s4, cols[fi], σ, eps, W, H)
         end
     end
     n_screen_tris == 0 && return _soft_background_image(T, H, W, bg)
@@ -383,6 +389,49 @@ function _soft_clip_near!(out::Vector{Vec4{T}}, poly::Vector{Vec4{T}},
     return out_n
 end
 
+@inline function _soft_clip_push(n::Int, v::Vec4{T},
+                                c1::Vec4{T}, c2::Vec4{T},
+                                c3::Vec4{T}, c4::Vec4{T}) where {T}
+    n += 1
+    if n == 1
+        c1 = v
+    elseif n == 2
+        c2 = v
+    elseif n == 3
+        c3 = v
+    else
+        c4 = v
+    end
+    return n, c1, c2, c3, c4
+end
+
+function _soft_clip_near_triangle(a::Vec4{T}, b::Vec4{T}, c::Vec4{T}, eps) where {T}
+    out_n = 0
+    c1 = a
+    c2 = a
+    c3 = a
+    c4 = a
+    prev = c
+    prev_d = _soft_near_value(prev, eps)
+    prev_in = prev_d >= zero(prev_d)
+    @inbounds for curr in (a, b, c)
+        curr_d = _soft_near_value(curr, eps)
+        curr_in = curr_d >= zero(curr_d)
+        if curr_in != prev_in
+            t = prev_d / (prev_d - curr_d)
+            out_n, c1, c2, c3, c4 =
+                _soft_clip_push(out_n, _soft_lerp_clip(prev, curr, t), c1, c2, c3, c4)
+        end
+        if curr_in
+            out_n, c1, c2, c3, c4 = _soft_clip_push(out_n, curr, c1, c2, c3, c4)
+        end
+        prev = curr
+        prev_d = curr_d
+        prev_in = curr_in
+    end
+    return out_n, c1, c2, c3, c4
+end
+
 @inline function _soft_project_clip_to_screen(clip::Vec4{T}, W::T, H::T) where {T}
     invw = one(T) / clip.w
     ndcx = clip.x * invw
@@ -417,9 +466,21 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
         bmax_y = 0
     end
     valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
-    return (s1=s1, s2=s2, s3=s3, color=color,
-            min_x=bmin_x, max_x=bmax_x, min_y=bmin_y, max_y=bmax_y,
-            area=area, valid=valid)
+    return _SoftScreenTriangle(s1, s2, s3, color,
+                               bmin_x, bmax_x, bmin_y, bmax_y,
+                               area, valid)
+end
+
+@inline function _soft_store_screen_triangle!(
+        screen_tris::Vector{_SoftScreenTriangle{T}}, n::Int, max_n::Int,
+        s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T}, color::Color3{T},
+        σ, eps, W::Int, H::Int) where {T}
+    if n == length(screen_tris)
+        resize!(screen_tris, min(max_n, max(n + 1, 2n)))
+    end
+    n += 1
+    @inbounds screen_tris[n] = _soft_screen_triangle(s1, s2, s3, color, σ, eps, W, H)
+    return n
 end
 
 """
