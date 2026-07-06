@@ -119,6 +119,7 @@ end
 
 const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
 const _OBJECT_LAYER_LOCK = ReentrantLock()
+const _DEFAULT_OBJECT_LAYER_MASK = UInt32(1)
 
 """
 Layers mask attached to `obj`. Scene-graph objects need not carry a `layers`
@@ -135,6 +136,20 @@ function object_layers(obj::AbstractObject3D)
         unlock(_OBJECT_LAYER_LOCK)
     end
 end
+
+function _object_layer_mask(obj::AbstractObject3D)
+    hasproperty(obj, :layers) && return getfield(obj, :layers).mask
+    lock(_OBJECT_LAYER_LOCK)
+    try
+        layers = get(_OBJECT_LAYER_STORE, obj, nothing)
+        return layers === nothing ? _DEFAULT_OBJECT_LAYER_MASK : layers.mask
+    finally
+        unlock(_OBJECT_LAYER_LOCK)
+    end
+end
+
+@inline _layers_test_object(obj::AbstractObject3D, layers::Layers) =
+    (_object_layer_mask(obj) & layers.mask) != 0
 
 # Distance from point `p` to the ray, and the ray parameter `t` (in units of the
 # ray direction `d`, which `Raycaster` keeps normalised) at the closest approach.
@@ -329,7 +344,7 @@ _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3
 function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
                              obj::AbstractObject3D, world::Mat4{Float64})
     is_visible(obj) || return hits
-    layers_test(object_layers(obj), rc.layers) && _raycast_object!(hits, rc, obj, world)
+    _layers_test_object(obj, rc.layers) && _raycast_object!(hits, rc, obj, world)
     for child in get_children(obj)
         is_visible(child) || continue
         _raycast_recursive!(hits, rc, child, world * compute_local_matrix(child))
@@ -365,7 +380,7 @@ function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
         _visible_in_tree(root) &&
             _raycast_recursive!(hits, rc, root, compute_world_matrix(root))
     else
-        if _visible_in_tree(root) && layers_test(object_layers(root), rc.layers)
+        if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
             _raycast_object!(hits, rc, root, compute_world_matrix(root))
         end
     end

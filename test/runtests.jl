@@ -13541,6 +13541,24 @@ end
             layers_set!(rcL.layers, 2)
             @test !isempty(raycast(rcL, box))                # object channel 2 is now pickable
 
+            empty!(Diff3D._OBJECT_LAYER_STORE)
+            default_scene = Scene()
+            default_box = Mesh(BoxGeometry(width=1.0,height=1.0,depth=1.0), MeshBasicMaterial())
+            default_box.position = Vec3(3.0,0.0,0.0)
+            add!(default_scene, default_box)
+            @test length(Diff3D._OBJECT_LAYER_STORE) == 0
+            @test !isempty(raycast(rayx(), default_scene))
+            @test length(Diff3D._OBJECT_LAYER_STORE) == 0
+            default_layers = object_layers(default_box)
+            @test length(Diff3D._OBJECT_LAYER_STORE) == 1
+            layers_set!(default_layers, 2)
+            rc_default_layer0 = rayx()
+            layers_set!(rc_default_layer0.layers, 0)
+            @test isempty(raycast(rc_default_layer0, default_scene))
+            rc_default_layer2 = rayx()
+            layers_set!(rc_default_layer2.layers, 2)
+            @test !isempty(raycast(rc_default_layer2, default_scene))
+
             # --- recursive flag ---
             grp = Group()
             add!(grp, box)
