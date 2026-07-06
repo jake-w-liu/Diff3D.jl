@@ -3896,8 +3896,25 @@ end
                                            light_caps=Diff3D._web_light_caps([web_case]))
         @test html == expected_html
         @test occursin("\"textures\":[", html)
+        @test occursin("\"envTextures\":[", html)
         @test occursin("function resolveTextureRefs(c)", html)
+        @test occursin("function resolveEnvTextureRefs(c)", html)
         @test occursin("for(const c of DATA.cases) resolveTextureRefs(c)", html)
+        @test occursin("for(const c of DATA.cases) resolveEnvTextureRefs(c)", html)
+        shared_env_face = Texture(fill(0.25, 2, 2, 3); filter=:nearest)
+        shared_env = CubeTexture(ntuple(_ -> shared_env_face, 6))
+        shared_env_scene = Scene()
+        add!(shared_env_scene, Mesh(BoxGeometry(),
+             MeshStandardMaterial(envmap=shared_env); name="shared_env_1"))
+        add!(shared_env_scene, Mesh(BoxGeometry(),
+             MeshPhysicalMaterial(envmap=shared_env); name="shared_env_2"))
+        shared_env_case = WebGLExportCase("shared_env", "Shared env", "",
+                                          shared_env_scene; radius=4.0)
+        shared_env_json = Diff3D._web_case_json(shared_env_case)
+        @test length(findall("\"envTexture\":{\"ref\":1}", shared_env_json)) == 2
+        @test length(findall("\"envTextures\":[{\"id\":1,\"texture\":{\"colors\"", shared_env_json)) == 1
+        @test length(findall("\"faces\":[{\"width\":2,\"height\":2", shared_env_json)) == 1
+        @test !occursin("\"envTexture\":{\"colors\"", shared_env_json)
         if DIFF3D_ALLOC_ASSERTIONS_ENABLED
             save_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
             for i in 1:2
@@ -4561,7 +4578,8 @@ end
         @test occursin("map.xy*=uNormalScale", html)
         @test occursin("uNormalMap", html)
         @test occursin("mappedNormal", html)
-        @test occursin("\"envTexture\":{\"colors\":[", html)
+        @test occursin(r"\"envTexture\":\{\"ref\":\d+\}", html)
+        @test occursin("\"envTextures\":[{\"id\":1,\"texture\":{\"colors\":[", html)
         @test occursin("\"faces\":[{\"width\":4,\"height\":4", html)
         @test occursin("\"envMapIntensity\":0.59999999999999998", html)
         @test occursin("uUseEnvMap", html)
@@ -4578,7 +4596,7 @@ end
         @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", html)
         @test occursin("{\"width\":1,\"height\":1", html)
         @test occursin("uploadedMipmaps", html)
-        @test occursin("return {texture:tex,maxLod:maxLod}", html)
+        @test occursin("return env.__webglCubeTexture", html)
         @test occursin("uniform1f(p,\"uEnvMaxLod\",envTex.maxLod||0)", html)
         @test occursin("gl.bindTexture(gl.TEXTURE_CUBE_MAP,envTex.texture)", html)
         @test occursin("envColor", html)
@@ -4836,6 +4854,8 @@ end
         @test occursin("function updateBoneTexture", html)
         @test occursin("meshFragmentShaderRuntime", html)
         @test occursin("function makeCubeTexture", html)
+        @test occursin("if(env.__webglCubeTexture) return env.__webglCubeTexture", html)
+        @test occursin("env.__webglCubeTexture={texture:tex,maxLod:maxLod}", html)
         @test occursin("function makeSolidCubeTexture", html)
         @test occursin("defaultEnvCubeTex", html)
         @test occursin("gl.TEXTURE_CUBE_MAP_POSITIVE_X", html)
