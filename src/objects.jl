@@ -277,13 +277,13 @@ set_parent!(o::Sprite, p) = (o.parent = p)
 World matrix for a sprite: positioned at its world location, oriented so its
 local axes coincide with the camera's right/up/forward axes (screen-facing).
 """
-function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera)
+function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
+                             wm::Mat4{Float64}=compute_world_matrix(sprite))
     V = view_matrix(camera)
     # Rows 1..3 of the view matrix are the camera right/up/forward axes in world space.
     right = Vec3(mat4_get(V,1,1), mat4_get(V,1,2), mat4_get(V,1,3))
     up    = Vec3(mat4_get(V,2,1), mat4_get(V,2,2), mat4_get(V,2,3))
     fwd   = Vec3(mat4_get(V,3,1), mat4_get(V,3,2), mat4_get(V,3,3))
-    wm = compute_world_matrix(sprite)
     p = Vec3(mat4_get(wm,1,4), mat4_get(wm,2,4), mat4_get(wm,3,4))
     # World scale = column norms of the world matrix (as in the WebGL sprite shader).
     sx = sqrt(mat4_get(wm,1,1)^2 + mat4_get(wm,2,1)^2 + mat4_get(wm,3,1)^2)

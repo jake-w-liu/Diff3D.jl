@@ -1113,39 +1113,42 @@ end
 
 """Rasterize `LineObject` strips, `LineLoop` closed strips, and `LineSegments` pairs."""
 function _draw_line_object!(rt::RenderTarget, obj::LineObject,
+                            world::Mat4,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
-        rt, geo, obj.material, compute_world_matrix(obj), :line_strip, proj, view,
+        rt, geo, obj.material, world, :line_strip, proj, view,
         near, xlo, xhi, ylo, yhi, stamp, stamp_id,
         _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
 end
 
 function _draw_line_object!(rt::RenderTarget, obj::LineSegments,
+                            world::Mat4,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
-        rt, geo, obj.material, compute_world_matrix(obj), :lines, proj, view, near,
+        rt, geo, obj.material, world, :lines, proj, view, near,
         xlo, xhi, ylo, yhi, stamp, stamp_id,
         _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
 end
 
 function _draw_line_object!(rt::RenderTarget, obj::LineLoop,
+                            world::Mat4,
                             proj::Mat4, view::Mat4, near,
                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
     return _draw_line_geometry_from_material!(
-        rt, geo, obj.material, compute_world_matrix(obj), :line_loop, proj, view, near,
+        rt, geo, obj.material, world, :line_loop, proj, view, near,
         xlo, xhi, ylo, yhi, stamp, stamp_id,
         _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
@@ -1170,12 +1173,13 @@ function _draw_instanced_lines_geometry!(rt::RenderTarget, geo, material,
 end
 
 function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
+                                base::Mat4,
                                 proj::Mat4, view::Mat4, near,
                                 xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                 stamp::Matrix{Int}, stamp_id::Int)
     _draw_instanced_lines_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
                                     obj.instance_matrices, obj.instance_colors,
-                                    compute_world_matrix(obj), obj.draw_mode,
+                                    base, obj.draw_mode,
                                     proj, view, near, xlo, xhi, ylo, yhi,
                                     stamp, stamp_id)
 end
@@ -1228,11 +1232,13 @@ end
 
 function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                      proj::Mat4, view::Mat4, near,
+                                     parent_world::Mat4{Float64},
                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                      cache::Union{Nothing,RenderCache},
                                      stamp::Union{Nothing,Matrix{Int}},
                                      stamp_id::Int)
     is_visible(obj) || return stamp, stamp_id
+    world = parent_world * compute_local_matrix(obj)
     if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         line_mode = obj isa LineSegments ? :lines :
                     obj isa LineLoop ? :line_loop : :line_strip
@@ -1240,7 +1246,7 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
             stamp === nothing &&
                 (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
                          _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+            stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                           xlo, xhi, ylo, yhi, stamp, stamp_id,
                                           cache === nothing ? nothing :
                                           cache.morph_positions)
@@ -1250,7 +1256,7 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
             stamp === nothing &&
                 (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
                          _render_cache_stamp!(cache, rt.height, rt.width))
-            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
+            stamp_id = _draw_instanced_lines!(rt, obj, world, proj, view, near,
                                               xlo, xhi, ylo, yhi, stamp, stamp_id)
         end
     end
@@ -1261,10 +1267,12 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
         if child isa LineObject || child isa LineSegments || child isa LineLoop ||
            child isa InstancedMesh
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          world,
                                                           xlo, xhi, ylo, yhi, cache,
                                                           stamp, stamp_id)
         else
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          world,
                                                           xlo, xhi, ylo, yhi, cache,
                                                           stamp, stamp_id)
         end
@@ -1274,32 +1282,34 @@ end
 
 function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObject3D,
                                             proj::Mat4, view::Mat4, near,
+                                            parent_world::Mat4{Float64},
                                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                             stamp::Matrix{Int}, stamp_id::Int,
                                             morph_scratch::Vector{Vec3{Float64}})
     is_visible(obj) || return stamp_id
+    world = parent_world * compute_local_matrix(obj)
     if obj isa LineObject
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_strip) &&
-            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+            (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
     elseif obj isa LineSegments
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :lines) &&
-            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+            (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
     elseif obj isa LineLoop
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_loop) &&
-            (stamp_id = _draw_line_object!(rt, obj, proj, view, near,
+            (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
     elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
         geo = _instanced_geometry(obj)
         if _line_geometry_has_segment(geo, obj.draw_mode)
-            stamp_id = _draw_instanced_lines!(rt, obj, proj, view, near,
+            stamp_id = _draw_instanced_lines!(rt, obj, world, proj, view, near,
                                               xlo, xhi, ylo, yhi, stamp, stamp_id)
         end
     end
@@ -1310,10 +1320,12 @@ function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObjec
         if child isa LineObject || child isa LineSegments || child isa LineLoop ||
            child isa InstancedMesh
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          world,
                                                           xlo, xhi, ylo, yhi, stamp,
                                                           stamp_id, morph_scratch)
         else
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          world,
                                                           xlo, xhi, ylo, yhi, stamp,
                                                           stamp_id, morph_scratch)
         end
@@ -1330,11 +1342,12 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
     view = view_matrix(camera)
     near = _camera_near(camera)
     if cache === nothing
-        _render_lines_visible_tree!(rt, scene, proj, view, near, xlo, xhi, ylo, yhi,
-                                    cache, nothing, 0)
+        _render_lines_visible_tree!(rt, scene, proj, view, near, Mat4{Float64}(),
+                                    xlo, xhi, ylo, yhi, cache, nothing, 0)
     else
         stamp = _render_cache_stamp!(cache, rt.height, rt.width)
         _render_lines_visible_tree_cached!(rt, scene, proj, view, near,
+                                           Mat4{Float64}(),
                                            xlo, xhi, ylo, yhi, stamp, 0,
                                            cache.morph_positions)
     end
@@ -1517,25 +1530,26 @@ end
     return nothing
 end
 
-function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, camera::AbstractCamera,
-                              view::Mat4, vp::Mat4, W::Int, H::Int,
-                              clipping_planes, xlo::Int, xhi::Int,
+function _draw_sprite_object!(rt::RenderTarget, obj::Sprite, world::Mat4,
+                              camera::AbstractCamera, view::Mat4, vp::Mat4,
+                              W::Int, H::Int, clipping_planes, xlo::Int, xhi::Int,
                               ylo::Int, yhi::Int,
                               cache::Union{Nothing,RenderCache},
                               state::_SpriteRenderState)
     mat = obj.material
     if mat isa SpriteMaterial
         return _draw_sprite_object_material!(rt, obj, mat::SpriteMaterial,
-                                             camera, view, vp, W, H,
+                                             world, camera, view, vp, W, H,
                                              clipping_planes, xlo, xhi, ylo, yhi,
                                              cache, state)
     end
-    return _draw_sprite_object_material!(rt, obj, mat, camera, view, vp, W, H,
-                                         clipping_planes, xlo, xhi, ylo, yhi,
-                                         cache, state)
+    return _draw_sprite_object_material!(rt, obj, mat, world, camera, view, vp,
+                                         W, H, clipping_planes, xlo, xhi, ylo,
+                                         yhi, cache, state)
 end
 
 function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
+                                       world::Mat4,
                                        camera::AbstractCamera, view::Mat4,
                                        vp::Mat4, W::Int, H::Int, clipping_planes,
                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
@@ -1543,7 +1557,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                        state::_SpriteRenderState)
     state.stamp_id += 1
     stamp_id = state.stamp_id
-    M = sprite_world_matrix(obj, camera)
+    M = sprite_world_matrix(obj, camera, world)
     tint = _material_field(mat, :color)
     tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
@@ -1672,37 +1686,42 @@ end
 function _render_sprites_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                        camera::AbstractCamera, view::Mat4, vp::Mat4,
                                        W::Int, H::Int, clipping_planes,
+                                       parent_world::Mat4{Float64},
                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                        cache::Union{Nothing,RenderCache},
                                        state::_SpriteRenderState)
     is_visible(obj) || return nothing
+    world = parent_world * compute_local_matrix(obj)
     if obj isa Sprite
-        _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
+        _draw_sprite_object!(rt, obj, world, camera, view, vp, W, H,
                              clipping_planes, xlo, xhi, ylo, yhi,
                              cache, state)
     end
     _render_sprite_children!(rt, obj, camera, view, vp, W, H, clipping_planes,
-                             xlo, xhi, ylo, yhi, cache, state)
+                             world, xlo, xhi, ylo, yhi, cache, state)
     return nothing
 end
 
 function _render_sprites_visible_tree!(rt::RenderTarget, obj::Sprite,
                                        camera::AbstractCamera, view::Mat4, vp::Mat4,
                                        W::Int, H::Int, clipping_planes,
+                                       parent_world::Mat4{Float64},
                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                        cache::Union{Nothing,RenderCache},
                                        state::_SpriteRenderState)
     is_visible(obj) || return nothing
-    _draw_sprite_object!(rt, obj, camera, view, vp, W, H,
+    world = parent_world * compute_local_matrix(obj)
+    _draw_sprite_object!(rt, obj, world, camera, view, vp, W, H,
                          clipping_planes, xlo, xhi, ylo, yhi, cache, state)
     _render_sprite_children!(rt, obj, camera, view, vp, W, H, clipping_planes,
-                             xlo, xhi, ylo, yhi, cache, state)
+                             world, xlo, xhi, ylo, yhi, cache, state)
     return nothing
 end
 
 function _render_sprite_children!(rt::RenderTarget, obj::AbstractObject3D,
                                   camera::AbstractCamera, view::Mat4, vp::Mat4,
                                   W::Int, H::Int, clipping_planes,
+                                  parent_world::Mat4{Float64},
                                   xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                   cache::Union{Nothing,RenderCache},
                                   state::_SpriteRenderState)
@@ -1711,11 +1730,13 @@ function _render_sprite_children!(rt::RenderTarget, obj::AbstractObject3D,
         if child isa Sprite
             _render_sprites_visible_tree!(rt, child::Sprite, camera, view, vp,
                                           W, H, clipping_planes,
+                                          parent_world,
                                           xlo, xhi, ylo, yhi,
                                           cache, state)
         else
             _render_sprites_visible_tree!(rt, child, camera, view, vp,
                                           W, H, clipping_planes,
+                                          parent_world,
                                           xlo, xhi, ylo, yhi,
                                           cache, state)
         end
@@ -1749,6 +1770,7 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
     state.stamp = nothing
     state.stamp_id = 0
     _render_sprites_visible_tree!(rt, scene, camera, view, vp, W, H, clipping_planes,
+                                  Mat4{Float64}(),
                                   xlo, xhi, ylo, yhi, cache, state)
     return rt
 end
@@ -1870,13 +1892,14 @@ end
 end
 
 function _draw_points_object!(rt::RenderTarget, obj::PointsObject,
+                              world::Mat4,
                               camera::AbstractCamera, proj::Mat4, view::Mat4,
                               near, W::Int, H::Int, xlo::Int, xhi::Int,
                               ylo::Int, yhi::Int,
                               morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _points_geometry(obj)
     _draw_points_geometry_from_material!(
-        rt, geo, obj.material, compute_world_matrix(obj), camera, proj, view, near,
+        rt, geo, obj.material, world, camera, proj, view, near,
         W, H, xlo, xhi, ylo, yhi,
         _object_morph_positions(obj, geo, morph_scratch),
         Color3(1.0,1.0,1.0))
@@ -1899,12 +1922,13 @@ function _draw_instanced_points_geometry!(rt::RenderTarget, geo, material,
 end
 
 function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
+                                 base::Mat4,
                                  camera::AbstractCamera, proj::Mat4, view::Mat4,
                                  near, W::Int, H::Int, xlo::Int, xhi::Int,
                                  ylo::Int, yhi::Int)
     _draw_instanced_points_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
                                      obj.instance_matrices, obj.instance_colors,
-                                     compute_world_matrix(obj), camera, proj, view,
+                                     base, camera, proj, view,
                                      near, W, H, xlo, xhi, ylo, yhi)
     return nothing
 end
@@ -1926,14 +1950,16 @@ end
 function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                       camera::AbstractCamera, proj::Mat4, view::Mat4,
                                       near, W::Int, H::Int,
+                                      parent_world::Mat4{Float64},
                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                       morph_scratch::Union{Nothing,Vector{Vec3{Float64}}})
     is_visible(obj) || return nothing
+    world = parent_world * compute_local_matrix(obj)
     if obj isa PointsObject
-        _draw_points_object!(rt, obj, camera, proj, view, near, W, H, xlo, xhi,
+        _draw_points_object!(rt, obj, world, camera, proj, view, near, W, H, xlo, xhi,
                              ylo, yhi, morph_scratch)
     elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
-        _draw_instanced_points!(rt, obj, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
+        _draw_instanced_points!(rt, obj, world, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
     end
     for child in get_children(obj)
         _point_subtree_may_draw(child) || continue
@@ -1941,9 +1967,11 @@ function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
         # in scenes with many primitive objects.
         if child isa PointsObject || child isa InstancedMesh
             _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
+                                         world,
                                          xlo, xhi, ylo, yhi, morph_scratch)
         else
             _render_points_visible_tree!(rt, child, camera, proj, view, near, W, H,
+                                         world,
                                          xlo, xhi, ylo, yhi, morph_scratch)
         end
     end
@@ -1962,6 +1990,7 @@ function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstr
     W, H = rt.width, rt.height
 
     _render_points_visible_tree!(rt, scene, camera, proj, view, near, W, H,
+                                 Mat4{Float64}(),
                                  xlo, xhi, ylo, yhi,
                                  cache === nothing ? nothing : cache.morph_positions)
     return rt

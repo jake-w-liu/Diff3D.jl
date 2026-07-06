@@ -11871,6 +11871,53 @@ end
                                              line_cam;
                                              cache=many_sprite_alpha_cache)
 
+        function primitive_chain_pair(kind::Symbol, n::Int)
+            deep = Scene(background=Color3(0.0, 0.0, 0.0))
+            flat = Scene(background=Color3(0.0, 0.0, 0.0))
+            line_geo = BufferGeometry([-0.04, 0.0, 0.0, 0.04, 0.0, 0.0],
+                                      Float64[], Float64[], Int[], 2, 0)
+            point_geo = BufferGeometry([0.0, 0.0, 0.0],
+                                       Float64[], Float64[], Int[], 1, 0)
+            line_mat = LineBasicMaterial(color=Color3(0.8, 0.9, 1.0))
+            point_mat = PointsMaterial(color=Color3(1.0, 0.8, 0.4), size=2.0)
+            sprite_mat = SpriteMaterial(color=Color3(0.7, 0.8, 0.9))
+            make_obj() = kind === :line ? LineSegments(line_geo, line_mat) :
+                         kind === :point ? PointsObject(point_geo, point_mat) :
+                         Sprite(sprite_mat)
+            parent = deep
+            x = 0.0
+            for i in 1:n
+                dx = 0.01 * (-1)^i
+                dy = 0.02
+                x += dx
+                obj = make_obj()
+                obj.position = Vec3(dx, dy, 0.0)
+                add!(parent, obj)
+                parent = obj
+                flat_obj = make_obj()
+                flat_obj.position = Vec3(x, dy * i, 0.0)
+                add!(flat, flat_obj)
+            end
+            return flat, deep
+        end
+
+        for kind in (:line, :point, :sprite)
+            flat_scene, deep_scene = primitive_chain_pair(kind, 24)
+            expected = RenderTarget(48, 48)
+            actual = RenderTarget(48, 48)
+            if kind === :line
+                render_lines!(expected, flat_scene, line_cam; cache=RenderCache())
+                render_lines!(actual, deep_scene, line_cam; cache=RenderCache())
+            elseif kind === :point
+                render_points!(expected, flat_scene, point_cam; cache=RenderCache())
+                render_points!(actual, deep_scene, point_cam; cache=RenderCache())
+            else
+                render_sprites!(expected, flat_scene, line_cam; cache=RenderCache())
+                render_sprites!(actual, deep_scene, line_cam; cache=RenderCache())
+            end
+            @test maximum(abs.(expected.color .- actual.color)) < 1e-12
+        end
+
         alpha_discard_scene = Scene(background=Color3(0.0,0.0,0.0))
         alpha_discard_mat = MeshBasicMaterial(color=Color3(1.0,1.0,1.0),
                                               transparent=true, opacity=0.25,
