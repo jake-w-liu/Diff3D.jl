@@ -2821,23 +2821,13 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
     return nothing
 end
 
-function _web_collect_texture_registry(root::AbstractObject3D,
-                                       force_ids::Set{Int}=Set{Int}(),
-                                       camera_distance::Real=0.0)
-    registry = _web_texture_registry()
-    function emit(obj, world; kwargs...)
-        _web_register_material_textures!(registry, obj.material)
-        return nothing
-    end
-    _web_visit_drawables(emit, root, force_ids, camera_distance)
-    return registry
-end
-
 function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
                                 camera_distance::Real=0.0;
                                 texture_registry::Union{Nothing,_WebTextureRegistry}=nothing)
     out = String[]
     function emit(obj, world; kwargs...)
+        texture_registry === nothing ||
+            _web_register_material_textures!(texture_registry, obj.material)
         push!(out, _web_drawable_json(obj, world; kwargs...,
                                       texture_registry=texture_registry))
         return nothing
@@ -2854,6 +2844,8 @@ function _web_write_drawables_json(io::IO, root::AbstractObject3D,
     write(io, '[')
     first = true
     function emit(obj, world; kwargs...)
+        texture_registry === nothing ||
+            _web_register_material_textures!(texture_registry, obj.material)
         first ? (first = false) : write(io, ',')
         _web_write_drawable_json(io, obj, world, num_buf; kwargs...,
                                  texture_registry=texture_registry)
@@ -3296,8 +3288,7 @@ end
 
 function _web_collect_case_json_parts(case::WebGLExportCase)
     animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
-    texture_registry = _web_collect_texture_registry(case.scene, animation_target_ids,
-                                                    case.radius)
+    texture_registry = _web_texture_registry()
     objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius;
                                     texture_registry=texture_registry)
     return lights_json, nodes, objects, texture_registry
@@ -3348,10 +3339,10 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, lights_json)
     write(io, ",\"nodes\":")
     _web_write_transform_nodes_json(io, nodes, num_buf)
-    write(io, ",\"textures\":")
-    _web_write_texture_registry_json(io, texture_registry, num_buf)
     write(io, ",\"objects\":")
     _web_write_objects_json(io, objects, num_buf)
+    write(io, ",\"textures\":")
+    _web_write_texture_registry_json(io, texture_registry, num_buf)
     write(io, ",\"animations\":[")
     for (i, clip) in enumerate(case.animations)
         i == 1 || write(io, ',')
@@ -3373,8 +3364,7 @@ end
 function _web_write_case_json(io::IO, case::WebGLExportCase)
     animation_target_ids, lights_json = _web_collect_case_light_parts(case)
     nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
-    texture_registry = _web_collect_texture_registry(case.scene, animation_target_ids,
-                                                    case.radius)
+    texture_registry = _web_texture_registry()
     objects = _WebDrawableStream(case.scene, animation_target_ids, case.radius,
                                  texture_registry)
     _web_write_case_json_parts(io, case, lights_json, nodes, objects,
