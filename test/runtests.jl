@@ -11312,6 +11312,34 @@ end
         @test all(combined_instanced[i] === separate_instanced[i]
                   for i in eachindex(combined_instanced))
         @test [w.e for w in combined_instanced_worlds] == [w.e for w in separate_instanced_worlds]
+        primitive_flags = Diff3D._RenderPrimitiveFlags()
+        Diff3D._collect_render_drawables_worlds_into!(combined_meshes,
+                                                      combined_mesh_worlds,
+                                                      combined_instanced,
+                                                      combined_instanced_worlds,
+                                                      scene, primitive_flags)
+        @test !primitive_flags.sprites
+        @test !primitive_flags.lines
+        @test !primitive_flags.points
+        primitive_scene = Scene()
+        add!(primitive_scene, Sprite(SpriteMaterial()))
+        add!(primitive_scene,
+             LineSegments(BufferGeometry([-0.1, 0.0, 0.0, 0.1, 0.0, 0.0],
+                                         Float64[], Float64[], Int[], 2, 0),
+                          LineBasicMaterial()))
+        add!(primitive_scene,
+             PointsObject(BufferGeometry([0.0, 0.0, 0.0],
+                                         Float64[], Float64[], Int[], 1, 0),
+                          PointsMaterial()))
+        Diff3D._collect_render_drawables_worlds_into!(combined_meshes,
+                                                      combined_mesh_worlds,
+                                                      combined_instanced,
+                                                      combined_instanced_worlds,
+                                                      primitive_scene,
+                                                      primitive_flags)
+        @test primitive_flags.sprites == Diff3D._sprite_subtree_has_drawable(primitive_scene)
+        @test primitive_flags.lines == Diff3D._line_subtree_has_drawable(primitive_scene)
+        @test primitive_flags.points == Diff3D._point_subtree_has_drawable(primitive_scene)
         r1 = RenderTarget(64,64); render!(r1, scene, cam)
         cache = RenderCache(); r2 = RenderTarget(64,64); render_pooled!(r2, scene, cam, cache)
         @test maximum(abs.(r1.color .- r2.color)) < 1e-12      # same image as render!

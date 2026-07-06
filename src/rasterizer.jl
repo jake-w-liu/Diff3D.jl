@@ -1207,14 +1207,17 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         mesh_worlds = Mat4{Float64}[]
         instanced = InstancedMesh[]
         instanced_worlds = Mat4{Float64}[]
+        primitive_flags = _RenderPrimitiveFlags()
         _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
-                                               instanced_worlds, scene)
+                                               instanced_worlds, scene,
+                                               primitive_flags)
         lights = collect_lights(scene)
     else
+        primitive_flags = cache.primitive_flags
         meshes = _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                                         cache.instanced,
                                                         cache.instanced_worlds,
-                                                        scene)
+                                                        scene, primitive_flags)
         mesh_worlds = cache.mesh_worlds
         instanced = cache.instanced
         instanced_worlds = cache.instanced_worlds
@@ -1427,8 +1430,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
 
     # Camera-facing sprites (billboards), depth-tested against the mesh passes.
-    render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
-                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
+    if primitive_flags.sprites
+        render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
+                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache,
+                        assume_drawable=true)
+    end
 
     for i in eachindex(wireframe_meshes)
         mesh = wireframe_meshes[i]
@@ -1437,9 +1443,14 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
 
     # Line and point primitives (depth-tested against the mesh passes).
-    render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache)
-    render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                   cache=cache)
+    if primitive_flags.lines
+        render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                      cache=cache, assume_drawable=true)
+    end
+    if primitive_flags.points
+        render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                       cache=cache, assume_drawable=true)
+    end
 
     return rt
 end

@@ -139,6 +139,21 @@ mutable struct _SpriteRenderState
     stamp_id::Int
 end
 
+mutable struct _RenderPrimitiveFlags
+    sprites::Bool
+    lines::Bool
+    points::Bool
+end
+
+_RenderPrimitiveFlags() = _RenderPrimitiveFlags(false, false, false)
+
+@inline function _reset_render_primitive_flags!(flags::_RenderPrimitiveFlags)
+    flags.sprites = false
+    flags.lines = false
+    flags.points = false
+    return flags
+end
+
 mutable struct _InstancedMaterialState
     mesh::Union{Nothing,InstancedMesh}
     base_material::Any
@@ -180,6 +195,7 @@ mutable struct RenderCache
     stamp::Matrix{Int}
     wire_edges::Set{Tuple{Int,Int}}
     sprite_state::_SpriteRenderState
+    primitive_flags::_RenderPrimitiveFlags
     smooth_tri::Vector{ShadeVtx}
     smooth_clipped::Vector{ShadeVtx}
     smooth_iw::Vector{Float64}
@@ -203,7 +219,7 @@ function RenderCache()
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
-                _SpriteRenderState(nothing, 0),
+                _SpriteRenderState(nothing, 0), _RenderPrimitiveFlags(),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
                 BufferGeometry[], BoundingSphere{Float64}[],
                 Matrix{Float64}[], IdDict{AbstractLight,ShadowMap}(),
@@ -624,14 +640,38 @@ function _collect_render_drawables_worlds_into!(meshes::Vector{Mesh},
                                                 mesh_worlds::Vector{Mat4{Float64}},
                                                 instanced::Vector{InstancedMesh},
                                                 instanced_worlds::Vector{Mat4{Float64}},
-                                                root::AbstractObject3D)
+                                                root::AbstractObject3D,
+                                                primitive_flags::Union{Nothing,_RenderPrimitiveFlags}=nothing)
     empty!(meshes)
     empty!(mesh_worlds)
     empty!(instanced)
     empty!(instanced_worlds)
+    primitive_flags === nothing || _reset_render_primitive_flags!(primitive_flags)
     _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
-                                            instanced_worlds, root, Mat4{Float64}())
+                                            instanced_worlds, root, Mat4{Float64}(),
+                                            primitive_flags)
     return meshes
+end
+
+@inline _mark_render_primitive_flags!(::Nothing, obj::AbstractObject3D) = nothing
+
+@inline function _mark_render_primitive_flags!(flags::_RenderPrimitiveFlags,
+                                               obj::AbstractObject3D)
+    if obj isa Sprite
+        flags.sprites = true
+    elseif obj isa PointsObject || (obj isa InstancedMesh && _instanced_point_drawable(obj))
+        flags.points = true
+    end
+    if obj isa LineObject
+        flags.lines |= _line_geometry_has_segment(_line_geometry(obj), :line_strip)
+    elseif obj isa LineSegments
+        flags.lines |= _line_geometry_has_segment(_line_geometry(obj), :lines)
+    elseif obj isa LineLoop
+        flags.lines |= _line_geometry_has_segment(_line_geometry(obj), :line_loop)
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+        flags.lines |= _line_geometry_has_segment(_instanced_geometry(obj), obj.draw_mode)
+    end
+    return nothing
 end
 
 function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
@@ -639,9 +679,11 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
                                                  instanced::Vector{InstancedMesh},
                                                  instanced_worlds::Vector{Mat4{Float64}},
                                                  obj::AbstractObject3D,
-                                                 parent_world::Mat4{Float64})
+                                                 parent_world::Mat4{Float64},
+                                                 primitive_flags::Union{Nothing,_RenderPrimitiveFlags})
     is_visible(obj) || return nothing
     children = get_children(obj)
+    _mark_render_primitive_flags!(primitive_flags, obj)
     if !(obj isa Mesh) && !(obj isa InstancedMesh) && isempty(children)
         return nothing
     end
@@ -655,7 +697,8 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
     end
     @inbounds for child in children
         _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
-                                                instanced_worlds, child, world)
+                                                instanced_worlds, child, world,
+                                                primitive_flags)
     end
     return nothing
 end
@@ -1378,8 +1421,9 @@ end
 function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height,
-                       cache::Union{Nothing,RenderCache}=nothing)
-    _line_subtree_has_drawable(scene) || return rt
+                       cache::Union{Nothing,RenderCache}=nothing,
+                       assume_drawable::Bool=false)
+    (assume_drawable || _line_subtree_has_drawable(scene)) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
@@ -1803,8 +1847,9 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
                          clipping_planes=_NO_PLANES,
                          xlo::Int=1, xhi::Int=rt.width,
                          ylo::Int=1, yhi::Int=rt.height,
-                         cache::Union{Nothing,RenderCache}=nothing)
-    _sprite_subtree_has_drawable(scene) || return rt
+                         cache::Union{Nothing,RenderCache}=nothing,
+                         assume_drawable::Bool=false)
+    (assume_drawable || _sprite_subtree_has_drawable(scene)) || return rt
     view = view_matrix(camera)
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
@@ -2024,8 +2069,9 @@ end
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
                         ylo::Int=1, yhi::Int=rt.height,
-                        cache::Union{Nothing,RenderCache}=nothing)
-    _point_subtree_has_drawable(scene) || return rt
+                        cache::Union{Nothing,RenderCache}=nothing,
+                        assume_drawable::Bool=false)
+    (assume_drawable || _point_subtree_has_drawable(scene)) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
     near = _camera_near(camera)
