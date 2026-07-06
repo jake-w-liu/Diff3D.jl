@@ -4014,10 +4014,13 @@ end
         set_attribute!(attr_export_alloc, :color,
                        repeat([1.0, 0.5, 0.25], 3), 3)
         set_attribute!(attr_export_alloc, :lineDistance, [0.0, 1.0, 2.0], 1)
+        set_attribute!(attr_export_alloc, :uv2,
+                       [0.25, 0.5, 0.75, 0.5, 0.25, 0.75], 2)
         attr_num_buf = Diff3D._web_num_buffer()
         Diff3D._web_write_tangent_json(devnull, attr_export_alloc, attr_num_buf)
         Diff3D._web_write_color_json(devnull, attr_export_alloc, true, attr_num_buf)
         Diff3D._web_write_line_distance_json(devnull, attr_export_alloc, attr_num_buf)
+        Diff3D._web_write_uv2_json(devnull, attr_export_alloc, attr_num_buf)
         @test_opt_alloc 64 Diff3D._web_write_tangent_json(devnull, attr_export_alloc,
                                                           attr_num_buf)
         @test_opt_alloc 64 Diff3D._web_write_color_json(devnull, attr_export_alloc,
@@ -4025,6 +4028,8 @@ end
         @test_opt_alloc 64 Diff3D._web_write_line_distance_json(devnull,
                                                                 attr_export_alloc,
                                                                 attr_num_buf)
+        @test_opt_alloc 64 Diff3D._web_write_uv2_json(devnull, attr_export_alloc,
+                                                      attr_num_buf)
         drawable_export_alloc = Mesh(geo_export_alloc, MeshBasicMaterial();
                                      name="drawable_export_alloc")
         drawable_io = IOBuffer()

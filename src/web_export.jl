@@ -1840,7 +1840,7 @@ function _web_write_uv2_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8}
         attr = get_attribute(geo, :uv2)
         if attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices
             _js_write_attribute_components_array(io, attr.data, attr.item_size, 2,
-                                                 geo.n_vertices)
+                                                 geo.n_vertices, num_buf)
             return nothing
         end
     end
