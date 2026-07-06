@@ -11295,6 +11295,23 @@ end
         scene = build_instanced_scene(40)
         cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=500.0)
         cam.position = Vec3(8.0,8,14.0); cam.target = Vec3(3.0,3,3)
+        separate_meshes = Mesh[]; separate_mesh_worlds = Mat4{Float64}[]
+        separate_instanced = InstancedMesh[]; separate_instanced_worlds = Mat4{Float64}[]
+        combined_meshes = Mesh[]; combined_mesh_worlds = Mat4{Float64}[]
+        combined_instanced = InstancedMesh[]; combined_instanced_worlds = Mat4{Float64}[]
+        Diff3D._collect_meshes_worlds_into!(separate_meshes, separate_mesh_worlds, scene)
+        Diff3D._collect_instanced_worlds_into!(separate_instanced,
+                                               separate_instanced_worlds, scene)
+        Diff3D._collect_render_drawables_worlds_into!(combined_meshes, combined_mesh_worlds,
+                                                      combined_instanced,
+                                                      combined_instanced_worlds, scene)
+        @test length(combined_meshes) == length(separate_meshes)
+        @test all(combined_meshes[i] === separate_meshes[i] for i in eachindex(combined_meshes))
+        @test [w.e for w in combined_mesh_worlds] == [w.e for w in separate_mesh_worlds]
+        @test length(combined_instanced) == length(separate_instanced)
+        @test all(combined_instanced[i] === separate_instanced[i]
+                  for i in eachindex(combined_instanced))
+        @test [w.e for w in combined_instanced_worlds] == [w.e for w in separate_instanced_worlds]
         r1 = RenderTarget(64,64); render!(r1, scene, cam)
         cache = RenderCache(); r2 = RenderTarget(64,64); render_pooled!(r2, scene, cam, cache)
         @test maximum(abs.(r1.color .- r2.color)) < 1e-12      # same image as render!

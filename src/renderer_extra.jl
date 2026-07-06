@@ -620,6 +620,46 @@ function _collect_meshes_worlds_visit!(out::Vector{Mesh},
     return nothing
 end
 
+function _collect_render_drawables_worlds_into!(meshes::Vector{Mesh},
+                                                mesh_worlds::Vector{Mat4{Float64}},
+                                                instanced::Vector{InstancedMesh},
+                                                instanced_worlds::Vector{Mat4{Float64}},
+                                                root::AbstractObject3D)
+    empty!(meshes)
+    empty!(mesh_worlds)
+    empty!(instanced)
+    empty!(instanced_worlds)
+    _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
+                                            instanced_worlds, root, Mat4{Float64}())
+    return meshes
+end
+
+function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
+                                                 mesh_worlds::Vector{Mat4{Float64}},
+                                                 instanced::Vector{InstancedMesh},
+                                                 instanced_worlds::Vector{Mat4{Float64}},
+                                                 obj::AbstractObject3D,
+                                                 parent_world::Mat4{Float64})
+    is_visible(obj) || return nothing
+    children = get_children(obj)
+    if !(obj isa Mesh) && !(obj isa InstancedMesh) && isempty(children)
+        return nothing
+    end
+    world = parent_world * compute_local_matrix(obj)
+    if obj isa Mesh
+        push!(meshes, obj)
+        push!(mesh_worlds, world)
+    elseif obj isa InstancedMesh
+        push!(instanced, obj)
+        push!(instanced_worlds, world)
+    end
+    @inbounds for child in children
+        _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
+                                                instanced_worlds, child, world)
+    end
+    return nothing
+end
+
 function _append_skinned_render_meshes_worlds!(meshes::Vector{Mesh},
                                                worlds::Vector{Mat4{Float64}},
                                                scene::AbstractObject3D)
@@ -665,9 +705,10 @@ function _collect_instanced_worlds_into!(out::Vector{InstancedMesh},
                                          root::AbstractObject3D)
     _collect_instanced_into!(out, root)
     empty!(worlds)
-    isempty(out) && return out
-    empty!(out)
-    _collect_instanced_worlds_visit!(out, worlds, root, Mat4{Float64}())
+    sizehint!(worlds, length(out))
+    @inbounds for obj in out
+        push!(worlds, compute_world_matrix(obj))
+    end
     return out
 end
 
@@ -841,12 +882,13 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
         normalize(camera.position - camera.target) : nothing
-    _collect_meshes_worlds_into!(cache.meshes, cache.mesh_worlds, scene)
+    _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
+                                           cache.instanced, cache.instanced_worlds,
+                                           scene)
     _append_skinned_render_meshes_worlds!(cache.meshes, cache.mesh_worlds, scene,
                                           cache.skinned, cache.skinned_meshes,
                                           cache.skinned_matrices, cache.morph_positions)
     _collect_lights_into!(cache.lights, scene)
-    _collect_instanced_worlds_into!(cache.instanced, cache.instanced_worlds, scene)
     for i in eachindex(cache.meshes)
         mesh = cache.meshes[i]
         mat = _mesh_material(mesh)
@@ -2466,16 +2508,16 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     shared_cache = thread_caches[1]
     meshes = shared_cache.meshes
     mesh_worlds = shared_cache.mesh_worlds
-    _collect_meshes_worlds_into!(meshes, mesh_worlds, scene)
+    instanced = shared_cache.instanced
+    instanced_worlds = shared_cache.instanced_worlds
+    _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
+                                           instanced_worlds, scene)
     _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
                                           shared_cache.skinned, shared_cache.skinned_meshes,
                                           shared_cache.skinned_matrices,
                                           shared_cache.morph_positions)
     lights = shared_cache.lights
     _collect_lights_into!(lights, scene)
-    instanced = shared_cache.instanced
-    instanced_worlds = shared_cache.instanced_worlds
-    _collect_instanced_worlds_into!(instanced, instanced_worlds, scene)
     instanced_material_states = shared_cache.instanced_materials
     for (instanced_slot, im) in pairs(instanced)
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue

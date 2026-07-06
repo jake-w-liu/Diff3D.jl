@@ -1205,11 +1205,19 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     if cache === nothing
         meshes = Mesh[]
         mesh_worlds = Mat4{Float64}[]
-        _collect_meshes_worlds_into!(meshes, mesh_worlds, scene)
+        instanced = InstancedMesh[]
+        instanced_worlds = Mat4{Float64}[]
+        _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
+                                               instanced_worlds, scene)
         lights = collect_lights(scene)
     else
-        meshes = _collect_meshes_worlds_into!(cache.meshes, cache.mesh_worlds, scene)
+        meshes = _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
+                                                        cache.instanced,
+                                                        cache.instanced_worlds,
+                                                        scene)
         mesh_worlds = cache.mesh_worlds
+        instanced = cache.instanced
+        instanced_worlds = cache.instanced_worlds
         lights = _collect_lights_into!(cache.lights, scene)
     end
     if cache === nothing
@@ -1219,15 +1227,6 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                               cache.skinned, cache.skinned_meshes,
                                               cache.skinned_matrices,
                                               cache.morph_positions)
-    end
-    if cache === nothing
-        instanced = InstancedMesh[]
-        instanced_worlds = Mat4{Float64}[]
-        _collect_instanced_worlds_into!(instanced, instanced_worlds, scene)
-    else
-        instanced = _collect_instanced_worlds_into!(cache.instanced,
-                                                    cache.instanced_worlds, scene)
-        instanced_worlds = cache.instanced_worlds
     end
     shadow_fn = if shadows
         if cache === nothing
