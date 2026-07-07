@@ -18193,6 +18193,10 @@ end
         # base64_decode skips a non-ASCII (codepoint > 255) character instead of
         # indexing the 256-entry LUT out of bounds.
         @test base64_decode("QUJD" * string(Char(0x2603))) == UInt8[0x41, 0x42, 0x43]
+        strict_b64_data = UInt8.(mod.(0:65_535, 251))
+        strict_b64 = base64encode(strict_b64_data)
+        @test Diff3D._gltf_base64_decode_strict(strict_b64) == strict_b64_data
+        @test_opt_alloc 90_000 Diff3D._gltf_base64_decode_strict(strict_b64)
 
         # CSG with an empty operand resolves set-theoretically.
         let box = BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),

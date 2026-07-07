@@ -7768,7 +7768,14 @@ end
 
 function _gltf_base64_decode_strict(s::AbstractString)
     out = UInt8[]
+    nchars = 0
+    for ch in s
+        ch in (' ', '\n', '\r', '\t') && continue
+        nchars += 1
+    end
+    sizehint!(out, (nchars ÷ 4) * 3)
     quartet = Int[]
+    sizehint!(quartet, 4)
     done = false
     for ch in s
         ch in (' ', '\n', '\r', '\t') && continue
