@@ -239,14 +239,117 @@ function _obj_index_count_label(kind::Symbol)
 end
 
 function _obj_checked_index(tok, count::Int, kind::Symbol)
-    label = String(kind)
-    raw = tryparse(Int, String(tok))
-    raw === nothing && error("OBJ $label index must be an integer")
+    label = _obj_index_label(kind)
+    raw = _obj_parse_index_token(tok, kind)
     raw == 0 && error("OBJ $label index 0 is invalid")
     idx = raw < 0 ? count + raw + 1 : raw
     1 <= idx <= count ||
         error("OBJ $label index $raw out of bounds for $count $(_obj_index_count_label(kind))")
     return idx
+end
+
+function _obj_index_label(kind::Symbol)
+    kind === :vertex && return "vertex"
+    kind === :uv && return "uv"
+    kind === :normal && return "normal"
+    return String(kind)
+end
+
+function _obj_parse_index_token(tok, kind::Symbol)
+    return _obj_parse_index_range(tok, firstindex(tok), lastindex(tok), kind)
+end
+
+function _obj_parse_index_range(tok::AbstractString, first_i::Int, last_i::Int, kind::Symbol)
+    label = _obj_index_label(kind)
+    first_i <= last_i || error("OBJ $label index must be an integer")
+    i = first_i
+    sign = 1
+    ch = tok[i]
+    if ch == '+' || ch == '-'
+        sign = ch == '-' ? -1 : 1
+        i = nextind(tok, i)
+        i <= last_i || error("OBJ $label index must be an integer")
+    end
+    value = 0
+    digits = false
+    while i <= last_i
+        ch = tok[i]
+        '0' <= ch <= '9' || error("OBJ $label index must be an integer")
+        digit = Int(ch - '0')
+        value <= (typemax(Int) - digit) ÷ 10 ||
+            error("OBJ $label index must be an integer")
+        value = value * 10 + digit
+        digits = true
+        i = nextind(tok, i)
+    end
+    digits || error("OBJ $label index must be an integer")
+    return sign < 0 ? -value : value
+end
+
+function _obj_checked_index_range(tok::AbstractString, first_i::Int, last_i::Int,
+                                  count::Int, kind::Symbol)
+    raw = _obj_parse_index_range(tok, first_i, last_i, kind)
+    raw == 0 && error("OBJ $(_obj_index_label(kind)) index 0 is invalid")
+    idx = raw < 0 ? count + raw + 1 : raw
+    1 <= idx <= count ||
+        error("OBJ $(_obj_index_label(kind)) index $raw out of bounds for $count $(_obj_index_count_label(kind))")
+    return idx
+end
+
+function _obj_parse_corner(c::AbstractString, nverts_v::Int, nverts_uv::Int, nverts_n::Int)
+    first_i = firstindex(c)
+    last_i = lastindex(c)
+    slash1 = findnext(==('/'), c, first_i)
+    if slash1 === nothing
+        return (_obj_checked_index_range(c, first_i, last_i, nverts_v, :vertex), 0, 0)
+    end
+    vidx = _obj_checked_index_range(c, first_i, prevind(c, slash1), nverts_v, :vertex)
+    after1 = nextind(c, slash1)
+    slash2 = after1 <= last_i ? findnext(==('/'), c, after1) : nothing
+    if slash2 === nothing
+        uidx = after1 <= last_i ? _obj_checked_index_range(c, after1, last_i, nverts_uv, :uv) : 0
+        return (vidx, uidx, 0)
+    end
+    uidx = after1 < slash2 ? _obj_checked_index_range(c, after1, prevind(c, slash2), nverts_uv, :uv) : 0
+    after2 = nextind(c, slash2)
+    slash3 = after2 <= last_i ? findnext(==('/'), c, after2) : nothing
+    normal_last = slash3 === nothing ? last_i : prevind(c, slash3)
+    nidx = after2 <= normal_last ?
+           _obj_checked_index_range(c, after2, normal_last, nverts_n, :normal) : 0
+    return (vidx, uidx, nidx)
+end
+
+function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
+                           out_nrm::Vector{Float64}, indices::Vector{Int},
+                           verts::Vector{Float64}, file_uvs::Vector{Float64},
+                           file_normals::Vector{Float64}, corner::NTuple{3,Int},
+                           out_vi::Int, have_uvs::Bool, have_normals::Bool,
+                           missing_normals::Bool)
+    vidx, uidx, nidx = corner
+    @inbounds begin
+        base = (vidx - 1) * 3
+        push!(out_pos, verts[base + 1], verts[base + 2], verts[base + 3])
+        if uidx != 0
+            ub = (uidx - 1) * 2
+            have_uvs || _obj_backfill_uvs!(out_uvs, out_vi)
+            push!(out_uvs, file_uvs[ub + 1], file_uvs[ub + 2])
+            have_uvs = true
+        elseif have_uvs
+            push!(out_uvs, 0.0, 0.0)
+        end
+        if nidx != 0
+            nb = (nidx - 1) * 3
+            have_normals || _obj_backfill_normals!(out_nrm, out_vi)
+            push!(out_nrm, file_normals[nb + 1], file_normals[nb + 2], file_normals[nb + 3])
+            have_normals = true
+        else
+            missing_normals = true
+            have_normals && push!(out_nrm, 0.0, 0.0, 0.0)
+        end
+    end
+    out_vi += 1
+    push!(indices, out_vi)
+    return out_vi, have_uvs, have_normals, missing_normals
 end
 
 function _obj_require_values(tokens, count::Int, label::String)
@@ -276,6 +379,14 @@ _obj_backfill_uvs!(out::Vector{Float64}, emitted_vertices::Int) =
 
 _obj_backfill_normals!(out::Vector{Float64}, emitted_vertices::Int) =
     _obj_backfill_zeros!(out, 3 * emitted_vertices)
+
+function _obj_is_face_record(line::AbstractString)
+    isempty(line) && return false
+    i = firstindex(line)
+    line[i] == 'f' || return false
+    j = nextind(line, i)
+    return j <= lastindex(line) && isspace(line[j])
+end
 
 function _obj_parse_vec3(tokens, label::String)
     _obj_require_values(tokens, 3, label)
@@ -307,6 +418,40 @@ function load_obj(path::String)
     for raw in eachline(path)
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
+        if _obj_is_face_record(line)
+            nverts_v = length(verts) ÷ 3
+            nverts_uv = length(file_uvs) ÷ 2
+            nverts_n = length(file_normals) ÷ 3
+            parts = eachsplit(line)
+            tag_state = iterate(parts)
+            first_state = iterate(parts, tag_state[2])
+            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
+            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
+            third_state === nothing && error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(first_state[1], nverts_v, nverts_uv, nverts_n)
+            prev_corner = _obj_parse_corner(second_state[1], nverts_v, nverts_uv, nverts_n)
+            corner = _obj_parse_corner(third_state[1], nverts_v, nverts_uv, nverts_n)
+            while true
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, first_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, prev_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                prev_corner = corner
+                next_state = iterate(parts, third_state[2])
+                next_state === nothing && break
+                corner = _obj_parse_corner(next_state[1], nverts_v, nverts_uv, nverts_n)
+                third_state = next_state
+            end
+            continue
+        end
         t = split(line)
         tag = t[1]
         if tag == "v"
@@ -326,36 +471,25 @@ function load_obj(path::String)
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
-            corners = t[2:end]
-            length(corners) >= 3 || error("OBJ face requires at least 3 vertices")
+            length(t) >= 4 || error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(t[2], nverts_v, nverts_uv, nverts_n)
+            prev_corner = _obj_parse_corner(t[3], nverts_v, nverts_uv, nverts_n)
             # Fan-triangulate polygon (corner 1, k, k+1).
-            for k in 2:(length(corners) - 1)
-                for c in (corners[1], corners[k], corners[k+1])
-                    sub = split(c, '/')
-                    vidx = _obj_checked_index(sub[1], nverts_v, :vertex)
-                    base = (vidx - 1) * 3
-                    push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
-                    if length(sub) >= 2 && !isempty(sub[2])
-                        uidx = _obj_checked_index(sub[2], nverts_uv, :uv)
-                        ub = (uidx - 1) * 2
-                        have_uvs || _obj_backfill_uvs!(out_uvs, out_vi)
-                        push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
-                        have_uvs = true
-                    else
-                        have_uvs && push!(out_uvs, 0.0, 0.0)
-                    end
-                    if length(sub) >= 3 && !isempty(sub[3])
-                        nidx = _obj_checked_index(sub[3], nverts_n, :normal)
-                        nb = (nidx - 1) * 3
-                        have_normals || _obj_backfill_normals!(out_nrm, out_vi)
-                        push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
-                        have_normals = true
-                    else
-                        missing_normals = true
-                        have_normals && push!(out_nrm, 0.0, 0.0, 0.0)
-                    end
-                    out_vi += 1; push!(indices, out_vi)
-                end
+            for k in 4:length(t)
+                corner = _obj_parse_corner(t[k], nverts_v, nverts_uv, nverts_n)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, first_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, prev_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                prev_corner = corner
             end
         end
     end

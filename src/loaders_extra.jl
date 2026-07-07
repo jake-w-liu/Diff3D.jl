@@ -2089,6 +2089,39 @@ function load_obj_groups(path::String)
     for raw in eachline(path)
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
+        if _obj_is_face_record(line)
+            nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
+            parts = eachsplit(line)
+            tag_state = iterate(parts)
+            first_state = iterate(parts, tag_state[2])
+            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
+            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
+            third_state === nothing && error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(first_state[1], nv, nuv, nn)
+            prev_corner = _obj_parse_corner(second_state[1], nv, nuv, nn)
+            corner = _obj_parse_corner(third_state[1], nv, nuv, nn)
+            while true
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, first_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, prev_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                push!(face_mtl, cur_mtl)
+                prev_corner = corner
+                next_state = iterate(parts, third_state[2])
+                next_state === nothing && break
+                corner = _obj_parse_corner(next_state[1], nv, nuv, nn)
+                third_state = next_state
+            end
+            continue
+        end
         t = split(line); tag = t[1]
         if tag == "v"
             x, y, z = _obj_parse_vec3(t, "v")
@@ -2109,32 +2142,24 @@ function load_obj_groups(path::String)
             cur_mtl = t[2]
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
-            corners = t[2:end]
-            length(corners) >= 3 || error("OBJ face requires at least 3 vertices")
-            for k in 2:(length(corners) - 1)
-                for c in (corners[1], corners[k], corners[k+1])
-                    sub = split(c, '/')
-                    vidx = _obj_checked_index(sub[1], nv, :vertex); base = (vidx-1)*3
-                    push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
-                    if length(sub) >= 2 && !isempty(sub[2])
-                        uidx = _obj_checked_index(sub[2], nuv, :uv); ub = (uidx-1)*2
-                        have_uvs || _obj_backfill_uvs!(out_uvs, out_vi)
-                        push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
-                        have_uvs = true
-                    else
-                        have_uvs && push!(out_uvs, 0.0, 0.0)
-                    end
-                    if length(sub) >= 3 && !isempty(sub[3])
-                        nidx = _obj_checked_index(sub[3], nn, :normal); nb = (nidx-1)*3
-                        have_normals || _obj_backfill_normals!(out_nrm, out_vi)
-                        push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
-                        have_normals = true
-                    else
-                        missing_normals = true
-                        have_normals && push!(out_nrm, 0.0, 0.0, 0.0)
-                    end
-                    out_vi += 1; push!(indices, out_vi)
-                end
+            length(t) >= 4 || error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(t[2], nv, nuv, nn)
+            prev_corner = _obj_parse_corner(t[3], nv, nuv, nn)
+            for k in 4:length(t)
+                corner = _obj_parse_corner(t[k], nv, nuv, nn)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, first_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, prev_corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                out_vi, have_uvs, have_normals, missing_normals =
+                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                                      file_uvs, file_normals, corner, out_vi,
+                                      have_uvs, have_normals, missing_normals)
+                prev_corner = corner
                 push!(face_mtl, cur_mtl)
             end
         end

@@ -6024,6 +6024,23 @@ end
         @test geo.uvs == [0.0,0.0, 1.0,0.0, 1.0,1.0,
                           0.0,0.0, 1.0,1.0, 0.0,1.0]
         rm(f)
+
+        grid_path = tempname() * ".obj"
+        grid_io = IOBuffer()
+        n = 32
+        for y in 0:n, x in 0:n
+            println(grid_io, "v ", x, " ", y, " 0")
+        end
+        for y in 0:(n - 1), x in 0:(n - 1)
+            a = y * (n + 1) + x + 1
+            println(grid_io, "f ", a, " ", a + 1, " ", a + n + 2, " ", a + n + 1)
+        end
+        write(grid_path, String(take!(grid_io)))
+        @test load_obj(grid_path).n_faces == 2 * n * n
+        @test_opt_alloc 2_600_000 load_obj(grid_path)
+        @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
+        @test_opt_alloc 2_700_000 load_obj_groups(grid_path)
+        rm(grid_path)
     end
 
     @testset "XYZ parse + colors + strict validation" begin
