@@ -524,64 +524,100 @@ function _rasterize_flat_mesh_pooled_from_mesh!(rt::RenderTarget, mesh::Mesh, wo
                                                 cam_pos::Vec3, tri, clipped, sx, sy, sz,
                                                 colorbuf::Vector{Color3{Float64}},
                                                 xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                                                ortho_dir)
+                                                ortho_dir,
+                                                flat_attr_tri=nothing,
+                                                flat_attr_clipped=nothing,
+                                                flat_iw=nothing)
     geo = _mesh_geometry(mesh)
     mat = mesh.material
     if mat isa MeshBasicMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshLambertMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshPhongMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshStandardMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshNormalMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshPhysicalMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshToonMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshMatcapMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa MeshDepthMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     elseif mat isa ShaderMaterial
         _rasterize_geo_flat_pooled!(rt, geo, world, mat, lights, proj, view, near,
                                     cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     else
         _rasterize_geo_flat_pooled!(rt, geo, world, mat::AbstractMaterial, lights,
                                     proj, view, near, cam_pos, tri, clipped, sx, sy,
                                     sz, colorbuf; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     end
 end
 
@@ -797,12 +833,18 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                      tri, clipped, sx, sy, sz, colorbuf::Vector{Color3{Float64}};
                                      xlo::Int=1, xhi::Int=rt.width,
                                      ylo::Int=1, yhi::Int=rt.height,
-                                     ortho_dir=nothing)
+                                     ortho_dir=nothing,
+                                     flat_attr_tri=nothing,
+                                     flat_attr_clipped=nothing,
+                                     flat_iw=nothing)
     if _render_pooled_uses_fragment_alpha(geo, mat)
         return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
                                     tri, clipped, sx, sy, sz; colorbuf=colorbuf,
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     end
 
     side = material_side(mat)
@@ -876,14 +918,20 @@ function _rasterize_instanced_geo_flat_pooled!(rt::RenderTarget, geo, mat,
                                                colorbuf::Vector{Color3{Float64}},
                                                ortho_dir;
                                                xlo::Int=1, xhi::Int=rt.width,
-                                               ylo::Int=1, yhi::Int=rt.height)
+                                               ylo::Int=1, yhi::Int=rt.height,
+                                               flat_attr_tri=nothing,
+                                               flat_attr_clipped=nothing,
+                                               flat_iw=nothing)
     @inbounds for instance_index in eachindex(instance_matrices)
         instance_material = _with_vertex_color(mat, instance_colors[instance_index])
         _rasterize_geo_flat_pooled!(rt, geo, base * instance_matrices[instance_index],
                                     instance_material, lights, proj, view, near, cam_pos,
                                     tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     end
     return nothing
 end
@@ -897,7 +945,10 @@ function _rasterize_instanced_geo_flat_pooled_materials!(rt::RenderTarget, geo,
                                                          colorbuf::Vector{Color3{Float64}},
                                                          ortho_dir;
                                                          xlo::Int=1, xhi::Int=rt.width,
-                                                         ylo::Int=1, yhi::Int=rt.height)
+                                                         ylo::Int=1, yhi::Int=rt.height,
+                                                         flat_attr_tri=nothing,
+                                                         flat_attr_clipped=nothing,
+                                                         flat_iw=nothing)
     @boundscheck length(instance_materials) == length(instance_matrices) ||
         throw(ArgumentError("instance material count must match instance matrix count"))
     @inbounds for instance_index in eachindex(instance_matrices)
@@ -905,7 +956,10 @@ function _rasterize_instanced_geo_flat_pooled_materials!(rt::RenderTarget, geo,
                                     instance_materials[instance_index], lights, proj, view,
                                     near, cam_pos, tri, clipped, sx, sy, sz, colorbuf;
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                    ortho_dir=ortho_dir)
+                                    ortho_dir=ortho_dir,
+                                    flat_attr_tri=flat_attr_tri,
+                                    flat_attr_clipped=flat_attr_clipped,
+                                    flat_iw=flat_iw)
     end
     return nothing
 end
@@ -940,7 +994,9 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                cache.lights, proj, view, near,
                                                camera.position, cache.tri, cache.clipped,
                                                cache.sx, cache.sy, cache.sz, cache.colors,
-                                               1, rt.width, 1, rt.height, ortho_dir)
+                                               1, rt.width, 1, rt.height, ortho_dir,
+                                               cache.smooth_tri, cache.smooth_clipped,
+                                               cache.smooth_iw)
     end
     for (instanced_slot, im) in pairs(cache.instanced)
         mat = _instanced_material(im)
@@ -952,7 +1008,10 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         _rasterize_instanced_geo_flat_pooled_materials!(
             rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
             base, cache.lights, proj, view, near, camera.position, cache.tri,
-            cache.clipped, cache.sx, cache.sy, cache.sz, cache.colors, ortho_dir)
+            cache.clipped, cache.sx, cache.sy, cache.sz, cache.colors, ortho_dir;
+            flat_attr_tri=cache.smooth_tri,
+            flat_attr_clipped=cache.smooth_clipped,
+            flat_iw=cache.smooth_iw)
     end
     return rt
 end
@@ -2501,7 +2560,10 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera.position,
                                                tri, clipped, sx, sy, sz, colorbuf,
-                                               1, rt.width, ylo, yhi, ortho_dir)
+                                               1, rt.width, ylo, yhi, ortho_dir,
+                                               thread_cache.smooth_tri,
+                                               thread_cache.smooth_clipped,
+                                               thread_cache.smooth_iw)
     end
     for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
@@ -2510,7 +2572,10 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         _rasterize_instanced_geo_flat_pooled_materials!(
             rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
             base, lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz,
-            colorbuf, ortho_dir; ylo=ylo, yhi=yhi)
+            colorbuf, ortho_dir; ylo=ylo, yhi=yhi,
+            flat_attr_tri=thread_cache.smooth_tri,
+            flat_attr_clipped=thread_cache.smooth_clipped,
+            flat_iw=thread_cache.smooth_iw)
     end
     return nothing
 end

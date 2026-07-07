@@ -2082,7 +2082,8 @@ function load_obj_groups(path::String)
     verts = Float64[]; file_uvs = Float64[]; file_normals = Float64[]
     out_pos = Float64[]; out_uvs = Float64[]; out_nrm = Float64[]; indices = Int[]
     face_mtl = String[]
-    have_normals = false; have_uvs = false; out_vi = 0; cur_mtl = ""
+    have_normals = false; have_uvs = false; missing_normals = false
+    out_vi = 0; cur_mtl = ""
     materials = Dict{String, MeshPhongMaterial}()
     dir = dirname(path)
     for raw in eachline(path)
@@ -2099,7 +2100,7 @@ function load_obj_groups(path::String)
                   length(t) >= 3 ? _obj_parse_float(t[3], "vt v") : 0.0)
         elseif tag == "vn"
             x, y, z = _obj_parse_vec3(t, "vn")
-            push!(file_normals, x, y, z); have_normals = true
+            push!(file_normals, x, y, z)
         elseif tag == "mtllib"
             length(t) >= 2 || error("OBJ mtllib requires a material library path")
             mp = joinpath(dir, t[2]); isfile(mp) && merge!(materials, load_mtl(mp))
@@ -2117,16 +2118,20 @@ function load_obj_groups(path::String)
                     push!(out_pos, verts[base+1], verts[base+2], verts[base+3])
                     if length(sub) >= 2 && !isempty(sub[2])
                         uidx = _obj_checked_index(sub[2], nuv, :uv); ub = (uidx-1)*2
+                        have_uvs || _obj_backfill_uvs!(out_uvs, out_vi)
                         push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
                         have_uvs = true
                     else
-                        push!(out_uvs, 0.0, 0.0)
+                        have_uvs && push!(out_uvs, 0.0, 0.0)
                     end
-                    if have_normals && length(sub) >= 3 && !isempty(sub[3])
+                    if length(sub) >= 3 && !isempty(sub[3])
                         nidx = _obj_checked_index(sub[3], nn, :normal); nb = (nidx-1)*3
+                        have_normals || _obj_backfill_normals!(out_nrm, out_vi)
                         push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
+                        have_normals = true
                     else
-                        push!(out_nrm, 0.0, 0.0, 0.0)
+                        missing_normals = true
+                        have_normals && push!(out_nrm, 0.0, 0.0, 0.0)
                     end
                     out_vi += 1; push!(indices, out_vi)
                 end
@@ -2140,7 +2145,7 @@ function load_obj_groups(path::String)
     # Recompute smooth normals when the file had none, or when ANY emitted vertex
     # normal is zero-length (some faces lacked vn) — otherwise those vertices
     # keep a degenerate (0,0,0) normal and shade black.
-    needs_recompute = !have_normals
+    needs_recompute = !have_normals || missing_normals
     if !needs_recompute
         @inbounds for b in 1:3:length(out_nrm)
             if out_nrm[b] == 0.0 && out_nrm[b+1] == 0.0 && out_nrm[b+2] == 0.0
@@ -7764,11 +7769,13 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     ncomp = _GLTF_COMP_SIZE[typ]
     ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
     normalized = _gltf_checked_bool(get(acc, "normalized", false), "accessor normalized")
-    out = zeros(Float64, count * ncomp)
+    dense_payload = haskey(acc, "bufferView")
+    out = dense_payload ? Vector{Float64}(undef, count * ncomp) :
+          zeros(Float64, count * ncomp)
 
     compbytes = _gltf_component_bytes(ctype)
 
-    if haskey(acc, "bufferView")
+    if dense_payload
         buffer_views = get(gltf, "bufferViews", Any[])
         bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views), "accessor bufferView") + 1]
         buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]

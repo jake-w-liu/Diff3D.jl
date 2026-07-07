@@ -3979,6 +3979,33 @@ end
             Diff3D._web_write_case_json(devnull, texture_case)
             @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull, texture_case)
 
+            env_face_data = Array{Float64}(undef, 64, 64, 3)
+            for y in 1:64, x in 1:64, c in 1:3
+                env_face_data[y, x, c] = mod(3y + 5x + 7c, 257) / 256
+            end
+            env_alloc = CubeTexture(ntuple(_ -> Texture(env_face_data;
+                                                         filter=:nearest,
+                                                         colorspace=:linear), 6))
+            env_num_buf = Diff3D._web_num_buffer()
+            env_io = IOBuffer()
+            Diff3D._web_write_env_json(env_io, env_alloc, env_num_buf)
+            @test String(take!(env_io)) == Diff3D._web_env_json(env_alloc)
+            env_registry_alloc = Diff3D._web_cube_texture_registry()
+            Diff3D._web_register_env_texture!(env_registry_alloc, env_alloc)
+            Diff3D._web_write_env_texture_registry_json(devnull, env_registry_alloc,
+                                                        env_num_buf)
+            @test_opt_alloc 50000 Diff3D._web_write_env_texture_registry_json(
+                devnull, env_registry_alloc, env_num_buf)
+            env_scene_alloc = Scene(background=Color3(0.0, 0.0, 0.0))
+            add!(env_scene_alloc,
+                 Mesh(BoxGeometry(), MeshStandardMaterial(envmap=env_alloc);
+                      name="env_case_alloc"))
+            env_case_alloc = WebGLExportCase("env_alloc", "Env Alloc", "streamed",
+                                             env_scene_alloc; radius=4.0)
+            Diff3D._web_write_case_json(devnull, env_case_alloc)
+            @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull,
+                                                              env_case_alloc)
+
             shared_texture_scene = Scene(background=Color3(0.0, 0.0, 0.0))
             add!(shared_texture_scene,
                  Mesh(BoxGeometry(), MeshBasicMaterial(map=texture_alloc);
@@ -5557,6 +5584,28 @@ end
         render!(sprite_cached, sprite_scene, cam; cache=sprite_cache)
         @test maximum(abs.(sprite_cached.color .- sprite_direct.color)) < 1e-12
         @test_opt_alloc 512 render!(sprite_cached, sprite_scene, cam; cache=sprite_cache)
+
+        alpha_tex_data = ones(Float64, 2, 2, 4)
+        alpha_tex_data[:, :, 4] .= 1.0
+        alpha_tex = Texture(alpha_tex_data; filter=:nearest, colorspace=:linear)
+        alpha_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(alpha_scene,
+             Mesh(BoxGeometry(),
+                  MeshBasicMaterial(map=alpha_tex, alpha_test=0.5,
+                                    side=:double)))
+        alpha_pooled = RenderTarget(32, 32)
+        alpha_cache = RenderCache()
+        render_pooled!(alpha_pooled, alpha_scene, cam, alpha_cache)
+        @test alpha_pooled.color[16, 16, 1] > 0.5
+        @test_opt_alloc 1024 render_pooled!(alpha_pooled, alpha_scene, cam,
+                                            alpha_cache)
+        alpha_tiled = RenderTarget(32, 32)
+        alpha_tiled_caches = [RenderCache()]
+        render_tiled!(alpha_tiled, alpha_scene, cam; tiles=1,
+                      cache=alpha_tiled_caches)
+        @test alpha_tiled.color[16, 16, 1] > 0.5
+        @test_opt_alloc 1024 render_tiled!(alpha_tiled, alpha_scene, cam;
+                                           tiles=1, cache=alpha_tiled_caches)
     end
 
     @testset "Smooth shading — vertex colors are interpolated" begin
@@ -5892,7 +5941,7 @@ end
         @test !has_attribute(plain, :color)
         xyz_alloc = join(("$(i) 0 0" for i in 1:1000), "\n") * "\n"
         parse_xyz(xyz_alloc)
-        @test_opt_alloc 80000 parse_xyz(xyz_alloc)
+        @test_opt_alloc 40000 parse_xyz(xyz_alloc)
 
         path = tempname() * ".xyz"
         try

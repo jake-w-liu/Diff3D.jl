@@ -221,6 +221,22 @@ function _obj_parse_float(tok, label::String)
     return value
 end
 
+function _obj_backfill_zeros!(out::Vector{Float64}, required_len::Int)
+    old_len = length(out)
+    old_len >= required_len && return out
+    resize!(out, required_len)
+    @inbounds for i in (old_len + 1):required_len
+        out[i] = 0.0
+    end
+    return out
+end
+
+_obj_backfill_uvs!(out::Vector{Float64}, emitted_vertices::Int) =
+    _obj_backfill_zeros!(out, 2 * emitted_vertices)
+
+_obj_backfill_normals!(out::Vector{Float64}, emitted_vertices::Int) =
+    _obj_backfill_zeros!(out, 3 * emitted_vertices)
+
 function _obj_parse_vec3(tokens, label::String)
     _obj_require_values(tokens, 3, label)
     return (_obj_parse_float(tokens[2], "$label x"),
@@ -245,6 +261,7 @@ function load_obj(path::String)
     indices = Int[]
     have_normals = false
     have_uvs = false
+    missing_normals = false
     out_vi = 0
 
     for raw in eachline(path)
@@ -265,7 +282,6 @@ function load_obj(path::String)
         elseif tag == "vn"
             x, y, z = _obj_parse_vec3(t, "vn")
             push!(file_normals, x, y, z)
-            have_normals = true
         elseif tag == "f"
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
@@ -282,17 +298,21 @@ function load_obj(path::String)
                     if length(sub) >= 2 && !isempty(sub[2])
                         uidx = _obj_checked_index(sub[2], nverts_uv, :uv)
                         ub = (uidx - 1) * 2
+                        have_uvs || _obj_backfill_uvs!(out_uvs, out_vi)
                         push!(out_uvs, file_uvs[ub+1], file_uvs[ub+2])
                         have_uvs = true
                     else
-                        push!(out_uvs, 0.0, 0.0)
+                        have_uvs && push!(out_uvs, 0.0, 0.0)
                     end
-                    if have_normals && length(sub) >= 3 && !isempty(sub[3])
+                    if length(sub) >= 3 && !isempty(sub[3])
                         nidx = _obj_checked_index(sub[3], nverts_n, :normal)
                         nb = (nidx - 1) * 3
+                        have_normals || _obj_backfill_normals!(out_nrm, out_vi)
                         push!(out_nrm, file_normals[nb+1], file_normals[nb+2], file_normals[nb+3])
+                        have_normals = true
                     else
-                        push!(out_nrm, 0.0, 0.0, 0.0)
+                        missing_normals = true
+                        have_normals && push!(out_nrm, 0.0, 0.0, 0.0)
                     end
                     out_vi += 1; push!(indices, out_vi)
                 end
@@ -305,7 +325,7 @@ function load_obj(path::String)
     # Recompute smooth normals when the file had none, or when ANY emitted vertex
     # normal is zero-length (e.g. a face lacked vn) — otherwise those vertices
     # keep a degenerate (0,0,0) normal and shade black.
-    needs_recompute = !have_normals
+    needs_recompute = !have_normals || missing_normals
     if !needs_recompute
         @inbounds for b in 1:3:length(out_nrm)
             if out_nrm[b] == 0.0 && out_nrm[b+1] == 0.0 && out_nrm[b+2] == 0.0
@@ -407,12 +427,11 @@ silently ignored or propagated into geometry buffers.
 """
 function parse_xyz(text::AbstractString; source::AbstractString="<string>")
     positions = Float64[]
-    colors = Float64[]
+    colors = nothing
     bytes = codeunits(text)
     n = length(bytes)
     row_hint = count(==(UInt8('\n')), bytes) + 1
     sizehint!(positions, 3 * row_hint)
-    sizehint!(colors, 3 * row_hint)
     layout = nothing
     line_no = 0
     i = 1
@@ -449,6 +468,10 @@ function parse_xyz(text::AbstractString; source::AbstractString="<string>")
         end
         if layout === nothing
             layout = record_layout
+            if record_layout === :xyzrgb
+                colors = Float64[]
+                sizehint!(colors, 3 * row_hint)
+            end
         elseif layout !== record_layout
             throw(ArgumentError("XYZ line $line_no in $source mixes XYZ and XYZRGB records"))
         end
@@ -457,7 +480,8 @@ function parse_xyz(text::AbstractString; source::AbstractString="<string>")
               _xyz_parse_float(bytes, f2, l2, line_no, "y"),
               _xyz_parse_float(bytes, f3, l3, line_no, "z"))
         if record_layout === :xyzrgb
-            push!(colors,
+            out_colors = colors::Vector{Float64}
+            push!(out_colors,
                   _xyz_parse_color(bytes, f4, l4, line_no, "red"),
                   _xyz_parse_color(bytes, f5, l5, line_no, "green"),
                   _xyz_parse_color(bytes, f6, l6, line_no, "blue"))
@@ -465,7 +489,7 @@ function parse_xyz(text::AbstractString; source::AbstractString="<string>")
     end
     nverts = length(positions) ÷ 3
     geo = BufferGeometry(positions, Float64[], Float64[], Int[], nverts, 0)
-    layout === :xyzrgb && set_attribute!(geo, :color, colors, 3)
+    layout === :xyzrgb && set_attribute!(geo, :color, colors::Vector{Float64}, 3)
     return geo
 end
 

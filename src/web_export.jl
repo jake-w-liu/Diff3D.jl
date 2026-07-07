@@ -594,10 +594,11 @@ function _web_texture_average_color(tex::Texture)
     return Color3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0))
 end
 
-function _web_env_json(env)
-    env isa CubeTexture || return "null"
-    io = IOBuffer(sizehint=_web_env_json_sizehint(env))
-    num_buf = _web_num_buffer()
+function _web_write_env_json(io::IO, env, num_buf::Vector{UInt8})
+    if !(env isa CubeTexture)
+        write(io, "null")
+        return nothing
+    end
     write(io, "{\"colors\":[")
     for (i, face) in enumerate(env.faces)
         i == 1 || write(io, ',')
@@ -609,6 +610,17 @@ function _web_env_json(env)
         _web_write_cube_face_json(io, face, num_buf)
     end
     write(io, "]}")
+    return nothing
+end
+
+function _web_write_env_json(io::IO, env)
+    return _web_write_env_json(io, env, _web_num_buffer())
+end
+
+function _web_env_json(env)
+    env isa CubeTexture || return "null"
+    io = IOBuffer(sizehint=_web_env_json_sizehint(env))
+    _web_write_env_json(io, env, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -1077,7 +1089,7 @@ function _web_write_texture_or_ref_json(io::IO, tex, num_buf::Vector{UInt8},
     return nothing
 end
 
-function _web_write_env_or_ref_json(io::IO, env,
+function _web_write_env_or_ref_json(io::IO, env, num_buf::Vector{UInt8},
                                     registry::Union{Nothing,_WebCubeTextureRegistry})
     if registry !== nothing && env isa CubeTexture
         id = get(registry.ids, env, 0)
@@ -1088,19 +1100,20 @@ function _web_write_env_or_ref_json(io::IO, env,
             return nothing
         end
     end
-    write(io, _web_env_json(env))
+    _web_write_env_json(io, env, num_buf)
     return nothing
 end
 
 function _web_write_env_texture_registry_json(io::IO,
-                                              registry::_WebCubeTextureRegistry)
+                                              registry::_WebCubeTextureRegistry,
+                                              num_buf::Vector{UInt8})
     write(io, '[')
     for (i, env) in enumerate(registry.textures)
         i == 1 || write(io, ',')
         write(io, "{\"id\":")
         print(io, i)
         write(io, ",\"texture\":")
-        write(io, _web_env_json(env))
+        _web_write_env_json(io, env, num_buf)
         write(io, '}')
     end
     write(io, ']')
@@ -2397,7 +2410,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     _web_write_texture_or_ref_json(io, _web_material_anisotropy_texture(mat), num_buf,
                                    texture_registry)
     write(io, ",\"envTexture\":")
-    _web_write_env_or_ref_json(io, _web_material_env_texture(mat),
+    _web_write_env_or_ref_json(io, _web_material_env_texture(mat), num_buf,
                                env_texture_registry)
     write(io, ",\"emissive\":")
     _js_write_color(io, _web_material_emissive_color(mat), num_buf)
@@ -3415,7 +3428,7 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, ",\"textures\":")
     _web_write_texture_registry_json(io, texture_registry, num_buf)
     write(io, ",\"envTextures\":")
-    _web_write_env_texture_registry_json(io, env_texture_registry)
+    _web_write_env_texture_registry_json(io, env_texture_registry, num_buf)
     write(io, ",\"animations\":[")
     for (i, clip) in enumerate(case.animations)
         i == 1 || write(io, ',')
