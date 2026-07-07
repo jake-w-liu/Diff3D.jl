@@ -70,6 +70,20 @@ SoftRenderWorkspace{T}() where {T<:Real} =
     SoftRenderWorkspace{T}(_SoftScreenTriangle{T}[], Int[], Int[], Int[], Int[])
 SoftRenderWorkspace() = SoftRenderWorkspace{Float64}()
 
+"""Reusable scene-extraction and soft-rasterizer buffers for `soft_render_scene`."""
+mutable struct SoftRenderSceneWorkspace
+    vertices::Vector{Vec3{Float64}}
+    faces::Vector{NTuple{3,Int}}
+    colors::Vector{Color3{Float64}}
+    face_colors::Vector{Color3{Float64}}
+    soft::SoftRenderWorkspace{Float64}
+end
+
+SoftRenderSceneWorkspace() =
+    SoftRenderSceneWorkspace(Vec3{Float64}[], NTuple{3,Int}[],
+                             Color3{Float64}[], Color3{Float64}[],
+                             SoftRenderWorkspace{Float64}())
+
 function _soft_checked_workspace(workspace, ::Type{T}) where {T}
     workspace === nothing && return nothing
     workspace isa SoftRenderWorkspace{T} ||
@@ -85,6 +99,11 @@ end
 
 function _soft_int_buffer!(buf::Vector{Int}, n::Int)
     length(buf) < n && resize!(buf, n)
+    return buf
+end
+
+function _soft_resize_buffer!(buf::Vector{T}, n::Int) where {T}
+    length(buf) == n || resize!(buf, n)
     return buf
 end
 
@@ -626,10 +645,16 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
         max_mesh_faces = max(max_mesh_faces, geo.n_faces)
     end
 
-    all_verts = Vector{Vec3{Float64}}(undef, total_vertices)
-    all_faces = Vector{NTuple{3,Int}}(undef, total_faces)
-    all_colors = Vector{Color3{Float64}}(undef, total_faces)
-    face_colors = Vector{Color3{Float64}}(undef, max_mesh_faces)
+    scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
+    soft_workspace = scene_workspace === nothing ? workspace : scene_workspace.soft
+    all_verts = scene_workspace === nothing ? Vector{Vec3{Float64}}(undef, total_vertices) :
+        _soft_resize_buffer!(scene_workspace.vertices, total_vertices)
+    all_faces = scene_workspace === nothing ? Vector{NTuple{3,Int}}(undef, total_faces) :
+        _soft_resize_buffer!(scene_workspace.faces, total_faces)
+    all_colors = scene_workspace === nothing ? Vector{Color3{Float64}}(undef, total_faces) :
+        _soft_resize_buffer!(scene_workspace.colors, total_faces)
+    face_colors = scene_workspace === nothing ? Vector{Color3{Float64}}(undef, max_mesh_faces) :
+        _soft_resize_buffer!(scene_workspace.face_colors, max_mesh_faces)
     vert_offset = 0
     face_offset = 0
 
@@ -659,7 +684,7 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     end
 
     soft_render(all_verts, all_faces, all_colors, vp, width, height, config;
-                workspace=workspace)
+                workspace=soft_workspace)
 end
 
 """

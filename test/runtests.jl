@@ -2786,6 +2786,14 @@ end
         @test size(soft_scene_img) == (12, 12, 3)
         @test all(isfinite, soft_scene_img)
         @test_opt_alloc 65536 soft_render_scene(soft_scene, soft_scene_cam, 12, 12)
+        soft_scene_ws = SoftRenderSceneWorkspace()
+        soft_scene_ws_img = soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
+                                              workspace=soft_scene_ws)
+        @test soft_scene_ws_img == soft_scene_img
+        @test length(soft_scene_ws.vertices) == sum(Diff3D._mesh_geometry(m).n_vertices
+                                                    for m in collect_meshes(soft_scene))
+        @test_opt_alloc 10000 soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
+                                                workspace=soft_scene_ws)
     end
 
     @testset "Loss functions" begin
