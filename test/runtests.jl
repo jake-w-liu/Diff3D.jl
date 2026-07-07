@@ -4137,8 +4137,12 @@ end
               "[1,0,0.5,0.25]"
         geo_export_alloc = SphereGeometry(radius=1.0, width_segments=32,
                                           height_segments=16)
-        Diff3D._web_geo_object(geo_export_alloc)
-        @test_opt_alloc 160000 Diff3D._web_geo_object(geo_export_alloc)
+        geo_export_json = Diff3D._web_geo_object(geo_export_alloc)
+        @test occursin("\"tangents\":null", geo_export_json)
+        @test occursin("\"uv2s\":null", geo_export_json)
+        @test occursin("\"colors\":null", geo_export_json)
+        @test occursin("\"lineDistances\":null", geo_export_json)
+        @test_opt_alloc 220000 Diff3D._web_geo_object(geo_export_alloc)
         attr_export_alloc = BufferGeometry([0.0,0,0, 1.0,0,0, 0.0,1,0],
                                            Float64[], Float64[], Int[1,2,3], 3, 1)
         set_attribute!(attr_export_alloc, :tangent,
@@ -5317,6 +5321,8 @@ end
         @test occursin("attribute vec3 aColor", html)
         @test occursin("vColor=aColor", html)
         @test occursin("uColor*vColor", html)
+        @test occursin("o.colors=(o.colors&&o.colors.length)?o.colors:defaultColors", html)
+        @test occursin("o.tangents=(o.tangents&&o.tangents.length)?o.tangents:defaultTangents", html)
         @test occursin("o.colorBuf=buf(o.colors)", html)
         @test occursin("attrib(p,\"aColor\",o.colorBuf)", html)
         color_gate_geo = BufferGeometry([0.0,0,0, 1.0,0,0],
@@ -5326,12 +5332,12 @@ end
         color_json_on = Diff3D._web_geo_object(color_gate_geo; use_vertex_colors=true)
         color_json_off = Diff3D._web_geo_object(color_gate_geo; use_vertex_colors=false)
         @test occursin("\"colors\":[1,0,0,0,1,0]", color_json_on)
-        @test occursin("\"colors\":[1,1,1,1,1,1]", color_json_off)
+        @test occursin("\"colors\":null", color_json_off)
         color_mesh_on = Mesh(color_gate_geo, MeshBasicMaterial(vertex_colors=true))
         color_mesh_off = Mesh(color_gate_geo, MeshBasicMaterial())
         @test occursin("\"colors\":[1,0,0,0,1,0]",
                        Diff3D._web_drawable_json(color_mesh_on, Mat4()))
-        @test occursin("\"colors\":[1,1,1,1,1,1]",
+        @test occursin("\"colors\":null",
                        Diff3D._web_drawable_json(color_mesh_off, Mat4()))
         @test occursin("\"texture\":{\"width\":2,\"height\":2", html)
         @test occursin(r"\"alphaTexture\":\{\"ref\":\d+\}", html)

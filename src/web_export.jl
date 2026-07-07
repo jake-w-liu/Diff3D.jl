@@ -1614,16 +1614,22 @@ function _web_positions(obj, geo::BufferGeometry)
     return geo.positions
 end
 
+function _web_attribute_for_components(geo::BufferGeometry, name::Symbol, min_item_size::Int)
+    has_attribute(geo, name) || return nothing
+    attr = get_attribute(geo, name)
+    length(attr.data) >= attr.item_size * geo.n_vertices || return nothing
+    attr.item_size >= min_item_size || return nothing
+    return attr
+end
+
 function _web_write_tangent_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
-    if has_attribute(geo, :tangent)
-        attr = get_attribute(geo, :tangent)
-        if attr.item_size >= 4 && length(attr.data) >= attr.item_size * geo.n_vertices
-            _js_write_attribute_components_array(io, attr.data, attr.item_size, 4,
-                                                 geo.n_vertices, num_buf)
-            return true
-        end
+    attr = _web_attribute_for_components(geo, :tangent, 4)
+    if attr !== nothing
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 4,
+                                             geo.n_vertices, num_buf)
+        return true
     end
-    _js_write_repeated_pattern_array(io, (1.0, 0.0, 0.0, 1.0), geo.n_vertices, num_buf)
+    write(io, "null")
     return false
 end
 
@@ -1849,39 +1855,37 @@ _web_material_vertex_colors(mat) =
 
 function _web_write_color_json(io::IO, geo::BufferGeometry, use_vertex_colors::Bool,
                                num_buf::Vector{UInt8})
-    if use_vertex_colors && has_attribute(geo, :color)
-        attr = get_attribute(geo, :color)
-        if attr.item_size >= 3 && length(attr.data) >= attr.item_size * geo.n_vertices
-            _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
-                                                 geo.n_vertices, num_buf)
-            return nothing
-        end
+    attr = use_vertex_colors ? _web_attribute_for_components(geo, :color, 3) : nothing
+    if attr !== nothing
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                             geo.n_vertices, num_buf)
+        return nothing
     end
-    _js_write_repeated_array(io, 1.0, 3 * geo.n_vertices, num_buf)
+    write(io, "null")
     return nothing
 end
 
 function _web_color_json(geo::BufferGeometry, use_vertex_colors::Bool)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(3 * geo.n_vertices))
+    has_colors = use_vertex_colors && _web_attribute_for_components(geo, :color, 3) !== nothing
+    io = IOBuffer(sizehint=has_colors ? _web_num_array_sizehint(3 * geo.n_vertices) : 8)
     _web_write_color_json(io, geo, use_vertex_colors, _web_num_buffer())
     return String(take!(io))
 end
 
 function _web_write_line_distance_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
-    if has_attribute(geo, :lineDistance)
-        attr = get_attribute(geo, :lineDistance)
-        if attr.item_size >= 1 && length(attr.data) >= attr.item_size * geo.n_vertices
-            _js_write_attribute_components_array(io, attr.data, attr.item_size, 1,
-                                                 geo.n_vertices, num_buf)
-            return nothing
-        end
+    attr = _web_attribute_for_components(geo, :lineDistance, 1)
+    if attr !== nothing
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 1,
+                                             geo.n_vertices, num_buf)
+        return nothing
     end
-    _js_write_repeated_array(io, 0.0, geo.n_vertices, num_buf)
+    write(io, "null")
     return nothing
 end
 
 function _web_line_distance_json(geo::BufferGeometry)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(geo.n_vertices))
+    has_distances = _web_attribute_for_components(geo, :lineDistance, 1) !== nothing
+    io = IOBuffer(sizehint=has_distances ? _web_num_array_sizehint(geo.n_vertices) : 8)
     _web_write_line_distance_json(io, geo, _web_num_buffer())
     return String(take!(io))
 end
@@ -1892,11 +1896,19 @@ function _web_draw_range_values(geo::BufferGeometry)
     return (clamp(first(entries) - 1, 0, total), length(entries))
 end
 
-function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real})
+function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real};
+                                  use_vertex_colors::Bool=true)
     n_float = length(positions)
     n_float = _web_sizehint_add(n_float, length(geo.positions))
-    n_float = _web_sizehint_add(n_float, _web_sizehint_mul(4, geo.n_vertices))
-    n_float = _web_sizehint_add(n_float, _web_sizehint_mul(7, geo.n_vertices))
+    n_float = _web_sizehint_add(n_float, _web_sizehint_mul(2, geo.n_vertices))
+    _web_attribute_for_components(geo, :tangent, 4) !== nothing &&
+        (n_float = _web_sizehint_add(n_float, _web_sizehint_mul(4, geo.n_vertices)))
+    _web_attribute_for_components(geo, :uv2, 2) !== nothing &&
+        (n_float = _web_sizehint_add(n_float, _web_sizehint_mul(2, geo.n_vertices)))
+    use_vertex_colors && _web_attribute_for_components(geo, :color, 3) !== nothing &&
+        (n_float = _web_sizehint_add(n_float, _web_sizehint_mul(3, geo.n_vertices)))
+    _web_attribute_for_components(geo, :lineDistance, 1) !== nothing &&
+        (n_float = _web_sizehint_add(n_float, geo.n_vertices))
     indices = isempty(geo.indices) ? (1:geo.n_vertices) : geo.indices
     hint = 512
     hint = _web_sizehint_add(hint, _web_sizehint_mul(10, n_float))
@@ -1914,15 +1926,13 @@ function _web_write_uv_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
 end
 
 function _web_write_uv2_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
-    if has_attribute(geo, :uv2)
-        attr = get_attribute(geo, :uv2)
-        if attr.item_size >= 2 && length(attr.data) >= attr.item_size * geo.n_vertices
-            _js_write_attribute_components_array(io, attr.data, attr.item_size, 2,
-                                                 geo.n_vertices, num_buf)
-            return nothing
-        end
+    attr = _web_attribute_for_components(geo, :uv2, 2)
+    if attr !== nothing
+        _js_write_attribute_components_array(io, attr.data, attr.item_size, 2,
+                                             geo.n_vertices, num_buf)
+        return nothing
     end
-    _web_write_uv_json(io, geo, num_buf)
+    write(io, "null")
     return nothing
 end
 
@@ -1963,7 +1973,8 @@ end
 
 function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
                          use_vertex_colors::Bool=true)
-    io = IOBuffer(sizehint=_web_geo_object_sizehint(geo, positions))
+    io = IOBuffer(sizehint=_web_geo_object_sizehint(geo, positions;
+                                                    use_vertex_colors=use_vertex_colors))
     _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors)
     return String(take!(io))
 end
@@ -4026,7 +4037,8 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES&&!o.hasMorphTargets);
     o.textureSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length>MAX_BONES&&boneTexturesEnabled&&!o.hasMorphTargets);
     o.skinDirty=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&!(o.shaderSkin||o.textureSkin)); if(o.skin){ for(const b of o.skin.bones){ b.parentMatrix=(b.parentMatrix||M4.ident()).slice(); b.basePosition=(b.basePosition||[0,0,0]).slice(); b.baseEuler=(b.baseEuler||[0,0,0]).slice(); b.baseEulerOrder=b.baseEulerOrder||"XYZ"; b.baseScale=(b.baseScale||[1,1,1]).slice(); b.baseQuaternion=(b.baseQuaternion||eulerToQuat(b.baseEuler,b.baseEulerOrder)).slice(); b.baseMatrix=b.matrix.slice(); b.matrix=b.baseMatrix.slice(); b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); } }
-    const vertexCount=o.positions.length/3, defaultSkinIndex=new Array(vertexCount*4).fill(0), defaultSkinWeight=new Array(vertexCount*4).fill(0); for(let i=0;i<vertexCount;i++) defaultSkinWeight[4*i]=1;
+    const vertexCount=o.positions.length/3, defaultSkinIndex=new Array(vertexCount*4).fill(0), defaultSkinWeight=new Array(vertexCount*4).fill(0), defaultColors=new Array(vertexCount*3).fill(1), defaultTangents=new Array(vertexCount*4).fill(0); for(let i=0;i<vertexCount;i++){ defaultSkinWeight[4*i]=1; defaultTangents[4*i]=1; defaultTangents[4*i+3]=1; }
+    o.colors=(o.colors&&o.colors.length)?o.colors:defaultColors; o.tangents=(o.tangents&&o.tangents.length)?o.tangents:defaultTangents;
     for(const t of objectTextures(o)) captureTextureBase(t);
     o.posBuf=buf(o.positions,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.nrmBuf=buf(o.normals,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.tanBuf=buf(o.tangents,gl.ARRAY_BUFFER,Float32Array,(o.morphDirty||o.skinDirty)?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); o.uvBuf=buf(o.uvs); o.uv2Buf=buf(o.uv2s||o.uvs); o.colorBuf=buf(o.colors); o.lineDistanceBuf=buf(o.lineDistances||new Array(vertexCount).fill(0)); o.skinIndexBuf=buf(o.skin?o.skin.indices:defaultSkinIndex); o.skinWeightBuf=buf(o.skin?o.skin.weights:defaultSkinWeight); o.tex=makeTexture(o.texture); o.alphaTex=makeTexture(o.alphaTexture); o.emissiveTex=makeTexture(o.emissiveTexture); o.aoTex=makeTexture(o.aoTexture); o.lightTex=makeTexture(o.lightTexture); o.roughnessTex=makeTexture(o.roughnessTexture); o.metalnessTex=makeTexture(o.metalnessTexture); o.normalTex=makeTexture(o.normalTexture); o.clearcoatNormalTex=clearcoatNormalTexturesEnabled?makeTexture(o.clearcoatNormalTexture):null; o.matcapTex=makeTexture(o.matcapTexture); o.gradientTex=makeTexture(o.gradientTexture); o.physicalScalarTex=physicalTexturesEnabled?makeTexture(packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3])):null; o.physicalScalar2Tex=physicalTexturesEnabled?makeTexture(packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2])):null; o.sheenColorTex=physicalTexturesEnabled?makeTexture(o.sheenColorTexture):null; o.specularColorTex=physicalTexturesEnabled?makeTexture(o.specularColorTexture):null; o.boneTex=o.textureSkin?makeBoneTexture(o):null; o.envCubeTex=cubeTexturesEnabled?makeCubeTexture(o.envTexture):null;
     const maxIndex=o.indices.reduce((m,v)=>Math.max(m,v),0);
