@@ -2761,6 +2761,15 @@ end
         soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(), 16, 16, config)
         @test_opt_alloc 85000 soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(),
                                           16, 16, config)
+        soft_ws = SoftRenderWorkspace()
+        soft_ws_img = soft_render(soft_verts, soft_faces, soft_colors, Mat4{Float64}(),
+                                  16, 16, config; workspace=soft_ws)
+        @test soft_ws_img == soft_render(soft_verts, soft_faces, soft_colors,
+                                         Mat4{Float64}(), 16, 16, config)
+        @test !isempty(soft_ws.tile_counts)
+        @test_opt_alloc 10000 soft_render(soft_verts, soft_faces, soft_colors,
+                                          Mat4{Float64}(), 16, 16, config;
+                                          workspace=soft_ws)
 
         soft_scene = Scene(background=Color3(0.0, 0.0, 0.0))
         add!(soft_scene, AmbientLight(intensity=0.2))
@@ -2889,6 +2898,46 @@ end
                                                      lr=0.2, n_iters=10, verbose=false)
         @test_opt_alloc 8192 inverse_render_adam(p0, target, linear_image, loss_mse;
                                                  lr=0.1, n_iters=10, verbose=false)
+
+        wide_calls = Ref(0)
+        function quadratic_image(p)
+            wide_calls[] += 1
+            T = eltype(p)
+            img = Array{T,3}(undef, 1, 1, 1)
+            s = zero(T)
+            for x in p
+                s += x * x
+            end
+            img[1, 1, 1] = s
+            return img
+        end
+        wide = fill(0.1, 24)
+        wide_target = zeros(1, 1, 1)
+        wide_calls[] = 0
+        inverse_render_optimize(wide, wide_target, quadratic_image, loss_mse;
+                                lr=0.01, n_iters=1, verbose=false, ad=:auto)
+        @test wide_calls[] == 1
+        wide_calls[] = 0
+        inverse_render_adam(wide, wide_target, quadratic_image, loss_mse;
+                            lr=0.01, n_iters=1, verbose=false, ad=:auto)
+        @test wide_calls[] == 1
+        wide_calls[] = 0
+        inverse_render_optimize(wide, wide_target, quadratic_image, loss_mse;
+                                lr=0.01, n_iters=1, verbose=false, ad=:forward)
+        @test wide_calls[] > 1
+        function constant_image(p)
+            img = Array{Float64,3}(undef, 1, 1, 1)
+            img[1, 1, 1] = 0.0
+            return img
+        end
+        _, const_hist = inverse_render_optimize(wide, wide_target, constant_image,
+                                                loss_mse; lr=0.01, n_iters=1,
+                                                verbose=false, ad=:auto)
+        @test const_hist[1] == 0.0
+        @test_throws ArgumentError inverse_render_optimize(wide, wide_target,
+                                                          quadratic_image, loss_mse;
+                                                          n_iters=1, verbose=false,
+                                                          ad=:invalid)
     end
 
     @testset "I/O — PPM export" begin
@@ -12200,11 +12249,11 @@ end
         reverse_ad_sum_abs2(x) = sum(abs2, x)
         reverse_gradient(reverse_ad_sum_abs2, wide_ad)
         reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
-        @test_opt_alloc 56000 reverse_gradient(reverse_ad_sum_abs2, wide_ad)
-        @test_opt_alloc 56000 reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
+        @test_opt_alloc 24000 reverse_gradient(reverse_ad_sum_abs2, wide_ad)
+        @test_opt_alloc 24000 reverse_value_gradient(reverse_ad_sum_abs2, wide_ad)
         reverse_ad_mixed_constants(x) = sum(y -> y + 1.0, x)
         reverse_value_gradient(reverse_ad_mixed_constants, wide_ad)
-        @test_opt_alloc 45000 reverse_value_gradient(reverse_ad_mixed_constants, wide_ad)
+        @test_opt_alloc 24000 reverse_value_gradient(reverse_ad_mixed_constants, wide_ad)
         # Non-trivial scalar function (exp/sqrt/max) vs ForwardDiff.
         hfun(x) = exp(x[1]) * sqrt(abs(x[2]) + 1) + max(x[1], x[3]) - x[2]/x[3]
         x0 = [0.4, -1.3, 2.1]
@@ -15016,6 +15065,16 @@ end
 
         # [F:loaders] Binary GLB loader (load_glb)
         @testset "load_glb container" begin
+            byte_json = Vector{UInt8}(codeunits("{\"name\":\"mesh\",\"unicode\":\"\\uD834\\uDD1E\",\"raw\":\""))
+            append!(byte_json, UInt8[0xe2, 0x82, 0xac])
+            append!(byte_json, codeunits("\",\"values\":[true,false,null,-1.25e2]}"))
+            parsed_json = Diff3D._json_parse(@view byte_json[1:length(byte_json)])
+            @test parsed_json["name"] == "mesh"
+            @test parsed_json["unicode"] == String(UInt8[0xf0, 0x9d, 0x84, 0x9e])
+            @test parsed_json["raw"] == String(UInt8[0xe2, 0x82, 0xac])
+            @test parsed_json["values"] == Any[true, false, nothing, -125.0]
+            @test_throws "invalid UTF-8" Diff3D._json_parse(UInt8[0x7b,0x22,0x78,0x22,0x3a,0x22,0xff,0x22,0x7d])
+
             # Build a minimal valid GLB in-memory: 12-byte header + JSON chunk + BIN
             # chunk. One triangle, POSITION accessor + ushort indices in the BIN buffer.
             le32(x) = UInt8[x & 0xff, (x>>8)&0xff, (x>>16)&0xff, (x>>24)&0xff]

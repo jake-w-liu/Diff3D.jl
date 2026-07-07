@@ -57,6 +57,37 @@ struct _SoftScreenTriangle{T}
     valid::Bool
 end
 
+"""Reusable scratch buffers for repeated `soft_render` calls with element type `T`."""
+mutable struct SoftRenderWorkspace{T<:Real}
+    screen_tris::Vector{_SoftScreenTriangle{T}}
+    tile_counts::Vector{Int}
+    tile_offsets::Vector{Int}
+    tile_faces::Vector{Int}
+    tile_cursor::Vector{Int}
+end
+
+SoftRenderWorkspace{T}() where {T<:Real} =
+    SoftRenderWorkspace{T}(_SoftScreenTriangle{T}[], Int[], Int[], Int[], Int[])
+SoftRenderWorkspace() = SoftRenderWorkspace{Float64}()
+
+function _soft_checked_workspace(workspace, ::Type{T}) where {T}
+    workspace === nothing && return nothing
+    workspace isa SoftRenderWorkspace{T} ||
+        throw(ArgumentError("soft_render workspace element type must be $T; got $(typeof(workspace))"))
+    return workspace
+end
+
+function _soft_screen_triangle_buffer!(workspace::SoftRenderWorkspace{T},
+                                       n::Int) where {T}
+    length(workspace.screen_tris) < n && resize!(workspace.screen_tris, n)
+    return workspace.screen_tris
+end
+
+function _soft_int_buffer!(buf::Vector{Int}, n::Int)
+    length(buf) < n && resize!(buf, n)
+    return buf
+end
+
 """
 Differentiable soft rendering.
 Takes explicit arrays rather than scene-graph objects for AD compatibility.
@@ -77,6 +108,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                      view_proj::Mat4,
                      width::Int, height::Int,
                      config::SoftRasterizerConfig = SoftRasterizerConfig()
+                     ; workspace=nothing
                      ) where {Tv, Tc}
 
     # Promote to a common element type so the renderer is differentiable with
@@ -93,6 +125,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     γ = T(config.gamma)
     bg = Color3(T(config.bg_color.r), T(config.bg_color.g), T(config.bg_color.b))
     eps = T(config.eps)
+    workspace = _soft_checked_workspace(workspace, T)
 
     n_faces = length(faces)
     W, H = width, height
@@ -113,7 +146,9 @@ function soft_render(vertices::Vector{Vec3{Tv}},
 
     # Precompute screen-space triangles. Allocate for the common no-near-clip
     # case (one emitted triangle per face) and grow only for split triangles.
-    screen_tris = Vector{_SoftScreenTriangle{T}}(undef, n_faces)
+    screen_tris = workspace === nothing ?
+        Vector{_SoftScreenTriangle{T}}(undef, n_faces) :
+        _soft_screen_triangle_buffer!(workspace, n_faces)
     n_screen_tris = 0
     max_screen_tris = 2n_faces
 
@@ -228,7 +263,9 @@ function soft_render(vertices::Vector{Vec3{Tv}},
 
     # Bucket faces into tiles. Two-pass CSR build keeps allocation O(faces +
     # tile-overlap entries) and gives contiguous, index-ordered per-tile lists.
-    tile_counts = zeros(Int, n_tiles)
+    tile_counts = workspace === nothing ? zeros(Int, n_tiles) :
+        _soft_int_buffer!(workspace.tile_counts, n_tiles)
+    fill!(tile_counts, 0)
     for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
@@ -238,13 +275,18 @@ function soft_render(vertices::Vector{Vec3{Tv}},
             tile_counts[tile_index(tx, ty)] += 1
         end
     end
-    tile_offsets = Vector{Int}(undef, n_tiles + 1)
+    tile_offsets = workspace === nothing ? Vector{Int}(undef, n_tiles + 1) :
+        _soft_int_buffer!(workspace.tile_offsets, n_tiles + 1)
     tile_offsets[1] = 1
     for t in 1:n_tiles
         tile_offsets[t + 1] = tile_offsets[t] + tile_counts[t]
     end
-    tile_faces = Vector{Int}(undef, tile_offsets[n_tiles + 1] - 1)
-    tile_cursor = copy(tile_offsets)
+    n_tile_faces = tile_offsets[n_tiles + 1] - 1
+    tile_faces = workspace === nothing ? Vector{Int}(undef, n_tile_faces) :
+        _soft_int_buffer!(workspace.tile_faces, n_tile_faces)
+    tile_cursor = workspace === nothing ? copy(tile_offsets) :
+        _soft_int_buffer!(workspace.tile_cursor, n_tiles + 1)
+    copyto!(tile_cursor, 1, tile_offsets, 1, n_tiles + 1)
     for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
@@ -564,7 +606,7 @@ Suitable for wrapping in ForwardDiff.
 """
 function soft_render_scene(scene::Scene, camera::AbstractCamera,
                            width::Int, height::Int;
-                           sigma=1.0, gamma=1.0)
+                           sigma=1.0, gamma=1.0, workspace=nothing)
     config = SoftRasterizerConfig(sigma=sigma, gamma=gamma, bg_color=scene.background)
 
     proj = projection_matrix(camera)
@@ -616,7 +658,8 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
         face_offset += geo.n_faces
     end
 
-    soft_render(all_verts, all_faces, all_colors, vp, width, height, config)
+    soft_render(all_verts, all_faces, all_colors, vp, width, height, config;
+                workspace=workspace)
 end
 
 """

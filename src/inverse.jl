@@ -9,6 +9,21 @@ struct _ForwardDiffValueGradientConfig{N,Tag}
     dual_params::Vector{ForwardDiff.Dual{Tag,Float64,N}}
 end
 
+struct _InverseValueGradientConfig{F}
+    mode::Symbol
+    forward::F
+    allow_fallback::Bool
+end
+
+const _INVERSE_AUTO_REVERSE_MIN_PARAMS = 16
+
+function _inverse_ad_mode(ad)
+    mode = ad isa Symbol ? ad : Symbol(ad)
+    mode in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("inverse rendering ad must be :auto, :forward, or :reverse"))
+    return mode
+end
+
 function _forwarddiff_value_gradient_config(objective::F,
                                             params::AbstractVector{Float64}) where {F}
     chunk = isempty(params) ? 1 : min(ForwardDiff.pickchunksize(length(params)),
@@ -23,6 +38,26 @@ function _forwarddiff_value_gradient_config(::F,
     dual_params = Vector{ForwardDiff.Dual{Tag,Float64,N}}(undef, length(params))
     return _ForwardDiffValueGradientConfig{N,Tag}(dual_params)
 end
+
+function _inverse_value_gradient_config(objective::F,
+                                        params::AbstractVector{Float64},
+                                        ad) where {F}
+    requested = _inverse_ad_mode(ad)
+    mode = requested
+    allow_fallback = false
+    if requested == :auto
+        mode = length(params) >= _INVERSE_AUTO_REVERSE_MIN_PARAMS ? :reverse : :forward
+        allow_fallback = mode == :reverse
+    end
+    forward = (mode == :forward || allow_fallback) ?
+        _forwarddiff_value_gradient_config(objective, params) : nothing
+    return _InverseValueGradientConfig(mode, forward, allow_fallback)
+end
+
+_inverse_reverse_autofallback_error(err) =
+    err isa MethodError ||
+    (err isa ErrorException && occursin("reverse_gradient: f must return",
+                                        sprint(showerror, err)))
 
 function _forwarddiff_value_and_gradient!(grad::AbstractVector{Float64},
                                           objective::F,
@@ -71,6 +106,32 @@ function _forwarddiff_value_and_gradient_chunk!(grad::AbstractVector{Float64},
     return value
 end
 
+function _inverse_value_and_gradient!(grad::AbstractVector{Float64},
+                                      objective::F,
+                                      params::AbstractVector{Float64},
+                                      cfg::_InverseValueGradientConfig) where {F}
+    if cfg.mode == :forward
+        return _forwarddiff_value_and_gradient!(grad, objective, params, cfg.forward)
+    end
+    length(grad) == length(params) ||
+        throw(ArgumentError("gradient workspace length must match params"))
+    if isempty(params)
+        return Float64(objective(params))
+    end
+    value, reverse_grad = try
+        reverse_value_gradient(objective, params)
+    catch err
+        if cfg.allow_fallback && _inverse_reverse_autofallback_error(err)
+            return _forwarddiff_value_and_gradient!(grad, objective, params, cfg.forward)
+        end
+        rethrow()
+    end
+    length(reverse_grad) == length(grad) ||
+        throw(ArgumentError("reverse-gradient result length must match params"))
+    copyto!(grad, reverse_grad)
+    return value
+end
+
 function _validate_optimizer_common(lr, n_iters, label::String)
     n_iters isa Bool && throw(ArgumentError("$label n_iters must be a non-negative integer"))
     n_iters isa Integer ||
@@ -107,6 +168,9 @@ Arguments:
 - lr: learning rate
 - n_iters: number of optimization steps
 - verbose: print progress
+- ad: `:auto`, `:forward`, or `:reverse` gradient backend. `:auto` uses the
+  single-pass reverse engine for wider parameter vectors and falls back to
+  ForwardDiff when the reverse engine reports an unsupported objective.
 
 Returns: (optimized_params, loss_history)
 """
@@ -116,7 +180,8 @@ function inverse_render_optimize(initial_params::Vector{Float64},
                                  loss_fn::Function;
                                  lr=0.01,
                                  n_iters=100,
-                                 verbose=true)
+                                 verbose=true,
+                                 ad=:auto)
     _validate_optimizer_common(lr, n_iters, "inverse_render_optimize")
     params = copy(initial_params)
     loss_history = Vector{Float64}(undef, n_iters)
@@ -127,10 +192,10 @@ function inverse_render_optimize(initial_params::Vector{Float64},
     end
 
     grad = similar(params)
-    grad_cfg = _forwarddiff_value_gradient_config(objective, params)
+    grad_cfg = _inverse_value_gradient_config(objective, params, ad)
 
     for iter in 1:n_iters
-        current_loss = _forwarddiff_value_and_gradient!(grad, objective, params, grad_cfg)
+        current_loss = _inverse_value_and_gradient!(grad, objective, params, grad_cfg)
         loss_history[iter] = current_loss
 
         # Gradient descent step
@@ -149,6 +214,7 @@ end
 """
 Adam optimizer for inverse rendering.
 Better convergence than vanilla gradient descent.
+Accepts the same `ad` gradient-backend keyword as `inverse_render_optimize`.
 """
 function inverse_render_adam(initial_params::Vector{Float64},
                             target_image::Array{Float64, 3},
@@ -158,7 +224,8 @@ function inverse_render_adam(initial_params::Vector{Float64},
                             β1=0.9, β2=0.999,
                             ε=1e-8,
                             n_iters=100,
-                            verbose=true)
+                            verbose=true,
+                            ad=:auto)
     _validate_optimizer_common(lr, n_iters, "inverse_render_adam")
     _validate_adam_hyperparams(β1, β2, ε)
     params = copy(initial_params)
@@ -175,10 +242,10 @@ function inverse_render_adam(initial_params::Vector{Float64},
 
     one_minus_β1 = 1 - β1
     one_minus_β2 = 1 - β2
-    grad_cfg = _forwarddiff_value_gradient_config(objective, params)
+    grad_cfg = _inverse_value_gradient_config(objective, params, ad)
 
     for iter in 1:n_iters
-        current_loss = _forwarddiff_value_and_gradient!(grad, objective, params, grad_cfg)
+        current_loss = _inverse_value_and_gradient!(grad, objective, params, grad_cfg)
         loss_history[iter] = current_loss
 
         # Adam update

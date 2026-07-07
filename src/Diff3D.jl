@@ -197,7 +197,7 @@ export
     BenchResult, benchmark_render, build_instanced_scene, scene_triangle_count,
 
     # Soft rasterizer
-    SoftRasterizerConfig, soft_render, soft_render_scene,
+    SoftRasterizerConfig, SoftRenderWorkspace, soft_render, soft_render_scene,
     differentiable_render,
     sigmoid_approx, signed_distance_to_triangle,
     point_line_distance, point_segment_distance,

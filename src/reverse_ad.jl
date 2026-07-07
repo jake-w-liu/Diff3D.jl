@@ -13,8 +13,8 @@
 mutable struct ADVar <: Real
     val::Float64
     adj::Float64                 # accumulated adjoint (∂output/∂this)
-    args::Tuple                  # parent ADVars
-    partials::Tuple              # ∂this/∂parent for each parent (Float64)
+    args::Union{Tuple{},Tuple{ADVar},Tuple{ADVar,ADVar}}
+    partials::Union{Tuple{},Tuple{Float64},Tuple{Float64,Float64}}
 end
 
 # Per-task stack of active tapes (operations recorded in creation = topological
