@@ -5996,6 +5996,21 @@ end
         @test get_vertex(geo, 2).x ≈ 1.0
         @test get_normal(geo, 1).z ≈ 1.0
         @test_opt_alloc 6000 load_stl(f)
+        stress_io = IOBuffer()
+        println(stress_io, "solid stress")
+        for i in 1:256
+            println(stress_io, "facet normal 0 0 1")
+            println(stress_io, "outer loop")
+            println(stress_io, "vertex ", i, " 0 0")
+            println(stress_io, "vertex ", i, " 1 0")
+            println(stress_io, "vertex ", i, " 0 1")
+            println(stress_io, "endloop")
+            println(stress_io, "endfacet")
+        end
+        println(stress_io, "endsolid stress")
+        write(f, String(take!(stress_io)))
+        @test load_stl(f).n_faces == 256
+        @test_opt_alloc 600000 load_stl(f)
         rm(f)
     end
 
