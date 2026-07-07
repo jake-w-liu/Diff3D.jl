@@ -9244,7 +9244,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             morph_weights = _gltf_checked_number_vector(
                 get(node, "weights", get(mesh_def, "weights", Float64[])), "morph weights")
             morph_names = _gltf_target_names(mesh_def)
-            for prim in mesh_def["primitives"]
+            for (prim_slot, prim) in enumerate(mesh_def["primitives"])
                 if instance_matrices !== nothing
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
@@ -9256,13 +9256,14 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     add!(obj, mesh_obj)
                 else
                     draw_mode = _gltf_instanced_draw_mode(mesh_obj)
+                    prim_matrices = prim_slot == 1 ? instance_matrices :
+                                    copy(instance_matrices)
                     inst = InstancedMesh(mesh_obj.geometry, mesh_obj.material,
-                                         length(instance_matrices);
+                                         prim_matrices;
                                          name=mesh_obj.name,
                                          cast_shadow=object_casts_shadow(mesh_obj),
                                          receive_shadow=object_receives_shadow(mesh_obj),
                                          draw_mode=draw_mode)
-                    inst.instance_matrices = copy(instance_matrices)
                     add!(obj, inst)
                 end
             end

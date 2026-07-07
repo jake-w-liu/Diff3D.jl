@@ -4196,8 +4196,22 @@ end
             end
             add!(light_alloc_scene, light)
         end
+        light_num_buf = Diff3D._web_num_buffer()
+        light_io = IOBuffer()
+        Diff3D._web_write_lights_json(light_io, light_alloc_scene;
+                                      num_buf=light_num_buf)
+        @test String(take!(light_io)) == Diff3D._web_lights_json(light_alloc_scene)
+        Diff3D._web_write_lights_json(devnull, light_alloc_scene;
+                                      num_buf=light_num_buf)
+        @test_opt_alloc 10000 Diff3D._web_write_lights_json(devnull,
+                                                            light_alloc_scene;
+                                                            num_buf=light_num_buf)
         Diff3D._web_lights_json(light_alloc_scene)
-        @test_opt_alloc 60000 Diff3D._web_lights_json(light_alloc_scene)
+        @test_opt_alloc 40000 Diff3D._web_lights_json(light_alloc_scene)
+        light_alloc_case = WebGLExportCase("light_alloc", "Light Alloc", "streamed",
+                                           light_alloc_scene; radius=4.0)
+        Diff3D._web_write_case_json(devnull, light_alloc_case)
+        @test_opt_alloc 25000 Diff3D._web_write_case_json(devnull, light_alloc_case)
         @test Diff3D._web_morph_target_ids_json([1, 2, 1], 2) == "[1,2]"
         @test Diff3D._web_morph_target_ids_json([1, 2], 3) == "[1,2,3]"
         malformed_tex = Texture(reshape([NaN, Inf, -Inf, 0.5], 1, 1, 4); filter=:nearest)
@@ -5850,6 +5864,7 @@ end
         loaded = load_stl(f)
         @test loaded.n_faces == geo.n_faces
         @test loaded.n_vertices == geo.n_faces * 3    # STL: independent verts
+        @test_opt_alloc 1024 save_stl_binary(f, geo)
         # Triangle 1 vertices match (within Float32 precision).
         a1, b1, c1 = get_face(geo, 1)
         la, lb, lc = get_face(loaded, 1)
@@ -5882,6 +5897,7 @@ end
         @test geo.n_vertices == 3
         @test get_vertex(geo, 2).x ≈ 1.0
         @test get_normal(geo, 1).z ≈ 1.0
+        @test_opt_alloc 6000 load_stl(f)
         rm(f)
     end
 
@@ -6546,7 +6562,7 @@ end
         # Subdivision: detail=d multiplies faces by (d+1)².
         @test OctahedronGeometry(detail=1).n_faces == 8 * 4
         @test TetrahedronGeometry(detail=2).n_faces == 4 * 9
-        @test_opt_alloc 20000 IcosahedronGeometry(radius=1.0)
+        @test_opt_alloc 17000 IcosahedronGeometry(radius=1.0)
         @test_opt_alloc 35000 DodecahedronGeometry(radius=1.0)
         # Octahedron/Tetrahedron geometric winding agrees with stored outward normals.
         for geo in (OctahedronGeometry(), TetrahedronGeometry())
@@ -6842,7 +6858,7 @@ end
         ]
         closed_ex = ExtrudeGeometry(tri; extrude_path=closed_path)
         @test closed_ex.n_faces == 4 * 3 * 2
-        @test_opt_alloc 6144 ExtrudeGeometry(tri; extrude_path=closed_path)
+        @test_opt_alloc 4096 ExtrudeGeometry(tri; extrude_path=closed_path)
         @test_throws ArgumentError ExtrudeGeometry(sq; extrude_path=[Vec3(0.0, 0.0, 0.0)])
         @test_throws ArgumentError ExtrudeGeometry([Vec2(0.0, 0.0), Vec2(1.0, 0.0)];
                                                    extrude_path=closed_path)
@@ -11412,6 +11428,32 @@ end
         @test primitive_flags.sprites == Diff3D._sprite_subtree_has_drawable(primitive_scene)
         @test primitive_flags.lines == Diff3D._line_subtree_has_drawable(primitive_scene)
         @test primitive_flags.points == Diff3D._point_subtree_has_drawable(primitive_scene)
+        many_collect_scene = Scene()
+        for i in 1:100
+            m = Mesh(BoxGeometry(), MeshBasicMaterial(side=:double))
+            m.position = Vec3((i % 10) * 0.01, (i ÷ 10) * 0.01, 0.0)
+            add!(many_collect_scene, m)
+        end
+        collect_cache = RenderCache()
+        Diff3D._collect_render_drawables_worlds_into!(
+            collect_cache.meshes, collect_cache.mesh_worlds,
+            collect_cache.instanced, collect_cache.instanced_worlds,
+            many_collect_scene)
+        @test_opt_alloc 1024 Diff3D._collect_render_drawables_worlds_into!(
+            collect_cache.meshes, collect_cache.mesh_worlds,
+            collect_cache.instanced, collect_cache.instanced_worlds,
+            many_collect_scene)
+        many_collect_rt = RenderTarget(16, 16)
+        render_pooled!(many_collect_rt, many_collect_scene, cam, collect_cache)
+        @test_opt_alloc 4096 render_pooled!(many_collect_rt, many_collect_scene,
+                                            cam, collect_cache)
+        many_collect_tile_rt = RenderTarget(16, 16)
+        many_collect_tile_cache = [RenderCache()]
+        render_tiled!(many_collect_tile_rt, many_collect_scene, cam; tiles=1,
+                      cache=many_collect_tile_cache)
+        @test_opt_alloc 4096 render_tiled!(many_collect_tile_rt,
+                                           many_collect_scene, cam; tiles=1,
+                                           cache=many_collect_tile_cache)
         r1 = RenderTarget(64,64); render!(r1, scene, cam)
         cache = RenderCache(); r2 = RenderTarget(64,64); render_pooled!(r2, scene, cam, cache)
         @test maximum(abs.(r1.color .- r2.color)) < 1e-12      # same image as render!
@@ -12556,6 +12598,11 @@ end
             @test inst.draw_mode === :triangles
             @test mat4_transform_point(get_instance_matrix(inst, 2), Vec3(0.0, 0.0, 0.0)) ==
                   Vec3(2.0, 0.0, 0.0)
+            direct_mats = [Mat4{Float64}(), mat4_translation(3.0, 0.0, 0.0)]
+            direct_inst = InstancedMesh(BufferGeometry(), MeshBasicMaterial(),
+                                        direct_mats)
+            @test direct_inst.instance_matrices === direct_mats
+            @test instanced_count(direct_inst) == 2
 
             trs_gltf, trs_buffers = instancing_fixture(rotation=true, scale=true)
             trs_inst = only(collect_instanced(Diff3D._gltf_build_scene(trs_gltf, trs_buffers)))
@@ -19655,9 +19702,9 @@ end
         morph_alloc_zero_influences = [0.0]
         Diff3D.apply_morph_targets!(morph_alloc_scratch, morph_alloc_geo,
                                     morph_alloc_influences)
-        @test_opt_alloc 512 Diff3D.apply_morph_targets!(morph_alloc_scratch,
-                                                        morph_alloc_geo,
-                                                        morph_alloc_influences)
+        @test_opt_alloc 0 Diff3D.apply_morph_targets!(morph_alloc_scratch,
+                                                       morph_alloc_geo,
+                                                       morph_alloc_influences)
         @test_opt_alloc 64 Diff3D.apply_morph_targets!(morph_alloc_scratch,
                                                        morph_alloc_geo,
                                                        morph_alloc_zero_influences)
@@ -19667,12 +19714,12 @@ end
                                     morph_alloc_influences)
         Diff3D.apply_morph_tangents!(morph_alloc_tangent_out, morph_alloc_geo,
                                      morph_alloc_influences)
-        @test_opt_alloc 512 Diff3D.apply_morph_normals!(morph_alloc_normal_out,
+        @test_opt_alloc 0 Diff3D.apply_morph_normals!(morph_alloc_normal_out,
+                                                       morph_alloc_geo,
+                                                       morph_alloc_influences)
+        @test_opt_alloc 0 Diff3D.apply_morph_tangents!(morph_alloc_tangent_out,
                                                         morph_alloc_geo,
                                                         morph_alloc_influences)
-        @test_opt_alloc 512 Diff3D.apply_morph_tangents!(morph_alloc_tangent_out,
-                                                         morph_alloc_geo,
-                                                         morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_targets(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_normals(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_tangents(morph_alloc_geo, morph_alloc_influences)

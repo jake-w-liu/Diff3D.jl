@@ -1062,9 +1062,10 @@ function _extrude_clean_path(path::AbstractVector{<:Vec3})
     end
     eps = 1e-9 * scale
     closed = norm(raw[end] - raw[1]) <= eps
-    clean = closed ? raw[1:end - 1] : raw
+    clean_last = closed ? length(raw) - 1 : length(raw)
     filtered = Vec3{Float64}[]
-    for p in clean
+    for i in 1:clean_last
+        p = raw[i]
         if isempty(filtered) || norm(p - filtered[end]) > eps
             push!(filtered, p)
         end

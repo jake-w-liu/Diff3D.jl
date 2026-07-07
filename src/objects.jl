@@ -78,6 +78,18 @@ function InstancedMesh(geometry, material, count::Int; name="InstancedMesh",
                   cast_shadow, receive_shadow, mats, colors, draw_mode)
 end
 
+function InstancedMesh(geometry, material,
+                       instance_matrices::Vector{Mat4{Float64}};
+                       name="InstancedMesh",
+                       cast_shadow::Bool=false, receive_shadow::Bool=false,
+                       draw_mode::Symbol=:triangles)
+    colors = [Color3(1.0, 1.0, 1.0) for _ in eachindex(instance_matrices)]
+    InstancedMesh(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+                  AbstractObject3D[], true, name, _next_id(), geometry,
+                  material, cast_shadow, receive_shadow, instance_matrices,
+                  colors, draw_mode)
+end
+
 function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
                        scale::Vec3{Float64},
                        parent::Union{Nothing, AbstractObject3D},
@@ -631,7 +643,8 @@ function _skin_morph_normals!(out::Vector{Float64}, geo::BufferGeometry,
         name = _morph_normal_symbol(ti)
         has_attribute(geo, name) || continue
         attr = get_attribute(geo, name)
-        _apply_morph_attribute3_attr!(out, attr, w, name, geo.n_vertices, 3)
+        _apply_morph_attribute3_attr_dispatch!(out, attr, w, name,
+                                               geo.n_vertices, 3)
     end
     return _normalize_attribute3!(out, geo.n_vertices, 3)
 end

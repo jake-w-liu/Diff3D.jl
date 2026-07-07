@@ -732,9 +732,55 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
         push!(instanced_worlds, world)
     end
     @inbounds for child in children
-        _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
-                                                instanced_worlds, child, world,
-                                                primitive_flags)
+        if child isa Mesh
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa InstancedMesh
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa Group
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa Object3D
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa Scene
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa LineObject
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa LineSegments
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa LineLoop
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa PointsObject
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa Sprite
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        elseif child isa SkinnedMesh
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        else
+            _collect_render_drawables_worlds_visit!(
+                meshes, mesh_worlds, instanced, instanced_worlds, child,
+                world, primitive_flags)
+        end
     end
     return nothing
 end

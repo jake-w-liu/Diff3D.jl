@@ -418,6 +418,15 @@ function _apply_morph_position_attr!(out::Vector{Vec3{Float64}}, attr::BufferAtt
     return out
 end
 
+@inline function _apply_morph_position_attr_dispatch!(
+        out::Vector{Vec3{Float64}}, attr::BufferAttribute,
+        w::Float64, name::Symbol, n_vertices::Int)
+    if attr isa BufferAttribute{Float64}
+        return _apply_morph_position_attr!(out, attr, w, name, n_vertices)
+    end
+    return _apply_morph_position_attr!(out, attr, w, name, n_vertices)
+end
+
 function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
                               influences::AbstractVector{<:Real})
     _validate_geometry_vertices(g, "apply_morph_targets")
@@ -435,7 +444,7 @@ function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
         name = _morph_position_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        _apply_morph_position_attr!(out, attr, w, name, g.n_vertices)
+        _apply_morph_position_attr_dispatch!(out, attr, w, name, g.n_vertices)
     end
     return out
 end
@@ -502,6 +511,17 @@ function _apply_morph_attribute3_attr!(out::Vector{Float64}, attr::BufferAttribu
     return out
 end
 
+@inline function _apply_morph_attribute3_attr_dispatch!(
+        out::Vector{Float64}, attr::BufferAttribute, w::Float64,
+        name::Symbol, n_vertices::Int, dst_item_size::Int)
+    if attr isa BufferAttribute{Float64}
+        return _apply_morph_attribute3_attr!(
+            out, attr, w, name, n_vertices, dst_item_size)
+    end
+    return _apply_morph_attribute3_attr!(
+        out, attr, w, name, n_vertices, dst_item_size)
+end
+
 """
     apply_morph_normals(geo, influences)
 
@@ -532,7 +552,7 @@ function apply_morph_normals!(out::Vector{Float64}, g::BufferGeometry,
         name = _morph_normal_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, 3)
+        _apply_morph_attribute3_attr_dispatch!(out, attr, w, name, g.n_vertices, 3)
     end
     return _normalize_attribute3!(out, g.n_vertices, 3)
 end
@@ -575,7 +595,8 @@ function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
         name = _morph_tangent_symbol(ti)
         has_attribute(g, name) || continue
         attr = get_attribute(g, name)
-        _apply_morph_attribute3_attr!(out, attr, w, name, g.n_vertices, base_attr.item_size)
+        _apply_morph_attribute3_attr_dispatch!(
+            out, attr, w, name, g.n_vertices, base_attr.item_size)
     end
     return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)
 end
@@ -1351,27 +1372,35 @@ end
 
 # ========================== Icosahedron Geometry ==========================
 
+const _ICOSAHEDRON_T = (1 + sqrt(5.0)) / 2
+
+const _ICOSAHEDRON_BASE_VERTS = Vec3{Float64}[
+    Vec3(-1.0,  _ICOSAHEDRON_T,  0.0),
+    Vec3( 1.0,  _ICOSAHEDRON_T,  0.0),
+    Vec3(-1.0, -_ICOSAHEDRON_T,  0.0),
+    Vec3( 1.0, -_ICOSAHEDRON_T,  0.0),
+    Vec3( 0.0, -1.0,  _ICOSAHEDRON_T),
+    Vec3( 0.0,  1.0,  _ICOSAHEDRON_T),
+    Vec3( 0.0, -1.0, -_ICOSAHEDRON_T),
+    Vec3( 0.0,  1.0, -_ICOSAHEDRON_T),
+    Vec3( _ICOSAHEDRON_T,  0.0, -1.0),
+    Vec3( _ICOSAHEDRON_T,  0.0,  1.0),
+    Vec3(-_ICOSAHEDRON_T,  0.0, -1.0),
+    Vec3(-_ICOSAHEDRON_T,  0.0,  1.0),
+]
+
+const _ICOSAHEDRON_BASE_FACES = NTuple{3,Int}[
+    (1,12,6), (1,6,2), (1,2,8), (1,8,11), (1,11,12),
+    (2,6,10), (6,12,5), (12,11,3), (11,8,7), (8,2,9),
+    (4,10,5), (4,5,3), (4,3,7), (4,7,9), (4,9,10),
+    (10,6,5), (5,12,3), (3,11,7), (7,8,9), (9,2,10),
+]
+
 function IcosahedronGeometry(; radius=1.0, detail=0)
     radius = _geometry_finite_scalar(radius, "IcosahedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "IcosahedronGeometry detail")
-    t = (1 + sqrt(5)) / 2
-
-    # Base vertices (un-normalized): PolyhedronGeometry projects each to the sphere.
-    base_verts = [
-        Vec3(-1.0,  t,  0.0), Vec3( 1.0,  t,  0.0), Vec3(-1.0, -t,  0.0), Vec3( 1.0, -t,  0.0),
-        Vec3( 0.0, -1.0,  t), Vec3( 0.0,  1.0,  t), Vec3( 0.0, -1.0, -t), Vec3( 0.0,  1.0, -t),
-        Vec3( t,  0.0, -1.0), Vec3( t,  0.0,  1.0), Vec3(-t,  0.0, -1.0), Vec3(-t,  0.0,  1.0)
-    ]
-
-    # 20 base faces (1-based vertex indices into base_verts).
-    base_faces = NTuple{3,Int}[
-        (1,12,6), (1,6,2), (1,2,8), (1,8,11), (1,11,12),
-        (2,6,10), (6,12,5), (12,11,3), (11,8,7), (8,2,9),
-        (4,10,5), (4,5,3), (4,3,7), (4,7,9), (4,9,10),
-        (10,6,5), (5,12,3), (3,11,7), (7,8,9), (9,2,10)
-    ]
-
-    PolyhedronGeometry(base_verts, base_faces; radius=radius, detail=detail)
+    PolyhedronGeometry(_ICOSAHEDRON_BASE_VERTS, _ICOSAHEDRON_BASE_FACES;
+                       radius=radius, detail=detail)
 end
 
 # ========================== Utility ==========================
@@ -1430,10 +1459,10 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
         total_faces += g.n_faces
     end
 
-    merged = BufferGeometry(positions, normals_arr, uvs_arr, indices, total_verts, total_faces)
-    if with_groups
-        append!(merged.groups, groups)
-    end
+    merged_groups = with_groups ? groups : NTuple{3,Int}[]
+    merged = BufferGeometry(positions, normals_arr, uvs_arr, indices,
+                            total_verts, total_faces,
+                            Dict{Symbol, BufferAttribute}(), merged_groups)
 
     # Carry over named attributes present on every input with matching item_size.
     if !isempty(geos)

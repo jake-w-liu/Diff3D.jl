@@ -1295,8 +1295,8 @@ function _web_write_light_json(io::IO, light::AmbientLight;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
-    num_buf = _web_num_buffer()
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     _web_write_light_common_json(io, "ambient", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1315,11 +1315,11 @@ function _web_write_light_json(io::IO, light::DirectionalLight, scene::Scene;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
     target = light.target
     dir = normalize(pos - target)
-    num_buf = _web_num_buffer()
     _web_write_light_common_json(io, "directional", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1349,8 +1349,8 @@ function _web_write_light_json(io::IO, light::PointLight, scene::Scene;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
-    num_buf = _web_num_buffer()
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     _web_write_light_common_json(io, "point", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1380,14 +1380,14 @@ function _web_write_light_json(io::IO, light::SpotLight, scene::Scene;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
     target = light.target
     dir = normalize(target - pos)
     penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
     cone = clamp(Float64(light.angle), 0.0, pi)
     inner = cone * (1.0 - penumbra)
-    num_buf = _web_num_buffer()
     _web_write_light_common_json(io, "spot", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1429,8 +1429,8 @@ function _web_write_light_json(io::IO, light::HemisphereLight;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
-    num_buf = _web_num_buffer()
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     _web_write_light_common_json(io, "hemisphere", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1451,13 +1451,13 @@ function _web_write_light_json(io::IO, light::RectAreaLight;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
     forward = normalize(light.target - pos)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, forward))
     v = cross(forward, u)
-    num_buf = _web_num_buffer()
     _web_write_light_common_json(io, "rectArea", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1490,8 +1490,8 @@ function _web_write_light_json(io::IO, light::LightProbe;
                                visibility_extra_id::Int=0,
                                visibility_extra_value::Bool=false,
                                shadow_mode::Symbol=:static,
-                               clipping_planes=_NO_PLANES)
-    num_buf = _web_num_buffer()
+                               clipping_planes=_NO_PLANES,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     _web_write_light_common_json(io, "lightProbe", light, num_buf)
     write(io, ",\"position\":")
     _js_write_vec(io, get_position(light), num_buf)
@@ -1524,17 +1524,17 @@ function _web_light_json(light::AbstractLight, args...; kwargs...)
     return String(take!(io))
 end
 
-function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
-                          stale_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_point_shadow_ids::Set{Int}=Set{Int}();
-                          clipping_planes=_NO_PLANES)
+function _web_write_lights_json(io::IO, scene::Scene, force_ids::Set{Int}=Set{Int}(),
+                                stale_shadow_ids::Set{Int}=Set{Int}(),
+                                dynamic_shadow_ids::Set{Int}=Set{Int}(),
+                                dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
+                                dynamic_point_shadow_ids::Set{Int}=Set{Int}();
+                                clipping_planes=_NO_PLANES,
+                                num_buf::Vector{UInt8}=_web_num_buffer())
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
     # own visibility or ancestor visibility is animated (force_ids) must be
     # exported even while currently hidden. Statically hidden lights are dropped
     # to match the CPU renderer's hierarchical visibility.
-    io = IOBuffer()
     write(io, '[')
     first = true
     ancestor_ids = Int[]
@@ -1562,7 +1562,8 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
                                       visibility_extra_id=obj.id,
                                       visibility_extra_value=obj_visible,
                                       shadow_mode=shadow_mode,
-                                      clipping_planes=clipping_planes)
+                                      clipping_planes=clipping_planes,
+                                      num_buf=num_buf)
             end
         end
         push!(ancestor_ids, obj.id)
@@ -1576,6 +1577,20 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
     end
     visit(scene, true, false)
     write(io, ']')
+    return nothing
+end
+
+function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
+                          stale_shadow_ids::Set{Int}=Set{Int}(),
+                          dynamic_shadow_ids::Set{Int}=Set{Int}(),
+                          dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
+                          dynamic_point_shadow_ids::Set{Int}=Set{Int}();
+                          clipping_planes=_NO_PLANES)
+    io = IOBuffer()
+    _web_write_lights_json(io, scene, force_ids, stale_shadow_ids,
+                           dynamic_shadow_ids, dynamic_spot_shadow_ids,
+                           dynamic_point_shadow_ids;
+                           clipping_planes=clipping_planes)
     return String(take!(io))
 end
 
@@ -3367,6 +3382,28 @@ function _web_collect_case_light_parts(case::WebGLExportCase)
     return animation_target_ids, lights_json
 end
 
+struct _WebLightsStream
+    scene::Scene
+    force_ids::Set{Int}
+    stale_shadow_ids::Set{Int}
+    dynamic_shadow_ids::Set{Int}
+    dynamic_spot_shadow_ids::Set{Int}
+    dynamic_point_shadow_ids::Set{Int}
+    clipping_planes::Any
+end
+
+function _web_case_light_stream(case::WebGLExportCase,
+                                animation_target_ids::Set{Int})
+    return _WebLightsStream(
+        case.scene,
+        animation_target_ids,
+        _web_stale_shadow_light_ids(case.scene, case.animations),
+        _web_dynamic_directional_shadow_light_ids(case.scene, case.animations),
+        _web_dynamic_spot_shadow_light_ids(case.scene, case.animations),
+        _web_dynamic_point_shadow_light_ids(case.scene, case.animations),
+        case.clipping_planes)
+end
+
 function _web_collect_case_json_parts(case::WebGLExportCase)
     animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
     texture_registry = _web_texture_registry()
@@ -3377,8 +3414,24 @@ function _web_collect_case_json_parts(case::WebGLExportCase)
     return lights_json, nodes, objects, texture_registry, env_texture_registry
 end
 
+function _web_write_lights_part(io::IO, lights_json::AbstractString,
+                                num_buf::Vector{UInt8})
+    write(io, lights_json)
+    return nothing
+end
+
+function _web_write_lights_part(io::IO, lights::_WebLightsStream,
+                                num_buf::Vector{UInt8})
+    _web_write_lights_json(io, lights.scene, lights.force_ids, lights.stale_shadow_ids,
+                           lights.dynamic_shadow_ids, lights.dynamic_spot_shadow_ids,
+                           lights.dynamic_point_shadow_ids;
+                           clipping_planes=lights.clipping_planes,
+                           num_buf=num_buf)
+    return nothing
+end
+
 function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
-                                    lights_json::AbstractString,
+                                    lights_json,
                                     nodes,
                                     objects,
                                     texture_registry::_WebTextureRegistry,
@@ -3420,7 +3473,7 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
         _js_write_plane(io, plane, num_buf)
     end
     write(io, "],\"lights\":")
-    write(io, lights_json)
+    _web_write_lights_part(io, lights_json, num_buf)
     write(io, ",\"nodes\":")
     _web_write_transform_nodes_json(io, nodes, num_buf)
     write(io, ",\"objects\":")
@@ -3450,7 +3503,8 @@ function _web_case_json(case::WebGLExportCase)
 end
 
 function _web_write_case_json(io::IO, case::WebGLExportCase)
-    animation_target_ids, lights_json = _web_collect_case_light_parts(case)
+    animation_target_ids = _web_animation_target_ids(case.animations)
+    lights_json = _web_case_light_stream(case, animation_target_ids)
     nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
     texture_registry = _web_texture_registry()
     env_texture_registry = _web_cube_texture_registry()

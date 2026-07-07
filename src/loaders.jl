@@ -45,6 +45,8 @@ end
 
 # ========================== STL ==========================
 
+const _STL_BINARY_ZERO_HEADER = zeros(UInt8, 80)
+
 """
     save_stl_binary(path, geo) -> path
 
@@ -54,7 +56,7 @@ geometry).  Round-trips with [`load_stl`](@ref).
 function save_stl_binary(path::String, geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "save_stl_binary")
     open(path, "w") do io
-        write(io, zeros(UInt8, 80))                 # 80-byte header
+        write(io, _STL_BINARY_ZERO_HEADER)          # 80-byte header
         write(io, UInt32(geo.n_faces))
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
@@ -140,7 +142,7 @@ function _load_stl_binary(path::String)
 end
 
 function _stl_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, String(tok))
+    value = tryparse(Float64, tok)
     value === nothing && error("ASCII STL $context must be a number")
     isfinite(value) || error("ASCII STL $context must be finite")
     return value
