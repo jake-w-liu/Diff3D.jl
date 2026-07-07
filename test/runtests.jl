@@ -7762,6 +7762,9 @@ end
         fixed_empty = UInt8[0x78, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]
         @test zlib_inflate(fixed_empty) == UInt8[]
         @test_opt_alloc 1024 zlib_inflate(fixed_empty)
+        capped_payload = Diff3D._zlib_store(UInt8[0x01, 0x02, 0x03])
+        @test zlib_inflate(capped_payload; max_output=3) == UInt8[0x01, 0x02, 0x03]
+        @test_throws Exception zlib_inflate(capped_payload; max_output=2)
         @test base64_decode("TWFu") == Vector{UInt8}(codeunits("Man"))
         @test base64_decode("TWE=") == Vector{UInt8}(codeunits("Ma"))
         @test base64_decode("TQ==") == Vector{UInt8}(codeunits("M"))
@@ -18387,6 +18390,46 @@ end
             Diff3D._png_chunk(zero_dim, "IEND", UInt8[])
             @test_throws Exception Diff3D._decode_png(take!(zero_dim))
         end
+    end
+
+    @testset "fresh audit loader decode bounds" begin
+        function png_rgb_bytes(width::Int, height::Int, raw::Vector{UInt8})
+            io = IOBuffer()
+            write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])
+            ihdr = UInt8[
+                UInt8((width >> 24) & 0xff), UInt8((width >> 16) & 0xff),
+                UInt8((width >> 8) & 0xff), UInt8(width & 0xff),
+                UInt8((height >> 24) & 0xff), UInt8((height >> 16) & 0xff),
+                UInt8((height >> 8) & 0xff), UInt8(height & 0xff),
+                8, 2, 0, 0, 0,
+            ]
+            Diff3D._png_chunk(io, "IHDR", ihdr)
+            Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(raw))
+            Diff3D._png_chunk(io, "IEND", UInt8[])
+            return take!(io)
+        end
+
+        empty_large_png = png_rgb_bytes(1024, 1024, UInt8[])
+        empty_png_alloc = @allocated try
+            Diff3D._decode_png(empty_large_png)
+        catch err
+            @test occursin("PNG image data is truncated", sprint(showerror, err))
+        end
+        @test empty_png_alloc < 2_000_000
+
+        trailing_png = png_rgb_bytes(1, 1,
+                                     vcat(UInt8[0x00, 0xff, 0x00, 0x00],
+                                          fill(UInt8(0), 16)))
+        @test_throws Exception Diff3D._decode_png(trailing_png)
+
+        empty_large_hdr = Vector{UInt8}(codeunits(
+            "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1024 +X 1024\n"))
+        empty_hdr_alloc = @allocated try
+            Diff3D._decode_rgbe(empty_large_hdr)
+        catch err
+            @test occursin("truncated", sprint(showerror, err))
+        end
+        @test empty_hdr_alloc < 2_000_000
     end
 
     @testset "fresh audit round 18 fixes" begin

@@ -154,11 +154,25 @@ function _read_dynamic(br::_BitReader)
     return (lit, dist)
 end
 
-function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist)
+@inline function _inflate_push!(out::Vector{UInt8}, b::UInt8, max_output::Int)
+    max_output >= 0 && length(out) >= max_output &&
+        error("DEFLATE output exceeds expected size")
+    push!(out, b)
+    return nothing
+end
+
+@inline function _inflate_reserve!(out::Vector{UInt8}, n::Int, max_output::Int)
+    max_output >= 0 && length(out) + n > max_output &&
+        error("DEFLATE output exceeds expected size")
+    return nothing
+end
+
+function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist,
+                         max_output::Int)
     while true
         sym = _decode_sym(br, lit)
         if sym < 256
-            push!(out, UInt8(sym))
+            _inflate_push!(out, UInt8(sym), max_output)
         elseif sym == 256
             break
         else
@@ -168,6 +182,7 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist)
             d = _DIST_BASE[dsym + 1] + _getbits(br, _DIST_EXTRA[dsym + 1])
             start = length(out) - d
             start >= 0 || error("DEFLATE back-reference distance exceeds output (corrupt stream)")
+            _inflate_reserve!(out, len, max_output)
             for k in 1:len
                 push!(out, out[start + k])
             end
@@ -176,7 +191,10 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist)
 end
 
 """Inflate a raw DEFLATE stream (no zlib header) to bytes."""
-function inflate(data::AbstractVector{UInt8})
+function inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
+    max_output === nothing || max_output >= 0 ||
+        throw(ArgumentError("max_output must be non-negative"))
+    limit = max_output === nothing ? -1 : max_output
     br = _BitReader(data); out = UInt8[]
     while true
         bfinal = _getbit(br); btype = _getbits(br, 2)
@@ -188,13 +206,14 @@ function inflate(data::AbstractVector{UInt8})
             nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
             br.pos += 4                         # skip LEN(2) + NLEN(2)
             br.pos + len - 1 <= length(br.data) || error("DEFLATE stored block is truncated")
+            _inflate_reserve!(out, len, limit)
             for _ in 1:len
                 push!(out, br.data[br.pos]); br.pos += 1
             end
         elseif btype == 1
-            lit, dist = _fixed_huffs(); _inflate_block!(out, br, lit, dist)
+            lit, dist = _fixed_huffs(); _inflate_block!(out, br, lit, dist, limit)
         elseif btype == 2
-            lit, dist = _read_dynamic(br); _inflate_block!(out, br, lit, dist)
+            lit, dist = _read_dynamic(br); _inflate_block!(out, br, lit, dist, limit)
         else
             error("invalid DEFLATE block type 3")
         end
@@ -203,7 +222,7 @@ function inflate(data::AbstractVector{UInt8})
     return out
 end
 
-function zlib_inflate(data::AbstractVector{UInt8})
+function zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
     length(data) >= 6 || error("zlib stream is truncated")
     cmf = data[1]
     flg = data[2]
@@ -213,7 +232,7 @@ function zlib_inflate(data::AbstractVector{UInt8})
         error("zlib stream has an invalid header check")
     (flg & 0x20) == 0x00 || error("zlib streams with preset dictionaries are not supported")
 
-    out = inflate(@view data[3:end - 4])
+    out = inflate(@view data[3:end - 4]; max_output=max_output)
     expected = (UInt32(data[end - 3]) << 24) | (UInt32(data[end - 2]) << 16) |
                (UInt32(data[end - 1]) << 8) | UInt32(data[end])
     actual = _adler32(out)
@@ -424,6 +443,58 @@ function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
     return img
 end
 
+@inline _checked_add_int(a::Int, b::Int, context::AbstractString) =
+    try
+        Base.checked_add(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        error("$context is too large")
+    end
+
+@inline _checked_mul_int(a::Int, b::Int, context::AbstractString) =
+    try
+        Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        error("$context is too large")
+    end
+
+@inline function _png_row_payload_bytes(width::Int, bits_per_pixel::Int)
+    bits = _checked_mul_int(width, bits_per_pixel, "PNG image data")
+    return cld(bits, 8)
+end
+
+function _png_expected_raw_size(W::Int, H::Int, bits_per_pixel::Int, interlace)
+    total = 0
+    if interlace == 0
+        stride = _png_row_payload_bytes(W, bits_per_pixel)
+        row = _checked_add_int(stride, 1, "PNG image data")
+        return _checked_mul_int(row, H, "PNG image data")
+    end
+    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
+        pass_w = _png_pass_size(W, x0, xstep)
+        pass_h = _png_pass_size(H, y0, ystep)
+        (pass_w == 0 || pass_h == 0) && continue
+        stride = _png_row_payload_bytes(pass_w, bits_per_pixel)
+        row = _checked_add_int(stride, 1, "PNG image data")
+        total = _checked_add_int(total,
+                                 _checked_mul_int(row, pass_h,
+                                                  "PNG image data"),
+                                 "PNG image data")
+    end
+    return total
+end
+
+@inline _inflate_limit_for_exact(expected::Int) =
+    expected == typemax(Int) ? expected : expected + 1
+
+function _png_inflate_exact_scanlines(idat::Vector{UInt8}, expected::Int)
+    raw = zlib_inflate(idat; max_output=_inflate_limit_for_exact(expected))
+    length(raw) < expected && error("PNG image data is truncated")
+    length(raw) > expected && error("PNG image data has trailing bytes")
+    return raw
+end
+
 """
     load_png(path) -> Array{Float64,3}
 
@@ -499,7 +570,8 @@ function _decode_png(bytes::AbstractVector{UInt8})
             error("PNG tRNS palette alpha data is longer than the palette")
         palette_bitdepth = Int(bitdepth)
         channels = isempty(trns) ? 3 : 4
-        raw = zlib_inflate(idat)
+        expected = _png_expected_raw_size(W, H, palette_bitdepth, interlace)
+        raw = _png_inflate_exact_scanlines(idat, expected)
         img = Array{Float64}(undef, H, W, channels)
         return interlace == 0 ?
                _png_decode_palette_noninterlaced!(img, raw, W, H, palette_bitdepth,
@@ -513,7 +585,8 @@ function _decode_png(bytes::AbstractVector{UInt8})
                error("unsupported PNG color type $colortype")
     bps = Int(bitdepth) ÷ 8                     # bytes per sample
     bpp = channels * bps                        # bytes per pixel (filter window)
-    raw = zlib_inflate(idat)
+    expected = _png_expected_raw_size(W, H, Int(bitdepth) * channels, interlace)
+    raw = _png_inflate_exact_scanlines(idat, expected)
     img = Array{Float64}(undef, H, W, channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
     return interlace == 0 ?
@@ -899,7 +972,7 @@ end
     e == 0x00 ? 0.0 : ldexp(Float64(c), Int(e) - 136)
 
 function _rgbe_flat_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
-    needed = 4 * width
+    needed = _checked_mul_int(4, width, "RGBE scanline data")
     pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
     channels = Matrix{UInt8}(undef, 4, width)
     @inbounds for x in 1:width
@@ -910,6 +983,58 @@ function _rgbe_flat_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
         channels[4, x] = bytes[base + 3]
     end
     return channels, pos + needed
+end
+
+function _rgbe_flat_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
+    needed = _checked_mul_int(4, width, "RGBE scanline data")
+    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
+    return pos + needed
+end
+
+function _rgbe_rle_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
+    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
+    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
+        return _rgbe_flat_scanline_end(bytes, pos, width)
+    (bytes[pos + 2] & 0x80) == 0x00 ||
+        error("unsupported old-style RGBE run-length encoding")
+    encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
+    encoded_width == width ||
+        error("RGBE RLE scanline width $encoded_width does not match header width $width")
+    pos += 4
+    @inbounds for _ in 1:4
+        x = 1
+        while x <= width
+            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
+            count = Int(bytes[pos])
+            pos += 1
+            if count > 128
+                run = count - 128
+                run > 0 || error("RGBE RLE run length must be positive")
+                x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
+                pos <= length(bytes) || error("RGBE RLE run value is truncated")
+                pos += 1
+                x += run
+            elseif count > 0
+                x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
+                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
+                pos += count
+                x += count
+            else
+                error("RGBE RLE packet length must be positive")
+            end
+        end
+    end
+    return pos
+end
+
+function _rgbe_validate_scanlines(bytes::Vector{UInt8}, pos::Int, width::Int,
+                                  height::Int, use_rle::Bool)
+    p = pos
+    for _ in 1:height
+        p = use_rle ? _rgbe_rle_scanline_end(bytes, p, width) :
+                      _rgbe_flat_scanline_end(bytes, p, width)
+    end
+    return p
 end
 
 function _rgbe_rle_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
@@ -981,8 +1106,9 @@ function _decode_rgbe(bytes::Vector{UInt8})
 
     height = resolution.height
     width = resolution.width
-    img = Array{Float64}(undef, height, width, 3)
     use_rle = 8 <= width <= 0x7fff
+    _rgbe_validate_scanlines(bytes, pos, width, height, use_rle)
+    img = Array{Float64}(undef, height, width, 3)
     @inbounds for sy in 1:height
         channels, pos = use_rle ? _rgbe_rle_scanline(bytes, pos, width) :
                                   _rgbe_flat_scanline(bytes, pos, width)
