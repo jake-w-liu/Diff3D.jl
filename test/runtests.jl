@@ -14801,6 +14801,33 @@ end
             @test Diff3D.ies_intensity(p, 0.0) == 1.0           # peak
             @test Diff3D.ies_intensity(p, 120.0) == 0.0         # tail
             @test Diff3D.ies_intensity(p, 200.0) == 0.0         # clamp above
+            ies_label_crlf = "IESNA:LM-63-2002\r\nTILT=NONE\r\n[TEST] ignored\r\n" *
+                             "1,1000,1.0,3,1,1,1,0,0,0\r\n" *
+                             "1,1,100\r\n0,90,180\r\n0\r\n10,5,0\r\n"
+            p_label = Diff3D.parse_ies(ies_label_crlf)
+            @test p_label.angles == [0.0,90.0,180.0]
+            @test p_label.candela == [10.0,5.0,0.0]
+            ies_large = let n = 4096
+                io = IOBuffer()
+                println(io, "IESNA:LM-63-2002")
+                println(io, "TILT=NONE")
+                println(io, "1 1000 1.0 ", n, " 1 1 1 0.0 0.0 0.0")
+                println(io, "1.0 1.0 100.0")
+                for i in 0:(n - 1)
+                    i == 0 || print(io, ' ')
+                    print(io, 180.0 * i / (n - 1))
+                end
+                println(io)
+                println(io, "0.0")
+                for i in 0:(n - 1)
+                    i == 0 || print(io, ' ')
+                    print(io, 1000.0 / (i + 1))
+                end
+                println(io)
+                String(take!(io))
+            end
+            @test length(Diff3D.parse_ies(ies_large).angles) == 4096
+            @test_opt_alloc 120_000 Diff3D.parse_ies(ies_large)
             @test_throws ArgumentError Diff3D.IESProfile([0.0,90.0],[1.0])
             # SpotLight integration: a profile that is dark off-axis cuts the contribution
             pos = Diff3D.Vec3(0.0,0.0,0.0)

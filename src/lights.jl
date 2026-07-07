@@ -33,6 +33,10 @@ function IESProfile(angles::AbstractVector{<:Real}, candela::AbstractVector{<:Re
     length(angles) >= 1 || throw(ArgumentError("IESProfile: need at least one sample"))
     a = collect(Float64, angles)
     c = collect(Float64, candela)
+    return _ies_profile_checked(a, c)
+end
+
+function _ies_profile_checked(a::Vector{Float64}, c::Vector{Float64})
     all(isfinite, a) || throw(ArgumentError("IESProfile: angles must be finite"))
     all(isfinite, c) || throw(ArgumentError("IESProfile: candela values must be finite"))
     all(x -> x >= 0.0, c) ||
@@ -115,31 +119,135 @@ function _ies_positive_integer_count(value::Real, label::String)
     return Int(f)
 end
 
-function parse_ies(text::AbstractString)
-    lines = split(text, '\n')
-    # Find the TILT line; everything after it is the numeric payload.
-    tilt_idx = findfirst(l -> occursin("TILT=", uppercase(l)), lines)
-    tilt_idx === nothing && throw(ArgumentError("parse_ies: no TILT= line found"))
-    tilt_line = uppercase(strip(lines[tilt_idx]))
-    payload_start = tilt_idx + 1
-    # TILT=INCLUDE embeds extra tilt tables; TILT=NONE / TILT=<file> do not.
-    if endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
-        # Skip the embedded tilt block: 1 line (lamp-to-lumin geometry),
-        # 1 line (num tilt angles), then the angle and multiplier rows.
-        # Robustly skip by consuming the next 4 numeric lines.
-        payload_start = tilt_idx + 5
+function _ies_line_bounds(s::String, i::Int)
+    n = lastindex(s)
+    j = i
+    while j <= n && s[j] != '\n'
+        j = nextind(s, j)
     end
-    # Gather all numeric tokens from the payload, ignoring [KEYWORD] label lines.
-    nums = Float64[]
-    for li in payload_start:length(lines)
-        s = strip(lines[li])
-        (isempty(s) || startswith(s, '[')) && continue
-        # LM-63 permits commas as field delimiters; normalize them to spaces.
-        for tok in split(replace(s, ',' => ' '))
-            push!(nums, _ies_parse_numeric_token(tok, li))
+    stop = j <= n ? prevind(s, j) : n
+    stop >= i && s[stop] == '\r' && (stop = prevind(s, stop))
+    next_i = j <= n ? nextind(s, j) : nextind(s, n)
+    return i, stop, next_i
+end
+
+function _ies_trim_bounds(s::String, first::Int, last::Int)
+    while first <= last && isspace(s[first])
+        first = nextind(s, first)
+    end
+    while first <= last && isspace(s[last])
+        last = prevind(s, last)
+    end
+    return first, last
+end
+
+function _ies_line_contains_tilt(s::String, first::Int, last::Int)
+    pattern = ('T', 'I', 'L', 'T', '=')
+    p = first
+    while p <= last
+        q = p
+        matched = true
+        for expected in pattern
+            if q > last || uppercase(s[q]) != expected
+                matched = false
+                break
+            end
+            q = nextind(s, q)
         end
+        matched && return true
+        p = nextind(s, p)
     end
-    length(nums) >= 14 || throw(ArgumentError("parse_ies: truncated photometric data"))
+    return false
+end
+
+mutable struct _IESNumericScanner
+    s::String
+    pos::Int
+    line_start::Int
+    line_stop::Int
+    next_line::Int
+    line_no::Int
+end
+
+function _ies_numeric_scanner(s::String, pos::Int, line_no::Int)
+    n = lastindex(s)
+    if pos > n
+        return _IESNumericScanner(s, pos, pos, prevind(s, pos), pos, line_no)
+    end
+    line_start, line_stop, next_line = _ies_line_bounds(s, pos)
+    return _IESNumericScanner(s, pos, line_start, line_stop, next_line, line_no)
+end
+
+function _ies_advance_line!(scanner::_IESNumericScanner)
+    scanner.pos = scanner.next_line
+    scanner.line_no += 1
+    n = lastindex(scanner.s)
+    scanner.pos > n && return false
+    scanner.line_start, scanner.line_stop, scanner.next_line =
+        _ies_line_bounds(scanner.s, scanner.pos)
+    return true
+end
+
+@inline _ies_numeric_delim(ch::Char) = isspace(ch) || ch == ','
+
+function _ies_next_number!(scanner::_IESNumericScanner)
+    s = scanner.s
+    n = lastindex(s)
+    while scanner.pos <= n
+        if scanner.pos == scanner.line_start
+            first, last = _ies_trim_bounds(s, scanner.line_start, scanner.line_stop)
+            (first > last || s[first] == '[') && (_ies_advance_line!(scanner); continue)
+        end
+        while scanner.pos <= scanner.line_stop && _ies_numeric_delim(s[scanner.pos])
+            scanner.pos = nextind(s, scanner.pos)
+        end
+        scanner.pos > scanner.line_stop && (_ies_advance_line!(scanner); continue)
+        first = scanner.pos
+        while scanner.pos <= scanner.line_stop && !_ies_numeric_delim(s[scanner.pos])
+            scanner.pos = nextind(s, scanner.pos)
+        end
+        last = prevind(s, scanner.pos)
+        return _ies_parse_numeric_token(SubString(s, first, last), scanner.line_no)
+    end
+    return nothing
+end
+
+function _ies_find_payload_start(s::String)
+    i = firstindex(s)
+    n = lastindex(s)
+    line_no = 1
+    while i <= n
+        first, last, next_i = _ies_line_bounds(s, i)
+        trimmed_first, trimmed_last = _ies_trim_bounds(s, first, last)
+        if trimmed_first <= trimmed_last && _ies_line_contains_tilt(s, trimmed_first, trimmed_last)
+            tilt_line = uppercase(String(SubString(s, trimmed_first, trimmed_last)))
+            payload_i = next_i
+            payload_line_no = line_no + 1
+            if endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
+                for _ in 1:4
+                    payload_i > n && break
+                    _, _, payload_i = _ies_line_bounds(s, payload_i)
+                    payload_line_no += 1
+                end
+            end
+            return payload_i, payload_line_no
+        end
+        i = next_i
+        line_no += 1
+    end
+    throw(ArgumentError("parse_ies: no TILT= line found"))
+end
+
+function parse_ies(text::AbstractString)
+    s = text isa String ? text : String(text)
+    payload_start, payload_line_no = _ies_find_payload_start(s)
+    scanner = _ies_numeric_scanner(s, payload_start, payload_line_no)
+    control = Vector{Float64}(undef, 13)
+    for i in 1:13
+        value = _ies_next_number!(scanner)
+        value === nothing && throw(ArgumentError("parse_ies: truncated photometric data"))
+        control[i] = value
+    end
     # The LM-63 control block is 13 numeric values (the standard splits them as a
     # 10-value first line and a 3-value second line, but token order is fixed
     # regardless of line wrapping):
@@ -149,21 +257,27 @@ function parse_ies(text::AbstractString)
     #   9: length            10: height
     #  11: ballast_factor    12: future_use       13: input_watts
     # The vertical-angle vector starts at token 14.
-    cand_mult = nums[3]
-    num_vert = _ies_positive_integer_count(nums[4], "vertical-angle")
-    num_horiz = _ies_positive_integer_count(nums[5], "horizontal-angle")
-    idx = 14
-    vend = idx + num_vert - 1
-    vend <= length(nums) || throw(ArgumentError("parse_ies: missing vertical angles"))
-    vangles = nums[idx:vend]
-    idx = vend + 1
-    hend = idx + num_horiz - 1
-    hend <= length(nums) || throw(ArgumentError("parse_ies: missing horizontal angles"))
-    idx = hend + 1                        # skip horizontal angles (single-plane collapse)
-    cend = idx + num_vert - 1             # take the first horizontal plane's candela column
-    cend <= length(nums) || throw(ArgumentError("parse_ies: missing candela values"))
-    cand = nums[idx:cend] .* (cand_mult > 0 ? cand_mult : 1.0)
-    return IESProfile(vangles, cand)
+    cand_mult = control[3]
+    num_vert = _ies_positive_integer_count(control[4], "vertical-angle")
+    num_horiz = _ies_positive_integer_count(control[5], "horizontal-angle")
+    vangles = Vector{Float64}(undef, num_vert)
+    for i in 1:num_vert
+        value = _ies_next_number!(scanner)
+        value === nothing && throw(ArgumentError("parse_ies: missing vertical angles"))
+        vangles[i] = value
+    end
+    for _ in 1:num_horiz
+        _ies_next_number!(scanner) === nothing &&
+            throw(ArgumentError("parse_ies: missing horizontal angles"))
+    end
+    cand = Vector{Float64}(undef, num_vert)
+    scale = cand_mult > 0 ? cand_mult : 1.0
+    for i in 1:num_vert
+        value = _ies_next_number!(scanner)
+        value === nothing && throw(ArgumentError("parse_ies: missing candela values"))
+        cand[i] = value * scale
+    end
+    return _ies_profile_checked(vangles, cand)
 end
 
 # ========================== AmbientLight ==========================
