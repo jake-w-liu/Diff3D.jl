@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import sys
 
@@ -15,6 +18,16 @@ except ModuleNotFoundError:  # pragma: no cover - depends on host Python.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "examples" / "examples_registry.toml"
 SMOKE_SCRIPT = "examples/browser_webgl_smoke.py"
+
+
+def positive_seconds(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a positive integer")
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +73,20 @@ def parse_args() -> argparse.Namespace:
         metavar="N/M",
         help="Run shard N of M (1-indexed), splitting the examples round-robin "
              "across M parallel runners. Without this, all examples run.",
+    )
+    parser.add_argument(
+        "--generate-timeout",
+        type=positive_seconds,
+        default=1200,
+        metavar="SECONDS",
+        help="Timeout for each Julia example generator command.",
+    )
+    parser.add_argument(
+        "--browser-timeout",
+        type=positive_seconds,
+        default=5400,
+        metavar="SECONDS",
+        help="Timeout for the browser smoke subprocess for this shard.",
     )
     return parser.parse_args()
 
@@ -128,9 +155,43 @@ def validate_entry(entry: dict) -> tuple[Path, Path]:
     return script, html
 
 
-def run_checked(command: list[str], *, label: str) -> None:
-    print(label, " ".join(command), flush=True)
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
+def terminate_started_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    else:  # pragma: no cover - CI is POSIX; keep local Windows behavior sane.
+        proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+        else:  # pragma: no cover
+            proc.kill()
+        proc.wait()
+
+
+def run_checked(command: list[str], *, label: str, timeout_s: int) -> None:
+    command_text = shlex.join(command)
+    print(f"{label} {command_text} timeout={timeout_s}s", flush=True)
+    kwargs = {"cwd": REPO_ROOT}
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(command, **kwargs)
+    try:
+        status = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        terminate_started_process(proc)
+        raise RuntimeError(f"{label} timed out after {timeout_s}s: {command_text}") from None
+    if status != 0:
+        raise subprocess.CalledProcessError(status, command)
 
 
 def main() -> int:
@@ -147,7 +208,8 @@ def main() -> int:
         script, html = validate_entry(entry)
         if not args.skip_generate:
             run_checked([args.julia, "--project=.", str(script.relative_to(REPO_ROOT))],
-                        label="REGISTRY_GENERATE")
+                        label="REGISTRY_GENERATE",
+                        timeout_s=args.generate_timeout)
             generated += 1
         if not args.skip_browser:
             if not html.is_file():
@@ -156,7 +218,8 @@ def main() -> int:
 
     if smoke_paths:
         run_checked([args.python, SMOKE_SCRIPT, *(str(path) for path in smoke_paths)],
-                    label="REGISTRY_SMOKE")
+                    label="REGISTRY_SMOKE",
+                    timeout_s=args.browser_timeout)
 
     print(
         f"REGISTRY_VERIFICATION_OK examples={len(examples)} generated={generated} smoked={len(smoke_paths)}",

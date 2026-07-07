@@ -44,6 +44,7 @@ jobs:
   examples-browser:
     name: Registered examples browser smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     # CI renders WebGL in software (swiftshader), ~50-100x slower than a GPU.
     # Shard the 108 examples across parallel runners so wall-clock is ~30 min
     # instead of ~3 h. fail-fast: false so one shard's failure still lets the
