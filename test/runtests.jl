@@ -10469,6 +10469,19 @@ end
         @test face_mtl == ["red"]
         @test haskey(m2, "red") && m2["red"].color.r ≈ 0.8
         @test m2["red"].map isa Texture
+        stress_mtl = joinpath(dir, "stress.mtl")
+        stress_io = IOBuffer()
+        for i in 1:512
+            println(stress_io, "newmtl mat", i)
+            println(stress_io, "Kd 0.1 0.2 0.3")
+            println(stress_io, "Ks 0.4 0.5 0.6")
+            println(stress_io, "Ke 0.0 0.1 0.2")
+            println(stress_io, "Ns 30.0")
+            println(stress_io, "d 0.8")
+        end
+        write(stress_mtl, String(take!(stress_io)))
+        @test length(load_mtl(stress_mtl)) == 512
+        @test_opt_alloc 1_800_000 load_mtl(stress_mtl)
         rm(dir; recursive=true)
     end
 

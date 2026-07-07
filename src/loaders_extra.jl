@@ -2016,7 +2016,7 @@ function _mtl_require_values(tokens, count::Int, label::String)
 end
 
 function _mtl_parse_float(tok, label::String)
-    value = tryparse(Float64, String(tok))
+    value = tryparse(Float64, tok)
     value === nothing && error("MTL $label must be a number")
     isfinite(value) || error("MTL $label must be finite")
     return value
@@ -2029,8 +2029,39 @@ function _mtl_parse_color(tokens, label::String)
                   _mtl_parse_float(tokens[4], "$label blue"))
 end
 
+@noinline function _mtl_require_values_error(count::Int, label::String)
+    error("MTL $label requires $count $(count == 1 ? "value" : "values")")
+end
+
+@inline function _mtl_required_token(parts, state, count::Int, label::String)
+    token_state = iterate(parts, state)
+    token_state === nothing && _mtl_require_values_error(count, label)
+    return token_state
+end
+
+function _mtl_parse_color_tokens(parts, state, label::String)
+    r_state = _mtl_required_token(parts, state, 3, label)
+    g_state = _mtl_required_token(parts, r_state[2], 3, label)
+    b_state = _mtl_required_token(parts, g_state[2], 3, label)
+    return Color3(_mtl_parse_float(r_state[1], "$label red"),
+                  _mtl_parse_float(g_state[1], "$label green"),
+                  _mtl_parse_float(b_state[1], "$label blue"))
+end
+
+function _mtl_parse_scalar_token(parts, state, label::String)
+    value_state = _mtl_required_token(parts, state, 1, label)
+    return _mtl_parse_float(value_state[1], label)
+end
+
+@inline function _mtl_required_arg(parts, state, message::String)
+    token_state = iterate(parts, state)
+    token_state === nothing && error(message)
+    return token_state
+end
+
 function load_mtl(path::String)
     mats = Dict{String, MeshPhongMaterial}()
+    sizehint!(mats, max(0, filesize(path) ÷ 80))
     name = ""
     kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0); ke = Color3(0.0,0.0,0.0)
     ns = 30.0; d = 1.0; diffuse_map = nothing
@@ -2042,27 +2073,29 @@ function load_mtl(path::String)
                                        map=diffuse_map)
     end
     for raw in eachline(path)
-        t = split(strip(raw))
-        isempty(t) && continue
-        tag = t[1]
+        line = strip(raw)
+        parts = eachsplit(line)
+        tag_state = iterate(parts)
+        tag_state === nothing && continue
+        tag = tag_state[1]
         if tag == "newmtl"
-            length(t) >= 2 || error("MTL newmtl requires a material name")
+            name_state = _mtl_required_arg(parts, tag_state[2],
+                                           "MTL newmtl requires a material name")
             flush!()
-            name = t[2]; kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
+            name = String(name_state[1])
+            kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
             ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0; diffuse_map = nothing
-        elseif tag == "Kd"; kd = _mtl_parse_color(t, "Kd")
-        elseif tag == "Ks"; ks = _mtl_parse_color(t, "Ks")
-        elseif tag == "Ke"; ke = _mtl_parse_color(t, "Ke")
+        elseif tag == "Kd"; kd = _mtl_parse_color_tokens(parts, tag_state[2], "Kd")
+        elseif tag == "Ks"; ks = _mtl_parse_color_tokens(parts, tag_state[2], "Ks")
+        elseif tag == "Ke"; ke = _mtl_parse_color_tokens(parts, tag_state[2], "Ke")
         elseif tag == "Ns"
-            _mtl_require_values(t, 1, "Ns")
-            ns = _mtl_parse_float(t[2], "Ns")
+            ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
         elseif tag == "d"
-            _mtl_require_values(t, 1, "d")
-            d = _mtl_parse_float(t[2], "d")
+            d = _mtl_parse_scalar_token(parts, tag_state[2], "d")
         elseif tag == "Tr"
-            _mtl_require_values(t, 1, "Tr")
-            d = 1.0 - _mtl_parse_float(t[2], "Tr")
+            d = 1.0 - _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
         elseif tag == "map_Kd"
+            t = split(line)
             texpath = _mtl_texture_path(t)
             isempty(texpath) && error("MTL map_Kd requires a texture path")
             diffuse_map = TextureLoader(isabspath(texpath) ? texpath : joinpath(dir, texpath))
