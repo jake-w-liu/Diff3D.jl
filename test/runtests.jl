@@ -6037,9 +6037,9 @@ end
         end
         write(grid_path, String(take!(grid_io)))
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 2_600_000 load_obj(grid_path)
+        @test_opt_alloc 2_100_000 load_obj(grid_path)
         @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
-        @test_opt_alloc 2_700_000 load_obj_groups(grid_path)
+        @test_opt_alloc 2_100_000 load_obj_groups(grid_path)
         seekstart(grid_io)
         truncate(grid_io, 0)
         for y in 0:n, x in 0:n
@@ -6053,7 +6053,7 @@ end
         end
         write(grid_path, String(take!(grid_io)))
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 2_600_000 load_obj(grid_path)
+        @test_opt_alloc 2_100_000 load_obj(grid_path)
         rm(grid_path)
     end
 

@@ -358,7 +358,7 @@ function _obj_require_values(tokens, count::Int, label::String)
 end
 
 function _obj_parse_float(tok, label::String)
-    value = tryparse(Float64, String(tok))
+    value = tryparse(Float64, tok)
     value === nothing && error("OBJ $label must be a number")
     isfinite(value) || error("OBJ $label must be finite")
     return value
@@ -424,6 +424,38 @@ function _obj_parse_vec3(tokens, label::String)
     return (_obj_parse_float(tokens[2], "$label x"),
             _obj_parse_float(tokens[3], "$label y"),
             _obj_parse_float(tokens[4], "$label z"))
+end
+
+@noinline function _obj_require_values_error(count::Int, label::String)
+    error("OBJ $label requires $count $(count == 1 ? "value" : "values")")
+end
+
+@inline function _obj_required_token(parts, state, count::Int, label::String)
+    token_state = iterate(parts, state)
+    token_state === nothing && _obj_require_values_error(count, label)
+    return token_state
+end
+
+function _obj_parse_vec3_tokens(parts, state, label::String)
+    x_state = _obj_required_token(parts, state, 3, label)
+    y_state = _obj_required_token(parts, x_state[2], 3, label)
+    z_state = _obj_required_token(parts, y_state[2], 3, label)
+    return (_obj_parse_float(x_state[1], "$label x"),
+            _obj_parse_float(y_state[1], "$label y"),
+            _obj_parse_float(z_state[1], "$label z"))
+end
+
+function _obj_parse_vt_tokens(parts, state)
+    u_state = _obj_required_token(parts, state, 1, "vt")
+    v_state = iterate(parts, u_state[2])
+    return (_obj_parse_float(u_state[1], "vt u"),
+            v_state === nothing ? 0.0 : _obj_parse_float(v_state[1], "vt v"))
+end
+
+@inline function _obj_required_arg(parts, state, message::String)
+    token_state = iterate(parts, state)
+    token_state === nothing && error(message)
+    return token_state
 end
 
 """
@@ -492,31 +524,35 @@ function load_obj(path::String)
             end
             continue
         end
-        t = split(line)
-        tag = t[1]
+        parts = eachsplit(line)
+        tag_state = iterate(parts)
+        tag_state === nothing && continue
+        tag = tag_state[1]
         if tag == "v"
-            x, y, z = _obj_parse_vec3(t, "v")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "v")
             push!(verts, x, y, z)
         elseif tag == "vt"
-            _obj_require_values(t, 1, "vt")
             # A 1-D texture coordinate (`vt u`) is valid; treat the missing
             # second component as 0.0 (matching three.js OBJLoader) instead of
             # indexing past the end of the token list with a BoundsError.
-            push!(file_uvs, _obj_parse_float(t[2], "vt u"),
-                  length(t) >= 3 ? _obj_parse_float(t[3], "vt v") : 0.0)
+            u, v = _obj_parse_vt_tokens(parts, tag_state[2])
+            push!(file_uvs, u, v)
         elseif tag == "vn"
-            x, y, z = _obj_parse_vec3(t, "vn")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "vn")
             push!(file_normals, x, y, z)
         elseif tag == "f"
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
-            length(t) >= 4 || error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(t[2], nverts_v, nverts_uv, nverts_n)
-            prev_corner = _obj_parse_corner(t[3], nverts_v, nverts_uv, nverts_n)
+            first_state = iterate(parts, tag_state[2])
+            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
+            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
+            third_state === nothing && error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(first_state[1], nverts_v, nverts_uv, nverts_n)
+            prev_corner = _obj_parse_corner(second_state[1], nverts_v, nverts_uv, nverts_n)
+            corner = _obj_parse_corner(third_state[1], nverts_v, nverts_uv, nverts_n)
             # Fan-triangulate polygon (corner 1, k, k+1).
-            for k in 4:length(t)
-                corner = _obj_parse_corner(t[k], nverts_v, nverts_uv, nverts_n)
+            while true
                 out_vi, have_uvs, have_normals, missing_normals =
                     _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
                                       file_uvs, file_normals, first_corner, out_vi,
@@ -530,6 +566,10 @@ function load_obj(path::String)
                                       file_uvs, file_normals, corner, out_vi,
                                       have_uvs, have_normals, missing_normals)
                 prev_corner = corner
+                next_state = iterate(parts, third_state[2])
+                next_state === nothing && break
+                corner = _obj_parse_corner(next_state[1], nverts_v, nverts_uv, nverts_n)
+                third_state = next_state
             end
         end
     end

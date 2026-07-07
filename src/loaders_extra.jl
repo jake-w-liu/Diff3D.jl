@@ -2132,31 +2132,38 @@ function load_obj_groups(path::String)
             end
             continue
         end
-        t = split(line); tag = t[1]
+        parts = eachsplit(line)
+        tag_state = iterate(parts)
+        tag_state === nothing && continue
+        tag = tag_state[1]
         if tag == "v"
-            x, y, z = _obj_parse_vec3(t, "v")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "v")
             push!(verts, x, y, z)
         elseif tag == "vt"
-            _obj_require_values(t, 1, "vt")
             # 1-D texture coordinate `vt u` -> (u, 0), matching three.js OBJLoader.
-            push!(file_uvs, _obj_parse_float(t[2], "vt u"),
-                  length(t) >= 3 ? _obj_parse_float(t[3], "vt v") : 0.0)
+            u, v = _obj_parse_vt_tokens(parts, tag_state[2])
+            push!(file_uvs, u, v)
         elseif tag == "vn"
-            x, y, z = _obj_parse_vec3(t, "vn")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "vn")
             push!(file_normals, x, y, z)
         elseif tag == "mtllib"
-            length(t) >= 2 || error("OBJ mtllib requires a material library path")
-            mp = joinpath(dir, t[2]); isfile(mp) && merge!(materials, load_mtl(mp))
+            lib_state = _obj_required_arg(parts, tag_state[2],
+                                          "OBJ mtllib requires a material library path")
+            mp = joinpath(dir, lib_state[1]); isfile(mp) && merge!(materials, load_mtl(mp))
         elseif tag == "usemtl"
-            length(t) >= 2 || error("OBJ usemtl requires a material name")
-            cur_mtl = t[2]
+            mtl_state = _obj_required_arg(parts, tag_state[2],
+                                          "OBJ usemtl requires a material name")
+            cur_mtl = mtl_state[1]
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
-            length(t) >= 4 || error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(t[2], nv, nuv, nn)
-            prev_corner = _obj_parse_corner(t[3], nv, nuv, nn)
-            for k in 4:length(t)
-                corner = _obj_parse_corner(t[k], nv, nuv, nn)
+            first_state = iterate(parts, tag_state[2])
+            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
+            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
+            third_state === nothing && error("OBJ face requires at least 3 vertices")
+            first_corner = _obj_parse_corner(first_state[1], nv, nuv, nn)
+            prev_corner = _obj_parse_corner(second_state[1], nv, nuv, nn)
+            corner = _obj_parse_corner(third_state[1], nv, nuv, nn)
+            while true
                 out_vi, have_uvs, have_normals, missing_normals =
                     _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
                                       file_uvs, file_normals, first_corner, out_vi,
@@ -2171,6 +2178,10 @@ function load_obj_groups(path::String)
                                       have_uvs, have_normals, missing_normals)
                 prev_corner = corner
                 push!(face_mtl, cur_mtl)
+                next_state = iterate(parts, third_state[2])
+                next_state === nothing && break
+                corner = _obj_parse_corner(next_state[1], nv, nuv, nn)
+                third_state = next_state
             end
         end
     end
