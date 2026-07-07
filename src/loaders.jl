@@ -388,6 +388,37 @@ function _obj_is_face_record(line::AbstractString)
     return j <= lastindex(line) && isspace(line[j])
 end
 
+function _obj_scan_counts(path::String)
+    n_vertices = 0
+    n_uvs = 0
+    n_normals = 0
+    n_triangles = 0
+    for raw in eachline(path)
+        line = strip(raw)
+        (isempty(line) || startswith(line, "#")) && continue
+        parts = eachsplit(line)
+        state = iterate(parts)
+        state === nothing && continue
+        tag = state[1]
+        if tag == "v"
+            n_vertices += 1
+        elseif tag == "vt"
+            n_uvs += 1
+        elseif tag == "vn"
+            n_normals += 1
+        elseif tag == "f"
+            corners = 0
+            next_state = iterate(parts, state[2])
+            while next_state !== nothing
+                corners += 1
+                next_state = iterate(parts, next_state[2])
+            end
+            corners >= 3 && (n_triangles += corners - 2)
+        end
+    end
+    return n_vertices, n_uvs, n_normals, n_triangles
+end
+
 function _obj_parse_vec3(tokens, label::String)
     _obj_require_values(tokens, 3, label)
     return (_obj_parse_float(tokens[2], "$label x"),
@@ -414,6 +445,15 @@ function load_obj(path::String)
     have_uvs = false
     missing_normals = false
     out_vi = 0
+    n_v_hint, n_uv_hint, n_n_hint, n_tri_hint = _obj_scan_counts(path)
+    emitted_hint = 3 * n_tri_hint
+    sizehint!(verts, 3 * n_v_hint)
+    sizehint!(file_uvs, 2 * n_uv_hint)
+    sizehint!(file_normals, 3 * n_n_hint)
+    sizehint!(out_pos, 3 * emitted_hint)
+    sizehint!(out_uvs, n_uv_hint == 0 ? 0 : 2 * emitted_hint)
+    sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
+    sizehint!(indices, emitted_hint)
 
     for raw in eachline(path)
         line = strip(raw)

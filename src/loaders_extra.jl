@@ -2086,6 +2086,16 @@ function load_obj_groups(path::String)
     out_vi = 0; cur_mtl = ""
     materials = Dict{String, MeshPhongMaterial}()
     dir = dirname(path)
+    n_v_hint, n_uv_hint, n_n_hint, n_tri_hint = _obj_scan_counts(path)
+    emitted_hint = 3 * n_tri_hint
+    sizehint!(verts, 3 * n_v_hint)
+    sizehint!(file_uvs, 2 * n_uv_hint)
+    sizehint!(file_normals, 3 * n_n_hint)
+    sizehint!(out_pos, 3 * emitted_hint)
+    sizehint!(out_uvs, n_uv_hint == 0 ? 0 : 2 * emitted_hint)
+    sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
+    sizehint!(indices, emitted_hint)
+    sizehint!(face_mtl, n_tri_hint)
     for raw in eachline(path)
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
