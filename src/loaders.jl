@@ -46,6 +46,45 @@ end
 # ========================== STL ==========================
 
 const _STL_BINARY_ZERO_HEADER = zeros(UInt8, 80)
+const _STL_BINARY_FACET_BYTES = 50
+
+@inline function _stl_put_u16_le!(buf::Vector{UInt8}, off::Int, x::UInt16)
+    @inbounds begin
+        buf[off] = UInt8(x & 0xff)
+        buf[off + 1] = UInt8((x >> 8) & 0xff)
+    end
+    return nothing
+end
+
+@inline function _stl_put_u32_le!(buf::Vector{UInt8}, off::Int, x::UInt32)
+    @inbounds begin
+        buf[off] = UInt8(x & 0xff)
+        buf[off + 1] = UInt8((x >> 8) & 0xff)
+        buf[off + 2] = UInt8((x >> 16) & 0xff)
+        buf[off + 3] = UInt8((x >> 24) & 0xff)
+    end
+    return nothing
+end
+
+@inline _stl_put_f32_le!(buf::Vector{UInt8}, off::Int, x::Real) =
+    _stl_put_u32_le!(buf, off, reinterpret(UInt32, Float32(x)))
+
+@inline function _stl_fill_facet_record!(buf::Vector{UInt8}, n::Vec3, v1::Vec3, v2::Vec3, v3::Vec3)
+    _stl_put_f32_le!(buf, 1, n.x)
+    _stl_put_f32_le!(buf, 5, n.y)
+    _stl_put_f32_le!(buf, 9, n.z)
+    _stl_put_f32_le!(buf, 13, v1.x)
+    _stl_put_f32_le!(buf, 17, v1.y)
+    _stl_put_f32_le!(buf, 21, v1.z)
+    _stl_put_f32_le!(buf, 25, v2.x)
+    _stl_put_f32_le!(buf, 29, v2.y)
+    _stl_put_f32_le!(buf, 33, v2.z)
+    _stl_put_f32_le!(buf, 37, v3.x)
+    _stl_put_f32_le!(buf, 41, v3.y)
+    _stl_put_f32_le!(buf, 45, v3.z)
+    _stl_put_u16_le!(buf, 49, UInt16(0))
+    return nothing
+end
 
 """
     save_stl_binary(path, geo) -> path
@@ -55,20 +94,19 @@ geometry).  Round-trips with [`load_stl`](@ref).
 """
 function save_stl_binary(path::String, geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "save_stl_binary")
+    geo.n_faces <= typemax(UInt32) ||
+        throw(ArgumentError("save_stl_binary supports at most $(typemax(UInt32)) faces"))
+    record = Vector{UInt8}(undef, _STL_BINARY_FACET_BYTES)
     open(path, "w") do io
         write(io, _STL_BINARY_ZERO_HEADER)          # 80-byte header
-        write(io, UInt32(geo.n_faces))
-        for fi in 1:geo.n_faces
+        _stl_put_u32_le!(record, 1, UInt32(geo.n_faces))
+        unsafe_write(io, pointer(record), UInt(4))
+        @inbounds for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
             v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
-            n = compute_face_normal(geo, fi)
-            for c in (Float32(n.x), Float32(n.y), Float32(n.z))
-                write(io, c)
-            end
-            for v in (v1, v2, v3)
-                write(io, Float32(v.x)); write(io, Float32(v.y)); write(io, Float32(v.z))
-            end
-            write(io, UInt16(0))                     # attribute byte count
+            n = normalize(cross(v2 - v1, v3 - v1))
+            _stl_fill_facet_record!(record, n, v1, v2, v3)
+            write(io, record)
         end
     end
     return path

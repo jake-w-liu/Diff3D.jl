@@ -5953,6 +5953,10 @@ end
         @test loaded.n_faces == geo.n_faces
         @test loaded.n_vertices == geo.n_faces * 3    # STL: independent verts
         @test_opt_alloc 1024 save_stl_binary(f, geo)
+        stress = PlaneGeometry(width_segments=32, height_segments=32)
+        save_stl_binary(f, stress)
+        @test filesize(f) == 84 + 50 * stress.n_faces
+        @test_opt_alloc 2048 save_stl_binary(f, stress)
         # Triangle 1 vertices match (within Float32 precision).
         a1, b1, c1 = get_face(geo, 1)
         la, lb, lc = get_face(loaded, 1)
