@@ -57,20 +57,34 @@ struct _SoftScreenTriangle{T}
     valid::Bool
 end
 
-"""Reusable scratch buffers for repeated `soft_render` calls with element type `T`."""
+"""Reusable scratch/output buffers for repeated `soft_render` calls with element type `T`.
+
+When passed as `workspace`, the returned image array is owned by the workspace
+and is overwritten by the next render that reuses the same dimensions.
+"""
 mutable struct SoftRenderWorkspace{T<:Real}
     screen_tris::Vector{_SoftScreenTriangle{T}}
     tile_counts::Vector{Int}
     tile_offsets::Vector{Int}
     tile_faces::Vector{Int}
     tile_cursor::Vector{Int}
+    image::Array{T,3}
 end
 
 SoftRenderWorkspace{T}() where {T<:Real} =
-    SoftRenderWorkspace{T}(_SoftScreenTriangle{T}[], Int[], Int[], Int[], Int[])
+    SoftRenderWorkspace{T}(_SoftScreenTriangle{T}[], Int[], Int[], Int[], Int[],
+                           Array{T,3}(undef, 0, 0, 0))
+SoftRenderWorkspace{T}(screen_tris::Vector{_SoftScreenTriangle{T}},
+                       tile_counts::Vector{Int}, tile_offsets::Vector{Int},
+                       tile_faces::Vector{Int}, tile_cursor::Vector{Int}) where {T<:Real} =
+    SoftRenderWorkspace{T}(screen_tris, tile_counts, tile_offsets, tile_faces,
+                           tile_cursor, Array{T,3}(undef, 0, 0, 0))
 SoftRenderWorkspace() = SoftRenderWorkspace{Float64}()
 
-"""Reusable scene-extraction and soft-rasterizer buffers for `soft_render_scene`."""
+"""Reusable scene-extraction and soft-rasterizer buffers for `soft_render_scene`.
+
+The returned image follows the same reuse rules as `SoftRenderWorkspace`.
+"""
 mutable struct SoftRenderSceneWorkspace
     vertices::Vector{Vec3{Float64}}
     faces::Vector{NTuple{3,Int}}
@@ -102,6 +116,13 @@ function _soft_int_buffer!(buf::Vector{Int}, n::Int)
     return buf
 end
 
+function _soft_image_buffer!(workspace::SoftRenderWorkspace{T},
+                             H::Int, W::Int) where {T}
+    size(workspace.image) == (H, W, 3) ||
+        (workspace.image = Array{T,3}(undef, H, W, 3))
+    return workspace.image
+end
+
 function _soft_resize_buffer!(buf::Vector{T}, n::Int) where {T}
     length(buf) == n || resize!(buf, n)
     return buf
@@ -121,9 +142,9 @@ Arguments:
 
 Returns: Array{T, 3} of size (height, width, 3) — RGB image.
 """
-function soft_render(vertices::Vector{Vec3{Tv}},
+function soft_render(vertices::AbstractVector{Vec3{Tv}},
                      faces::Vector{NTuple{3,Int}},
-                     face_colors::Vector{Color3{Tc}},
+                     face_colors::AbstractVector{Color3{Tc}},
                      view_proj::Mat4,
                      width::Int, height::Int,
                      config::SoftRasterizerConfig = SoftRasterizerConfig()
@@ -155,7 +176,7 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     _soft_positive_finite(γ, "SoftRasterizerConfig gamma")
     _soft_positive_finite(eps, "SoftRasterizerConfig eps")
     _soft_finite_color(bg, "SoftRasterizerConfig bg_color")
-    n_faces == 0 && return _soft_background_image(T, H, W, bg)
+    n_faces == 0 && return _soft_background_image(T, H, W, bg, workspace)
     n_vertices = length(verts)
     for face in faces
         i1, i2, i3 = face
@@ -192,12 +213,13 @@ function soft_render(vertices::Vector{Vec3{Tv}},
                 s1, s3, s4, cols[fi], σ, eps, W, H)
         end
     end
-    n_screen_tris == 0 && return _soft_background_image(T, H, W, bg)
+    n_screen_tris == 0 && return _soft_background_image(T, H, W, bg, workspace)
 
     if n_screen_tris <= 8
         # Tiny face sets need no spatial index: scanning directly avoids the CSR
         # tile buffers that dominate small inverse-rendering problems.
-        image = Array{T}(undef, H, W, 3)
+        image = workspace === nothing ? Array{T}(undef, H, W, 3) :
+            _soft_image_buffer!(workspace, H, W)
         for py in 1:H
             for px in 1:W
                 cx = T(px) - T(0.5)
@@ -319,7 +341,8 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     end
 
     # Render each pixel
-    image = Array{T}(undef, H, W, 3)
+    image = workspace === nothing ? Array{T}(undef, H, W, 3) :
+        _soft_image_buffer!(workspace, H, W)
     for py in 1:H
         ty = tile_y_of(py)
         for px in 1:W
@@ -405,14 +428,55 @@ function soft_render(vertices::Vector{Vec3{Tv}},
     return image
 end
 
-function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T}) where {T}
-    image = Array{T}(undef, H, W, 3)
+function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T},
+                                workspace=nothing) where {T}
+    image = workspace === nothing ? Array{T}(undef, H, W, 3) :
+        _soft_image_buffer!(workspace, H, W)
     @inbounds for j in 1:W, i in 1:H
         image[i, j, 1] = bg.r
         image[i, j, 2] = bg.g
         image[i, j, 3] = bg.b
     end
     return image
+end
+
+@inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
+                                         geo::BufferGeometry, world_mat::Mat4,
+                                         material::AbstractMaterial,
+                                         lights::Vector{<:AbstractLight},
+                                         cam_pos::Vec3)
+    return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos)
+end
+
+function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
+                                          geo::BufferGeometry, world_mat::Mat4,
+                                          mesh::Mesh,
+                                          lights::Vector{<:AbstractLight},
+                                          cam_pos::Vec3)
+    mat = mesh.material
+    if mat isa MeshBasicMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshLambertMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshPhongMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshStandardMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshPhysicalMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshToonMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshNormalMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshMatcapMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa MeshDepthMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    elseif mat isa AbstractMaterial
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+    else
+        throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
+    end
 end
 
 @inline _soft_near_value(v::Vec4, eps) = v.z + v.w - eps
@@ -670,8 +734,8 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
         end
 
         # Compute face colors
-        shade_mesh_faces!(face_colors, geo, world_mat, _mesh_material(mesh),
-                          lights, camera.position)
+        _soft_shade_mesh_faces_for_mesh!(face_colors, geo, world_mat, mesh,
+                                         lights, camera.position)
 
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
@@ -695,9 +759,11 @@ Differentiable render with explicit parameters for AD.
 function differentiable_render(params::AbstractVector{T},
                                setup_fn::Function,
                                width::Int, height::Int;
-                               sigma=1.0, gamma=1.0) where T
+                               sigma=1.0, gamma=1.0,
+                               workspace=nothing) where T
     # setup_fn returns (vertices, faces, face_colors, view_proj, bg_color)
     vertices, faces, face_colors, vp, bg = setup_fn(params)
     config = SoftRasterizerConfig(sigma=sigma, gamma=gamma, bg_color=bg)
-    soft_render(vertices, faces, face_colors, vp, width, height, config)
+    soft_render(vertices, faces, face_colors, vp, width, height, config;
+                workspace=workspace)
 end

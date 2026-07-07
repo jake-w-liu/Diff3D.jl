@@ -2744,7 +2744,12 @@ end
                                        sigma=1e-2, gamma=1.0)
         one_face_params = [-0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0]
         one_face_rf(one_face_params)
-        @test_opt_alloc 7600 one_face_rf(one_face_params)
+        @test_opt_alloc 7300 one_face_rf(one_face_params)
+        one_face_ws = SoftRenderWorkspace()
+        one_face_rf_ws = vertex_render_fn(one_face_faces, one_face_colors, vp, 16, 16;
+                                          sigma=1e-2, gamma=1.0, workspace=one_face_ws)
+        @test one_face_rf_ws(one_face_params) == one_face_rf(one_face_params)
+        @test_opt_alloc 1024 one_face_rf_ws(one_face_params)
 
         soft_verts = Vec3{Float64}[]
         soft_faces = NTuple{3,Int}[]
@@ -2767,9 +2772,19 @@ end
         @test soft_ws_img == soft_render(soft_verts, soft_faces, soft_colors,
                                          Mat4{Float64}(), 16, 16, config)
         @test !isempty(soft_ws.tile_counts)
-        @test_opt_alloc 10000 soft_render(soft_verts, soft_faces, soft_colors,
-                                          Mat4{Float64}(), 16, 16, config;
-                                          workspace=soft_ws)
+        @test_opt_alloc 512 soft_render(soft_verts, soft_faces, soft_colors,
+                                        Mat4{Float64}(), 16, 16, config;
+                                        workspace=soft_ws)
+        setup_soft(_p) = (soft_verts, soft_faces, soft_colors, Mat4{Float64}(),
+                          Color3(0.0, 0.0, 0.0))
+        diff_ws = SoftRenderWorkspace()
+        diff_img = differentiable_render([0.0], setup_soft, 16, 16;
+                                         sigma=1e-2, gamma=1.0, workspace=diff_ws)
+        @test diff_img == soft_render(soft_verts, soft_faces, soft_colors,
+                                      Mat4{Float64}(), 16, 16, config)
+        @test_opt_alloc 512 differentiable_render([0.0], setup_soft, 16, 16;
+                                                  sigma=1e-2, gamma=1.0,
+                                                  workspace=diff_ws)
 
         soft_scene = Scene(background=Color3(0.0, 0.0, 0.0))
         add!(soft_scene, AmbientLight(intensity=0.2))
@@ -2792,8 +2807,24 @@ end
         @test soft_scene_ws_img == soft_scene_img
         @test length(soft_scene_ws.vertices) == sum(Diff3D._mesh_geometry(m).n_vertices
                                                     for m in collect_meshes(soft_scene))
-        @test_opt_alloc 10000 soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
-                                                workspace=soft_scene_ws)
+        @test_opt_alloc 4096 soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
+                                               workspace=soft_scene_ws)
+        many_basic_soft_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        for i in 1:100
+            mesh = Mesh(PlaneGeometry(), MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)))
+            mesh.position = Vec3(2.0 * i, 0.0, 0.0)
+            add!(many_basic_soft_scene, mesh)
+        end
+        many_basic_soft_cam = OrthographicCamera(left=-1.0, right=1.0, top=1.0,
+                                                 bottom=-1.0, near=0.1, far=10.0)
+        many_basic_soft_cam.position = Vec3(0.0, 0.0, 2.0)
+        many_basic_soft_cam.target = Vec3(0.0, 0.0, 0.0)
+        many_basic_soft_ws = SoftRenderSceneWorkspace()
+        soft_render_scene(many_basic_soft_scene, many_basic_soft_cam, 1, 1;
+                          workspace=many_basic_soft_ws)
+        @test_opt_alloc 4096 soft_render_scene(many_basic_soft_scene,
+                                               many_basic_soft_cam, 1, 1;
+                                               workspace=many_basic_soft_ws)
     end
 
     @testset "Loss functions" begin
@@ -11263,7 +11294,13 @@ end
         vp = mat4_perspective(π/4,1.0,0.1,100.0) * mat4_look_at(Vec3(0.0,0,3.0), Vec3(0.0,0,0), Vec3(0.0,1,0))
         crf = color_render_fn(verts, faces, vp, 16, 16; sigma=0.5, gamma=1.0)
         @test_throws ArgumentError crf([1.0, 0.0, 0.0, 0.5])
-        target = crf([1.0, 0.0, 0.0])                   # red
+        red_params = [1.0, 0.0, 0.0]
+        target = crf(red_params)                         # red
+        @test_opt_alloc 7300 crf(red_params)
+        crf_ws = color_render_fn(verts, faces, vp, 16, 16; sigma=0.5, gamma=1.0,
+                                 workspace=SoftRenderWorkspace())
+        @test crf_ws(red_params) == target
+        @test_opt_alloc 1024 crf_ws(red_params)
         copt, chist = optimize_face_colors([0.0,0.0,1.0], verts, faces, vp, target;
                                            W=16, H=16, sigma=0.5, gamma=1.0, lr=0.1, n_iters=40, verbose=false)
         @test chist[end] < chist[1]
