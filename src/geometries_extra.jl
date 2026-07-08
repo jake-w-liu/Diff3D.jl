@@ -1437,30 +1437,45 @@ end
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
 @inline _edge_key_second(key::UInt128) = Int(key & UInt128(typemax(UInt64)))
 
-mutable struct _EdgeFaceRecord
-    normal::Vec3{Float64}
-    count::Int
-    feature::Bool
-end
-
 @inline function _record_edge_face!(
-    edge_faces::Dict{UInt128,_EdgeFaceRecord},
+    edge_keys::Vector{UInt128},
+    edge_record_ids::Vector{Int},
+    ordered_edges::Vector{UInt128},
+    edge_normals::Vector{Vec3{Float64}},
+    edge_counts::Vector{Int},
+    edge_features::Vector{Bool},
     a::Int, b::Int, n::Vec3{Float64}, cosT::Float64,
 )
     key = _edge_key(a, b)
-    record = get(edge_faces, key, nothing)
-    if record === nothing
-        edge_faces[key] = _EdgeFaceRecord(n, 1, false)
-    elseif record.count == 1
-        record.feature = dot(record.normal, n) < cosT
-        record.count = 2
-    else
-        record.count += 1
+    mask = length(edge_keys) - 1
+    idx = Int(hash(key) & UInt(mask)) + 1
+    while true
+        existing = edge_keys[idx]
+        if existing == 0
+            edge_keys[idx] = key
+            record_id = length(ordered_edges) + 1
+            edge_record_ids[idx] = record_id
+            push!(ordered_edges, key)
+            push!(edge_normals, n)
+            push!(edge_counts, 1)
+            push!(edge_features, false)
+            return nothing
+        elseif existing == key
+            record_id = edge_record_ids[idx]
+            count = edge_counts[record_id]
+            if count == 1
+                edge_features[record_id] = dot(edge_normals[record_id], n) < cosT
+                edge_counts[record_id] = 2
+            else
+                edge_counts[record_id] = count + 1
+            end
+            return nothing
+        end
+        idx = idx == length(edge_keys) ? 1 : idx + 1
     end
-    return nothing
 end
 
-@inline function _wireframe_seen_capacity(max_edges::Int)
+@inline function _edge_table_capacity(max_edges::Int)
     return max(16, nextpow(2, max_edges + max(16, max_edges >>> 2)))
 end
 
@@ -1502,7 +1517,7 @@ Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs).""
 function wireframe_geometry(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     max_edges = 3 * geo.n_faces
-    seen = zeros(UInt128, _wireframe_seen_capacity(max_edges))
+    seen = zeros(UInt128, _edge_table_capacity(max_edges))
     ordered_edges = Vector{UInt128}()
     sizehint!(ordered_edges, max_edges)
     @inbounds for fi in 1:geo.n_faces
@@ -1560,8 +1575,18 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     cpos = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     cpos_len = 0
     # edge (lo,hi) -> first normal, adjacent face count, sharp-on-second-face
-    edge_faces = Dict{UInt128, _EdgeFaceRecord}()
-    sizehint!(edge_faces, 3 * geo.n_faces)
+    max_edges = 3 * geo.n_faces
+    edge_keys = zeros(UInt128, _edge_table_capacity(max_edges))
+    edge_record_ids = zeros(Int, length(edge_keys))
+    ordered_edges = Vector{UInt128}()
+    edge_normals = Vector{Vec3{Float64}}()
+    edge_counts = Vector{Int}()
+    edge_features = Bool[]
+    edge_hint = min(max_edges, max(16, geo.n_vertices + geo.n_faces))
+    sizehint!(ordered_edges, edge_hint)
+    sizehint!(edge_normals, edge_hint)
+    sizehint!(edge_counts, edge_hint)
+    sizehint!(edge_features, edge_hint)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
@@ -1572,19 +1597,23 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
                                                cpos_len, geo, i2)
         c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
                                                cpos_len, geo, i3)
-        _record_edge_face!(edge_faces, c1, c2, n, cosT)
-        _record_edge_face!(edge_faces, c2, c3, n, cosT)
-        _record_edge_face!(edge_faces, c3, c1, n, cosT)
+        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
+                           edge_counts, edge_features, c1, c2, n, cosT)
+        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
+                           edge_counts, edge_features, c2, c3, n, cosT)
+        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
+                           edge_counts, edge_features, c3, c1, n, cosT)
     end
     feature_edges = 0
-    @inbounds for (_, record) in edge_faces
-        (record.count == 1 || record.feature) && (feature_edges += 1)
+    @inbounds for i in eachindex(ordered_edges)
+        (edge_counts[i] == 1 || edge_features[i]) && (feature_edges += 1)
     end
     positions = Vector{Float64}(undef, 6 * feature_edges)
     vi = 0
     pout = 1
-    @inbounds for (key, record) in edge_faces
-        (record.count == 1 || record.feature) || continue
+    @inbounds for i in eachindex(ordered_edges)
+        (edge_counts[i] == 1 || edge_features[i]) || continue
+        key = ordered_edges[i]
         a = cpos[_edge_key_first(key)]
         b = cpos[_edge_key_second(key)]
         positions[pout] = a.x
