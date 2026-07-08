@@ -553,9 +553,13 @@ _skinned_bind_matrix_inverse(sm::SkinnedMesh) =
 end
 
 function _skinning_matrices(sm::SkinnedMesh)
+    skel = sm.skeleton
+    length(skel.bind_inverses) == length(skel.bones) ||
+        error("skeleton bind_inverses length must match bones length")
     bind = sm.bind_matrix
     bind_inv = _skinned_bind_matrix_inverse(sm)
-    [bind_inv * m * bind for m in skeleton_matrices(sm.skeleton)]
+    [bind_inv * compute_world_matrix(skel.bones[i]) * skel.bind_inverses[i] * bind
+     for i in eachindex(skel.bones)]
 end
 
 function _skinning_matrices!(out::Vector{Mat4{Float64}}, sm::SkinnedMesh)

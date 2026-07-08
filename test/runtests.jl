@@ -6465,8 +6465,9 @@ end
                                       skin_alloc_wts)
         Diff3D._skinned_render_geometry(skin_alloc_mesh)
         apply_skinning(skin_alloc_mesh)
-        @test_opt_alloc 65536 Diff3D._skinned_render_geometry(skin_alloc_mesh)
-        @test_opt_alloc 16384 apply_skinning(skin_alloc_mesh)
+        @test_opt_alloc 512 Diff3D._skinning_matrices(skin_alloc_mesh)
+        @test_opt_alloc 60000 Diff3D._skinned_render_geometry(skin_alloc_mesh)
+        @test_opt_alloc 14000 apply_skinning(skin_alloc_mesh)
         skin_export_bones = [Bone(name="alloc_export_bone_$i") for i in 1:32]
         for i in 2:length(skin_export_bones)
             add!(skin_export_bones[i - 1], skin_export_bones[i])
