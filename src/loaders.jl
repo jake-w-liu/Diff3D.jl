@@ -48,6 +48,14 @@ end
 const _STL_BINARY_ZERO_HEADER = zeros(UInt8, 80)
 const _STL_BINARY_FACET_BYTES = 50
 
+@inline function _stl_header_solid_at(head::Vector{UInt8}, off::Int)
+    @inbounds return head[off + 1] == UInt8('s') &&
+                      head[off + 2] == UInt8('o') &&
+                      head[off + 3] == UInt8('l') &&
+                      head[off + 4] == UInt8('i') &&
+                      head[off + 5] == UInt8('d')
+end
+
 @inline function _stl_put_u16_le!(buf::Vector{UInt8}, off::Int, x::UInt16)
     @inbounds begin
         buf[off] = UInt8(x & 0xff)
@@ -124,7 +132,7 @@ function _looks_binary_stl(path::String)
     # three.js STLLoader and classify as ASCII only when the header spells
     # "solid" near the start (offsets 0-4 tolerate a BOM); otherwise binary.
     for off in 0:4
-        head[off+1:off+5] == b"solid" && return false
+        _stl_header_solid_at(head, off) && return false
     end
     return true
 end

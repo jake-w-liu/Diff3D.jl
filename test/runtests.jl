@@ -6000,6 +6000,7 @@ end
         @test geo.n_vertices == 3
         @test get_vertex(geo, 2).x ≈ 1.0
         @test get_normal(geo, 1).z ≈ 1.0
+        @test_opt_alloc 1024 Diff3D._looks_binary_stl(f)
         @test_opt_alloc 6000 load_stl(f)
         stress_io = IOBuffer()
         println(stress_io, "solid stress")
