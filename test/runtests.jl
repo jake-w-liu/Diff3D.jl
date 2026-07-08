@@ -14960,7 +14960,7 @@ end
             r0 = bloom_pass(threshold=0.8, intensity=0.6, radius=0)(img)
             @test r0[5,5,1] ≈ 1.6
             @test r0[4,5,1] == 0.0
-            @test_opt_alloc 80000 bloom_pass(threshold=0.8, intensity=0.6, radius=2)(img)
+            @test_opt_alloc 5000 bloom_pass(threshold=0.8, intensity=0.6, radius=2)(img)
             @test_opt_alloc 30000 bloom_pass(threshold=0.8, intensity=0.6, radius=0)(img)
         end
 

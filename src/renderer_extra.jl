@@ -2318,32 +2318,40 @@ function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6, radius::Int=2)
             end
             return out
         end
-        bright = Array{Float64}(undef, H, W, 3)        # bright-pass extraction
-        @inbounds for j in 1:W, i in 1:H
-            if _luma(img, i, j) > thr
-                bright[i,j,1] = img[i,j,1]; bright[i,j,2] = img[i,j,2]; bright[i,j,3] = img[i,j,3]
-            else
-                bright[i,j,1] = 0.0; bright[i,j,2] = 0.0; bright[i,j,3] = 0.0
-            end
-        end
         k = _gaussian_kernel(rad)
         tmp = Array{Float64}(undef, H, W, 3)
         out = Array{Float64}(undef, H, W, 3)
-        @inbounds for c in 1:3, j in 1:W, i in 1:H
-            acc = 0.0
+        @inbounds for j in 1:W, i in 1:H
+            acc1 = 0.0
+            acc2 = 0.0
+            acc3 = 0.0
             for t in -rad:rad
                 jj = clamp(j + t, 1, W)
-                acc += k[t + rad + 1] * bright[i, jj, c]
+                if _luma(img, i, jj) > thr
+                    w = k[t + rad + 1]
+                    acc1 += w * img[i, jj, 1]
+                    acc2 += w * img[i, jj, 2]
+                    acc3 += w * img[i, jj, 3]
+                end
             end
-            tmp[i, j, c] = acc
+            tmp[i, j, 1] = acc1
+            tmp[i, j, 2] = acc2
+            tmp[i, j, 3] = acc3
         end
-        @inbounds for c in 1:3, j in 1:W, i in 1:H
-            acc = 0.0
+        @inbounds for j in 1:W, i in 1:H
+            acc1 = 0.0
+            acc2 = 0.0
+            acc3 = 0.0
             for t in -rad:rad
                 ii = clamp(i + t, 1, H)
-                acc += k[t + rad + 1] * tmp[ii, j, c]
+                w = k[t + rad + 1]
+                acc1 += w * tmp[ii, j, 1]
+                acc2 += w * tmp[ii, j, 2]
+                acc3 += w * tmp[ii, j, 3]
             end
-            out[i, j, c] = img[i, j, c] + inten * acc
+            out[i, j, 1] = img[i, j, 1] + inten * acc1
+            out[i, j, 2] = img[i, j, 2] + inten * acc2
+            out[i, j, 3] = img[i, j, 3] + inten * acc3
         end
         return out
     end
