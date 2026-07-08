@@ -259,6 +259,15 @@ function _is_png_bytes(bytes::AbstractVector{UInt8})
     return true
 end
 
+@inline function _png_chunk_type_eq(bytes::AbstractVector{UInt8}, start::Int,
+                                    b1::UInt8, b2::UInt8, b3::UInt8, b4::UInt8)
+    @inbounds return bytes[start] == b1 && bytes[start + 1] == b2 &&
+                      bytes[start + 2] == b3 && bytes[start + 3] == b4
+end
+
+_png_chunk_type_string(bytes::AbstractVector{UInt8}, start::Int) =
+    String(@view bytes[start:start + 3])
+
 function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
     c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
@@ -521,18 +530,23 @@ function _decode_png(bytes::AbstractVector{UInt8})
         pos + 7 <= length(bytes) || error("PNG chunk header is truncated")
         len = _rd_be32(bytes, pos); pos += 4
         ctype_start = pos
-        ctype = String(bytes[ctype_start:ctype_start+3]); pos += 4
+        is_ihdr = _png_chunk_type_eq(bytes, ctype_start, 0x49, 0x48, 0x44, 0x52)
+        is_idat = _png_chunk_type_eq(bytes, ctype_start, 0x49, 0x44, 0x41, 0x54)
+        is_plte = _png_chunk_type_eq(bytes, ctype_start, 0x50, 0x4c, 0x54, 0x45)
+        is_trns = _png_chunk_type_eq(bytes, ctype_start, 0x74, 0x52, 0x4e, 0x53)
+        is_iend = _png_chunk_type_eq(bytes, ctype_start, 0x49, 0x45, 0x4e, 0x44)
+        pos += 4
         data_stop = pos + len - 1
         crc_pos = data_stop + 1
         data_stop <= length(bytes) ||
-            error("PNG chunk '$ctype' length $len exceeds the file size")
+            error("PNG chunk '$(_png_chunk_type_string(bytes, ctype_start))' length $len exceeds the file size")
         crc_pos + 3 <= length(bytes) ||
-            error("PNG chunk '$ctype' CRC is truncated")
+            error("PNG chunk '$(_png_chunk_type_string(bytes, ctype_start))' CRC is truncated")
         expected_crc = UInt32(_rd_be32(bytes, crc_pos))
         _png_crc_matches(bytes, ctype_start, pos, data_stop, expected_crc) ||
-            error("PNG chunk '$ctype' CRC mismatch")
-        seen_ihdr || ctype == "IHDR" || error("PNG first chunk must be IHDR")
-        if ctype == "IHDR"
+            error("PNG chunk '$(_png_chunk_type_string(bytes, ctype_start))' CRC mismatch")
+        seen_ihdr || is_ihdr || error("PNG first chunk must be IHDR")
+        if is_ihdr
             !seen_ihdr || error("PNG contains multiple IHDR chunks")
             len == 13 || error("PNG IHDR chunk length must be 13")
             W = _rd_be32(bytes, pos); H = _rd_be32(bytes, pos+4)
@@ -542,19 +556,19 @@ function _decode_png(bytes::AbstractVector{UInt8})
             interlace = bytes[pos+12]
             (W > 0 && H > 0) || error("PNG dimensions must be positive")
             seen_ihdr = true
-        elseif ctype == "IDAT"
+        elseif is_idat
             !idat_closed || error("PNG IDAT chunks must be consecutive")
             seen_idat = true
             if len > 0
                 append!(idat, @view bytes[pos:pos+len-1])
             end
-        elseif ctype == "PLTE"
+        elseif is_plte
             !seen_idat || error("PNG PLTE chunk must appear before IDAT")
             palette = collect(@view bytes[pos:pos+len-1])
-        elseif ctype == "tRNS"
+        elseif is_trns
             !seen_idat || error("PNG tRNS chunk must appear before IDAT")
             trns = collect(@view bytes[pos:pos+len-1])
-        elseif ctype == "IEND"
+        elseif is_iend
             len == 0 || error("PNG IEND chunk must be empty")
             seen_iend = true
             break

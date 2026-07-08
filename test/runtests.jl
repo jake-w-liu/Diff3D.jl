@@ -8003,7 +8003,7 @@ end
             png_alloc_bytes = read(png_alloc_file)
             @test maximum(abs.(Diff3D._decode_png(png_alloc_bytes) .- png_alloc_img)) <= 1/255 + 1e-9
             @test_opt_alloc 2048 save_png(png_alloc_file, png_alloc_img)
-            @test_opt_alloc 600000 Diff3D._decode_png(png_alloc_bytes)
+            @test_opt_alloc 590000 Diff3D._decode_png(png_alloc_bytes)
         finally
             rm(png_alloc_file; force=true)
         end
