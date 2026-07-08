@@ -1779,12 +1779,32 @@ function _morph_buffer_aliases_track(values::Vector{Float64},
     return false
 end
 
-function _morph_track_output_buffer!(target, property::Symbol, tr)
+const _MorphInfluenceObject =
+    Union{Mesh, LineObject, PointsObject, LineSegments, LineLoop, SkinnedMesh}
+
+function _generic_morph_track_output_buffer!(target, property::Symbol, tr)
     width = length(tr.values[1])
     values = getproperty(target, property)
     if length(values) != width || _morph_buffer_aliases_track(values, tr)
         values = Vector{Float64}(undef, width)
         setproperty!(target, property, values)
+    end
+    return values
+end
+
+_morph_track_output_buffer!(target, property::Symbol, tr) =
+    _generic_morph_track_output_buffer!(target, property, tr)
+
+function _morph_track_output_buffer!(
+    target::_MorphInfluenceObject, property::Symbol, tr,
+)
+    property === :morph_target_influences ||
+        return _generic_morph_track_output_buffer!(target, property, tr)
+    width = length(tr.values[1])
+    values = target.morph_target_influences
+    if length(values) != width || _morph_buffer_aliases_track(values, tr)
+        values = Vector{Float64}(undef, width)
+        target.morph_target_influences = values
     end
     return values
 end

@@ -13742,7 +13742,7 @@ end
             mixer_set_time!(wide_mixer, 0.5)
             @test wide_mesh.morph_target_influences[1] ≈ 0.5
             @test wide_mesh.morph_target_influences[end] ≈ 0.5
-            @test_opt_alloc 2048 mixer_set_time!(wide_mixer, 0.25)
+            @test_opt_alloc 128 mixer_set_time!(wide_mixer, 0.25)
 
             component_track = NumberKeyframeTrack(wide_mesh, "morphTargetInfluences[0]",
                                                   [0.0, 1.0], [0.0, 1.0])
