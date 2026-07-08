@@ -1456,14 +1456,11 @@ const _EMPTY_EDGE_FACE_RECORD =
     return nothing
 end
 
-@inline function _remember_wireframe_edge!(
-    seen::Set{UInt128}, ordered_edges::Vector{UInt128}, a::Int, b::Int,
-)
+@inline function _record_wireframe_edge!(seen::Set{UInt128}, a::Int, b::Int)
     key = _edge_key(a, b)
-    key in seen && return nothing
+    key in seen && return false
     push!(seen, key)
-    push!(ordered_edges, key)
-    return nothing
+    return true
 end
 
 @inline function _write_wireframe_key!(
@@ -1487,19 +1484,27 @@ function wireframe_geometry(geo::BufferGeometry)
     max_edges = 3 * geo.n_faces
     seen = Set{UInt128}()
     sizehint!(seen, max_edges)
-    ordered_edges = Vector{UInt128}()
-    sizehint!(ordered_edges, max_edges)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        _remember_wireframe_edge!(seen, ordered_edges, i1, i2)
-        _remember_wireframe_edge!(seen, ordered_edges, i2, i3)
-        _remember_wireframe_edge!(seen, ordered_edges, i3, i1)
+        _record_wireframe_edge!(seen, i1, i2)
+        _record_wireframe_edge!(seen, i2, i3)
+        _record_wireframe_edge!(seen, i3, i1)
     end
-    positions = Vector{Float64}(undef, 6 * length(ordered_edges))
+    positions = Vector{Float64}(undef, 6 * length(seen))
+    empty!(seen)
     vi = 0
     pout = 1
-    @inbounds for key in ordered_edges
-        vi, pout = _write_wireframe_key!(positions, geo, key, vi, pout)
+    @inbounds for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        if _record_wireframe_edge!(seen, i1, i2)
+            vi, pout = _write_wireframe_key!(positions, geo, _edge_key(i1, i2), vi, pout)
+        end
+        if _record_wireframe_edge!(seen, i2, i3)
+            vi, pout = _write_wireframe_key!(positions, geo, _edge_key(i2, i3), vi, pout)
+        end
+        if _record_wireframe_edge!(seen, i3, i1)
+            vi, pout = _write_wireframe_key!(positions, geo, _edge_key(i3, i1), vi, pout)
+        end
     end
     BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
