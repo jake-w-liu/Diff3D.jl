@@ -141,6 +141,20 @@ end
     return nothing
 end
 
+@inline function _png_write_signature(io::IO)
+    write(io, 0x89); write(io, 0x50); write(io, 0x4e); write(io, 0x47)
+    write(io, 0x0d); write(io, 0x0a); write(io, 0x1a); write(io, 0x0a)
+    return nothing
+end
+
+@inline function _png_write_crc_be32(io::IO, x::Integer, crc::UInt32)
+    crc = _png_write_crc_byte(io, UInt8((x >> 24) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8((x >> 16) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8((x >> 8) & 0xff), crc)
+    crc = _png_write_crc_byte(io, UInt8(x & 0xff), crc)
+    return crc
+end
+
 # Coerce an image (Float in [0,1] or UInt8) to a UInt8 RGB array. A grayscale or
 # luminance(+alpha) image (1 or 2 channels) broadcasts its first channel across
 # RGB instead of reading past the end of a hardcoded 3-channel loop.
@@ -259,6 +273,32 @@ end
 @inline function _png_write_crc_byte(io::IO, byte::UInt8, crc::UInt32)
     write(io, byte)
     return _crc32_update_byte(crc, byte)
+end
+
+function _png_write_ihdr_chunk(io::IO, width::Int, height::Int,
+                               bit_depth::UInt8, color_type::UInt8)
+    _write_be32(io, 13)
+    crc = UInt32(0xffffffff)
+    crc = _png_write_crc_byte(io, 0x49, crc)
+    crc = _png_write_crc_byte(io, 0x48, crc)
+    crc = _png_write_crc_byte(io, 0x44, crc)
+    crc = _png_write_crc_byte(io, 0x52, crc)
+    crc = _png_write_crc_be32(io, width, crc)
+    crc = _png_write_crc_be32(io, height, crc)
+    crc = _png_write_crc_byte(io, bit_depth, crc)
+    crc = _png_write_crc_byte(io, color_type, crc)
+    crc = _png_write_crc_byte(io, 0x00, crc)
+    crc = _png_write_crc_byte(io, 0x00, crc)
+    crc = _png_write_crc_byte(io, 0x00, crc)
+    _write_be32(io, _crc32_finish(crc))
+    return nothing
+end
+
+@inline function _png_write_iend_chunk(io::IO)
+    _write_be32(io, 0)
+    write(io, 0x49); write(io, 0x45); write(io, 0x4e); write(io, 0x44)
+    _write_be32(io, UInt32(0xae426082))
+    return nothing
 end
 
 function _png_write_crc_adler_slice(io::IO, data::Vector{UInt8}, pos::Int,
@@ -477,13 +517,10 @@ function save_png(filename::String, img::AbstractArray)
     isgray2d = ndims(img) == 2
     isu8 = eltype(img) === UInt8
     open(filename, "w") do io
-        write(io, UInt8[137, 80, 78, 71, 13, 10, 26, 10])   # PNG signature
-        ihdr = UInt8[]
-        append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
-        push!(ihdr, 0x08, 0x02, 0x00, 0x00, 0x00)           # 8-bit, RGB, deflate, no filter/interlace
-        _png_chunk(io, "IHDR", ihdr)
+        _png_write_signature(io)
+        _png_write_ihdr_chunk(io, W, H, 0x08, 0x02) # 8-bit RGB, deflate, no filter/interlace
         _png_write_idat_rgb(io, img, H, W, C, isgray2d, isu8)
-        _png_chunk(io, "IEND", UInt8[])
+        _png_write_iend_chunk(io)
     end
     return filename
 end
@@ -499,12 +536,10 @@ function save_png_rgba(filename::String, img::AbstractArray)
     C == 4 || throw(ArgumentError("save_png_rgba expects an H×W×4 image"))
     isu8 = eltype(img) === UInt8
     open(filename, "w") do io
-        write(io, UInt8[137,80,78,71,13,10,26,10])
-        ihdr = UInt8[]; append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
-        push!(ihdr, 0x08, 0x06, 0x00, 0x00, 0x00)   # 8-bit, RGBA
-        _png_chunk(io, "IHDR", ihdr)
+        _png_write_signature(io)
+        _png_write_ihdr_chunk(io, W, H, 0x08, 0x06) # 8-bit RGBA
         _png_write_idat_rgba(io, img, H, W, isu8)
-        _png_chunk(io, "IEND", UInt8[])
+        _png_write_iend_chunk(io)
     end
     return filename
 end
@@ -519,12 +554,10 @@ function save_png16(filename::String, img::AbstractArray)
     C == 1 || throw(ArgumentError("save_png16 expects an H×W or H×W×1 image"))
     isgray3d = ndims(img) == 3
     open(filename, "w") do io
-        write(io, UInt8[137,80,78,71,13,10,26,10])
-        ihdr = UInt8[]; append!(ihdr, _be32(W)); append!(ihdr, _be32(H))
-        push!(ihdr, 0x10, 0x00, 0x00, 0x00, 0x00)   # 16-bit grayscale
-        _png_chunk(io, "IHDR", ihdr)
+        _png_write_signature(io)
+        _png_write_ihdr_chunk(io, W, H, 0x10, 0x00) # 16-bit grayscale
         _png_write_idat_gray16(io, img, H, W, isgray3d)
-        _png_chunk(io, "IEND", UInt8[])
+        _png_write_iend_chunk(io)
     end
     return filename
 end
