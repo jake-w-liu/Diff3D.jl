@@ -8178,7 +8178,8 @@ end
             append!(pcm16, i16_bytes(v))
         end
         wav16_path = tempname() * ".wav"
-        write(wav16_path, wav_bytes(1, 2, 8000, 16, pcm16; junk=true))
+        wav16_bytes = wav_bytes(1, 2, 8000, 16, pcm16; junk=true)
+        write(wav16_path, wav16_bytes)
         a16 = load_wav(wav16_path)
         @test a16 isa AudioBufferData
         @test a16.sample_rate == 8000
@@ -8191,6 +8192,7 @@ end
         @test audio_duration(a16) ≈ 3 / 8000
         @test load_audio(wav16_path).samples == a16.samples
         @test AudioLoader(wav16_path).samples == a16.samples
+        @test_opt_alloc 512 Diff3D._decode_wav(wav16_bytes)
         rm(wav16_path)
 
         wav8_path = tempname() * ".wav"
@@ -8209,6 +8211,22 @@ end
         @test afloat.sample_rate == 48000
         @test vec(afloat.samples) ≈ [-0.25, 0.5, 1.25]
         rm(float_path)
+
+        ext_fmt = UInt8[]
+        append!(ext_fmt, le16(0xfffe), le16(1), le32(8000), le32(16000),
+                le16(2), le16(16), le16(22), le16(16), le32(0),
+                le16(1), le16(0),
+                UInt8[0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa,
+                      0x00, 0x38, 0x9b, 0x71])
+        ext_body = UInt8[]
+        append!(ext_body, codeunits("WAVE"))
+        append!(ext_body, codeunits("fmt "), le32(length(ext_fmt)), ext_fmt)
+        append!(ext_body, codeunits("data"), le32(2), i16_bytes(32767))
+        ext_wav = vcat(Vector{UInt8}(codeunits("RIFF")), le32(length(ext_body)), ext_body)
+        ext_audio = Diff3D._decode_wav(ext_wav)
+        @test ext_audio.sample_rate == 8000
+        @test ext_audio.channels == 1
+        @test vec(ext_audio.samples) ≈ [1.0]
 
         bad_riff_size = wav_bytes(1, 1, 8000, 16, UInt8[0x00, 0x00])
         bad_riff_size[5:8] = le32(36)  # WAVE + fmt chunk + data header, but no data payload

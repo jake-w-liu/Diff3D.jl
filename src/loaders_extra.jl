@@ -259,11 +259,15 @@ function _is_png_bytes(bytes::AbstractVector{UInt8})
     return true
 end
 
-@inline function _png_chunk_type_eq(bytes::AbstractVector{UInt8}, start::Int,
-                                    b1::UInt8, b2::UInt8, b3::UInt8, b4::UInt8)
+@inline function _bytes4_eq(bytes::AbstractVector{UInt8}, start::Int,
+                            b1::UInt8, b2::UInt8, b3::UInt8, b4::UInt8)
     @inbounds return bytes[start] == b1 && bytes[start + 1] == b2 &&
                       bytes[start + 2] == b3 && bytes[start + 3] == b4
 end
+
+@inline _png_chunk_type_eq(bytes::AbstractVector{UInt8}, start::Int,
+                           b1::UInt8, b2::UInt8, b3::UInt8, b4::UInt8) =
+    _bytes4_eq(bytes, start, b1, b2, b3, b4)
 
 _png_chunk_type_string(bytes::AbstractVector{UInt8}, start::Int) =
     String(@view bytes[start:start + 3])
@@ -805,91 +809,101 @@ end
 
 audio_duration(a::AudioBufferData) = size(a.samples, 1) / a.sample_rate
 
-@inline function _le_u16(bytes::Vector{UInt8}, pos::Int)
+@inline function _le_u16(bytes::AbstractVector{UInt8}, pos::Int)
     pos + 1 <= length(bytes) || error("WAV chunk is truncated")
     return Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8)
 end
 
-@inline function _le_u32(bytes::Vector{UInt8}, pos::Int)
+@inline function _le_u32(bytes::AbstractVector{UInt8}, pos::Int)
     pos + 3 <= length(bytes) || error("WAV chunk is truncated")
     return Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8) |
            (Int(bytes[pos + 2]) << 16) | (Int(bytes[pos + 3]) << 24)
 end
 
-@inline function _le_i16(bytes::Vector{UInt8}, pos::Int)
+@inline function _le_i16(bytes::AbstractVector{UInt8}, pos::Int)
     u = _le_u16(bytes, pos)
     return u >= 0x8000 ? u - 0x10000 : u
 end
 
-@inline function _le_i24(bytes::Vector{UInt8}, pos::Int)
+@inline function _le_i24(bytes::AbstractVector{UInt8}, pos::Int)
     pos + 2 <= length(bytes) || error("WAV chunk is truncated")
     u = Int(bytes[pos]) | (Int(bytes[pos + 1]) << 8) | (Int(bytes[pos + 2]) << 16)
     return u >= 0x800000 ? u - 0x1000000 : u
 end
 
-@inline function _le_i32(bytes::Vector{UInt8}, pos::Int)
+@inline function _le_i32(bytes::AbstractVector{UInt8}, pos::Int)
     # Reinterpret the 32-bit pattern as signed. The old `u - 0x100000000` made the
     # subtrahend a UInt64 literal, promoting `u` to UInt64 and wrapping modularly,
     # so every negative 32-bit PCM sample decoded to a huge positive value.
     return Int(reinterpret(Int32, UInt32(_le_u32(bytes, pos))))
 end
 
-function _le_float32(bytes::Vector{UInt8}, pos::Int)
+function _le_float32(bytes::AbstractVector{UInt8}, pos::Int)
     return reinterpret(Float32, UInt32(_le_u32(bytes, pos)))
 end
 
-function _le_float64(bytes::Vector{UInt8}, pos::Int)
+function _le_float64(bytes::AbstractVector{UInt8}, pos::Int)
     pos + 7 <= length(bytes) || error("WAV chunk is truncated")
     lo = UInt64(_le_u32(bytes, pos))
     hi = UInt64(_le_u32(bytes, pos + 4))
     return reinterpret(Float64, lo | (hi << 32))
 end
 
-function _wav_format_from_extensible(fmt::Vector{UInt8})
-    length(fmt) >= 40 || error("WAV extensible fmt chunk is truncated")
-    cb_size = _le_u16(fmt, 17)
+@inline _wav_chunk_type_string(bytes::AbstractVector{UInt8}, pos::Int) =
+    String(@view bytes[pos:pos + 3])
+
+function _wav_format_from_extensible(bytes::AbstractVector{UInt8}, fmt_start::Int,
+                                     fmt_len::Int)
+    fmt_len >= 40 || error("WAV extensible fmt chunk is truncated")
+    cb_size = _le_u16(bytes, fmt_start + 16)
     cb_size >= 22 || error("WAV extensible fmt chunk is missing its subformat GUID")
-    guid = fmt[25:40]
-    tail = UInt8[0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71]
-    guid[5:16] == tail || error("unsupported WAV extensible subformat GUID")
-    return _le_u16(guid, 1)
+    guid_start = fmt_start + 24
+    _bytes4_eq(bytes, guid_start + 4, 0x00, 0x00, 0x10, 0x00) &&
+        _bytes4_eq(bytes, guid_start + 8, 0x80, 0x00, 0x00, 0xaa) &&
+        _bytes4_eq(bytes, guid_start + 12, 0x00, 0x38, 0x9b, 0x71) ||
+        error("unsupported WAV extensible subformat GUID")
+    return _le_u16(bytes, guid_start)
 end
 
 function _decode_wav(bytes::Vector{UInt8})
     length(bytes) >= 12 || error("WAV file is truncated")
-    String(bytes[1:4]) == "RIFF" || error("not a RIFF WAV file")
-    String(bytes[9:12]) == "WAVE" || error("RIFF file is not WAVE audio")
+    _bytes4_eq(bytes, 1, 0x52, 0x49, 0x46, 0x46) || error("not a RIFF WAV file")
+    _bytes4_eq(bytes, 9, 0x57, 0x41, 0x56, 0x45) || error("RIFF file is not WAVE audio")
     riff_size = _le_u32(bytes, 5)
     riff_end = riff_size + 8
     riff_end <= length(bytes) || error("WAV RIFF size exceeds file length")
-    fmt = nothing
+    fmt_start = 0
+    fmt_len = 0
     data_start = 0
     data_len = 0
     pos = 13
     while pos + 7 <= riff_end
-        chunk_id = String(bytes[pos:pos + 3])
+        chunk_id_start = pos
         chunk_len = _le_u32(bytes, pos + 4)
         chunk_start = pos + 8
         chunk_end = chunk_start + chunk_len - 1
-        chunk_end <= riff_end || error("WAV chunk $chunk_id exceeds RIFF declared size")
-        chunk_end <= length(bytes) || error("WAV chunk $chunk_id exceeds file length")
-        if chunk_id == "fmt "
-            fmt = bytes[chunk_start:chunk_end]
-        elseif chunk_id == "data"
+        chunk_end <= riff_end ||
+            error("WAV chunk $(_wav_chunk_type_string(bytes, chunk_id_start)) exceeds RIFF declared size")
+        chunk_end <= length(bytes) ||
+            error("WAV chunk $(_wav_chunk_type_string(bytes, chunk_id_start)) exceeds file length")
+        if _bytes4_eq(bytes, chunk_id_start, 0x66, 0x6d, 0x74, 0x20) # "fmt "
+            fmt_start = chunk_start
+            fmt_len = chunk_len
+        elseif _bytes4_eq(bytes, chunk_id_start, 0x64, 0x61, 0x74, 0x61) # "data"
             data_start = chunk_start
             data_len = chunk_len
         end
         pos = chunk_start + chunk_len + (isodd(chunk_len) ? 1 : 0)
     end
-    fmt === nothing && error("WAV fmt chunk is missing")
+    fmt_start > 0 || error("WAV fmt chunk is missing")
     data_len > 0 || error("WAV data chunk is missing or empty")
-    length(fmt) >= 16 || error("WAV fmt chunk is truncated")
-    format_tag = _le_u16(fmt, 1)
-    channels = _le_u16(fmt, 3)
-    sample_rate = _le_u32(fmt, 5)
-    block_align = _le_u16(fmt, 13)
-    bits_per_sample = _le_u16(fmt, 15)
-    format_tag == 0xfffe && (format_tag = _wav_format_from_extensible(fmt))
+    fmt_len >= 16 || error("WAV fmt chunk is truncated")
+    format_tag = _le_u16(bytes, fmt_start)
+    channels = _le_u16(bytes, fmt_start + 2)
+    sample_rate = _le_u32(bytes, fmt_start + 4)
+    block_align = _le_u16(bytes, fmt_start + 12)
+    bits_per_sample = _le_u16(bytes, fmt_start + 14)
+    format_tag == 0xfffe && (format_tag = _wav_format_from_extensible(bytes, fmt_start, fmt_len))
     channels > 0 || error("WAV channel count must be positive")
     sample_rate > 0 || error("WAV sample rate must be positive")
     bytes_per_sample = bits_per_sample ÷ 8
@@ -941,8 +955,8 @@ decode remains outside this native loader.
 """
 function load_audio(path::String)
     bytes = read(path)
-    length(bytes) >= 12 && String(bytes[1:4]) == "RIFF" &&
-        String(bytes[9:12]) == "WAVE" && return _decode_wav(bytes)
+    length(bytes) >= 12 && _bytes4_eq(bytes, 1, 0x52, 0x49, 0x46, 0x46) &&
+        _bytes4_eq(bytes, 9, 0x57, 0x41, 0x56, 0x45) && return _decode_wav(bytes)
     error("unsupported audio format for $path; AudioLoader currently supports WAV")
 end
 
