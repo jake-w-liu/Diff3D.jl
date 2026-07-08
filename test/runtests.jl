@@ -13575,7 +13575,7 @@ end
             @test Diff3D._split_texture_track_property(:map_offset) == (:map, :offset)
             @test_opt_alloc 64 Diff3D._split_texture_track_property(:opacity)
             @test_opt_alloc 64 Diff3D._split_texture_track_property(:map_offset)
-            @test_opt_alloc 2048 mixer_set_time!(mixer, 0.0)
+            @test_opt_alloc 256 mixer_set_time!(mixer, 0.0)
         end
 
         # [CTRL:controls] QuaternionKeyframeTrack (slerp rotation track)

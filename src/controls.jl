@@ -1545,6 +1545,29 @@ function _replace_field_value(x, property::Symbol, value)
     return typeof(x)(vals...)
 end
 
+@inline _material_noop_update(::Any, ::Symbol, ::Any) = false
+@inline function _material_noop_update(mat::MeshBasicMaterial, property::Symbol, value)
+    if property === :opacity
+        value isa Real || return false
+        return isequal(Float64(value), mat.opacity)
+    elseif property === :depth_test
+        value isa Real || return false
+        return isequal(value >= 0.5, mat.depth_test)
+    elseif property === :color
+        value isa Color3 || return false
+        return isequal(Color3(Float64(value.r), Float64(value.g), Float64(value.b)), mat.color)
+    end
+    return false
+end
+
+@inline _material_component_noop_update(::Any, ::Symbol, ::Int, ::Real) = false
+@inline function _material_component_noop_update(
+    mat::MeshBasicMaterial, property::Symbol, component::Int, value::Real,
+)
+    property === :color || return false
+    return isequal(_with_component(mat.color, component, value), mat.color)
+end
+
 _material_animation_property(property::Symbol) =
     property === :material_rotation ? :rotation : property
 
@@ -1552,6 +1575,7 @@ function _write_material_track_value!(target, property::Symbol, value)
     hasproperty(target, :material) || return false
     mat = getproperty(target, :material)
     property = _material_animation_property(property)
+    _material_noop_update(mat, property, value) && return true
     newmat = _replace_field_value(mat, property, value)
     newmat === nothing && return false
     setproperty!(target, :material, newmat)
@@ -1562,6 +1586,7 @@ function _write_material_track_value!(target, property::Symbol, component::Int, 
     hasproperty(target, :material) || return false
     mat = getproperty(target, :material)
     property = _material_animation_property(property)
+    _material_component_noop_update(mat, property, component, value) && return true
     hasproperty(mat, property) || return false
     current = getproperty(mat, property)
     newmat = _replace_field_value(mat, property, _with_component(current, component, value))
