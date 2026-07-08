@@ -14866,9 +14866,12 @@ end
             @test p.angles == [0.0,30.0,60.0,90.0,120.0]
             @test p.candela == [1000.0,800.0,400.0,100.0,0.0]
             @test Diff3D.ies_candela(p, 45.0) == 600.0          # interpolate 800<->400
+            @test Diff3D.ies_candela(p, 30.0) == 800.0          # exact interior sample
+            @test Diff3D.ies_candela(p, NaN) == 0.0             # preserve endpoint clamp
             @test Diff3D.ies_intensity(p, 0.0) == 1.0           # peak
             @test Diff3D.ies_intensity(p, 120.0) == 0.0         # tail
             @test Diff3D.ies_intensity(p, 200.0) == 0.0         # clamp above
+            @test_opt_alloc 0 Diff3D.ies_intensity(p, 45.0)
             ies_label_crlf = "IESNA:LM-63-2002\r\nTILT=NONE\r\n[TEST] ignored\r\n" *
                              "1,1000,1.0,3,1,1,1,0,0,0\r\n" *
                              "1,1,100\r\n0,90,180\r\n0\r\n10,5,0\r\n"

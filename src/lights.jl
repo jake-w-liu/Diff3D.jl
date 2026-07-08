@@ -63,14 +63,14 @@ function ies_candela(profile::IESProfile, angle_deg::Real)
     θ = Float64(angle_deg)
     θ <= a[1] && return c[1]
     θ >= a[n] && return c[n]
-    # locate the bracketing interval (angles are ascending)
-    @inbounds for i in 2:n
-        if θ <= a[i]
-            t = (θ - a[i-1]) / (a[i] - a[i-1])
-            return c[i-1] + (c[i] - c[i-1]) * t
-        end
+    isnan(θ) && return c[n]
+    # Angles are strictly ascending; binary search keeps per-shading IES lookups
+    # logarithmic for dense measured profiles.
+    i = searchsortedfirst(a, θ)
+    @inbounds begin
+        t = (θ - a[i-1]) / (a[i] - a[i-1])
+        return c[i-1] + (c[i] - c[i-1]) * t
     end
-    return c[n]
 end
 
 """
