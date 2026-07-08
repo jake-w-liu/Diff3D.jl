@@ -1437,21 +1437,25 @@ end
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
 @inline _edge_key_second(key::UInt128) = Int(key & UInt128(typemax(UInt64)))
 
-const _EMPTY_EDGE_FACE_RECORD =
-    (Vec3(0.0, 0.0, 0.0), 0, false)
+mutable struct _EdgeFaceRecord
+    normal::Vec3{Float64}
+    count::Int
+    feature::Bool
+end
 
 @inline function _record_edge_face!(
-    edge_faces::Dict{UInt128,Tuple{Vec3{Float64},Int,Bool}},
+    edge_faces::Dict{UInt128,_EdgeFaceRecord},
     a::Int, b::Int, n::Vec3{Float64}, cosT::Float64,
 )
     key = _edge_key(a, b)
-    n1, count, feature = get(edge_faces, key, _EMPTY_EDGE_FACE_RECORD)
-    if count == 0
-        edge_faces[key] = (n, 1, false)
-    elseif count == 1
-        edge_faces[key] = (n1, 2, dot(n1, n) < cosT)
+    record = get(edge_faces, key, nothing)
+    if record === nothing
+        edge_faces[key] = _EdgeFaceRecord(n, 1, false)
+    elseif record.count == 1
+        record.feature = dot(record.normal, n) < cosT
+        record.count = 2
     else
-        edge_faces[key] = (n1, count + 1, feature)
+        record.count += 1
     end
     return nothing
 end
@@ -1548,8 +1552,8 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     canonical_ids = zeros(Int, geo.n_vertices)
     cpos = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     cpos_len = 0
-    # edge (lo,hi) -> (first normal, adjacent face count, sharp-on-second-face)
-    edge_faces = Dict{UInt128, Tuple{Vec3{Float64},Int,Bool}}()
+    # edge (lo,hi) -> first normal, adjacent face count, sharp-on-second-face
+    edge_faces = Dict{UInt128, _EdgeFaceRecord}()
     sizehint!(edge_faces, 3 * geo.n_faces)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
@@ -1566,14 +1570,14 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         _record_edge_face!(edge_faces, c3, c1, n, cosT)
     end
     feature_edges = 0
-    @inbounds for (_, (_, count, feature)) in edge_faces
-        (count == 1 || feature) && (feature_edges += 1)
+    @inbounds for (_, record) in edge_faces
+        (record.count == 1 || record.feature) && (feature_edges += 1)
     end
     positions = Vector{Float64}(undef, 6 * feature_edges)
     vi = 0
     pout = 1
-    @inbounds for (key, (_, count, feature)) in edge_faces
-        (count == 1 || feature) || continue
+    @inbounds for (key, record) in edge_faces
+        (record.count == 1 || record.feature) || continue
         a = cpos[_edge_key_first(key)]
         b = cpos[_edge_key_second(key)]
         positions[pout] = a.x
