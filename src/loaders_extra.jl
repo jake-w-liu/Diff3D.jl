@@ -251,8 +251,13 @@ end
 end
 
 const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
-_is_png_bytes(bytes::AbstractVector{UInt8}) =
-    length(bytes) >= length(_PNG_SIGNATURE) && bytes[1:length(_PNG_SIGNATURE)] == _PNG_SIGNATURE
+function _is_png_bytes(bytes::AbstractVector{UInt8})
+    length(bytes) >= length(_PNG_SIGNATURE) || return false
+    @inbounds for i in 1:length(_PNG_SIGNATURE)
+        bytes[i] == _PNG_SIGNATURE[i] || return false
+    end
+    return true
+end
 
 function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
