@@ -1006,12 +1006,11 @@ function _rgbe_read_line(bytes::Vector{UInt8}, pos::Int)
     while pos <= length(bytes) && bytes[pos] != UInt8('\n')
         pos += 1
     end
-    line_bytes = collect(@view bytes[start:pos-1])
-    if !isempty(line_bytes) && line_bytes[end] == UInt8('\r')
-        pop!(line_bytes)
-    end
+    stop = pos - 1
+    stop >= start && bytes[stop] == UInt8('\r') && (stop -= 1)
     pos <= length(bytes) && bytes[pos] == UInt8('\n') && (pos += 1)
-    return String(line_bytes), pos
+    line = stop >= start ? String(@view bytes[start:stop]) : ""
+    return line, pos
 end
 
 function _rgbe_parse_resolution(line::AbstractString)

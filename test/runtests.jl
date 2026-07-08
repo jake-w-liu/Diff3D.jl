@@ -9944,6 +9944,9 @@ end
         @test flat[1, 2, :] == [0.0, 0.0, 0.0]
         @test flat[2, 1, :] ≈ [1.0, 2.0, 255 / 64]
         @test flat[2, 2, :] ≈ [0.125, 0.125, 0.125]
+        flat_bytes = hdr_bytes(2, 2, flat_pixels)
+        @test Diff3D._decode_rgbe(flat_bytes) == flat
+        @test_opt_alloc 2048 Diff3D._decode_rgbe(flat_bytes)
         @test load_hdr(flat_path) == flat
         tex = RGBELoader(flat_path)
         @test tex isa Texture
