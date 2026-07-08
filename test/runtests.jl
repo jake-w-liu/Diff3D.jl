@@ -4044,7 +4044,12 @@ end
             stream_case = WebGLExportCase("stream_alloc", "Stream Alloc", "drawables",
                                           stream_scene; radius=8.0)
             Diff3D._web_write_case_json(devnull, stream_case)
-            @test_opt_alloc 50000 Diff3D._web_write_case_json(devnull, stream_case)
+            texture_free_registry = Diff3D._web_texture_registry()
+            Diff3D._web_register_material_textures!(texture_free_registry, MeshBasicMaterial())
+            @test isempty(texture_free_registry.textures)
+            @test_opt_alloc 512 Diff3D._web_register_material_textures!(
+                texture_free_registry, MeshBasicMaterial())
+            @test_opt_alloc 12000 Diff3D._web_write_case_json(devnull, stream_case)
 
             texture_n = 128
             texture_data = Array{Float64}(undef, texture_n, texture_n, 4)

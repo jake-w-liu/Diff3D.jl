@@ -1007,31 +1007,6 @@ function _web_material_texture(mat)
     return nothing
 end
 
-const _WEB_MATERIAL_2D_TEXTURE_GETTERS = (
-    _web_material_texture,
-    _web_material_alpha_texture,
-    _web_material_emissive_texture,
-    _web_material_ao_texture,
-    _web_material_light_texture,
-    _web_material_roughness_texture,
-    _web_material_metalness_texture,
-    _web_material_normal_texture,
-    _web_material_matcap_texture,
-    _web_material_gradient_texture,
-    _web_material_clearcoat_texture,
-    _web_material_clearcoat_roughness_texture,
-    _web_material_clearcoat_normal_texture,
-    _web_material_transmission_texture,
-    _web_material_thickness_texture,
-    _web_material_sheen_color_texture,
-    _web_material_sheen_roughness_texture,
-    _web_material_iridescence_texture,
-    _web_material_iridescence_thickness_texture,
-    _web_material_specular_intensity_texture,
-    _web_material_specular_color_texture,
-    _web_material_anisotropy_texture,
-)
-
 struct _WebTextureRegistry
     ids::IdDict{Texture,Int}
     textures::Vector{Texture}
@@ -1055,9 +1030,28 @@ function _web_register_texture!(registry::_WebTextureRegistry, tex)
 end
 
 function _web_register_material_textures!(registry::_WebTextureRegistry, mat)
-    for getter in _WEB_MATERIAL_2D_TEXTURE_GETTERS
-        _web_register_texture!(registry, getter(mat))
-    end
+    _web_register_texture!(registry, _web_material_texture(mat))
+    _web_register_texture!(registry, _web_material_alpha_texture(mat))
+    _web_register_texture!(registry, _web_material_emissive_texture(mat))
+    _web_register_texture!(registry, _web_material_ao_texture(mat))
+    _web_register_texture!(registry, _web_material_light_texture(mat))
+    _web_register_texture!(registry, _web_material_roughness_texture(mat))
+    _web_register_texture!(registry, _web_material_metalness_texture(mat))
+    _web_register_texture!(registry, _web_material_normal_texture(mat))
+    _web_register_texture!(registry, _web_material_matcap_texture(mat))
+    _web_register_texture!(registry, _web_material_gradient_texture(mat))
+    _web_register_texture!(registry, _web_material_clearcoat_texture(mat))
+    _web_register_texture!(registry, _web_material_clearcoat_roughness_texture(mat))
+    _web_register_texture!(registry, _web_material_clearcoat_normal_texture(mat))
+    _web_register_texture!(registry, _web_material_transmission_texture(mat))
+    _web_register_texture!(registry, _web_material_thickness_texture(mat))
+    _web_register_texture!(registry, _web_material_sheen_color_texture(mat))
+    _web_register_texture!(registry, _web_material_sheen_roughness_texture(mat))
+    _web_register_texture!(registry, _web_material_iridescence_texture(mat))
+    _web_register_texture!(registry, _web_material_iridescence_thickness_texture(mat))
+    _web_register_texture!(registry, _web_material_specular_intensity_texture(mat))
+    _web_register_texture!(registry, _web_material_specular_color_texture(mat))
+    _web_register_texture!(registry, _web_material_anisotropy_texture(mat))
     return nothing
 end
 
