@@ -53,7 +53,7 @@ end
 # Build the canonical-Huffman fast-decode table from per-symbol code lengths.
 # Produces the identical canonical code assignment as the previous (lengths,
 # codes) form: within a length, codes increase in symbol-index order.
-function _build_huff(lengths::Vector{Int})
+function _build_huff(lengths::AbstractVector{Int})
     maxbits = isempty(lengths) ? 0 : maximum(lengths)
     if maxbits == 0
         return _Huff(0, Int[], Int[], Int[], Int[])
@@ -80,8 +80,9 @@ function _build_huff(lengths::Vector{Int})
     end
     symbols = Vector{Int}(undef, acc)
     fill_pos = copy(first_index)             # running write cursor per length
-    @inbounds for n in 1:length(lengths)
-        l = lengths[n]
+    n = 0
+    @inbounds for l in lengths
+        n += 1
         if l > 0
             symbols[fill_pos[l] + 1] = n - 1 # 0-based symbol value
             fill_pos[l] += 1
@@ -119,6 +120,7 @@ const _FIXED_LITLEN_HUFF = let
     _build_huff(litlen)
 end
 const _FIXED_DIST_HUFF = _build_huff(fill(5, 30))
+const _DEFLATE_CODELEN_ORDER = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
 
 @inline function _fixed_huffs()
     return _FIXED_LITLEN_HUFF, _FIXED_DIST_HUFF
@@ -128,29 +130,49 @@ function _read_dynamic(br::_BitReader)
     hlit = _getbits(br, 5) + 257
     hdist = _getbits(br, 5) + 1
     hclen = _getbits(br, 4) + 4
-    order = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]
     cl_lengths = zeros(Int, 19)
     for i in 1:hclen
-        cl_lengths[order[i] + 1] = _getbits(br, 3)
+        cl_lengths[_DEFLATE_CODELEN_ORDER[i] + 1] = _getbits(br, 3)
     end
     cl_huff = _build_huff(cl_lengths)
-    all_lengths = Int[]
-    while length(all_lengths) < hlit + hdist
+    target = hlit + hdist
+    all_lengths = Vector{Int}(undef, target)
+    pos = 1
+    while pos <= target
         sym = _decode_sym(br, cl_huff)
         if sym < 16
-            push!(all_lengths, sym)
+            all_lengths[pos] = sym
+            pos += 1
         elseif sym == 16
-            isempty(all_lengths) && error("corrupt DEFLATE dynamic Huffman (repeat code with no previous length)")
-            rep = _getbits(br, 2) + 3; prev = all_lengths[end]
-            append!(all_lengths, fill(prev, rep))
+            pos == 1 && error("corrupt DEFLATE dynamic Huffman (repeat code with no previous length)")
+            rep = _getbits(br, 2) + 3
+            pos + rep - 1 <= target ||
+                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            prev = all_lengths[pos - 1]
+            @inbounds for _ in 1:rep
+                all_lengths[pos] = prev
+                pos += 1
+            end
         elseif sym == 17
-            append!(all_lengths, fill(0, _getbits(br, 3) + 3))
+            rep = _getbits(br, 3) + 3
+            pos + rep - 1 <= target ||
+                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            @inbounds for _ in 1:rep
+                all_lengths[pos] = 0
+                pos += 1
+            end
         else
-            append!(all_lengths, fill(0, _getbits(br, 7) + 11))
+            rep = _getbits(br, 7) + 11
+            pos + rep - 1 <= target ||
+                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            @inbounds for _ in 1:rep
+                all_lengths[pos] = 0
+                pos += 1
+            end
         end
     end
-    lit = _build_huff(all_lengths[1:hlit])
-    dist = _build_huff(all_lengths[hlit+1:hlit+hdist])
+    lit = _build_huff(@view all_lengths[1:hlit])
+    dist = _build_huff(@view all_lengths[hlit+1:hlit+hdist])
     return (lit, dist)
 end
 

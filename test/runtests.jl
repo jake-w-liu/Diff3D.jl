@@ -15217,21 +15217,27 @@ end
 
         # [F:loaders] Fast canonical-Huffman DEFLATE decode
         @testset "fast Huffman inflate byte-identical" begin
-            # A DEFLATE-compressed payload (dynamic Huffman with LZ77 back-references)
-            # that the fast canonical-Huffman decoder must reproduce exactly. Built with
-            # zlib (level 6); decoding routes through _build_huff/_decode_sym.
-            payload = vcat(UInt8.(collect("ABCABCABCABCABCABCABCABCABCABC")),
-                           UInt8.(collect("ABCABCABCABCABCABCABCABCABCABC")),
-                           UInt8.(0:255), UInt8.(0:255))
-            # zlib stream of `payload` (RFC1950 header 0x78 0x9c + DEFLATE + Adler32).
-            # Round-trip through Diff3D's own pure-Julia inflate must equal payload.
-            # Generate the compressed bytes here so the test is self-contained: use the
-            # stored-block form is too weak to exercise Huffman, so we assert on a known
-            # dynamic-Huffman vector captured from zlib level 6.
-            zbytes = UInt8[0x78,0x9c,0x73,0x74,0x72,0x74,0x4c,0x4d,0x4d,0x05,0x42,0x16,0x20,0x36,0x09,0x01]
-            # The exact zlib bytes are environment-dependent; instead assert the inflate
-            # of a hand-built fixed-Huffman stored+match stream. Use a stored block that
-            # the decoder must still parse, then a fixed-Huffman block:
+            # Dynamic-Huffman zlib stream captured from zlib level 6. It routes through
+            # _read_dynamic/_build_huff and must decode byte-identically.
+            payload = Vector{UInt8}(codeunits("Lorem ipsum dolor sit amet, consectetur adipiscing elit. "^100))
+            zbytes = UInt8[
+                0x78,0x9c,0xed,0xcb,0xd1,0x09,0xc0,0x20,0x0c,0x40,0xc1,0x55,0x32,0x40,0xe9,0x24,
+                0x2e,0x21,0x36,0x94,0x80,0x1a,0x31,0x71,0xff,0xee,0x51,0xde,0xfd,0x5f,0xf1,0xad,
+                0x43,0x6c,0xc5,0x19,0xf2,0x78,0xf7,0x2d,0x61,0x29,0x75,0x68,0x5e,0xd2,0x7c,0x86,
+                0xb6,0xd4,0x3c,0x5b,0xea,0x63,0xcb,0xa2,0xd9,0x7c,0x45,0xbb,0xe5,0x2d,0x85,0x48,
+                0x24,0x12,0x89,0x44,0x22,0x91,0x48,0x24,0x12,0x89,0x44,0x22,0x91,0x48,0x24,0x12,
+                0x89,0x7f,0x8f,0x1f,0x9b,0xd6,0x3d,0x11]
+            @test zlib_inflate(zbytes) == payload
+
+            # A dynamic table where a repeat-code run crosses past HLIT+HDIST is
+            # invalid (zlib reports "invalid code lengths set") and must not be
+            # accepted by ignoring the extra generated lengths.
+            invalid_dynamic = UInt8[
+                0x05,0xc0,0x21,0x01,0x00,0x00,0x00,
+                0x00,0xa0,0xfe,0xad,0x11,0x00]
+            @test_throws "repeat length exceeds table" Diff3D.inflate(invalid_dynamic)
+
+            # Stored blocks still round-trip through the non-Huffman path.
             out = Diff3D.inflate(UInt8[0x01,0x03,0x00,0xfc,0xff,0x41,0x42,0x43])  # stored: "ABC"
             @test out == UInt8[0x41,0x42,0x43]
         end
