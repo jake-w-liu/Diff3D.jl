@@ -121,6 +121,7 @@ const _FIXED_LITLEN_HUFF = let
 end
 const _FIXED_DIST_HUFF = _build_huff(fill(5, 30))
 const _DEFLATE_CODELEN_ORDER = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
+const _INFLATE_MIN_SIZEHINT = 1024
 
 @inline function _fixed_huffs()
     return _FIXED_LITLEN_HUFF, _FIXED_DIST_HUFF
@@ -213,11 +214,23 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist,
 end
 
 """Inflate a raw DEFLATE stream (no zlib header) to bytes."""
+@inline function _inflate_sizehint(input_len::Int, limit::Int)
+    limit < 0 && return 0
+    # Bound preallocation by compressed size. `max_output` can be attacker-controlled
+    # through image dimensions; do not reserve an implausibly large buffer before the
+    # stream has proven it can produce that much output.
+    doubled = input_len > typemax(Int) ÷ 2 ? typemax(Int) : 2 * input_len
+    return min(limit, max(_INFLATE_MIN_SIZEHINT, doubled))
+end
+
 function inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
     max_output === nothing || max_output >= 0 ||
         throw(ArgumentError("max_output must be non-negative"))
     limit = max_output === nothing ? -1 : max_output
-    br = _BitReader(data); out = UInt8[]
+    br = _BitReader(data)
+    out = UInt8[]
+    hint = _inflate_sizehint(length(data), limit)
+    hint > 0 && sizehint!(out, hint)
     while true
         bfinal = _getbit(br); btype = _getbits(br, 2)
         if btype == 0

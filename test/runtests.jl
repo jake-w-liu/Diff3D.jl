@@ -7980,6 +7980,10 @@ end
         capped_payload = Diff3D._zlib_store(UInt8[0x01, 0x02, 0x03])
         @test zlib_inflate(capped_payload; max_output=3) == UInt8[0x01, 0x02, 0x03]
         @test_throws Exception zlib_inflate(capped_payload; max_output=2)
+        bounded_payload = deterministic_bytes(65_536)
+        bounded_zlib = Diff3D._zlib_store(bounded_payload)
+        @test zlib_inflate(bounded_zlib; max_output=length(bounded_payload)) == bounded_payload
+        @test_opt_alloc 70000 zlib_inflate(bounded_zlib; max_output=length(bounded_payload))
         @test base64_decode("TWFu") == Vector{UInt8}(codeunits("Man"))
         @test base64_decode("TWE=") == Vector{UInt8}(codeunits("Ma"))
         @test base64_decode("TQ==") == Vector{UInt8}(codeunits("M"))
