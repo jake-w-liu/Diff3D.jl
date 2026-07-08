@@ -3581,13 +3581,19 @@ function _web_write_rewritten(io::IO, text::AbstractString, rewrites)
         if first(best_range) > i
             write(io, SubString(text, i, prevind(text, first(best_range))))
         end
-        write(io, best_replacement)
+        if best_replacement isa Function
+            best_replacement(io)
+        else
+            write(io, best_replacement)
+        end
         i = nextind(text, last(best_range))
     end
     return nothing
 end
 
-function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4))
+function _web_write_webgl_html(io::IO, data_json::String, title::String;
+                               light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4),
+                               extra_rewrites=())
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
     max_spot = max(1, Int(light_caps.spot))
@@ -4510,8 +4516,14 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
         "const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;" =>
             "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;",
     )
-    io = IOBuffer(sizehint=sizeof(html) + 1024)
-    _web_write_rewritten(io, html, rewrites)
+    all_rewrites = isempty(extra_rewrites) ? rewrites : (rewrites..., extra_rewrites...)
+    _web_write_rewritten(io, html, all_rewrites)
+    return nothing
+end
+
+function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4))
+    io = IOBuffer(sizehint=170_000 + sizeof(data_json))
+    _web_write_webgl_html(io, data_json, title; light_caps)
     return String(take!(io))
 end
 
@@ -4528,21 +4540,18 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
     light_caps = _web_light_caps(cases)
     data_marker = "__DIFF3D_DATA_JSON__"
     data_statement = "  const DATA = $data_marker;"
-    html = _webgl_html(data_marker, title; light_caps)
-    marker = findfirst(data_statement, html)
-    marker === nothing && error("WebGL HTML data insertion marker missing")
-    open(path, "w") do io
-        marker_start = first(marker)
-        marker_stop = last(marker)
-        if marker_start > firstindex(html)
-            write(io, html[firstindex(html):prevind(html, marker_start)])
-        end
+    data_inserted = Ref(false)
+    data_rewrite = data_statement => function (io::IO)
+        data_inserted[] = true
         write(io, "  const DATA = ")
         _web_write_data_json(io, cases)
         write(io, ';')
-        if marker_stop < lastindex(html)
-            write(io, html[nextind(html, marker_stop):lastindex(html)])
-        end
+        return nothing
     end
+    open(path, "w") do io
+        _web_write_webgl_html(io, data_marker, title; light_caps,
+                              extra_rewrites=(data_rewrite,))
+    end
+    data_inserted[] || error("WebGL HTML data insertion marker missing")
     return path
 end

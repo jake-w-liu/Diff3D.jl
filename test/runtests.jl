@@ -4014,7 +4014,7 @@ end
                                              save_alloc_scene; radius=4.0)
             save_alloc_file = tempname() * ".html"
             save_webgl_html(save_alloc_file, [save_alloc_case]; title="Save Alloc")
-            @test_opt_alloc 800000 save_webgl_html(save_alloc_file, [save_alloc_case];
+            @test_opt_alloc 350000 save_webgl_html(save_alloc_file, [save_alloc_case];
                                                     title="Save Alloc")
             rm(save_alloc_file; force=true)
 
