@@ -776,6 +776,8 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
                 world, primitive_flags)
+        elseif isempty(get_children(child))
+            continue
         else
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,

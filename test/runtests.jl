@@ -12305,7 +12305,15 @@ end
         render_pooled!(colored_alloc_rt, colored_alloc_scene, colored_alloc_cam,
                        colored_alloc_cache)
         @test maximum(abs.(colored_alloc_expected.color .- colored_alloc_rt.color)) < 1e-12
-        @test_opt_alloc 2048 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+        Diff3D._collect_render_drawables_worlds_into!(
+            colored_alloc_cache.meshes, colored_alloc_cache.mesh_worlds,
+            colored_alloc_cache.instanced, colored_alloc_cache.instanced_worlds,
+            colored_alloc_scene, colored_alloc_cache.primitive_flags)
+        @test_opt_alloc 64 Diff3D._collect_render_drawables_worlds_into!(
+            colored_alloc_cache.meshes, colored_alloc_cache.mesh_worlds,
+            colored_alloc_cache.instanced, colored_alloc_cache.instanced_worlds,
+            colored_alloc_scene, colored_alloc_cache.primitive_flags)
+        @test_opt_alloc 1024 render_pooled!(colored_alloc_rt, colored_alloc_scene,
                                             colored_alloc_cam, colored_alloc_cache)
         colored_tiled_cache = [RenderCache() for _ in 1:Threads.nthreads()]
         colored_tiled_rt = RenderTarget(48,48)
@@ -12313,7 +12321,7 @@ end
                       tiles=1, cache=colored_tiled_cache)
         @test maximum(abs.(colored_alloc_expected.color .- colored_tiled_rt.color)) < 1e-12
         if Threads.nthreads() == 1
-            @test_opt_alloc 2048 render_tiled!(colored_tiled_rt, colored_alloc_scene,
+            @test_opt_alloc 1024 render_tiled!(colored_tiled_rt, colored_alloc_scene,
                                                colored_alloc_cam; tiles=1,
                                                cache=colored_tiled_cache)
         end
@@ -12325,7 +12333,7 @@ end
         render_tiled!(colored_tiled_rt, colored_alloc_scene, colored_alloc_cam;
                       tiles=1, cache=colored_tiled_cache)
         @test maximum(abs.(colored_alloc_expected.color .- colored_tiled_rt.color)) < 1e-12
-        @test_opt_alloc 2048 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+        @test_opt_alloc 1024 render_pooled!(colored_alloc_rt, colored_alloc_scene,
                                             colored_alloc_cam, colored_alloc_cache)
 
         colored_cached_rt = RenderTarget(48,48)
@@ -12333,7 +12341,7 @@ end
         render!(colored_cached_rt, colored_alloc_scene, colored_alloc_cam;
                 cache=colored_cached_cache)
         @test maximum(abs.(colored_alloc_expected.color .- colored_cached_rt.color)) < 1e-12
-        @test_opt_alloc 2048 render!(colored_cached_rt, colored_alloc_scene,
+        @test_opt_alloc 1024 render!(colored_cached_rt, colored_alloc_scene,
                                      colored_alloc_cam; cache=colored_cached_cache)
     end
 
