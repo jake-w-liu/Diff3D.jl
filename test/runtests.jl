@@ -18459,7 +18459,13 @@ end
         strict_b64_data = UInt8.(mod.(0:65_535, 251))
         strict_b64 = base64encode(strict_b64_data)
         @test Diff3D._gltf_base64_decode_strict(strict_b64) == strict_b64_data
-        @test_opt_alloc 90_000 Diff3D._gltf_base64_decode_strict(strict_b64)
+        @test Diff3D._gltf_base64_decode_strict(" T W E= \n") == UInt8[0x4d, 0x61]
+        @test_throws "glTF data URI base64 length is not a multiple of 4" Diff3D._gltf_base64_decode_strict("A")
+        @test_throws "glTF data URI base64 contains invalid character" Diff3D._gltf_base64_decode_strict("A" * string(Char(0x2603)))
+        @test_throws "glTF data URI base64 has data after padding" Diff3D._gltf_base64_decode_strict("AA==AA==")
+        @test_throws "glTF data URI base64 has non-zero padding bits" Diff3D._gltf_base64_decode_strict("AB==")
+        @test_throws "glTF data URI base64 has invalid padding" Diff3D._gltf_base64_decode_strict("A===")
+        @test_opt_alloc 70_000 Diff3D._gltf_base64_decode_strict(strict_b64)
 
         # CSG with an empty operand resolves set-theoretically.
         let box = BoxGeometry(width = 1.0, height = 1.0, depth = 1.0),

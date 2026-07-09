@@ -7989,52 +7989,81 @@ function base64_decode(s::AbstractString)
 end
 
 function _gltf_base64_decode_strict(s::AbstractString)
-    out = UInt8[]
     nchars = 0
+    pad_run = 0
     for ch in s
         ch in (' ', '\n', '\r', '\t') && continue
         nchars += 1
+        pad_run = ch == '=' ? pad_run + 1 : 0
     end
-    sizehint!(out, (nchars ÷ 4) * 3)
-    quartet = Int[]
-    sizehint!(quartet, 4)
+    out_len = (nchars ÷ 4) * 3
+    if nchars % 4 == 0
+        out_len -= min(pad_run, 2)
+    end
+    out = Vector{UInt8}(undef, max(out_len, 0))
+    oi = 1
+    q1 = 0
+    q2 = 0
+    q3 = 0
+    q4 = 0
+    qlen = 0
     done = false
     for ch in s
         ch in (' ', '\n', '\r', '\t') && continue
         done && error("glTF data URI base64 has data after padding")
+        v = 0
         if ch == '='
-            push!(quartet, -1)
+            v = -1
         else
             Int(ch) <= 255 || error("glTF data URI base64 contains invalid character")
             v = _B64_LUT[Int(ch) + 1]
             v >= 0 || error("glTF data URI base64 contains invalid character")
-            any(<(0), quartet) && error("glTF data URI base64 has data after padding")
-            push!(quartet, v)
+            (q1 < 0 || q2 < 0 || q3 < 0 || q4 < 0) &&
+                error("glTF data URI base64 has data after padding")
         end
-        if length(quartet) == 4
-            quartet[1] >= 0 && quartet[2] >= 0 ||
+        qlen += 1
+        if qlen == 1
+            q1 = v
+        elseif qlen == 2
+            q2 = v
+        elseif qlen == 3
+            q3 = v
+        elseif qlen == 4
+            q4 = v
+            q1 >= 0 && q2 >= 0 ||
                 error("glTF data URI base64 has invalid padding")
-            if quartet[3] < 0
-                quartet[4] < 0 || error("glTF data URI base64 has invalid padding")
-                (quartet[2] & 0x0f) == 0 ||
+            if q3 < 0
+                q4 < 0 || error("glTF data URI base64 has invalid padding")
+                (q2 & 0x0f) == 0 ||
                     error("glTF data URI base64 has non-zero padding bits")
-                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
+                out[oi] = UInt8((q1 << 2) | (q2 >> 4))
+                oi += 1
                 done = true
-            elseif quartet[4] < 0
-                (quartet[3] & 0x03) == 0 ||
+            elseif q4 < 0
+                (q3 & 0x03) == 0 ||
                     error("glTF data URI base64 has non-zero padding bits")
-                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
-                push!(out, UInt8(((quartet[2] & 0x0f) << 4) | (quartet[3] >> 2)))
+                out[oi] = UInt8((q1 << 2) | (q2 >> 4))
+                oi += 1
+                out[oi] = UInt8(((q2 & 0x0f) << 4) | (q3 >> 2))
+                oi += 1
                 done = true
             else
-                push!(out, UInt8((quartet[1] << 2) | (quartet[2] >> 4)))
-                push!(out, UInt8(((quartet[2] & 0x0f) << 4) | (quartet[3] >> 2)))
-                push!(out, UInt8(((quartet[3] & 0x03) << 6) | quartet[4]))
+                out[oi] = UInt8((q1 << 2) | (q2 >> 4))
+                oi += 1
+                out[oi] = UInt8(((q2 & 0x0f) << 4) | (q3 >> 2))
+                oi += 1
+                out[oi] = UInt8(((q3 & 0x03) << 6) | q4)
+                oi += 1
             end
-            empty!(quartet)
+            q1 = 0
+            q2 = 0
+            q3 = 0
+            q4 = 0
+            qlen = 0
         end
     end
-    isempty(quartet) || error("glTF data URI base64 length is not a multiple of 4")
+    qlen == 0 || error("glTF data URI base64 length is not a multiple of 4")
+    oi == length(out) + 1 || resize!(out, oi - 1)
     return out
 end
 
