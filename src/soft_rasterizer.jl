@@ -91,7 +91,13 @@ mutable struct SoftRenderSceneWorkspace
     colors::Vector{Color3{Float64}}
     face_colors::Vector{Color3{Float64}}
     soft::SoftRenderWorkspace{Float64}
+    meshes::Vector{Mesh}
+    lights::Vector{SceneLight}
 end
+
+SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft) =
+    SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft,
+                             Mesh[], SceneLight[])
 
 SoftRenderSceneWorkspace() =
     SoftRenderSceneWorkspace(Vec3{Float64}[], NTuple{3,Int}[],
@@ -696,8 +702,11 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     view = view_matrix(camera)
     vp = proj * view
 
-    meshes = collect_meshes(scene)
-    lights = collect_lights(scene)
+    scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
+    meshes = scene_workspace === nothing ? collect_meshes(scene) :
+        _collect_meshes_into!(scene_workspace.meshes, scene)
+    lights = scene_workspace === nothing ? collect_lights(scene) :
+        _collect_lights_into!(scene_workspace.lights, scene)
 
     total_vertices = 0
     total_faces = 0
@@ -709,7 +718,6 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
         max_mesh_faces = max(max_mesh_faces, geo.n_faces)
     end
 
-    scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
     soft_workspace = scene_workspace === nothing ? workspace : scene_workspace.soft
     all_verts = scene_workspace === nothing ? Vector{Vec3{Float64}}(undef, total_vertices) :
         _soft_resize_buffer!(scene_workspace.vertices, total_vertices)

@@ -2807,8 +2807,10 @@ end
         @test soft_scene_ws_img == soft_scene_img
         @test length(soft_scene_ws.vertices) == sum(Diff3D._mesh_geometry(m).n_vertices
                                                     for m in collect_meshes(soft_scene))
-        @test_opt_alloc 4096 soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
-                                               workspace=soft_scene_ws)
+        @test length(soft_scene_ws.meshes) == length(collect_meshes(soft_scene))
+        @test length(soft_scene_ws.lights) == length(collect_lights(soft_scene))
+        @test_opt_alloc 256 soft_render_scene(soft_scene, soft_scene_cam, 12, 12;
+                                              workspace=soft_scene_ws)
         many_basic_soft_scene = Scene(background=Color3(0.0, 0.0, 0.0))
         for i in 1:100
             mesh = Mesh(PlaneGeometry(), MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)))
@@ -2822,9 +2824,11 @@ end
         many_basic_soft_ws = SoftRenderSceneWorkspace()
         soft_render_scene(many_basic_soft_scene, many_basic_soft_cam, 1, 1;
                           workspace=many_basic_soft_ws)
-        @test_opt_alloc 4096 soft_render_scene(many_basic_soft_scene,
-                                               many_basic_soft_cam, 1, 1;
-                                               workspace=many_basic_soft_ws)
+        @test length(many_basic_soft_ws.meshes) == 100
+        @test isempty(many_basic_soft_ws.lights)
+        @test_opt_alloc 256 soft_render_scene(many_basic_soft_scene,
+                                              many_basic_soft_cam, 1, 1;
+                                              workspace=many_basic_soft_ws)
     end
 
     @testset "Loss functions" begin
