@@ -4188,6 +4188,41 @@ end
         Diff3D._web_drawable_json(drawable_export_alloc, Mat4())
         @test_opt_alloc 260000 Diff3D._web_drawable_json(drawable_export_alloc,
                                                          Mat4())
+        morph_position_n = 6000
+        morph_position_pos = Vector{Float64}(undef, 3 * morph_position_n)
+        morph_position_delta = similar(morph_position_pos)
+        for i in 1:morph_position_n
+            j = 3i - 2
+            morph_position_pos[j] = sin(i)
+            morph_position_pos[j + 1] = cos(i)
+            morph_position_pos[j + 2] = 0.0
+            morph_position_delta[j] = 0.0
+            morph_position_delta[j + 1] = 0.0
+            morph_position_delta[j + 2] = 1.0
+        end
+        morph_position_geo = BufferGeometry(morph_position_pos, Float64[], Float64[],
+                                            collect(1:morph_position_n),
+                                            morph_position_n, morph_position_n ÷ 3)
+        set_attribute!(morph_position_geo, :morphPosition0,
+                       morph_position_delta, 3)
+        morph_position_mesh = Mesh(morph_position_geo, MeshBasicMaterial();
+                                   morph_target_influences=[0.5])
+        morph_positions = Diff3D._web_positions(morph_position_mesh,
+                                                morph_position_geo)
+        morph_flat_positions = Float64[]
+        sizehint!(morph_flat_positions, 3 * length(morph_positions))
+        for v in morph_positions
+            push!(morph_flat_positions, v.x, v.y, v.z)
+        end
+        morph_vec_io = IOBuffer()
+        morph_flat_io = IOBuffer()
+        Diff3D._web_write_geo_object(morph_vec_io, morph_position_geo,
+                                     morph_positions)
+        Diff3D._web_write_geo_object(morph_flat_io, morph_position_geo,
+                                     morph_flat_positions)
+        @test String(take!(morph_vec_io)) == String(take!(morph_flat_io))
+        @test_opt_alloc 180000 Diff3D._web_positions(morph_position_mesh,
+                                                     morph_position_geo)
         transform_alloc_scene = Scene(background=Color3(0.0, 0.0, 0.0))
         transform_alloc_parent = transform_alloc_scene
         for i in 1:80

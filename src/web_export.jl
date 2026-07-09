@@ -1588,22 +1588,11 @@ function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
     return String(take!(io))
 end
 
-function _web_flatten_vec3(vs::AbstractVector{<:Vec3})
-    out = Vector{Float64}(undef, 3 * length(vs))
-    for (i, v) in enumerate(vs)
-        j = 3i - 2
-        out[j] = v.x
-        out[j + 1] = v.y
-        out[j + 2] = v.z
-    end
-    return out
-end
-
 function _web_positions(obj, geo::BufferGeometry)
     obj isa SkinnedMesh && return geo.positions
     morphed_positions = _object_morph_positions(obj, geo)
     if morphed_positions !== nothing
-        return _web_flatten_vec3(morphed_positions)
+        return morphed_positions
     end
     return geo.positions
 end
@@ -1910,10 +1899,25 @@ function _web_geo_object_sizehint(geo::BufferGeometry, position_float_count::Int
     return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
 end
 
-function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real};
+_web_position_component_count(positions::AbstractVector{<:Real}) = length(positions)
+_web_position_component_count(positions::AbstractVector{<:Vec3}) = 3 * length(positions)
+
+function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector;
                                   use_vertex_colors::Bool=true)
-    return _web_geo_object_sizehint(geo, length(positions);
+    return _web_geo_object_sizehint(geo, _web_position_component_count(positions);
                                     use_vertex_colors=use_vertex_colors)
+end
+
+function _web_write_positions_json(io::IO, positions::AbstractVector{<:Real},
+                                   num_buf::Vector{UInt8})
+    _js_write_array(io, positions, num_buf)
+    return nothing
+end
+
+function _web_write_positions_json(io::IO, positions::AbstractVector{<:Vec3},
+                                   num_buf::Vector{UInt8})
+    _js_write_vec3_components_array(io, positions, num_buf)
+    return nothing
 end
 
 function _web_write_uv_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
@@ -1937,11 +1941,11 @@ function _web_write_uv2_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8}
 end
 
 function _web_write_geo_object(io::IO, geo::BufferGeometry,
-                               positions::AbstractVector{<:Real}=geo.positions;
+                               positions::AbstractVector=geo.positions;
                                use_vertex_colors::Bool=true)
     num_buf = _web_num_buffer()
     write(io, "\"positions\":")
-    _js_write_array(io, positions, num_buf)
+    _web_write_positions_json(io, positions, num_buf)
     write(io, ",\"normals\":")
     if length(geo.normals) == length(geo.positions)
         _js_write_array(io, geo.normals, num_buf)
@@ -1971,7 +1975,7 @@ function _web_write_geo_object(io::IO, geo::BufferGeometry,
     return nothing
 end
 
-function _web_geo_object(geo::BufferGeometry, positions::AbstractVector{<:Real}=geo.positions;
+function _web_geo_object(geo::BufferGeometry, positions::AbstractVector=geo.positions;
                          use_vertex_colors::Bool=true)
     io = IOBuffer(sizehint=_web_geo_object_sizehint(geo, positions;
                                                     use_vertex_colors=use_vertex_colors))
@@ -2204,8 +2208,8 @@ function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
 end
 
 function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
-                                     positions::AbstractVector{<:Real})
-    return _web_drawable_json_sizehint(obj, geo, length(positions))
+                                     positions::AbstractVector)
+    return _web_drawable_json_sizehint(obj, geo, _web_position_component_count(positions))
 end
 
 function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt8};
