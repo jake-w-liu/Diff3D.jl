@@ -541,11 +541,16 @@ end
 @inline _inflate_limit_for_exact(expected::Int) =
     expected == typemax(Int) ? expected : expected + 1
 
-function _png_inflate_exact_scanlines(idat::Vector{UInt8}, expected::Int)
+function _png_inflate_exact_scanlines(idat::AbstractVector{UInt8}, expected::Int)
     raw = zlib_inflate(idat; max_output=_inflate_limit_for_exact(expected))
     length(raw) < expected && error("PNG image data is truncated")
     length(raw) > expected && error("PNG image data has trailing bytes")
     return raw
+end
+
+@inline function _png_idat_payload(bytes::AbstractVector{UInt8}, idat::Vector{UInt8},
+                                   idat_start::Int, idat_len::Int)
+    return idat_start == 0 ? idat : @view bytes[idat_start:idat_start + idat_len - 1]
 end
 
 """
@@ -559,6 +564,8 @@ function _decode_png(bytes::AbstractVector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
     idat = UInt8[]
+    idat_start = 0
+    idat_len = 0
     palette = UInt8[]
     trns = UInt8[]
     seen_ihdr = false
@@ -599,7 +606,18 @@ function _decode_png(bytes::AbstractVector{UInt8})
             !idat_closed || error("PNG IDAT chunks must be consecutive")
             seen_idat = true
             if len > 0
-                append!(idat, @view bytes[pos:pos+len-1])
+                if idat_start == 0 && isempty(idat)
+                    idat_start = pos
+                    idat_len = len
+                else
+                    if idat_start != 0
+                        sizehint!(idat, idat_len + len)
+                        append!(idat, @view bytes[idat_start:idat_start + idat_len - 1])
+                        idat_start = 0
+                        idat_len = 0
+                    end
+                    append!(idat, @view bytes[pos:pos+len-1])
+                end
             end
         elseif is_plte
             !seen_idat || error("PNG PLTE chunk must appear before IDAT")
@@ -629,7 +647,8 @@ function _decode_png(bytes::AbstractVector{UInt8})
         palette_bitdepth = Int(bitdepth)
         channels = isempty(trns) ? 3 : 4
         expected = _png_expected_raw_size(W, H, palette_bitdepth, interlace)
-        raw = _png_inflate_exact_scanlines(idat, expected)
+        idat_payload = _png_idat_payload(bytes, idat, idat_start, idat_len)
+        raw = _png_inflate_exact_scanlines(idat_payload, expected)
         img = Array{Float64}(undef, H, W, channels)
         return interlace == 0 ?
                _png_decode_palette_noninterlaced!(img, raw, W, H, palette_bitdepth,
@@ -644,7 +663,8 @@ function _decode_png(bytes::AbstractVector{UInt8})
     bps = Int(bitdepth) ÷ 8                     # bytes per sample
     bpp = channels * bps                        # bytes per pixel (filter window)
     expected = _png_expected_raw_size(W, H, Int(bitdepth) * channels, interlace)
-    raw = _png_inflate_exact_scanlines(idat, expected)
+    idat_payload = _png_idat_payload(bytes, idat, idat_start, idat_len)
+    raw = _png_inflate_exact_scanlines(idat_payload, expected)
     img = Array{Float64}(undef, H, W, channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
     return interlace == 0 ?

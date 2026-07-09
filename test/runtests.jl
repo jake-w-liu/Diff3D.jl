@@ -82,6 +82,38 @@ const TEST_ADAM7_PASSES = (
 test_be32(x::Integer) =
     UInt8[(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
 
+test_rd_be32(bytes::AbstractVector{UInt8}, i::Int) =
+    (Int(bytes[i]) << 24) | (Int(bytes[i + 1]) << 16) |
+    (Int(bytes[i + 2]) << 8) | Int(bytes[i + 3])
+
+function test_split_first_idat_png(bytes::Vector{UInt8})
+    out = IOBuffer()
+    write(out, @view bytes[1:8])
+    pos = 9
+    split = false
+    while pos <= length(bytes)
+        chunk_start = pos
+        len = test_rd_be32(bytes, pos)
+        pos += 4
+        ctype = String(@view bytes[pos:pos + 3])
+        pos += 4
+        data_start = pos
+        data_stop = pos + len - 1
+        crc_stop = data_stop + 4
+        if ctype == "IDAT" && !split && len > 1
+            mid = len ÷ 2
+            Diff3D._png_chunk(out, "IDAT", collect(@view bytes[data_start:data_start + mid - 1]))
+            Diff3D._png_chunk(out, "IDAT", collect(@view bytes[data_start + mid:data_stop]))
+            split = true
+        else
+            write(out, @view bytes[chunk_start:crc_stop])
+        end
+        pos = crc_stop + 1
+    end
+    split || error("test PNG had no splittable IDAT chunk")
+    return take!(out)
+end
+
 test_pass_size(n::Int, start::Int, step::Int) =
     n <= start ? 0 : ((n - start + step - 1) ÷ step)
 
@@ -8070,8 +8102,10 @@ end
             save_png(png_alloc_file, png_alloc_img)
             png_alloc_bytes = read(png_alloc_file)
             @test maximum(abs.(Diff3D._decode_png(png_alloc_bytes) .- png_alloc_img)) <= 1/255 + 1e-9
+            split_idat_bytes = test_split_first_idat_png(png_alloc_bytes)
+            @test maximum(abs.(Diff3D._decode_png(split_idat_bytes) .- png_alloc_img)) <= 1/255 + 1e-9
             @test_opt_alloc 2048 save_png(png_alloc_file, png_alloc_img)
-            @test_opt_alloc 590000 Diff3D._decode_png(png_alloc_bytes)
+            @test_opt_alloc 500000 Diff3D._decode_png(png_alloc_bytes)
         finally
             rm(png_alloc_file; force=true)
         end
