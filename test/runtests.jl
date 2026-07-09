@@ -10576,7 +10576,7 @@ end
         end
         write(stress_mtl, String(take!(stress_io)))
         @test length(load_mtl(stress_mtl)) == 512
-        @test_opt_alloc 1_800_000 load_mtl(stress_mtl)
+        @test_opt_alloc 1_550_000 load_mtl(stress_mtl)
         rm(dir; recursive=true)
     end
 

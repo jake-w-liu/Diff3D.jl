@@ -2140,14 +2140,20 @@ end
     return token_state
 end
 
-function _mtl_parse_color_tokens(parts, state, label::String)
+function _mtl_parse_color_tokens(parts, state, label::String,
+                                 red_label::String, green_label::String,
+                                 blue_label::String)
     r_state = _mtl_required_token(parts, state, 3, label)
     g_state = _mtl_required_token(parts, r_state[2], 3, label)
     b_state = _mtl_required_token(parts, g_state[2], 3, label)
-    return Color3(_mtl_parse_float(r_state[1], "$label red"),
-                  _mtl_parse_float(g_state[1], "$label green"),
-                  _mtl_parse_float(b_state[1], "$label blue"))
+    return Color3(_mtl_parse_float(r_state[1], red_label),
+                  _mtl_parse_float(g_state[1], green_label),
+                  _mtl_parse_float(b_state[1], blue_label))
 end
+
+_mtl_parse_color_tokens(parts, state, label::String) =
+    _mtl_parse_color_tokens(parts, state, label, string(label, " red"),
+                            string(label, " green"), string(label, " blue"))
 
 function _mtl_parse_scalar_token(parts, state, label::String)
     value_state = _mtl_required_token(parts, state, 1, label)
@@ -2186,9 +2192,15 @@ function load_mtl(path::String)
             name = String(name_state[1])
             kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
             ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0; diffuse_map = nothing
-        elseif tag == "Kd"; kd = _mtl_parse_color_tokens(parts, tag_state[2], "Kd")
-        elseif tag == "Ks"; ks = _mtl_parse_color_tokens(parts, tag_state[2], "Ks")
-        elseif tag == "Ke"; ke = _mtl_parse_color_tokens(parts, tag_state[2], "Ke")
+        elseif tag == "Kd"
+            kd = _mtl_parse_color_tokens(parts, tag_state[2],
+                                         "Kd", "Kd red", "Kd green", "Kd blue")
+        elseif tag == "Ks"
+            ks = _mtl_parse_color_tokens(parts, tag_state[2],
+                                         "Ks", "Ks red", "Ks green", "Ks blue")
+        elseif tag == "Ke"
+            ke = _mtl_parse_color_tokens(parts, tag_state[2],
+                                         "Ke", "Ke red", "Ke green", "Ke blue")
         elseif tag == "Ns"
             ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
         elseif tag == "d"
