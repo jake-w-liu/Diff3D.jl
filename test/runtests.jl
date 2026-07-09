@@ -6020,7 +6020,7 @@ end
         println(stress_io, "endsolid stress")
         write(f, String(take!(stress_io)))
         @test load_stl(f).n_faces == 256
-        @test_opt_alloc 600000 load_stl(f)
+        @test_opt_alloc 250000 load_stl(f)
         rm(f)
     end
 

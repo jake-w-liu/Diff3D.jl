@@ -194,10 +194,31 @@ function _stl_parse_ascii_float(tok, context::String)
     return value
 end
 
-@inline function _stl_required_token(parts, state, message::String)
-    token_state = iterate(parts, state)
-    token_state === nothing && error(message)
-    return token_state
+@inline function _stl_next_token_bounds(line::AbstractString, state::Int)
+    i = state
+    last_i = lastindex(line)
+    while i <= last_i && isspace(line[i])
+        i = nextind(line, i)
+    end
+    i <= last_i || return nothing
+    first_i = i
+    while i <= last_i && !isspace(line[i])
+        i = nextind(line, i)
+    end
+    return (first_i, prevind(line, i), i)
+end
+
+@inline function _stl_required_token_bounds(line::AbstractString, state::Int,
+                                            message::String)
+    token = _stl_next_token_bounds(line, state)
+    token === nothing && error(message)
+    return token
+end
+
+@inline function _stl_parse_ascii_float_range(line::AbstractString,
+                                              first_i::Int, last_i::Int,
+                                              context::String)
+    return _stl_parse_ascii_float(SubString(line, first_i, last_i), context)
 end
 
 function _load_stl_ascii(path::String)
@@ -207,40 +228,41 @@ function _load_stl_ascii(path::String)
         line = strip(raw)
         if startswith(line, "facet normal")
             !in_facet || error("ASCII STL nested facet is invalid")
-            parts = eachsplit(line)
-            first_state = iterate(parts)
-            first_state === nothing && error("ASCII STL facet normal requires 3 components")
-            second_state = _stl_required_token(parts, first_state[2],
-                                               "ASCII STL facet normal requires 3 components")
-            nx_state = _stl_required_token(parts, second_state[2],
-                                           "ASCII STL facet normal requires 3 components")
-            ny_state = _stl_required_token(parts, nx_state[2],
-                                           "ASCII STL facet normal requires 3 components")
-            nz_state = _stl_required_token(parts, ny_state[2],
-                                           "ASCII STL facet normal requires 3 components")
+            first_state = _stl_required_token_bounds(
+                line, firstindex(line), "ASCII STL facet normal requires 3 components")
+            second_state = _stl_required_token_bounds(
+                line, first_state[3], "ASCII STL facet normal requires 3 components")
+            nx_state = _stl_required_token_bounds(
+                line, second_state[3], "ASCII STL facet normal requires 3 components")
+            ny_state = _stl_required_token_bounds(
+                line, nx_state[3], "ASCII STL facet normal requires 3 components")
+            nz_state = _stl_required_token_bounds(
+                line, ny_state[3], "ASCII STL facet normal requires 3 components")
             cur_n = (
-                _stl_parse_ascii_float(nx_state[1], "facet normal x"),
-                _stl_parse_ascii_float(ny_state[1], "facet normal y"),
-                _stl_parse_ascii_float(nz_state[1], "facet normal z"),
+                _stl_parse_ascii_float_range(line, nx_state[1], nx_state[2],
+                                             "facet normal x"),
+                _stl_parse_ascii_float_range(line, ny_state[1], ny_state[2],
+                                             "facet normal y"),
+                _stl_parse_ascii_float_range(line, nz_state[1], nz_state[2],
+                                             "facet normal z"),
             )
             in_facet = true
             vertices_in_facet = 0
         elseif startswith(line, "vertex")
             in_facet || error("ASCII STL vertex appears outside a facet")
-            parts = eachsplit(line)
-            first_state = iterate(parts)
-            first_state === nothing && error("ASCII STL vertex requires 3 coordinates")
-            x_state = _stl_required_token(parts, first_state[2],
-                                          "ASCII STL vertex requires 3 coordinates")
-            y_state = _stl_required_token(parts, x_state[2],
-                                          "ASCII STL vertex requires 3 coordinates")
-            z_state = _stl_required_token(parts, y_state[2],
-                                          "ASCII STL vertex requires 3 coordinates")
+            first_state = _stl_required_token_bounds(
+                line, firstindex(line), "ASCII STL vertex requires 3 coordinates")
+            x_state = _stl_required_token_bounds(
+                line, first_state[3], "ASCII STL vertex requires 3 coordinates")
+            y_state = _stl_required_token_bounds(
+                line, x_state[3], "ASCII STL vertex requires 3 coordinates")
+            z_state = _stl_required_token_bounds(
+                line, y_state[3], "ASCII STL vertex requires 3 coordinates")
             vertices_in_facet < 3 || error("ASCII STL facet has more than 3 vertices")
             push!(positions,
-                  _stl_parse_ascii_float(x_state[1], "vertex x"),
-                  _stl_parse_ascii_float(y_state[1], "vertex y"),
-                  _stl_parse_ascii_float(z_state[1], "vertex z"))
+                  _stl_parse_ascii_float_range(line, x_state[1], x_state[2], "vertex x"),
+                  _stl_parse_ascii_float_range(line, y_state[1], y_state[2], "vertex y"),
+                  _stl_parse_ascii_float_range(line, z_state[1], z_state[2], "vertex z"))
             push!(normals, cur_n[1], cur_n[2], cur_n[3])
             vi += 1; push!(indices, vi)
             vertices_in_facet += 1
