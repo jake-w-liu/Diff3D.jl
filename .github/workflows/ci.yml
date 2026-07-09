@@ -13,6 +13,7 @@ jobs:
   package-tests:
     name: Package tests
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -21,25 +22,7 @@ jobs:
       - name: Instantiate package environment
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run package tests
-        run: |
-          set -euo pipefail
-          julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()' &
-          test_pid=$!
-          (
-            while kill -0 "$test_pid" 2>/dev/null; do
-              sleep 60
-              kill -0 "$test_pid" 2>/dev/null || break
-              printf 'DIFF3D_TEST_HEARTBEAT %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            done
-          ) &
-          heartbeat_pid=$!
-          set +e
-          wait "$test_pid"
-          status=$?
-          set -e
-          kill "$heartbeat_pid" 2>/dev/null || true
-          wait "$heartbeat_pid" 2>/dev/null || true
-          exit "$status"
+        run: julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()'
 
   examples-browser:
     name: Registered examples browser smoke
