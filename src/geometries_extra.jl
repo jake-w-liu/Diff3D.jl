@@ -1479,6 +1479,10 @@ end
     return max(16, nextpow(2, max_edges + max(16, max_edges >>> 2)))
 end
 
+@inline function _edge_record_hint(geo::BufferGeometry, max_edges::Int)
+    return min(max_edges, max(16, geo.n_vertices + geo.n_faces))
+end
+
 @inline function _record_wireframe_edge!(
     seen::Vector{UInt128}, ordered_edges::Vector{UInt128}, a::Int, b::Int,
 )
@@ -1519,7 +1523,7 @@ function wireframe_geometry(geo::BufferGeometry)
     max_edges = 3 * geo.n_faces
     seen = zeros(UInt128, _edge_table_capacity(max_edges))
     ordered_edges = Vector{UInt128}()
-    sizehint!(ordered_edges, max_edges)
+    sizehint!(ordered_edges, _edge_record_hint(geo, max_edges))
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         _record_wireframe_edge!(seen, ordered_edges, i1, i2)
@@ -1582,7 +1586,7 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     edge_normals = Vector{Vec3{Float64}}()
     edge_counts = Vector{Int}()
     edge_features = Bool[]
-    edge_hint = min(max_edges, max(16, geo.n_vertices + geo.n_faces))
+    edge_hint = _edge_record_hint(geo, max_edges)
     sizehint!(ordered_edges, edge_hint)
     sizehint!(edge_normals, edge_hint)
     sizehint!(edge_counts, edge_hint)
