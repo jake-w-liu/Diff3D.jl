@@ -7935,7 +7935,10 @@ end
 
         mip_alloc_tex = DataTexture(deterministic_array(64,64,3))
         generate_mipmaps!(mip_alloc_tex)
-        @test_opt_alloc 140000 generate_mipmaps!(mip_alloc_tex)
+        @test_opt_alloc 40000 generate_mipmaps!(mip_alloc_tex)
+        mip_odd_alloc_tex = DataTexture(deterministic_array(65,63,3))
+        generate_mipmaps!(mip_odd_alloc_tex)
+        @test_opt_alloc 40000 generate_mipmaps!(mip_odd_alloc_tex)
     end
 
     @testset "CubeTexture and DepthTexture" begin

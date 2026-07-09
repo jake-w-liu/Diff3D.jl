@@ -323,26 +323,6 @@ end
 
 # ========================== Mipmaps ==========================
 
-# Area-average resampling weights for one axis: output texel o ∈ 1:no covers the
-# continuous source interval [(o-1)·ns/no, o·ns/no); returns, per output texel,
-# the contributing source indices and their overlap length (summing to ns/no).
-# For an even ns this is the plain 2×2 box; for an odd ns the boundary source
-# texel is split with a fractional weight instead of being dropped.
-function _box_filter_weights(ns::Int, no::Int)
-    weights = Vector{Vector{Tuple{Int,Float64}}}(undef, no)
-    step = ns / no
-    for o in 1:no
-        lo = (o - 1) * step; hi = o * step
-        lst = Tuple{Int,Float64}[]
-        for s in (floor(Int, lo) + 1):min(ceil(Int, hi), ns)
-            ov = min(hi, Float64(s)) - max(lo, Float64(s - 1))   # overlap with cell (s-1, s]
-            ov > 0 && push!(lst, (s, ov))
-        end
-        weights[o] = lst
-    end
-    return weights
-end
-
 function _box_mipmap_even(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
     nxt = Array{Float64}(undef, nh, nw, C)
     @inbounds for c in 1:C, j in 1:nw, i in 1:nh
@@ -350,6 +330,39 @@ function _box_mipmap_even(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
         sj = 2j - 1
         nxt[i, j, c] = (cur[si, sj, c] + cur[si, sj + 1, c] +
                         cur[si + 1, sj, c] + cur[si + 1, sj + 1, c]) * 0.25
+    end
+    return nxt
+end
+
+@inline _box_filter_overlap(lo::Float64, hi::Float64, src::Int) =
+    min(hi, Float64(src)) - max(lo, Float64(src - 1))
+
+function _box_mipmap_weighted(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
+    H, W, _ = size(cur)
+    row_step = H / nh
+    col_step = W / nw
+    inv_area = (nh / H) * (nw / W)
+    nxt = Array{Float64}(undef, nh, nw, C)
+    @inbounds for c in 1:C, j in 1:nw
+        col_lo = (j - 1) * col_step
+        col_hi = j * col_step
+        sj_first = floor(Int, col_lo) + 1
+        sj_last = min(ceil(Int, col_hi), W)
+        for i in 1:nh
+            row_lo = (i - 1) * row_step
+            row_hi = i * row_step
+            si_first = floor(Int, row_lo) + 1
+            si_last = min(ceil(Int, row_hi), H)
+            acc = 0.0
+            for sj in sj_first:sj_last
+                wj = _box_filter_overlap(col_lo, col_hi, sj)
+                for si in si_first:si_last
+                    wi = _box_filter_overlap(row_lo, row_hi, si)
+                    acc += wi * wj * cur[si, sj, c]
+                end
+            end
+            nxt[i, j, c] = acc * inv_area
+        end
     end
     return nxt
 end
@@ -368,18 +381,7 @@ function generate_mipmaps!(tex::Texture)
             # Area-average box filter. Using fractional overlap weights means odd
             # rows/columns contribute instead of being cropped, so the coarsest mip
             # equals the true image average (was biased toward the top-left corner).
-            rw = _box_filter_weights(H, nh)
-            cw = _box_filter_weights(W, nw)
-            inv_area = (nh / H) * (nw / W)        # 1 / (cell height · cell width)
-            nxt = Array{Float64}(undef, nh, nw, C)
-            @inbounds for c in 1:C, j in 1:nw, i in 1:nh
-                acc = 0.0
-                for (si, wi) in rw[i], (sj, wj) in cw[j]
-                    acc += wi * wj * cur[si, sj, c]
-                end
-                nxt[i, j, c] = acc * inv_area
-            end
-            nxt
+            _box_mipmap_weighted(cur, nh, nw, C)
         end
         push!(tex.mipmaps, nxt)
         cur = nxt
