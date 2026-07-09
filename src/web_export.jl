@@ -1890,9 +1890,9 @@ function _web_draw_range_values(geo::BufferGeometry)
     return (clamp(first(entries) - 1, 0, total), length(entries))
 end
 
-function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real};
+function _web_geo_object_sizehint(geo::BufferGeometry, position_float_count::Integer;
                                   use_vertex_colors::Bool=true)
-    n_float = length(positions)
+    n_float = position_float_count
     n_float = _web_sizehint_add(n_float, length(geo.positions))
     n_float = _web_sizehint_add(n_float, _web_sizehint_mul(2, geo.n_vertices))
     _web_attribute_for_components(geo, :tangent, 4) !== nothing &&
@@ -1908,6 +1908,12 @@ function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector
     hint = _web_sizehint_add(hint, _web_sizehint_mul(10, n_float))
     hint = _web_sizehint_add(hint, _web_sizehint_mul(8, length(indices)))
     return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
+end
+
+function _web_geo_object_sizehint(geo::BufferGeometry, positions::AbstractVector{<:Real};
+                                  use_vertex_colors::Bool=true)
+    return _web_geo_object_sizehint(geo, length(positions);
+                                    use_vertex_colors=use_vertex_colors)
 end
 
 function _web_write_uv_json(io::IO, geo::BufferGeometry, num_buf::Vector{UInt8})
@@ -2179,8 +2185,8 @@ function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{
 end
 
 function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
-                                     positions::AbstractVector{<:Real})
-    hint = _web_sizehint_add(8192, _web_geo_object_sizehint(geo, positions))
+                                     position_float_count::Integer)
+    hint = _web_sizehint_add(8192, _web_geo_object_sizehint(geo, position_float_count))
     if hasproperty(obj, :morph_target_influences)
         target_count = _web_morph_position_target_count(geo)
         normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
@@ -2195,6 +2201,11 @@ function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
     end
     hint = _web_sizehint_add(hint, obj isa SkinnedMesh ? _web_skin_json_sizehint(obj, geo) : 64)
     return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, hint)
+end
+
+function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
+                                     positions::AbstractVector{<:Real})
+    return _web_drawable_json_sizehint(obj, geo, length(positions))
 end
 
 function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt8};
@@ -3309,6 +3320,57 @@ function _web_case_json_sizehint(lights_json::AbstractString,
     return sizehint
 end
 
+function _web_position_float_count(obj, geo::BufferGeometry)
+    obj isa SkinnedMesh && return length(geo.positions)
+    if hasproperty(obj, :morph_target_influences)
+        influences = getproperty(obj, :morph_target_influences)
+        _has_active_morph_influences(influences) && return 3 * geo.n_vertices
+    end
+    return length(geo.positions)
+end
+
+function _web_registry_json_sizehint(texture_registry::_WebTextureRegistry,
+                                     env_texture_registry::_WebCubeTextureRegistry)
+    sizehint = 64
+    for tex in texture_registry.textures
+        H, W, _ = size(tex.data)
+        sizehint = _web_sizehint_add(sizehint, _web_texture_json_sizehint(H, W) + 32)
+    end
+    for env in env_texture_registry.textures
+        sizehint = _web_sizehint_add(sizehint, _web_env_json_sizehint(env) + 32)
+    end
+    return sizehint
+end
+
+function _web_case_json_stream_sizehint(case::WebGLExportCase)
+    animation_target_ids = _web_animation_target_ids(case.animations)
+    texture_registry = _web_texture_registry()
+    env_texture_registry = _web_cube_texture_registry()
+    sizehint = _web_sizehint_add(8192, _web_camera_json_sizehint(case.camera))
+    sizehint = _web_sizehint_add(sizehint, _web_sizehint_mul(4096, length(case.animations) + 1))
+    _web_for_each_transform_node(case.scene, animation_target_ids) do obj, world, parent_world, num_buf
+        sizehint = _web_sizehint_add(sizehint, _web_transform_node_json_sizehint(obj) + 1)
+    end
+    function emit(obj, world; kwargs...)
+        _web_register_material_textures!(texture_registry, obj.material)
+        _web_register_material_env_textures!(env_texture_registry, obj.material)
+        geo = obj.geometry
+        sizehint = _web_sizehint_add(
+            sizehint,
+            _web_drawable_json_sizehint(obj, geo, _web_position_float_count(obj, geo)) + 1,
+        )
+        return nothing
+    end
+    _web_visit_drawables(emit, case.scene, animation_target_ids, case.radius)
+    sizehint = _web_sizehint_add(sizehint,
+                                 _web_registry_json_sizehint(texture_registry,
+                                                             env_texture_registry))
+    for clip in case.animations
+        sizehint = _web_sizehint_add(sizehint, _web_clip_json_sizehint(clip))
+    end
+    return min(_WEB_JSON_ARRAY_SIZEHINT_LIMIT, sizehint)
+end
+
 struct _WebDrawableStream{T<:AbstractObject3D,S<:Set{Int},R<:Real,G,H}
     root::T
     force_ids::S
@@ -3497,13 +3559,8 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
 end
 
 function _web_case_json(case::WebGLExportCase)
-    lights_json, nodes, objects, texture_registry, env_texture_registry =
-        _web_collect_case_json_parts(case)
-    io = IOBuffer(sizehint=_web_case_json_sizehint(lights_json, nodes, objects,
-                                                   case.animations, texture_registry,
-                                                   env_texture_registry))
-    _web_write_case_json_parts(io, case, lights_json, nodes, objects,
-                               texture_registry, env_texture_registry, _web_num_buffer())
+    io = IOBuffer(sizehint=_web_case_json_stream_sizehint(case))
+    _web_write_case_json(io, case)
     return String(take!(io))
 end
 

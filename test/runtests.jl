@@ -4021,6 +4021,10 @@ end
             @test_opt_alloc 350000 save_webgl_html(save_alloc_file, [save_alloc_case];
                                                     title="Save Alloc")
             rm(save_alloc_file; force=true)
+            save_alloc_case_io = IOBuffer()
+            Diff3D._web_write_case_json(save_alloc_case_io, save_alloc_case)
+            @test Diff3D._web_case_json(save_alloc_case) == String(take!(save_alloc_case_io))
+            @test_opt_alloc 140000 Diff3D._web_case_json(save_alloc_case)
 
             stream_n = 6000
             stream_positions = Vector{Float64}(undef, 3 * stream_n)
