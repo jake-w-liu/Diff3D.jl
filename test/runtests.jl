@@ -2781,7 +2781,9 @@ end
         one_face_rf_ws = vertex_render_fn(one_face_faces, one_face_colors, vp, 16, 16;
                                           sigma=1e-2, gamma=1.0, workspace=one_face_ws)
         @test one_face_rf_ws(one_face_params) == one_face_rf(one_face_params)
-        @test_opt_alloc 1024 one_face_rf_ws(one_face_params)
+        @test Diff3D._promote_mat4(vp, Float64) == vp
+        @test_opt_alloc 64 Diff3D._promote_mat4(vp, Float64)
+        @test_opt_alloc 128 one_face_rf_ws(one_face_params)
 
         soft_verts = Vec3{Float64}[]
         soft_faces = NTuple{3,Int}[]
@@ -11523,7 +11525,7 @@ end
         crf_ws = color_render_fn(verts, faces, vp, 16, 16; sigma=0.5, gamma=1.0,
                                  workspace=SoftRenderWorkspace())
         @test crf_ws(red_params) == target
-        @test_opt_alloc 1024 crf_ws(red_params)
+        @test_opt_alloc 128 crf_ws(red_params)
         copt, chist = optimize_face_colors([0.0,0.0,1.0], verts, faces, vp, target;
                                            W=16, H=16, sigma=0.5, gamma=1.0, lr=0.1, n_iters=40, verbose=false)
         @test chist[end] < chist[1]

@@ -8,7 +8,7 @@
 
 # Promote a Float64 Mat4 to element type T (so AD duals flow through projection).
 @inline _promote_mat4(vp::Mat4{T}, ::Type{T}) where {T} = vp
-@inline _promote_mat4(vp::Mat4, ::Type{T}) where {T} =
+@inline _promote_mat4(vp::Mat4{S}, ::Type{T}) where {S,T} =
     Mat4{T}(ntuple(k -> T(vp.e[k]), 16))
 
 struct _FlatVec3Params{T,P<:AbstractVector{T}} <: AbstractVector{Vec3{T}}
