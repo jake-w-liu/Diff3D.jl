@@ -6100,10 +6100,29 @@ end
             println(grid_io, "f ", a, " ", a + 1, " ", a + n + 2, " ", a + n + 1)
         end
         write(grid_path, String(take!(grid_io)))
+        @test Diff3D._obj_scan_counts(grid_path) == ((n + 1)^2, 0, 0, 2 * n * n)
+        @test_opt_alloc 100_000 Diff3D._obj_scan_counts(grid_path)
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 2_100_000 load_obj(grid_path)
+        @test_opt_alloc 1_600_000 load_obj(grid_path)
         @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
-        @test_opt_alloc 2_100_000 load_obj_groups(grid_path)
+        @test_opt_alloc 1_600_000 load_obj_groups(grid_path)
+        seekstart(grid_io)
+        truncate(grid_io, 0)
+        for y in 0:n, x in 0:n
+            println(grid_io, "v ", x, " ", y, " 0")
+        end
+        println(grid_io, "usemtl grid")
+        for y in 0:(n - 1), x in 0:(n - 1)
+            a = y * (n + 1) + x + 1
+            println(grid_io, "f ", a, " ", a + 1, " ", a + n + 2, " ", a + n + 1)
+        end
+        write(grid_path, String(take!(grid_io)))
+        geo_mtl, face_mtl, mats = load_obj_groups(grid_path)
+        @test geo_mtl.n_faces == 2 * n * n
+        @test length(face_mtl) == geo_mtl.n_faces
+        @test all(==("grid"), face_mtl)
+        @test isempty(mats)
+        @test_opt_alloc 1_600_000 load_obj_groups(grid_path)
         seekstart(grid_io)
         truncate(grid_io, 0)
         for y in 0:n, x in 0:n
@@ -6116,8 +6135,9 @@ end
                     a + n + 2, "//1 ", a + n + 1, "//1")
         end
         write(grid_path, String(take!(grid_io)))
+        @test Diff3D._obj_scan_counts(grid_path) == ((n + 1)^2, 0, 1, 2 * n * n)
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 2_100_000 load_obj(grid_path)
+        @test_opt_alloc 1_600_000 load_obj(grid_path)
         rm(grid_path)
     end
 

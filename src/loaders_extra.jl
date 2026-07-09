@@ -2271,14 +2271,16 @@ function load_obj_groups(path::String)
         tag_state === nothing && continue
         tag = tag_state[1]
         if tag == "v"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "v")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
+                                             "v", "v x", "v y", "v z")
             push!(verts, x, y, z)
         elseif tag == "vt"
             # 1-D texture coordinate `vt u` -> (u, 0), matching three.js OBJLoader.
             u, v = _obj_parse_vt_tokens(parts, tag_state[2])
             push!(file_uvs, u, v)
         elseif tag == "vn"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "vn")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
+                                             "vn", "vn x", "vn y", "vn z")
             push!(file_normals, x, y, z)
         elseif tag == "mtllib"
             lib_state = _obj_required_arg(parts, tag_state[2],
@@ -2287,7 +2289,7 @@ function load_obj_groups(path::String)
         elseif tag == "usemtl"
             mtl_state = _obj_required_arg(parts, tag_state[2],
                                           "OBJ usemtl requires a material name")
-            cur_mtl = mtl_state[1]
+            cur_mtl = String(mtl_state[1])
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
             first_state = iterate(parts, tag_state[2])

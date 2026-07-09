@@ -440,34 +440,109 @@ function _obj_is_face_record(line::AbstractString)
     return j <= lastindex(line) && isspace(line[j])
 end
 
+const _OBJ_SCAN_BUFFER_SIZE = 16 * 1024
+
+@inline _obj_scan_space(b::UInt8) =
+    b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') ||
+    b == UInt8('\v') || b == UInt8('\f')
+
+@inline function _obj_scan_tag_code(tag1::UInt8, tag2::UInt8, tag_len::Int)
+    if tag_len == 1
+        tag1 == UInt8('v') && return UInt8(1)
+        tag1 == UInt8('f') && return UInt8(4)
+    elseif tag_len == 2 && tag1 == UInt8('v')
+        tag2 == UInt8('t') && return UInt8(2)
+        tag2 == UInt8('n') && return UInt8(3)
+    end
+    return UInt8(0)
+end
+
+@inline function _obj_scan_finish_line(tag_code::UInt8, face_corners::Int,
+                                       n_triangles::Int)
+    if tag_code == UInt8(4) && face_corners >= 3
+        n_triangles += face_corners - 2
+    end
+    return n_triangles
+end
+
 function _obj_scan_counts(path::String)
+    buf = Vector{UInt8}(undef, _OBJ_SCAN_BUFFER_SIZE)
     n_vertices = 0
     n_uvs = 0
     n_normals = 0
     n_triangles = 0
-    for raw in eachline(path)
-        line = strip(raw)
-        (isempty(line) || startswith(line, "#")) && continue
-        parts = eachsplit(line)
-        state = iterate(parts)
-        state === nothing && continue
-        tag = state[1]
-        if tag == "v"
-            n_vertices += 1
-        elseif tag == "vt"
-            n_uvs += 1
-        elseif tag == "vn"
-            n_normals += 1
-        elseif tag == "f"
-            corners = 0
-            next_state = iterate(parts, state[2])
-            while next_state !== nothing
-                corners += 1
-                next_state = iterate(parts, next_state[2])
+
+    token_no = 0
+    tag_len = 0
+    tag1 = UInt8(0)
+    tag2 = UInt8(0)
+    tag_code = UInt8(0)
+    face_corners = 0
+    in_token = false
+    skip_line = false
+
+    open(path, "r") do io
+        while !eof(io)
+            nread = readbytes!(io, buf)
+            @inbounds for k in 1:nread
+                b = buf[k]
+                if b == UInt8('\n')
+                    if in_token && token_no == 1
+                        tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
+                        tag_code == UInt8(1) ? (n_vertices += 1) :
+                        tag_code == UInt8(2) ? (n_uvs += 1) :
+                        tag_code == UInt8(3) && (n_normals += 1)
+                    end
+                    n_triangles = skip_line ? n_triangles :
+                                  _obj_scan_finish_line(tag_code, face_corners,
+                                                        n_triangles)
+                    token_no = 0
+                    tag_len = 0
+                    tag1 = UInt8(0)
+                    tag2 = UInt8(0)
+                    tag_code = UInt8(0)
+                    face_corners = 0
+                    in_token = false
+                    skip_line = false
+                elseif skip_line
+                    continue
+                elseif _obj_scan_space(b)
+                    if in_token && token_no == 1
+                        tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
+                        tag_code == UInt8(1) ? (n_vertices += 1) :
+                        tag_code == UInt8(2) ? (n_uvs += 1) :
+                        tag_code == UInt8(3) && (n_normals += 1)
+                    end
+                    in_token = false
+                elseif !in_token
+                    if token_no == 0 && b == UInt8('#')
+                        skip_line = true
+                    else
+                        token_no += 1
+                        in_token = true
+                        if token_no == 1
+                            tag_len = 1
+                            tag1 = b
+                            tag2 = UInt8(0)
+                        elseif tag_code == UInt8(4)
+                            face_corners += 1
+                        end
+                    end
+                elseif token_no == 1
+                    tag_len += 1
+                    tag_len == 2 && (tag2 = b)
+                end
             end
-            corners >= 3 && (n_triangles += corners - 2)
         end
     end
+    if in_token && token_no == 1
+        tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
+        tag_code == UInt8(1) ? (n_vertices += 1) :
+        tag_code == UInt8(2) ? (n_uvs += 1) :
+        tag_code == UInt8(3) && (n_normals += 1)
+    end
+    n_triangles = skip_line ? n_triangles :
+                  _obj_scan_finish_line(tag_code, face_corners, n_triangles)
     return n_vertices, n_uvs, n_normals, n_triangles
 end
 
@@ -488,14 +563,19 @@ end
     return token_state
 end
 
-function _obj_parse_vec3_tokens(parts, state, label::String)
+function _obj_parse_vec3_tokens(parts, state, label::String,
+                                x_label::String, y_label::String, z_label::String)
     x_state = _obj_required_token(parts, state, 3, label)
     y_state = _obj_required_token(parts, x_state[2], 3, label)
     z_state = _obj_required_token(parts, y_state[2], 3, label)
-    return (_obj_parse_float(x_state[1], "$label x"),
-            _obj_parse_float(y_state[1], "$label y"),
-            _obj_parse_float(z_state[1], "$label z"))
+    return (_obj_parse_float(x_state[1], x_label),
+            _obj_parse_float(y_state[1], y_label),
+            _obj_parse_float(z_state[1], z_label))
 end
+
+_obj_parse_vec3_tokens(parts, state, label::String) =
+    _obj_parse_vec3_tokens(parts, state, label, string(label, " x"),
+                           string(label, " y"), string(label, " z"))
 
 function _obj_parse_vt_tokens(parts, state)
     u_state = _obj_required_token(parts, state, 1, "vt")
@@ -581,7 +661,8 @@ function load_obj(path::String)
         tag_state === nothing && continue
         tag = tag_state[1]
         if tag == "v"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "v")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
+                                             "v", "v x", "v y", "v z")
             push!(verts, x, y, z)
         elseif tag == "vt"
             # A 1-D texture coordinate (`vt u`) is valid; treat the missing
@@ -590,7 +671,8 @@ function load_obj(path::String)
             u, v = _obj_parse_vt_tokens(parts, tag_state[2])
             push!(file_uvs, u, v)
         elseif tag == "vn"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2], "vn")
+            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
+                                             "vn", "vn x", "vn y", "vn z")
             push!(file_normals, x, y, z)
         elseif tag == "f"
             nverts_v = length(verts) ÷ 3
