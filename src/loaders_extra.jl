@@ -1472,6 +1472,26 @@ end
 _PizBR(data::AbstractVector{UInt8}, off::Int, c::UInt32, lc::Int) =
     _PizBR(data, off, UInt128(c), lc)
 
+mutable struct _ExrPizWorkspace
+    outbuf::Vector{Int}
+    bitmap::Vector{UInt8}
+    lut::Vector{UInt16}
+    freq::Vector{Int}
+    hdec::Vector{_PizHDec}
+    long_codes::Vector{Int}
+    prefix_counts::Vector{Int}
+    out::Vector{UInt8}
+end
+
+_ExrPizWorkspace() =
+    _ExrPizWorkspace(Int[], UInt8[], UInt16[], Int[], _PizHDec[], Int[], Int[], UInt8[])
+
+@inline function _piz_workspace_buffer!(buffer::Vector{T}, n::Int, value::T) where {T}
+    resize!(buffer, n)
+    fill!(buffer, value)
+    return buffer
+end
+
 @inline function _piz_getchar!(r::_PizBR)
     b = (r.off + 1) <= length(r.data) ? r.data[r.off + 1] : 0x00
     r.c = (r.c << 8) | UInt128(b)
@@ -1757,26 +1777,27 @@ function _piz_wav2decode!(buffer::Vector{Int}, j::Int, nx::Int, ox::Int, ny::Int
     end
 end
 
-function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels, width::Int)
+function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels,
+                         width::Int, workspace::_ExrPizWorkspace)
     types = [pt == 1 ? 1 : 2 for (_, pt) in channels]   # int16 count per sample
     starts = Int[]; s = 0
     for t in types
         push!(starts, s); s += width * nlines * t
     end
     outend = s
-    outbuf = zeros(Int, outend)
+    outbuf = _piz_workspace_buffer!(workspace.outbuf, outend, 0)
 
     r = _PizBR(blockdata, 0, UInt128(0), 0)
     minNZ = _piz_ru16le(r); maxNZ = _piz_ru16le(r)
     maxNZ >= _PIZ_BITMAP_SIZE && error("EXR PIZ bitmap size")
-    bitmap = zeros(UInt8, _PIZ_BITMAP_SIZE)
+    bitmap = _piz_workspace_buffer!(workspace.bitmap, _PIZ_BITMAP_SIZE, 0x00)
     if minNZ <= maxNZ
         r.off + (maxNZ - minNZ + 1) <= length(r.data) || error("EXR PIZ block is truncated")
         for i in 0:(maxNZ - minNZ)
             bitmap[minNZ + i + 1] = r.data[r.off + 1]; r.off += 1
         end
     end
-    lut = zeros(UInt16, _PIZ_USHORT_RANGE)
+    lut = _piz_workspace_buffer!(workspace.lut, _PIZ_USHORT_RANGE, 0x0000)
     maxValue = _piz_reverse_lut!(bitmap, lut)
     nComp = _piz_ru32le(r)                  # Huffman payload length field
 
@@ -1784,10 +1805,11 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     im = _piz_ru32le(r); iM = _piz_ru32le(r); r.off += 4
     nBits = _piz_ru32le(r); r.off += 4
     (0 <= im < _PIZ_HUF_ENCSIZE && 0 <= iM < _PIZ_HUF_ENCSIZE) || error("EXR PIZ HUF_ENCSIZE")
-    freq = zeros(Int, _PIZ_HUF_ENCSIZE)
-    hdec = fill(_PizHDec(0, 0, 0), _PIZ_HUF_DECSIZE)
-    long_codes = Int[]
-    prefix_counts = zeros(Int, _PIZ_HUF_DECSIZE)
+    freq = _piz_workspace_buffer!(workspace.freq, _PIZ_HUF_ENCSIZE, 0)
+    hdec = _piz_workspace_buffer!(workspace.hdec, _PIZ_HUF_DECSIZE, _PizHDec(0, 0, 0))
+    long_codes = workspace.long_codes
+    empty!(long_codes)
+    prefix_counts = _piz_workspace_buffer!(workspace.prefix_counts, _PIZ_HUF_DECSIZE, 0)
     _piz_unpack_enc_table!(r, im, iM, freq)
     _piz_build_dec_table!(freq, im, iM, hdec, long_codes, prefix_counts)
     ooff = Ref(0)
@@ -1802,7 +1824,11 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
         outbuf[idx] = Int(lut[(outbuf[idx] & 0xffff) + 1])
     end
 
-    out = zeros(UInt8, nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels))
+    out = _piz_workspace_buffer!(
+        workspace.out,
+        nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels),
+        0x00,
+    )
     ends = copy(starts)
     tmpoff = 0
     for _y in 0:(nlines - 1)
@@ -1820,9 +1846,13 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     return out
 end
 
+_exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels, width::Int) =
+    _exr_piz_decode(blockdata, nlines, channels, width, _ExrPizWorkspace())
+
 # Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
 function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width::Int,
-                          compression::Int, channels, plinear)
+                          compression::Int, channels, plinear,
+                          piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing)
     uncompressed = nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels)
     dsize = length(blockbytes)
     # A block is stored uncompressed (per OpenEXR) whenever its compressed size
@@ -1832,7 +1862,8 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
     raw = if compression == 0 || dsize >= uncompressed
         blockbytes
     elseif compression == 4                               # PIZ
-        _exr_piz_decode(blockbytes, nlines, channels, width)
+        workspace = piz_workspace === nothing ? _ExrPizWorkspace() : piz_workspace
+        _exr_piz_decode(blockbytes, nlines, channels, width, workspace)
     elseif compression == 6 || compression == 7          # B44 / B44A
         _exr_b44_decode(blockbytes, nlines, channels, plinear, width, compression == 7)
     elseif compression == 1                               # RLE
@@ -1976,6 +2007,7 @@ function _decode_exr(bytes::Vector{UInt8})
     is_y = !has_rgb && has_y          # Y (luminance) replicates across RGB output
 
     img = zeros(Float64, height, width, 3)
+    piz_workspace = compression == 4 ? _ExrPizWorkspace() : nothing
     if tiled
         # ONE_LEVEL (0) and MIPMAP_LEVELS (1): the offset table is level-0-first,
         # so reading the level-0 tile count decodes the full-resolution image.
@@ -2000,7 +2032,8 @@ function _decode_exr(bytes::Vector{UInt8})
                 error("EXR tile coordinate ($tileX,$tileY) is out of range")
             cols = min(tile_x, width - startX)
             lines = min(tile_y, height - startY)
-            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols, compression, channels, plinear)
+            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols,
+                                    compression, channels, plinear, piz_workspace)
             _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
     else
@@ -2016,7 +2049,8 @@ function _decode_exr(bytes::Vector{UInt8})
             (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
             (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
             nlines = min(lines_per_block, ymax - y0 + 1)
-            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width, compression, channels, plinear)
+            raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width,
+                                    compression, channels, plinear, piz_workspace)
             _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
     end

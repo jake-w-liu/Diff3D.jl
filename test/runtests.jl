@@ -10271,7 +10271,7 @@ end
         # every 16-bit half value in row-major order (decoder-independent truth).
         piz_path = joinpath(@__DIR__, "fixtures", "AllHalfValues.exr")
         piz = load_exr(piz_path)
-        @test_opt_alloc 15000000 load_exr(piz_path)
+        @test_opt_alloc 4_500_000 load_exr(piz_path)
         @test size(piz) == (256, 256, 3)
         piz_mismatch = 0
         for y in 1:256, x in 1:256
