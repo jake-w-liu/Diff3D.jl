@@ -4056,7 +4056,7 @@ end
             save_alloc_case_io = IOBuffer()
             Diff3D._web_write_case_json(save_alloc_case_io, save_alloc_case)
             @test Diff3D._web_case_json(save_alloc_case) == String(take!(save_alloc_case_io))
-            @test_opt_alloc 140000 Diff3D._web_case_json(save_alloc_case)
+            @test_opt_alloc 115000 Diff3D._web_case_json(save_alloc_case)
 
             stream_n = 6000
             stream_positions = Vector{Float64}(undef, 3 * stream_n)
@@ -4084,12 +4084,14 @@ end
             stream_case = WebGLExportCase("stream_alloc", "Stream Alloc", "drawables",
                                           stream_scene; radius=8.0)
             Diff3D._web_write_case_json(devnull, stream_case)
+            @test isempty(Diff3D._web_case_animation_target_ids(AnimationClip[]))
+            @test_opt_alloc 64 Diff3D._web_case_animation_target_ids(AnimationClip[])
             texture_free_registry = Diff3D._web_texture_registry()
             Diff3D._web_register_material_textures!(texture_free_registry, MeshBasicMaterial())
             @test isempty(texture_free_registry.textures)
             @test_opt_alloc 512 Diff3D._web_register_material_textures!(
                 texture_free_registry, MeshBasicMaterial())
-            @test_opt_alloc 12000 Diff3D._web_write_case_json(devnull, stream_case)
+            @test_opt_alloc 8000 Diff3D._web_write_case_json(devnull, stream_case)
 
             texture_n = 128
             texture_data = Array{Float64}(undef, texture_n, texture_n, 4)
@@ -4218,7 +4220,7 @@ end
         @test String(take!(drawable_io)) ==
               Diff3D._web_drawable_json(drawable_export_alloc, Mat4())
         Diff3D._web_drawable_json(drawable_export_alloc, Mat4())
-        @test_opt_alloc 260000 Diff3D._web_drawable_json(drawable_export_alloc,
+        @test_opt_alloc 180000 Diff3D._web_drawable_json(drawable_export_alloc,
                                                          Mat4())
         morph_position_n = 6000
         morph_position_pos = Vector{Float64}(undef, 3 * morph_position_n)

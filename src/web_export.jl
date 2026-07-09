@@ -23,6 +23,12 @@ struct WebGLExportCase
     camera::Union{Nothing, AbstractCamera, ArrayCamera}
 end
 
+const _WEB_EMPTY_MAT4S = Mat4{Float64}[]
+const _WEB_EMPTY_COLOR3S = Color3{Float64}[]
+const _WEB_EMPTY_INTS = Int[]
+const _WEB_EMPTY_BOOLS = Bool[]
+const _WEB_EMPTY_ID_SET = Set{Int}()
+
 function WebGLExportCase(id::String, title::String, subtitle::String, scene::Scene;
                          target=Vec3(0.0, 0.0, 0.0), radius::Real=8.0,
                          height::Real=3.0, fov::Real=pi/4,
@@ -1518,11 +1524,11 @@ function _web_light_json(light::AbstractLight, args...; kwargs...)
     return String(take!(io))
 end
 
-function _web_write_lights_json(io::IO, scene::Scene, force_ids::Set{Int}=Set{Int}(),
-                                stale_shadow_ids::Set{Int}=Set{Int}(),
-                                dynamic_shadow_ids::Set{Int}=Set{Int}(),
-                                dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
-                                dynamic_point_shadow_ids::Set{Int}=Set{Int}();
+function _web_write_lights_json(io::IO, scene::Scene, force_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                                stale_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                                dynamic_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                                dynamic_spot_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                                dynamic_point_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET;
                                 clipping_planes=_NO_PLANES,
                                 num_buf::Vector{UInt8}=_web_num_buffer())
     # Unpruned traversal (collect_lights skips invisible subtrees): lights whose
@@ -1574,11 +1580,11 @@ function _web_write_lights_json(io::IO, scene::Scene, force_ids::Set{Int}=Set{In
     return nothing
 end
 
-function _web_lights_json(scene::Scene, force_ids::Set{Int}=Set{Int}(),
-                          stale_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_spot_shadow_ids::Set{Int}=Set{Int}(),
-                          dynamic_point_shadow_ids::Set{Int}=Set{Int}();
+function _web_lights_json(scene::Scene, force_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                          stale_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                          dynamic_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                          dynamic_spot_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET,
+                          dynamic_point_shadow_ids::Set{Int}=_WEB_EMPTY_ID_SET;
                           clipping_planes=_NO_PLANES)
     io = IOBuffer()
     _web_write_lights_json(io, scene, force_ids, stale_shadow_ids,
@@ -1942,8 +1948,8 @@ end
 
 function _web_write_geo_object(io::IO, geo::BufferGeometry,
                                positions::AbstractVector=geo.positions;
-                               use_vertex_colors::Bool=true)
-    num_buf = _web_num_buffer()
+                               use_vertex_colors::Bool=true,
+                               num_buf::Vector{UInt8}=_web_num_buffer())
     write(io, "\"positions\":")
     _web_write_positions_json(io, positions, num_buf)
     write(io, ",\"normals\":")
@@ -2139,7 +2145,8 @@ function _web_is_drawable(obj::AbstractObject3D)
            obj isa LineSegments || obj isa Sprite
 end
 
-function _web_collect_transform_nodes(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}())
+function _web_collect_transform_nodes(root::AbstractObject3D,
+                                      force_ids::Set{Int}=_WEB_EMPTY_ID_SET)
     out = String[]
     _web_for_each_transform_node(root, force_ids) do obj, world, parent_world, num_buf
         push!(out, _web_transform_node_json(obj, world, parent_world, num_buf))
@@ -2217,11 +2224,11 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
                                   transform_obj::AbstractObject3D=obj,
                                   color_override::Union{Nothing,Color3}=nothing,
                                   instance_matrix=nothing,
-                                  instance_matrices::AbstractVector{<:Mat4}=Mat4{Float64}[],
-                                  instance_colors::AbstractVector{<:Color3}=Color3{Float64}[],
-                                  morph_target_ids::AbstractVector{Int}=Int[],
-                                  visibility_target_ids::AbstractVector{Int}=Int[],
-                                  visibility_values::AbstractVector{Bool}=Bool[],
+                                  instance_matrices::AbstractVector{<:Mat4}=_WEB_EMPTY_MAT4S,
+                                  instance_colors::AbstractVector{<:Color3}=_WEB_EMPTY_COLOR3S,
+                                  morph_target_ids::AbstractVector{Int}=_WEB_EMPTY_INTS,
+                                  visibility_target_ids::AbstractVector{Int}=_WEB_EMPTY_INTS,
+                                  visibility_values::AbstractVector{Bool}=_WEB_EMPTY_BOOLS,
                                   visibility_extra_id::Int=0,
                                   visibility_extra_value::Bool=false,
                                   lod_group_id::Int=0,
@@ -2510,7 +2517,8 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ',')
     _web_write_skin_json(io, obj, geo, num_buf)
     write(io, ',')
-    _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors)
+    _web_write_geo_object(io, geo, positions; use_vertex_colors=use_vertex_colors,
+                          num_buf=num_buf)
     write(io, '}')
     return nothing
 end
@@ -2535,6 +2543,9 @@ function _web_animation_target_ids(animations::AbstractVector{AnimationClip})
     end
     return ids
 end
+
+_web_case_animation_target_ids(animations::AbstractVector{AnimationClip}) =
+    isempty(animations) ? _WEB_EMPTY_ID_SET : _web_animation_target_ids(animations)
 
 const WEB_STALE_SHADOW_LIGHT_TRACK_PROPERTIES = Set(("position", "target", "angle"))
 const WEB_DYNAMIC_DIRECTIONAL_SHADOW_TRACK_PROPERTIES = Set(("position", "target"))
@@ -2698,7 +2709,7 @@ function _web_wireframe_proxy(obj)
 end
 
 function _web_visit_drawables(emit::F, root::AbstractObject3D,
-                              force_ids::Set{Int}=Set{Int}(),
+                              force_ids::Set{Int}=_WEB_EMPTY_ID_SET,
                               camera_distance::Real=0.0) where {F}
     forced_subtree_ids = Set{Int}()
     function collect_forced_subtrees!(obj::AbstractObject3D)
@@ -2921,7 +2932,8 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
     return nothing
 end
 
-function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{Int}(),
+function _web_collect_drawables(root::AbstractObject3D,
+                                force_ids::Set{Int}=_WEB_EMPTY_ID_SET,
                                 camera_distance::Real=0.0;
                                 texture_registry::Union{Nothing,_WebTextureRegistry}=nothing,
                                 env_texture_registry::Union{Nothing,_WebCubeTextureRegistry}=nothing)
@@ -2941,7 +2953,7 @@ function _web_collect_drawables(root::AbstractObject3D, force_ids::Set{Int}=Set{
 end
 
 function _web_write_drawables_json(io::IO, root::AbstractObject3D,
-                                   force_ids::Set{Int}=Set{Int}(),
+                                   force_ids::Set{Int}=_WEB_EMPTY_ID_SET,
                                    camera_distance::Real=0.0,
                                    num_buf::Vector{UInt8}=_web_num_buffer();
                                    texture_registry::Union{Nothing,_WebTextureRegistry}=nothing,
@@ -3347,7 +3359,7 @@ function _web_registry_json_sizehint(texture_registry::_WebTextureRegistry,
 end
 
 function _web_case_json_stream_sizehint(case::WebGLExportCase)
-    animation_target_ids = _web_animation_target_ids(case.animations)
+    animation_target_ids = _web_case_animation_target_ids(case.animations)
     texture_registry = _web_texture_registry()
     env_texture_registry = _web_cube_texture_registry()
     sizehint = _web_sizehint_add(8192, _web_camera_json_sizehint(case.camera))
@@ -3441,11 +3453,16 @@ function _web_collect_case_light_node_parts(case::WebGLExportCase)
 end
 
 function _web_collect_case_light_parts(case::WebGLExportCase)
-    animation_target_ids = _web_animation_target_ids(case.animations)
-    stale_shadow_ids = _web_stale_shadow_light_ids(case.scene, case.animations)
-    dynamic_shadow_ids = _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
-    dynamic_spot_shadow_ids = _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
-    dynamic_point_shadow_ids = _web_dynamic_point_shadow_light_ids(case.scene, case.animations)
+    animation_target_ids = _web_case_animation_target_ids(case.animations)
+    no_animations = isempty(case.animations)
+    stale_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
+                       _web_stale_shadow_light_ids(case.scene, case.animations)
+    dynamic_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
+                         _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
+    dynamic_spot_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
+                              _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
+    dynamic_point_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
+                               _web_dynamic_point_shadow_light_ids(case.scene, case.animations)
     lights_json = _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
                                    dynamic_shadow_ids, dynamic_spot_shadow_ids,
                                    dynamic_point_shadow_ids;
@@ -3465,13 +3482,18 @@ end
 
 function _web_case_light_stream(case::WebGLExportCase,
                                 animation_target_ids::Set{Int})
+    no_animations = isempty(case.animations)
     return _WebLightsStream(
         case.scene,
         animation_target_ids,
-        _web_stale_shadow_light_ids(case.scene, case.animations),
-        _web_dynamic_directional_shadow_light_ids(case.scene, case.animations),
-        _web_dynamic_spot_shadow_light_ids(case.scene, case.animations),
-        _web_dynamic_point_shadow_light_ids(case.scene, case.animations),
+        no_animations ? _WEB_EMPTY_ID_SET :
+            _web_stale_shadow_light_ids(case.scene, case.animations),
+        no_animations ? _WEB_EMPTY_ID_SET :
+            _web_dynamic_directional_shadow_light_ids(case.scene, case.animations),
+        no_animations ? _WEB_EMPTY_ID_SET :
+            _web_dynamic_spot_shadow_light_ids(case.scene, case.animations),
+        no_animations ? _WEB_EMPTY_ID_SET :
+            _web_dynamic_point_shadow_light_ids(case.scene, case.animations),
         case.clipping_planes)
 end
 
@@ -3569,7 +3591,7 @@ function _web_case_json(case::WebGLExportCase)
 end
 
 function _web_write_case_json(io::IO, case::WebGLExportCase)
-    animation_target_ids = _web_animation_target_ids(case.animations)
+    animation_target_ids = _web_case_animation_target_ids(case.animations)
     lights_json = _web_case_light_stream(case, animation_target_ids)
     nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
     texture_registry = _web_texture_registry()
@@ -3584,7 +3606,7 @@ end
 function _web_light_caps(cases::AbstractVector{WebGLExportCase})
     max_dir = max_point = max_spot = max_hemi = max_rect = 0
     for case in cases
-        force_ids = _web_animation_target_ids(case.animations)
+        force_ids = _web_case_animation_target_ids(case.animations)
         dir = point = spot = hemi = rect = 0
         traverse(case.scene, obj -> begin
             obj isa AbstractLight || return
