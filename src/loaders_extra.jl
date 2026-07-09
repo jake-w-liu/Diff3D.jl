@@ -1478,9 +1478,9 @@ const _PIZ_LONG_ZEROCODE_RUN = 63
 const _PIZ_SHORTEST_LONG_RUN = 2 + _PIZ_LONG_ZEROCODE_RUN - _PIZ_SHORT_ZEROCODE_RUN
 
 struct _PizHDec
-    len::Int
-    lit::Int
-    first::Int
+    len::Int32
+    lit::Int32
+    first::Int32
 end
 
 mutable struct _PizBR{D<:AbstractVector{UInt8}}
@@ -1493,20 +1493,21 @@ _PizBR(data::AbstractVector{UInt8}, off::Int, c::UInt32, lc::Int) =
     _PizBR(data, off, UInt128(c), lc)
 
 mutable struct _ExrPizWorkspace
-    outbuf::Vector{Int}
+    outbuf::Vector{Int32}
     bitmap::Vector{UInt8}
     lut::Vector{UInt16}
     freq::Vector{Int}
     hdec::Vector{_PizHDec}
-    long_codes::Vector{Int}
-    prefix_counts::Vector{Int}
+    long_codes::Vector{Int32}
+    prefix_counts::Vector{Int32}
     out::Vector{UInt8}
 end
 
 _ExrPizWorkspace() =
-    _ExrPizWorkspace(Int[], UInt8[], UInt16[], Int[], _PizHDec[], Int[], Int[], UInt8[])
+    _ExrPizWorkspace(Int32[], UInt8[], UInt16[], Int[], _PizHDec[], Int32[],
+                     Int32[], UInt8[])
 
-@inline function _piz_workspace_buffer!(buffer::Vector{T}, n::Int, value::T) where {T}
+@inline function _piz_workspace_buffer!(buffer::Vector{T}, n::Int, value) where {T}
     resize!(buffer, n)
     fill!(buffer, value)
     return buffer
@@ -1542,14 +1543,14 @@ end
 @inline _piz_u16(v::Int) = v & 0xffff
 @inline _piz_i16(v::Int) = (rr = v & 0xffff; rr > 0x7fff ? rr - 0x10000 : rr)
 
-@inline function _piz_wdec14(l::Int, h::Int)
-    ls = _piz_i16(l); hs = _piz_i16(h)
+@inline function _piz_wdec14(l::Integer, h::Integer)
+    ls = _piz_i16(Int(l)); hs = _piz_i16(Int(h))
     ai = ls + (hs & 1) + (hs >> 1)
     return (ai, ai - hs)
 end
 
-@inline function _piz_wdec16(l::Int, h::Int)
-    m = _piz_u16(l); d = _piz_u16(h)
+@inline function _piz_wdec16(l::Integer, h::Integer)
+    m = _piz_u16(Int(l)); d = _piz_u16(Int(h))
     bb = (m - (d >> 1)) & _PIZ_MOD_MASK
     aa = (d + bb - _PIZ_A_OFFSET) & _PIZ_MOD_MASK
     return (aa, bb)
@@ -1619,8 +1620,8 @@ function _piz_unpack_enc_table!(r::_PizBR, im0::Int, iM::Int, hcode::Vector{Int}
 end
 
 function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int,
-                               hdec::Vector{_PizHDec}, long_codes::Vector{Int},
-                               prefix_counts::Vector{Int})
+                               hdec::Vector{_PizHDec}, long_codes::Vector{T},
+                               prefix_counts::Vector{U}) where {T<:Integer,U<:Integer}
     fill!(hdec, _PizHDec(0, 0, 0))
     fill!(prefix_counts, 0)
     im = im0
@@ -1648,7 +1649,7 @@ function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int,
 
     total = 0
     @inbounds for idx in eachindex(prefix_counts)
-        count = prefix_counts[idx]
+        count = Int(prefix_counts[idx])
         if count > 0
             hdec[idx] = _PizHDec(0, count, total + 1)
             total += count
@@ -1663,7 +1664,7 @@ function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int,
         l = _piz_huflength(hcode[im + 1])
         if l > _PIZ_HUF_DECBITS
             idx = (c >> (l - _PIZ_HUF_DECBITS)) + 1
-            pos = prefix_counts[idx]
+            pos = Int(prefix_counts[idx])
             long_codes[pos] = im
             prefix_counts[idx] = pos + 1
         end
@@ -1671,7 +1672,8 @@ function _piz_build_dec_table!(hcode::Vector{Int}, im0::Int, iM::Int,
     end
 end
 
-function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Base.RefValue{Int}, oend::Int)
+function _piz_getcode!(po::Integer, rlc::Integer, r::_PizBR, out::Vector{T},
+                       ooff::Base.RefValue{Int}, oend::Int) where {T<:Integer}
     if po == rlc
         if r.lc < 8
             _piz_getchar!(r)
@@ -1682,7 +1684,7 @@ function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Bas
         # Prior value (0-based ooff-1 -> Julia ooff). When nothing is written yet
         # (a run as the first symbol, only on malformed data) three.js reads
         # undefined -> 0; mirror that instead of indexing out[0].
-        s = ooff[] >= 1 ? out[ooff[]] : 0
+        s = ooff[] >= 1 ? out[ooff[]] : zero(T)
         while cs > 0
             out[ooff[] + 1] = s; ooff[] += 1; cs -= 1
         end
@@ -1695,8 +1697,9 @@ function _piz_getcode!(po::Int, rlc::Int, r::_PizBR, out::Vector{Int}, ooff::Bas
 end
 
 function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
-                         long_codes::Vector{Int}, r::_PizBR, ni::Int,
-                         rlc::Int, no::Int, out::Vector{Int}, ooff::Base.RefValue{Int})
+                         long_codes::Vector{T}, r::_PizBR, ni::Int,
+                         rlc::Int, no::Int, out::Vector{U},
+                         ooff::Base.RefValue{Int}) where {T<:Integer,U<:Integer}
     r.c = UInt128(0); r.lc = 0
     oend = no
     in_end = r.off + (ni + 7) ÷ 8
@@ -1705,14 +1708,17 @@ function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
         while r.lc >= _PIZ_HUF_DECBITS
             index = Int((r.c >> (r.lc - _PIZ_HUF_DECBITS)) & UInt128(_PIZ_HUF_DECMASK))
             pl = dec[index + 1]
-            if pl.len != 0
-                r.lc -= pl.len
+            len = Int(pl.len)
+            if len != 0
+                r.lc -= len
                 _piz_getcode!(pl.lit, rlc, r, out, ooff, oend)
             else
-                pl.lit == 0 && error("EXR PIZ hufDecode")
+                lit = Int(pl.lit)
+                lit == 0 && error("EXR PIZ hufDecode")
+                first = Int(pl.first)
                 matched = false
-                for jj in 0:(pl.lit - 1)
-                    po = long_codes[pl.first + jj]
+                for jj in 0:(lit - 1)
+                    po = Int(long_codes[first + jj])
                     l = _piz_huflength(enc[po + 1])
                     while r.lc < l && r.off < in_end
                         _piz_getchar!(r)
@@ -1735,13 +1741,15 @@ function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
     while r.lc > 0
         idx = Int((r.c << (_PIZ_HUF_DECBITS - r.lc)) & UInt128(_PIZ_HUF_DECMASK))
         pl = dec[idx + 1]
-        pl.len != 0 || error("EXR PIZ hufDecode")
-        r.lc -= pl.len
+        len = Int(pl.len)
+        len != 0 || error("EXR PIZ hufDecode")
+        r.lc -= len
         _piz_getcode!(pl.lit, rlc, r, out, ooff, oend)
     end
 end
 
-function _piz_wav2decode!(buffer::Vector{Int}, j::Int, nx::Int, ox::Int, ny::Int, oy::Int, mx::Int)
+function _piz_wav2decode!(buffer::Vector{T}, j::Int, nx::Int, ox::Int, ny::Int,
+                          oy::Int, mx::Int) where {T<:Integer}
     w14 = mx < (1 << 14)
     n = nx > ny ? ny : nx
     p = 1
@@ -1849,7 +1857,7 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
         nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels),
         0x00,
     )
-    ends = copy(starts)
+    ends = starts
     tmpoff = 0
     for _y in 0:(nlines - 1)
         for ci in 1:length(channels)

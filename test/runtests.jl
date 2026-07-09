@@ -10360,7 +10360,7 @@ end
         # every 16-bit half value in row-major order (decoder-independent truth).
         piz_path = joinpath(@__DIR__, "fixtures", "AllHalfValues.exr")
         piz = load_exr(piz_path)
-        @test_opt_alloc 4_500_000 load_exr(piz_path)
+        @test_opt_alloc 3_200_000 load_exr(piz_path)
         @test size(piz) == (256, 256, 3)
         piz_mismatch = 0
         for y in 1:256, x in 1:256
@@ -10426,10 +10426,6 @@ end
                 for i in 1:40; hcode[i] = i; end
                 hcode[41] = 40                                  # complete canonical tree, max len 40
                 Diff3D._piz_canonical!(hcode)
-                hdec = fill(Diff3D._PizHDec(0, 0, 0), 1 << 14)
-                long_codes = Int[]
-                prefix_counts = zeros(Int, 1 << 14)
-                Diff3D._piz_build_dec_table!(hcode, 0, 40, hdec, long_codes, prefix_counts)
                 sym = 39
                 code = Diff3D._piz_hufcode(hcode[sym + 1]); L = Diff3D._piz_huflength(hcode[sym + 1])
                 @test L > 32
@@ -10443,9 +10439,33 @@ end
                     push!(bytes, UInt8(byte))
                 end
                 append!(bytes, zeros(UInt8, 8))
-                r = Diff3D._PizBR(bytes, 0, UInt128(0), 0); out = zeros(Int, 50); ooff = Ref(0)
-                Diff3D._piz_hufdecode!(hcode, hdec, long_codes, r, L, 40, 50, out, ooff)
-                @test out[1] == 39 && ooff[] == 1
+                for T in (Int, Int32)
+                    hdec = fill(Diff3D._PizHDec(0, 0, 0), 1 << 14)
+                    long_codes = T[]
+                    prefix_counts = zeros(T, 1 << 14)
+                    Diff3D._piz_build_dec_table!(hcode, 0, 40, hdec,
+                                                 long_codes, prefix_counts)
+                    r = Diff3D._PizBR(bytes, 0, UInt128(0), 0)
+                    out = zeros(T, 50)
+                    ooff = Ref(0)
+                    Diff3D._piz_hufdecode!(hcode, hdec, long_codes, r, L, 40,
+                                           50, out, ooff)
+                    @test out[1] == 39 && ooff[] == 1
+                end
+                # Storage-bound probe: every possible symbol is routed through
+                # one long-code prefix. This is not a decodable canonical tree;
+                # it verifies the Int32 helper buffers cover the maximum table
+                # counts and symbol ids accepted by the PIZ table builder.
+                worst = fill(40, ENCSIZE)
+                hdec = fill(Diff3D._PizHDec(0, 0, 0), 1 << 14)
+                long_codes = Int32[]
+                prefix_counts = zeros(Int32, 1 << 14)
+                Diff3D._piz_build_dec_table!(worst, 0, ENCSIZE - 1, hdec,
+                                             long_codes, prefix_counts)
+                @test length(long_codes) == ENCSIZE
+                @test hdec[1].lit == ENCSIZE
+                @test prefix_counts[1] == ENCSIZE + 1
+                @test maximum(long_codes) == ENCSIZE - 1
             end
             # A corrupt raw DEFLATE stream (back-reference distance past the output)
             # must raise a clear error, not a BoundsError (reachable via ZIP/PXR24 EXR).
