@@ -1429,45 +1429,55 @@ end
 
 # ========================== Edges / Wireframe ==========================
 
-@inline function _edge_key(a::Int, b::Int)::UInt128
+const _EDGE_KEY32_MAX = Int64(typemax(UInt32))
+
+@inline function _edge_key(::Type{UInt64}, a::Int, b::Int)::UInt64
+    lo, hi = a < b ? (a, b) : (b, a)
+    return (UInt64(lo) << 32) | UInt64(hi)
+end
+
+@inline function _edge_key(::Type{UInt128}, a::Int, b::Int)::UInt128
     lo, hi = a < b ? (a, b) : (b, a)
     return (UInt128(lo) << 64) | UInt128(hi)
 end
 
+@inline _edge_key(a::Int, b::Int)::UInt128 = _edge_key(UInt128, a, b)
+@inline _edge_key_first(key::UInt64) = Int(key >> 32)
+@inline _edge_key_second(key::UInt64) = Int(key & UInt64(0xffffffff))
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
 @inline _edge_key_second(key::UInt128) = Int(key & UInt128(typemax(UInt64)))
 
 @inline function _record_edge_face!(
-    edge_keys::Vector{UInt128},
+    edge_keys::Vector{K},
     edge_record_ids::Vector{Int},
-    ordered_edges::Vector{UInt128},
+    ordered_edges::Vector{K},
     edge_normals::Vector{Vec3{Float64}},
-    edge_counts::Vector{Int},
+    edge_counts::Vector{UInt8},
     edge_features::Vector{Bool},
     a::Int, b::Int, n::Vec3{Float64}, cosT::Float64,
-)
-    key = _edge_key(a, b)
+) where {K<:Union{UInt64,UInt128}}
+    key = _edge_key(K, a, b)
     mask = length(edge_keys) - 1
     idx = Int(hash(key) & UInt(mask)) + 1
     while true
         existing = edge_keys[idx]
-        if existing == 0
+        if existing == zero(K)
             edge_keys[idx] = key
             record_id = length(ordered_edges) + 1
             edge_record_ids[idx] = record_id
             push!(ordered_edges, key)
             push!(edge_normals, n)
-            push!(edge_counts, 1)
+            push!(edge_counts, UInt8(1))
             push!(edge_features, false)
             return nothing
         elseif existing == key
             record_id = edge_record_ids[idx]
             count = edge_counts[record_id]
-            if count == 1
+            if count == UInt8(1)
                 edge_features[record_id] = dot(edge_normals[record_id], n) < cosT
-                edge_counts[record_id] = 2
+                edge_counts[record_id] = UInt8(2)
             else
-                edge_counts[record_id] = count + 1
+                edge_counts[record_id] = min(count + UInt8(1), typemax(UInt8))
             end
             return nothing
         end
@@ -1484,14 +1494,14 @@ end
 end
 
 @inline function _record_wireframe_edge!(
-    seen::Vector{UInt128}, ordered_edges::Vector{UInt128}, a::Int, b::Int,
-)
-    key = _edge_key(a, b)
+    seen::Vector{K}, ordered_edges::Vector{K}, a::Int, b::Int,
+) where {K<:Union{UInt64,UInt128}}
+    key = _edge_key(K, a, b)
     mask = length(seen) - 1
     idx = Int(hash(key) & UInt(mask)) + 1
     while true
         existing = seen[idx]
-        if existing == 0
+        if existing == zero(K)
             seen[idx] = key
             push!(ordered_edges, key)
             return nothing
@@ -1503,8 +1513,9 @@ end
 end
 
 @inline function _write_wireframe_key!(
-    positions::Vector{Float64}, geo::BufferGeometry, key::UInt128, vi::Int, pout::Int,
-)
+    positions::Vector{Float64}, geo::BufferGeometry, key::K,
+    vi::Int, pout::Int,
+) where {K<:Union{UInt64,UInt128}}
     va = get_vertex(geo, _edge_key_first(key))
     vb = get_vertex(geo, _edge_key_second(key))
     positions[pout] = va.x
@@ -1520,9 +1531,15 @@ end
 Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
 function wireframe_geometry(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
+    geo.n_vertices <= _EDGE_KEY32_MAX ?
+        _wireframe_geometry_keyed(geo, UInt64) :
+        _wireframe_geometry_keyed(geo, UInt128)
+end
+
+function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
     max_edges = 3 * geo.n_faces
-    seen = zeros(UInt128, _edge_table_capacity(max_edges))
-    ordered_edges = Vector{UInt128}()
+    seen = zeros(K, _edge_table_capacity(max_edges))
+    ordered_edges = Vector{K}()
     sizehint!(ordered_edges, _edge_record_hint(geo, max_edges))
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
@@ -1545,7 +1562,7 @@ end
 @inline function _canonical_edge_vertex!(
     canonical_ids::Vector{Int},
     canon::Dict{Tuple{Float64,Float64,Float64},Int},
-    cpos::Vector{Vec3{Float64}},
+    csrc::Vector{Int},
     cpos_len::Int,
     geo::BufferGeometry,
     vi::Int,
@@ -1557,7 +1574,7 @@ end
     c = get(canon, key, 0)
     if c == 0
         cpos_len += 1
-        cpos[cpos_len] = v
+        csrc[cpos_len] = vi
         canon[key] = cpos_len
         c = cpos_len
     end
@@ -1572,19 +1589,26 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     _validate_triangle_geometry_indices(geo, "edges_geometry")
     threshold_angle = _geometry_finite_scalar(threshold_angle, "edges_geometry threshold_angle")
     cosT = cos(threshold_angle)
+    geo.n_vertices <= _EDGE_KEY32_MAX ?
+        _edges_geometry_keyed(geo, cosT, UInt64) :
+        _edges_geometry_keyed(geo, cosT, UInt128)
+end
+
+function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
+                               ::Type{K}) where {K<:Union{UInt64,UInt128}}
     # Canonicalize vertices by position.
     canon = Dict{Tuple{Float64,Float64,Float64}, Int}()
     sizehint!(canon, geo.n_vertices)
     canonical_ids = zeros(Int, geo.n_vertices)
-    cpos = Vector{Vec3{Float64}}(undef, geo.n_vertices)
+    csrc = Vector{Int}(undef, geo.n_vertices)
     cpos_len = 0
     # edge (lo,hi) -> first normal, adjacent face count, sharp-on-second-face
     max_edges = 3 * geo.n_faces
-    edge_keys = zeros(UInt128, _edge_table_capacity(max_edges))
+    edge_keys = zeros(K, _edge_table_capacity(max_edges))
     edge_record_ids = zeros(Int, length(edge_keys))
-    ordered_edges = Vector{UInt128}()
+    ordered_edges = Vector{K}()
     edge_normals = Vector{Vec3{Float64}}()
-    edge_counts = Vector{Int}()
+    edge_counts = Vector{UInt8}()
     edge_features = Bool[]
     edge_hint = _edge_record_hint(geo, max_edges)
     sizehint!(ordered_edges, edge_hint)
@@ -1595,11 +1619,11 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         n = cross(v2 - v1, v3 - v1); nl = norm(n); nl > 0 && (n = n / nl)
-        c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+        c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
                                                cpos_len, geo, i1)
-        c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+        c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
                                                cpos_len, geo, i2)
-        c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, cpos,
+        c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
                                                cpos_len, geo, i3)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
                            edge_counts, edge_features, c1, c2, n, cosT)
@@ -1610,16 +1634,16 @@ function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     end
     feature_edges = 0
     @inbounds for i in eachindex(ordered_edges)
-        (edge_counts[i] == 1 || edge_features[i]) && (feature_edges += 1)
+        (edge_counts[i] == UInt8(1) || edge_features[i]) && (feature_edges += 1)
     end
     positions = Vector{Float64}(undef, 6 * feature_edges)
     vi = 0
     pout = 1
     @inbounds for i in eachindex(ordered_edges)
-        (edge_counts[i] == 1 || edge_features[i]) || continue
+        (edge_counts[i] == UInt8(1) || edge_features[i]) || continue
         key = ordered_edges[i]
-        a = cpos[_edge_key_first(key)]
-        b = cpos[_edge_key_second(key)]
+        a = get_vertex(geo, csrc[_edge_key_first(key)])
+        b = get_vertex(geo, csrc[_edge_key_second(key)])
         positions[pout] = a.x
         positions[pout + 1] = a.y
         positions[pout + 2] = a.z
