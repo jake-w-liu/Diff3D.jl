@@ -1085,6 +1085,89 @@ function _rasterize_instanced_geo_flat_pooled_from_instanced!(
     return nothing
 end
 
+function _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+    rt::RenderTarget, im::InstancedMesh, mat::M, instanced_slot::Int,
+    base::Mat4, instanced_material_states, lights, proj::Mat4, view::Mat4,
+    near, cam_pos::Vec3, tri, clipped, sx, sy, sz,
+    colorbuf::Vector{Color3{Float64}}, ortho_dir, ylo::Int, yhi::Int,
+    flat_attr_tri, flat_attr_clipped, flat_iw) where {M<:AbstractMaterial}
+    instance_materials = instanced_material_states[instanced_slot].materials::Vector{M}
+    _rasterize_instanced_geo_flat_pooled_materials!(
+        rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
+        base, lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz,
+        colorbuf, ortho_dir; ylo=ylo, yhi=yhi,
+        flat_attr_tri=flat_attr_tri,
+        flat_attr_clipped=flat_attr_clipped,
+        flat_iw=flat_iw)
+    return nothing
+end
+
+function _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
+    rt::RenderTarget, im::InstancedMesh, instanced_slot::Int, base::Mat4,
+    instanced_material_states, lights, proj::Mat4, view::Mat4, near,
+    cam_pos::Vec3, tri, clipped, sx, sy, sz, colorbuf::Vector{Color3{Float64}},
+    ortho_dir, ylo::Int, yhi::Int, flat_attr_tri, flat_attr_clipped, flat_iw)
+    mat = im.material
+    if mat isa MeshBasicMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshLambertMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshPhongMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshStandardMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshNormalMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshPhysicalMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshToonMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshMatcapMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa MeshDepthMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    elseif mat isa ShaderMaterial
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, lights,
+            proj, view, near, cam_pos, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, flat_attr_tri, flat_attr_clipped, flat_iw)
+    else
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, _instanced_material(im), instanced_slot, base,
+            instanced_material_states, lights, proj, view, near, cam_pos, tri,
+            clipped, sx, sy, sz, colorbuf, ortho_dir, ylo, yhi, flat_attr_tri,
+            flat_attr_clipped, flat_iw)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
@@ -2688,14 +2771,11 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         base = instanced_worlds[instanced_slot]
-        instance_materials = instanced_material_states[instanced_slot].materials
-        _rasterize_instanced_geo_flat_pooled_materials!(
-            rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
-            base, lights, proj, view, near, camera.position, tri, clipped, sx, sy, sz,
-            colorbuf, ortho_dir; ylo=ylo, yhi=yhi,
-            flat_attr_tri=thread_cache.smooth_tri,
-            flat_attr_clipped=thread_cache.smooth_clipped,
-            flat_iw=thread_cache.smooth_iw)
+        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
+            rt, im, instanced_slot, base, instanced_material_states, lights, proj,
+            view, near, camera.position, tri, clipped, sx, sy, sz, colorbuf,
+            ortho_dir, ylo, yhi, thread_cache.smooth_tri,
+            thread_cache.smooth_clipped, thread_cache.smooth_iw)
     end
     return nothing
 end
