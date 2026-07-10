@@ -18,11 +18,11 @@ end
 
 function _checked_ssim_window_size(window_size)
     window_size isa Bool &&
-        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
+        throw(ArgumentError("loss_ssim: window_size must be an odd integer >= 3 (got $window_size)"))
     window_size isa Integer ||
-        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
-    window_size >= 2 ||
-        throw(ArgumentError("loss_ssim: window_size must be an integer >= 2 (got $window_size)"))
+        throw(ArgumentError("loss_ssim: window_size must be an odd integer >= 3 (got $window_size)"))
+    (window_size >= 3 && isodd(window_size)) ||
+        throw(ArgumentError("loss_ssim: window_size must be an odd integer >= 3 (got $window_size)"))
     return window_size
 end
 
@@ -174,8 +174,8 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
             img_occ = (sigmoid_approx((img_val - threshold) * 200) - occ0) / (1 - occ0)
             tgt_occ = (sigmoid_approx((tgt_val - threshold) * 200) - occ0) / (1 - occ0)
 
-            intersection += img_occ * tgt_occ
-            union_val += img_occ + tgt_occ - img_occ * tgt_occ
+            intersection += min(img_occ, tgt_occ)
+            union_val += max(img_occ, tgt_occ)
         end
     end
 

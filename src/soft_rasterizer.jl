@@ -618,7 +618,12 @@ end
 Sigmoid approximation — smooth and AD-friendly.
 """
 @inline function sigmoid_approx(x::T) where T
-    one(T) / (one(T) + exp(-x))
+    if x >= zero(T)
+        return one(T) / (one(T) + exp(-x))
+    else
+        ex = exp(x)
+        return ex / (one(T) + ex)
+    end
 end
 
 """

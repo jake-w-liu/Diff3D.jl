@@ -2712,6 +2712,8 @@ end
         vp = mat4_perspective(π/4, 1.0, 0.1, 100.0) *
              mat4_look_at(Vec3(0.0,0.0,3.0), Vec3(0.0,0.0,0.0), Vec3(0.0,1.0,0.0))
         config = SoftRasterizerConfig(sigma=1e-2, gamma=1.0)
+        @test isfinite(ForwardDiff.derivative(t -> Diff3D.sigmoid_approx(t), -1000.0))
+        @test isfinite(ForwardDiff.derivative(t -> Diff3D.sigmoid_approx(t), 1000.0))
 
         img = soft_render(verts, faces, colors, vp, 16, 16, config)
         @test size(img) == (16, 16, 3)
@@ -2777,6 +2779,10 @@ end
         one_face_params = [-0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0]
         one_face_rf(one_face_params)
         @test_opt_alloc 7300 one_face_rf(one_face_params)
+        sharp_rf = vertex_render_fn(one_face_faces, one_face_colors, vp, 8, 8;
+                                    sigma=1e-6, gamma=1.0)
+        sharp_grad = ForwardDiff.gradient(p -> sum(sharp_rf(p)), one_face_params)
+        @test all(isfinite, sharp_grad)
         one_face_ws = SoftRenderWorkspace()
         one_face_rf_ws = vertex_render_fn(one_face_faces, one_face_colors, vp, 16, 16;
                                           sigma=1e-2, gamma=1.0, workspace=one_face_ws)
@@ -17388,6 +17394,8 @@ end
             # loss_ssim: image smaller than the SSIM window must error, not report a perfect match.
             @test_throws ArgumentError loss_ssim(zeros(6, 6, 3), ones(6, 6, 3))
             @test_throws ArgumentError loss_ssim(zeros(6, 6, 3), ones(6, 6, 3); window_size=3.0)
+            @test_throws ArgumentError loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size=2)
+            @test_throws ArgumentError loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size=4)
             # Valid sizes are unaffected: identical images -> zero loss, dissimilar -> large loss.
             img = reshape(collect(range(0.0, 1.0; length=9*9*3)), 9, 9, 3)
             @test loss_ssim(img, img) ≈ 0.0 atol=1e-12
@@ -17395,6 +17403,10 @@ end
 
             # loss_silhouette_iou: two identical empty (all-black) silhouettes are a perfect match.
             @test loss_silhouette_iou(zeros(8, 8, 3), zeros(8, 8, 3)) < 0.05
+            @test loss_silhouette_iou(fill(0.03, 2, 2, 1),
+                                      fill(0.03, 2, 2, 1)) < 1e-6
+            @test loss_silhouette_iou(fill(0.05, 2, 2, 1),
+                                      fill(0.05, 2, 2, 1)) < 1e-6
             @test_throws ArgumentError loss_silhouette_iou(zeros(4, 4, 3), zeros(4, 4, 3);
                                                            threshold=-1.0)
             # Resolution-independent: still ~0 loss for a larger blank pair.
@@ -18284,8 +18296,9 @@ end
         @test reverse_gradient(x -> x[1]^1, [0.0]) == [1.0]
         @test reverse_gradient(x -> x[1]^2, [0.0]) == [0.0]
 
-        # loss_ssim rejects window_size < 2 (n=1 ⇒ /(n-1)=0 ⇒ NaN) with a clear error.
+        # loss_ssim rejects invalid window sizes with a clear error.
         @test_throws ArgumentError loss_ssim(rand(4, 4, 1), rand(4, 4, 1); window_size = 1)
+        @test_throws ArgumentError loss_ssim(rand(4, 4, 1), rand(4, 4, 1); window_size = 2)
         @test isfinite(loss_ssim(rand(8, 8, 1), rand(8, 8, 1); window_size = 7))
 
         # Signed 32-bit LE reader returns true negatives (was modular UInt64 wrap).
