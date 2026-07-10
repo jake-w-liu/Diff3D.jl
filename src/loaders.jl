@@ -371,6 +371,49 @@ function _obj_parse_corner(c::AbstractString, nverts_v::Int, nverts_uv::Int, nve
     return (vidx, uidx, nidx)
 end
 
+function _obj_find_slash_range(c::AbstractString, first_i::Int, last_i::Int)
+    i = first_i
+    while i <= last_i
+        c[i] == '/' && return i
+        i = nextind(c, i)
+    end
+    return nothing
+end
+
+function _obj_parse_corner_range(c::AbstractString, first_i::Int, last_i::Int,
+                                 nverts_v::Int, nverts_uv::Int, nverts_n::Int)
+    slash1 = _obj_find_slash_range(c, first_i, last_i)
+    if slash1 === nothing
+        return (_obj_checked_index_range(c, first_i, last_i, nverts_v, :vertex), 0, 0)
+    end
+    vidx = _obj_checked_index_range(c, first_i, prevind(c, slash1), nverts_v, :vertex)
+    after1 = nextind(c, slash1)
+    slash2 = after1 <= last_i ? _obj_find_slash_range(c, after1, last_i) : nothing
+    if slash2 === nothing
+        uidx = after1 <= last_i ? _obj_checked_index_range(c, after1, last_i, nverts_uv, :uv) : 0
+        return (vidx, uidx, 0)
+    end
+    uidx = after1 < slash2 ? _obj_checked_index_range(c, after1, prevind(c, slash2), nverts_uv, :uv) : 0
+    after2 = nextind(c, slash2)
+    slash3 = after2 <= last_i ? _obj_find_slash_range(c, after2, last_i) : nothing
+    normal_last = slash3 === nothing ? last_i : prevind(c, slash3)
+    nidx = after2 <= normal_last ?
+           _obj_checked_index_range(c, after2, normal_last, nverts_n, :normal) : 0
+    return (vidx, uidx, nidx)
+end
+
+function _obj_next_token_range(line::AbstractString, i::Int, last_i::Int)
+    while i <= last_i && isspace(line[i])
+        i = nextind(line, i)
+    end
+    i <= last_i || return (0, 0, i, false)
+    first_i = i
+    while i <= last_i && !isspace(line[i])
+        i = nextind(line, i)
+    end
+    return (first_i, prevind(line, i), i, true)
+end
+
 function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
                            out_nrm::Vector{Float64}, indices::Vector{Int},
                            verts::Vector{Float64}, file_uvs::Vector{Float64},
@@ -401,6 +444,48 @@ function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
     end
     out_vi += 1
     push!(indices, out_vi)
+    return out_vi, have_uvs, have_normals, missing_normals
+end
+
+function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
+                                      out_nrm::Vector{Float64}, indices::Vector{Int},
+                                      verts::Vector{Float64}, file_uvs::Vector{Float64},
+                                      file_normals::Vector{Float64}, line::AbstractString,
+                                      nverts_v::Int, nverts_uv::Int, nverts_n::Int,
+                                      out_vi::Int, have_uvs::Bool, have_normals::Bool,
+                                      missing_normals::Bool)
+    last_i = lastindex(line)
+    i = nextind(line, firstindex(line))
+    first_first, first_last, i, have_first = _obj_next_token_range(line, i, last_i)
+    second_first, second_last, i, have_second = _obj_next_token_range(line, i, last_i)
+    third_first, third_last, i, have_third = _obj_next_token_range(line, i, last_i)
+    (have_first && have_second && have_third) ||
+        error("OBJ face requires at least 3 vertices")
+    first_corner = _obj_parse_corner_range(line, first_first, first_last,
+                                           nverts_v, nverts_uv, nverts_n)
+    prev_corner = _obj_parse_corner_range(line, second_first, second_last,
+                                          nverts_v, nverts_uv, nverts_n)
+    corner = _obj_parse_corner_range(line, third_first, third_last,
+                                     nverts_v, nverts_uv, nverts_n)
+    while true
+        out_vi, have_uvs, have_normals, missing_normals =
+            _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                              file_uvs, file_normals, first_corner, out_vi,
+                              have_uvs, have_normals, missing_normals)
+        out_vi, have_uvs, have_normals, missing_normals =
+            _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                              file_uvs, file_normals, prev_corner, out_vi,
+                              have_uvs, have_normals, missing_normals)
+        out_vi, have_uvs, have_normals, missing_normals =
+            _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
+                              file_uvs, file_normals, corner, out_vi,
+                              have_uvs, have_normals, missing_normals)
+        prev_corner = corner
+        next_first, next_last, i, have_next = _obj_next_token_range(line, i, last_i)
+        have_next || break
+        corner = _obj_parse_corner_range(line, next_first, next_last,
+                                         nverts_v, nverts_uv, nverts_n)
+    end
     return out_vi, have_uvs, have_normals, missing_normals
 end
 
@@ -626,34 +711,11 @@ function load_obj(path::String)
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
-            parts = eachsplit(line)
-            tag_state = iterate(parts)
-            first_state = iterate(parts, tag_state[2])
-            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
-            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
-            third_state === nothing && error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(first_state[1], nverts_v, nverts_uv, nverts_n)
-            prev_corner = _obj_parse_corner(second_state[1], nverts_v, nverts_uv, nverts_n)
-            corner = _obj_parse_corner(third_state[1], nverts_v, nverts_uv, nverts_n)
-            while true
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, first_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, prev_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                prev_corner = corner
-                next_state = iterate(parts, third_state[2])
-                next_state === nothing && break
-                corner = _obj_parse_corner(next_state[1], nverts_v, nverts_uv, nverts_n)
-                third_state = next_state
-            end
+            out_vi, have_uvs, have_normals, missing_normals =
+                _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices,
+                                             verts, file_uvs, file_normals, line,
+                                             nverts_v, nverts_uv, nverts_n, out_vi,
+                                             have_uvs, have_normals, missing_normals)
             continue
         end
         parts = eachsplit(line)

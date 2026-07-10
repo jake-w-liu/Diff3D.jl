@@ -6139,7 +6139,7 @@ end
         @test Diff3D._obj_scan_counts(grid_path) == ((n + 1)^2, 0, 0, 2 * n * n)
         @test_opt_alloc 100_000 Diff3D._obj_scan_counts(grid_path)
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 1_600_000 load_obj(grid_path)
+        @test_opt_alloc 900_000 load_obj(grid_path)
         @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
         @test_opt_alloc 1_600_000 load_obj_groups(grid_path)
         seekstart(grid_io)
@@ -6173,7 +6173,7 @@ end
         write(grid_path, String(take!(grid_io)))
         @test Diff3D._obj_scan_counts(grid_path) == ((n + 1)^2, 0, 1, 2 * n * n)
         @test load_obj(grid_path).n_faces == 2 * n * n
-        @test_opt_alloc 1_600_000 load_obj(grid_path)
+        @test_opt_alloc 900_000 load_obj(grid_path)
         rm(grid_path)
     end
 
