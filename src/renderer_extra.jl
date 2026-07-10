@@ -1012,6 +1012,79 @@ function _rasterize_instanced_geo_flat_pooled_materials!(rt::RenderTarget, geo,
     return nothing
 end
 
+function _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+    rt::RenderTarget, im::InstancedMesh, mat::AbstractMaterial,
+    instanced_slot::Int, base::Mat4, cache::RenderCache, proj::Mat4, view::Mat4,
+    near, cam_pos::Vec3, ortho_dir;
+    xlo::Int=1, xhi::Int=rt.width, ylo::Int=1, yhi::Int=rt.height)
+    (_instanced_triangle_drawable(im) && !material_wireframe(mat)) || return nothing
+    instance_materials = _instanced_materials!(cache.instanced_materials,
+                                               instanced_slot, im, mat,
+                                               im.instance_colors)
+    _rasterize_instanced_geo_flat_pooled_materials!(
+        rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
+        base, cache.lights, proj, view, near, cam_pos, cache.tri,
+        cache.clipped, cache.sx, cache.sy, cache.sz, cache.colors, ortho_dir;
+        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+        flat_attr_tri=cache.smooth_tri,
+        flat_attr_clipped=cache.smooth_clipped,
+        flat_iw=cache.smooth_iw)
+    return nothing
+end
+
+function _rasterize_instanced_geo_flat_pooled_from_instanced!(
+    rt::RenderTarget, im::InstancedMesh, instanced_slot::Int, base::Mat4,
+    cache::RenderCache, proj::Mat4, view::Mat4, near, cam_pos::Vec3, ortho_dir;
+    xlo::Int=1, xhi::Int=rt.width, ylo::Int=1, yhi::Int=rt.height)
+    mat = im.material
+    if mat isa MeshBasicMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshLambertMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshPhongMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshStandardMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshNormalMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshPhysicalMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshToonMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshMatcapMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa MeshDepthMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    elseif mat isa ShaderMaterial
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, mat, instanced_slot, base, cache, proj, view, near, cam_pos,
+            ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    else
+        _rasterize_instanced_geo_flat_pooled_from_instanced_material!(
+            rt, im, _instanced_material(im), instanced_slot, base, cache, proj,
+            view, near, cam_pos, ortho_dir; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
@@ -1047,19 +1120,10 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                cache.smooth_iw)
     end
     for (instanced_slot, im) in pairs(cache.instanced)
-        mat = _instanced_material(im)
-        (_instanced_triangle_drawable(im) && !material_wireframe(mat)) || continue
         base = cache.instanced_worlds[instanced_slot]
-        instance_materials = _instanced_materials!(cache.instanced_materials,
-                                                   instanced_slot, im, mat,
-                                                   im.instance_colors)
-        _rasterize_instanced_geo_flat_pooled_materials!(
-            rt, _instanced_geometry(im), instance_materials, im.instance_matrices,
-            base, cache.lights, proj, view, near, camera.position, cache.tri,
-            cache.clipped, cache.sx, cache.sy, cache.sz, cache.colors, ortho_dir;
-            flat_attr_tri=cache.smooth_tri,
-            flat_attr_clipped=cache.smooth_clipped,
-            flat_iw=cache.smooth_iw)
+        _rasterize_instanced_geo_flat_pooled_from_instanced!(
+            rt, im, instanced_slot, base, cache, proj, view, near, camera.position,
+            ortho_dir)
     end
     return rt
 end

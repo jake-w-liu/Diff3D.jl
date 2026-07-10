@@ -11779,6 +11779,7 @@ end
         a2 = @allocated render_pooled!(r2, scene, cam, cache)
         a3 = @allocated render_pooled!(r2, scene, cam, cache)
         @test a3 <= a2                                         # allocation does not grow per frame
+        @test_opt_alloc 128 render_pooled!(r2, scene, cam, cache)
 
         im = only(collect_instanced(scene))
         base = compute_world_matrix(im)
@@ -12463,7 +12464,7 @@ end
             colored_alloc_cache.meshes, colored_alloc_cache.mesh_worlds,
             colored_alloc_cache.instanced, colored_alloc_cache.instanced_worlds,
             colored_alloc_scene, colored_alloc_cache.primitive_flags)
-        @test_opt_alloc 1024 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+        @test_opt_alloc 128 render_pooled!(colored_alloc_rt, colored_alloc_scene,
                                             colored_alloc_cam, colored_alloc_cache)
         colored_tiled_cache = [RenderCache() for _ in 1:Threads.nthreads()]
         colored_tiled_rt = RenderTarget(48,48)
@@ -12483,7 +12484,7 @@ end
         render_tiled!(colored_tiled_rt, colored_alloc_scene, colored_alloc_cam;
                       tiles=1, cache=colored_tiled_cache)
         @test maximum(abs.(colored_alloc_expected.color .- colored_tiled_rt.color)) < 1e-12
-        @test_opt_alloc 1024 render_pooled!(colored_alloc_rt, colored_alloc_scene,
+        @test_opt_alloc 128 render_pooled!(colored_alloc_rt, colored_alloc_scene,
                                             colored_alloc_cam, colored_alloc_cache)
 
         colored_cached_rt = RenderTarget(48,48)
