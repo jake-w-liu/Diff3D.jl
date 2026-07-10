@@ -2275,34 +2275,15 @@ function load_obj_groups(path::String)
         (isempty(line) || startswith(line, "#")) && continue
         if _obj_is_face_record(line)
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
-            parts = eachsplit(line)
-            tag_state = iterate(parts)
-            first_state = iterate(parts, tag_state[2])
-            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
-            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
-            third_state === nothing && error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(first_state[1], nv, nuv, nn)
-            prev_corner = _obj_parse_corner(second_state[1], nv, nuv, nn)
-            corner = _obj_parse_corner(third_state[1], nv, nuv, nn)
-            while true
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, first_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, prev_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
+            first_face = length(indices) ÷ 3 + 1
+            out_vi, have_uvs, have_normals, missing_normals =
+                _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices,
+                                             verts, file_uvs, file_normals, line,
+                                             nv, nuv, nn, out_vi, have_uvs,
+                                             have_normals, missing_normals)
+            last_face = length(indices) ÷ 3
+            for _ in first_face:last_face
                 push!(face_mtl, cur_mtl)
-                prev_corner = corner
-                next_state = iterate(parts, third_state[2])
-                next_state === nothing && break
-                corner = _obj_parse_corner(next_state[1], nv, nuv, nn)
-                third_state = next_state
             end
             continue
         end

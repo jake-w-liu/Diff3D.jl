@@ -6141,7 +6141,7 @@ end
         @test load_obj(grid_path).n_faces == 2 * n * n
         @test_opt_alloc 900_000 load_obj(grid_path)
         @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
-        @test_opt_alloc 1_600_000 load_obj_groups(grid_path)
+        @test_opt_alloc 900_000 load_obj_groups(grid_path)
         seekstart(grid_io)
         truncate(grid_io, 0)
         for y in 0:n, x in 0:n
@@ -6158,7 +6158,7 @@ end
         @test length(face_mtl) == geo_mtl.n_faces
         @test all(==("grid"), face_mtl)
         @test isempty(mats)
-        @test_opt_alloc 1_600_000 load_obj_groups(grid_path)
+        @test_opt_alloc 900_000 load_obj_groups(grid_path)
         seekstart(grid_io)
         truncate(grid_io, 0)
         for y in 0:n, x in 0:n
@@ -6174,6 +6174,8 @@ end
         @test Diff3D._obj_scan_counts(grid_path) == ((n + 1)^2, 0, 1, 2 * n * n)
         @test load_obj(grid_path).n_faces == 2 * n * n
         @test_opt_alloc 900_000 load_obj(grid_path)
+        @test load_obj_groups(grid_path)[1].n_faces == 2 * n * n
+        @test_opt_alloc 900_000 load_obj_groups(grid_path)
         rm(grid_path)
     end
 
