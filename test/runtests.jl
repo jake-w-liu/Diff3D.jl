@@ -7746,6 +7746,16 @@ end
         rt1 = RenderTarget(60,60); render!(rt1, scene, cam)
         rt2 = RenderTarget(60,60); render_tiled!(rt2, scene, cam; tiles=5)
         @test maximum(abs.(rt1.color .- rt2.color)) < 1e-12
+
+        wire_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(wire_scene, Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                              MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                wireframe=true)))
+        wire_ref = RenderTarget(32, 32); render!(wire_ref, wire_scene, cam;
+                                                 cache=RenderCache())
+        wire_tiled = RenderTarget(32, 32)
+        render_tiled!(wire_tiled, wire_scene, cam; tiles=1, cache=[RenderCache()])
+        @test maximum(abs.(wire_ref.color .- wire_tiled.color)) < 1e-12
     end
 
     @testset "Line and point rasterization" begin
@@ -7776,6 +7786,12 @@ end
         ps = Scene(background=Color3(0.0,0,0)); add!(ps, PointsObject(pg, PointsMaterial(color=Color3(0.0,1,0), size=3.0)))
         rtp = RenderTarget(40,40); render!(rtp, ps, cam)
         @test count(>(0.5), rtp.color[:,:,2]) >= 1          # point lit
+        for bad_size in (Inf, NaN, 1.0e300)
+            bad_scene = Scene(background=Color3(0.0, 0.0, 0.0))
+            add!(bad_scene, PointsObject(pg, PointsMaterial(size=bad_size)))
+            @test_throws ArgumentError render_points!(RenderTarget(8, 8), bad_scene,
+                                                      cam; cache=RenderCache())
+        end
 
         point_cam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
                                        near=0.1, far=10.0)

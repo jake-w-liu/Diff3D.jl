@@ -2164,6 +2164,10 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
         if size_attenuation && camera isa PerspectiveCamera
             effective_size *= reference_depth / max(1e-6, -pv.z)
         end
+        (isfinite(effective_size) && effective_size >= 0.0) ||
+            throw(ArgumentError("point size must be finite and non-negative"))
+        effective_size <= Float64(typemax(Int) ÷ 4) ||
+            throw(ArgumentError("point size is too large"))
         r = max(Int(round(effective_size)) ÷ 2, 0)
         diameter = max(2r + 1, 1)
         # Skip a point whose footprint cannot touch the buffer; this also keeps
@@ -2759,6 +2763,12 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     for i in eachindex(meshes)
         mesh = meshes[i]
         mat = _mesh_material(mesh)
+        if material_wireframe(mat)
+            _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
+                                              proj, view, near, 1, rt.width,
+                                              ylo, yhi, thread_cache)
+            continue
+        end
         is_transparent_material(mat) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera.position,
