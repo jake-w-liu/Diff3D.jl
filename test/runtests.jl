@@ -22843,4 +22843,27 @@ end
             [0.25]) ≈ [2.0]
     end
 
+    @testset "fresh audit round 148 fixes" begin
+        largest = floatmax(Float64)
+        ok, tangent, handedness =
+            Diff3D._normal_map_tangent_seed(
+                Vec3(0.0, 0.0, 0.0),
+                Vec3(largest, 0.0, 0.0),
+                Vec3(0.0, largest, 0.0),
+                (0.0, 0.0),
+                (largest, largest),
+                (largest, -largest))
+        @test ok
+        @test norm(
+            tangent - normalize(Vec3(1.0, 1.0, 0.0))) < 1e-15
+        @test handedness == -1.0
+        @test_opt_alloc 0 Diff3D._normal_map_tangent_seed(
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(largest, 0.0, 0.0),
+            Vec3(0.0, largest, 0.0),
+            (0.0, 0.0),
+            (largest, largest),
+            (largest, -largest))
+    end
+
 end

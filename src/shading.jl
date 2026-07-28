@@ -458,6 +458,87 @@ function _normal_map_tangent_seed(p1::Vec3, p2::Vec3, p3::Vec3, uv1, uv2, uv3)
     return true, T / tl, sign(det)
 end
 
+function _normal_map_tangent_seed(
+        p1::Vec3{Float64}, p2::Vec3{Float64}, p3::Vec3{Float64},
+        uv1::NTuple{2,Float64}, uv2::NTuple{2,Float64},
+        uv3::NTuple{2,Float64})
+    e1 = p2 - p1
+    e2 = p3 - p1
+    du1 = uv2[1] - uv1[1]
+    dv1 = uv2[2] - uv1[2]
+    du2 = uv3[1] - uv1[1]
+    dv2 = uv3[2] - uv1[2]
+    det = du1 * dv2 - du2 * dv1
+    fallback = Vec3(0.0, 0.0, 0.0)
+    if isfinite(det) && abs(det) >= 1e-12
+        tangent = (e1 * dv2 - e2 * dv1) * (1.0 / det)
+        tangent_length = norm(tangent)
+        if isfinite(tangent_length) &&
+           isfinite(tangent.x) && isfinite(tangent.y) &&
+           isfinite(tangent.z) && tangent_length >= 1e-12
+            return true, tangent / tangent_length, sign(det)
+        end
+    end
+
+    # Extreme finite positions or UVs can overflow the ordinary determinant
+    # and tangent products even when their normalized tangent is well-defined.
+    # Retain each product as a mantissa and binary exponent until the final
+    # unit direction is formed.
+    edge1 = _float_vector_difference(p1, p2)
+    edge2 = _float_vector_difference(p1, p3)
+    du1_rep = _float_difference_representation(uv1[1], uv2[1])
+    dv1_rep = _float_difference_representation(uv1[2], uv2[2])
+    du2_rep = _float_difference_representation(uv1[1], uv3[1])
+    dv2_rep = _float_difference_representation(uv1[2], uv3[2])
+    determinant = _float_representation_add(
+        _float_representation_multiply(du1_rep, dv2_rep),
+        _float_representation_negate(
+            _float_representation_multiply(du2_rep, dv1_rep)),
+    )
+    determinant.nonzero ||
+        return false, fallback, 0.0
+    determinant_value = _float_representation_value(determinant)
+    abs(determinant_value) < 1e-12 &&
+        return false, fallback, 0.0
+
+    tangent = ntuple(3) do axis
+        _float_representation_add(
+            _float_representation_multiply(edge1[axis], dv2_rep),
+            _float_representation_negate(
+                _float_representation_multiply(edge2[axis], dv1_rep)),
+        )
+    end
+    tangent_exponent = typemin(Int)
+    for component in tangent
+        component.nonzero &&
+            (tangent_exponent = max(
+                tangent_exponent, component.exponent))
+    end
+    tangent_exponent == typemin(Int) &&
+        return false, fallback, 0.0
+    scaled_tangent = Vec3(
+        tangent[1].nonzero ? ldexp(
+            tangent[1].mantissa,
+            tangent[1].exponent - tangent_exponent) : 0.0,
+        tangent[2].nonzero ? ldexp(
+            tangent[2].mantissa,
+            tangent[2].exponent - tangent_exponent) : 0.0,
+        tangent[3].nonzero ? ldexp(
+            tangent[3].mantissa,
+            tangent[3].exponent - tangent_exponent) : 0.0,
+    )
+    scaled_length = norm(scaled_tangent)
+    tangent_length = ldexp(
+        scaled_length / abs(determinant.mantissa),
+        tangent_exponent - determinant.exponent)
+    tangent_length < 1e-12 &&
+        return false, fallback, 0.0
+    handedness = sign(determinant.mantissa)
+    return true,
+           (scaled_tangent / scaled_length) * handedness,
+           handedness
+end
+
 function _apply_normal_map_tangent_seed(face_n::Vec3, nmap, u, v, tangent::Vec3,
                                         handedness, normal_scale::Real=1.0)
     T = tangent - face_n * dot(face_n, tangent)       # Gram-Schmidt orthonormalize
