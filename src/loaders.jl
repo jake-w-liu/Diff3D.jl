@@ -967,6 +967,29 @@ const _PLY_SIZE = Dict(:i8=>1, :u8=>1, :i16=>2, :u16=>2, :i32=>4, :u32=>4, :f32=
 # Integer scalar types: PLY colour channels stored as integers are normalised to [0,1].
 _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
 
+@inline function _ply_color_integer_max(t::Symbol)
+    t === :u8 && return 255.0
+    t === :i8 && return 127.0
+    t === :u16 && return 65_535.0
+    t === :i16 && return 32_767.0
+    t === :u32 && return 4_294_967_295.0
+    t === :i32 && return 2_147_483_647.0
+    return 1.0
+end
+
+@noinline function _ply_color_range_error(row::Int, channel::String, t::Symbol)
+    error("PLY vertex row $row color channel $channel is outside the non-negative $t range")
+end
+
+@inline function _ply_normalize_color(value::Float64, t::Symbol, row::Int,
+                                      channel::String)
+    _ply_is_int(t) || return value
+    max_value = _ply_color_integer_max(t)
+    (value == floor(value) && 0.0 <= value <= max_value) ||
+        _ply_color_range_error(row, channel, t)
+    return value / max_value
+end
+
 @inline function _ply_checked_add(a::Int, b::Int, context::String)
     (a >= 0 && b >= 0 && a <= typemax(Int) - b) ||
         error("PLY $context is too large")
@@ -1350,7 +1373,6 @@ function load_ply(path::String)
     positions = Float64[]; normals = Float64[]; colors = Float64[]
     indices = Int[]
     have_normals = false; have_color = false
-    color_is_int = false
     read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
     function checked_binary_skip!(nbytes::Int)
         nbytes >= 0 || error("PLY binary skip size must be non-negative")
@@ -1407,9 +1429,6 @@ function load_ply(path::String)
                         error("PLY vertex property $(props[c][2]) must be scalar")
                 end
             end
-            have_color && (color_is_int = _ply_is_int(types[ir]))
-            cnorm = color_is_int ? 255.0 : 1.0
-
             coord_count = _ply_checked_mul(ecount, 3, "vertex coordinate count")
             positions = Vector{Float64}(undef, coord_count)
             have_normals && (normals = Vector{Float64}(undef, coord_count))
@@ -1451,11 +1470,14 @@ function load_ply(path::String)
                         elseif have_normals && c == inz
                             normals[b3+3] = val
                         elseif have_color && c == ir
-                            colors[b3+1] = val / cnorm
+                            colors[b3+1] = _ply_normalize_color(
+                                val, types[c], v + 1, prop[2])
                         elseif have_color && c == ig
-                            colors[b3+2] = val / cnorm
+                            colors[b3+2] = _ply_normalize_color(
+                                val, types[c], v + 1, prop[2])
                         elseif have_color && c == ib
-                            colors[b3+3] = val / cnorm
+                            colors[b3+3] = _ply_normalize_color(
+                                val, types[c], v + 1, prop[2])
                         end
                     end
                 end
@@ -1483,9 +1505,15 @@ function load_ply(path::String)
                         elseif have_normals && c == inx; normals[b3+1] = val
                         elseif have_normals && c == iny; normals[b3+2] = val
                         elseif have_normals && c == inz; normals[b3+3] = val
-                        elseif have_color && c == ir; colors[b3+1] = val/cnorm
-                        elseif have_color && c == ig; colors[b3+2] = val/cnorm
-                        elseif have_color && c == ib; colors[b3+3] = val/cnorm
+                        elseif have_color && c == ir
+                            colors[b3+1] = _ply_normalize_color(
+                                val, types[c], v + 1, p[2])
+                        elseif have_color && c == ig
+                            colors[b3+2] = _ply_normalize_color(
+                                val, types[c], v + 1, p[2])
+                        elseif have_color && c == ib
+                            colors[b3+3] = _ply_normalize_color(
+                                val, types[c], v + 1, p[2])
                         end
                     end
                 end

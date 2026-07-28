@@ -20724,4 +20724,72 @@ end
         end
     end
 
+    @testset "fresh audit round 70 fixes" begin
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                      "property float x\nproperty float y\nproperty float z\n" *
+                      "property ushort red\nproperty ushort green\n" *
+                      "property ushort blue\nend_header\n" *
+                      "0 0 0 65535 32768 0\n")
+                @test get_attribute(load_ply(path), :color).data ≈
+                      [1.0, 32768 / 65535, 0.0]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        # Each channel follows its own declared type, including mixed integer
+        # widths and floating-point color properties.
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                      "property float x\nproperty float y\nproperty float z\n" *
+                      "property uchar red\nproperty float green\n" *
+                      "property uint blue\nend_header\n" *
+                      "0 0 0 255 0.25 4294967295\n")
+                @test get_attribute(load_ply(path), :color).data ==
+                      [1.0, 0.25, 1.0]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        let path = tempname() * ".ply"
+            try
+                open(path, "w") do io
+                    write(io,
+                          "ply\nformat binary_little_endian 1.0\n" *
+                          "element vertex 1\nproperty float x\n" *
+                          "property float y\nproperty float z\n" *
+                          "property ushort red\nproperty ushort green\n" *
+                          "property ushort blue\nend_header\n")
+                    write(io, Float32(0), Float32(0), Float32(0),
+                          UInt16(65535), UInt16(32768), UInt16(0))
+                end
+                @test get_attribute(load_ply(path), :color).data ≈
+                      [1.0, 32768 / 65535, 0.0]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                      "property float x\nproperty float y\nproperty float z\n" *
+                      "property char red\nproperty uchar green\n" *
+                      "property uchar blue\nend_header\n0 0 0 -1 0 0\n")
+                @test_throws "outside the non-negative i8 range" load_ply(path)
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        @test_opt_alloc 0 Diff3D._ply_normalize_color(32768.0, :u16, 1, "green")
+    end
+
 end
