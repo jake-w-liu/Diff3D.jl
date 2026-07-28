@@ -1894,8 +1894,30 @@ mixer_update!(mixer::AnimationMixer, dt) = mixer_set_time!(mixer, mixer.time + d
 
 # ========================== Helpers ==========================
 
-_line_geo(positions::Vector{Float64}) =
-    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+function _line_geo(positions::Vector{Float64})
+    length(positions) % 3 == 0 ||
+        throw(ArgumentError("helper line position length must be divisible by 3"))
+    length(positions) <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
+        throw(ArgumentError(
+            "helper line position buffer exceeds the " *
+            "$_GEOMETRY_MAX_BUFFER_ELEMENTS-element safety limit"))
+    @inbounds for value in positions
+        isfinite(value) ||
+            throw(ArgumentError("helper line positions must be finite"))
+    end
+    return BufferGeometry(
+        positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+end
+
+function _helper_line_position_length(n_segments::Int, label::String)
+    n_segments >= 0 || throw(ArgumentError("$label must be non-negative"))
+    len = _geometry_checked_mul(6, n_segments, "$label position buffer")
+    len <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
+        throw(ArgumentError(
+            "$label position buffer exceeds the " *
+            "$_GEOMETRY_MAX_BUFFER_ELEMENTS-element safety limit"))
+    return len
+end
 
 @inline function _write_line_vertex!(positions::Vector{Float64}, vi::Int, x, y, z)
     base = 3vi - 2
@@ -1922,6 +1944,7 @@ end
 
 """Diff3D line segments along +x (red), +y (green), +z (blue)."""
 function AxesHelper(size=1.0)
+    size = _geometry_finite_float(size, "AxesHelper size")
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
     geo = _line_geo(pos)
     set_attribute!(geo, :color, Float64[1,0,0, 1,0,0,  0,1,0, 0,1,0,  0,0,1, 0,0,1], 3)
@@ -1930,8 +1953,13 @@ end
 
 """A `divisions`×`divisions` grid of size `size` on the xz-plane."""
 function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
+    size = _geometry_finite_float(size, "GridHelper size")
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
-    pos = Vector{Float64}(undef, 12 * (divisions + 1))
+    lines = _geometry_checked_mul(
+        2, _geometry_checked_add(divisions, 1, "GridHelper line count"),
+        "GridHelper line count")
+    pos = Vector{Float64}(
+        undef, _helper_line_position_length(lines, "GridHelper"))
     step = size / divisions; half = size / 2
     vi = 1
     for i in 0:divisions
@@ -2003,6 +2031,7 @@ end
 """Cross-hair lines marking a point light's position."""
 function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0))
     p = light.position
+    size = _geometry_finite_float(size, "PointLightHelper size")
     pos = Float64[p.x-size,p.y,p.z, p.x+size,p.y,p.z,
                   p.x,p.y-size,p.z, p.x,p.y+size,p.z,
                   p.x,p.y,p.z-size, p.x,p.y,p.z+size]
@@ -2029,6 +2058,7 @@ circle marks the cone of half-angle `light.angle` at the distance to the target
 (three.js `SpotLightHelper`). Four apex-to-rim spokes plus the base ring.
 """
 function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
+    segments = _geometry_nonnegative_int(segments, "SpotLightHelper segments")
     apex = light.position
     axis = light.target - apex
     len = norm(axis)
@@ -2037,7 +2067,11 @@ function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
     base = apex + dir * len
     r = len * tan(light.angle)              # cone base radius at the target plane
     u, v = _perp_basis(dir)
-    pos = Vector{Float64}(undef, 6 * (max(segments, 0) + 4))
+    total_segments = _geometry_checked_add(
+        segments, 4, "SpotLightHelper segment count")
+    pos = Vector{Float64}(
+        undef, _helper_line_position_length(
+            total_segments, "SpotLightHelper"))
     vi = 1
     # Base ring.
     prev = base + u * r
@@ -2062,6 +2096,7 @@ takes the sky colour, the lower apex the ground colour, stored as a per-vertex
 `:color` attribute.
 """
 function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.color)
+    size = _geometry_finite_float(size, "HemisphereLightHelper size")
     p = light.position; s = size
     top = Vec3(p.x, p.y+s, p.z); bot = Vec3(p.x, p.y-s, p.z)
     px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
@@ -2127,7 +2162,8 @@ skeleton are skipped, matching three.js which only links bone-to-bone.
 function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
     bones = skeleton.bones
     n_bones = length(bones)
-    pos = Vector{Float64}(undef, 6 * n_bones)
+    pos = Vector{Float64}(
+        undef, _helper_line_position_length(n_bones, "SkeletonHelper"))
     vi = 1
     if n_bones < 16
         boneids = Set{UInt}()
@@ -2174,6 +2210,7 @@ plane normal from the plane's nearest point to the origin (three.js
 `PlaneHelper`). The plane is `n·x + d = 0`; its representative point is `-d·n`.
 """
 function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0))
+    size = _geometry_finite_float(size, "PlaneHelper size")
     n = normalize(plane.normal)
     center = n * (-plane.constant)          # closest point to the origin on the plane
     u, v = _perp_basis(n)
@@ -2199,8 +2236,18 @@ approximated by `circle_segments` chords each.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                          circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
-    n_segments = max(sectors, 0) + max(rings, 0) * max(circle_segments, 0)
-    pos = Vector{Float64}(undef, 6 * n_segments)
+    radius = _geometry_finite_float(radius, "PolarGridHelper radius")
+    sectors = _geometry_nonnegative_int(sectors, "PolarGridHelper sectors")
+    rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
+    circle_segments = _geometry_nonnegative_int(
+        circle_segments, "PolarGridHelper circle_segments")
+    ring_segments = _geometry_checked_mul(
+        rings, circle_segments, "PolarGridHelper segment count")
+    n_segments = _geometry_checked_add(
+        sectors, ring_segments, "PolarGridHelper segment count")
+    pos = Vector{Float64}(
+        undef, _helper_line_position_length(
+            n_segments, "PolarGridHelper"))
     vi = 1
     # Radial spokes.
     for k in 0:sectors-1

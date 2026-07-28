@@ -21403,4 +21403,33 @@ end
         @test_opt_alloc 0 Diff3D._render_checked_mul(3, 7, "test")
     end
 
+    @testset "fresh audit round 85 fixes" begin
+        @test_throws "AxesHelper size must be finite" AxesHelper(NaN)
+        @test_throws "GridHelper size must be finite" GridHelper(Inf, 1)
+        @test_throws "PointLightHelper size must be finite" PointLightHelper(
+            PointLight(), NaN)
+        @test_throws "HemisphereLightHelper size must be finite" HemisphereLightHelper(
+            HemisphereLight(), Inf)
+        @test_throws "PlaneHelper size must be finite" PlaneHelper(
+            Plane(Vec3(0.0, 1.0, 0.0), 0.0), NaN)
+        @test_throws "PolarGridHelper radius must be finite" PolarGridHelper(
+            NaN, 1, 1; circle_segments=3)
+
+        @test_throws "SpotLightHelper segments must be non-negative" SpotLightHelper(
+            SpotLight(); segments=-1)
+        @test_throws "SpotLightHelper segments must not exceed" SpotLightHelper(
+            SpotLight(); segments=typemax(Int))
+        @test_throws "PolarGridHelper sectors must be non-negative" PolarGridHelper(
+            1.0, -1, 0; circle_segments=0)
+        @test_throws "PolarGridHelper rings must not exceed" PolarGridHelper(
+            1.0, 0, typemax(Int); circle_segments=0)
+        @test_throws "PolarGridHelper position buffer exceeds" PolarGridHelper(
+            1.0, 1_000_000, 1; circle_segments=1)
+
+        @test_throws "helper line positions must be finite" Diff3D._line_geo(
+            [0.0, 0.0, NaN])
+        @test Diff3D._helper_line_position_length(7, "helper") == 42
+        @test_opt_alloc 0 Diff3D._helper_line_position_length(7, "helper")
+    end
+
 end
