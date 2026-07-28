@@ -3,6 +3,10 @@ examples/output/
 docs/build/
 docs/src/assets/gallery/*.html
 
+# Diff3D is a reusable package. Resolve dependencies against each consumer's
+# Julia version instead of pinning a repository-local application environment.
+Manifest.toml
+
 # Python bytecode from the examples verifier / browser smoke scripts.
 __pycache__/
 *.pyc

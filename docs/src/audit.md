@@ -42,12 +42,11 @@ release.
 ## Release Blockers To Resolve Outside Code
 
 - Keep the top-level MIT `LICENSE` file present for registry license detection.
-- Decide whether this repository is a package-only artifact or a reproducible
-  research artifact; that determines whether committing `Manifest.toml` is
-  appropriate.
+- Keep the top-level `Manifest.toml` untracked. Diff3D is a reusable package,
+  so dependency versions must resolve against the consuming Julia version.
 
 ## CI Coverage
 
-- `.github/workflows/ci.yml` runs package tests, documentation build, and the
-  full registered-example browser smoke sweep through
-  `examples/verify_examples_registry.py`.
+- `.github/workflows/ci.yml` runs package tests on the minimum supported Julia
+  release and the latest stable Julia release, plus the full registered-example
+  browser smoke sweep through `examples/verify_examples_registry.py`.

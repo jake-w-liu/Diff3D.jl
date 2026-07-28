@@ -11,14 +11,18 @@ permissions:
 
 jobs:
   package-tests:
-    name: Package tests
+    name: Package tests (Julia ${{ matrix.julia }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ["1.9", "1"]
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
-          version: "1"
+          version: ${{ matrix.julia }}
       - name: Instantiate package environment
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run package tests
