@@ -6760,29 +6760,24 @@ function _svg_arc_flag(value::Float64, name)
     error("SVG arc $name flag must be 0 or 1")
 end
 
-function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
-                         rotation_deg::Float64, large_arc::Bool, sweep::Bool,
-                         stop::Vec2{Float64}, segments::Int)
-    rx < 0.0 && error("SVG arc radius must be non-negative")
-    ry < 0.0 && error("SVG arc radius must be non-negative")
-    (start == stop) && return Vec2{Float64}[]
-    (rx == 0.0 || ry == 0.0) && return [stop]
-
-    φ = rotation_deg * π / 180.0
+function _svg_arc_parameters(
+        start_x::T, start_y::T, rx::T, ry::T,
+        rotation_deg::T, large_arc::Bool, sweep::Bool,
+        stop_x::T, stop_y::T) where {T<:AbstractFloat}
+    φ = mod(rotation_deg, T(360)) * T(π) / T(180)
     cosφ = cos(φ)
     sinφ = sin(φ)
-    dx = (start.x - stop.x) / 2.0
-    dy = (start.y - stop.y) / 2.0
+    dx = _stable_midpoint(start_x, -stop_x)
+    dy = _stable_midpoint(start_y, -stop_y)
     x1p = cosφ * dx + sinφ * dy
     y1p = -sinφ * dx + cosφ * dy
-    rx = abs(rx)
-    ry = abs(ry)
 
     λ = x1p^2 / rx^2 + y1p^2 / ry^2
-    if λ > 1.0
-        scale = sqrt(λ)
-        rx *= scale
-        ry *= scale
+    isfinite(λ) || return nothing
+    if λ > one(T)
+        radius_scale = sqrt(λ)
+        rx *= radius_scale
+        ry *= radius_scale
     end
 
     rx2 = rx^2
@@ -6790,14 +6785,18 @@ function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
     x1p2 = x1p^2
     y1p2 = y1p^2
     denom = rx2 * y1p2 + ry2 * x1p2
-    denom == 0.0 && return [stop]
+    (isfinite(denom) && !iszero(denom)) || return nothing
     numer = rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2
-    coef = (large_arc == sweep ? -1.0 : 1.0) *
-           sqrt(max(0.0, numer / denom))
+    ratio = numer / denom
+    isfinite(ratio) || return nothing
+    coef = (large_arc == sweep ? -one(T) : one(T)) *
+           sqrt(max(zero(T), ratio))
     cxp = coef * rx * y1p / ry
     cyp = coef * -ry * x1p / rx
-    cx = cosφ * cxp - sinφ * cyp + (start.x + stop.x) / 2.0
-    cy = sinφ * cxp + cosφ * cyp + (start.y + stop.y) / 2.0
+    cx = cosφ * cxp - sinφ * cyp +
+         _stable_midpoint(start_x, stop_x)
+    cy = sinφ * cxp + cosφ * cyp +
+         _stable_midpoint(start_y, stop_y)
 
     ux = (x1p - cxp) / rx
     uy = (y1p - cyp) / ry
@@ -6805,15 +6804,109 @@ function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
     vy = (-y1p - cyp) / ry
     θ1 = atan(uy, ux)
     Δθ = atan(ux * vy - uy * vx, ux * vx + uy * vy)
-    !sweep && Δθ > 0.0 && (Δθ -= 2π)
-    sweep && Δθ < 0.0 && (Δθ += 2π)
+    two_pi = T(2) * T(π)
+    !sweep && Δθ > zero(T) && (Δθ -= two_pi)
+    sweep && Δθ < zero(T) && (Δθ += two_pi)
+    params = (cosφ, sinφ, rx, ry, cx, cy, θ1, Δθ)
+    return all(isfinite, params) ? params : nothing
+end
 
-    n = max(1, ceil(Int, abs(Δθ) / (π / 2.0)) * segments)
-    return [begin
-                θ = θ1 + Δθ * step / n
-                Vec2(cosφ * rx * cos(θ) - sinφ * ry * sin(θ) + cx,
-                     sinφ * rx * cos(θ) + cosφ * ry * sin(θ) + cy)
-            end for step in 1:n]
+function _svg_arc_sample_points(
+        params, segments::Int, output_scale)
+    cosφ, sinφ, rx, ry, cx, cy, θ1, Δθ = params
+    quarter_turns = max(
+        1, ceil(Int, abs(Float64(Δθ)) / (π / 2.0)))
+    n = _geometry_checked_mul(
+        quarter_turns, segments, "SVG arc sample count")
+    n <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
+        throw(ArgumentError(
+            "SVG arc generated buffer exceeds the " *
+            "$_GEOMETRY_MAX_BUFFER_ELEMENTS-element safety limit"))
+    points = Vector{Vec2{Float64}}(undef, n)
+    for step in 1:n
+        θ = θ1 + Δθ * step / n
+        x = (cosφ * rx * cos(θ) -
+             sinφ * ry * sin(θ) + cx) * output_scale
+        y = (sinφ * rx * cos(θ) +
+             cosφ * ry * sin(θ) + cy) * output_scale
+        xf = Float64(x)
+        yf = Float64(y)
+        (isfinite(xf) && isfinite(yf)) || return nothing
+        points[step] = Vec2(xf, yf)
+    end
+    return points
+end
+
+function _svg_arc_points_big(
+        start::Vec2{Float64}, rx::Float64, ry::Float64,
+        rotation_deg::Float64, large_arc::Bool, sweep::Bool,
+        stop::Vec2{Float64}, segments::Int)
+    return setprecision(BigFloat, 4352) do
+        params = _svg_arc_parameters(
+            BigFloat(start.x), BigFloat(start.y),
+            BigFloat(rx), BigFloat(ry), BigFloat(rotation_deg),
+            large_arc, sweep,
+            BigFloat(stop.x), BigFloat(stop.y))
+        params === nothing && return nothing
+        _svg_arc_sample_points(params, segments, one(BigFloat))
+    end
+end
+
+function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
+                         rotation_deg::Float64, large_arc::Bool, sweep::Bool,
+                         stop::Vec2{Float64}, segments::Int)
+    rx < 0.0 && error("SVG arc radius must be non-negative")
+    ry < 0.0 && error("SVG arc radius must be non-negative")
+    (isfinite(start.x) && isfinite(start.y) &&
+     isfinite(stop.x) && isfinite(stop.y) &&
+     isfinite(rx) && isfinite(ry) && isfinite(rotation_deg)) ||
+        throw(ArgumentError("SVG arc values must be finite"))
+    (start == stop) && return Vec2{Float64}[]
+    (rx == 0.0 || ry == 0.0) && return [stop]
+
+    rx = abs(rx)
+    ry = abs(ry)
+    params = _svg_arc_parameters(
+        start.x, start.y, rx, ry, rotation_deg,
+        large_arc, sweep, stop.x, stop.y)
+    if params !== nothing
+        points = _svg_arc_sample_points(params, segments, 1.0)
+        if points !== nothing
+            points[end] = stop
+            return points
+        end
+    end
+
+    coordinate_scale = max(
+        max(max(abs(start.x), abs(start.y)),
+            max(abs(stop.x), abs(stop.y))),
+        max(rx, ry))
+    scaled_params = _svg_arc_parameters(
+        start.x / coordinate_scale,
+        start.y / coordinate_scale,
+        rx / coordinate_scale,
+        ry / coordinate_scale,
+        rotation_deg,
+        large_arc, sweep,
+        stop.x / coordinate_scale,
+        stop.y / coordinate_scale)
+    if scaled_params !== nothing
+        points = _svg_arc_sample_points(
+            scaled_params, segments, coordinate_scale)
+        if points !== nothing
+            points[end] = stop
+            return points
+        end
+    end
+
+    points = _svg_arc_points_big(
+        start, rx, ry, rotation_deg,
+        large_arc, sweep, stop, segments)
+    points === nothing &&
+        throw(ArgumentError(
+            "SVG arc cannot be represented with finite Float64 points"))
+    points[end] = stop
+    return points
 end
 
 function _svg_path_points(raw::AbstractString, segments::Int)

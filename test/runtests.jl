@@ -23005,4 +23005,37 @@ end
         @test_opt_alloc 0 Diff3D._svg_circle_segments(8)
     end
 
+    @testset "fresh audit round 155 fixes" begin
+        extreme = Diff3D._svg_arc_points(
+            Vec2(-1.0e308, 0.0),
+            1.0e308, 1.0e308, 0.0,
+            false, true,
+            Vec2(1.0e308, 0.0), 4)
+        @test length(extreme) == 8
+        @test all(
+            point -> isfinite(point.x) && isfinite(point.y),
+            extreme)
+        @test extreme[end] == Vec2(1.0e308, 0.0)
+
+        tiny_radius = nextfloat(0.0)
+        rescaled = Diff3D._svg_arc_points(
+            Vec2(0.0, 0.0),
+            tiny_radius, tiny_radius, 0.0,
+            false, true,
+            Vec2(1.0, 0.0), 1)
+        @test rescaled ==
+            [Vec2(0.5, -0.5), Vec2(1.0, 0.0)]
+
+        ordinary = Diff3D._svg_arc_points(
+            Vec2(0.0, 0.0), 1.0, 1.0, 0.0,
+            false, true, Vec2(2.0, 0.0), 2)
+        @test length(ordinary) == 4
+        @test ordinary[end] == Vec2(2.0, 0.0)
+        @test ordinary[2].x ≈ 1.0
+        @test abs(ordinary[2].y) ≈ 1.0
+        @test_opt_alloc 256 Diff3D._svg_arc_points(
+            Vec2(0.0, 0.0), 1.0, 1.0, 0.0,
+            false, true, Vec2(2.0, 0.0), 2)
+    end
+
 end
