@@ -684,7 +684,16 @@ struct Plane{T<:Real}
 end
 
 # Signed distance from a plane (a·x + d = 0) to a point; >0 on the normal side.
-plane_distance_to_point(p::Plane, pt::Vec3) = dot(p.normal, pt) + p.constant
+function plane_distance_to_point(p::Plane, pt::Vec3)
+    result = dot(p.normal, pt) + p.constant
+    if result isa AbstractFloat && !isfinite(result) &&
+       isfinite(p.normal.x) && isfinite(p.normal.y) &&
+       isfinite(p.normal.z) && isfinite(p.constant) &&
+       isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z)
+        return _stable_float_plane_distance(p, pt)
+    end
+    return result
+end
 
 # ========================== Quaternion slerp / setFromUnitVectors ==========================
 
@@ -832,6 +841,12 @@ end
 @inline _float_zero_representation(::Type{T}) where {T<:AbstractFloat} =
     _FloatRepresentation(zero(T), 0, false)
 
+@inline function _float_value_representation(value::T) where {T<:AbstractFloat}
+    iszero(value) && return _float_zero_representation(T)
+    mantissa, exponent = frexp(value)
+    return _FloatRepresentation(mantissa, exponent, true)
+end
+
 @inline function _float_difference_representation(
         value1::T, value2::T) where {T<:AbstractFloat}
     difference, scale, nonzero = _axis_difference(value1, value2)
@@ -867,6 +882,12 @@ end
         mantissa, a.exponent + b.exponent + correction, true)
 end
 
+@inline function _float_representation_value(
+        value::_FloatRepresentation{T}) where {T<:AbstractFloat}
+    value.nonzero || return zero(T)
+    return ldexp(value.mantissa, value.exponent)
+end
+
 @inline function _stable_float_lerp_fallback(
         a::AbstractFloat, b::AbstractFloat, t::Real)
     a, b, t = promote(a, b, t)
@@ -897,6 +918,28 @@ end
     )
     return _float_representation_add(
         xy, _float_representation_multiply(a[3], b[3]))
+end
+
+@inline function _stable_float_plane_distance(p::Plane, pt::Vec3)
+    nx, ny, nz, constant, x, y, z = promote(
+        p.normal.x, p.normal.y, p.normal.z, p.constant,
+        pt.x, pt.y, pt.z,
+    )
+    normal = (
+        _float_value_representation(nx),
+        _float_value_representation(ny),
+        _float_value_representation(nz),
+    )
+    point = (
+        _float_value_representation(x),
+        _float_value_representation(y),
+        _float_value_representation(z),
+    )
+    result = _float_representation_add(
+        _float_representation_dot(normal, point),
+        _float_value_representation(constant),
+    )
+    return _float_representation_value(result)
 end
 
 @inline _float_vector_difference(a::Vec3{T}, b::Vec3{T}) where

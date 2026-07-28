@@ -21902,4 +21902,26 @@ end
         @test_opt_alloc 0 line3_at(extreme_line, 2.0)
     end
 
+    @testset "fresh audit round 103 fixes" begin
+        normal = -normalize(Vec3(1.0, 1.0, 1.0))
+        point = Vec3(1.1e308, 1.1e308, 1.1e308)
+        plane = Plane(normal, 1.7e308)
+        expected = Float64(
+            BigFloat(normal.x) * BigFloat(point.x) +
+            BigFloat(normal.y) * BigFloat(point.y) +
+            BigFloat(normal.z) * BigFloat(point.z) +
+            BigFloat(plane.constant))
+        distance = plane_distance_to_point(plane, point)
+        @test isfinite(distance)
+        @test isapprox(distance, expected; rtol=2.0e-15)
+
+        permissive = Plane(Vec3(), 0.0)
+        frustum = Frustum((
+            plane, permissive, permissive,
+            permissive, permissive, permissive))
+        @test frustum_intersects_sphere(
+            frustum, BoundingSphere(point, 3.0e307))
+        @test_opt_alloc 0 plane_distance_to_point(plane, point)
+    end
+
 end
