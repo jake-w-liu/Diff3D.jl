@@ -251,6 +251,9 @@ end
 function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
                               filter::Symbol, u, v, label::String)
     H, W, _ = _checked_texture_data_size(data, label)
+    wrap_s = _texture_wrap_symbol(wrap_s)
+    wrap_t = _texture_wrap_symbol(wrap_t)
+    filter = _texture_filter_symbol(filter)
     u = _sanitize_uv(u); v = _sanitize_uv(v)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
@@ -294,11 +297,14 @@ end
 
 function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     H, W, _ = _checked_texture_data_size(tex, "sample_texture_channel")
+    _texture_wrap_symbol(tex.wrap_s)
+    _texture_wrap_symbol(tex.wrap_t)
+    filter = _texture_filter_symbol(tex.filter)
     u, v = texture_transform_uv(tex, u, v)
     u = _sanitize_uv(u); v = _sanitize_uv(v)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
-    if tex.filter === :nearest
+    if filter === :nearest
         return _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default)
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
@@ -459,14 +465,16 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     isfinite(duv) ||
         throw(ArgumentError("texture LOD footprint (duv) must be finite"))
     H, W, _ = _checked_texture_data_size(tex, "sample_texture_auto")
+    min_filter = _texture_min_filter_symbol(tex.min_filter)
+    mag_filter = _texture_mag_filter_symbol(tex.mag_filter)
     sz = max(W, H)
     span_raw = abs(duv) * sz
     if span_raw <= 1.0
         return _sample_texture_filtered(tex, u, v,
-                                        _texture_mag_filter_texel_filter(tex.mag_filter))
+                                        _texture_mag_filter_texel_filter(mag_filter))
     end
-    filter = _texture_min_filter_texel_filter(tex.min_filter)
-    (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(tex.min_filter)) &&
+    filter = _texture_min_filter_texel_filter(min_filter)
+    (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(min_filter)) &&
         return _sample_texture_filtered(tex, u, v, filter)
     nlevels = length(tex.mipmaps)
     # Continuous LOD; clamp to [0, nlevels]. Keep AD type for the blend weight.
@@ -478,7 +486,7 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     # floor(Int, ·) works directly on Float64, ForwardDiff.Dual, and ADVar for the
     # discrete level index — do NOT do Float64(lod) (undefined for Dual, crashes
     # the differentiable path); the AD type stays in `lod`/`frac` for the blend.
-    if !_texture_min_filter_blends_mipmaps(tex.min_filter)
+    if !_texture_min_filter_blends_mipmaps(min_filter)
         nearest_level = clamp(floor(Int, lod + 0.5), 0, nlevels)
         return _sample_texture_lod_filtered(tex, u, v, nearest_level, filter)
     end

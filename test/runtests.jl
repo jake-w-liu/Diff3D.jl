@@ -20940,4 +20940,64 @@ end
             255.0, :u8, "vertex", 1, "x")
     end
 
+    @testset "fresh audit round 74 fixes" begin
+        tex = Texture(reshape([0.0, 1.0, 1.0, 0.0], 2, 2, 1);
+                      filter=:nearest)
+
+        # Texture is mutable, so sampling and export must revalidate modes that
+        # can be changed after construction instead of silently treating every
+        # unknown filter as bilinear.
+        tex.filter = :invalid
+        @test_throws ArgumentError("unsupported texture filter: invalid") sample_texture(
+            tex, 0.5, 0.5)
+        @test_throws ArgumentError("unsupported texture filter: invalid") Diff3D.sample_texture_channel(
+            tex, 0.5, 0.5, 1)
+        @test_throws ArgumentError("unsupported texture filter: invalid") sample_texture_lod(
+            tex, 0.5, 0.5, 0)
+        @test_throws ArgumentError("unsupported texture filter: invalid") Diff3D._web_texture_json(
+            tex)
+        @test_throws ArgumentError("unsupported texture filter: invalid") Diff3D._web_cube_face_json(
+            tex)
+
+        tex.filter = :nearest
+        tex.min_filter = :invalid
+        @test_throws ArgumentError("unsupported texture min_filter: invalid") sample_texture_auto(
+            tex, 0.5, 0.5, 2.0)
+        @test_throws ArgumentError("unsupported texture min_filter: invalid") Diff3D._web_texture_json(
+            tex)
+
+        tex.min_filter = :nearest
+        tex.mag_filter = :invalid
+        @test_throws ArgumentError("unsupported texture mag_filter: invalid") sample_texture_auto(
+            tex, 0.5, 0.5, 0.1)
+        @test_throws ArgumentError("unsupported texture mag_filter: invalid") Diff3D._web_cube_face_json(
+            tex)
+
+        tex.mag_filter = :nearest
+        tex.wrap_s = :invalid
+        @test_throws ArgumentError("unsupported texture wrap mode: invalid") sample_texture(
+            tex, 0.5, 0.5)
+        @test_throws ArgumentError("unsupported texture wrap mode: invalid") Diff3D._web_texture_json(
+            tex)
+
+        tex.wrap_s = :repeat
+        tex.max_anisotropy = NaN
+        @test_throws ArgumentError("Texture max_anisotropy must be finite") Diff3D._web_texture_json(
+            tex)
+
+        # Directly assigned constructor aliases are normalized at the use site
+        # and serialized canonically.
+        tex.max_anisotropy = 1.0
+        tex.filter = :linear
+        tex.min_filter = :linear
+        tex.mag_filter = :bilinear
+        @test sample_texture(tex, 0.5, 0.5) == Color3(0.5, 0.5, 0.5)
+        json = Diff3D._web_texture_json(tex)
+        @test occursin("\"filter\":\"bilinear\"", json)
+        @test occursin("\"minFilter\":\"linear\"", json)
+        @test occursin("\"magFilter\":\"linear\"", json)
+        @test_opt_alloc 64 sample_texture(tex, 0.25, 0.5)
+        @test_opt_alloc 64 sample_texture_auto(tex, 0.25, 0.5, 0.1)
+    end
+
 end
