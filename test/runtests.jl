@@ -22494,4 +22494,25 @@ end
             camera, camera.target)
     end
 
+    @testset "fresh audit round 132 fixes" begin
+        target = zeros(1, 1, 1)
+        render_linear(p) = reshape([p[1]], 1, 1, 1)
+        extreme_linear_loss(image, _) =
+            image[1] * 1.0e308
+        params, history = inverse_render_adam(
+            [1.0], target, render_linear, extreme_linear_loss;
+            lr=0.01, n_iters=1, verbose=false, ad=:forward,
+        )
+        @test history == [1.0e308]
+        @test params[1] ≈ 0.99
+
+        @test Diff3D._adam_normalized_step(
+            0.0, 0.0, 0.1, sqrt(0.001),
+            nextfloat(0.0),
+        ) == 0.0
+        @test_opt_alloc 0 Diff3D._adam_normalized_step(
+            1.0e307, 1.0e307, 0.1, sqrt(0.001),
+            1.0e-8)
+    end
+
 end

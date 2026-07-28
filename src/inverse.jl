@@ -156,6 +156,29 @@ function _validate_adam_hyperparams(β1, β2, ε)
     return nothing
 end
 
+@inline function _adam_normalized_step(
+    first_moment, root_second_moment,
+    first_correction, root_second_correction, epsilon,
+)
+    if iszero(root_second_moment)
+        iszero(first_moment) && return zero(first_moment)
+        return (first_moment / first_correction) / epsilon
+    end
+
+    epsilon_ratio =
+        (epsilon / root_second_moment) * root_second_correction
+    if epsilon_ratio > one(epsilon_ratio)
+        epsilon_limited =
+            (first_moment / first_correction) / epsilon
+        return epsilon_limited /
+               (one(epsilon_ratio) + inv(epsilon_ratio))
+    end
+    moment_ratio =
+        (first_moment / root_second_moment) *
+        (root_second_correction / first_correction)
+    return moment_ratio / (one(epsilon_ratio) + epsilon_ratio)
+end
+
 """
 Gradient descent optimizer for inverse rendering.
 Optimizes `params` to minimize the loss between rendered image and target.
@@ -231,7 +254,7 @@ function inverse_render_adam(initial_params::Vector{Float64},
     params = copy(initial_params)
     n = length(params)
     m = zeros(n)  # first moment
-    v = zeros(n)  # second moment
+    root_v = zeros(n)  # square root of the second moment
     grad = similar(params)
     loss_history = Vector{Float64}(undef, n_iters)
 
@@ -242,6 +265,8 @@ function inverse_render_adam(initial_params::Vector{Float64},
 
     one_minus_β1 = 1 - β1
     one_minus_β2 = 1 - β2
+    sqrt_β2 = sqrt(β2)
+    sqrt_one_minus_β2 = sqrt(one_minus_β2)
     grad_cfg = _inverse_value_gradient_config(objective, params, ad)
 
     for iter in 1:n_iters
@@ -249,16 +274,21 @@ function inverse_render_adam(initial_params::Vector{Float64},
         loss_history[iter] = current_loss
 
         # Adam update
-        inv_m_correction = 1 / (1 - β1^iter)
-        inv_v_correction = 1 / (1 - β2^iter)
-        @inbounds for i in eachindex(params, grad, m, v)
+        first_correction = 1 - β1^iter
+        root_second_correction = sqrt(1 - β2^iter)
+        @inbounds for i in eachindex(params, grad, m, root_v)
             gi = grad[i]
-            mi = β1 * m[i] + one_minus_β1 * gi
-            vi = β2 * v[i] + one_minus_β2 * gi * gi
+            mi = _stable_lerp(m[i], gi, one_minus_β1)
+            root_vi = hypot(
+                sqrt_β2 * root_v[i],
+                sqrt_one_minus_β2 * gi,
+            )
             m[i] = mi
-            v[i] = vi
-            params[i] -= lr * (mi * inv_m_correction) /
-                         (sqrt(vi * inv_v_correction) + ε)
+            root_v[i] = root_vi
+            params[i] -= lr * _adam_normalized_step(
+                mi, root_vi, first_correction,
+                root_second_correction, ε,
+            )
         end
 
         if verbose && (iter % 10 == 0 || iter == 1)
