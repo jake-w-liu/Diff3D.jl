@@ -22285,4 +22285,16 @@ end
             texture, 0.5, 0.5)
     end
 
+    @testset "fresh audit round 122 fixes" begin
+        largest = floatmax(Float64)
+        face = Texture(
+            fill(largest, 2, 2, 3); colorspace=:linear)
+        cube = CubeTexture(ntuple(_ -> face, 6))
+        sample = Diff3D._pmrem_prefilter(
+            cube, Vec3(1.0, 0.0, 0.0), 0.5, 8)
+        @test sample == Color3(largest, largest, largest)
+        @test_opt_alloc 0 Diff3D._pmrem_prefilter(
+            cube, Vec3(1.0, 0.0, 0.0), 0.5, 8)
+    end
+
 end

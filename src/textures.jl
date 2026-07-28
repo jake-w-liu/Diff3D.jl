@@ -940,8 +940,8 @@ end
 function _pmrem_prefilter(ct::CubeTexture, N::Vec3, roughness::Float64, samples::Int)
     roughness <= 0.0 && return sample_cube(ct, N)        # exact mirror reflection
     V = N                                                # split-sum assumes V = N = R
-    total = Color3(0.0, 0.0, 0.0)
-    weight = 0.0
+    average = Color3(0.0, 0.0, 0.0)
+    total_weight = 0.0
     @inbounds for i in 0:(samples - 1)
         xi1 = i / samples
         xi2 = _radical_inverse_vdc(UInt32(i))
@@ -949,11 +949,15 @@ function _pmrem_prefilter(ct::CubeTexture, N::Vec3, roughness::Float64, samples:
         L = normalize(2.0 * dot(V, H) * H - V)           # reflect V about H
         ndl = dot(N, L)
         if ndl > 0.0
-            total += sample_cube(ct, L) * ndl
-            weight += ndl
+            sample = sample_cube(ct, L)
+            next_weight = total_weight + ndl
+            average = total_weight == 0.0 ? sample :
+                _stable_color_lerp(
+                    average, sample, ndl / next_weight)
+            total_weight = next_weight
         end
     end
-    return weight > 0.0 ? total * (1.0 / weight) : sample_cube(ct, N)
+    return total_weight > 0.0 ? average : sample_cube(ct, N)
 end
 
 """
