@@ -22107,4 +22107,23 @@ end
             Vec3(1.0e308, 0.0, 1.0e308))
     end
 
+    @testset "fresh audit round 113 fixes" begin
+        matrix = Mat3{Float64}((
+            1.0e308, 1.0e308, 0.375,
+            0.0, 0.0, 0.5,
+            0.0, 0.0, 1.0,
+        ))
+        texture = Texture(
+            reshape([0.1, 0.2, 0.3, 0.4], 1, 4, 1);
+            wrap_s=:repeat, wrap_t=:clamp,
+            filter=:nearest, colorspace=:linear,
+            matrix=matrix, matrix_auto_update=false)
+        @test texture_transform_uv(
+            texture, 2.0, -2.0) == (0.375, 0.5)
+        @test sample_texture(
+            texture, 2.0, -2.0).r == 0.2
+        @test_opt_alloc 0 texture_transform_uv(
+            texture, 2.0, -2.0)
+    end
+
 end

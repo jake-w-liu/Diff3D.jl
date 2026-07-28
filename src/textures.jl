@@ -295,8 +295,32 @@ end
         _texture_validate_matrix(tex.matrix)
     end
     e = tex.matrix.e
-    return (e[1] * u + e[2] * v + e[3],
-            e[4] * u + e[5] * v + e[6])
+    transformed_u = e[1] * u + e[2] * v + e[3]
+    transformed_v = e[4] * u + e[5] * v + e[6]
+    if transformed_u isa AbstractFloat &&
+       isfinite(u) && isfinite(v)
+        !isfinite(transformed_u) &&
+            (transformed_u = _stable_texture_transform_component(
+                e[1], e[2], e[3], u, v))
+        !isfinite(transformed_v) &&
+            (transformed_v = _stable_texture_transform_component(
+                e[4], e[5], e[6], u, v))
+    end
+    return transformed_u, transformed_v
+end
+
+@inline function _stable_texture_transform_component(a, b, c, u, v)
+    a, b, c, u, v = promote(a, b, c, u, v)
+    au = _float_representation_multiply(
+        _float_value_representation(a),
+        _float_value_representation(u))
+    bv = _float_representation_multiply(
+        _float_value_representation(b),
+        _float_value_representation(v))
+    result = _float_representation_add(
+        _float_representation_add(au, bv),
+        _float_value_representation(c))
+    return _float_representation_value(result)
 end
 
 """
