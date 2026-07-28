@@ -73,7 +73,11 @@ function _scene_bounds(meshes, instanced)
         end
     end
     _valid_shadow_box(box) || return (Vec3(), 1e-3)
-    center = (box.min + box.max) * 0.5
+    center = Vec3(
+        _geometry_midpoint(box.min.x, box.max.x),
+        _geometry_midpoint(box.min.y, box.max.y),
+        _geometry_midpoint(box.min.z, box.max.z),
+    )
     radius = norm(box.max - center)
     return (center, max(radius, 1e-3))
 end

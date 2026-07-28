@@ -21797,4 +21797,19 @@ end
         @test_opt_alloc 0 frustum_from_matrix(scaled_matrix)
     end
 
+    @testset "fresh audit round 97 fixes" begin
+        geometry = BufferGeometry(
+            [1.0e308, 0.0, 0.0,
+             1.0e308, 2.0, 0.0,
+             1.0e308, 0.0, 2.0],
+            zeros(9), Float64[], [1, 2, 3], 3, 1)
+        mesh = Mesh(
+            geometry, MeshBasicMaterial(); cast_shadow=true)
+        center, radius = Diff3D._scene_bounds(
+            [mesh], InstancedMesh[])
+        @test center == Vec3(1.0e308, 1.0, 1.0)
+        @test radius == sqrt(2.0)
+        @test all(isfinite, (center.x, center.y, center.z, radius))
+    end
+
 end
