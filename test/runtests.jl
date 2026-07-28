@@ -21722,4 +21722,20 @@ end
         @test_opt_alloc 0 projection_matrix(camera)
     end
 
+    @testset "fresh audit round 93 fixes" begin
+        eye = Vec3(1.0e308, 0.0, 0.0)
+        target = Vec3(-1.0e308, 0.0, 0.0)
+        up = Vec3(0.0, 1.0, 0.0)
+        matrix = mat4_look_at(eye, target, up)
+        @test all(isfinite, matrix.e)
+        @test mat4_transform_point(matrix, eye) == Vec3()
+
+        camera = PerspectiveCamera()
+        camera.position = eye
+        camera.target = target
+        camera.up = up
+        @test all(isfinite, view_matrix(camera).e)
+        @test_opt_alloc 0 mat4_look_at(eye, target, up)
+    end
+
 end

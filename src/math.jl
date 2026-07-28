@@ -257,15 +257,27 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     d = eye - target
     # Guard the degenerate eye==target case before normalising (three.js lookAt):
     # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
-    z = dot(d, d) < 1e-12 ? Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
-    xc = cross(up, z)
+    z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
+        dot(d, d) < 1e-12 ?
+            Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
+    else
+        # Finite endpoints with opposite extreme signs can overflow during the
+        # subtraction even though their direction is well-defined. Recover it
+        # from independently scaled component differences.
+        scaled, _, nonzero =
+            _difference_direction_and_logscale(target, eye)
+        nonzero ? normalize(scaled) :
+            Vec3(zero(d.x), zero(d.y), one(d.z))
+    end
+    up_direction = normalize(up)
+    xc = cross(up_direction, z)
     if dot(xc, xc) < 1e-12          # up parallel to view dir: perturb z (three.js lookAt)
         if abs(z.z) > one(z.z) - 1e-4
             z = normalize(Vec3(z.x + 1e-4, z.y, z.z))
         else
             z = normalize(Vec3(z.x, z.y, z.z + 1e-4))
         end
-        xc = cross(up, z)
+        xc = cross(up_direction, z)
     end
     x = normalize(xc)
     y = cross(z, x)
