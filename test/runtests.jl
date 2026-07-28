@@ -21738,4 +21738,12 @@ end
         @test_opt_alloc 0 mat4_look_at(eye, target, up)
     end
 
+    @testset "fresh audit round 94 fixes" begin
+        normalized = normalize(Vec3(NaN, 1.0, 0.0))
+        @test isnan(normalized.x)
+        @test isnan(normalized.y)
+        @test isnan(normalized.z)
+        @test normalize(Vec3()) == Vec3()
+    end
+
 end

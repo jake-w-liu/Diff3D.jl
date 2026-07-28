@@ -56,7 +56,7 @@ cross(a::Vec3, b::Vec3) = Vec3(
 norm(a::Vec3) = _norm3(a.x, a.y, a.z)
 function normalize(a::Vec3)
     l = norm(a)
-    l > zero(l) || return Vec3(zero(a.x), zero(a.y), zero(a.z))
+    iszero(l) && return Vec3(zero(a.x), zero(a.y), zero(a.z))
     isfinite(l) && return a / l
 
     # A finite vector can have a mathematical length larger than typemax(T).
