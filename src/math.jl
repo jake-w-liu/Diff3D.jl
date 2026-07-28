@@ -1460,6 +1460,22 @@ end
     return Vec3(x, y, z), logscale, true
 end
 
+@inline function _direction_between(a::Vec3, b::Vec3)
+    direction = b - a
+    if isfinite(direction.x) &&
+       isfinite(direction.y) &&
+       isfinite(direction.z)
+        return normalize(direction)
+    end
+    if isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
+       isfinite(b.x) && isfinite(b.y) && isfinite(b.z)
+        scaled, _, nonzero =
+            _difference_direction_and_logscale(a, b)
+        nonzero && return normalize(scaled)
+    end
+    return normalize(direction)
+end
+
 """Parameter `t` of the point on the line/segment closest to `p`."""
 function line3_closest_point_parameter(l::Line3, p::Vec3; clamp_to_segment=true)
     direction, direction_logscale, nondegenerate =

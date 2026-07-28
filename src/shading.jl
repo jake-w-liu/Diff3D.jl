@@ -1500,8 +1500,7 @@ end
 end
 
 @inline function _rect_area_basis(light::RectAreaLight)
-    f, _ =
-        _light_direction_and_distance(light.position, light.target)
+    f = _direction_between(light.position, light.target)
     ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, f))
     v = cross(f, u)
@@ -2054,7 +2053,7 @@ function light_contribution(light::AmbientLight, position::Vec3)
 end
 
 function light_contribution(light::DirectionalLight, position::Vec3)
-    dir, _ = _light_direction_and_distance(light.target, light.position)
+    dir = _direction_between(light.target, light.position)
     (light.color, light.intensity, dir)
 end
 
@@ -2091,8 +2090,8 @@ function light_contribution(light::SpotLight, position::Vec3)
         _light_direction_and_distance(position, light.position)
 
     # Spot cone
-    target_dir, _ =
-        _light_direction_and_distance(light.position, light.target)
+    target_dir =
+        _direction_between(light.position, light.target)
     # dir points from surface to light, so -dir points from light to surface.
     cos_angle = dot(-dir, target_dir)
     cos_outer = cos(light.angle)

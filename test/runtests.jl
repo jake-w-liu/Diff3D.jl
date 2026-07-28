@@ -22441,4 +22441,28 @@ end
         @test_opt_alloc 0 Diff3D._mean3_vec3(a, b, c)
     end
 
+    @testset "fresh audit round 130 fixes" begin
+        small = Vec3(1.0e-12, 0.0, 0.0)
+        directional = DirectionalLight(position=small)
+        _, _, directional_dir =
+            light_contribution(directional, Vec3())
+        @test directional_dir == Vec3(1.0, 0.0, 0.0)
+
+        spot = SpotLight(position=Vec3(), target=small)
+        @test Diff3D._direction_between(
+            spot.position, spot.target) ==
+              Vec3(1.0, 0.0, 0.0)
+
+        rectangle = RectAreaLight(position=Vec3())
+        rectangle.target = small
+        forward, _, _ = Diff3D._rect_area_basis(rectangle)
+        @test forward == Vec3(1.0, 0.0, 0.0)
+        @test Diff3D._direction_between(
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0)) ==
+              Vec3(1.0, 0.0, 0.0)
+        @test_opt_alloc 0 Diff3D._direction_between(
+            Vec3(), small)
+    end
+
 end
