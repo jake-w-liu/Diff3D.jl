@@ -221,12 +221,20 @@ end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
 function mat4_transform_vec4(m::Mat4, v::Vec4)
-    Vec4(
+    result = Vec4(
         mat4_get(m, 1, 1)*v.x + mat4_get(m, 1, 2)*v.y + mat4_get(m, 1, 3)*v.z + mat4_get(m, 1, 4)*v.w,
         mat4_get(m, 2, 1)*v.x + mat4_get(m, 2, 2)*v.y + mat4_get(m, 2, 3)*v.z + mat4_get(m, 2, 4)*v.w,
         mat4_get(m, 3, 1)*v.x + mat4_get(m, 3, 2)*v.y + mat4_get(m, 3, 3)*v.z + mat4_get(m, 3, 4)*v.w,
-        mat4_get(m, 4, 1)*v.x + mat4_get(m, 4, 2)*v.y + mat4_get(m, 4, 3)*v.z + mat4_get(m, 4, 4)*v.w
+        mat4_get(m, 4, 1)*v.x + mat4_get(m, 4, 2)*v.y + mat4_get(m, 4, 3)*v.z + mat4_get(m, 4, 4)*v.w,
     )
+    if result.x isa AbstractFloat &&
+       !(isfinite(result.x) && isfinite(result.y) &&
+         isfinite(result.z) && isfinite(result.w)) &&
+       all(isfinite, m.e) &&
+       isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(v.w)
+        return _stable_float_mat4_transform(m, v)
+    end
+    return result
 end
 
 function mat4_transform_point(m::Mat4, p::Vec3)
@@ -235,11 +243,20 @@ function mat4_transform_point(m::Mat4, p::Vec3)
 end
 
 function mat4_transform_direction(m::Mat4, d::Vec3)
-    Vec3(
+    result = Vec3(
         mat4_get(m, 1, 1)*d.x + mat4_get(m, 1, 2)*d.y + mat4_get(m, 1, 3)*d.z,
         mat4_get(m, 2, 1)*d.x + mat4_get(m, 2, 2)*d.y + mat4_get(m, 2, 3)*d.z,
-        mat4_get(m, 3, 1)*d.x + mat4_get(m, 3, 2)*d.y + mat4_get(m, 3, 3)*d.z
+        mat4_get(m, 3, 1)*d.x + mat4_get(m, 3, 2)*d.y + mat4_get(m, 3, 3)*d.z,
     )
+    if result.x isa AbstractFloat &&
+       !(isfinite(result.x) && isfinite(result.y) && isfinite(result.z)) &&
+       all(isfinite, m.e) &&
+       isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
+        transformed = _stable_float_mat4_transform(
+            m, Vec4(d.x, d.y, d.z, zero(d.x)))
+        return Vec3(transformed.x, transformed.y, transformed.z)
+    end
+    return result
 end
 
 function mat4_translation(tx, ty, tz)
@@ -946,6 +963,18 @@ end
         xy, _float_representation_multiply(a[3], b[3]))
 end
 
+@inline function _float_representation_dot4(a, b)
+    xy = _float_representation_add(
+        _float_representation_multiply(a[1], b[1]),
+        _float_representation_multiply(a[2], b[2]),
+    )
+    zw = _float_representation_add(
+        _float_representation_multiply(a[3], b[3]),
+        _float_representation_multiply(a[4], b[4]),
+    )
+    return _float_representation_add(xy, zw)
+end
+
 @inline function _stable_float_components(a::Vec3, b::Vec3)
     ax, ay, az, bx, by, bz = promote(
         a.x, a.y, a.z, b.x, b.y, b.z)
@@ -994,6 +1023,37 @@ end
         _float_representation_value(result[1]),
         _float_representation_value(result[2]),
         _float_representation_value(result[3]),
+    )
+end
+
+@inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
+    m1, m2, m3, m4, x, y, z, w = promote(
+        mat4_get(m, row, 1), mat4_get(m, row, 2),
+        mat4_get(m, row, 3), mat4_get(m, row, 4),
+        v.x, v.y, v.z, v.w,
+    )
+    matrix_row = (
+        _float_value_representation(m1),
+        _float_value_representation(m2),
+        _float_value_representation(m3),
+        _float_value_representation(m4),
+    )
+    vector = (
+        _float_value_representation(x),
+        _float_value_representation(y),
+        _float_value_representation(z),
+        _float_value_representation(w),
+    )
+    return _float_representation_value(
+        _float_representation_dot4(matrix_row, vector))
+end
+
+@inline function _stable_float_mat4_transform(m::Mat4, v::Vec4)
+    return Vec4(
+        _stable_float_mat4_row(m, 1, v),
+        _stable_float_mat4_row(m, 2, v),
+        _stable_float_mat4_row(m, 3, v),
+        _stable_float_mat4_row(m, 4, v),
     )
 end
 

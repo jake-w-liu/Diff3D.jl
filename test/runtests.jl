@@ -21954,4 +21954,32 @@ end
         @test_opt_alloc 0 dot(a, b)
     end
 
+    @testset "fresh audit round 106 fixes" begin
+        matrix = Mat4{Float64}((
+            1.0e308, 0.0, 0.0, 0.0,
+            1.0e308, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ))
+        vector = Vec4(2.0, -2.0, 0.0, 1.0)
+        @test mat4_transform_vec4(matrix, vector) ==
+              Vec4(0.0, -2.0, 0.0, 1.0)
+        @test mat4_transform_point(
+            matrix, Vec3(2.0, -2.0, 0.0)) ==
+              Vec3(0.0, -2.0, 0.0)
+        @test mat4_transform_direction(
+            matrix, Vec3(2.0, -2.0, 0.0)) ==
+              Vec3(0.0, -2.0, 0.0)
+
+        @test ForwardDiff.derivative(
+            x -> mat4_transform_point(
+                mat4_translation(x, 0.0, 0.0),
+                Vec3(2.0, 0.0, 0.0)).x,
+            1.0,
+        ) == 1.0
+        @test_opt_alloc 0 mat4_transform_vec4(matrix, vector)
+        @test_opt_alloc 0 mat4_transform_direction(
+            matrix, Vec3(2.0, -2.0, 0.0))
+    end
+
 end
