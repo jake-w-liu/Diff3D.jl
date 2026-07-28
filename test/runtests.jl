@@ -20407,4 +20407,24 @@ end
         @test_opt_alloc 0 Diff3D._next_id!(alloc_counter)
     end
 
+    @testset "fresh audit round 63 fixes" begin
+        @test_throws "invalid DEFLATE literal/length symbol 286" inflate(UInt8[0x1b, 0x03])
+        @test_throws "invalid DEFLATE literal/length symbol 287" inflate(UInt8[0x1b, 0x07])
+
+        # Exercise distance symbol 30 through a minimal internal Huffman table;
+        # dynamic DEFLATE tables can contain symbols 30/31.
+        literal_lengths = zeros(Int, 258)
+        literal_lengths[258] = 1  # symbol 257: length 3
+        distance_lengths = zeros(Int, 31)
+        distance_lengths[31] = 1  # symbol 30
+        @test_throws "invalid DEFLATE distance symbol 30" Diff3D._inflate_block!(
+            UInt8[], Diff3D._BitReader(UInt8[0x00]),
+            Diff3D._build_huff(literal_lengths),
+            Diff3D._build_huff(distance_lengths), -1)
+
+        fixed_empty = UInt8[0x03, 0x00]
+        @test inflate(fixed_empty) == UInt8[]
+        @test_opt_alloc 1024 inflate(fixed_empty)
+    end
+
 end

@@ -199,9 +199,13 @@ function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist,
         elseif sym == 256
             break
         else
+            257 <= sym <= 285 ||
+                error("invalid DEFLATE literal/length symbol $sym")
             li = sym - 256
             len = _LEN_BASE[li] + _getbits(br, _LEN_EXTRA[li])
             dsym = _decode_sym(br, dist)
+            0 <= dsym <= 29 ||
+                error("invalid DEFLATE distance symbol $dsym")
             d = _DIST_BASE[dsym + 1] + _getbits(br, _DIST_EXTRA[dsym + 1])
             start = length(out) - d
             start >= 0 || error("DEFLATE back-reference distance exceeds output (corrupt stream)")
