@@ -22360,4 +22360,16 @@ end
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
+    @testset "fresh audit round 126 fixes" begin
+        @test_throws ArgumentError StereoCamera(eye_sep=Inf)
+        @test_throws ArgumentError StereoCamera(eye_sep=-Inf)
+        @test_throws ArgumentError StereoCamera(eye_sep=NaN)
+
+        stereo = StereoCamera()
+        stereo.eye_sep = Inf
+        @test_throws ArgumentError stereo_update!(
+            stereo, PerspectiveCamera())
+        @test_opt_alloc 0 Diff3D._validated_stereo_eye_sep(0.064)
+    end
+
 end

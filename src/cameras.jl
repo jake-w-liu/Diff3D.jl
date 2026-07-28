@@ -190,8 +190,19 @@ mutable struct StereoCamera
     cameraR::PerspectiveCamera
 end
 
+function _validated_stereo_eye_sep(eye_sep)
+    separation = Float64(eye_sep)
+    isfinite(separation) ||
+        throw(ArgumentError("StereoCamera eye_sep must be finite"))
+    return separation
+end
+
 function StereoCamera(; eye_sep=0.064, aspect=1.0)
-    StereoCamera(eye_sep, PerspectiveCamera(aspect=aspect), PerspectiveCamera(aspect=aspect))
+    StereoCamera(
+        _validated_stereo_eye_sep(eye_sep),
+        PerspectiveCamera(aspect=aspect),
+        PerspectiveCamera(aspect=aspect),
+    )
 end
 
 """
@@ -208,7 +219,7 @@ function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
         mat4_get(view, 1, 2),
         mat4_get(view, 1, 3),
     )
-    half = s.eye_sep / 2
+    half = _validated_stereo_eye_sep(s.eye_sep) / 2
     for (sub, sign) in ((s.cameraL, -1.0), (s.cameraR, 1.0))
         off = right * (sign * half)
         sub.fov = cam.fov; sub.aspect = cam.aspect
