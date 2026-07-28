@@ -22603,4 +22603,18 @@ end
         @test_opt_alloc 0 Diff3D.downsample!(out, hdr, 2)
     end
 
+    @testset "fresh audit round 138 fixes" begin
+        largest = floatmax(Float64)
+        image = fill(largest, 3, 3, 3)
+        depth = zeros(3, 3)
+        pass = bokeh_pass(
+            depth; focus_depth=1.0, aperture=1.0)
+        output = pass(image)
+        @test output[2, 2, 1] == largest
+        @test output[2, 2, 2] == largest
+        @test output[2, 2, 3] == largest
+        @test_opt_alloc 0 Diff3D._bokeh_stable_average(
+            image, 2, 2, 1, 1, 3, 3, 1, 0.2)
+    end
+
 end

@@ -2811,17 +2811,63 @@ function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMat
             end
             r2 = r * r
             sr = 0.0; sg = 0.0; sb = 0.0; wsum = 0.0
+            finite_r = true
+            finite_g = true
+            finite_b = true
             for dy in -r:r, dx in -r:r
                 (dx*dx + dy*dy) <= r2 || continue   # disc-shaped circle of confusion
                 ii = clamp(i + dy, 1, H); jj = clamp(j + dx, 1, W)
-                sr += img[ii,jj,1]; sg += img[ii,jj,2]; sb += img[ii,jj,3]; wsum += 1.0
+                red = Float64(img[ii,jj,1])
+                green = Float64(img[ii,jj,2])
+                blue = Float64(img[ii,jj,3])
+                sr += red; sg += green; sb += blue; wsum += 1.0
+                finite_r &= isfinite(red)
+                finite_g &= isfinite(green)
+                finite_b &= isfinite(blue)
             end
             iw = 1.0 / wsum
-            out[i,j,1] = sr*iw; out[i,j,2] = sg*iw; out[i,j,3] = sb*iw
+            red = sr * iw
+            green = sg * iw
+            blue = sb * iw
+            !isfinite(red) && finite_r &&
+                (red = _bokeh_stable_average(
+                    img, i, j, r, r2, H, W, 1, iw))
+            !isfinite(green) && finite_g &&
+                (green = _bokeh_stable_average(
+                    img, i, j, r, r2, H, W, 2, iw))
+            !isfinite(blue) && finite_b &&
+                (blue = _bokeh_stable_average(
+                    img, i, j, r, r2, H, W, 3, iw))
+            out[i,j,1] = red
+            out[i,j,2] = green
+            out[i,j,3] = blue
         end
         return out
     end
 end
+
+@inline function _bokeh_stable_average(
+    img::AbstractArray, i::Int, j::Int, r::Int, r2::Int,
+    H::Int, W::Int, channel::Int, inverse_weight::Float64,
+)
+    represented_sum = _float_zero_representation(Float64)
+    @inbounds for dy in -r:r, dx in -r:r
+        (dx*dx + dy*dy) <= r2 || continue
+        ii = clamp(i + dy, 1, H)
+        jj = clamp(j + dx, 1, W)
+        represented_sum = _float_representation_add(
+            represented_sum,
+            _float_value_representation(
+                Float64(img[ii, jj, channel])),
+        )
+    end
+    represented_average = _float_representation_multiply(
+        represented_sum,
+        _float_value_representation(inverse_weight),
+    )
+    return _float_representation_value(represented_average)
+end
+
 # Positional-depth convenience form, matching `outline_pass`/`ssao_pass`.
 bokeh_pass(depth::AbstractMatrix; focus_depth::Real, aperture::Real=0.02) =
     bokeh_pass(; focus_depth=focus_depth, aperture=aperture, depth=depth)
