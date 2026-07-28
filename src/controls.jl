@@ -1425,15 +1425,48 @@ function _animation_loop_mode(loop::Symbol)
     throw(ArgumentError("unsupported animation loop mode: $loop"))
 end
 
+function _validated_animation_duration(value::Real)
+    value isa Bool &&
+        throw(ArgumentError("AnimationClip duration must be finite and non-negative"))
+    duration = Float64(value)
+    isfinite(duration) && duration >= 0.0 ||
+        throw(ArgumentError("AnimationClip duration must be finite and non-negative"))
+    return duration
+end
+
+function _validated_animation_time_scale(value::Real)
+    value isa Bool &&
+        throw(ArgumentError("animation time_scale must be finite"))
+    time_scale = Float64(value)
+    isfinite(time_scale) ||
+        throw(ArgumentError("animation time_scale must be finite"))
+    return time_scale
+end
+
+function _validated_animation_repetitions(value::Integer)
+    value isa Bool &&
+        throw(ArgumentError("animation repetitions must be an integer"))
+    return try
+        Int(value)
+    catch
+        throw(ArgumentError("animation repetitions are too large"))
+    end
+end
+
 function AnimationClip(name::String, duration::Real,
                        tracks::AbstractVector{<:AbstractKeyframeTrack};
                        loop::Symbol=:repeat,
                        repetitions::Integer=-1,
                        clamp_when_finished::Bool=false,
                        time_scale::Real=1.0)
-    AnimationClip(name, Float64(duration), collect(AbstractKeyframeTrack, tracks),
-                  _animation_loop_mode(loop), Int(repetitions),
-                  clamp_when_finished, Float64(time_scale))
+    AnimationClip(
+        name, _validated_animation_duration(duration),
+        collect(AbstractKeyframeTrack, tracks),
+        _animation_loop_mode(loop),
+        _validated_animation_repetitions(repetitions),
+        clamp_when_finished,
+        _validated_animation_time_scale(time_scale),
+    )
 end
 
 function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTrack};
@@ -1461,16 +1494,23 @@ function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing
                         time_scale::Union{Real,Nothing}=nothing)
     AnimationMixer(clip, 0.0,
                    loop === nothing ? clip.loop : _animation_loop_mode(loop),
-                   repetitions === nothing ? clip.repetitions : Int(repetitions),
+                   repetitions === nothing ? clip.repetitions :
+                   _validated_animation_repetitions(repetitions),
                    clamp_when_finished === nothing ? clip.clamp_when_finished : clamp_when_finished,
-                   time_scale === nothing ? clip.time_scale : Float64(time_scale))
+                   time_scale === nothing ? clip.time_scale :
+                   _validated_animation_time_scale(time_scale))
 end
 
 function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
                               repetitions::Int, clamp_when_finished::Bool)
     d = Float64(duration)
+    isfinite(d) && d >= 0.0 ||
+        throw(ArgumentError("animation duration must be finite and non-negative"))
     d <= 0.0 && return 0.0
     x = Float64(t)
+    isfinite(x) ||
+        throw(ArgumentError("animation time must be finite"))
+    loop = _animation_loop_mode(loop)
     if loop === :once
         x <= 0.0 && return 0.0
         x >= d && return clamp_when_finished ? d : 0.0
@@ -1880,9 +1920,13 @@ end
 
 """Sample the clip at absolute time `t` and write each track's value to its target."""
 function mixer_set_time!(mixer::AnimationMixer, t)
-    isnan(Float64(t)) && throw(ArgumentError("mixer_set_time!: time must not be NaN"))
-    mixer.time = Float64(t)
-    sample_time = _animation_loop_time(mixer.time * mixer.time_scale,
+    time = Float64(t)
+    isfinite(time) ||
+        throw(ArgumentError("mixer_set_time!: time must be finite"))
+    time_scale =
+        _validated_animation_time_scale(mixer.time_scale)
+    mixer.time = time
+    sample_time = _animation_loop_time(mixer.time * time_scale,
                                        mixer.clip.duration,
                                        mixer.loop,
                                        mixer.repetitions,

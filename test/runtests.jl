@@ -22564,4 +22564,26 @@ end
             "test", finite_times, finite_values)
     end
 
+    @testset "fresh audit round 136 fixes" begin
+        empty_tracks = AbstractKeyframeTrack[]
+        @test_throws ArgumentError AnimationClip(
+            "bad", NaN, empty_tracks)
+        @test_throws ArgumentError AnimationClip(
+            "bad", Inf, empty_tracks)
+        @test_throws ArgumentError AnimationClip(
+            "bad", -1.0, empty_tracks)
+        @test_throws ArgumentError AnimationClip(
+            "bad", 1.0, empty_tracks; time_scale=Inf)
+        @test_throws ArgumentError AnimationClip(
+            "bad", 1.0, empty_tracks; repetitions=true)
+
+        clip = AnimationClip("valid", 1.0, empty_tracks)
+        mixer = AnimationMixer(clip)
+        @test_throws ArgumentError mixer_set_time!(mixer, Inf)
+        mixer.time_scale = NaN
+        @test_throws ArgumentError mixer_set_time!(mixer, 0.5)
+        @test_opt_alloc 0 Diff3D._animation_loop_time(
+            0.5, 1.0, :repeat, -1, false)
+    end
+
 end
