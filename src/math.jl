@@ -70,11 +70,17 @@ end
 @inline function _stable_lerp(a, b, t)
     iszero(t) && return a
     t == one(t) && return b
-    if (a >= zero(a) && b >= zero(b)) ||
-       (a <= zero(a) && b <= zero(b))
-        return a + (b - a) * t
+    result = if (a >= zero(a) && b >= zero(b)) ||
+                (a <= zero(a) && b <= zero(b))
+        a + (b - a) * t
+    else
+        a * (one(t) - t) + b * t
     end
-    return a * (one(t) - t) + b * t
+    if result isa AbstractFloat && !isfinite(result) &&
+       isfinite(a) && isfinite(b) && isfinite(t)
+        return _stable_float_lerp_fallback(a, b, t)
+    end
+    return result
 end
 
 lerp(a::Vec3, b::Vec3, t::Real) = Vec3(
@@ -859,6 +865,12 @@ end
     mantissa, correction = frexp(a.mantissa * b.mantissa)
     return _FloatRepresentation(
         mantissa, a.exponent + b.exponent + correction, true)
+end
+
+@inline function _stable_float_lerp_fallback(
+        a::AbstractFloat, b::AbstractFloat, t::Real)
+    a, b, t = promote(a, b, t)
+    return muladd(t, b - a, a)
 end
 
 @inline function _float_representation_cross(a, b)

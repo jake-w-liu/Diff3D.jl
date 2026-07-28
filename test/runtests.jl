@@ -21876,4 +21876,30 @@ end
             shadow, point; pcf_radius=typemax(Int))
     end
 
+    @testset "fresh audit round 102 fixes" begin
+        extreme_line = Line3(
+            Vec3(1.0e308, 0.0, 0.0), Vec3())
+        @test line3_at(extreme_line, 2.0) ==
+              Vec3(-1.0e308, 0.0, 0.0)
+        @test line3_at(extreme_line, -1.0) ==
+              Vec3(Inf, 0.0, 0.0)
+
+        cancellation_line = Line3(
+            Vec3(1.0e308, 0.0, 0.0),
+            Vec3(9.0e307, 0.0, 0.0))
+        expected = Float64(
+            BigFloat(1.0e308) +
+            (BigFloat(9.0e307) - BigFloat(1.0e308)) * 19)
+        @test line3_at(cancellation_line, 19).x == expected
+        @test isfinite(expected)
+
+        @test ForwardDiff.derivative(
+            t -> line3_at(
+                Line3(Vec3(2.0, 0.0, 0.0),
+                      Vec3(6.0, 0.0, 0.0)), t).x,
+            0.25,
+        ) == 4.0
+        @test_opt_alloc 0 line3_at(extreme_line, 2.0)
+    end
+
 end
