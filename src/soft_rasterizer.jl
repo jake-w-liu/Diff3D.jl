@@ -248,9 +248,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                 end
 
                 total_weight = zero(T)
-                color_r = zero(T)
-                color_g = zero(T)
-                color_b = zero(T)
+                average_color = Color3(zero(T), zero(T), zero(T))
                 if any_face
                     for fi in 1:n_screen_tris
                         tri = screen_tris[fi]
@@ -265,18 +263,22 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                         depth_weight = exp(-z_face / γ - m)
 
                         w = coverage * depth_weight
-                        total_weight += w
-                        color_r += w * tri.color.r
-                        color_g += w * tri.color.g
-                        color_b += w * tri.color.b
+                        next_weight = total_weight + w
+                        average_color = iszero(total_weight) ? tri.color :
+                            _stable_color_lerp(
+                                average_color, tri.color, w / next_weight)
+                        total_weight = next_weight
                     end
                 end
 
                 w_bg = exp(-one(T) / γ - m) + eps
                 denom = total_weight + w_bg
-                image[py, px, 1] = (color_r + w_bg * bg.r) / denom
-                image[py, px, 2] = (color_g + w_bg * bg.g) / denom
-                image[py, px, 3] = (color_b + w_bg * bg.b) / denom
+                color = iszero(total_weight) ? bg :
+                    _stable_color_lerp(
+                        average_color, bg, w_bg / denom)
+                image[py, px, 1] = color.r
+                image[py, px, 2] = color.g
+                image[py, px, 3] = color.b
             end
         end
         return image
@@ -388,9 +390,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
 
             # Pass 2: stabilized weights weight_f = coverage_f * exp(e_f - m).
             total_weight = zero(T)
-            color_r = zero(T)
-            color_g = zero(T)
-            color_b = zero(T)
+            average_color = Color3(zero(T), zero(T), zero(T))
             if any_face
                 for k in face_lo:face_hi
                     fi = tile_faces[k]
@@ -411,10 +411,11 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     depth_weight = exp(e_f - m)
 
                     w = coverage * depth_weight
-                    total_weight += w
-                    color_r += w * tri.color.r
-                    color_g += w * tri.color.g
-                    color_b += w * tri.color.b
+                    next_weight = total_weight + w
+                    average_color = iszero(total_weight) ? tri.color :
+                        _stable_color_lerp(
+                            average_color, tri.color, w / next_weight)
+                    total_weight = next_weight
                 end
             end
 
@@ -427,9 +428,12 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             # floor keeps the denominator strictly positive without a discrete branch.
             w_bg = exp(-one(T) / γ - m) + eps
             denom = total_weight + w_bg
-            image[py, px, 1] = (color_r + w_bg * bg.r) / denom
-            image[py, px, 2] = (color_g + w_bg * bg.g) / denom
-            image[py, px, 3] = (color_b + w_bg * bg.b) / denom
+            color = iszero(total_weight) ? bg :
+                _stable_color_lerp(
+                    average_color, bg, w_bg / denom)
+            image[py, px, 1] = color.r
+            image[py, px, 2] = color.g
+            image[py, px, 3] = color.b
         end
     end
 

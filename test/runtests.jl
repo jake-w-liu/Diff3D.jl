@@ -22636,4 +22636,41 @@ end
             floatmax(Float64))
     end
 
+    @testset "fresh audit round 141 fixes" begin
+        largest = floatmax(Float64)
+        vertices = [
+            Vec3(-1.0, -1.0, 0.0),
+            Vec3(1.0, -1.0, 0.0),
+            Vec3(0.0, 1.0, 0.0),
+        ]
+        color = Color3(largest, largest, largest)
+        config = SoftRasterizerConfig(bg_color=color)
+
+        for face_count in (4, 9)
+            faces = fill((1, 2, 3), face_count)
+            colors = fill(color, face_count)
+            image = soft_render(
+                vertices, faces, colors, Mat4(), 1, 1, config)
+            @test image == fill(largest, 1, 1, 3)
+
+            workspace = SoftRenderWorkspace()
+            soft_render(
+                vertices, faces, colors, Mat4(), 1, 1, config;
+                workspace=workspace)
+            @test_opt_alloc 512 soft_render(
+                vertices, faces, colors, Mat4(), 1, 1, config;
+                workspace=workspace)
+        end
+
+        faces = fill((1, 2, 3), 4)
+        derivative = ForwardDiff.derivative(1.0) do value
+            colors = fill(Color3(value, value, value), 4)
+            cfg = SoftRasterizerConfig(
+                bg_color=Color3(value, value, value))
+            soft_render(
+                vertices, faces, colors, Mat4(), 1, 1, cfg)[1]
+        end
+        @test derivative ≈ 1.0
+    end
+
 end
