@@ -239,7 +239,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     tri = screen_tris[fi]
                     tri.valid || continue
                     !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-                    z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                    z_face = _mean3_scaled(
+                        tri.s1.z, tri.s2.z, tri.s3.z)
                     e_f = -z_face / γ
                     if e_f > m
                         m = e_f
@@ -259,7 +260,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                             tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
                             tri.area)
                         coverage = sigmoid_approx(d / σ)
-                        z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                        z_face = _mean3_scaled(
+                            tri.s1.z, tri.s2.z, tri.s3.z)
                         depth_weight = exp(-z_face / γ - m)
 
                         w = coverage * depth_weight
@@ -380,7 +382,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                 fi = tile_faces[k]
                 tri = screen_tris[fi]
                 !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-                z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                z_face = _mean3_scaled(
+                    tri.s1.z, tri.s2.z, tri.s3.z)
                 e_f = -z_face / γ
                 if e_f > m
                     m = e_f
@@ -406,7 +409,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     coverage = sigmoid_approx(d / σ)
 
                     # Stabilized depth-based weighting
-                    z_face = (tri.s1.z + tri.s2.z + tri.s3.z) / 3
+                    z_face = _mean3_scaled(
+                        tri.s1.z, tri.s2.z, tri.s3.z)
                     e_f = -z_face / γ
                     depth_weight = exp(e_f - m)
 

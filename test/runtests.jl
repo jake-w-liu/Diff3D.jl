@@ -22673,4 +22673,27 @@ end
         @test derivative ≈ 1.0
     end
 
+    @testset "fresh audit round 142 fixes" begin
+        depth = 1.0e308
+        vertices = [
+            Vec3(-1.0, -1.0, depth),
+            Vec3(1.0, -1.0, depth),
+            Vec3(0.0, 1.0, depth),
+        ]
+        config = SoftRasterizerConfig(gamma=depth)
+        for face_count in (1, 9)
+            image = soft_render(
+                vertices,
+                fill((1, 2, 3), face_count),
+                fill(Color3(1.0, 0.0, 0.0), face_count),
+                Mat4(), 1, 1, config)
+            @test isfinite(image[1])
+            @test image[1] > 0.0
+            @test image[2] == 0.0
+            @test image[3] == 0.0
+        end
+        @test Diff3D._mean3_scaled(depth, depth, depth) == depth
+        @test_opt_alloc 0 Diff3D._mean3_scaled(depth, depth, depth)
+    end
+
 end
