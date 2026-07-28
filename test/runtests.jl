@@ -22416,4 +22416,29 @@ end
         @test_opt_alloc 0 loss_ssim(positive, positive)
     end
 
+    @testset "fresh audit round 129 fixes" begin
+        largest = floatmax(Float64)
+        a = Vec3(largest, largest, largest)
+        b = Vec3(largest, -largest, largest)
+        c = Vec3(-largest, largest, largest)
+        expected = Vec3(largest / 3, largest / 3, largest)
+
+        mean = Diff3D._mean3_vec3(a, b, c)
+        centroid = triangle_centroid(Triangle(a, b, c))
+        @test isapprox(mean.x, expected.x; rtol=eps())
+        @test isapprox(mean.y, expected.y; rtol=eps())
+        @test mean.z == expected.z
+        @test isapprox(centroid.x, expected.x; rtol=eps())
+        @test isapprox(centroid.y, expected.y; rtol=eps())
+        @test centroid.z == expected.z
+        @test ForwardDiff.derivative(
+            x -> Diff3D._mean3_vec3(
+                Vec3(x, 0.0, 0.0),
+                Vec3(2.0, 0.0, 0.0),
+                Vec3(3.0, 0.0, 0.0)).x,
+            1.0,
+        ) == 1 / 3
+        @test_opt_alloc 0 Diff3D._mean3_vec3(a, b, c)
+    end
+
 end

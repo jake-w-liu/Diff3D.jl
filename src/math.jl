@@ -1325,11 +1325,14 @@ end
     return ((a / scale + b / scale + c / scale) / 3) * scale
 end
 
-triangle_centroid(tri::Triangle) = Vec3(
-    _mean3_scaled(tri.a.x, tri.b.x, tri.c.x),
-    _mean3_scaled(tri.a.y, tri.b.y, tri.c.y),
-    _mean3_scaled(tri.a.z, tri.b.z, tri.c.z),
+@inline _mean3_vec3(a::Vec3, b::Vec3, c::Vec3) = Vec3(
+    _mean3_scaled(a.x, b.x, c.x),
+    _mean3_scaled(a.y, b.y, c.y),
+    _mean3_scaled(a.z, b.z, c.z),
 )
+
+triangle_centroid(tri::Triangle) =
+    _mean3_vec3(tri.a, tri.b, tri.c)
 
 """Barycentric coordinates `(u,v,w)` of `p` relative to the triangle plane."""
 function triangle_barycentric(tri::Triangle, p::Vec3)

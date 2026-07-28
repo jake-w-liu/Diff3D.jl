@@ -919,9 +919,8 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         if side !== :double
-            wc = mat4_transform_point(world_mat, Vec3((v1.x+v2.x+v3.x)/3,
-                                                      (v1.y+v2.y+v3.y)/3,
-                                                      (v1.z+v2.z+v3.z)/3))
+            wc = mat4_transform_point(
+                world_mat, _mean3_vec3(v1, v2, v3))
             fn = _flat_face_normal(geo, i1, i2, i3,
                                    mat4_transform_point(world_mat, v1),
                                    mat4_transform_point(world_mat, v2),

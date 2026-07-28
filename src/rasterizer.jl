@@ -945,7 +945,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
             w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
             w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
-            wc = Vec3((w1.x+w2.x+w3.x)/3, (w1.y+w2.y+w3.y)/3, (w1.z+w2.z+w3.z)/3)
+            wc = _mean3_vec3(w1, w2, w3)
             fn = _flat_face_normal(geo, i1, i2, i3, w1, w2, w3, normal_mat, has_normals)
             # Orthographic rays are parallel, so facing is judged against the
             # constant view direction; the eye-point vector is perspective-only.
@@ -1756,9 +1756,7 @@ material_clipping_planes(m::AbstractMaterial) =
     v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
     v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
     v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
-    center = Vec3((v1.x + v2.x + v3.x) / 3,
-                  (v1.y + v2.y + v3.y) / 3,
-                  (v1.z + v2.z + v3.z) / 3)
+    center = _mean3_vec3(v1, v2, v3)
     face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
     return clamp_color(shade_face(face_n, normalize(cam_pos - center), center,
                                   mat, lights; shadow_fn=shadow_fn))
@@ -1858,7 +1856,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         # Back-face culling (skipped for double-sided materials).
         if side !== :double
-            wc = mat4_transform_point(world_mat, Vec3((v1.x+v2.x+v3.x)/3, (v1.y+v2.y+v3.y)/3, (v1.z+v2.z+v3.z)/3))
+            wc = mat4_transform_point(
+                world_mat, _mean3_vec3(v1, v2, v3))
             fn = _flat_face_normal(geo, i1, i2, i3,
                                    mat4_transform_point(world_mat, v1),
                                    mat4_transform_point(world_mat, v2),

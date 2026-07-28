@@ -762,7 +762,7 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
         v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
         v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
         v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
-        center = Vec3((v1.x+v2.x+v3.x)/3, (v1.y+v2.y+v3.y)/3, (v1.z+v2.z+v3.z)/3)
+        center = _mean3_vec3(v1, v2, v3)
 
         if material isa MeshDepthMaterial
             d = norm(cam_pos - center)
@@ -912,7 +912,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
         v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
         v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
-        center = Vec3((v1.x+v2.x+v3.x)/3, (v1.y+v2.y+v3.y)/3, (v1.z+v2.z+v3.z)/3)
+        center = _mean3_vec3(v1, v2, v3)
 
         if material isa MeshDepthMaterial
             d = norm(cam_pos - center)
