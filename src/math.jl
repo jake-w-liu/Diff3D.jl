@@ -44,12 +44,30 @@ Base.:*(a::Vec3, s::Real) = Vec3(a.x * s, a.y * s, a.z * s)
 Base.:*(s::Real, a::Vec3) = a * s
 Base.:/(a::Vec3, s::Real) = Vec3(a.x / s, a.y / s, a.z / s)
 
-dot(a::Vec3, b::Vec3) = a.x * b.x + a.y * b.y + a.z * b.z
-cross(a::Vec3, b::Vec3) = Vec3(
-    a.y * b.z - a.z * b.y,
-    a.z * b.x - a.x * b.z,
-    a.x * b.y - a.y * b.x
-)
+function dot(a::Vec3, b::Vec3)
+    result = a.x * b.x + a.y * b.y + a.z * b.z
+    if result isa AbstractFloat && !isfinite(result) &&
+       isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
+       isfinite(b.x) && isfinite(b.y) && isfinite(b.z)
+        return _stable_float_dot(a, b)
+    end
+    return result
+end
+
+function cross(a::Vec3, b::Vec3)
+    result = Vec3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x,
+    )
+    if result.x isa AbstractFloat &&
+       !(isfinite(result.x) && isfinite(result.y) && isfinite(result.z)) &&
+       isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
+       isfinite(b.x) && isfinite(b.y) && isfinite(b.z)
+        return _stable_float_cross(a, b)
+    end
+    return result
+end
 @inline _norm3(x, y, z) = hypot(x, y, z)
 @inline _norm4(x, y, z, w) = hypot(x, y, z, w)
 
@@ -918,6 +936,43 @@ end
     )
     return _float_representation_add(
         xy, _float_representation_multiply(a[3], b[3]))
+end
+
+@inline function _stable_float_components(a::Vec3, b::Vec3)
+    ax, ay, az, bx, by, bz = promote(
+        a.x, a.y, a.z, b.x, b.y, b.z)
+    return (
+        (
+            _float_value_representation(ax),
+            _float_value_representation(ay),
+            _float_value_representation(az),
+        ),
+        (
+            _float_value_representation(bx),
+            _float_value_representation(by),
+            _float_value_representation(bz),
+        ),
+    )
+end
+
+@inline function _stable_float_dot(a::Vec3, b::Vec3)
+    a_representation, b_representation =
+        _stable_float_components(a, b)
+    return _float_representation_value(
+        _float_representation_dot(
+            a_representation, b_representation))
+end
+
+@inline function _stable_float_cross(a::Vec3, b::Vec3)
+    a_representation, b_representation =
+        _stable_float_components(a, b)
+    result = _float_representation_cross(
+        a_representation, b_representation)
+    return Vec3(
+        _float_representation_value(result[1]),
+        _float_representation_value(result[2]),
+        _float_representation_value(result[3]),
+    )
 end
 
 @inline function _stable_float_plane_distance(p::Plane, pt::Vec3)

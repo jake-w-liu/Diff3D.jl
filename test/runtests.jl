@@ -21924,4 +21924,23 @@ end
         @test_opt_alloc 0 plane_distance_to_point(plane, point)
     end
 
+    @testset "fresh audit round 104 fixes" begin
+        a = Vec3(1.0e308, 1.0e308, 1.0e308)
+        b = Vec3(2.0, -1.0, -0.5)
+        @test dot(a, b) == 5.0e307
+
+        parallel_a = Vec3(1.0e308, 1.0e308, 0.0)
+        parallel_b = Vec3(2.0, 2.0, 0.0)
+        @test cross(parallel_a, parallel_b) == Vec3()
+
+        @test ForwardDiff.derivative(
+            x -> dot(
+                Vec3(x, 2.0, 3.0),
+                Vec3(4.0, 5.0, 6.0)),
+            1.0,
+        ) == 4.0
+        @test_opt_alloc 0 dot(a, b)
+        @test_opt_alloc 0 cross(parallel_a, parallel_b)
+    end
+
 end
