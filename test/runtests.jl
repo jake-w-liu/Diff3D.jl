@@ -23069,4 +23069,35 @@ end
             Vec2(-largest / 4, 0.5), triangle)
     end
 
+    @testset "fresh audit round 158 fixes" begin
+        largest = floatmax(Float64)
+        @test Diff3D._svg_lerp_point(
+            Vec2(-largest, -largest),
+            Vec2(largest, largest), 0.5) ==
+            Vec2(0.0, 0.0)
+
+        intersection =
+            Diff3D._svg_segment_intersection_point(
+                Vec2(-largest, -1.0),
+                Vec2(largest, 1.0),
+                Vec2(-largest, 1.0),
+                Vec2(largest, -1.0))
+        @test intersection == Vec2(0.0, 0.0)
+        thin_intersection =
+            Diff3D._svg_segment_intersection_point(
+                Vec2(-largest, -1.0e-300),
+                Vec2(largest, 1.0e-300),
+                Vec2(-largest, 1.0e-300),
+                Vec2(largest, -1.0e-300))
+        @test thin_intersection == Vec2(0.0, 0.0)
+        @test Diff3D._svg_segment_intersection_point(
+            Vec2(0.0, 0.0), Vec2(1.0, 0.0),
+            Vec2(0.0, 1.0), Vec2(1.0, 1.0)) === nothing
+        @test_opt_alloc 0 Diff3D._svg_segment_intersection_point(
+            Vec2(-largest, -1.0),
+            Vec2(largest, 1.0),
+            Vec2(-largest, 1.0),
+            Vec2(largest, -1.0))
+    end
+
 end

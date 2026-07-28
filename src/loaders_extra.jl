@@ -6215,7 +6215,10 @@ function _svg_clip_open_path_to_loop(path::SVGPath,
 end
 
 function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
-    return Vec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+    return Vec2(
+        _stable_lerp(a.x, b.x, t),
+        _stable_lerp(a.y, b.y, t),
+    )
 end
 
 function _svg_clip_segment_interval_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
@@ -6306,20 +6309,35 @@ end
 
 function _svg_segment_intersection_point(a::Vec2{Float64}, b::Vec2{Float64},
                                          c::Vec2{Float64}, d::Vec2{Float64})
-    rx = b.x - a.x
-    ry = b.y - a.y
-    sx = d.x - c.x
-    sy = d.y - c.y
+    scale_x = max(
+        1.0,
+        max(max(abs(a.x), abs(b.x)),
+            max(abs(c.x), abs(d.x))),
+    )
+    scale_y = max(
+        1.0,
+        max(max(abs(a.y), abs(b.y)),
+            max(abs(c.y), abs(d.y))),
+    )
+    an = Vec2(a.x / scale_x, a.y / scale_y)
+    bn = Vec2(b.x / scale_x, b.y / scale_y)
+    cn = Vec2(c.x / scale_x, c.y / scale_y)
+    dn = Vec2(d.x / scale_x, d.y / scale_y)
+    rx = bn.x - an.x
+    ry = bn.y - an.y
+    sx = dn.x - cn.x
+    sy = dn.y - cn.y
     denom = rx * sy - ry * sx
-    abs(denom) > 1e-12 || return nothing
-    qx = c.x - a.x
-    qy = c.y - a.y
+    denom_tolerance = 1e-12 / scale_x / scale_y
+    abs(denom) > denom_tolerance || return nothing
+    qx = cn.x - an.x
+    qy = cn.y - an.y
     t = (qx * sy - qy * sx) / denom
     u = (qx * ry - qy * rx) / denom
     -1e-9 <= t <= 1.0 + 1e-9 || return nothing
     -1e-9 <= u <= 1.0 + 1e-9 || return nothing
     t = clamp(t, 0.0, 1.0)
-    return Vec2(a.x + rx * t, a.y + ry * t)
+    return _svg_lerp_point(a, b, t)
 end
 
 function _svg_loop_edges(loops::Vector{Vector{Vec2{Float64}}})
