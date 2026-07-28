@@ -22093,4 +22093,18 @@ end
             max_aniso=8)
     end
 
+    @testset "fresh audit round 112 fixes" begin
+        @test Diff3D._cube_face_uv(
+            Vec3(1.0e308, 0.0, 1.0e308)) ==
+              (1, 0.0, 0.5)
+        @test Diff3D._cube_face_uv(
+            Vec3(1.0e308, 0.0, -1.0e308)) ==
+              (1, 1.0, 0.5)
+        @test Diff3D._cube_face_uv(
+            Vec3(0.0, 1.0e308, 1.0e308)) ==
+              (3, 0.5, 0.0)
+        @test_opt_alloc 0 Diff3D._cube_face_uv(
+            Vec3(1.0e308, 0.0, 1.0e308))
+    end
+
 end

@@ -730,14 +730,14 @@ function _cube_face_uv(dir::Vec3)
     ax, ay, az = abs(dir.x), abs(dir.y), abs(dir.z)
     ax == 0 && ay == 0 && az == 0 && return 1, 0.5, 0.5
     if ax >= ay && ax >= az
-        if dir.x > 0; return 1, 0.5 - dir.z/(2dir.x), 0.5 + dir.y/(2ax)
-        else;         return 2, 0.5 - dir.z/(2dir.x), 0.5 + dir.y/(2ax); end
+        if dir.x > 0; return 1, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2
+        else;         return 2, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2; end
     elseif ay >= ax && ay >= az
-        if dir.y > 0; return 3, 0.5 + dir.x/(2ay), 0.5 - dir.z/(2ay)
-        else;         return 4, 0.5 + dir.x/(2ay), 0.5 + dir.z/(2ay); end
+        if dir.y > 0; return 3, 0.5 + (dir.x/ay)/2, 0.5 - (dir.z/ay)/2
+        else;         return 4, 0.5 + (dir.x/ay)/2, 0.5 + (dir.z/ay)/2; end
     else
-        if dir.z > 0; return 5, 0.5 + dir.x/(2dir.z), 0.5 + dir.y/(2az)
-        else;         return 6, 0.5 + dir.x/(2dir.z), 0.5 + dir.y/(2az); end
+        if dir.z > 0; return 5, 0.5 + (dir.x/dir.z)/2, 0.5 + (dir.y/az)/2
+        else;         return 6, 0.5 + (dir.x/dir.z)/2, 0.5 + (dir.y/az)/2; end
     end
 end
 
