@@ -22238,4 +22238,18 @@ end
         @test_opt_alloc 0 cross(a, b)
     end
 
+    @testset "fresh audit round 120 fixes" begin
+        largest = floatmax(Float64)
+        texture = Texture(
+            fill(largest, 4, 4, 1); colorspace=:linear)
+        generate_mipmaps!(texture)
+        sample = sample_texture_aniso(
+            texture, 0.5, 0.5, 1.0, 0.1;
+            max_aniso=8)
+        @test sample == Color3(largest, largest, largest)
+        @test_opt_alloc 0 sample_texture_aniso(
+            texture, 0.5, 0.5, 1.0, 0.1;
+            max_aniso=8)
+    end
+
 end

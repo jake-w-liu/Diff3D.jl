@@ -766,11 +766,17 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
             sample_texture_auto(tex, u, v + off, duv_minor)
         end
     end
-    acc = probe(0)                               # seeds the accumulator with the AD type
+    average = probe(0)                           # seeds the accumulator with the AD type
     @inbounds for k in 1:(N - 1)
-        acc = acc + probe(k)
+        sample = probe(k)
+        weight = 1.0 / (k + 1)
+        average = Color3(
+            _stable_lerp(average.r, sample.r, weight),
+            _stable_lerp(average.g, sample.g, weight),
+            _stable_lerp(average.b, sample.b, weight),
+        )
     end
-    return acc * invN
+    return average
 end
 
 # ========================== CubeTexture ==========================
