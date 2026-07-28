@@ -1002,7 +1002,11 @@ end
 @inline function _stable_float_lerp_fallback(
         a::AbstractFloat, b::AbstractFloat, t::Real)
     a, b, t = promote(a, b, t)
-    return muladd(t, b - a, a)
+    # `muladd` is permitted to remain as separate multiply/add operations at
+    # low optimization levels, which loses the finite result when the product
+    # overflows before cancellation. `fma` requires the single-rounding
+    # operation on every compiler path.
+    return fma(t, b - a, a)
 end
 
 @inline function _float_representation_cross(a, b)
