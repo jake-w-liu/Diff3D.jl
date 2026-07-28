@@ -6110,8 +6110,11 @@ function _svg_clip_signed_distance(p::Vec2{Float64}, a::Vec2{Float64},
     point_y = p.y - a.y
     if isfinite(edge_x) && isfinite(edge_y) &&
        isfinite(point_x) && isfinite(point_y)
-        cross_value = _float_product_difference(
-            edge_x, point_y, edge_y, point_x)
+        # Preserve the original arithmetic on the ordinary finite path.  In
+        # addition to avoiding the exceptional-path machinery, this keeps
+        # clipping intersections bit-for-bit compatible with the distances
+        # used to compute their parameters.
+        cross_value = edge_x * point_y - edge_y * point_x
         isfinite(cross_value) &&
             return ccw ? cross_value : -cross_value
     end
@@ -6134,8 +6137,21 @@ function _svg_clip_signed_distance(p::Vec2{Float64}, a::Vec2{Float64},
     return ccw ? cross_value : -cross_value
 end
 
-function _svg_clip_edge_intersection(s::Vec2{Float64}, e::Vec2{Float64},
-                                     a::Vec2{Float64}, b::Vec2{Float64})
+function _svg_clip_edge_intersection(
+        s::Vec2{Float64}, e::Vec2{Float64},
+        ds::Float64, de::Float64,
+        a::Vec2{Float64}, b::Vec2{Float64})
+    denom = ds - de
+    if isfinite(denom) && abs(denom) > 1e-15
+        t = ds / denom
+        candidate = Vec2(
+            s.x + (e.x - s.x) * t,
+            s.y + (e.y - s.y) * t,
+        )
+        isfinite(candidate.x) && isfinite(candidate.y) &&
+            return candidate
+    end
+
     params = _svg_line_intersection_parameters(s, e, a, b)
     params === nothing && return e
     candidate = _svg_lerp_point(
@@ -6170,11 +6186,13 @@ function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
                 !s_inside &&
                     _svg_push_unique_point!(out,
                                             _svg_clip_edge_intersection(s, e,
+                                                                        ds, de,
                                                                         a, b))
                 _svg_push_unique_point!(out, e)
             elseif s_inside
                 _svg_push_unique_point!(out,
                                         _svg_clip_edge_intersection(s, e,
+                                                                    ds, de,
                                                                     a, b))
             end
             s = e
@@ -6201,7 +6219,7 @@ function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
         in1 = d1 >= -1e-9
         in0 && in1 && continue
         (!in0 && !in1) && return nothing
-        hit = _svg_clip_edge_intersection(p0, p1, c, d)
+        hit = _svg_clip_edge_intersection(p0, p1, d0, d1, c, d)
         if in0
             p1 = hit
         else
@@ -6248,6 +6266,11 @@ function _svg_clip_open_path_to_loop(path::SVGPath,
 end
 
 function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
+    x = a.x + (b.x - a.x) * t
+    y = a.y + (b.y - a.y) * t
+    if isfinite(x) && isfinite(y)
+        return Vec2(x, y)
+    end
     return Vec2(
         _stable_lerp(a.x, b.x, t),
         _stable_lerp(a.y, b.y, t),
@@ -6339,17 +6362,11 @@ function _svg_clip_segment_interval_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
         inb = db >= -1e-9
         ina && inb && continue
         (!ina && !inb) && return nothing
-        params = _svg_line_intersection_parameters(a, b, c, d)
-        params === nothing &&
+        denom = da - db
+        (!isfinite(denom) || abs(denom) <= 1e-15) &&
             return _svg_clip_segment_interval_to_loop_big(
                 a, b, clip_loop)
-        t = clamp(params[1], 0.0, 1.0)
-        candidate = _svg_lerp_point(a, b, t)
-        residual = _svg_clip_signed_distance(
-            candidate, c, d, true)
-        (!isfinite(residual) || abs(residual) > 1e-9) &&
-            return _svg_clip_segment_interval_to_loop_big(
-                a, b, clip_loop)
+        t = clamp(da / denom, 0.0, 1.0)
         if ina
             t1 = min(t1, t)
         else
