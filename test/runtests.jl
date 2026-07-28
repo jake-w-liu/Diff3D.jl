@@ -18418,7 +18418,7 @@ end
                        "property float x\nproperty float y\nproperty float z\n" *
                        "element face 1\nproperty list uchar int vertex_indices\nend_header\n" *
                        "0 0 0\n1 0 0\n0 1 0\n-1\n")
-            @test_throws "PLY list property count" load_ply(tmp)
+            @test_throws "PLY face row 1 property vertex_indices is not representable as declared u8" load_ply(tmp)
             rm(tmp)
         end
         let tmp = tempname() * ".ply"
