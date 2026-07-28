@@ -22709,4 +22709,29 @@ end
             color, color, 0.5)
     end
 
+    @testset "fresh audit round 144 fixes" begin
+        largest = floatmax(Float64)
+        geometry = BufferGeometry(
+            zeros(9), Float64[], fill(largest, 6),
+            [1, 2, 3], 3, 1)
+        uv_attribute = BufferAttribute(
+            fill(largest, 6), 2)
+        color_attribute = BufferAttribute(
+            fill(largest, 9), 3)
+
+        @test Diff3D._face_centroid_uv(
+            geometry, 1, 2, 3) == (largest, largest)
+        @test Diff3D._face_centroid_uv_attr(
+            uv_attribute, 1, 2, 3) == (largest, largest)
+        @test Diff3D._face_vertex_color(
+            color_attribute, 1, 2, 3) ==
+            Color3(largest, largest, largest)
+        @test_opt_alloc 0 Diff3D._face_centroid_uv(
+            geometry, 1, 2, 3)
+        @test_opt_alloc 0 Diff3D._face_centroid_uv_attr(
+            uv_attribute, 1, 2, 3)
+        @test_opt_alloc 0 Diff3D._face_vertex_color(
+            color_attribute, 1, 2, 3)
+    end
+
 end

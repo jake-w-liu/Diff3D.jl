@@ -150,8 +150,10 @@ end
 # Centroid UV of a face (average of its three vertex UVs).
 @inline function _face_centroid_uv(geo::BufferGeometry, i1, i2, i3)
     b1 = (i1-1)*2; b2 = (i2-1)*2; b3 = (i3-1)*2
-    ((geo.uvs[b1+1] + geo.uvs[b2+1] + geo.uvs[b3+1]) / 3,
-     (geo.uvs[b1+2] + geo.uvs[b2+2] + geo.uvs[b3+2]) / 3)
+    (_mean3_scaled(
+         geo.uvs[b1+1], geo.uvs[b2+1], geo.uvs[b3+1]),
+     _mean3_scaled(
+         geo.uvs[b1+2], geo.uvs[b2+2], geo.uvs[b3+2]))
 end
 
 @inline _vertex_uv(geo::BufferGeometry, i) = (geo.uvs[(i-1)*2+1], geo.uvs[(i-1)*2+2])
@@ -166,8 +168,8 @@ end
     s = attr.item_size
     b1 = (i1-1)*s; b2 = (i2-1)*s; b3 = (i3-1)*s
     d = attr.data
-    ((d[b1+1] + d[b2+1] + d[b3+1]) / 3,
-     (d[b1+2] + d[b2+2] + d[b3+2]) / 3)
+    (_mean3_scaled(d[b1+1], d[b2+1], d[b3+1]),
+     _mean3_scaled(d[b1+2], d[b2+2], d[b3+2]))
 end
 
 @inline function _vertex_uv_attr(attr::BufferAttribute, i)
@@ -431,9 +433,10 @@ end
     s = attr.item_size
     b1 = (i1-1)*s; b2 = (i2-1)*s; b3 = (i3-1)*s
     d = attr.data
-    Color3((d[b1+1] + d[b2+1] + d[b3+1]) / 3,
-           (d[b1+2] + d[b2+2] + d[b3+2]) / 3,
-           (d[b1+3] + d[b2+3] + d[b3+3]) / 3)
+    Color3(
+        _mean3_scaled(d[b1+1], d[b2+1], d[b3+1]),
+        _mean3_scaled(d[b1+2], d[b2+2], d[b3+2]),
+        _mean3_scaled(d[b1+3], d[b2+3], d[b3+3]))
 end
 
 # Perturb a face normal by a tangent-space normal map. The tangent frame is
