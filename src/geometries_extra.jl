@@ -49,7 +49,7 @@ end
 
 function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTuple{3,Int}};
                             radius=1.0, detail=0)
-    radius = _geometry_finite_scalar(radius, "PolyhedronGeometry radius")
+    radius = _geometry_finite_float(radius, "PolyhedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "PolyhedronGeometry detail")
     verts = Vector{Vec3{Float64}}(undef, length(base_verts))
     for (i, v) in enumerate(base_verts)
@@ -100,7 +100,7 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
 end
 
 function OctahedronGeometry(; radius=1.0, detail=0)
-    radius = _geometry_finite_scalar(radius, "OctahedronGeometry radius")
+    radius = _geometry_finite_float(radius, "OctahedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "OctahedronGeometry detail")
     v = [Vec3(1.0,0,0), Vec3(-1.0,0,0), Vec3(0.0,1.0,0), Vec3(0.0,-1.0,0),
          Vec3(0.0,0,1.0), Vec3(0.0,0,-1.0)]
@@ -109,7 +109,7 @@ function OctahedronGeometry(; radius=1.0, detail=0)
 end
 
 function TetrahedronGeometry(; radius=1.0, detail=0)
-    radius = _geometry_finite_scalar(radius, "TetrahedronGeometry radius")
+    radius = _geometry_finite_float(radius, "TetrahedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "TetrahedronGeometry detail")
     v = [Vec3(1.0,1,1), Vec3(-1.0,-1,1), Vec3(-1.0,1,-1), Vec3(1.0,-1,-1)]
     f = NTuple{3,Int}[(3,2,1),(1,4,3),(2,4,1),(3,4,2)]
@@ -117,7 +117,7 @@ function TetrahedronGeometry(; radius=1.0, detail=0)
 end
 
 function DodecahedronGeometry(; radius=1.0, detail=0)
-    radius = _geometry_finite_scalar(radius, "DodecahedronGeometry radius")
+    radius = _geometry_finite_float(radius, "DodecahedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "DodecahedronGeometry detail")
     t = (1 + sqrt(5)) / 2
     r = 1 / t
@@ -437,7 +437,7 @@ end
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     _validate_tube_path(path)
-    radius = _geometry_finite_scalar(radius, "TubeGeometry radius")
+    radius = _geometry_finite_float(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     rs1 = radial_segments + 1
@@ -468,6 +468,8 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             v = vj * 2π
             normal = N * cos(v) + B * sin(v)
             p = path[i] + normal * radius
+            _geometry_check_position(
+                Float64(p.x), Float64(p.y), Float64(p.z), "TubeGeometry")
             vi = (i - 1) * rs1 + j + 1
             pbase = 3vi - 2
             ubase = 2vi - 1
@@ -523,7 +525,7 @@ function CatmullRomCurve(points::AbstractVector{<:Vec3};
         throw(ArgumentError("CatmullRomCurve needs at least two control points"))
     curve_type in _CATMULL_ROM_CURVE_TYPES ||
         throw(ArgumentError("unsupported CatmullRomCurve curve_type: $curve_type"))
-    tf = Float64(_geometry_finite_scalar(tension, "CatmullRomCurve tension"))
+    tf = _geometry_finite_float(tension, "CatmullRomCurve tension")
     return CatmullRomCurve([_catmull_rom_control_point(p) for p in points],
                            curve_type, Bool(closed), tf)
 end
@@ -1330,7 +1332,7 @@ end
 """Extrude a planar polygon `shape` to `depth` along +z, or along `extrude_path`."""
 function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path)
-    depth = _geometry_finite_scalar(depth, "ExtrudeGeometry depth")
+    depth = _geometry_finite_float(depth, "ExtrudeGeometry depth")
     # Normalize to CCW (like the extrude_path branch) so the hard-coded cap and
     # side-wall normals stay consistent with the winding for any input orientation.
     shape = _extrude_clean_shape(shape)
@@ -1424,8 +1426,9 @@ end
 # Cylinder of `length` capped by two hemispheres of `radius`, revolved about y.
 
 function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
-    radius = _geometry_finite_scalar(radius, "CapsuleGeometry radius")
-    length = _geometry_finite_scalar(length, "CapsuleGeometry length")
+    radius = _geometry_finite_float(radius, "CapsuleGeometry radius")
+    length = _geometry_finite_float(length, "CapsuleGeometry length")
+    _geometry_check_abs_sum(length * 0.5, radius, "CapsuleGeometry")
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
     cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
@@ -1655,7 +1658,8 @@ end
 line BufferGeometry. Coincident vertices are merged by position first."""
 function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     _validate_triangle_geometry_indices(geo, "edges_geometry")
-    threshold_angle = _geometry_finite_scalar(threshold_angle, "edges_geometry threshold_angle")
+    threshold_angle = _geometry_finite_float(
+        threshold_angle, "edges_geometry threshold_angle")
     cosT = cos(threshold_angle)
     geo.n_vertices <= _EDGE_KEY32_MAX ?
         _edges_geometry_keyed(geo, cosT, UInt64) :

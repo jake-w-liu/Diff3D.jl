@@ -21286,4 +21286,63 @@ end
             2.0, 2.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0)
     end
 
+    @testset "fresh audit round 82 fixes" begin
+        outside_float64 = big(10)^10_000
+        @test_throws "BoxGeometry width must be representable as Float64" BoxGeometry(
+            width=outside_float64)
+        @test_throws "SphereGeometry radius must be representable as Float64" SphereGeometry(
+            radius=outside_float64)
+        @test_throws "PlaneGeometry width must be representable as Float64" PlaneGeometry(
+            width=outside_float64)
+        @test_throws "RingGeometry outer_radius must be representable as Float64" RingGeometry(
+            outer_radius=outside_float64)
+        @test_throws "CircleGeometry radius must be representable as Float64" CircleGeometry(
+            radius=outside_float64)
+        @test_throws "ConeGeometry radius must be representable as Float64" ConeGeometry(
+            radius=outside_float64)
+        @test_throws "IcosahedronGeometry radius must be representable as Float64" IcosahedronGeometry(
+            radius=outside_float64)
+        @test_throws "OctahedronGeometry radius must be representable as Float64" OctahedronGeometry(
+            radius=outside_float64)
+        @test_throws "PolyhedronGeometry radius must be representable as Float64" PolyhedronGeometry(
+            [Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)],
+            [(1, 2, 3)]; radius=outside_float64)
+        @test_throws "TubeGeometry radius must be representable as Float64" TubeGeometry(
+            [Vec3(), Vec3(0.0, 0.0, 1.0)]; radius=outside_float64)
+        @test_throws "ExtrudeGeometry depth must be representable as Float64" ExtrudeGeometry(
+            [Vec2(0.0, 0.0), Vec2(1.0, 0.0), Vec2(0.0, 1.0)];
+            depth=outside_float64)
+        @test_throws "CapsuleGeometry radius must be representable as Float64" CapsuleGeometry(
+            radius=outside_float64)
+        @test_throws "edges_geometry threshold_angle must be representable as Float64" edges_geometry(
+            BoxGeometry(); threshold_angle=outside_float64)
+        @test_throws "CatmullRomCurve tension must be representable as Float64" CatmullRomCurve(
+            [Vec3(), Vec3(1.0, 0.0, 0.0)]; tension=outside_float64)
+
+        @test_throws "TorusGeometry generated positions exceed the Float64 range" TorusGeometry(
+            radius=floatmax(Float64), tube=floatmax(Float64),
+            radial_segments=3, tubular_segments=3)
+        @test_throws "TorusKnotGeometry generated positions exceed the Float64 range" TorusKnotGeometry(
+            radius=floatmax(Float64), tube=1.0,
+            tubular_segments=3, radial_segments=3)
+        @test_throws "CapsuleGeometry generated positions exceed the Float64 range" CapsuleGeometry(
+            radius=floatmax(Float64), length=floatmax(Float64),
+            cap_segments=1, radial_segments=3)
+        @test_throws "TubeGeometry generated positions exceed the Float64 range" TubeGeometry(
+            [Vec3(floatmax(Float64), 0.0, 0.0),
+             Vec3(floatmax(Float64), 0.0, 1.0)];
+            radius=floatmax(Float64), radial_segments=3)
+
+        extreme_plane = PlaneGeometry(
+            width=floatmax(Float64), height=floatmax(Float64),
+            width_segments=3, height_segments=3)
+        @test all(isfinite, extreme_plane.positions)
+        extreme_ring = RingGeometry(
+            inner_radius=-1.0e308, outer_radius=1.0e308,
+            theta_segments=3, phi_segments=1)
+        @test all(isfinite, extreme_ring.positions)
+
+        @test_opt_alloc 0 Diff3D._geometry_check_abs_sum(1.0, 2.0, "geometry")
+    end
+
 end

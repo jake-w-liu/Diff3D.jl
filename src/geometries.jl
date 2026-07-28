@@ -165,13 +165,31 @@ end
 
 function _geometry_finite_float(value, label::String)
     checked = _geometry_finite_scalar(value, label)
-    try
-        out = Float64(checked)
-        isfinite(out) || throw(ArgumentError("$label must be finite"))
-        return out
+    out = try
+        Float64(checked)
     catch
-        throw(ArgumentError("$label must be finite"))
+        throw(ArgumentError("$label must be representable as Float64"))
     end
+    isfinite(out) ||
+        throw(ArgumentError("$label must be representable as Float64"))
+    return out
+end
+
+@inline function _geometry_check_abs_sum(a::Float64, b::Float64,
+                                         label::String)
+    abs(a) <= floatmax(Float64) - abs(b) ||
+        throw(ArgumentError("$label generated positions exceed the Float64 range"))
+    return nothing
+end
+
+@noinline _geometry_position_range_error(label::String) =
+    throw(ArgumentError("$label generated positions exceed the Float64 range"))
+
+@inline function _geometry_check_position(x::Float64, y::Float64, z::Float64,
+                                          label::String)
+    (isfinite(x) && isfinite(y) && isfinite(z)) ||
+        _geometry_position_range_error(label)
+    return nothing
 end
 
 @inline function _geometry_unit2(x::Float64, y::Float64)
@@ -837,9 +855,9 @@ end
 
 function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
                      width_segments=1, height_segments=1, depth_segments=1)
-    width = _geometry_finite_scalar(width, "BoxGeometry width")
-    height = _geometry_finite_scalar(height, "BoxGeometry height")
-    depth = _geometry_finite_scalar(depth, "BoxGeometry depth")
+    width = _geometry_finite_float(width, "BoxGeometry width")
+    height = _geometry_finite_float(height, "BoxGeometry height")
+    depth = _geometry_finite_float(depth, "BoxGeometry depth")
     ws = _geometry_segment_count("width_segments", width_segments)
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
@@ -910,7 +928,7 @@ _clamp_seg(s, lo::Int, label::String) = throw(ArgumentError("$label must be nume
 # ========================== Sphere Geometry ==========================
 
 function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
-    radius = _geometry_finite_scalar(radius, "SphereGeometry radius")
+    radius = _geometry_finite_float(radius, "SphereGeometry radius")
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
     width_segments = _clamp_seg(width_segments, 3, "SphereGeometry width_segments")
@@ -988,8 +1006,8 @@ end
 # ========================== Plane Geometry ==========================
 
 function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segments=1)
-    width = _geometry_finite_scalar(width, "PlaneGeometry width")
-    height = _geometry_finite_scalar(height, "PlaneGeometry height")
+    width = _geometry_finite_float(width, "PlaneGeometry width")
+    height = _geometry_finite_float(height, "PlaneGeometry height")
     # Clamp segment counts (matching SphereGeometry/three.js) so a 0 cannot make
     # the per-segment step a 0/0 = NaN that silently poisons positions/UVs.
     width_segments = _clamp_seg(width_segments, 1, "PlaneGeometry width_segments")
@@ -1004,13 +1022,12 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
     indices = Vector{Int}(undef, index_len)
 
     hw, hh = width/2, height/2
-    dw = width / width_segments
-    dh = height / height_segments
-
     for iy in 0:height_segments
-        y = iy * dh - hh
+        ty = iy / height_segments
+        y = (1.0 - ty) * (-hh) + ty * hh
         for ix in 0:width_segments
-            x = ix * dw - hw
+            tx = ix / width_segments
+            x = (1.0 - tx) * (-hw) + tx * hw
             vi = iy * (width_segments + 1) + ix + 1
             pbase = 3vi - 2
             ubase = 2vi - 1
@@ -1199,8 +1216,8 @@ end
 
 function ConeGeometry(; radius=1.0, height=1.0, radial_segments=32, height_segments=1,
                        open_ended=false)
-    radius = _geometry_finite_scalar(radius, "ConeGeometry radius")
-    height = _geometry_finite_scalar(height, "ConeGeometry height")
+    radius = _geometry_finite_float(radius, "ConeGeometry radius")
+    height = _geometry_finite_float(height, "ConeGeometry height")
     CylinderGeometry(; radius_top=0.0, radius_bottom=radius, height=height,
                       radial_segments=radial_segments, height_segments=height_segments,
                       open_ended=open_ended)
@@ -1211,6 +1228,7 @@ end
 function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
     radius = _geometry_finite_float(radius, "TorusGeometry radius")
     tube = _geometry_finite_float(tube, "TorusGeometry tube")
+    _geometry_check_abs_sum(radius, tube, "TorusGeometry")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
@@ -1291,6 +1309,9 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
     radius = _geometry_finite_float(radius, "TorusKnotGeometry radius")
     tube = _geometry_finite_float(tube, "TorusKnotGeometry tube")
+    abs(radius) <= (floatmax(Float64) - abs(tube)) / 1.5 ||
+        throw(ArgumentError(
+            "TorusKnotGeometry generated positions exceed the Float64 range"))
     p_val = _geometry_nonzero_finite_scalar(p_val, "TorusKnotGeometry p_val")
     q_val = _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val")
     # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
@@ -1384,8 +1405,8 @@ end
 # ========================== Ring Geometry ==========================
 
 function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
-    inner_radius = _geometry_finite_scalar(inner_radius, "RingGeometry inner_radius")
-    outer_radius = _geometry_finite_scalar(outer_radius, "RingGeometry outer_radius")
+    inner_radius = _geometry_finite_float(inner_radius, "RingGeometry inner_radius")
+    outer_radius = _geometry_finite_float(outer_radius, "RingGeometry outer_radius")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     theta_segments = _clamp_seg(theta_segments, 3, "RingGeometry theta_segments")
     phi_segments = _clamp_seg(phi_segments, 1, "RingGeometry phi_segments")
@@ -1401,7 +1422,7 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
 
     for j in 0:phi_segments
         v = j / phi_segments
-        r = inner_radius + v * (outer_radius - inner_radius)
+        r = (1.0 - v) * inner_radius + v * outer_radius
         for i in 0:theta_segments
             u = i / theta_segments
             θ = u * 2π
@@ -1445,7 +1466,7 @@ end
 # ========================== Circle Geometry ==========================
 
 function CircleGeometry(; radius=1.0, segments=32)
-    radius = _geometry_finite_scalar(radius, "CircleGeometry radius")
+    radius = _geometry_finite_float(radius, "CircleGeometry radius")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
     segments = _clamp_seg(segments, 3, "CircleGeometry segments")
     n_verts = segments + 2
@@ -1520,7 +1541,7 @@ const _ICOSAHEDRON_BASE_FACES = NTuple{3,Int}[
 ]
 
 function IcosahedronGeometry(; radius=1.0, detail=0)
-    radius = _geometry_finite_scalar(radius, "IcosahedronGeometry radius")
+    radius = _geometry_finite_float(radius, "IcosahedronGeometry radius")
     detail = _geometry_nonnegative_int(detail, "IcosahedronGeometry detail")
     PolyhedronGeometry(_ICOSAHEDRON_BASE_VERTS, _ICOSAHEDRON_BASE_FACES;
                        radius=radius, detail=detail)
