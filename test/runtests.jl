@@ -22515,4 +22515,23 @@ end
             1.0e-8)
     end
 
+    @testset "fresh audit round 133 fixes" begin
+        largest = floatmax(Float64)
+        target = zeros(1, 1, 1)
+        render_linear(p) = reshape([p[1]], 1, 1, 1)
+        extreme_linear_loss(image, _) =
+            image[1] * largest
+        params, history = inverse_render_optimize(
+            [largest], target, render_linear,
+            extreme_linear_loss;
+            lr=2.0, n_iters=1, verbose=false, ad=:forward,
+        )
+        @test history == [Inf]
+        @test params == [-largest]
+        @test Diff3D._optimizer_parameter_step(
+            largest, 2.0, largest) == -largest
+        @test_opt_alloc 0 Diff3D._optimizer_parameter_step(
+            largest, 2.0, largest)
+    end
+
 end

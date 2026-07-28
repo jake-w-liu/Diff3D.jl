@@ -179,6 +179,10 @@ end
     return moment_ratio / (one(epsilon_ratio) + epsilon_ratio)
 end
 
+@inline _optimizer_parameter_step(parameter, rate, update) =
+    _float_product_difference(
+        one(parameter), parameter, rate, update)
+
 """
 Gradient descent optimizer for inverse rendering.
 Optimizes `params` to minimize the loss between rendered image and target.
@@ -223,7 +227,8 @@ function inverse_render_optimize(initial_params::Vector{Float64},
 
         # Gradient descent step
         @inbounds for i in eachindex(params, grad)
-            params[i] -= lr * grad[i]
+            params[i] =
+                _optimizer_parameter_step(params[i], lr, grad[i])
         end
 
         if verbose && (iter % 10 == 0 || iter == 1)
@@ -285,10 +290,11 @@ function inverse_render_adam(initial_params::Vector{Float64},
             )
             m[i] = mi
             root_v[i] = root_vi
-            params[i] -= lr * _adam_normalized_step(
+            normalized_step = _adam_normalized_step(
                 mi, root_vi, first_correction,
-                root_second_correction, ε,
-            )
+                root_second_correction, ε)
+            params[i] = _optimizer_parameter_step(
+                params[i], lr, normalized_step)
         end
 
         if verbose && (iter % 10 == 0 || iter == 1)
