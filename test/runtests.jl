@@ -22391,4 +22391,29 @@ end
         @test_opt_alloc 0 loss_mse(mse_image, zeros_image)
     end
 
+    @testset "fresh audit round 128 fixes" begin
+        largest = floatmax(Float64)
+        positive = fill(largest, 7, 7, 1)
+        negative = fill(-largest, 7, 7, 1)
+        alternating = reshape(
+            [isodd(i) ? largest : -largest for i in 1:49],
+            7, 7, 1,
+        )
+
+        @test loss_ssim(positive, positive) == 0.0
+        @test loss_ssim(positive, negative) == 2.0
+        @test loss_ssim(alternating, alternating) == 0.0
+        @test_throws ArgumentError loss_ssim(
+            ones(7, 7, 1), ones(7, 7, 1); C1=Inf)
+        @test_throws ArgumentError loss_ssim(
+            ones(7, 7, 1), ones(7, 7, 1); C2=0.0)
+        @test ForwardDiff.derivative(
+            x -> loss_ssim(
+                fill(x, 3, 3, 1), ones(3, 3, 1);
+                window_size=3),
+            1.0,
+        ) == 0.0
+        @test_opt_alloc 0 loss_ssim(positive, positive)
+    end
+
 end

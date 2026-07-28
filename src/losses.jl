@@ -26,6 +26,14 @@ function _checked_ssim_window_size(window_size)
     return window_size
 end
 
+function _checked_ssim_constant(value, label::String)
+    value isa Bool &&
+        throw(ArgumentError("loss_ssim: $label must be positive and finite"))
+    (isfinite(value) && value > zero(value)) ||
+        throw(ArgumentError("loss_ssim: $label must be positive and finite"))
+    return value
+end
+
 function _checked_silhouette_threshold(threshold)
     threshold isa Bool &&
         throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
@@ -84,6 +92,8 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
     # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
     # divides the (n-1) Bessel correction by zero, silently returning NaN.
     window_size = _checked_ssim_window_size(window_size)
+    C1 = _checked_ssim_constant(C1, "C1")
+    C2 = _checked_ssim_constant(C2, "C2")
     hw = window_size ÷ 2
     if min(H, W) < 2*hw + 1
         throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))
@@ -97,36 +107,87 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                 # Local means
                 μx = zero(R)
                 μy = zero(R)
+                raw_scale = sqrt(C2)
                 n = 0
                 for dj in -hw:hw
                     for di in -hw:hw
-                        μx += image[i+di, j+dj, c]
-                        μy += target[i+di, j+dj, c]
                         n += 1
+                        x = convert(R, image[i+di, j+dj, c])
+                        y = convert(R, target[i+di, j+dj, c])
+                        raw_scale =
+                            max(raw_scale, abs(x), abs(y))
+                        if n == 1
+                            μx = x
+                            μy = y
+                        else
+                            μx = _stable_lerp(
+                                μx, x, one(x) / n)
+                            μy = _stable_lerp(
+                                μy, y, one(y) / n)
+                        end
                     end
                 end
-                μx /= n
-                μy /= n
 
-                # Local variances and covariance
+                # Local variances and covariance. Keep the accumulators scaled
+                # to the largest deviation seen so squared HDR values cannot
+                # overflow before the bounded SSIM ratio is formed.
                 σx2 = zero(R)
                 σy2 = zero(R)
                 σxy = zero(R)
+                deviation_scale = sqrt(C2)
                 for dj in -hw:hw
                     for di in -hw:hw
-                        dx = image[i+di, j+dj, c] - μx
-                        dy = target[i+di, j+dj, c] - μy
-                        σx2 += dx * dx
-                        σy2 += dy * dy
-                        σxy += dx * dy
+                        x = convert(R, image[i+di, j+dj, c])
+                        y = convert(R, target[i+di, j+dj, c])
+                        dx = x - μx
+                        dy = y - μy
+                        finite_dx = isfinite(dx)
+                        finite_dy = isfinite(dy)
+                        next_scale =
+                            finite_dx && finite_dy ?
+                            max(deviation_scale, abs(dx), abs(dy)) :
+                            max(deviation_scale, raw_scale)
+                        if next_scale > deviation_scale
+                            ratio = deviation_scale / next_scale
+                            ratio2 = ratio * ratio
+                            σx2 *= ratio2
+                            σy2 *= ratio2
+                            σxy *= ratio2
+                            deviation_scale = next_scale
+                        end
+                        scaled_dx = finite_dx ?
+                            dx / deviation_scale :
+                            x / deviation_scale -
+                            μx / deviation_scale
+                        scaled_dy = finite_dy ?
+                            dy / deviation_scale :
+                            y / deviation_scale -
+                            μy / deviation_scale
+                        σx2 += scaled_dx * scaled_dx
+                        σy2 += scaled_dy * scaled_dy
+                        σxy += scaled_dx * scaled_dy
                     end
                 end
                 σx2 /= (n - 1)
                 σy2 /= (n - 1)
                 σxy /= (n - 1)
 
-                ssim_val = (2*μx*μy + C1) * (2*σxy + C2) /
-                           ((μx^2 + μy^2 + C1) * (σx2 + σy2 + C2))
+                mean_scale = max(abs(μx), abs(μy), sqrt(C1))
+                scaled_μx = μx / mean_scale
+                scaled_μy = μy / mean_scale
+                scaled_C1 = (C1 / mean_scale) / mean_scale
+                luminance = (
+                    2 * scaled_μx * scaled_μy + scaled_C1
+                ) / (
+                    scaled_μx * scaled_μx +
+                    scaled_μy * scaled_μy + scaled_C1
+                )
+
+                scaled_C2 =
+                    (C2 / deviation_scale) / deviation_scale
+                structure = (2 * σxy + scaled_C2) /
+                            (σx2 + σy2 + scaled_C2)
+                ssim_val = luminance * structure
                 ssim_sum += ssim_val
                 count += 1
             end
