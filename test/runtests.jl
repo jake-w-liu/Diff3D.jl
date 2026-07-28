@@ -22967,4 +22967,26 @@ end
         @test_opt_alloc 0 Diff3D._font_polygon_area(polygon)
     end
 
+    @testset "fresh audit round 153 fixes" begin
+        low = 9.0e307
+        high = 1.1e308
+        loop = [
+            Vec2(low, 0.0),
+            Vec2(high, 0.0),
+            Vec2(high, 1.0),
+            Vec2(low, 1.0),
+        ]
+        crossings = Diff3D._svg_slab_crossings(
+            [loop], low, high)
+        @test length(crossings) == 2
+        @test [crossing.ym for crossing in crossings] ==
+            [0.0, 1.0]
+
+        largest = floatmax(Float64)
+        @test Diff3D._stable_midpoint(
+            largest, largest) == largest
+        @test_opt_alloc 0 Diff3D._stable_midpoint(
+            largest, largest)
+    end
+
 end

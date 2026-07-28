@@ -6373,7 +6373,7 @@ end
 
 function _svg_slab_crossings(loops::Vector{Vector{Vec2{Float64}}},
                              x0::Float64, x1::Float64)
-    xm = (x0 + x1) / 2.0
+    xm = _stable_midpoint(x0, x1)
     crossings = NamedTuple{(:y0, :y1, :ym),Tuple{Float64,Float64,Float64}}[]
     for (a, b) in _svg_loop_edges(loops)
         ym = _svg_edge_y_at_x(a, b, xm; strict=true)
@@ -6398,13 +6398,14 @@ function _svg_loops_overlap_positive(a::Vector{Vec2{Float64}},
         x0 = xs[i]
         x1 = xs[i + 1]
         x1 - x0 > 1e-9 || continue
-        xm = (x0 + x1) / 2.0
+        xm = _stable_midpoint(x0, x1)
         crossings = _svg_slab_crossings(loops, x0, x1)
         for j in 1:(length(crossings) - 1)
             lower = crossings[j]
             upper = crossings[j + 1]
             upper.ym - lower.ym > 1e-9 || continue
-            p = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            p = Vec2(
+                xm, _stable_midpoint(lower.ym, upper.ym))
             if _font_point_in_loop(p, loops[1]) && _font_point_in_loop(p, loops[2])
                 return true
             end
@@ -6444,13 +6445,14 @@ function _svg_clip_closed_path_to_union(path::SVGPath,
         x0 = xs[i]
         x1 = xs[i + 1]
         x1 - x0 > 1e-9 || continue
-        xm = (x0 + x1) / 2.0
+        xm = _stable_midpoint(x0, x1)
         crossings = _svg_slab_crossings(loops, x0, x1)
         for j in 1:(length(crossings) - 1)
             lower = crossings[j]
             upper = crossings[j + 1]
             upper.ym - lower.ym > 1e-9 || continue
-            sample = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            sample = Vec2(
+                xm, _stable_midpoint(lower.ym, upper.ym))
             _font_point_in_loop(sample, subject) || continue
             any(loop -> _font_point_in_loop(sample, loop), clean_clips) || continue
             points = _font_loop_points([Vec2(x0, lower.y0),
@@ -6514,13 +6516,14 @@ function _svg_mask_closed_path_to_entries(path::SVGPath,
         x0 = xs[i]
         x1 = xs[i + 1]
         x1 - x0 > 1e-9 || continue
-        xm = (x0 + x1) / 2.0
+        xm = _stable_midpoint(x0, x1)
         crossings = _svg_slab_crossings(loops, x0, x1)
         for j in 1:(length(crossings) - 1)
             lower = crossings[j]
             upper = crossings[j + 1]
             upper.ym - lower.ym > 1e-9 || continue
-            sample = Vec2(xm, (lower.ym + upper.ym) / 2.0)
+            sample = Vec2(
+                xm, _stable_midpoint(lower.ym, upper.ym))
             _font_point_in_loop(sample, subject) || continue
             intensity = _svg_mask_source_over_intensity(entries, sample)
             intensity > 1e-12 || continue
@@ -8984,7 +8987,8 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                     iridescence_ior=_gltf_checked_finite_number(
                                         get(iridescence_ext, "iridescenceIor", 1.3),
                                         "iridescenceIor"),
-                                    iridescence_thickness=0.5 * (thickness_min + thickness_max),
+                                    iridescence_thickness=_stable_midpoint(
+                                        thickness_min, thickness_max),
                                     iridescence_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceTexture", nothing);
                                                                   colorspace=:linear, texture_cache=texture_cache),
                                     iridescence_thickness_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceThicknessTexture", nothing);
