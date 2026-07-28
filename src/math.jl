@@ -247,18 +247,39 @@ end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
 function mat4_transform_vec4(m::Mat4, v::Vec4)
-    result = Vec4(
-        mat4_get(m, 1, 1)*v.x + mat4_get(m, 1, 2)*v.y + mat4_get(m, 1, 3)*v.z + mat4_get(m, 1, 4)*v.w,
-        mat4_get(m, 2, 1)*v.x + mat4_get(m, 2, 2)*v.y + mat4_get(m, 2, 3)*v.z + mat4_get(m, 2, 4)*v.w,
-        mat4_get(m, 3, 1)*v.x + mat4_get(m, 3, 2)*v.y + mat4_get(m, 3, 3)*v.z + mat4_get(m, 3, 4)*v.w,
-        mat4_get(m, 4, 1)*v.x + mat4_get(m, 4, 2)*v.y + mat4_get(m, 4, 3)*v.z + mat4_get(m, 4, 4)*v.w,
+    return Vec4(
+        _mat4_row_dot(m, 1, v),
+        _mat4_row_dot(m, 2, v),
+        _mat4_row_dot(m, 3, v),
+        _mat4_row_dot(m, 4, v),
     )
-    if result.x isa AbstractFloat &&
-       !(isfinite(result.x) && isfinite(result.y) &&
-         isfinite(result.z) && isfinite(result.w)) &&
-       all(isfinite, m.e) &&
-       isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(v.w)
-        return _stable_float_mat4_transform(m, v)
+end
+
+@inline function _mat4_row_dot(m::Mat4, row::Int, v::Vec4)
+    m1 = mat4_get(m, row, 1)
+    m2 = mat4_get(m, row, 2)
+    m3 = mat4_get(m, row, 3)
+    m4 = mat4_get(m, row, 4)
+    product1 = m1 * v.x
+    product2 = m2 * v.y
+    product3 = m3 * v.z
+    product4 = m4 * v.w
+    result = product1 + product2 + product3 + product4
+    if result isa AbstractFloat &&
+       isfinite(m1) && isfinite(m2) &&
+       isfinite(m3) && isfinite(m4) &&
+       isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(v.w) &&
+       _float_dot_needs_fallback(
+           result,
+           max(max(abs(product1), abs(product2)),
+               max(abs(product3), abs(product4))),
+           (!iszero(m1) && !iszero(v.x)) ||
+           (!iszero(m2) && !iszero(v.y)) ||
+           (!iszero(m3) && !iszero(v.z)) ||
+           (!iszero(m4) && !iszero(v.w)),
+           4,
+       )
+        return _stable_float_mat4_row(m, row, v)
     end
     return result
 end
@@ -277,20 +298,20 @@ function mat4_transform_point(m::Mat4, p::Vec3)
 end
 
 function mat4_transform_direction(m::Mat4, d::Vec3)
-    result = Vec3(
-        mat4_get(m, 1, 1)*d.x + mat4_get(m, 1, 2)*d.y + mat4_get(m, 1, 3)*d.z,
-        mat4_get(m, 2, 1)*d.x + mat4_get(m, 2, 2)*d.y + mat4_get(m, 2, 3)*d.z,
-        mat4_get(m, 3, 1)*d.x + mat4_get(m, 3, 2)*d.y + mat4_get(m, 3, 3)*d.z,
+    return Vec3(
+        dot(Vec3(
+            mat4_get(m, 1, 1),
+            mat4_get(m, 1, 2),
+            mat4_get(m, 1, 3)), d),
+        dot(Vec3(
+            mat4_get(m, 2, 1),
+            mat4_get(m, 2, 2),
+            mat4_get(m, 2, 3)), d),
+        dot(Vec3(
+            mat4_get(m, 3, 1),
+            mat4_get(m, 3, 2),
+            mat4_get(m, 3, 3)), d),
     )
-    if result.x isa AbstractFloat &&
-       !(isfinite(result.x) && isfinite(result.y) && isfinite(result.z)) &&
-       all(isfinite, m.e) &&
-       isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
-        transformed = _stable_float_mat4_transform(
-            m, Vec4(d.x, d.y, d.z, zero(d.x)))
-        return Vec3(transformed.x, transformed.y, transformed.z)
-    end
-    return result
 end
 
 function mat4_translation(tx, ty, tz)
@@ -1020,15 +1041,12 @@ end
 end
 
 @inline function _float_representation_dot4(a, b)
-    xy = _float_representation_add(
+    return _float_representation_sum4(
         _float_representation_multiply(a[1], b[1]),
         _float_representation_multiply(a[2], b[2]),
-    )
-    zw = _float_representation_add(
         _float_representation_multiply(a[3], b[3]),
         _float_representation_multiply(a[4], b[4]),
     )
-    return _float_representation_add(xy, zw)
 end
 
 @inline function _stable_float_components(a::Vec3, b::Vec3)
@@ -1166,15 +1184,6 @@ end
 @inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
     return _float_representation_value(
         _stable_float_mat4_row_representation(m, row, v))
-end
-
-@inline function _stable_float_mat4_transform(m::Mat4, v::Vec4)
-    return Vec4(
-        _stable_float_mat4_row(m, 1, v),
-        _stable_float_mat4_row(m, 2, v),
-        _stable_float_mat4_row(m, 3, v),
-        _stable_float_mat4_row(m, 4, v),
-    )
 end
 
 @inline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)

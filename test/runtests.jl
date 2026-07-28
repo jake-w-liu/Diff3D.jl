@@ -22174,4 +22174,24 @@ end
             plane, point)
     end
 
+    @testset "fresh audit round 117 fixes" begin
+        matrix = Mat4{Float64}((
+            1.0e308, 0.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 0.0,
+            1.0e308, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ))
+        vector = Vec4(1.0, 1.0, -1.0, 1.0)
+        @test mat4_transform_vec4(
+            matrix, vector) == Vec4(1.0, 1.0, -1.0, 1.0)
+        @test mat4_transform_point(
+            matrix, Vec3(1.0, 1.0, -1.0)) ==
+              Vec3(1.0, 1.0, -1.0)
+        @test mat4_transform_direction(
+            matrix, Vec3(1.0, 1.0, -1.0)) ==
+              Vec3(1.0, 1.0, -1.0)
+        @test_opt_alloc 0 mat4_transform_vec4(
+            matrix, vector)
+    end
+
 end
