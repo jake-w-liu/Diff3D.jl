@@ -22139,4 +22139,24 @@ end
             1.0, 1.0e308)
     end
 
+    @testset "fresh audit round 115 fixes" begin
+        a3 = Vec3(1.0e308, 1.0, 1.0e308)
+        b3 = Vec3(1.0, 1.0, -1.0)
+        @test dot(a3, b3) == 1.0
+
+        a2 = Vec2(1.0e308, 1.0e308)
+        b2 = Vec2(1.0, -prevfloat(1.0))
+        expected = Float64(
+            BigFloat(a2.x) * BigFloat(b2.x) +
+            BigFloat(a2.y) * BigFloat(b2.y))
+        @test dot(a2, b2) == expected
+
+        @test ForwardDiff.derivative(
+            x -> dot(Vec3(x, 2.0, 3.0), Vec3(4.0, 5.0, 6.0)),
+            1.0,
+        ) == 4.0
+        @test_opt_alloc 0 dot(a3, b3)
+        @test_opt_alloc 0 dot(a2, b2)
+    end
+
 end

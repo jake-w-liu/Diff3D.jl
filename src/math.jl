@@ -45,10 +45,21 @@ Base.:*(s::Real, a::Vec3) = a * s
 Base.:/(a::Vec3, s::Real) = Vec3(a.x / s, a.y / s, a.z / s)
 
 function dot(a::Vec3, b::Vec3)
-    result = a.x * b.x + a.y * b.y + a.z * b.z
-    if result isa AbstractFloat && !isfinite(result) &&
+    product_x = a.x * b.x
+    product_y = a.y * b.y
+    product_z = a.z * b.z
+    result = product_x + product_y + product_z
+    if result isa AbstractFloat &&
        isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
-       isfinite(b.x) && isfinite(b.y) && isfinite(b.z)
+       isfinite(b.x) && isfinite(b.y) && isfinite(b.z) &&
+       _float_dot_needs_fallback(
+           result,
+           max(max(abs(product_x), abs(product_y)), abs(product_z)),
+           (!iszero(a.x) && !iszero(b.x)) ||
+           (!iszero(a.y) && !iszero(b.y)) ||
+           (!iszero(a.z) && !iszero(b.z)),
+           3,
+       )
         return _stable_float_dot(a, b)
     end
     return result
@@ -114,10 +125,19 @@ Base.:-(a::Vec2, b::Vec2) = Vec2(a.x - b.x, a.y - b.y)
 Base.:*(a::Vec2, s::Real) = Vec2(a.x * s, a.y * s)
 Base.:*(s::Real, a::Vec2) = a * s
 function dot(a::Vec2, b::Vec2)
-    result = a.x * b.x + a.y * b.y
-    if result isa AbstractFloat && !isfinite(result) &&
+    product_x = a.x * b.x
+    product_y = a.y * b.y
+    result = product_x + product_y
+    if result isa AbstractFloat &&
        isfinite(a.x) && isfinite(a.y) &&
-       isfinite(b.x) && isfinite(b.y)
+       isfinite(b.x) && isfinite(b.y) &&
+       _float_dot_needs_fallback(
+           result,
+           max(abs(product_x), abs(product_y)),
+           (!iszero(a.x) && !iszero(b.x)) ||
+           (!iszero(a.y) && !iszero(b.y)),
+           2,
+       )
         return _stable_float_dot(a, b)
     end
     return result
@@ -1021,16 +1041,75 @@ end
     )
 end
 
+@inline function _float_dot_needs_fallback(
+        result::T, largest_product, has_nonzero_input_product::Bool,
+        term_count::Int) where {T<:AbstractFloat}
+    isfinite(result) || return true
+    iszero(largest_product) && return has_nonzero_input_product
+    tolerance = (2 * term_count) * eps(T)
+    return abs(result) <= largest_product * tolerance
+end
+
+@inline function _float_two_sum_error(a, b, result)
+    residual = result - a
+    return (a - (result - residual)) + (b - residual)
+end
+
 @inline function _stable_float_dot(a::Vec3, b::Vec3)
+    ax, ay, az, bx, by, bz = promote(
+        a.x, a.y, a.z, b.x, b.y, b.z)
+    product_x = ax * bx
+    product_y = ay * by
+    product_z = az * bz
+    partial = product_x + product_y
+    result = partial + product_z
+    products_representable =
+        !(iszero(product_x) && !iszero(ax) && !iszero(bx)) &&
+        !(iszero(product_y) && !iszero(ay) && !iszero(by)) &&
+        !(iszero(product_z) && !iszero(az) && !iszero(bz))
+    if products_representable &&
+       isfinite(product_x) && isfinite(product_y) &&
+       isfinite(product_z) && isfinite(partial) && isfinite(result)
+        correction =
+            fma(ax, bx, -product_x) +
+            fma(ay, by, -product_y) +
+            fma(az, bz, -product_z) +
+            _float_two_sum_error(product_x, product_y, partial) +
+            _float_two_sum_error(partial, product_z, result)
+        return result + correction
+    end
     a_representation, b_representation =
         _stable_float_components(a, b)
+    products = (
+        _float_representation_multiply(
+            a_representation[1], b_representation[1]),
+        _float_representation_multiply(
+            a_representation[2], b_representation[2]),
+        _float_representation_multiply(
+            a_representation[3], b_representation[3]),
+    )
     return _float_representation_value(
-        _float_representation_dot(
-            a_representation, b_representation))
+        _float_representation_sum4(
+            products[1], products[2], products[3],
+            _float_zero_representation(typeof(ax))))
 end
 
 @inline function _stable_float_dot(a::Vec2, b::Vec2)
     ax, ay, bx, by = promote(a.x, a.y, b.x, b.y)
+    product_x = ax * bx
+    product_y = ay * by
+    result = product_x + product_y
+    products_representable =
+        !(iszero(product_x) && !iszero(ax) && !iszero(bx)) &&
+        !(iszero(product_y) && !iszero(ay) && !iszero(by))
+    if products_representable &&
+       isfinite(product_x) && isfinite(product_y) && isfinite(result)
+        correction =
+            fma(ax, bx, -product_x) +
+            fma(ay, by, -product_y) +
+            _float_two_sum_error(product_x, product_y, result)
+        return result + correction
+    end
     return _float_representation_value(
         _float_representation_add(
             _float_representation_multiply(
