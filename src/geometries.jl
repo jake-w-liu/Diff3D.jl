@@ -782,7 +782,7 @@ function compute_face_normal(g::BufferGeometry, face_idx::Int)
     v1 = get_vertex(g, i1)
     v2 = get_vertex(g, i2)
     v3 = get_vertex(g, i3)
-    normalize(cross(v2 - v1, v3 - v1))
+    triangle_normal(Triangle(v1, v2, v3))
 end
 
 # ========================== Box Geometry ==========================

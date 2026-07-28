@@ -21519,4 +21519,89 @@ end
             1.0, 1.0e-308, 1.0e308)
     end
 
+    @testset "fresh audit round 88 fixes" begin
+        extreme_triangle = Triangle(
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0),
+            Vec3(-1.0e308, 1.0, 0.0),
+        )
+        @test triangle_normal(extreme_triangle) == Vec3(0.0, 0.0, 1.0)
+        extreme_point = Vec3(0.0, 0.25, 0.0)
+        barycentric = triangle_barycentric(extreme_triangle, extreme_point)
+        @test all(isfinite, (barycentric.x, barycentric.y, barycentric.z))
+        @test isapprox(barycentric.x, 0.25) &&
+              isapprox(barycentric.y, 0.5) &&
+              isapprox(barycentric.z, 0.25)
+        @test triangle_contains_point(
+            extreme_triangle, Vec3(0.0, 0.25, 0.0))
+        @test triangle_area(extreme_triangle) == 1.0e308
+
+        anisotropic_triangle = Triangle(
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0),
+            Vec3(0.0, 1.0e-308, 0.0),
+        )
+        @test triangle_normal(anisotropic_triangle) ==
+              Vec3(0.0, 0.0, 1.0)
+        @test triangle_area(anisotropic_triangle) ≈ 0.5
+        anisotropic_barycentric = triangle_barycentric(
+            anisotropic_triangle, Vec3(0.5e308, 0.25e-308, 1.0))
+        @test isapprox(anisotropic_barycentric.x, 0.25) &&
+              isapprox(anisotropic_barycentric.y, 0.5) &&
+              isapprox(anisotropic_barycentric.z, 0.25)
+
+        repeated_extreme = Triangle(
+            Vec3(1.0e308, 1.0e308, 1.0e308),
+            Vec3(1.0e308, 1.0e308, 1.0e308),
+            Vec3(1.0e308, 1.0e308, 1.0e308),
+        )
+        @test triangle_centroid(repeated_extreme) ==
+              Vec3(1.0e308, 1.0e308, 1.0e308)
+
+        extreme_line = Line3(
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0),
+        )
+        origin = Vec3()
+        @test line3_at(extreme_line, 0.5) == Vec3()
+        @test line3_closest_point_parameter(
+            extreme_line, origin) == 0.5
+        @test line3_closest_point(extreme_line, origin) == Vec3()
+        anisotropic_line = Line3(
+            Vec3(1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 1.0e-308, 0.0),
+        )
+        @test line3_closest_point_parameter(
+            anisotropic_line, Vec3(1.0e308, 0.5e-308, 0.0)) == 0.5
+        repeated_line = Line3(
+            Vec3(1.0e308, -1.0e308, 1.0e308),
+            Vec3(1.0e308, -1.0e308, 1.0e308),
+        )
+        @test line3_center(repeated_line) ==
+              Vec3(1.0e308, -1.0e308, 1.0e308)
+        @test line3_center(Line3(
+            Vec3(nextfloat(0.0), 0.0, 0.0),
+            Vec3(nextfloat(0.0), 0.0, 0.0))).x == nextfloat(0.0)
+
+        extreme_geometry = BufferGeometry(
+            [-1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0,
+             -1.0e308, 1.0, 0.0],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        @test compute_face_normal(extreme_geometry, 1) ==
+              Vec3(0.0, 0.0, 1.0)
+
+        @test reverse_gradient(
+            x -> triangle_centroid(Triangle(
+                Vec3(x[1], 0.0, 0.0),
+                Vec3(x[2], 0.0, 0.0),
+                Vec3(x[3], 0.0, 0.0))).x,
+            [1.0, 2.0, 3.0]) ≈ fill(1.0 / 3.0, 3)
+        @test_opt_alloc 0 triangle_normal(extreme_triangle)
+        @test_opt_alloc 0 triangle_area(extreme_triangle)
+        @test_opt_alloc 0 triangle_barycentric(
+            extreme_triangle, extreme_point)
+        @test_opt_alloc 0 line3_closest_point_parameter(
+            extreme_line, origin)
+    end
+
 end

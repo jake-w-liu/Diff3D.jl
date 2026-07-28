@@ -711,23 +711,287 @@ struct Triangle{T<:Real}
     c::Vec3{T}
 end
 
-triangle_normal(tri::Triangle)   = normalize(cross(tri.b - tri.a, tri.c - tri.a))
-triangle_area(tri::Triangle)     = 0.5 * norm(cross(tri.b - tri.a, tri.c - tri.a))
-triangle_centroid(tri::Triangle) = (tri.a + tri.b + tri.c) / 3
+@inline _vec3_max_abs(v::Vec3) =
+    max(max(abs(v.x), abs(v.y)), abs(v.z))
+
+@inline function _triangle_axis_edges(a, b, c)
+    scale = max(max(abs(a), abs(b)), abs(c))
+    if iszero(scale)
+        z = zero(a)
+        return z, z, scale
+    end
+    a_scaled = a / scale
+    return b / scale - a_scaled, c / scale - a_scaled, scale
+end
+
+@inline function _triangle_scaled_cross(tri::Triangle)
+    abx, acx, sx = _triangle_axis_edges(tri.a.x, tri.b.x, tri.c.x)
+    aby, acy, sy = _triangle_axis_edges(tri.a.y, tri.b.y, tri.c.y)
+    abz, acz, sz = _triangle_axis_edges(tri.a.z, tri.b.z, tri.c.z)
+    # Each minor is computed after scaling its two coordinate axes
+    # independently. This preserves thin triangles whose axes differ by
+    # hundreds of orders of magnitude.
+    nx = aby * acz - abz * acy
+    ny = abz * acx - abx * acz
+    nz = abx * acy - aby * acx
+    return nx, ny, nz, sx, sy, sz
+end
+
+@inline _triangle_cross_logmag(minor, scale1, scale2) =
+    log(abs(minor)) + log(scale1) + log(scale2)
+
+function _triangle_cross_direction_and_logscale(tri::Triangle)
+    nx, ny, nz, sx, sy, sz = _triangle_scaled_cross(tri)
+    has_x = !iszero(nx) && !iszero(sy) && !iszero(sz)
+    has_y = !iszero(ny) && !iszero(sx) && !iszero(sz)
+    has_z = !iszero(nz) && !iszero(sx) && !iszero(sy)
+    if !(has_x || has_y || has_z)
+        z = zero(nx + ny + nz)
+        return Vec3(z, z, z), z, false
+    end
+
+    if has_x
+        logscale = _triangle_cross_logmag(nx, sy, sz)
+    elseif has_y
+        logscale = _triangle_cross_logmag(ny, sx, sz)
+    else
+        logscale = _triangle_cross_logmag(nz, sx, sy)
+    end
+    if has_y
+        ly = _triangle_cross_logmag(ny, sx, sz)
+        ly > logscale && (logscale = ly)
+    end
+    if has_z
+        lz = _triangle_cross_logmag(nz, sx, sy)
+        lz > logscale && (logscale = lz)
+    end
+
+    cx = has_x ? (nx / abs(nx)) *
+         exp(_triangle_cross_logmag(nx, sy, sz) - logscale) : zero(nx)
+    cy = has_y ? (ny / abs(ny)) *
+         exp(_triangle_cross_logmag(ny, sx, sz) - logscale) : zero(ny)
+    cz = has_z ? (nz / abs(nz)) *
+         exp(_triangle_cross_logmag(nz, sx, sy) - logscale) : zero(nz)
+    return Vec3(cx, cy, cz), logscale, true
+end
+
+function triangle_normal(tri::Triangle)
+    direction, _, nondegenerate =
+        _triangle_cross_direction_and_logscale(tri)
+    nondegenerate || return direction
+    return normalize(direction)
+end
+
+@inline function _float_product_representation(a::T, b::T) where {T<:AbstractFloat}
+    (iszero(a) || iszero(b)) && return zero(T), 0, false
+    ma, ea = frexp(a)
+    mb, eb = frexp(b)
+    m, correction = frexp(ma * mb)
+    return m, ea + eb + correction, true
+end
+
+struct _FloatRepresentation{T<:AbstractFloat}
+    mantissa::T
+    exponent::Int
+    nonzero::Bool
+end
+
+@inline _float_zero_representation(::Type{T}) where {T<:AbstractFloat} =
+    _FloatRepresentation(zero(T), 0, false)
+
+@inline function _float_difference_representation(
+        value1::T, value2::T) where {T<:AbstractFloat}
+    difference, scale, nonzero = _axis_difference(value1, value2)
+    nonzero || return _float_zero_representation(T)
+    mantissa, exponent, nonzero =
+        _float_product_representation(difference, scale)
+    return _FloatRepresentation(mantissa, exponent, nonzero)
+end
+
+@inline function _float_representation_add(
+        a::_FloatRepresentation{T},
+        b::_FloatRepresentation{T}) where {T<:AbstractFloat}
+    a.nonzero || return b
+    b.nonzero || return a
+    exponent = max(a.exponent, b.exponent)
+    value = ldexp(a.mantissa, a.exponent - exponent) +
+            ldexp(b.mantissa, b.exponent - exponent)
+    iszero(value) && return _float_zero_representation(T)
+    mantissa, correction = frexp(value)
+    return _FloatRepresentation(mantissa, exponent + correction, true)
+end
+
+@inline _float_representation_negate(a::_FloatRepresentation{T}) where
+        {T<:AbstractFloat} =
+    _FloatRepresentation(-a.mantissa, a.exponent, a.nonzero)
+
+@inline function _float_representation_multiply(
+        a::_FloatRepresentation{T},
+        b::_FloatRepresentation{T}) where {T<:AbstractFloat}
+    (a.nonzero && b.nonzero) || return _float_zero_representation(T)
+    mantissa, correction = frexp(a.mantissa * b.mantissa)
+    return _FloatRepresentation(
+        mantissa, a.exponent + b.exponent + correction, true)
+end
+
+@inline function _float_representation_cross(a, b)
+    return (
+        _float_representation_add(
+            _float_representation_multiply(a[2], b[3]),
+            _float_representation_negate(
+                _float_representation_multiply(a[3], b[2]))),
+        _float_representation_add(
+            _float_representation_multiply(a[3], b[1]),
+            _float_representation_negate(
+                _float_representation_multiply(a[1], b[3]))),
+        _float_representation_add(
+            _float_representation_multiply(a[1], b[2]),
+            _float_representation_negate(
+                _float_representation_multiply(a[2], b[1]))),
+    )
+end
+
+@inline function _float_representation_dot(a, b)
+    xy = _float_representation_add(
+        _float_representation_multiply(a[1], b[1]),
+        _float_representation_multiply(a[2], b[2]),
+    )
+    return _float_representation_add(
+        xy, _float_representation_multiply(a[3], b[3]))
+end
+
+@inline _float_vector_difference(a::Vec3{T}, b::Vec3{T}) where
+        {T<:AbstractFloat} = (
+    _float_difference_representation(a.x, b.x),
+    _float_difference_representation(a.y, b.y),
+    _float_difference_representation(a.z, b.z),
+)
+
+@inline function _float_representation_ratio(
+        numerator::_FloatRepresentation{T},
+        denominator::_FloatRepresentation{T}) where {T<:AbstractFloat}
+    numerator.nonzero || return zero(T)
+    denominator.nonzero || return T(NaN)
+    return ldexp(
+        numerator.mantissa / denominator.mantissa,
+        numerator.exponent - denominator.exponent,
+    )
+end
+
+function triangle_normal(tri::Triangle{T}) where {T<:AbstractFloat}
+    normal = _float_representation_cross(
+        _float_vector_difference(tri.a, tri.b),
+        _float_vector_difference(tri.a, tri.c),
+    )
+    has_x = normal[1].nonzero
+    has_y = normal[2].nonzero
+    has_z = normal[3].nonzero
+    if !(has_x || has_y || has_z)
+        return Vec3(zero(T), zero(T), zero(T))
+    end
+    exponent = has_x ? normal[1].exponent :
+               (has_y ? normal[2].exponent : normal[3].exponent)
+    has_y && normal[2].exponent > exponent &&
+        (exponent = normal[2].exponent)
+    has_z && normal[3].exponent > exponent &&
+        (exponent = normal[3].exponent)
+    direction = Vec3(
+        has_x ? ldexp(
+            normal[1].mantissa, normal[1].exponent - exponent) : zero(T),
+        has_y ? ldexp(
+            normal[2].mantissa, normal[2].exponent - exponent) : zero(T),
+        has_z ? ldexp(
+            normal[3].mantissa, normal[3].exponent - exponent) : zero(T),
+    )
+    return normalize(direction)
+end
+
+function triangle_area(tri::Triangle)
+    direction, logscale, nondegenerate =
+        _triangle_cross_direction_and_logscale(tri)
+    nondegenerate || return zero(logscale)
+    # `direction` is the true cross product divided by `exp(logscale)`.
+    # Keeping the scale logarithmic prevents premature overflow/underflow when
+    # different coordinate axes have radically different magnitudes.
+    return exp(logscale + log(norm(direction)) - log(2))
+end
+
+function triangle_area(tri::Triangle{T}) where {T<:AbstractFloat}
+    normal = _float_representation_cross(
+        _float_vector_difference(tri.a, tri.b),
+        _float_vector_difference(tri.a, tri.c),
+    )
+    squared_norm = _float_representation_dot(normal, normal)
+    squared_norm.nonzero || return zero(T)
+    mantissa = squared_norm.mantissa
+    exponent = squared_norm.exponent
+    if isodd(exponent)
+        mantissa *= 2
+        exponent -= 1
+    end
+    # sqrt(m * 2^e) / 2 = sqrt(m) * 2^(e/2 - 1), with the
+    # exponent kept integral so no intermediate cross component must fit in T.
+    return ldexp(sqrt(mantissa), div(exponent, 2) - 1)
+end
+
+@inline function _mean3_scaled(a, b, c)
+    scale = max(max(abs(a), abs(b)), abs(c))
+    iszero(scale) && return zero(a)
+    return ((a / scale + b / scale + c / scale) / 3) * scale
+end
+
+triangle_centroid(tri::Triangle) = Vec3(
+    _mean3_scaled(tri.a.x, tri.b.x, tri.c.x),
+    _mean3_scaled(tri.a.y, tri.b.y, tri.c.y),
+    _mean3_scaled(tri.a.z, tri.b.z, tri.c.z),
+)
 
 """Barycentric coordinates `(u,v,w)` of `p` relative to the triangle plane."""
 function triangle_barycentric(tri::Triangle, p::Vec3)
-    v0 = tri.b - tri.a; v1 = tri.c - tri.a; v2 = p - tri.a
-    d00 = dot(v0, v0); d01 = dot(v0, v1); d11 = dot(v1, v1)
-    d20 = dot(v2, v0); d21 = dot(v2, v1)
-    denom = d00*d11 - d01*d01
-    if iszero(denom)                # degenerate (collinear/zero-area) triangle (three.js getBarycoord)
-        z = zero(denom)
+    scale = max(
+        max(_vec3_max_abs(tri.a), _vec3_max_abs(tri.b)),
+        _vec3_max_abs(tri.c),
+    )
+    if iszero(scale)
+        z = zero(tri.a.x + p.x)
         return Vec3(z, z, z)
     end
-    v = (d11*d20 - d01*d21) / denom
-    w = (d00*d21 - d01*d20) / denom
+    a = tri.a / scale
+    v0 = tri.b / scale - a
+    v1 = tri.c / scale - a
+    v2 = p / scale - a
+    d00 = dot(v0, v0)
+    d01 = dot(v0, v1)
+    d11 = dot(v1, v1)
+    d20 = dot(v2, v0)
+    d21 = dot(v2, v1)
+    denominator = d00 * d11 - d01 * d01
+    if iszero(denominator)
+        z = zero(denominator)
+        return Vec3(z, z, z)
+    end
+    v = (d11 * d20 - d01 * d21) / denominator
+    w = (d00 * d21 - d01 * d20) / denominator
     Vec3(one(v) - v - w, v, w)
+end
+
+function triangle_barycentric(
+        tri::Triangle{T}, p::Vec3{T}) where {T<:AbstractFloat}
+    edge_b = _float_vector_difference(tri.a, tri.b)
+    edge_c = _float_vector_difference(tri.a, tri.c)
+    offset = _float_vector_difference(tri.a, p)
+    normal = _float_representation_cross(edge_b, edge_c)
+    denominator = _float_representation_dot(normal, normal)
+    if !denominator.nonzero
+        return Vec3(zero(T), zero(T), zero(T))
+    end
+    numerator_v = _float_representation_dot(
+        _float_representation_cross(offset, edge_c), normal)
+    numerator_w = _float_representation_dot(
+        _float_representation_cross(edge_b, offset), normal)
+    v = _float_representation_ratio(numerator_v, denominator)
+    w = _float_representation_ratio(numerator_w, denominator)
+    return Vec3(one(T) - v - w, v, w)
 end
 
 function triangle_contains_point(tri::Triangle, p::Vec3; atol=1e-9)
@@ -745,15 +1009,113 @@ end
 
 line3_delta(l::Line3)  = l.finish - l.start
 line3_length(l::Line3) = norm(line3_delta(l))
-line3_center(l::Line3) = (l.start + l.finish) * 0.5
-line3_at(l::Line3, t)  = l.start + line3_delta(l) * t
+
+@inline function _stable_midpoint(a, b)
+    if (a >= zero(a) && b >= zero(b)) ||
+       (a <= zero(a) && b <= zero(b))
+        return a + (b - a) / 2
+    end
+    return a / 2 + b / 2
+end
+
+line3_center(l::Line3) = Vec3(
+    _stable_midpoint(l.start.x, l.finish.x),
+    _stable_midpoint(l.start.y, l.finish.y),
+    _stable_midpoint(l.start.z, l.finish.z),
+)
+
+@inline function _stable_lerp(a, b, t)
+    iszero(t) && return a
+    t == one(t) && return b
+    if (a >= zero(a) && b >= zero(b)) ||
+       (a <= zero(a) && b <= zero(b))
+        return a + (b - a) * t
+    end
+    return a * (one(t) - t) + b * t
+end
+
+line3_at(l::Line3, t) = Vec3(
+    _stable_lerp(l.start.x, l.finish.x, t),
+    _stable_lerp(l.start.y, l.finish.y, t),
+    _stable_lerp(l.start.z, l.finish.z, t),
+)
+
+@inline function _axis_difference(value1, value2)
+    scale = max(abs(value1), abs(value2))
+    iszero(scale) && return zero(value1), scale, false
+    difference = value2 / scale - value1 / scale
+    iszero(difference) && return difference, scale, false
+    return difference, scale, true
+end
+
+function _difference_direction_and_logscale(a::Vec3, b::Vec3)
+    dx, sx, has_x = _axis_difference(a.x, b.x)
+    dy, sy, has_y = _axis_difference(a.y, b.y)
+    dz, sz, has_z = _axis_difference(a.z, b.z)
+    if !(has_x || has_y || has_z)
+        z = zero(dx + dy + dz)
+        return Vec3(z, z, z), z, false
+    end
+
+    if has_x
+        logscale = log(abs(dx)) + log(sx)
+    elseif has_y
+        logscale = log(abs(dy)) + log(sy)
+    else
+        logscale = log(abs(dz)) + log(sz)
+    end
+    if has_y
+        ly = log(abs(dy)) + log(sy)
+        ly > logscale && (logscale = ly)
+    end
+    if has_z
+        lz = log(abs(dz)) + log(sz)
+        lz > logscale && (logscale = lz)
+    end
+
+    x = has_x ? (dx / abs(dx)) *
+        exp(log(abs(dx)) + log(sx) - logscale) : zero(dx)
+    y = has_y ? (dy / abs(dy)) *
+        exp(log(abs(dy)) + log(sy) - logscale) : zero(dy)
+    z = has_z ? (dz / abs(dz)) *
+        exp(log(abs(dz)) + log(sz) - logscale) : zero(dz)
+    return Vec3(x, y, z), logscale, true
+end
 
 """Parameter `t` of the point on the line/segment closest to `p`."""
 function line3_closest_point_parameter(l::Line3, p::Vec3; clamp_to_segment=true)
-    d = line3_delta(l)
-    denom = dot(d, d)
-    t = denom > 0 ? dot(p - l.start, d) / denom : zero(d.x)
-    clamp_to_segment ? clamp(t, zero(t), one(t)) : t
+    direction, direction_logscale, nondegenerate =
+        _difference_direction_and_logscale(l.start, l.finish)
+    nondegenerate || return zero(direction_logscale)
+    offset, offset_logscale, nonzero_offset =
+        _difference_direction_and_logscale(l.start, p)
+    nonzero_offset || return zero(offset_logscale)
+
+    denominator = dot(direction, direction)
+    ratio = dot(offset, direction) / denominator
+    iszero(ratio) && return zero(ratio)
+    if clamp_to_segment && ratio < zero(ratio)
+        return zero(ratio)
+    end
+    log_parameter =
+        offset_logscale - direction_logscale + log(abs(ratio))
+    if clamp_to_segment && log_parameter >= zero(log_parameter)
+        return one(ratio)
+    end
+    parameter = (ratio / abs(ratio)) * exp(log_parameter)
+    return clamp_to_segment ?
+           clamp(parameter, zero(parameter), one(parameter)) : parameter
+end
+
+function line3_closest_point_parameter(
+        l::Line3{T}, p::Vec3{T}; clamp_to_segment=true) where {T<:AbstractFloat}
+    direction = _float_vector_difference(l.start, l.finish)
+    denominator = _float_representation_dot(direction, direction)
+    denominator.nonzero || return zero(T)
+    offset = _float_vector_difference(l.start, p)
+    numerator = _float_representation_dot(offset, direction)
+    parameter = _float_representation_ratio(numerator, denominator)
+    return clamp_to_segment ? clamp(parameter, zero(T), one(T)) : parameter
 end
 line3_closest_point(l::Line3, p::Vec3; clamp_to_segment=true) =
     line3_at(l, line3_closest_point_parameter(l, p; clamp_to_segment=clamp_to_segment))
