@@ -1250,10 +1250,23 @@ view-projection matrix via the Gribb–Hartmann method (three.js
 """
 function frustum_from_matrix(m::Mat4)
     e = m.e
-    me0, me1, me2, me3     = e[1],  e[2],  e[3],  e[4]
-    me4, me5, me6, me7     = e[5],  e[6],  e[7],  e[8]
-    me8, me9, me10, me11   = e[9],  e[10], e[11], e[12]
-    me12, me13, me14, me15 = e[13], e[14], e[15], e[16]
+    scale = maximum(abs, e)
+    divisor = isfinite(scale) && scale > zero(scale) ? scale : one(scale)
+    # A homogeneous view-projection matrix may be multiplied by any non-zero
+    # scalar without changing its frustum. Normalize before adding/subtracting
+    # rows so two finite coefficients cannot overflow before plane normalization.
+    me0, me1, me2, me3 = (
+        e[1] / divisor, e[2] / divisor,
+        e[3] / divisor, e[4] / divisor)
+    me4, me5, me6, me7 = (
+        e[5] / divisor, e[6] / divisor,
+        e[7] / divisor, e[8] / divisor)
+    me8, me9, me10, me11 = (
+        e[9] / divisor, e[10] / divisor,
+        e[11] / divisor, e[12] / divisor)
+    me12, me13, me14, me15 = (
+        e[13] / divisor, e[14] / divisor,
+        e[15] / divisor, e[16] / divisor)
     planes = (
         _make_plane(me3-me0, me7-me4, me11-me8,  me15-me12),
         _make_plane(me3+me0, me7+me4, me11+me8,  me15+me12),

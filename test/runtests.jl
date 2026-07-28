@@ -21765,4 +21765,36 @@ end
         @test_opt_alloc 0 stereo_update!(stereo, camera)
     end
 
+    @testset "fresh audit round 96 fixes" begin
+        base_matrix = Mat4{Float64}((
+            0.8, 0.0, 0.0, 0.8,
+            0.0, 0.8, 0.0, 0.8,
+            0.0, 0.0, 0.8, 0.8,
+            0.0, 0.0, 0.0, 0.8,
+        ))
+        scaled_matrix = Mat4{Float64}(
+            ntuple(i -> base_matrix.e[i] * 1.0e308, 16))
+        expected = frustum_from_matrix(base_matrix)
+        actual = frustum_from_matrix(scaled_matrix)
+        for i in 1:6
+            expected_plane = expected.planes[i]
+            actual_plane = actual.planes[i]
+            @test all(isfinite, (
+                actual_plane.normal.x,
+                actual_plane.normal.y,
+                actual_plane.normal.z,
+                actual_plane.constant,
+            ))
+            @test isapprox(
+                actual_plane.normal.x, expected_plane.normal.x)
+            @test isapprox(
+                actual_plane.normal.y, expected_plane.normal.y)
+            @test isapprox(
+                actual_plane.normal.z, expected_plane.normal.z)
+            @test isapprox(
+                actual_plane.constant, expected_plane.constant)
+        end
+        @test_opt_alloc 0 frustum_from_matrix(scaled_matrix)
+    end
+
 end
