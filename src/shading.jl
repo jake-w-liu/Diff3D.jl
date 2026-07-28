@@ -1833,6 +1833,55 @@ function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
     end
 end
 
+function _accumulate_phong_mapped_color(result::Color3, normal::Vec3,
+                                        view_dir::Vec3, position::Vec3,
+                                        material::MeshPhongMaterial,
+                                        light::RectAreaLight, shadow_fn,
+                                        specular::Color3, shininess::Float64,
+                                        albedo::Color3)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_phong_response_color(normal, view_dir, position,
+                                                    light, albedo, specular,
+                                                    shininess) * vis
+end
+
+function _accumulate_phong_mapped_color(result::Color3, normal::Vec3,
+                                        view_dir::Vec3, position::Vec3,
+                                        material::MeshPhongMaterial, light,
+                                        shadow_fn, specular::Color3,
+                                        shininess::Float64, albedo::Color3)
+    if _is_fill_light(light)
+        return result + albedo * _fill_color(normal, light)
+    end
+    lc, li, ldir = light_contribution(light, position)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + shade_phong(normal, ldir, view_dir, lc, li, albedo,
+                                specular, shininess) * vis
+end
+
+@inline _dispatch_accumulate_phong_mapped_color(
+        light, result, normal, view_dir, position, material, shadow_fn,
+        specular, shininess, albedo) =
+    _accumulate_phong_mapped_color(result, normal, view_dir, position, material,
+                                   light, shadow_fn, specular, shininess, albedo)
+
+function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
+                                   position::Vec3,
+                                   material::MeshPhongMaterial,
+                                   lights::Vector{SceneLight}, shadow_fn,
+                                   specular::Color3, shininess::Float64,
+                                   albedo::Color3)
+    result = material.emissive * material.emissive_intensity
+    @inbounds for i in eachindex(lights)
+        result = _dispatch_scene_light(
+            _dispatch_accumulate_phong_mapped_color, lights[i], result, normal,
+            view_dir, position, material, shadow_fn, specular, shininess, albedo)
+    end
+    return result
+end
+
 function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
                                    position::Vec3,
                                    material::MeshPhongMaterial, lights, shadow_fn,
@@ -1840,23 +1889,9 @@ function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
                                    albedo::Color3)
     result = material.emissive * material.emissive_intensity
     for light in lights
-        if light isa RectAreaLight
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + _rect_area_phong_response_color(normal, view_dir,
-                                                              position, light,
-                                                              albedo, specular,
-                                                              shininess) * vis
-        elseif _is_fill_light(light)
-            fc = _fill_color(normal, light)
-            result = result + albedo * fc
-        else
-            lc, li, ldir = light_contribution(light, position)
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + shade_phong(normal, ldir, view_dir, lc, li,
-                                          albedo, specular, shininess) * vis
-        end
+        result = _accumulate_phong_mapped_color(
+            result, normal, view_dir, position, material, light, shadow_fn,
+            specular, shininess, albedo)
     end
     return result
 end
@@ -1925,6 +1960,56 @@ function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
     return result
 end
 
+function _accumulate_physical_mapped_color(
+        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshPhysicalMaterial, light::RectAreaLight, shadow_fn,
+        terms::_PhysicalMappedTerms, albedo::Color3)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_physical_response_color(
+        material, terms, normal, view_dir, position, light, albedo) * vis
+end
+
+function _accumulate_physical_mapped_color(
+        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshPhysicalMaterial, light, shadow_fn,
+        terms::_PhysicalMappedTerms, albedo::Color3)
+    roughness = _physical_mapped_roughness(terms)
+    if _is_fill_light(light)
+        fc = _fill_color(normal, light)
+        return result + _pbr_ambient(normal, albedo, terms.metalness,
+                                     roughness, fc) +
+               _transmission_fill_terms(material, terms, albedo, normal,
+                                        view_dir, fc)
+    end
+    lc, li, ldir = light_contribution(light, position)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _direct_response_physical_terms(
+        material, terms, normal, view_dir, lc, li, ldir, albedo) * vis
+end
+
+@inline _dispatch_accumulate_physical_mapped_color(
+        light, result, normal, view_dir, position, material, shadow_fn, terms,
+        albedo) =
+    _accumulate_physical_mapped_color(result, normal, view_dir, position,
+                                      material, light, shadow_fn, terms, albedo)
+
+function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
+                                      position::Vec3,
+                                      material::MeshPhysicalMaterial,
+                                      lights::Vector{SceneLight}, shadow_fn,
+                                      terms::_PhysicalMappedTerms,
+                                      albedo::Color3)
+    result = material.emissive * material.emissive_intensity
+    @inbounds for i in eachindex(lights)
+        result = _dispatch_scene_light(
+            _dispatch_accumulate_physical_mapped_color, lights[i], result,
+            normal, view_dir, position, material, shadow_fn, terms, albedo)
+    end
+    return result
+end
+
 function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
                                       position::Vec3,
                                       material::MeshPhysicalMaterial,
@@ -1932,26 +2017,10 @@ function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
                                       terms::_PhysicalMappedTerms,
                                       albedo::Color3)
     result = material.emissive * material.emissive_intensity
-    roughness = _physical_mapped_roughness(terms)
     for light in lights
-        if light isa RectAreaLight
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + _rect_area_physical_response_color(
-                material, terms, normal, view_dir, position, light, albedo) * vis
-        elseif _is_fill_light(light)
-            fc = _fill_color(normal, light)
-            result = result + _pbr_ambient(normal, albedo, terms.metalness,
-                                           roughness, fc) +
-                     _transmission_fill_terms(material, terms, albedo, normal,
-                                              view_dir, fc)
-        else
-            lc, li, ldir = light_contribution(light, position)
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + _direct_response_physical_terms(
-                material, terms, normal, view_dir, lc, li, ldir, albedo) * vis
-        end
+        result = _accumulate_physical_mapped_color(
+            result, normal, view_dir, position, material, light, shadow_fn,
+            terms, albedo)
     end
     return result
 end
@@ -1974,6 +2043,25 @@ function _shade_physical_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
                                  shadow_fn, terms, albedo)
 end
 
+@inline _dispatch_accumulate_standard_light(
+        light, result, material, normal, view_dir, position, shadow_fn,
+        metalness, roughness) =
+    _accumulate_standard_light(result, material, normal, view_dir, position,
+                               light, shadow_fn, metalness, roughness)
+
+function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
+                                material::MeshStandardMaterial,
+                                lights::Vector{SceneLight}, shadow_fn,
+                                metalness::Float64, roughness::Float64)
+    result = material.emissive * material.emissive_intensity
+    @inbounds for i in eachindex(lights)
+        result = _dispatch_scene_light(
+            _dispatch_accumulate_standard_light, lights[i], result, material,
+            normal, view_dir, position, shadow_fn, metalness, roughness)
+    end
+    return result
+end
+
 function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
                                 material::MeshStandardMaterial, lights, shadow_fn,
                                 metalness::Float64, roughness::Float64)
@@ -1986,34 +2074,64 @@ function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
     return result
 end
 
-function _shade_standard_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
-                                             position::Vec3,
-                                             material::MeshStandardMaterial,
-                                             lights, shadow_fn,
-                                             metalness::Float64,
-                                             roughness::Float64,
-                                             vertex_color::Color3)
+function _accumulate_standard_mapped_vertex_color(
+        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshStandardMaterial, light::RectAreaLight, shadow_fn,
+        metalness::Float64, roughness::Float64, albedo::Color3)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + _rect_area_standard_response_color(
+        material, normal, view_dir, position, light, metalness, roughness,
+        albedo) * vis
+end
+
+function _accumulate_standard_mapped_vertex_color(
+        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshStandardMaterial, light, shadow_fn,
+        metalness::Float64, roughness::Float64, albedo::Color3)
+    if _is_fill_light(light)
+        fc = _fill_color(normal, light)
+        return result + _pbr_ambient(normal, albedo, metalness, roughness, fc)
+    end
+    lc, li, ldir = light_contribution(light, position)
+    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis <= 0.0 && return result
+    return result + shade_pbr(normal, ldir, view_dir, lc, li, albedo,
+                              metalness, roughness) * vis
+end
+
+@inline _dispatch_accumulate_standard_mapped_vertex_color(
+        light, result, normal, view_dir, position, material, shadow_fn,
+        metalness, roughness, albedo) =
+    _accumulate_standard_mapped_vertex_color(
+        result, normal, view_dir, position, material, light, shadow_fn,
+        metalness, roughness, albedo)
+
+function _shade_standard_mapped_vertex_color(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshStandardMaterial, lights::Vector{SceneLight}, shadow_fn,
+        metalness::Float64, roughness::Float64, vertex_color::Color3)
+    albedo = _modulate(material.color, vertex_color)
+    result = material.emissive * material.emissive_intensity
+    @inbounds for i in eachindex(lights)
+        result = _dispatch_scene_light(
+            _dispatch_accumulate_standard_mapped_vertex_color, lights[i],
+            result, normal, view_dir, position, material, shadow_fn, metalness,
+            roughness, albedo)
+    end
+    return result
+end
+
+function _shade_standard_mapped_vertex_color(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshStandardMaterial, lights, shadow_fn,
+        metalness::Float64, roughness::Float64, vertex_color::Color3)
     albedo = _modulate(material.color, vertex_color)
     result = material.emissive * material.emissive_intensity
     for light in lights
-        if light isa RectAreaLight
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + _rect_area_standard_response_color(material, normal,
-                                                                 view_dir, position,
-                                                                 light, metalness,
-                                                                 roughness, albedo) *
-                              vis
-        elseif _is_fill_light(light)
-            fc = _fill_color(normal, light)
-            result = result + _pbr_ambient(normal, albedo, metalness, roughness, fc)
-        else
-            lc, li, ldir = light_contribution(light, position)
-            vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-            vis <= 0.0 && continue
-            result = result + shade_pbr(normal, ldir, view_dir, lc, li, albedo,
-                                        metalness, roughness) * vis
-        end
+        result = _accumulate_standard_mapped_vertex_color(
+            result, normal, view_dir, position, material, light, shadow_fn,
+            metalness, roughness, albedo)
     end
     return result
 end
