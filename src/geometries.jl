@@ -174,6 +174,40 @@ function _geometry_finite_float(value, label::String)
     end
 end
 
+@inline function _geometry_unit2(x::Float64, y::Float64)
+    len = hypot(x, y)
+    if len > 0.0
+        if isfinite(len)
+            return x / len, y / len
+        end
+
+        # `hypot(floatmax, floatmax)` can exceed Float64 even though its unit
+        # direction is representable. Scale before normalizing in that case.
+        scale = max(abs(x), abs(y))
+        xs, ys = x / scale, y / scale
+        scaled_len = hypot(xs, ys)
+        return xs / scaled_len, ys / scaled_len
+    end
+    return 0.0, 0.0
+end
+
+@inline function _geometry_unit_delta2(ax::Float64, ay::Float64,
+                                       bx::Float64, by::Float64)
+    dx, dy = bx - ax, by - ay
+    if isfinite(dx) && isfinite(dy)
+        return _geometry_unit2(dx, dy)
+    end
+
+    # Subtracting opposite, individually finite Float64 endpoints can overflow.
+    # Their scaled difference has the same direction and remains representable.
+    scale = max(abs(ax), abs(ay), abs(bx), abs(by))
+    scale > 0.0 || return 0.0, 0.0
+    return _geometry_unit2(
+        bx / scale - ax / scale,
+        by / scale - ay / scale,
+    )
+end
+
 function _geometry_nonzero_finite_scalar(value, label::String)
     _geometry_finite_scalar(value, label)
     value != zero(value) || throw(ArgumentError("$label must be finite and non-zero"))
@@ -894,7 +928,7 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             z = radius * sinθ * sinϕ
 
             nx, ny, nz = -sinθ * cosϕ, cosθ, sinθ * sinϕ
-            nl = sqrt(nx^2 + ny^2 + nz^2)
+            nl = hypot(nx, ny, nz)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
             end
@@ -1003,9 +1037,9 @@ end
 
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                            radial_segments=32, height_segments=1, open_ended=false)
-    radius_top = _geometry_finite_scalar(radius_top, "CylinderGeometry radius_top")
-    radius_bottom = _geometry_finite_scalar(radius_bottom, "CylinderGeometry radius_bottom")
-    height = _geometry_finite_scalar(height, "CylinderGeometry height")
+    radius_top = _geometry_finite_float(radius_top, "CylinderGeometry radius_top")
+    radius_bottom = _geometry_finite_float(radius_bottom, "CylinderGeometry radius_bottom")
+    height = _geometry_finite_float(height, "CylinderGeometry height")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 3, "CylinderGeometry radial_segments")
     height_segments = _clamp_seg(height_segments, 1, "CylinderGeometry height_segments")
@@ -1024,14 +1058,22 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     vi = 0
 
     half_h = height / 2
-    # height==0 (degenerate disk) would make slope Inf or 0/0=NaN, poisoning every
-    # side normal; fall back to a purely radial normal (slope=0) instead.
-    slope = height == 0 ? 0.0 : (radius_bottom - radius_top) / height
+    # Normalize `(1, (radius_bottom-radius_top)/height)` without first forming
+    # an overflowing radius difference or quotient. Preserve the established
+    # radial fallback for a zero-height, degenerate cylinder.
+    side_radial, side_y = if height == 0.0
+        (1.0, 0.0)
+    else
+        h_component, radius_component = _geometry_unit_delta2(
+            0.0, radius_top, height, radius_bottom)
+        height_sign = sign(height)
+        (h_component * height_sign, radius_component * height_sign)
+    end
 
     # Side
     for y_seg in 0:height_segments
         v = y_seg / height_segments
-        r = v * (radius_bottom - radius_top) + radius_top
+        r = (1.0 - v) * radius_top + v * radius_bottom
         y_pos = half_h - v * height
 
         for x_seg in 0:radial_segments
@@ -1043,10 +1085,10 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
             x = r * sinθ
             z = r * cosθ
 
-            nx = sinθ
-            ny = slope
-            nz = cosθ
-            nl = sqrt(nx^2 + ny^2 + nz^2)
+            nx = side_radial * sinθ
+            ny = side_y
+            nz = side_radial * cosθ
+            nl = hypot(nx, ny, nz)
             nx /= nl; ny /= nl; nz /= nl
 
             vi += 1
@@ -1155,8 +1197,8 @@ end
 # ========================== Torus Geometry ==========================
 
 function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
-    radius = _geometry_finite_scalar(radius, "TorusGeometry radius")
-    tube = _geometry_finite_scalar(tube, "TorusGeometry tube")
+    radius = _geometry_finite_float(radius, "TorusGeometry radius")
+    tube = _geometry_finite_float(tube, "TorusGeometry tube")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
@@ -1168,6 +1210,7 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
     normals_arr = Vector{Float64}(undef, position_len)
     uvs_arr = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
+    tube_direction = sign(tube)
 
     for j in 0:radial_segments
         vj = j / radial_segments
@@ -1188,12 +1231,13 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
             y = r_tube * sinu
             z = tube * sinv
 
-            cx = radius * cosu
-            cy = radius * sinu
-            nx = x - cx
-            ny = y - cy
-            nz = z
-            nl = sqrt(nx^2 + ny^2 + nz^2)
+            # Recovering the normal as `position - ring_center` loses a small
+            # tube completely when the major radius is very large. Its analytic
+            # direction is independent of the major radius.
+            nx = tube_direction * cosv * cosu
+            ny = tube_direction * cosv * sinu
+            nz = tube_direction * sinv
+            nl = hypot(nx, ny, nz)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
             end
@@ -1233,8 +1277,8 @@ end
 
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
-    radius = _geometry_finite_scalar(radius, "TorusKnotGeometry radius")
-    tube = _geometry_finite_scalar(tube, "TorusKnotGeometry tube")
+    radius = _geometry_finite_float(radius, "TorusKnotGeometry radius")
+    tube = _geometry_finite_float(tube, "TorusKnotGeometry tube")
     p_val = _geometry_nonzero_finite_scalar(p_val, "TorusKnotGeometry p_val")
     q_val = _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val")
     # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
@@ -1281,10 +1325,12 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
             py = p1.y + cx * N_vec.y + cy * B_vec.y
             pz = p1.z + cx * N_vec.z + cy * B_vec.z
 
-            nx = px - p1.x
-            ny = py - p1.y
-            nz = pz - p1.z
-            nl = sqrt(nx^2 + ny^2 + nz^2)
+            # Use the already available local displacement. Subtracting it
+            # back from a large knot position can erase the tube by cancellation.
+            nx = cx * N_vec.x + cy * B_vec.x
+            ny = cx * N_vec.y + cy * B_vec.y
+            nz = cx * N_vec.z + cy * B_vec.z
+            nl = hypot(nx, ny, nz)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
             end

@@ -21092,4 +21092,58 @@ end
         @test_opt_alloc 0 Diff3D._texture_tex_coord(1)
     end
 
+    @testset "fresh audit round 77 fixes" begin
+        function has_finite_unit_normals(g)
+            all(isfinite, g.normals) || return false
+            @inbounds for i in 1:3:length(g.normals)
+                isapprox(hypot(
+                    g.normals[i], g.normals[i + 1], g.normals[i + 2]),
+                    1.0; atol=2e-15) || return false
+            end
+            return true
+        end
+
+        # Profile/radius differences can be larger than Float64 even while all
+        # endpoints and the generated positions remain representable.
+        lathe = LatheGeometry(
+            [Vec2(1.0, -1.0e308), Vec2(1.0, 1.0e308)]; segments=3)
+        @test all(isfinite, lathe.positions)
+        @test has_finite_unit_normals(lathe)
+
+        cylinder = CylinderGeometry(
+            radius_top=-1.0e308, radius_bottom=1.0e308, height=1.0,
+            radial_segments=3, height_segments=1, open_ended=true)
+        @test all(isfinite, cylinder.positions)
+        @test has_finite_unit_normals(cylinder)
+
+        # Squared-length normalization used to overflow and collapse these
+        # representable normals to zero.
+        capsule = CapsuleGeometry(
+            radius=1.0e308, length=1.0e308,
+            cap_segments=2, radial_segments=3)
+        @test all(isfinite, capsule.positions)
+        @test has_finite_unit_normals(capsule)
+
+        # The small tube displacement is below the position ULP at this radius;
+        # analytic normals must not depend on subtracting it back out.
+        torus = TorusGeometry(
+            radius=1.0e308, tube=1.0,
+            radial_segments=3, tubular_segments=3)
+        @test all(isfinite, torus.positions)
+        @test has_finite_unit_normals(torus)
+
+        knot = TorusKnotGeometry(
+            radius=1.0e16, tube=1.0,
+            tubular_segments=8, radial_segments=3)
+        @test all(isfinite, knot.positions)
+        @test has_finite_unit_normals(knot)
+
+        unit_dx, unit_dy = Diff3D._geometry_unit_delta2(
+            0.0, -1.0e308, 1.0, 1.0e308)
+        @test unit_dx == 5.0e-309
+        @test unit_dy == 1.0
+        @test_opt_alloc 0 Diff3D._geometry_unit_delta2(
+            0.0, -1.0e308, 1.0, 1.0e308)
+    end
+
 end

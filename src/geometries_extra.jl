@@ -390,10 +390,12 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
             positions[pbase + 1] = pt.y
             positions[pbase + 2] = -pt.x * s
             jm = max(j-1, 1); jp = min(j+1, np)
-            dx = points[jp].x - points[jm].x; dy = points[jp].y - points[jm].y
+            dx, dy = _geometry_unit_delta2(
+                Float64(points[jm].x), Float64(points[jm].y),
+                Float64(points[jp].x), Float64(points[jp].y))
             nr = dy; nh = -dx                      # outward profile normal
             nx = nr*c; ny = nh; nz = -nr*s
-            nl = sqrt(nx^2 + ny^2 + nz^2); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
+            nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
             normals[pbase] = nx
             normals[pbase + 1] = ny
             normals[pbase + 2] = nz
@@ -1382,8 +1384,8 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     @inbounds for i in 1:np
         i2 = i % np + 1
         p1 = shape[i]; p2 = shape[i2]
-        ex = p2.x - p1.x; ey = p2.y - p1.y
-        nx = ey; ny = -ex; nl = sqrt(nx^2 + ny^2); nl > 0 && (nx/=nl; ny/=nl)
+        ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
+        nx = ey; ny = -ex
         a = vi + 1
         b = vi + 2
         c = vi + 3
@@ -1464,7 +1466,7 @@ function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segmen
             x = r*c; z = -r*sn
             cy = clamp(y, -half, half)               # nearest point on the spine
             nx = x; ny = y - cy; nz = z
-            nl = sqrt(nx^2 + ny^2 + nz^2); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
+            nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
             vi = s * np + j
             pbase = 3vi - 2
             positions[pbase] = x
