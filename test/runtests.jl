@@ -22342,4 +22342,22 @@ end
             Vec3(1.7e308, 0.0, 1.7e308))
     end
 
+    @testset "fresh audit round 125 fixes" begin
+        surface = Vec3(-1.0e308, 0.0, 0.0)
+        light =
+            RectAreaLight(position=Vec3(1.0e308, 0.0, 0.0))
+        light.target = surface
+        forward, right, up = Diff3D._rect_area_basis(light)
+        @test forward == Vec3(-1.0, 0.0, 0.0)
+        @test right == Vec3(0.0, -0.0, 1.0)
+        @test up == Vec3(0.0, 1.0, 0.0)
+
+        response = Diff3D._rect_area_response(
+            MeshLambertMaterial(), Vec3(1.0, 0.0, 0.0),
+            Vec3(1.0, 0.0, 0.0), surface, light)
+        @test response == Color3(0.0, 0.0, 0.0)
+        @test_opt_alloc 0 Diff3D._rect_area_sample_direction(
+            surface, Vec3(1.0e308, 0.0, 0.0))
+    end
+
 end

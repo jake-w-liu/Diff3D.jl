@@ -1500,11 +1500,37 @@ end
 end
 
 @inline function _rect_area_basis(light::RectAreaLight)
-    f = normalize(light.target - light.position)
+    f, _ =
+        _light_direction_and_distance(light.position, light.target)
     ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, f))
     v = cross(f, u)
     return f, u, v
+end
+
+@inline function _rect_area_sample_direction(
+    position::Vec3, sample_position::Vec3,
+)
+    displacement = sample_position - position
+    distance_squared = dot(displacement, displacement)
+    if _finite_light_vec3(displacement)
+        bounded_distance_squared = max(distance_squared, 1e-10)
+        return isfinite(distance_squared) ?
+            (displacement / sqrt(bounded_distance_squared),
+             bounded_distance_squared) :
+            (normalize(displacement), distance_squared)
+    end
+
+    if _finite_light_vec3(position) &&
+       _finite_light_vec3(sample_position)
+        direction, distance =
+            _light_direction_and_distance(position, sample_position)
+        return direction, max(distance * distance, 1e-10)
+    end
+
+    bounded_distance_squared = max(distance_squared, 1e-10)
+    return displacement / sqrt(bounded_distance_squared),
+           bounded_distance_squared
 end
 
 function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
@@ -1519,9 +1545,8 @@ function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
@@ -1543,9 +1568,8 @@ function _rect_area_response_vertex_color(m, normal::Vec3, view_dir::Vec3,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
@@ -1570,9 +1594,8 @@ function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
@@ -1599,9 +1622,8 @@ function _rect_area_standard_response_color(m::MeshStandardMaterial,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
@@ -1627,9 +1649,8 @@ function _rect_area_phong_response_color(normal::Vec3, view_dir::Vec3,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
@@ -1746,9 +1767,8 @@ function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
         sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        diff = sample_pos - position
-        dist2 = max(dot(diff, diff), 1e-10)
-        ldir = diff / sqrt(dist2)
+        ldir, dist2 =
+            _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
         emit <= 0.0 && continue
         li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
