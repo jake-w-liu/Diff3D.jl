@@ -21379,4 +21379,28 @@ end
             -1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0)
     end
 
+    @testset "fresh audit round 84 fixes" begin
+        @test_throws "RenderTarget pixel count is too large" RenderTarget(
+            typemax(Int), 2)
+        @test_throws "RenderTarget element type must represent positive infinity" RenderTarget(
+            1, 1; T=Int)
+        @test_throws "RenderTarget color dimensions must be height×width×3" RenderTarget{
+            Float64}(2, 2, zeros(1, 1, 3), zeros(2, 2))
+        @test_throws "RenderTarget depth dimensions must be height×width" RenderTarget{
+            Float64}(2, 2, zeros(2, 2, 3), zeros(1, 1))
+
+        scene = Scene()
+        camera = PerspectiveCamera()
+        @test_throws "render_aa supersampled width is too large" render_aa(
+            scene, camera, typemax(Int), typemax(Int); ss=typemax(Int))
+        @test_throws "RenderTarget pixel count is too large" render_msaa!(
+            RenderTarget(1, 1), scene, camera; samples=typemax(Int))
+
+        @test_throws "soft_render pixel count is too large" soft_render(
+            Vec3{Float64}[], NTuple{3,Int}[], Color3{Float64}[],
+            Mat4{Float64}(), typemax(Int), 2)
+        @test Diff3D._render_checked_mul(3, 7, "test") == 21
+        @test_opt_alloc 0 Diff3D._render_checked_mul(3, 7, "test")
+    end
+
 end

@@ -8,12 +8,59 @@ struct RenderTarget{T<:Real}
     height::Int
     color::Array{T, 3}    # H × W × 3 (RGB)
     depth::Matrix{T}      # H × W
+
+    function RenderTarget{T}(width::Int, height::Int, color::Array{T,3},
+                             depth::Matrix{T}) where {T<:Real}
+        (width > 0 && height > 0) ||
+            throw(ArgumentError("RenderTarget dimensions must be positive"))
+        size(color) == (height, width, 3) ||
+            throw(ArgumentError(
+                "RenderTarget color dimensions must be height×width×3"))
+        size(depth) == (height, width) ||
+            throw(ArgumentError(
+                "RenderTarget depth dimensions must be height×width"))
+        return new{T}(width, height, color, depth)
+    end
+end
+
+RenderTarget(width::Int, height::Int, color::Array{T,3},
+             depth::Matrix{T}) where {T<:Real} =
+    RenderTarget{T}(width, height, color, depth)
+
+@inline function _render_checked_mul(a::Int, b::Int, label::AbstractString)
+    (a >= 0 && b >= 0) || throw(ArgumentError("$label must be non-negative"))
+    try
+        return Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label is too large"))
+    end
+end
+
+function _render_target_type(::Type{T}) where {T}
+    (T <: Real && isconcretetype(T)) ||
+        throw(ArgumentError("RenderTarget element type must be a concrete Real type"))
+    infinity = try
+        T(Inf)
+    catch
+        throw(ArgumentError(
+            "RenderTarget element type must represent positive infinity"))
+    end
+    isinf(infinity) ||
+        throw(ArgumentError(
+            "RenderTarget element type must represent positive infinity"))
+    return infinity
 end
 
 function RenderTarget(width::Int, height::Int; T=Float64)
     (width > 0 && height > 0) || throw(ArgumentError("RenderTarget dimensions must be positive"))
+    T isa Type ||
+        throw(ArgumentError("RenderTarget element type must be a concrete Real type"))
+    infinity = _render_target_type(T)
+    pixels = _render_checked_mul(width, height, "RenderTarget pixel count")
+    _render_checked_mul(pixels, 3, "RenderTarget color element count")
     color = zeros(T, height, width, 3)
-    depth = fill(T(Inf), height, width)
+    depth = fill(infinity, height, width)
     RenderTarget{T}(width, height, color, depth)
 end
 

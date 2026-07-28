@@ -66,7 +66,10 @@ function downsample!(out::AbstractArray, img::AbstractArray, ss::Int)
     Ho, Wo = _rgb_image_size(out, "downsample output")
     (Ho == H && Wo == W) ||
         throw(ArgumentError("downsample output dimensions must match input ÷ scale"))
-    inv = 1.0 / (ss * ss)
+    # Convert before multiplication: `ss * ss` can overflow Int even though
+    # the reciprocal is representable and the input dimensions already prove
+    # every loop/index product is in range.
+    inv = 1.0 / (Float64(ss) * Float64(ss))
     @inbounds for c in 1:3, j in 1:W, i in 1:H
         s = 0.0
         for di in 0:ss-1, dj in 0:ss-1
@@ -100,7 +103,11 @@ end
 function render_aa(scene::Scene, camera::AbstractCamera, width::Int, height::Int;
                    ss::Int=2, shading::Symbol=:flat, shadows::Bool=false)
     ss > 0 || throw(ArgumentError("render_aa ss must be positive"))
-    rt = RenderTarget(width*ss, height*ss)
+    (width > 0 && height > 0) ||
+        throw(ArgumentError("render_aa dimensions must be positive"))
+    big_w = _render_checked_mul(width, ss, "render_aa supersampled width")
+    big_h = _render_checked_mul(height, ss, "render_aa supersampled height")
+    rt = RenderTarget(big_w, big_h)
     render!(rt, scene, camera; shading=shading, shadows=shadows)
     return downsample(rt.color, ss)
 end
@@ -118,11 +125,14 @@ function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                       samples::Int=4, shading::Symbol=:flat, shadows::Bool=false,
                       cache=nothing)
     samples > 0 || throw(ArgumentError("render_msaa! samples must be positive"))
-    ss = max(ceil(Int, sqrt(samples)), 1)
+    # Exact integer ceil(sqrt(samples)); avoids Float64 rounding at large Ints.
+    ss = isqrt(samples - 1) + 1
     ss == 1 && return render!(rt, scene, camera; shading=shading, shadows=shadows,
                               cache=cache)
-    big_w = rt.width * ss
-    big_h = rt.height * ss
+    big_w = _render_checked_mul(
+        rt.width, ss, "render_msaa! supersampled width")
+    big_h = _render_checked_mul(
+        rt.height, ss, "render_msaa! supersampled height")
     big = cache === nothing ? RenderTarget(big_w, big_h) :
           _render_cache_msaa_target!(cache, big_w, big_h)
     render!(big, scene, camera; shading=shading, shadows=shadows,

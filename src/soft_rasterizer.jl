@@ -176,6 +176,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     n_faces = length(faces)
     W, H = width, height
     (W > 0 && H > 0) || throw(ArgumentError("soft_render dimensions must be positive"))
+    pixels = _render_checked_mul(W, H, "soft_render pixel count")
+    _render_checked_mul(pixels, 3, "soft_render image element count")
     length(face_colors) == n_faces ||
         throw(ArgumentError("soft_render face_colors length must match faces length"))
     _soft_positive_finite(σ, "SoftRasterizerConfig sigma")
@@ -303,7 +305,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     TILE = 16
     n_tx = cld(W, TILE)
     n_ty = cld(H, TILE)
-    n_tiles = n_tx * n_ty
+    n_tiles = _render_checked_mul(n_tx, n_ty, "soft_render tile count")
     @inline tile_index(tx, ty) = (ty - 1) * n_tx + tx
     @inline tile_x_of(px) = (px - 1) ÷ TILE + 1
     @inline tile_y_of(py) = (py - 1) ÷ TILE + 1
