@@ -21185,4 +21185,53 @@ end
         @test_opt_alloc 0 Diff3D._mat4_linear_max_scale(extreme_linear)
     end
 
+    @testset "fresh audit round 79 fixes" begin
+        image = ones(Float64, 5, 5, 3)
+        depth = fill(5.0, 5, 5)
+        depth[3, 3] = 1.0
+
+        @test_throws ArgumentError(
+            "bloom_pass threshold must be finite") bloom_pass(threshold=NaN)
+        @test_throws ArgumentError(
+            "bloom_pass intensity must be finite") bloom_pass(intensity=Inf)
+        @test_throws ArgumentError(
+            "outline_pass threshold must be finite") outline_pass(
+                depth; threshold=NaN)
+        @test_throws ArgumentError(
+            "outline_pass color.r must be finite") outline_pass(
+                depth; color=Color3(NaN, 0.0, 0.0))
+        @test_throws ArgumentError(
+            "ssao_pass intensity must be finite") ssao_pass(
+                depth; intensity=NaN)
+        @test_throws ArgumentError(
+            "bokeh_pass focus_depth must be finite") bokeh_pass(
+                depth; focus_depth=NaN)
+        @test_throws ArgumentError(
+            "bokeh_pass aperture must be finite") bokeh_pass(
+                depth; focus_depth=1.0, aperture=Inf)
+        @test_throws ArgumentError(
+            "Gaussian blur radius is too large") Diff3D._gaussian_kernel(
+                typemax(Int))
+
+        extreme_depth = fill(-1.0e308, 5, 5)
+        extreme_depth[:, 4:5] .= 1.0e308
+        outlined = outline_pass(
+            extreme_depth; threshold=0.1, color=Color3(0.0, 0.0, 0.0))(image)
+        @test all(isfinite, outlined)
+        @test any(iszero, outlined)
+
+        # A hostile sample count is bounded before allocating the offset table.
+        bounded_ssao = ssao_pass(
+            depth; radius=1.0, intensity=1.0, samples=typemax(Int))(image)
+        @test all(isfinite, bounded_ssao)
+
+        nx, ny, nz = Diff3D._postfx_depth_normal(
+            1.0e308, -1.0e308, 1.0e308)
+        @test nx == 1.0
+        @test ny == 0.0
+        @test nz == 5.0e-309
+        @test_opt_alloc 0 Diff3D._postfx_depth_normal(
+            1.0e308, -1.0e308, 1.0e308)
+    end
+
 end

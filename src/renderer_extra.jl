@@ -2403,11 +2403,23 @@ function _check_depth_size(depth::AbstractMatrix, H::Int, W::Int, label::Abstrac
     return nothing
 end
 
+function _postfx_finite_float(value, label::AbstractString)
+    result = try
+        Float64(value)
+    catch
+        throw(ArgumentError("$label must be finite"))
+    end
+    isfinite(result) || throw(ArgumentError("$label must be finite"))
+    return result
+end
+
 # Build a 1-D Gaussian kernel of the given integer radius (σ = radius/2, clamped),
 # normalized to sum 1. Returned as an OffsetVector-free plain Vector indexed 1..2r+1
 # (centre at r+1).
 function _gaussian_kernel(radius::Int)
     r = max(radius, 0)
+    r <= (typemax(Int) - 1) ÷ 2 ||
+        throw(ArgumentError("Gaussian blur radius is too large"))
     σ = max(r / 2, 1e-3)
     k = Vector{Float64}(undef, 2r + 1)
     s = 0.0
@@ -2458,7 +2470,9 @@ scaled by `intensity`. Returns a new H×W×3 image; the input is not mutated. Th
 returned closure matches the [`EffectComposer`] pass convention (`img -> img`).
 """
 function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6, radius::Int=2)
-    thr = Float64(threshold); inten = Float64(intensity); rad = max(Int(radius), 0)
+    thr = _postfx_finite_float(threshold, "bloom_pass threshold")
+    inten = _postfx_finite_float(intensity, "bloom_pass intensity")
+    rad = max(radius, 0)
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "bloom_pass")
         if rad == 0
@@ -2569,12 +2583,16 @@ The depth matrix is captured at construction time, so the returned pass can be
 applied to any colour image of the matching size.
 """
 function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=Color3(0.0,0.0,0.0))
-    thr = Float64(threshold)
-    oc = (Float64(color.r), Float64(color.g), Float64(color.b))
+    thr = _postfx_finite_float(threshold, "outline_pass threshold")
+    oc = (
+        _postfx_finite_float(color.r, "outline_pass color.r"),
+        _postfx_finite_float(color.g, "outline_pass color.g"),
+        _postfx_finite_float(color.b, "outline_pass color.b"),
+    )
     # Map a raw depth to a bounded finite value so Sobel differences are well
     # defined at silhouettes: Inf (background) → a large sentinel beyond any face.
-    @inline function dval(d)
-        isfinite(d) ? Float64(d) : 1.0e9
+    @inline function dval(d, value_scale)
+        (isfinite(d) ? Float64(d) : 1.0e9) * value_scale
     end
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "outline_pass")
@@ -2590,14 +2608,25 @@ function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=
             end
         end
         span = (isfinite(dmin) && dmax > dmin) ? (dmax - dmin) : 1.0
+        value_scale = 1.0
+        if isinf(span)
+            endpoint_scale = max(abs(dmin), abs(dmax))
+            value_scale = 1.0 / endpoint_scale
+            span = dmax * value_scale - dmin * value_scale
+        end
         invspan = 1.0 / span
         @inbounds for j in 2:W-1, i in 2:H-1
-            d11 = dval(depth[i-1,j-1]); d12 = dval(depth[i-1,j]); d13 = dval(depth[i-1,j+1])
-            d21 = dval(depth[i  ,j-1]);                            d23 = dval(depth[i  ,j+1])
-            d31 = dval(depth[i+1,j-1]); d32 = dval(depth[i+1,j]); d33 = dval(depth[i+1,j+1])
-            gx = (d13 + 2*d23 + d33) - (d11 + 2*d21 + d31)
-            gy = (d31 + 2*d32 + d33) - (d11 + 2*d12 + d13)
-            mag = sqrt(gx*gx + gy*gy) * 0.25 * invspan
+            d11 = dval(depth[i-1,j-1], value_scale)
+            d12 = dval(depth[i-1,j], value_scale)
+            d13 = dval(depth[i-1,j+1], value_scale)
+            d21 = dval(depth[i  ,j-1], value_scale)
+            d23 = dval(depth[i  ,j+1], value_scale)
+            d31 = dval(depth[i+1,j-1], value_scale)
+            d32 = dval(depth[i+1,j], value_scale)
+            d33 = dval(depth[i+1,j+1], value_scale)
+            gx = (d13 - d11) + 2 * (d23 - d21) + (d33 - d31)
+            gy = (d31 - d11) + 2 * (d32 - d12) + (d33 - d13)
+            mag = hypot(gx, gy) * 0.25 * invspan
             if mag > thr
                 out[i,j,1] = oc[1]; out[i,j,2] = oc[2]; out[i,j,3] = oc[3]
             end
@@ -2605,6 +2634,26 @@ function outline_pass(depth::AbstractMatrix; threshold::Real=0.1, color::Color3=
         return out
     end
 end
+
+@inline function _postfx_depth_normal(dc::Float64, dx::Float64, dy::Float64)
+    nx, ny = dc - dx, dc - dy
+    if isfinite(nx) && isfinite(ny)
+        n = normalize(Vec3(nx, ny, 1.0))
+        return n.x, n.y, n.z
+    end
+
+    # Opposite finite depths can have an unrepresentable direct difference.
+    # Scale the endpoints first; this preserves the normal direction.
+    scale = max(max(abs(dc), abs(dx)), max(abs(dy), 1.0))
+    n = normalize(Vec3(
+        dc / scale - dx / scale,
+        dc / scale - dy / scale,
+        1.0 / scale,
+    ))
+    return n.x, n.y, n.z
+end
+
+const _POSTFX_MAX_SSAO_SAMPLES = 4096
 
 """
     ssao_pass(depth; radius=1.0, intensity=1.0, samples=8)
@@ -2626,8 +2675,9 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
     # overflow on a NaN/Inf/huge radius (1e6 px exceeds any real SSAO kernel).
     r0 = Float64(radius)
     rad = isnan(r0) ? 1e-3 : clamp(r0, 1e-3, 1e6)
-    inten = clamp(Float64(intensity), 0.0, 1.0)
-    ns = max(Int(samples), 1)
+    inten = clamp(
+        _postfx_finite_float(intensity, "ssao_pass intensity"), 0.0, 1.0)
+    ns = clamp(samples, 1, _POSTFX_MAX_SSAO_SAMPLES)
     bias = 1e-4
     # Precompute fixed hemisphere sample offsets on the image-plane circle (in
     # pixels), distributed by angle with mild radial jitter for coverage. Fixed
@@ -2651,11 +2701,9 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
             # Reconstruct a view-space normal from the depth height field. The
             # surface (x=col, y=row, z=depth) has tangents (1,0,dz/dx),(0,1,dz/dy);
             # their cross product gives (-dz/dx, -dz/dy, 1) (smaller depth = nearer).
-            dzx = df(i, j+1); isnan(dzx) && (dzx = dc); dzx -= dc
-            dzy = df(i+1, j); isnan(dzy) && (dzy = dc); dzy -= dc
-            nx = -dzx; ny = -dzy; nz = 1.0
-            ninv = 1.0 / sqrt(nx*nx + ny*ny + nz*nz)
-            nx *= ninv; ny *= ninv; nz *= ninv
+            dx = df(i, j+1); isnan(dx) && (dx = dc)
+            dy = df(i+1, j); isnan(dy) && (dy = dc)
+            nx, ny, nz = _postfx_depth_normal(dc, dx, dy)
             occ = 0.0
             cnt = 0
             for s in 1:ns
@@ -2665,6 +2713,7 @@ function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0,
                 isnan(dN) && continue          # background neighbour: no occlusion
                 cnt += 1
                 Δ = dc - dN                    # >0 when neighbour is nearer (occluder)
+                isfinite(Δ) || continue         # infinite gap has zero range weight
                 if Δ > bias
                     # Project the (image-plane offset, depth delta) onto the normal:
                     # only count occluders sitting above the surface plane. Uses the
@@ -2707,7 +2756,8 @@ occlusion or partial-occlusion bleeding, which a CPU gather DoF cannot represent
 exactly.
 """
 function bokeh_pass(; focus_depth::Real, aperture::Real=0.02, depth::AbstractMatrix)
-    fd = Float64(focus_depth); ap = max(Float64(aperture), 0.0)
+    fd = _postfx_finite_float(focus_depth, "bokeh_pass focus_depth")
+    ap = max(_postfx_finite_float(aperture, "bokeh_pass aperture"), 0.0)
     maxr = 16                                  # cap CoC radius to bound work
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "bokeh_pass")
