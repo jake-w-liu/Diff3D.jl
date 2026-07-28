@@ -1423,7 +1423,7 @@ line3_at(l::Line3, t) = Vec3(
     return difference, scale, true
 end
 
-function _difference_direction_and_logscale(a::Vec3, b::Vec3)
+@inline function _difference_direction_and_logscale(a::Vec3, b::Vec3)
     dx, sx, has_x = _axis_difference(a.x, b.x)
     dy, sy, has_y = _axis_difference(a.y, b.y)
     dz, sz, has_z = _axis_difference(a.z, b.z)

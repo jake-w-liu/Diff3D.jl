@@ -22297,4 +22297,38 @@ end
             cube, Vec3(1.0, 0.0, 0.0), 0.5, 8)
     end
 
+    @testset "fresh audit round 123 fixes" begin
+        surface = Vec3(-1.0e308, 0.0, 0.0)
+        directional =
+            DirectionalLight(position=Vec3(1.0e308, 0.0, 0.0))
+        directional.target = surface
+        point = PointLight(
+            position=Vec3(1.0e308, 0.0, 0.0), decay=2.0)
+        spot = SpotLight(
+            position=Vec3(1.0e308, 0.0, 0.0),
+            target=Vec3(0.0, 0.0, 0.0), decay=2.0)
+        rectangle =
+            RectAreaLight(position=Vec3(1.0e308, 0.0, 0.0))
+
+        _, directional_intensity, directional_dir =
+            light_contribution(directional, surface)
+        _, point_intensity, point_dir =
+            light_contribution(point, surface)
+        _, spot_intensity, spot_dir =
+            light_contribution(spot, surface)
+        _, rectangle_intensity, rectangle_dir =
+            light_contribution(rectangle, surface)
+
+        @test directional_intensity == 1.0
+        @test directional_dir == Vec3(1.0, 0.0, 0.0)
+        @test point_intensity == 0.0
+        @test point_dir == Vec3(1.0, 0.0, 0.0)
+        @test spot_intensity == 0.0
+        @test spot_dir == Vec3(1.0, 0.0, 0.0)
+        @test rectangle_intensity == 1.0
+        @test rectangle_dir == Vec3(1.0, 0.0, 0.0)
+        @test_opt_alloc 64 Diff3D._light_direction_and_distance(
+            surface, Vec3(1.0e308, 0.0, 0.0))
+    end
+
 end

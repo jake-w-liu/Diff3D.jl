@@ -1998,19 +1998,49 @@ end
 
 # ========================== Light contribution ==========================
 
+@inline _finite_light_vec3(v::Vec3) =
+    isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
+
+@inline function _light_direction_and_distance(from::Vec3, to::Vec3)
+    displacement = to - from
+    distance = norm(displacement)
+    if _finite_light_vec3(displacement)
+        return isfinite(distance) ?
+            (displacement / max(distance, 1e-10), distance) :
+            (normalize(displacement), distance)
+    end
+
+    # Subtracting finite positions with opposite extreme signs can overflow a
+    # component even though their direction remains well-defined. Recover the
+    # direction from scaled component differences; the distance may correctly
+    # remain infinite when its mathematical value exceeds Float64's range.
+    if _finite_light_vec3(from) && _finite_light_vec3(to)
+        scaled, logscale, nonzero =
+            _difference_direction_and_logscale(from, to)
+        if nonzero
+            scaled_norm = norm(scaled)
+            direction = scaled / scaled_norm
+            distance = exp(logscale + log(scaled_norm))
+            return direction, distance
+        end
+    end
+
+    # Preserve invalid-input propagation for non-finite light or surface data.
+    return displacement / max(distance, 1e-10), distance
+end
+
 function light_contribution(light::AmbientLight, position::Vec3)
     (light.color, light.intensity, Vec3(0.0, 1.0, 0.0))
 end
 
 function light_contribution(light::DirectionalLight, position::Vec3)
-    dir = normalize(light.position - light.target)
+    dir, _ = _light_direction_and_distance(light.target, light.position)
     (light.color, light.intensity, dir)
 end
 
 function light_contribution(light::PointLight, position::Vec3)
-    diff = light.position - position
-    dist = norm(diff)
-    dir = diff / max(dist, 1e-10)
+    dir, dist =
+        _light_direction_and_distance(position, light.position)
     attenuation = if light.distance > 0
         factor = max(1.0 - (dist / light.distance)^2, 0.0)
         factor / max(dist^light.decay, 1e-10)
@@ -2037,15 +2067,14 @@ function light_contribution(light::PointLight, position::Vec3)
 end
 
 function light_contribution(light::SpotLight, position::Vec3)
-    diff = light.position - position
-    dist = norm(diff)
-    dir = diff / max(dist, 1e-10)
+    dir, dist =
+        _light_direction_and_distance(position, light.position)
 
     # Spot cone
-    target_dir = normalize(light.target - light.position)
-    cos_angle = dot(-dir, target_dir)  # note: dir points toward light
-    # Actually: dir points from surface to light, target_dir points from light to target
-    cos_angle = dot(normalize(position - light.position), target_dir)
+    target_dir, _ =
+        _light_direction_and_distance(light.position, light.target)
+    # dir points from surface to light, so -dir points from light to surface.
+    cos_angle = dot(-dir, target_dir)
     cos_outer = cos(light.angle)
     cos_inner = cos(light.angle * (1 - light.penumbra))
 
@@ -2075,8 +2104,8 @@ function light_contribution(light::HemisphereLight, position::Vec3)
 end
 
 function light_contribution(light::RectAreaLight, position::Vec3)
-    diff = light.position - position
-    dir = diff / max(norm(diff), 1e-10)
+    dir, _ =
+        _light_direction_and_distance(position, light.position)
     (light.color, light.intensity, dir)
 end
 
