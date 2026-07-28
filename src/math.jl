@@ -196,7 +196,7 @@ function mat4_multiply(a::Mat4, b::Mat4)
     be = b.e
     # Build the product tuple directly so repeated Mat4 multiplies do not pay for
     # the closure allocation inherent in the previous `ntuple` implementation.
-    Mat4{T}((
+    result = Mat4{T}((
         ae[1]*be[1]  + ae[5]*be[2]  + ae[9]*be[3]   + ae[13]*be[4],
         ae[2]*be[1]  + ae[6]*be[2]  + ae[10]*be[3]  + ae[14]*be[4],
         ae[3]*be[1]  + ae[7]*be[2]  + ae[11]*be[3]  + ae[15]*be[4],
@@ -217,6 +217,12 @@ function mat4_multiply(a::Mat4, b::Mat4)
         ae[3]*be[13] + ae[7]*be[14] + ae[11]*be[15] + ae[15]*be[16],
         ae[4]*be[13] + ae[8]*be[14] + ae[12]*be[15] + ae[16]*be[16],
     ))
+    if result.e[1] isa AbstractFloat &&
+       !all(isfinite, result.e) &&
+       all(isfinite, ae) && all(isfinite, be)
+        return _stable_float_mat4_product(a, b)
+    end
+    return result
 end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
@@ -1055,6 +1061,32 @@ end
         _stable_float_mat4_row(m, 3, v),
         _stable_float_mat4_row(m, 4, v),
     )
+end
+
+@inline function _stable_float_mat4_product(a::Mat4, b::Mat4)
+    be = b.e
+    column1 = Vec4(be[1], be[2], be[3], be[4])
+    column2 = Vec4(be[5], be[6], be[7], be[8])
+    column3 = Vec4(be[9], be[10], be[11], be[12])
+    column4 = Vec4(be[13], be[14], be[15], be[16])
+    return Mat4((
+        _stable_float_mat4_row(a, 1, column1),
+        _stable_float_mat4_row(a, 2, column1),
+        _stable_float_mat4_row(a, 3, column1),
+        _stable_float_mat4_row(a, 4, column1),
+        _stable_float_mat4_row(a, 1, column2),
+        _stable_float_mat4_row(a, 2, column2),
+        _stable_float_mat4_row(a, 3, column2),
+        _stable_float_mat4_row(a, 4, column2),
+        _stable_float_mat4_row(a, 1, column3),
+        _stable_float_mat4_row(a, 2, column3),
+        _stable_float_mat4_row(a, 3, column3),
+        _stable_float_mat4_row(a, 4, column3),
+        _stable_float_mat4_row(a, 1, column4),
+        _stable_float_mat4_row(a, 2, column4),
+        _stable_float_mat4_row(a, 3, column4),
+        _stable_float_mat4_row(a, 4, column4),
+    ))
 end
 
 @inline function _stable_float_plane_distance(p::Plane, pt::Vec3)
