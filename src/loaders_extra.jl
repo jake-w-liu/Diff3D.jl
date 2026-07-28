@@ -8160,24 +8160,45 @@ function _gltf_checked_declared_byte_length(raw, label::String)
         return Int(raw)
     end
     raw isa Real || error("$label byteLength must be an integer")
-    value = Float64(raw)
-    isfinite(value) && value == floor(value) ||
+    valid_integer = try
+        isfinite(raw) && isinteger(raw)
+    catch
+        false
+    end
+    valid_integer ||
         error("$label byteLength must be an integer")
-    value >= 0 || error("$label byteLength must be non-negative")
-    value <= prevfloat(Float64(typemax(Int))) ||
+    raw >= 0 || error("$label byteLength must be non-negative")
+    raw <= typemax(Int) ||
         error("$label byteLength is outside the supported integer range")
-    return Int(value)
+    try
+        return Int(raw)
+    catch
+        error("$label byteLength is outside the supported integer range")
+    end
 end
 
 function _gltf_checked_integer(raw, label::String)
     raw isa Bool && error("glTF $label must be an integer")
+    if raw isa Integer
+        typemin(Int) <= raw <= typemax(Int) ||
+            error("glTF $label is outside the supported integer range")
+        return Int(raw)
+    end
     raw isa Real || error("glTF $label must be an integer")
-    value = Float64(raw)
-    isfinite(value) && value == floor(value) ||
+    valid_integer = try
+        isfinite(raw) && isinteger(raw)
+    catch
+        false
+    end
+    valid_integer ||
         error("glTF $label must be an integer")
-    Float64(typemin(Int)) <= value <= prevfloat(Float64(typemax(Int))) ||
+    typemin(Int) <= raw <= typemax(Int) ||
         error("glTF $label is outside the supported integer range")
-    return Int(value)
+    try
+        return Int(raw)
+    catch
+        error("glTF $label is outside the supported integer range")
+    end
 end
 
 function _gltf_checked_nonnegative_integer(raw, label::String)

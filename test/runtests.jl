@@ -20842,4 +20842,34 @@ end
         end
     end
 
+    @testset "fresh audit round 72 fixes" begin
+        exact_large_int = Int(2)^53 + 1
+        @test Diff3D._gltf_checked_integer(
+            exact_large_int, "test") == exact_large_int
+        @test Diff3D._gltf_checked_integer(
+            big(exact_large_int), "test") == exact_large_int
+        @test Diff3D._gltf_checked_integer(
+            exact_large_int // 1, "test") == exact_large_int
+        @test Diff3D._gltf_checked_integer(
+            typemax(Int), "test") == typemax(Int)
+        @test Diff3D._gltf_checked_integer(
+            typemin(Int), "test") == typemin(Int)
+        @test_throws "outside the supported integer range" Diff3D._gltf_checked_integer(
+            big(typemax(Int)) + 1, "test")
+        @test_throws "outside the supported integer range" Diff3D._gltf_checked_integer(
+            Float64(typemax(Int)), "test")
+        @test_throws "must be an integer" Diff3D._gltf_checked_integer(
+            1 // 2, "test")
+        @test_throws "must be an integer" Diff3D._gltf_checked_integer(
+            NaN, "test")
+
+        @test Diff3D._gltf_checked_declared_byte_length(
+            exact_large_int, "glTF buffer") == exact_large_int
+        @test Diff3D._gltf_checked_declared_byte_length(
+            exact_large_int // 1, "glTF buffer") == exact_large_int
+        @test_throws "outside the supported integer range" Diff3D._gltf_checked_declared_byte_length(
+            big(typemax(Int)) + 1, "glTF buffer")
+        @test_opt_alloc 0 Diff3D._gltf_checked_integer(1, "test")
+    end
+
 end
