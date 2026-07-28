@@ -130,16 +130,18 @@ Returns Vector{Color3} with one color per face.
 @inline function _flat_face_normal(geo::BufferGeometry, i1, i2, i3,
                                    v1::Vec3, v2::Vec3, v3::Vec3,
                                    normal_mat::Mat4, has_normals::Bool)
-    geo_n = cross(v2 - v1, v3 - v1)
     if has_normals
-        n = mat4_transform_direction(normal_mat, get_normal(geo, i1)) +
-            mat4_transform_direction(normal_mat, get_normal(geo, i2)) +
-            mat4_transform_direction(normal_mat, get_normal(geo, i3))
+        n = _mean3_vec3(
+            mat4_transform_direction(normal_mat, get_normal(geo, i1)),
+            mat4_transform_direction(normal_mat, get_normal(geo, i2)),
+            mat4_transform_direction(normal_mat, get_normal(geo, i3)),
+        )
         nl = norm(n)
-        nl > 1e-12 && return n / nl
+        nl > 1e-12 && return normalize(n)
     end
-    gl = norm(geo_n)
-    return gl > 1e-12 ? geo_n / gl : Vec3(0.0, 0.0, 1.0)
+    tri = Triangle(v1, v2, v3)
+    return triangle_area(tri) > 5e-13 ?
+        triangle_normal(tri) : Vec3(0.0, 0.0, 1.0)
 end
 
 # Optional material texture field (nothing if the material has no such map).

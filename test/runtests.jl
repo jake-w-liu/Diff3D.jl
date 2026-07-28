@@ -22782,4 +22782,37 @@ end
             overflowing_edges)
     end
 
+    @testset "fresh audit round 146 fixes" begin
+        largest = floatmax(Float64)
+        geometry = BufferGeometry(
+            [0.0, 0.0, 0.0,
+             0.0, 1.0, 0.0,
+             0.0, 0.0, 1.0],
+            repeat([1.0, 0.0, 0.0], 3),
+            Float64[], [1, 2, 3], 3, 1)
+        v1 = get_vertex(geometry, 1)
+        v2 = get_vertex(geometry, 2)
+        v3 = get_vertex(geometry, 3)
+        normal_matrix = Diff3D.mat4_scaling(
+            largest, 1.0, 1.0)
+        @test Diff3D._flat_face_normal(
+            geometry, 1, 2, 3, v1, v2, v3,
+            normal_matrix, true) == Vec3(1.0, 0.0, 0.0)
+
+        extreme_v1 = Vec3(0.0, -largest, -largest)
+        extreme_v2 = Vec3(0.0, largest, -largest)
+        extreme_v3 = Vec3(0.0, -largest, largest)
+        @test Diff3D._flat_face_normal(
+            geometry, 1, 2, 3,
+            extreme_v1, extreme_v2, extreme_v3,
+            Mat4(), false) == Vec3(1.0, 0.0, 0.0)
+        @test_opt_alloc 0 Diff3D._flat_face_normal(
+            geometry, 1, 2, 3, v1, v2, v3,
+            normal_matrix, true)
+        @test_opt_alloc 0 Diff3D._flat_face_normal(
+            geometry, 1, 2, 3,
+            extreme_v1, extreme_v2, extreme_v3,
+            Mat4(), false)
+    end
+
 end
