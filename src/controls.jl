@@ -692,7 +692,10 @@ abstract type AbstractKeyframeTrack end
 
 function _validate_keyframe_times(kind::AbstractString, times::Vector{Float64})
     isempty(times) && throw(ArgumentError("$kind requires at least one keyframe"))
-    for i in 2:length(times)
+    for i in eachindex(times)
+        isfinite(times[i]) ||
+            throw(ArgumentError("$kind times must be finite"))
+        i == firstindex(times) && continue
         times[i] > times[i - 1] ||
             throw(ArgumentError("$kind times must be strictly increasing"))
     end

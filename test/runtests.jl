@@ -22534,4 +22534,21 @@ end
             largest, 2.0, largest)
     end
 
+    @testset "fresh audit round 134 fixes" begin
+        object = Object3D()
+        values = [Vec3(), Vec3(1.0, 0.0, 0.0)]
+        @test_throws ArgumentError KeyframeTrack(
+            object, :position, [-Inf, 0.0], values)
+        @test_throws ArgumentError KeyframeTrack(
+            object, :position, [0.0, Inf], values)
+        @test_throws ArgumentError NumberKeyframeTrack(
+            object, :position, [0.0, NaN], [0.0, 1.0])
+
+        finite_times = [0.0, 1.0]
+        @test Diff3D._validate_keyframe_times(
+            "test", finite_times) === nothing
+        @test_opt_alloc 0 Diff3D._validate_keyframe_times(
+            "test", finite_times)
+    end
+
 end
