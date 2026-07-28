@@ -859,7 +859,8 @@ end
 function _equirectangular_uv(dir::Vec3)
     n = norm(dir)
     n > 0 || return (0.5, 0.5)
-    x, y, z = dir.x / n, dir.y / n, dir.z / n
+    unit = normalize(dir)
+    x, y, z = unit.x, unit.y, unit.z
     u = 0.5 + atan(z, x) / (2pi)
     v = 0.5 + asin(clamp(y, -1.0, 1.0)) / pi
     return (u, v)

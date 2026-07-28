@@ -22331,4 +22331,15 @@ end
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
+    @testset "fresh audit round 124 fixes" begin
+        @test Diff3D._equirectangular_uv(
+            Vec3(1.7e308, 0.0, 1.7e308)) ==
+              (0.625, 0.5)
+        @test Diff3D._equirectangular_uv(
+            Vec3(1.7e308, 1.7e308, 0.0)) ==
+              (0.5, 0.75)
+        @test_opt_alloc 0 Diff3D._equirectangular_uv(
+            Vec3(1.7e308, 0.0, 1.7e308))
+    end
+
 end
