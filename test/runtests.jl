@@ -22252,4 +22252,37 @@ end
             max_aniso=8)
     end
 
+    @testset "fresh audit round 121 fixes" begin
+        smallest = nextfloat(0.0)
+        texture = Texture(
+            fill(smallest, 2, 2, 1);
+            filter=:bilinear, colorspace=:linear)
+        @test sample_texture(
+            texture, 0.5, 0.5) ==
+              Color3(smallest, smallest, smallest)
+        @test Diff3D.sample_texture_channel(
+            texture, 0.5, 0.5, 1) == smallest
+
+        gradient_texture = Texture(
+            reshape([0.0, 1.0], 1, 2, 1);
+            filter=:bilinear, colorspace=:linear)
+        @test ForwardDiff.derivative(
+            u -> sample_texture(
+                gradient_texture, u, 0.5).r,
+            0.25,
+        ) == 2.0
+        @test ForwardDiff.derivative(
+            t -> Diff3D.lerp(
+                Vec3(), Vec3(1.0, 0.0, 0.0), t).x,
+            0.0,
+        ) == 1.0
+        @test reverse_gradient(
+            x -> Diff3D.lerp(
+                Vec3(), Vec3(1.0, 0.0, 0.0), x[1]).x,
+            [0.0],
+        ) == [1.0]
+        @test_opt_alloc 0 sample_texture(
+            texture, 0.5, 0.5)
+    end
+
 end

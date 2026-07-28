@@ -90,8 +90,13 @@ function normalize(a::Vec3)
 end
 
 @inline function _stable_lerp(a, b, t)
-    iszero(t) && return a
-    t == one(t) && return b
+    # Constant endpoint parameters can return the endpoint exactly. AD
+    # parameters must still execute the interpolation so their endpoint
+    # derivative is retained.
+    constant_parameter =
+        t isa AbstractFloat || t isa Integer || t isa Rational
+    constant_parameter && iszero(t) && return a
+    constant_parameter && t == one(t) && return b
     result = if (a >= zero(a) && b >= zero(b)) ||
                 (a <= zero(a) && b <= zero(b))
         a + (b - a) * t

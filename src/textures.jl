@@ -420,6 +420,14 @@ end
     return _sanitize_uv(u), _sanitize_uv(v)
 end
 
+@inline function _stable_color_lerp(a::Color3, b::Color3, t)
+    return Color3(
+        _stable_lerp(a.r, b.r, t),
+        _stable_lerp(a.g, b.g, t),
+        _stable_lerp(a.b, b.b, t),
+    )
+end
+
 function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
                               filter::Symbol, u, v, label::String)
     H, W, _ = _checked_texture_data_size(data, label)
@@ -439,9 +447,9 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     c10 = _texel_data(data, wrap_s, wrap_t, x0+1, y0)
     c01 = _texel_data(data, wrap_s, wrap_t, x0,   y0+1)
     c11 = _texel_data(data, wrap_s, wrap_t, x0+1, y0+1)
-    top = c00 * (1 - tx) + c10 * tx
-    bot = c01 * (1 - tx) + c11 * tx
-    return top * (1 - ty) + bot * ty
+    top = _stable_color_lerp(c00, c10, tx)
+    bottom = _stable_color_lerp(c01, c11, tx)
+    return _stable_color_lerp(top, bottom, ty)
 end
 
 function sample_texture(tex::Texture, u, v)
@@ -487,9 +495,9 @@ function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     c10 = _texel_channel(tex, x0+1, y0,   channel, default)
     c01 = _texel_channel(tex, x0,   y0+1, channel, default)
     c11 = _texel_channel(tex, x0+1, y0+1, channel, default)
-    top = c00 * (1 - tx) + c10 * tx
-    bot = c01 * (1 - tx) + c11 * tx
-    return top * (1 - ty) + bot * ty
+    top = _stable_lerp(c00, c10, tx)
+    bottom = _stable_lerp(c01, c11, tx)
+    return _stable_lerp(top, bottom, ty)
 end
 
 """
@@ -682,7 +690,7 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
     frac <= 0 && return c0                      # exactly on a level
     c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter)
-    return c0 * (1 - frac) + c1 * frac
+    return _stable_color_lerp(c0, c1, frac)
 end
 
 """
@@ -770,11 +778,7 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
     @inbounds for k in 1:(N - 1)
         sample = probe(k)
         weight = 1.0 / (k + 1)
-        average = Color3(
-            _stable_lerp(average.r, sample.r, weight),
-            _stable_lerp(average.g, sample.g, weight),
-            _stable_lerp(average.b, sample.b, weight),
-        )
+        average = _stable_color_lerp(average, sample, weight)
     end
     return average
 end
@@ -828,7 +832,7 @@ function sample_cube_lod(ct::CubeTexture, dir::Vec3, lod)
     c0 = sample_texture_lod(tex, u, v, l0)
     frac <= 0 && return c0
     c1 = sample_texture_lod(tex, u, v, min(l0 + 1, nlevels))
-    return c0 * (1 - frac) + c1 * frac
+    return _stable_color_lerp(c0, c1, frac)
 end
 
 function _cube_face_direction(face::Int, u::Float64, v::Float64)
@@ -1008,7 +1012,7 @@ function sample_pmrem(pmrem::PMREM, dir::Vec3, roughness)
     c0 = sample_cube(pmrem.levels[l0 + 1], dir)
     frac <= 0.0 && return c0
     c1 = sample_cube(pmrem.levels[min(l0 + 1, n - 1) + 1], dir)
-    return c0 * (1.0 - frac) + c1 * frac
+    return _stable_color_lerp(c0, c1, frac)
 end
 
 # ========================== Procedural textures ==========================
