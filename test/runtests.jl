@@ -22989,4 +22989,20 @@ end
             largest, largest)
     end
 
+    @testset "fresh audit round 154 fixes" begin
+        too_many = Diff3D._GEOMETRY_MAX_SUBDIVISIONS + 1
+        @test_throws ArgumentError Diff3D._font_curve_segments(
+            too_many)
+        @test_throws ArgumentError Diff3D._svg_curve_segments(
+            too_many)
+        @test_throws ArgumentError Diff3D._svg_circle_segments(
+            too_many)
+        @test Diff3D._font_curve_segments(8) == 8
+        @test Diff3D._svg_curve_segments(8) == 8
+        @test Diff3D._svg_circle_segments(8) == 8
+        @test_opt_alloc 0 Diff3D._font_curve_segments(8)
+        @test_opt_alloc 0 Diff3D._svg_curve_segments(8)
+        @test_opt_alloc 0 Diff3D._svg_circle_segments(8)
+    end
+
 end

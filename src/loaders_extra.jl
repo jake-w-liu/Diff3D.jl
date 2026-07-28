@@ -2955,7 +2955,7 @@ end
 
 function _font_curve_segments(curve_segments::Integer)
     curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
-    curve_segments <= typemax(Int) ||
+    curve_segments <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError("curve_segments is too large"))
     return Int(curve_segments)
 end
@@ -4727,14 +4727,14 @@ end
 
 function _svg_curve_segments(curve_segments::Integer)
     curve_segments > 0 || throw(ArgumentError("curve_segments must be positive"))
-    curve_segments <= typemax(Int) ||
+    curve_segments <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError("curve_segments is too large"))
     return Int(curve_segments)
 end
 
 function _svg_circle_segments(circle_segments::Integer)
     circle_segments >= 3 || throw(ArgumentError("circle_segments must be at least 3"))
-    circle_segments <= typemax(Int) ||
+    circle_segments <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError("circle_segments is too large"))
     return Int(circle_segments)
 end
