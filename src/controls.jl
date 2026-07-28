@@ -1389,19 +1389,24 @@ end
 function _quat_to_euler_xyz(q::Quaternion)
     qn = quat_normalize(q)
     x, y, z, w = qn.x, qn.y, qn.z, qn.w
-    m13 = 2*(x*z + w*y)
+    # Correct the small residual norm error left by floating-point
+    # normalization. The scale-invariant matrix terms also make exact gimbal
+    # rotations stable when their glTF components originated as Float32.
+    norm2 = x*x + y*y + z*z + w*w
+    scale = (one(norm2) + one(norm2)) / norm2
+    m13 = scale * (x*z + w*y)
     m13c = clamp(m13, -one(m13), one(m13))
     ey = asin(m13c)
     if abs(m13) < 0.9999999
-        m23 = 2*(y*z - w*x)
-        m33 = 1 - 2*(x*x + y*y)
-        m12 = 2*(x*y - w*z)
-        m11 = 1 - 2*(y*y + z*z)
+        m23 = scale * (y*z - w*x)
+        m33 = one(scale) - scale * (x*x + y*y)
+        m12 = scale * (x*y - w*z)
+        m11 = one(scale) - scale * (y*y + z*z)
         ex = atan(-m23, m33)
         ez = atan(-m12, m11)
     else                                   # gimbal lock
-        m32 = 2*(y*z + w*x)
-        m22 = 1 - 2*(x*x + z*z)
+        m32 = scale * (y*z + w*x)
+        m22 = one(scale) - scale * (x*x + z*z)
         ex = atan(m32, m22)
         ez = zero(ey)
     end
