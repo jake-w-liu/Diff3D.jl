@@ -13005,7 +13005,10 @@ end
                 function add_f32_accessor(data, typ, item_size)
                     offset = length(buf)
                     append!(buf, reinterpret(UInt8, Float32.(data)))
-                    push!(views, Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(offset)))
+                    push!(views, Dict{String,Any}(
+                        "buffer"=>0.0,
+                        "byteOffset"=>Float64(offset),
+                        "byteLength"=>length(buf) - offset))
                     push!(accessors, Dict{String,Any}("bufferView"=>Float64(length(views)-1),
                                                       "componentType"=>5126.0,
                                                       "count"=>Float64(length(data) ÷ item_size),
@@ -13065,8 +13068,12 @@ end
                                                                         "TEXCOORD_0"=>1.0),
                                          "material"=>0.0)])],
                     "bufferViews"=>[
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0),
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(pos_len))],
+                        Dict{String,Any}(
+                            "buffer"=>0.0, "byteOffset"=>0.0,
+                            "byteLength"=>pos_len),
+                        Dict{String,Any}(
+                            "buffer"=>0.0, "byteOffset"=>Float64(pos_len),
+                            "byteLength"=>length(buf) - pos_len)],
                     "accessors"=>[
                         Dict{String,Any}("bufferView"=>0.0, "componentType"=>5126.0,
                                          "count"=>3.0, "type"=>"VEC3"),
@@ -13156,8 +13163,12 @@ end
                                          "mode"=>0.0,
                                          "material"=>0.0)])],
                     "bufferViews"=>[
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0),
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(pos_len))],
+                        Dict{String,Any}(
+                            "buffer"=>0.0, "byteOffset"=>0.0,
+                            "byteLength"=>pos_len),
+                        Dict{String,Any}(
+                            "buffer"=>0.0, "byteOffset"=>Float64(pos_len),
+                            "byteLength"=>length(buf) - pos_len)],
                     "accessors"=>[
                         Dict{String,Any}("bufferView"=>0.0, "componentType"=>5126.0,
                                          "count"=>2.0, "type"=>"VEC3"),
