@@ -7,11 +7,16 @@
 # ========================== Tone mapping / sRGB ==========================
 
 """Reinhard tone map `c/(1+c)`, mapping HDR radiance into [0,1)."""
+@inline function _tone_map_reinhard_value(value)
+    x = Float64(value)
+    xc = x <= 0.0 ? 0.0 : x
+    return xc == Inf ? 1.0 : xc / (1 + xc)
+end
+
 function tone_map_reinhard(img::AbstractArray)
     out = Array{Float64}(undef, size(img))
     @inbounds for i in eachindex(img)
-        c = Float64(img[i])
-        out[i] = c == Inf ? 1.0 : c / (1 + c)   # limit c->Inf is 1, not Inf/Inf=NaN
+        out[i] = _tone_map_reinhard_value(img[i])
     end
     return out
 end

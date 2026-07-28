@@ -22627,4 +22627,13 @@ end
         @test_opt_alloc 0 Diff3D._tone_map_aces_value(largest)
     end
 
+    @testset "fresh audit round 140 fixes" begin
+        negative = reshape([-2.0, -1.0, -0.5], 1, 1, 3)
+        @test tone_map_reinhard(negative) == zeros(1, 1, 3)
+        @test Diff3D._tone_map_reinhard_value(-Inf) == 0.0
+        @test Diff3D._tone_map_reinhard_value(Inf) == 1.0
+        @test_opt_alloc 0 Diff3D._tone_map_reinhard_value(
+            floatmax(Float64))
+    end
+
 end
