@@ -22918,4 +22918,24 @@ end
             1:ordinary.n_vertices)
     end
 
+    @testset "fresh audit round 151 fixes" begin
+        scale = 1.0e150
+        points = [
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(scale, 0.0, 0.0),
+            Vec3(0.0, scale, 0.0),
+            Vec3(0.0, 0.0, scale),
+        ]
+        geometry = ConvexGeometry(points)
+        @test geometry.n_faces == 4
+        @test geometry.n_vertices == 12
+        @test all(isfinite, geometry.normals)
+        @test all(
+            i -> norm(get_normal(geometry, i)) ≈ 1.0,
+            1:geometry.n_vertices)
+        bounds = compute_bounding_box(geometry)
+        @test bounds.min == Vec3(0.0, 0.0, 0.0)
+        @test bounds.max == Vec3(scale, scale, scale)
+    end
+
 end

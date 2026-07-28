@@ -141,25 +141,49 @@ end
 
 function _convex_clean_points(points::AbstractVector{<:Vec3})
     raw = Vector{Vec3{Float64}}(undef, length(points))
-    out = 0
-    for p in points
-        out += 1
+    for (i, p) in pairs(points)
         q = Vec3(_geometry_finite_float(p.x, "ConvexGeometry points"),
                  _geometry_finite_float(p.y, "ConvexGeometry points"),
                  _geometry_finite_float(p.z, "ConvexGeometry points"))
-        raw[out] = q
+        raw[i] = q
     end
     isempty(raw) && throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
     scale = max(1.0, maximum(max(abs(p.x), abs(p.y), abs(p.z)) for p in raw))
-    eps = 1e-9 * scale
-    deduped = Vec3{Float64}[]
-    sizehint!(deduped, length(raw))
-    for p in raw
-        any(q -> norm(p - q) <= eps, deduped) || push!(deduped, p)
+    eps = 1e-9
+
+    # Compact the original points in place. Comparing after a uniform scale
+    # keeps distance calculations finite while preserving the previous
+    # scale-relative duplicate tolerance.
+    out = 0
+    for read_index in eachindex(raw)
+        p = raw[read_index]
+        p_scaled = p / scale
+        duplicate = false
+        for existing_index in 1:out
+            q_scaled = raw[existing_index] / scale
+            if norm(p_scaled - q_scaled) <= eps
+                duplicate = true
+                break
+            end
+        end
+        if !duplicate
+            out += 1
+            raw[out] = p
+        end
     end
-    length(deduped) >= 4 ||
+    resize!(raw, out)
+    length(raw) >= 4 ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    return deduped, eps
+
+    # All hull predicates run in this normalized coordinate system. Convex
+    # incidence and winding are invariant under a positive uniform scale, and
+    # values bounded by one cannot overflow cross products, volume tests, or
+    # face-centroid sums. The original coordinates remain available for output.
+    normalized = Vector{Vec3{Float64}}(undef, length(raw))
+    for i in eachindex(raw)
+        normalized[i] = raw[i] / scale
+    end
+    return raw, normalized, eps
 end
 
 function _convex_has_volume(points::Vector{Vec3{Float64}}, eps::Float64)
@@ -290,10 +314,10 @@ Build a flat-shaded triangle `BufferGeometry` for the convex hull of a
 non-coplanar 3D point set.
 """
 function ConvexGeometry(points::AbstractVector{<:Vec3})
-    clean, eps = _convex_clean_points(points)
-    _convex_has_volume(clean, eps) ||
+    clean, normalized, eps = _convex_clean_points(points)
+    _convex_has_volume(normalized, eps) ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    support_faces = _convex_support_faces(clean, eps)
+    support_faces = _convex_support_faces(normalized, eps)
     isempty(support_faces) &&
         throw(ArgumentError("ConvexGeometry could not find hull support faces"))
 
@@ -301,7 +325,8 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     sizehint!(hulls, length(support_faces))
     n_faces = 0
     for (face_indices, normal) in support_faces
-        hull = _convex_face_hull(clean, face_indices, normal, eps)
+        hull = _convex_face_hull(
+            normalized, face_indices, normal, eps)
         length(hull) >= 3 || continue
         push!(hulls, (hull, normal))
         n_faces = _geometry_checked_add(
@@ -324,11 +349,7 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
             p1 = origin
             p2 = clean[hull[k]]
             p3 = clean[hull[k + 1]]
-            face_normal = normalize(cross(p2 - p1, p3 - p1))
-            if dot(face_normal, normal) < 0.0
-                p2, p3 = p3, p2
-                face_normal = -face_normal
-            end
+            face_normal = normal
             for p in (p1, p2, p3)
                 vi += 1
                 pbase = 3vi - 2
