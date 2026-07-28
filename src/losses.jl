@@ -36,17 +36,20 @@ end
 
 function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_mse")
-    total = zero(promote_type(T, S))
-    n = H * W * C
+    average = zero(promote_type(T, S))
+    count = 0
     for c in 1:C
         for j in 1:W
             for i in 1:H
                 d = image[i, j, c] - target[i, j, c]
-                total += d * d
+                term = d * d
+                count += 1
+                average = count == 1 ? term :
+                    _stable_lerp(average, term, one(term) / count)
             end
         end
     end
-    return total / n
+    return average
 end
 
 """
@@ -54,16 +57,19 @@ L1 loss between two images.
 """
 function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_l1")
-    total = zero(promote_type(T, S))
-    n = H * W * C
+    average = zero(promote_type(T, S))
+    count = 0
     for c in 1:C
         for j in 1:W
             for i in 1:H
-                total += abs(image[i, j, c] - target[i, j, c])
+                term = abs(image[i, j, c] - target[i, j, c])
+                count += 1
+                average = count == 1 ? term :
+                    _stable_lerp(average, term, one(term) / count)
             end
         end
     end
-    return total / n
+    return average
 end
 
 """

@@ -22372,4 +22372,23 @@ end
         @test_opt_alloc 0 Diff3D._validated_stereo_eye_sep(0.064)
     end
 
+    @testset "fresh audit round 127 fixes" begin
+        largest = floatmax(Float64)
+        zeros_image = zeros(1, 2, 1)
+        l1_image = fill(largest, 1, 2, 1)
+        @test loss_l1(l1_image, zeros_image) == largest
+
+        mse_value = sqrt(largest * 0.75)
+        mse_image = fill(mse_value, 1, 2, 1)
+        @test loss_mse(mse_image, zeros_image) ==
+              mse_value * mse_value
+        @test ForwardDiff.derivative(
+            x -> loss_mse(
+                reshape([x, x], 1, 2, 1), zeros_image),
+            2.0,
+        ) == 4.0
+        @test_opt_alloc 0 loss_l1(l1_image, zeros_image)
+        @test_opt_alloc 0 loss_mse(mse_image, zeros_image)
+    end
+
 end
