@@ -22221,4 +22221,21 @@ end
         @test_opt_alloc 0 left * right
     end
 
+    @testset "fresh audit round 119 fixes" begin
+        a = Vec3(1.0e308, 1.0e308, 0.0)
+        b = Vec3(prevfloat(1.0), 1.0, 0.0)
+        expected = Float64(
+            BigFloat(a.x) * BigFloat(b.y) -
+            BigFloat(a.y) * BigFloat(b.x))
+        @test cross(a, b) == Vec3(0.0, 0.0, expected)
+
+        @test ForwardDiff.derivative(
+            x -> cross(
+                Vec3(x, 0.0, 0.0),
+                Vec3(0.0, 2.0, 0.0)).z,
+            1.0,
+        ) == 2.0
+        @test_opt_alloc 0 cross(a, b)
+    end
+
 end

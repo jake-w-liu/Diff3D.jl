@@ -66,18 +66,11 @@ function dot(a::Vec3, b::Vec3)
 end
 
 function cross(a::Vec3, b::Vec3)
-    result = Vec3(
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x,
+    return Vec3(
+        _float_product_difference(a.y, b.z, a.z, b.y),
+        _float_product_difference(a.z, b.x, a.x, b.z),
+        _float_product_difference(a.x, b.y, a.y, b.x),
     )
-    if result.x isa AbstractFloat &&
-       !(isfinite(result.x) && isfinite(result.y) && isfinite(result.z)) &&
-       isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
-       isfinite(b.x) && isfinite(b.y) && isfinite(b.z)
-        return _stable_float_cross(a, b)
-    end
-    return result
 end
 @inline _norm3(x, y, z) = hypot(x, y, z)
 @inline _norm4(x, y, z, w) = hypot(x, y, z, w)
@@ -1073,6 +1066,52 @@ end
     return (a - (result - residual)) + (b - residual)
 end
 
+@inline function _float_product_difference(a, b, c, d)
+    product1 = a * b
+    product2 = c * d
+    result = product1 - product2
+    if result isa AbstractFloat &&
+       isfinite(a) && isfinite(b) && isfinite(c) && isfinite(d) &&
+       _float_dot_needs_fallback(
+           result,
+           max(abs(product1), abs(product2)),
+           (!iszero(a) && !iszero(b)) ||
+           (!iszero(c) && !iszero(d)),
+           2,
+       )
+        return _stable_float_product_difference(a, b, c, d)
+    end
+    return result
+end
+
+@inline function _stable_float_product_difference(a, b, c, d)
+    a, b, c, d = promote(a, b, c, d)
+    product1 = a * b
+    product2 = c * d
+    result = product1 - product2
+    products_representable =
+        !(iszero(product1) && !iszero(a) && !iszero(b)) &&
+        !(iszero(product2) && !iszero(c) && !iszero(d))
+    if products_representable &&
+       isfinite(product1) && isfinite(product2) && isfinite(result)
+        correction =
+            fma(a, b, -product1) -
+            fma(c, d, -product2) +
+            _float_two_sum_error(product1, -product2, result)
+        return result + correction
+    end
+    difference = _float_representation_add(
+        _float_representation_multiply(
+            _float_value_representation(a),
+            _float_value_representation(b)),
+        _float_representation_negate(
+            _float_representation_multiply(
+                _float_value_representation(c),
+                _float_value_representation(d))),
+    )
+    return _float_representation_value(difference)
+end
+
 @inline function _stable_float_dot(a::Vec3, b::Vec3)
     ax, ay, az, bx, by, bz = promote(
         a.x, a.y, a.z, b.x, b.y, b.z)
@@ -1137,18 +1176,6 @@ end
                 _float_value_representation(ay),
                 _float_value_representation(by)),
         ),
-    )
-end
-
-@inline function _stable_float_cross(a::Vec3, b::Vec3)
-    a_representation, b_representation =
-        _stable_float_components(a, b)
-    result = _float_representation_cross(
-        a_representation, b_representation)
-    return Vec3(
-        _float_representation_value(result[1]),
-        _float_representation_value(result[2]),
-        _float_representation_value(result[3]),
     )
 end
 
