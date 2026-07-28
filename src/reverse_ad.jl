@@ -55,6 +55,10 @@ Base.Float64(x::ADVar) = x.val
 Base.float(x::ADVar) = x
 Base.float(::Type{ADVar}) = ADVar
 (::Type{T})(x::ADVar) where {T<:Integer} = T(x.val)
+(::Type{T})(x::ADVar) where {T<:AbstractFloat} = convert(T, x.val)
+Base.convert(::Type{T}, x::ADVar) where {T<:AbstractFloat} = convert(T, x.val)
+Base.Bool(x::ADVar) = Bool(x.val)
+Base.hash(x::ADVar, h::UInt) = hash(x.val, h)
 
 # ---- arithmetic ----
 Base.:+(a::ADVar, b::ADVar) = _ad_record(a.val + b.val, (a, b), (1.0, 1.0))
@@ -109,6 +113,7 @@ function Base.:^(a::Real, b::ADVar)
     db = af > 0 ? v * log(af) : 0.0
     _ad_record(v, (b,), (db,))
 end
+Base.:^(a::Irrational{:ℯ}, b::ADVar) = Float64(a)^b
 # Resolve the dispatch ambiguity between ^(::ADVar, ::Real) above and Base's
 # ^(::Number, ::Rational): a rational exponent (e.g. x^(1//3)) is ordinary input.
 Base.:^(a::ADVar, p::Rational) = a^float(p)
@@ -181,14 +186,18 @@ Base.:<=(a::ADVar, b::Real) = a.val <= Float64(b)
 Base.:>(a::ADVar, b::Real)  = a.val > Float64(b)
 Base.:>=(a::ADVar, b::Real) = a.val >= Float64(b)
 Base.:(==)(a::ADVar, b::Real) = a.val == Float64(b)
+Base.:(==)(a::ADVar, b::AbstractIrrational) = a.val == Float64(b)
 Base.:<(a::Real, b::ADVar)  = Float64(a) < b.val
 Base.:<=(a::Real, b::ADVar) = Float64(a) <= b.val
 Base.:>(a::Real, b::ADVar)  = Float64(a) > b.val
 Base.:>=(a::Real, b::ADVar) = Float64(a) >= b.val
 Base.:(==)(a::Real, b::ADVar) = Float64(a) == b.val
+Base.:(==)(a::AbstractIrrational, b::ADVar) = Float64(a) == b.val
 Base.isless(a::ADVar, b::ADVar) = a.val < b.val
 Base.isless(a::ADVar, b::Real) = a.val < Float64(b)
 Base.isless(a::Real, b::ADVar) = Float64(a) < b.val
+Base.isless(a::ADVar, b::AbstractFloat) = isless(a.val, Float64(b))
+Base.isless(a::AbstractFloat, b::ADVar) = isless(Float64(a), b.val)
 Base.isfinite(a::ADVar) = isfinite(a.val)
 Base.isnan(a::ADVar) = isnan(a.val)
 
@@ -205,9 +214,46 @@ Base.trunc(::Type{T}, a::ADVar) where {T<:Integer} = trunc(T, a.val)
 # result is piecewise-constant, so it carries a zero derivative. Without it those
 # forms raise MethodError instead of returning the rounded value.
 Base.round(a::ADVar, r::RoundingMode) = ADVar(round(a.val, r))
-# mod/rem are piecewise-linear with unit slope in the first argument (a.e.).
-Base.mod(a::ADVar, b::Real) = _ad_record(mod(a.val, b), (a,), (1.0,))
-Base.rem(a::ADVar, b::Real) = _ad_record(rem(a.val, b), (a,), (1.0,))
+# mod/rem are piecewise-linear away from quotient discontinuities.
+Base.mod(a::ADVar, b::Real) =
+    (bf = Float64(b); _ad_record(mod(a.val, bf), (a,), (1.0,)))
+Base.rem(a::ADVar, b::Real) =
+    (bf = Float64(b); _ad_record(rem(a.val, bf), (a,), (1.0,)))
+function Base.mod(a::ADVar, b::ADVar)
+    q = fld(a.val, b.val)
+    _ad_record(mod(a.val, b.val), (a, b), (1.0, -q))
+end
+function Base.mod(a::Real, b::ADVar)
+    af = Float64(a)
+    q = fld(af, b.val)
+    _ad_record(mod(af, b.val), (b,), (-q,))
+end
+function Base.rem(a::ADVar, b::ADVar)
+    q = trunc(a.val / b.val)
+    _ad_record(rem(a.val, b.val), (a, b), (1.0, -q))
+end
+function Base.rem(a::Real, b::ADVar)
+    af = Float64(a)
+    q = trunc(af / b.val)
+    _ad_record(rem(af, b.val), (b,), (-q,))
+end
+
+# Discrete quotient operations carry no derivative, matching ForwardDiff.
+Base.div(a::ADVar, b::ADVar, r::RoundingMode) = div(a.val, b.val, r)
+
+function Base.modf(a::ADVar)
+    fraction, integral = modf(a.val)
+    return (_ad_record(fraction, (a,), (1.0,)), _ad_constant(integral))
+end
+
+Base.eps(a::ADVar) = eps(a.val)
+Base.nextfloat(a::ADVar, n::Integer=1) =
+    _ad_record(nextfloat(a.val, n), (a,), (1.0,))
+Base.prevfloat(a::ADVar, n::Integer=1) =
+    _ad_record(prevfloat(a.val, n), (a,), (1.0,))
+Base.isinteger(a::ADVar) = isinteger(a.val)
+Base.issubnormal(a::ADVar) = issubnormal(a.val)
+Base.exponent(a::ADVar) = exponent(a.val)
 # Angle conversions. Base routes these through `f(x::Real) = f(float(x))`, and
 # `float(::ADVar) = ADVar` (above) makes that recurse forever (StackOverflow);
 # define them directly via the recorded `*`/sin/cos/tan so the gradient flows.

@@ -20427,4 +20427,51 @@ end
         @test_opt_alloc 1024 inflate(fixed_empty)
     end
 
+    @testset "fresh audit round 64 fixes" begin
+        x = Diff3D.ADVar(1.25)
+        @test Float16(x) == Float16(1.25)
+        @test Float32(x) == Float32(1.25)
+        @test Float64(x) == 1.25
+        @test BigFloat(x) == BigFloat(1.25)
+        @test convert(Float32, x) == Float32(1.25)
+        @test Bool(Diff3D.ADVar(1.0))
+        @test !Bool(Diff3D.ADVar(0.0))
+        @test_throws InexactError Bool(Diff3D.ADVar(2.0))
+
+        @test hash(x) == hash(1.25)
+        @test Dict(x => :value)[Diff3D.ADVar(1.25)] === :value
+        @test isless(Diff3D.ADVar(1.0), 2.0)
+        @test isless(0.0, Diff3D.ADVar(1.0))
+        @test Diff3D.ADVar(Float64(π)) == π
+        @test π == Diff3D.ADVar(Float64(π))
+        @test reverse_gradient(v -> ℯ^v[1], [2.0]) ≈ [exp(2.0)]
+
+        fraction_value, fraction_gradient = reverse_value_gradient(
+            v -> first(modf(v[1])), [-1.25])
+        @test fraction_value == -0.25
+        @test fraction_gradient == [1.0]
+        @test reverse_gradient(v -> last(modf(v[1])), [-1.25]) == [0.0]
+
+        @test reverse_gradient(v -> mod(v[1], v[2]), [-5.5, 2.0]) == [1.0, 3.0]
+        @test reverse_gradient(v -> rem(v[1], v[2]), [-5.5, 2.0]) == [1.0, 2.0]
+        @test reverse_gradient(v -> mod(-5.5, v[1]), [2.0]) == [3.0]
+        @test reverse_gradient(v -> rem(-5.5, v[1]), [2.0]) == [2.0]
+        @test div(Diff3D.ADVar(5.5), 2.0) == 2.0
+        @test fld(Diff3D.ADVar(5.5), 2.0) == 2.0
+        @test cld(Diff3D.ADVar(5.5), 2.0) == 3.0
+
+        @test eps(x) == eps(1.25)
+        @test reverse_gradient(v -> nextfloat(v[1]), [1.25]) == [1.0]
+        @test reverse_gradient(v -> prevfloat(v[1]), [1.25]) == [1.0]
+        @test isinteger(Diff3D.ADVar(2.0))
+        @test !isinteger(x)
+        @test issubnormal(Diff3D.ADVar(1.0e-320))
+        @test exponent(x) == exponent(1.25)
+
+        @test_opt_alloc 0 Float32(x)
+        @test_opt_alloc 0 hash(x)
+        @test_opt_alloc 0 isless(x, 2.0)
+        @test_opt_alloc 0 eps(x)
+    end
+
 end
