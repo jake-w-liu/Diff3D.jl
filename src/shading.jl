@@ -1109,13 +1109,54 @@ function _fill_color(normal::Vec3, light::HemisphereLight)
                      light.color.b * w + light.ground_color.b * (1 - w))
     return blended * light.intensity
 end
+
+@inline function _light_probe_channel(
+        dc::Float64, x::Float64, y::Float64, z::Float64,
+        normal::Vec3{Float64})
+    if !(isfinite(dc) && isfinite(x) && isfinite(y) && isfinite(z) &&
+         isfinite(normal.x) && isfinite(normal.y) && isfinite(normal.z))
+        value = dc + x * normal.x + y * normal.y + z * normal.z
+        return max(value, 0.0)
+    end
+    result = _float_representation_sum4(
+        _float_value_representation(dc),
+        _float_representation_multiply(
+            _float_value_representation(x),
+            _float_value_representation(normal.x)),
+        _float_representation_multiply(
+            _float_value_representation(y),
+            _float_value_representation(normal.y)),
+        _float_representation_multiply(
+            _float_value_representation(z),
+            _float_value_representation(normal.z)),
+    )
+    return max(_float_representation_value(result), 0.0)
+end
+
+@inline function _light_probe_channel(
+        dc::Float64, x::Float64, y::Float64, z::Float64,
+        normal::Vec3)
+    scale = max(max(abs(dc), abs(x)), max(abs(y), abs(z)))
+    iszero(scale) &&
+        return zero(normal.x + normal.y + normal.z)
+    value = dc / scale +
+            (x / scale) * normal.x +
+            (y / scale) * normal.y +
+            (z / scale) * normal.z
+    return max(value, zero(value)) * scale
+end
+
 # Order-1 SH irradiance, clamped to non-negative per channel.
 function _fill_color(normal::Vec3, light::LightProbe)
     c = light.coeffs
-    r = c[1].r + c[2].r*normal.x + c[3].r*normal.y + c[4].r*normal.z
-    g = c[1].g + c[2].g*normal.x + c[3].g*normal.y + c[4].g*normal.z
-    b = c[1].b + c[2].b*normal.x + c[3].b*normal.y + c[4].b*normal.z
-    Color3(max(r,0.0), max(g,0.0), max(b,0.0)) * light.intensity
+    Color3(
+        _light_probe_channel(
+            c[1].r, c[2].r, c[3].r, c[4].r, normal),
+        _light_probe_channel(
+            c[1].g, c[2].g, c[3].g, c[4].g, normal),
+        _light_probe_channel(
+            c[1].b, c[2].b, c[3].b, c[4].b, normal),
+    ) * light.intensity
 end
 
 # Environment (ambient/IBL) response of a metallic-roughness surface. Without

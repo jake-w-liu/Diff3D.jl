@@ -22815,4 +22815,32 @@ end
             Mat4(), false)
     end
 
+    @testset "fresh audit round 147 fixes" begin
+        largest = floatmax(Float64)
+        positive = Color3(largest, largest, largest)
+        negative = Color3(-largest, -largest, -largest)
+        probe = LightProbe(coeffs=(
+            positive, positive, negative, negative))
+        normal = Vec3(1.0, 1.0, 1.0)
+        @test Diff3D._fill_color(normal, probe) ==
+            Color3(0.0, 0.0, 0.0)
+        @test Diff3D._light_probe_channel(
+            largest, largest, -largest, -largest,
+            normal) == 0.0
+        @test_opt_alloc 0 Diff3D._light_probe_channel(
+            largest, largest, -largest, -largest,
+            normal)
+        derivative = ForwardDiff.derivative(0.25) do x
+            Diff3D._light_probe_channel(
+                1.0, 2.0, 3.0, 4.0,
+                Vec3(x, 0.5, 0.25))
+        end
+        @test derivative ≈ 2.0
+        @test reverse_gradient(
+            values -> Diff3D._light_probe_channel(
+                1.0, 2.0, 3.0, 4.0,
+                Vec3(values[1], 0.5, 0.25)),
+            [0.25]) ≈ [2.0]
+    end
+
 end
