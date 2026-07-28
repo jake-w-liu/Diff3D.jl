@@ -58,6 +58,12 @@ function _texture_min_filter_symbol(v)::Symbol
     throw(ArgumentError("unsupported texture min_filter: $s"))
 end
 
+function _texture_colorspace_symbol(v)::Symbol
+    s = Symbol(v)
+    s in (:srgb, :linear) && return s
+    throw(ArgumentError("unsupported texture colorspace: $s"))
+end
+
 function _texture_max_anisotropy(v)::Float64
     f = Float64(v)
     isfinite(f) || throw(ArgumentError("Texture max_anisotropy must be finite"))
@@ -90,7 +96,8 @@ function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=
     magf = mag_filter === nothing ? _texture_mag_filter_symbol(base_filter) :
            _texture_mag_filter_symbol(mag_filter)
     tex = Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
-                  base_filter, minf, magf, mipmaps, colorspace,
+                  base_filter, minf, magf, mipmaps,
+                  _texture_colorspace_symbol(colorspace),
                   Vec2(Float64(offset.x), Float64(offset.y)),
                   Vec2(Float64(repeat.x), Float64(repeat.y)),
                   Float64(rotation),
@@ -110,7 +117,8 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
     tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
-            _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
+            _texture_mag_filter_symbol(mag_filter), mipmaps,
+            _texture_colorspace_symbol(colorspace),
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
             _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord), 1.0, false)
 end
@@ -123,7 +131,8 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
     tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
-            _texture_mag_filter_symbol(mag_filter), mipmaps, colorspace,
+            _texture_mag_filter_symbol(mag_filter), mipmaps,
+            _texture_colorspace_symbol(colorspace),
             offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
             _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord),
             _texture_max_anisotropy(max_anisotropy), false)
@@ -317,7 +326,9 @@ untouched and always returns the raw stored values.
 """
 function sample_texture_linear(tex::Texture, u, v)
     c = sample_texture(tex, u, v)
-    tex.colorspace === :srgb || return c
+    tex.colorspace === :linear && return c
+    tex.colorspace === :srgb ||
+        throw(ArgumentError("unsupported texture colorspace: $(tex.colorspace)"))
     return Color3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b))
 end
 

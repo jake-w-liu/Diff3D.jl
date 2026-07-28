@@ -20625,4 +20625,36 @@ end
             UInt8[], typemax(Int), 5126, false)
     end
 
+    @testset "fresh audit round 68 fixes" begin
+        data = fill(0.5, 2, 2, 3)
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") Texture(
+            data; colorspace=:display_p3)
+
+        tex = Texture(data; colorspace=:linear)
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") Texture(
+            data, tex.wrap_s, tex.wrap_t, tex.filter, tex.min_filter,
+            tex.mag_filter, tex.mipmaps, :display_p3, tex.offset, tex.repeat,
+            tex.rotation, tex.center, tex.matrix, tex.matrix_auto_update,
+            tex.tex_coord)
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") Texture(
+            data, tex.wrap_s, tex.wrap_t, tex.filter, tex.min_filter,
+            tex.mag_filter, tex.mipmaps, :display_p3, tex.offset, tex.repeat,
+            tex.rotation, tex.center, tex.matrix, tex.matrix_auto_update,
+            tex.tex_coord, 2.0)
+
+        # Texture is mutable, so sampling also guards the invariant after direct
+        # field assignment instead of silently treating every unknown value as linear.
+        tex.colorspace = :display_p3
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") sample_texture_linear(
+            tex, 0.5, 0.5)
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") Diff3D._web_texture_json(
+            tex)
+        @test_throws ArgumentError("unsupported texture colorspace: display_p3") Diff3D._web_cube_face_json(
+            tex)
+
+        @test Diff3D._texture_colorspace_symbol(:srgb) === :srgb
+        @test Diff3D._texture_colorspace_symbol(:linear) === :linear
+        @test_opt_alloc 0 Diff3D._texture_colorspace_symbol(:linear)
+    end
+
 end
