@@ -21943,4 +21943,15 @@ end
         @test_opt_alloc 0 cross(parallel_a, parallel_b)
     end
 
+    @testset "fresh audit round 105 fixes" begin
+        a = Vec2(1.0e308, 1.0e308)
+        b = Vec2(2.0, -2.0)
+        @test dot(a, b) == 0.0
+        @test ForwardDiff.derivative(
+            x -> dot(Vec2(x, 2.0), Vec2(3.0, 4.0)),
+            1.0,
+        ) == 3.0
+        @test_opt_alloc 0 dot(a, b)
+    end
+
 end

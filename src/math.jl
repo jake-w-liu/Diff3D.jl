@@ -113,7 +113,15 @@ Base.:+(a::Vec2, b::Vec2) = Vec2(a.x + b.x, a.y + b.y)
 Base.:-(a::Vec2, b::Vec2) = Vec2(a.x - b.x, a.y - b.y)
 Base.:*(a::Vec2, s::Real) = Vec2(a.x * s, a.y * s)
 Base.:*(s::Real, a::Vec2) = a * s
-dot(a::Vec2, b::Vec2) = a.x * b.x + a.y * b.y
+function dot(a::Vec2, b::Vec2)
+    result = a.x * b.x + a.y * b.y
+    if result isa AbstractFloat && !isfinite(result) &&
+       isfinite(a.x) && isfinite(a.y) &&
+       isfinite(b.x) && isfinite(b.y)
+        return _stable_float_dot(a, b)
+    end
+    return result
+end
 
 # Vec4 arithmetic
 Base.:+(a::Vec4, b::Vec4) = Vec4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w)
@@ -961,6 +969,20 @@ end
     return _float_representation_value(
         _float_representation_dot(
             a_representation, b_representation))
+end
+
+@inline function _stable_float_dot(a::Vec2, b::Vec2)
+    ax, ay, bx, by = promote(a.x, a.y, b.x, b.y)
+    return _float_representation_value(
+        _float_representation_add(
+            _float_representation_multiply(
+                _float_value_representation(ax),
+                _float_value_representation(bx)),
+            _float_representation_multiply(
+                _float_value_representation(ay),
+                _float_value_representation(by)),
+        ),
+    )
 end
 
 @inline function _stable_float_cross(a::Vec3, b::Vec3)
