@@ -71,6 +71,34 @@ function _texture_max_anisotropy(v)::Float64
     return f
 end
 
+function _texture_positive_size(value::Integer, label::String)
+    value isa Bool && throw(ArgumentError("$label must be a positive integer"))
+    size_value = try
+        Int(value)
+    catch
+        throw(ArgumentError("$label is outside the supported integer range"))
+    end
+    size_value >= 1 || throw(ArgumentError("$label must be positive"))
+    return size_value
+end
+_texture_positive_size(value, label::String) =
+    throw(ArgumentError("$label must be a positive integer"))
+
+@inline function _texture_checked_mul(a::Int, b::Int, label::String)
+    try
+        return Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label is too large"))
+    end
+end
+
+@inline function _texture_check_rgb_square_size(size_value::Int, label::String)
+    pixels = _texture_checked_mul(size_value, size_value, "$label pixel count")
+    _texture_checked_mul(pixels, 3, "$label element count")
+    return size_value
+end
+
 @inline function _checked_texture_data_size(tex::Texture, label::String)
     return _checked_texture_data_size(tex.data, label)
 end
@@ -681,8 +709,8 @@ environment sampling.
 """
 function equirectangular_to_cubemap(tex::Texture; size::Integer=max(1, min(Base.size(tex.data, 1), Base.size(tex.data, 2) ÷ 2)),
                                     generate_mipmaps::Bool=false)
-    size > 0 || throw(ArgumentError("cubemap face size must be positive"))
-    face_size = Int(size)
+    face_size = _texture_positive_size(size, "cubemap face size")
+    _texture_check_rgb_square_size(face_size, "cubemap face")
     faces = ntuple(face -> begin
         data = Array{Float64}(undef, face_size, face_size, 3)
         @inbounds for row in 1:face_size, col in 1:face_size
@@ -770,14 +798,14 @@ are preserved. Sample the result with [`sample_pmrem`](@ref).
 """
 function generate_pmrem(ct::CubeTexture; levels::Integer=5, samples::Integer=64,
                         base_size::Integer=Base.size(ct.faces[1].data, 1))
-    levels >= 1 || throw(ArgumentError("PMREM needs at least one level"))
-    samples >= 1 || throw(ArgumentError("PMREM needs at least one sample"))
-    base_size >= 1 || throw(ArgumentError("PMREM base_size must be positive"))
-    nlev = Int(levels); nsamp = Int(samples)
+    nlev = _texture_positive_size(levels, "PMREM levels")
+    nsamp = _texture_positive_size(samples, "PMREM samples")
+    base_size_value = _texture_positive_size(base_size, "PMREM base_size")
+    _texture_check_rgb_square_size(base_size_value, "PMREM base level")
     out = Vector{CubeTexture}(undef, nlev)
     for l in 0:(nlev - 1)
         roughness = nlev == 1 ? 0.0 : l / (nlev - 1)
-        sz = max(1, Int(base_size) >> l)
+        sz = max(1, base_size_value >> l)
         faces = ntuple(face -> begin
             data = Array{Float64}(undef, sz, sz, 3)
             @inbounds for row in 1:sz, col in 1:sz
@@ -824,7 +852,8 @@ end
 function checker_texture(; n::Int=8, cell::Int=8, a=Color3(1.0,1.0,1.0), b=Color3(0.0,0.0,0.0),
                           wrap_s=:repeat, wrap_t=:repeat, filter=:nearest)
     n = max(1, n); cell = max(1, cell)   # avoid a 0-size texture / (i-1)÷0 DivideError
-    sz = n * cell
+    sz = _texture_checked_mul(n, cell, "checker texture side length")
+    _texture_check_rgb_square_size(sz, "checker texture")
     data = Array{Float64}(undef, sz, sz, 3)
     @inbounds for i in 1:sz, j in 1:sz
         ci = (i - 1) ÷ cell; cj = (j - 1) ÷ cell
@@ -839,6 +868,7 @@ function grid_texture(; size_px::Int=64, cell::Int=16, line=Color3(0.0,0.0,0.0),
                        bg=Color3(1.0,1.0,1.0), thickness::Int=1, wrap_s=:repeat, wrap_t=:repeat)
     cell = max(1, cell)            # cell=0 would make (i-1) % cell a DivideError
     size_px = max(1, size_px)
+    _texture_check_rgb_square_size(size_px, "grid texture")
     data = Array{Float64}(undef, size_px, size_px, 3)
     @inbounds for i in 1:size_px, j in 1:size_px
         on = ((i-1) % cell < thickness) || ((j-1) % cell < thickness)

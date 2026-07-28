@@ -21000,4 +21000,34 @@ end
         @test_opt_alloc 64 sample_texture_auto(tex, 0.25, 0.5, 0.1)
     end
 
+    @testset "fresh audit round 75 fixes" begin
+        # The old unchecked n*cell product could wrap to a small positive side
+        # length and silently return a tiny checker for an enormous request.
+        wrapped_checker_n = typemax(Int) ÷ 2 + 2
+        @test_throws ArgumentError("checker texture side length is too large") checker_texture(
+            n=wrapped_checker_n, cell=4)
+        @test_throws "grid texture pixel count is too large" grid_texture(
+            size_px=typemax(Int))
+
+        environment = Texture(ones(Float64, 2, 4, 3))
+        @test_throws "cubemap face pixel count is too large" equirectangular_to_cubemap(
+            environment; size=typemax(Int))
+        @test_throws "cubemap face size is outside the supported integer range" equirectangular_to_cubemap(
+            environment; size=big(typemax(Int)) + 1)
+
+        cube = equirectangular_to_cubemap(environment; size=1)
+        @test_throws "PMREM base level pixel count is too large" generate_pmrem(
+            cube; levels=1, samples=1, base_size=typemax(Int))
+        @test_throws "PMREM levels is outside the supported integer range" generate_pmrem(
+            cube; levels=big(typemax(Int)) + 1, samples=1, base_size=1)
+
+        @test size(checker_texture(n=2, cell=3).data) == (6, 6, 3)
+        @test size(grid_texture(size_px=5).data) == (5, 5, 3)
+        @test size(equirectangular_to_cubemap(
+            environment; size=2).faces[1].data) == (2, 2, 3)
+        @test length(generate_pmrem(
+            cube; levels=1, samples=1, base_size=1).levels) == 1
+        @test_opt_alloc 0 Diff3D._texture_check_rgb_square_size(4, "texture")
+    end
+
 end
