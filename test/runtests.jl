@@ -23038,4 +23038,20 @@ end
             false, true, Vec2(2.0, 0.0), 2)
     end
 
+    @testset "fresh audit round 156 fixes" begin
+        largest = floatmax(Float64)
+        @test Diff3D._svg_edge_y_at_x(
+            Vec2(-largest, 0.0),
+            Vec2(largest, 1.0),
+            0.0; strict=true) == 0.5
+        @test Diff3D._svg_edge_y_at_x(
+            Vec2(-largest, largest),
+            Vec2(largest, largest),
+            0.0; strict=true) == largest
+        @test_opt_alloc 0 Diff3D._svg_edge_y_at_x(
+            Vec2(-largest, 0.0),
+            Vec2(largest, 1.0),
+            0.0; strict=true)
+    end
+
 end

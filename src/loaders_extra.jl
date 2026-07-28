@@ -6358,8 +6358,10 @@ end
 
 function _svg_edge_y_at_x(a::Vec2{Float64}, b::Vec2{Float64},
                           x::Float64; strict::Bool)
-    dx = b.x - a.x
-    abs(dx) > 1e-12 || return nothing
+    dx = _float_difference_representation(a.x, b.x)
+    dx.nonzero &&
+        abs(_float_representation_value(dx)) > 1e-12 ||
+        return nothing
     xmin = min(a.x, b.x)
     xmax = max(a.x, b.x)
     if strict
@@ -6367,8 +6369,10 @@ function _svg_edge_y_at_x(a::Vec2{Float64}, b::Vec2{Float64},
     else
         xmin - 1e-9 <= x <= xmax + 1e-9 || return nothing
     end
-    t = clamp((x - a.x) / dx, 0.0, 1.0)
-    return a.y + (b.y - a.y) * t
+    offset = _float_difference_representation(a.x, x)
+    t = clamp(
+        _float_representation_ratio(offset, dx), 0.0, 1.0)
+    return _stable_lerp(a.y, b.y, t)
 end
 
 function _svg_slab_crossings(loops::Vector{Vector{Vec2{Float64}}},
