@@ -21840,4 +21840,27 @@ end
         @test Float64(ForwardDiff.partials(mixed)[1]) == 1.0
     end
 
+    @testset "fresh audit round 100 fixes" begin
+        target = RenderTarget(4, 4)
+        huge_scissor = (1, 0, typemax(Int), 4)
+        @test Diff3D._scissor_bounds(
+            target, huge_scissor) == (2, 4, 1, 4)
+        @test Diff3D._intersect_scissor(
+            huge_scissor, (0, 0, 4, 4)) == (1, 0, 3, 4)
+
+        scene = Scene(background=Color3(0.2, 0.3, 0.4))
+        camera = PerspectiveCamera()
+        fill!(target.color, 0.0)
+        fill!(target.depth, 0.0)
+        render!(
+            target, scene, camera;
+            scissor=huge_scissor, scissor_test=true)
+        @test all(target.color[:, 1, :] .== 0.0)
+        @test all(target.color[:, 2:4, 1] .== 0.2)
+        @test all(target.color[:, 2:4, 2] .== 0.3)
+        @test all(target.color[:, 2:4, 3] .== 0.4)
+        @test_opt_alloc 0 Diff3D._scissor_bounds(
+            target, huge_scissor)
+    end
+
 end

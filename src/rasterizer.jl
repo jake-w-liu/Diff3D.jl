@@ -87,10 +87,21 @@ function clear_rect!(rt::RenderTarget, bg::Color3, xlo::Int, xhi::Int, ylo::Int,
     return rt
 end
 
+@inline function _saturating_add_int(a::Int, b::Int)
+    if b > 0 && a > typemax(Int) - b
+        return typemax(Int)
+    elseif b < 0 && a < typemin(Int) - b
+        return typemin(Int)
+    end
+    return a + b
+end
+
 function _scissor_bounds(rt::RenderTarget, scissor::NTuple{4,Int})
     sxr, syr, swr, shr = scissor
-    xlo = max(1, sxr + 1); xhi = min(rt.width, sxr + swr)
-    ylo = max(1, syr + 1); yhi = min(rt.height, syr + shr)
+    xlo = max(1, _saturating_add_int(sxr, 1))
+    xhi = min(rt.width, _saturating_add_int(sxr, swr))
+    ylo = max(1, _saturating_add_int(syr, 1))
+    yhi = min(rt.height, _saturating_add_int(syr, shr))
     return xlo, xhi, ylo, yhi
 end
 
@@ -98,7 +109,8 @@ function _intersect_scissor(a::NTuple{4,Int}, b::NTuple{4,Int})
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
     x0 = max(ax, bx); y0 = max(ay, by)
-    x1 = min(ax + aw, bx + bw); y1 = min(ay + ah, by + bh)
+    x1 = min(_saturating_add_int(ax, aw), _saturating_add_int(bx, bw))
+    y1 = min(_saturating_add_int(ay, ah), _saturating_add_int(by, bh))
     (x1 <= x0 || y1 <= y0) && return nothing
     return (x0, y0, x1 - x0, y1 - y0)
 end
@@ -1527,7 +1539,9 @@ function render!(rt::RenderTarget, scene::Scene, camera::ArrayCamera;
         view_scissor = outer_scissor ? _intersect_scissor(viewport, scissor) : viewport
         view_scissor === nothing && continue
         sx, sy, sw, sh = view_scissor
-        sx < rt.width && sy < rt.height && sx + sw > 0 && sy + sh > 0 || continue
+        (sx < rt.width && sy < rt.height &&
+         _saturating_add_int(sx, sw) > 0 &&
+         _saturating_add_int(sy, sh) > 0) || continue
         render!(rt, scene, subcamera; kwargs..., scissor=view_scissor, scissor_test=true)
     end
     return rt
