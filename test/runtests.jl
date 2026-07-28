@@ -22126,4 +22126,17 @@ end
             texture, 2.0, -2.0)
     end
 
+    @testset "fresh audit round 114 fixes" begin
+        texture = Texture(
+            ones(1, 1, 1);
+            repeat=Vec2(1.0e308, 1.0),
+            offset=Vec2(1.0e308, 0.0),
+            center=Vec2(1.0, 0.0),
+            rotation=0.0)
+        @test texture.matrix.e[3] == 1.0
+        @test_opt_alloc 0 Diff3D._stable_texture_matrix_offset(
+            1.0e308, -1.0, 1.0, -0.0, 0.0,
+            1.0, 1.0e308)
+    end
+
 end

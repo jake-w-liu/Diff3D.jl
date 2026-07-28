@@ -336,14 +336,43 @@ function texture_update_matrix!(tex::Texture)
     cx, cy = tex.center.x, tex.center.y
     c = cos(tex.rotation)
     s = sin(tex.rotation)
+    offset_x = _stable_texture_matrix_offset(
+        sx, -c, cx, -s, cy, cx, tx)
+    offset_y = _stable_texture_matrix_offset(
+        sy, s, cx, -c, cy, cy, ty)
     matrix = Mat3{Float64}((
-        sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx,
-       -sy * s, sy * c,  sy * (s * cx - c * cy) + cy + ty,
+        sx * c, sx * s, offset_x,
+       -sy * s, sy * c, offset_y,
         0.0,    0.0,     1.0))
     _texture_validate_matrix(matrix)
     tex.matrix = matrix
     tex.matrix_cache_key = _texture_matrix_key(tex)
     return tex
+end
+
+@inline function _stable_texture_matrix_offset(
+        scale, coefficient_x, x, coefficient_y, y, center, offset)
+    scale, coefficient_x, x, coefficient_y, y, center, offset =
+        promote(
+            scale, coefficient_x, x, coefficient_y, y, center, offset)
+    scale_representation = _float_value_representation(scale)
+    x_term = _float_representation_multiply(
+        _float_representation_multiply(
+            scale_representation,
+            _float_value_representation(coefficient_x)),
+        _float_value_representation(x))
+    y_term = _float_representation_multiply(
+        _float_representation_multiply(
+            scale_representation,
+            _float_value_representation(coefficient_y)),
+        _float_value_representation(y))
+    result = _float_representation_sum4(
+        x_term,
+        y_term,
+        _float_value_representation(center),
+        _float_value_representation(offset),
+    )
+    return _float_representation_value(result)
 end
 
 @inline function _texture_matrix_key(tex::Texture)

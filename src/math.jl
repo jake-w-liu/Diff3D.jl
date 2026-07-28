@@ -926,6 +926,21 @@ end
     return _FloatRepresentation(mantissa, exponent + correction, true)
 end
 
+@inline _float_representation_precedes(a::_FloatRepresentation,
+                                       b::_FloatRepresentation) =
+    a.nonzero && (!b.nonzero || a.exponent >= b.exponent)
+
+@inline function _float_representation_sum4(a, b, c, d)
+    !_float_representation_precedes(a, b) && ((a, b) = (b, a))
+    !_float_representation_precedes(c, d) && ((c, d) = (d, c))
+    !_float_representation_precedes(a, c) && ((a, c) = (c, a))
+    !_float_representation_precedes(b, d) && ((b, d) = (d, b))
+    !_float_representation_precedes(b, c) && ((b, c) = (c, b))
+    result = _float_representation_add(a, b)
+    result = _float_representation_add(result, c)
+    return _float_representation_add(result, d)
+end
+
 @inline _float_representation_negate(a::_FloatRepresentation{T}) where
         {T<:AbstractFloat} =
     _FloatRepresentation(-a.mantissa, a.exponent, a.nonzero)
