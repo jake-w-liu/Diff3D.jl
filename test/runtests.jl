@@ -20657,4 +20657,71 @@ end
         @test_opt_alloc 0 Diff3D._texture_colorspace_symbol(:linear)
     end
 
+    @testset "fresh audit round 69 fixes" begin
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                      "property list uchar int extras\nproperty float x\n" *
+                      "property float y\nproperty float z\nend_header\n" *
+                      "1 99 1 2 3\n")
+                @test load_ply(path).positions == [1.0, 2.0, 3.0]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        # Scalar and unrelated list properties may surround the selected face
+        # vertex-index list without changing its position in the row.
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 3\n" *
+                      "property float x\nproperty float y\nproperty float z\n" *
+                      "element face 1\nproperty uchar material\n" *
+                      "property list uchar int vertex_indices\n" *
+                      "property list uchar int neighbors\nend_header\n" *
+                      "0 0 0\n1 0 0\n0 1 0\n7 3 0 1 2 2 9 8\n")
+                @test load_ply(path).indices == [1, 2, 3]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        let path = tempname() * ".ply"
+            try
+                open(path, "w") do io
+                    write(io,
+                          "ply\nformat binary_little_endian 1.0\n" *
+                          "element vertex 3\nproperty float x\n" *
+                          "property float y\nproperty float z\n" *
+                          "element face 1\nproperty uchar material\n" *
+                          "property list uchar int vertex_indices\n" *
+                          "property list uchar int neighbors\nend_header\n")
+                    write(io, Float32(0), Float32(0), Float32(0),
+                          Float32(1), Float32(0), Float32(0),
+                          Float32(0), Float32(1), Float32(0))
+                    write(io, UInt8(7), UInt8(3),
+                          Int32(0), Int32(1), Int32(2),
+                          UInt8(2), Int32(9), Int32(8))
+                end
+                @test load_ply(path).indices == [1, 2, 3]
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        let path = tempname() * ".ply"
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                      "property list uchar float x\nproperty float y\n" *
+                      "property float z\nend_header\n1 1 2 3\n")
+                @test_throws "PLY vertex property x must be scalar" load_ply(path)
+            finally
+                rm(path; force=true)
+            end
+        end
+    end
+
 end

@@ -1145,6 +1145,28 @@ end
     return value
 end
 
+@noinline function _ply_ascii_property_value_error(element::String, row::Int,
+                                                    prop::String, item::Int,
+                                                    status::UInt8)
+    reason = status == UInt8(2) ? "finite" : "a number"
+    item == 0 &&
+        error("PLY $element row $row property $prop must be $reason")
+    error("PLY $element row $row property $prop item $item must be $reason")
+end
+
+@inline function _ply_validate_ascii_property_value(bytes::AbstractVector{UInt8},
+                                                    first::Int, last::Int,
+                                                    element::String, row::Int,
+                                                    prop::String, item::Int=0)
+    _, status = _ply_try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) ||
+        _ply_ascii_property_value_error(element, row, prop, item, status)
+    return nothing
+end
+
+@noinline _ply_ascii_missing_property_error(element::String, row::Int, prop::String) =
+    error("PLY $element row $row is missing property $prop")
+
 function _ply_line_bounds(bytes::AbstractVector{UInt8}, i::Int, n::Int)
     i <= n || error("PLY ASCII element data is truncated")
     j = i
@@ -1362,13 +1384,29 @@ function load_ply(path::String)
             col(name) = findfirst(==(name), names)
             ix = col("x"); iy = col("y"); iz = col("z")
             (ix === nothing || iy === nothing || iz === nothing) && error("PLY vertex element lacks x/y/z")
+            for c in (ix, iy, iz)
+                props[c][1] === :scalar ||
+                    error("PLY vertex property $(props[c][2]) must be scalar")
+            end
             inx = col("nx"); iny = col("ny"); inz = col("nz")
             have_normals = inx !== nothing && iny !== nothing && inz !== nothing
+            if have_normals
+                for c in (inx, iny, inz)
+                    props[c][1] === :scalar ||
+                        error("PLY vertex property $(props[c][2]) must be scalar")
+                end
+            end
             ir = col("red"); ig = col("green"); ib = col("blue")
             if ir === nothing
                 ir = col("r"); ig = col("g"); ib = col("b")
             end
             have_color = ir !== nothing && ig !== nothing && ib !== nothing
+            if have_color
+                for c in (ir, ig, ib)
+                    props[c][1] === :scalar ||
+                        error("PLY vertex property $(props[c][2]) must be scalar")
+                end
+            end
             have_color && (color_is_int = _ply_is_int(types[ir]))
             cnorm = color_is_int ? 255.0 : 1.0
 
@@ -1382,26 +1420,44 @@ function load_ply(path::String)
                     line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
                     b3 = v * 3
                     p = line_start
-                    token_count = 0
-                    while true
+                    for (c, prop) in enumerate(props)
                         first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
-                        first == 0 && break
-                        c = (token_count += 1)
+                        first != 0 ||
+                            _ply_ascii_missing_property_error("vertex", v + 1, prop[2])
                         val = _ply_parse_ascii_vertex_float(bytes, first, last,
                                                             v + 1, c, props)
-                        if c == ix; positions[b3+1] = val
-                        elseif c == iy; positions[b3+2] = val
-                        elseif c == iz; positions[b3+3] = val
-                        elseif have_normals && c == inx; normals[b3+1] = val
-                        elseif have_normals && c == iny; normals[b3+2] = val
-                        elseif have_normals && c == inz; normals[b3+3] = val
-                        elseif have_color && c == ir; colors[b3+1] = val / cnorm
-                        elseif have_color && c == ig; colors[b3+2] = val / cnorm
-                        elseif have_color && c == ib; colors[b3+3] = val / cnorm
+                        if prop[1] === :list
+                            nitems = checked_list_count(val)
+                            for item in 1:nitems
+                                first, last, p = _ply_next_ascii_token(
+                                    bytes, p, line_stop)
+                                first != 0 ||
+                                    _ply_ascii_missing_property_error(
+                                        "vertex", v + 1, prop[2])
+                                _ply_validate_ascii_property_value(
+                                    bytes, first, last, "vertex", v + 1,
+                                    prop[2], item)
+                            end
+                        elseif c == ix
+                            positions[b3+1] = val
+                        elseif c == iy
+                            positions[b3+2] = val
+                        elseif c == iz
+                            positions[b3+3] = val
+                        elseif have_normals && c == inx
+                            normals[b3+1] = val
+                        elseif have_normals && c == iny
+                            normals[b3+2] = val
+                        elseif have_normals && c == inz
+                            normals[b3+3] = val
+                        elseif have_color && c == ir
+                            colors[b3+1] = val / cnorm
+                        elseif have_color && c == ig
+                            colors[b3+2] = val / cnorm
+                        elseif have_color && c == ib
+                            colors[b3+3] = val / cnorm
                         end
                     end
-                    token_count >= length(props) ||
-                        error("PLY vertex data is truncated: expected $ecount vertices, row $(v+1) has $token_count of $(length(props)) values")
                 end
             else
                 # Binary: read every property in declared order; keep the roles.
@@ -1435,13 +1491,16 @@ function load_ply(path::String)
                 end
             end
         elseif ename == "face"
-            # Find the list property (vertex_indices / vertex_index).
-            listp = nothing
-            for p in props
-                p[1] === :list && (listp = p)
-            end
-            listp === nothing && error("PLY face element has no list property")
-            ct = listp[3]; it = listp[4]
+            # Prefer the conventional named vertex-index list. Fall back to the
+            # first list for files that use a non-standard property name.
+            list_col = findfirst(
+                p -> p[1] === :list &&
+                     (p[2] == "vertex_indices" || p[2] == "vertex_index"),
+                props,
+            )
+            list_col === nothing &&
+                (list_col = findfirst(p -> p[1] === :list, props))
+            list_col === nothing && error("PLY face element has no list property")
             face_hint = _ply_checked_mul(ecount, 3, "face index hint")
             sizehint!(indices, _ply_checked_add(
                 length(indices), face_hint, "face index hint"))
@@ -1450,52 +1509,82 @@ function load_ply(path::String)
                 for face_row in 1:ecount
                     line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
                     p = line_start
-                    first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
-                    first != 0 || error("PLY face data is truncated: row $face_row has no list count")
-                    nidx = checked_list_count(
-                        _ply_parse_ascii_face_float(bytes, first, last,
-                                                    face_row, :count))
-                    first_idx = 0
-                    prev_idx = 0
-                    for k in 1:nidx
+                    for (prop_col, prop) in enumerate(props)
                         first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
                         first != 0 ||
-                            error("PLY face data is truncated: row $face_row declares $nidx indices but has $(k - 1)")
-                        idx = checked_vertex_index(
-                            _ply_parse_ascii_face_float(bytes, first, last,
-                                                        face_row, :index, k),
-                            nverts,
-                        )
-                        if k == 1
-                            first_idx = idx
-                        elseif k == 2
-                            prev_idx = idx
-                        else
-                            push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
-                            prev_idx = idx
+                            _ply_ascii_missing_property_error(
+                                "face", face_row, prop[2])
+                        if prop[1] === :scalar
+                            _ply_validate_ascii_property_value(
+                                bytes, first, last, "face", face_row, prop[2])
+                            continue
+                        end
+                        nitems = checked_list_count(
+                            _ply_parse_ascii_face_float(
+                                bytes, first, last, face_row, :count))
+                        first_idx = 0
+                        prev_idx = 0
+                        for k in 1:nitems
+                            first, last, p = _ply_next_ascii_token(
+                                bytes, p, line_stop)
+                            first != 0 ||
+                                _ply_ascii_missing_property_error(
+                                    "face", face_row, prop[2])
+                            if prop_col == list_col
+                                idx = checked_vertex_index(
+                                    _ply_parse_ascii_face_float(
+                                        bytes, first, last, face_row, :index, k),
+                                    nverts,
+                                )
+                                if k == 1
+                                    first_idx = idx
+                                elseif k == 2
+                                    prev_idx = idx
+                                else
+                                    push!(indices, first_idx + 1, prev_idx + 1,
+                                          idx + 1)
+                                    prev_idx = idx
+                                end
+                            else
+                                _ply_validate_ascii_property_value(
+                                    bytes, first, last, "face", face_row,
+                                    prop[2], k)
+                            end
                         end
                     end
                 end
             else
                 nverts = length(positions) ÷ 3
-                for _ in 0:ecount-1
-                    cnt, i = read_binary(bytes, i, ct)
-                    # A signed count type (e.g. `char`) can decode negative; validate
-                    # before allocating so a corrupt count yields a clear loader
-                    # error rather than `invalid GenericMemory size`.
-                    nidx = checked_list_count(cnt)
-                    first_idx = 0
-                    prev_idx = 0
-                    for k in 1:nidx
-                        val, i = read_binary(bytes, i, it)
-                        idx = checked_vertex_index(val, nverts)        # 0-based
-                        if k == 1
-                            first_idx = idx
-                        elseif k == 2
-                            prev_idx = idx
-                        else
-                            push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
-                            prev_idx = idx
+                for face_row in 1:ecount
+                    for (prop_col, prop) in enumerate(props)
+                        if prop[1] === :scalar
+                            _, i = read_binary(bytes, i, prop[3])
+                            continue
+                        end
+                        cnt, i = read_binary(bytes, i, prop[3])
+                        # A signed count type (e.g. `char`) can decode negative;
+                        # validate before consuming the declared list payload.
+                        nitems = checked_list_count(cnt)
+                        if prop_col != list_col
+                            checked_binary_skip!(_ply_checked_mul(
+                                nitems, _PLY_SIZE[prop[4]],
+                                "list payload byte count"))
+                            continue
+                        end
+                        first_idx = 0
+                        prev_idx = 0
+                        for k in 1:nitems
+                            val, i = read_binary(bytes, i, prop[4])
+                            idx = checked_vertex_index(val, nverts) # 0-based
+                            if k == 1
+                                first_idx = idx
+                            elseif k == 2
+                                prev_idx = idx
+                            else
+                                push!(indices, first_idx + 1, prev_idx + 1,
+                                      idx + 1)
+                                prev_idx = idx
+                            end
                         end
                     end
                 end
