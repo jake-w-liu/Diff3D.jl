@@ -1182,6 +1182,27 @@ end
 @inline _is_fill_light(l::AbstractLight) =
     (l isa AmbientLight) || (l isa HemisphereLight) || (l isa LightProbe)
 
+# Julia 1.9 does not reliably union-split iteration over the seven-member
+# `SceneLight` union. Explicitly narrow each built-in light before entering a
+# shading operation so its return value stays unboxed in per-fragment loops.
+@inline function _dispatch_scene_light(f, light::SceneLight, args...)
+    if light isa AmbientLight
+        return f(light, args...)
+    elseif light isa DirectionalLight
+        return f(light, args...)
+    elseif light isa PointLight
+        return f(light, args...)
+    elseif light isa SpotLight
+        return f(light, args...)
+    elseif light isa HemisphereLight
+        return f(light, args...)
+    elseif light isa RectAreaLight
+        return f(light, args...)
+    else
+        return f(light::LightProbe, args...)
+    end
+end
+
 _fill_color(normal::Vec3, light::AmbientLight) = light.color * light.intensity
 function _fill_color(normal::Vec3, light::HemisphereLight)
     w = clamp(normal.y * 0.5 + 0.5, zero(normal.y), one(normal.y))
@@ -2043,16 +2064,52 @@ function _accumulate_light_vertex_color(result, m, normal::Vec3, view_dir::Vec3,
     end
 end
 
-function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights, shadow_fn)
+@inline _dispatch_accumulate_light(light, result, m, normal, view_dir, position,
+                                   shadow_fn) =
+    _accumulate_light(result, m, normal, view_dir, position, light, shadow_fn)
+
+@inline _dispatch_accumulate_light_vertex_color(
+        light, result, m, normal, view_dir, position, shadow_fn, albedo) =
+    _accumulate_light_vertex_color(result, m, normal, view_dir, position, light,
+                                   shadow_fn, albedo)
+
+function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3,
+                    lights::Vector{SceneLight}, shadow_fn)
+    result = m.emissive * _material_scalar(m, :emissive_intensity)
+    @inbounds for i in eachindex(lights)
+        light = lights[i]
+        result = _dispatch_scene_light(_dispatch_accumulate_light, light, result,
+                                       m, normal, view_dir, position, shadow_fn)
+    end
+    return result
+end
+
+function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights,
+                    shadow_fn)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     for light in lights
-        result = _accumulate_light(result, m, normal, view_dir, position, light, shadow_fn)
+        result = _accumulate_light(result, m, normal, view_dir, position, light,
+                                   shadow_fn)
     end
     return result
 end
 
 shade_face(normal::Vec3, view_dir::Vec3, position::Vec3, material::LitMaterial, lights;
            shadow_fn=nothing) = _shade_lit(material, normal, view_dir, position, lights, shadow_fn)
+
+function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
+                                 lights::Vector{SceneLight}, shadow_fn,
+                                 vertex_color::Color3)
+    albedo = _modulate(m.color, vertex_color)
+    result = m.emissive * _material_scalar(m, :emissive_intensity)
+    @inbounds for i in eachindex(lights)
+        light = lights[i]
+        result = _dispatch_scene_light(_dispatch_accumulate_light_vertex_color,
+                                       light, result, m, normal, view_dir,
+                                       position, shadow_fn, albedo)
+    end
+    return result
+end
 
 function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                                  lights, shadow_fn, vertex_color::Color3)

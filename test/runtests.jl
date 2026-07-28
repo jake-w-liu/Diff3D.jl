@@ -12765,7 +12765,10 @@ end
             add!(scene, amb_light)
             add!(scene, d)
             lights = Diff3D.collect_lights(scene)
-            @test eltype(lights) === Diff3D.SceneLight
+            # Julia 1.9 can materialize structurally equal `Union` objects with
+            # distinct identities, so compare the type values rather than
+            # their internal object identities.
+            @test eltype(lights) == Diff3D.SceneLight
             c = Diff3D.shade_face(n, vd, p, mat, lights)
             # Independent hand recomputation of the same accumulation order: emissive + ambient fill + lambert direct.
             amb_fill = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * 0.3)
