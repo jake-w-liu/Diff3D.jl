@@ -20490,4 +20490,68 @@ end
         @test_opt_alloc 0 Diff3D._sorted_median(sorted_times)
     end
 
+    @testset "fresh audit round 66 fixes" begin
+        let path = tempname() * ".ply",
+            count = typemax(Int) ÷ 3 + 1
+            try
+                write(path,
+                      "ply\nformat ascii 1.0\nelement vertex $count\n" *
+                      "property float x\nproperty float y\nproperty float z\n" *
+                      "end_header\n0 0 0\n")
+                @test_throws "has only 6 body bytes remaining" load_ply(path)
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        # A binary list count must not overflow while converting its declared
+        # payload length to bytes.
+        let path = tempname() * ".ply"
+            try
+                open(path, "w") do io
+                    write(io, "ply\nformat binary_little_endian 1.0\n" *
+                              "element edge 1\n" *
+                              "property list double double payload\nend_header\n")
+                    write(io, Float64(2.0^62))
+                end
+                @test_throws "PLY list payload byte count is too large" load_ply(path)
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        # Counts outside Int's exact non-negative range produce a loader error,
+        # rather than leaking an InexactError from Int conversion.
+        let path = tempname() * ".ply"
+            try
+                open(path, "w") do io
+                    write(io, "ply\nformat binary_little_endian 1.0\n" *
+                              "element edge 1\n" *
+                              "property list double uchar payload\nend_header\n")
+                    write(io, ldexp(1.0, 8 * sizeof(Int) - 1))
+                end
+                @test_throws "PLY list property count exceeds the supported integer range" load_ply(path)
+            finally
+                rm(path; force=true)
+            end
+        end
+
+        # A zero-width unknown binary element consumes no body bytes, regardless
+        # of its logical row count, and is skipped in constant time.
+        let path = tempname() * ".ply"
+            try
+                open(path, "w") do io
+                    write(io, "ply\nformat binary_little_endian 1.0\n" *
+                              "element metadata $(typemax(Int))\n" *
+                              "element vertex 1\nproperty float x\n" *
+                              "property float y\nproperty float z\nend_header\n")
+                    write(io, 1.0f0, 2.0f0, 3.0f0)
+                end
+                @test load_ply(path).positions == [1.0, 2.0, 3.0]
+            finally
+                rm(path; force=true)
+            end
+        end
+    end
+
 end

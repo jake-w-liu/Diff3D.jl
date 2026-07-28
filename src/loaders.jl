@@ -967,6 +967,40 @@ const _PLY_SIZE = Dict(:i8=>1, :u8=>1, :i16=>2, :u16=>2, :i32=>4, :u32=>4, :f32=
 # Integer scalar types: PLY colour channels stored as integers are normalised to [0,1].
 _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
 
+@inline function _ply_checked_add(a::Int, b::Int, context::String)
+    (a >= 0 && b >= 0 && a <= typemax(Int) - b) ||
+        error("PLY $context is too large")
+    return a + b
+end
+
+@inline function _ply_checked_mul(a::Int, b::Int, context::String)
+    (a >= 0 && b >= 0 && (a == 0 || b <= typemax(Int) ÷ a)) ||
+        error("PLY $context is too large")
+    return a * b
+end
+
+@inline _ply_available_bytes(n::Int, offset::Int) = offset <= n ? n - offset + 1 : 0
+
+function _ply_binary_min_row_bytes(props)
+    total = 0
+    for prop in props
+        # A list may be empty, but its count scalar is always present.
+        ty = prop[3]
+        total = _ply_checked_add(total, _PLY_SIZE[ty], "binary row size")
+    end
+    return total
+end
+
+function _ply_preflight_element(ecount::Int, props, format::Symbol,
+                                remaining::Int, ename::String)
+    min_row_bytes = format === :ascii ? 1 : _ply_binary_min_row_bytes(props)
+    required = _ply_checked_mul(ecount, min_row_bytes, "element byte count")
+    required <= remaining ||
+        error("PLY $format element $ename declares $ecount rows, but the file " *
+              "has only $remaining body bytes remaining")
+    return nothing
+end
+
 function _ply_parse_type(tok, context::String)
     ty = get(_PLY_TYPE, String(tok), nothing)
     ty === nothing && error("unsupported PLY $context type $(String(tok))")
@@ -1151,7 +1185,8 @@ end
 # `p` (little-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_le(b::Vector{UInt8}, p::Int, t::Symbol)
     sz = (t === :u8 || t === :i8) ? 1 : (t === :u16 || t === :i16) ? 2 : t === :f64 ? 8 : 4
-    p + sz - 1 <= length(b) || error("PLY binary element data is truncated")
+    (p >= 1 && sz <= _ply_available_bytes(length(b), p)) ||
+        error("PLY binary element data is truncated")
     if t === :u8
         return (Float64(b[p]), p + 1)
     elseif t === :i8
@@ -1182,7 +1217,8 @@ end
 # `p` (big-endian). Returns (value::Float64, next_offset).
 @inline function _ply_read_be(b::Vector{UInt8}, p::Int, t::Symbol)
     sz = (t === :u8 || t === :i8) ? 1 : (t === :u16 || t === :i16) ? 2 : t === :f64 ? 8 : 4
-    p + sz - 1 <= length(b) || error("PLY binary element data is truncated")
+    (p >= 1 && sz <= _ply_available_bytes(length(b), p)) ||
+        error("PLY binary element data is truncated")
     if t === :u8
         return (Float64(b[p]), p + 1)
     elseif t === :i8
@@ -1296,13 +1332,16 @@ function load_ply(path::String)
     read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
     function checked_binary_skip!(nbytes::Int)
         nbytes >= 0 || error("PLY binary skip size must be non-negative")
-        i + nbytes - 1 <= n || error("PLY binary element data is truncated")
+        nbytes <= _ply_available_bytes(n, i) ||
+            error("PLY binary element data is truncated")
         i += nbytes
         return nothing
     end
     function checked_list_count(cnt)
         isfinite(cnt) && cnt >= 0 && cnt == floor(cnt) ||
             error("PLY list property count must be a non-negative integer")
+        cnt < ldexp(1.0, 8 * sizeof(Int) - 1) ||
+            error("PLY list property count exceeds the supported integer range")
         return Int(cnt)
     end
     function checked_vertex_index(idx, nverts::Int)
@@ -1315,6 +1354,7 @@ function load_ply(path::String)
     end
 
     for (ename, ecount, props) in elements
+        _ply_preflight_element(ecount, props, format, _ply_available_bytes(n, i), ename)
         if ename == "vertex"
             # Map property name -> column index for the roles we read.
             names = String[p[2] for p in props]
@@ -1332,9 +1372,10 @@ function load_ply(path::String)
             have_color && (color_is_int = _ply_is_int(types[ir]))
             cnorm = color_is_int ? 255.0 : 1.0
 
-            positions = Vector{Float64}(undef, ecount * 3)
-            have_normals && (normals = Vector{Float64}(undef, ecount * 3))
-            have_color && (colors = Vector{Float64}(undef, ecount * 3))
+            coord_count = _ply_checked_mul(ecount, 3, "vertex coordinate count")
+            positions = Vector{Float64}(undef, coord_count)
+            have_normals && (normals = Vector{Float64}(undef, coord_count))
+            have_color && (colors = Vector{Float64}(undef, coord_count))
 
             if format == :ascii
                 for v in 0:ecount-1
@@ -1374,7 +1415,8 @@ function load_ply(path::String)
                             # reading a single value and desyncing every row after.
                             cnt, i = read_binary(bytes, i, p[3])
                             nitems = checked_list_count(cnt)
-                            checked_binary_skip!(nitems * _PLY_SIZE[p[4]])
+                            checked_binary_skip!(_ply_checked_mul(
+                                nitems, _PLY_SIZE[p[4]], "list payload byte count"))
                             continue
                         end
                         val, i = read_binary(bytes, i, types[c])
@@ -1400,7 +1442,9 @@ function load_ply(path::String)
             end
             listp === nothing && error("PLY face element has no list property")
             ct = listp[3]; it = listp[4]
-            sizehint!(indices, length(indices) + 3 * ecount)
+            face_hint = _ply_checked_mul(ecount, 3, "face index hint")
+            sizehint!(indices, _ply_checked_add(
+                length(indices), face_hint, "face index hint"))
             if format == :ascii
                 nverts = length(positions) ÷ 3
                 for face_row in 1:ecount
@@ -1463,6 +1507,7 @@ function load_ply(path::String)
                     _, _, i = _ply_line_bounds(bytes, i, n)
                 end
             else
+                isempty(props) && continue
                 for _ in 0:ecount-1
                     for p in props
                         if p[1] === :scalar
@@ -1470,7 +1515,8 @@ function load_ply(path::String)
                         else
                             cnt, i = read_binary(bytes, i, p[3])
                             nitems = checked_list_count(cnt)
-                            checked_binary_skip!(nitems * _PLY_SIZE[p[4]])
+                            checked_binary_skip!(_ply_checked_mul(
+                                nitems, _PLY_SIZE[p[4]], "list payload byte count"))
                         end
                     end
                 end
