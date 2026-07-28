@@ -2163,7 +2163,7 @@ function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.col
     geo = _line_geo(pos)
     sky = light.color; grd = light.ground_color
     cols = Vector{Float64}(undef, 72)
-    blend = Color3((sky.r + grd.r) / 2, (sky.g + grd.g) / 2, (sky.b + grd.b) / 2)
+    blend = _stable_color_lerp(sky, grd, 0.5)
     # First 4 segments are the (mid-latitude) equator: blend; the remaining
     # spokes inherit the apex colour (sky for top spokes, ground for bottom).
     for seg in 1:12

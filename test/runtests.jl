@@ -22696,4 +22696,17 @@ end
         @test_opt_alloc 0 Diff3D._mean3_scaled(depth, depth, depth)
     end
 
+    @testset "fresh audit round 143 fixes" begin
+        largest = floatmax(Float64)
+        color = Color3(largest, largest, largest)
+        light = HemisphereLight(
+            color=color, ground_color=color)
+        helper = HemisphereLightHelper(light)
+        helper_colors = get_attribute(
+            helper.geometry, :color).data
+        @test all(==(largest), helper_colors)
+        @test_opt_alloc 0 Diff3D._stable_color_lerp(
+            color, color, 0.5)
+    end
+
 end
