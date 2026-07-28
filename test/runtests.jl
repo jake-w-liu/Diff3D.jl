@@ -22465,4 +22465,33 @@ end
             Vec3(), small)
     end
 
+    @testset "fresh audit round 131 fixes" begin
+        camera = PerspectiveCamera()
+        camera.position = Vec3(-1.0e308, 0.0, 0.0)
+        camera.target = Vec3(1.0e308, 0.0, 0.0)
+        right, up =
+            Diff3D._camera_pan_basis(camera, camera.target)
+        @test right == Vec3(0.0, 0.0, 1.0)
+        @test up == Vec3(0.0, 1.0, 0.0)
+
+        fly = FlyControls(camera)
+        fly_translate!(fly, 1.0, 0.0, 0.0)
+        @test all(isfinite, (
+            camera.position.x, camera.position.y,
+            camera.position.z, camera.target.x,
+            camera.target.y, camera.target.z,
+        ))
+
+        scene = Scene()
+        directional =
+            DirectionalLight(position=Vec3(1.0e308, 0.0, 0.0))
+        directional.target = Vec3(-1.0e308, 0.0, 0.0)
+        add!(scene, directional)
+        lights_json = Diff3D._web_lights_json(scene)
+        @test !occursin("NaN", lights_json)
+        @test occursin("\"direction\":[1,0,0]", lights_json)
+        @test_opt_alloc 0 Diff3D._camera_pan_basis(
+            camera, camera.target)
+    end
+
 end

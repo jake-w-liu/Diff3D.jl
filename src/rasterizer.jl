@@ -565,7 +565,7 @@ end
                 if has_specular || has_glossiness
                     specular, shininess = _phong_mapped_terms(
                         material, specular_map, glossiness_map, u, v, u2, v2)
-                    vd = normalize(cam_pos - wp)
+                    vd = _direction_between(wp, cam_pos)
                     col = UseVertexColors ?
                           _shade_phong_mapped_vertex_color(
                               wn, vd, wp, material, lights, shadow_fn, specular,
@@ -583,7 +583,7 @@ end
                                 material.roughness * sample_texture(roughness_map, ru, rv).g
                     metalness = metalness_map === nothing ? material.metalness :
                                material.metalness * sample_texture(metalness_map, mu, mv).b
-                    vd = normalize(cam_pos - wp)
+                    vd = _direction_between(wp, cam_pos)
                     col = UseVertexColors ?
                           _shade_standard_mapped_vertex_color(wn, vd, wp, material,
                                                               lights, shadow_fn,
@@ -595,7 +595,7 @@ end
                        (has_roughness || has_metalness || has_physical_pbr)
                     terms = _physical_mapped_terms(material, roughness_map,
                                                    metalness_map, u, v, u2, v2)
-                    vd = normalize(cam_pos - wp)
+                    vd = _direction_between(wp, cam_pos)
                     col = UseVertexColors ?
                           _shade_physical_mapped_vertex_color(
                               wn, vd, wp, material, lights, shadow_fn, terms, vc) :
@@ -604,7 +604,7 @@ end
                 elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
                                               u, v, u2, v2)
-                    vd = normalize(cam_pos - wp)
+                    vd = _direction_between(wp, cam_pos)
                     col = UseVertexColors ?
                           _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
                                                    shadow_fn=shadow_fn) :
@@ -612,7 +612,7 @@ end
                                      shadow_fn=shadow_fn)
                 else
                     eff_mat = material
-                    vd = normalize(cam_pos - wp)
+                    vd = _direction_between(wp, cam_pos)
                     col = UseVertexColors ?
                           _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
                                                    shadow_fn=shadow_fn) :
@@ -658,7 +658,7 @@ end
                                        em.b * t.b * emi)
                 end
             else
-                vd = normalize(cam_pos - wp)
+                vd = _direction_between(wp, cam_pos)
                 shade_mat = UseVertexColors ? _with_vertex_color(material, vc) : material
                 col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
             end
@@ -758,7 +758,7 @@ end
             wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
-            vd = normalize(cam_pos - wp)
+            vd = _direction_between(wp, cam_pos)
             if UseVertexColors
                 vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                             a0*vc1.g + a1*vc2.g + a2*vc3.g,
@@ -949,7 +949,9 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             fn = _flat_face_normal(geo, i1, i2, i3, w1, w2, w3, normal_mat, has_normals)
             # Orthographic rays are parallel, so facing is judged against the
             # constant view direction; the eye-point vector is perspective-only.
-            facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
+            facing = ortho_dir === nothing ?
+                dot(fn, _direction_between(wc, cam_pos)) :
+                dot(fn, ortho_dir)
             (side === :front ? facing <= 0 : facing > 0) && continue
         end
         # Geometry without authored normals: fall back to the local-space
@@ -1259,7 +1261,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # rather than the eye-point vector `cam_pos - wc`, which is exact only for
     # perspective projection. `nothing` selects the perspective test.
     ortho_dir = camera isa OrthographicCamera ?
-        normalize(camera.position - camera.target) : nothing
+        _direction_between(camera.target, camera.position) : nothing
 
     if cache === nothing
         meshes = Mesh[]
@@ -1758,8 +1760,9 @@ material_clipping_planes(m::AbstractMaterial) =
     v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
     center = _mean3_vec3(v1, v2, v3)
     face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
-    return clamp_color(shade_face(face_n, normalize(cam_pos - center), center,
-                                  mat, lights; shadow_fn=shadow_fn))
+    return clamp_color(shade_face(
+        face_n, _direction_between(center, cam_pos), center,
+        mat, lights; shadow_fn=shadow_fn))
 end
 
 function _combined_clipping_planes(global_planes, material_planes)
@@ -1864,7 +1867,9 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                    mat4_transform_point(world_mat, v3), normal_mat, has_normals)
             # Orthographic rays are parallel, so facing is judged against the
             # constant view direction; the eye-point vector is perspective-only.
-            facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
+            facing = ortho_dir === nothing ?
+                dot(fn, _direction_between(wc, cam_pos)) :
+                dot(fn, ortho_dir)
             (side === :front ? facing <= 0 : facing > 0) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))

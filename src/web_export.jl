@@ -1339,7 +1339,7 @@ function _web_write_light_json(io::IO, light::DirectionalLight, scene::Scene;
                                num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
     target = light.target
-    dir = normalize(pos - target)
+    dir = _direction_between(target, pos)
     _web_write_light_common_json(io, "directional", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
@@ -1404,7 +1404,7 @@ function _web_write_light_json(io::IO, light::SpotLight, scene::Scene;
                                num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
     target = light.target
-    dir = normalize(target - pos)
+    dir = _direction_between(pos, target)
     penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
     cone = clamp(Float64(light.angle), 0.0, pi)
     inner = cone * (1.0 - penumbra)
@@ -1474,7 +1474,7 @@ function _web_write_light_json(io::IO, light::RectAreaLight;
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
     pos = get_position(light)
-    forward = normalize(light.target - pos)
+    forward = _direction_between(pos, light.target)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, forward))
     v = cross(forward, u)

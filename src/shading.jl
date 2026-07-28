@@ -772,7 +772,7 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
         end
 
         face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
-        view_dir = normalize(cam_pos - center)
+        view_dir = _direction_between(center, cam_pos)
         color = shade_face(face_n, view_dir, center, material, lights; shadow_fn=shadow_fn)
         colors[fi] = clamp_color(color)
     end
@@ -922,7 +922,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         end
 
         face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
-        view_dir = normalize(cam_pos - center)
+        view_dir = _direction_between(center, cam_pos)
         eff_mat = material
         mapped_kind = 0
         phong_specular = Color3(0.0, 0.0, 0.0)

@@ -164,7 +164,7 @@ function _orbit_zoom_now!(oc::OrbitControls, factor)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
 function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
-    fwd = normalize(target - camera.position)
+    fwd = _direction_between(camera.position, target)
     raw_right = cross(fwd, camera.up)
     if norm(raw_right) <= 1e-12
         candidate = abs(fwd.x) < 0.9 ? Vec3(1.0, 0.0, 0.0) : Vec3(0.0, 1.0, 0.0)
@@ -354,7 +354,7 @@ end
 """Translate the camera (and its target) along forward/right/up axes."""
 function fly_translate!(fc::FlyControls, forward, right, up)
     cam = fc.camera
-    f = normalize(cam.target - cam.position)
+    f = _direction_between(cam.position, cam.target)
     r = normalize(cross(f, cam.up))
     u = cross(r, f)
     shift = f * forward + r * right + u * up

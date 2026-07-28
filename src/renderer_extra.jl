@@ -925,7 +925,9 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                    mat4_transform_point(world_mat, v1),
                                    mat4_transform_point(world_mat, v2),
                                    mat4_transform_point(world_mat, v3), normal_mat, has_normals)
-            facing = ortho_dir === nothing ? dot(fn, cam_pos - wc) : dot(fn, ortho_dir)
+            facing = ortho_dir === nothing ?
+                dot(fn, _direction_between(wc, cam_pos)) :
+                dot(fn, ortho_dir)
             (side === :front ? facing <= 0 : facing > 0) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
@@ -1191,7 +1193,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     proj = projection_matrix(camera); view = view_matrix(camera); near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        normalize(camera.position - camera.target) : nothing
+        _direction_between(camera.target, camera.position) : nothing
     _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                            cache.instanced, cache.instanced_worlds,
                                            scene)
@@ -2872,7 +2874,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        normalize(camera.position - camera.target) : nothing
+        _direction_between(camera.target, camera.position) : nothing
     H = rt.height
     thread_count = min(tiles, max(Threads.nthreads(), 1))
     thread_caches = if cache === nothing
