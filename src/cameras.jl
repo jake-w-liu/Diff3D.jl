@@ -168,10 +168,12 @@ function projection_matrix(c::OrthographicCamera)
     zoom = _validated_camera_zoom(c.zoom)
     l, r, b, t, n, fr = _validated_orthographic_params(
         c.left, c.right, c.bottom, c.top, c.near, c.far)
-    cx = (l + r) * 0.5
-    cy = (b + t) * 0.5
-    hx = (r - l) * 0.5 / zoom
-    hy = (t - b) * 0.5 / zoom
+    cx = _stable_midpoint(l, r)
+    cy = _stable_midpoint(b, t)
+    # midpoint(-lo, hi) is (hi-lo)/2 without overflowing for opposite-sign
+    # bounds. Divide only after the representable half-extent is formed.
+    hx = _stable_midpoint(-l, r) / zoom
+    hy = _stable_midpoint(-b, t) / zoom
     mat4_orthographic(cx - hx, cx + hx, cy - hy, cy + hy, n, fr)
 end
 

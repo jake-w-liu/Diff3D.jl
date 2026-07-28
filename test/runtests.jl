@@ -21702,4 +21702,24 @@ end
         ) ≈ [0.75, 0.25]
     end
 
+    @testset "fresh audit round 92 fixes" begin
+        camera = OrthographicCamera(
+            left=-1.0e308,
+            right=1.0e308,
+            bottom=-1.0,
+            top=1.0,
+            near=0.1,
+            far=10.0,
+        )
+        expected = mat4_orthographic(
+            -1.0e308, 1.0e308, -1.0, 1.0, 0.1, 10.0)
+        @test projection_matrix(camera).e == expected.e
+
+        camera.zoom = 2.0
+        expected_zoomed = mat4_orthographic(
+            -5.0e307, 5.0e307, -0.5, 0.5, 0.1, 10.0)
+        @test projection_matrix(camera).e == expected_zoomed.e
+        @test_opt_alloc 0 projection_matrix(camera)
+    end
+
 end
