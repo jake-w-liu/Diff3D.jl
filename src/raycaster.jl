@@ -219,6 +219,57 @@ function _ray_point_distance(o::Vec3, d::Vec3, p::Vec3)
     return (t, norm(p - closest))
 end
 
+@inline function _ray_representation_sqrt(
+        value::_FloatRepresentation{T}) where {T<:AbstractFloat}
+    value.nonzero || return zero(T)
+    value.mantissa >= zero(T) || return T(NaN)
+    mantissa = value.mantissa
+    exponent = value.exponent
+    if isodd(exponent)
+        mantissa *= 2
+        exponent -= 1
+    end
+    return ldexp(sqrt(mantissa), div(exponent, 2))
+end
+
+@inline function _ray_residual_distance(offset, direction, parameter)
+    T = typeof(parameter)
+    parameter_representation =
+        _float_difference_representation(zero(T), parameter)
+    residual = (
+        _float_representation_add(
+            offset[1],
+            _float_representation_negate(_float_representation_multiply(
+                direction[1], parameter_representation))),
+        _float_representation_add(
+            offset[2],
+            _float_representation_negate(_float_representation_multiply(
+                direction[2], parameter_representation))),
+        _float_representation_add(
+            offset[3],
+            _float_representation_negate(_float_representation_multiply(
+                direction[3], parameter_representation))),
+    )
+    return _ray_representation_sqrt(
+        _float_representation_dot(residual, residual))
+end
+
+function _ray_point_distance(
+        o::Vec3{T}, d::Vec3{T}, p::Vec3{T}) where {T<:AbstractFloat}
+    direction = _ray_float_vector_representation(d)
+    direction_squared = _float_representation_dot(direction, direction)
+    direction_squared.nonzero || return (zero(T), T(NaN))
+    offset = _float_vector_difference(o, p)
+    parameter = _float_representation_ratio(
+        _float_representation_dot(offset, direction), direction_squared)
+    if parameter < zero(T)
+        return (zero(T), _ray_representation_sqrt(
+            _float_representation_dot(offset, offset)))
+    end
+    return (parameter, _ray_residual_distance(
+        offset, direction, parameter))
+end
+
 # Shortest distance between the ray (origin `o`, unit dir `d`) and the segment
 # `[a, b]`, plus the ray parameter `t_ray >= 0` at the closest approach on the
 # ray and the point `seg_pt` on the segment. Closed-form minimisation of
@@ -253,6 +304,76 @@ function _ray_segment_distance(o::Vec3, d::Vec3, a::Vec3, b::Vec3)
     end
     ray_pt = o + d * t_ray
     return (t_ray, norm(ray_pt - seg_pt), seg_pt)
+end
+
+function _ray_segment_distance(
+        o::Vec3{T}, d::Vec3{T}, a::Vec3{T},
+        b::Vec3{T}) where {T<:AbstractFloat}
+    direction = _ray_float_vector_representation(d)
+    segment = _float_vector_difference(a, b)
+    origin_offset = _float_vector_difference(a, o)
+    direction_squared = _float_representation_dot(direction, direction)
+    segment_squared = _float_representation_dot(segment, segment)
+    direction_squared.nonzero ||
+        return (zero(T), T(NaN), Vec3(T(NaN), T(NaN), T(NaN)))
+
+    if segment_squared.nonzero
+        direction_segment = _float_representation_dot(direction, segment)
+        direction_offset = _float_representation_dot(
+            direction, origin_offset)
+        segment_offset = _float_representation_dot(segment, origin_offset)
+        perpendicular = _float_representation_cross(direction, segment)
+        denominator = _float_representation_dot(perpendicular, perpendicular)
+        segment_scale = _float_representation_add(
+            segment_squared,
+            _float_difference_representation(zero(T), one(T)),
+        )
+        relative_denominator =
+            _float_representation_ratio(denominator, segment_scale)
+        if denominator.nonzero && relative_denominator > eps(T)
+            numerator = _float_representation_add(
+                _float_representation_multiply(
+                    direction_squared, segment_offset),
+                _float_representation_negate(
+                    _float_representation_multiply(
+                        direction_segment, direction_offset)),
+            )
+            segment_parameter =
+                _float_representation_ratio(numerator, denominator)
+        else
+            segment_parameter = _float_representation_ratio(
+                segment_offset, segment_squared)
+        end
+        segment_parameter =
+            clamp(segment_parameter, zero(T), one(T))
+    else
+        segment_parameter = zero(T)
+    end
+
+    segment_point = line3_at(Line3(a, b), segment_parameter)
+    ray_offset = _float_vector_difference(o, segment_point)
+    ray_parameter = _float_representation_ratio(
+        _float_representation_dot(ray_offset, direction),
+        direction_squared,
+    )
+    if ray_parameter < zero(T)
+        ray_parameter = zero(T)
+        if segment_squared.nonzero
+            segment_offset =
+                _float_representation_dot(segment, origin_offset)
+            segment_parameter = clamp(
+                _float_representation_ratio(
+                    segment_offset, segment_squared),
+                zero(T),
+                one(T),
+            )
+            segment_point = line3_at(Line3(a, b), segment_parameter)
+            ray_offset = _float_vector_difference(o, segment_point)
+        end
+    end
+    distance = _ray_residual_distance(
+        ray_offset, direction, ray_parameter)
+    return (ray_parameter, distance, segment_point)
 end
 
 @inline function _raycast_morph_positions(rc::Raycaster, obj, geo::BufferGeometry)

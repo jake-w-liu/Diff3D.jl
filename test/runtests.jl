@@ -21644,4 +21644,40 @@ end
         @test hits[1].point == Vec3(0.0, 0.25, 0.0)
     end
 
+    @testset "fresh audit round 90 fixes" begin
+        ray_origin = Vec3(0.0, 1.0, 0.0)
+        ray_direction = Vec3(0.0, -1.0, 0.0)
+        segment_start = Vec3(-1.0e308, 0.0, 0.0)
+        segment_end = Vec3(1.0e308, 0.0, 0.0)
+        ray_parameter, distance, segment_point =
+            Diff3D._ray_segment_distance(
+                ray_origin, ray_direction, segment_start, segment_end)
+        @test ray_parameter == 1.0
+        @test distance == 0.0
+        @test segment_point == Vec3()
+
+        segment_geometry = BufferGeometry(
+            [-1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0],
+            Float64[], Float64[], Int[], 3, 0)
+        segment_object = LineSegments(
+            segment_geometry, LineBasicMaterial())
+        hits = raycast(
+            Raycaster(
+                ray_origin, ray_direction; line_threshold=0.1),
+            segment_object;
+            recursive=false,
+        )
+        @test length(hits) == 1
+        @test hits[1].distance == 1.0
+        @test hits[1].point == Vec3()
+
+        point_parameter, point_distance = Diff3D._ray_point_distance(
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(0.0, 1.0, 0.0),
+            Vec3(1.0e308, 1.0, 0.0),
+        )
+        @test point_parameter == 1.0
+        @test point_distance == Inf
+    end
+
 end
