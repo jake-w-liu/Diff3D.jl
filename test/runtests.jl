@@ -22194,4 +22194,31 @@ end
             matrix, vector)
     end
 
+    @testset "fresh audit round 118 fixes" begin
+        left = Mat4{Float64}((
+            1.0e308, 0.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 0.0,
+            1.0e308, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ))
+        right = Mat4{Float64}((
+            1.0, 1.0, -1.0, 1.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ))
+        product = left * right
+        @test product.e[1] == 1.0
+        @test all(isfinite, product.e)
+
+        @test ForwardDiff.derivative(
+            x -> mat4_get(
+                mat4_scaling(x, 2.0, 3.0) *
+                mat4_translation(4.0, 5.0, 6.0),
+                1, 4),
+            2.0,
+        ) == 4.0
+        @test_opt_alloc 0 left * right
+    end
+
 end
