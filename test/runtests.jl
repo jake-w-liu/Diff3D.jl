@@ -22159,4 +22159,19 @@ end
         @test_opt_alloc 0 dot(a2, b2)
     end
 
+    @testset "fresh audit round 116 fixes" begin
+        plane = Plane(Vec3(1.0, 1.0, 0.0), -1.0e308)
+        point = Vec3(1.0e308, 1.0, 0.0)
+        @test plane_distance_to_point(plane, point) == 1.0
+
+        @test ForwardDiff.derivative(
+            x -> plane_distance_to_point(
+                Plane(Vec3(1.0, 0.0, 0.0), 2.0),
+                Vec3(x, 0.0, 0.0)),
+            1.0,
+        ) == 1.0
+        @test_opt_alloc 0 plane_distance_to_point(
+            plane, point)
+    end
+
 end

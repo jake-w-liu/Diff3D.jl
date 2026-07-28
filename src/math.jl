@@ -762,11 +762,18 @@ end
 
 # Signed distance from a plane (a·x + d = 0) to a point; >0 on the normal side.
 function plane_distance_to_point(p::Plane, pt::Vec3)
-    result = dot(p.normal, pt) + p.constant
-    if result isa AbstractFloat && !isfinite(result) &&
+    projected = dot(p.normal, pt)
+    result = projected + p.constant
+    if result isa AbstractFloat &&
        isfinite(p.normal.x) && isfinite(p.normal.y) &&
        isfinite(p.normal.z) && isfinite(p.constant) &&
-       isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z)
+       isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z) &&
+       _float_dot_needs_fallback(
+           result,
+           max(abs(projected), abs(p.constant)),
+           !iszero(projected) || !iszero(p.constant),
+           2,
+       )
         return _stable_float_plane_distance(p, pt)
     end
     return result
@@ -1215,18 +1222,16 @@ end
         p.normal.x, p.normal.y, p.normal.z, p.constant,
         pt.x, pt.y, pt.z,
     )
-    normal = (
-        _float_value_representation(nx),
-        _float_value_representation(ny),
-        _float_value_representation(nz),
-    )
-    point = (
-        _float_value_representation(x),
-        _float_value_representation(y),
-        _float_value_representation(z),
-    )
-    result = _float_representation_add(
-        _float_representation_dot(normal, point),
+    result = _float_representation_sum4(
+        _float_representation_multiply(
+            _float_value_representation(nx),
+            _float_value_representation(x)),
+        _float_representation_multiply(
+            _float_value_representation(ny),
+            _float_value_representation(y)),
+        _float_representation_multiply(
+            _float_value_representation(nz),
+            _float_value_representation(z)),
         _float_value_representation(constant),
     )
     return _float_representation_value(result)
