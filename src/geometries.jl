@@ -687,6 +687,14 @@ function _compute_bounding_box_validated(g::BufferGeometry)
     return box
 end
 
+@inline function _geometry_midpoint(a::Float64, b::Float64)
+    a == b && return a
+    if signbit(a) == signbit(b)
+        return a + (b - a) * 0.5
+    end
+    return a * 0.5 + b * 0.5
+end
+
 """Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
 function compute_bounding_box(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_box")
@@ -699,13 +707,17 @@ function compute_bounding_sphere(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_sphere")
     g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
     box = _compute_bounding_box_validated(g)
-    center = (box.min + box.max) * 0.5
-    r2 = 0.0
+    center = Vec3(
+        _geometry_midpoint(box.min.x, box.max.x),
+        _geometry_midpoint(box.min.y, box.max.y),
+        _geometry_midpoint(box.min.z, box.max.z),
+    )
+    radius = 0.0
     @inbounds for vi in 1:g.n_vertices
         d = get_vertex(g, vi) - center
-        r2 = max(r2, dot(d, d))
+        radius = max(radius, norm(d))
     end
-    return BoundingSphere(center, sqrt(r2))
+    return BoundingSphere(center, radius)
 end
 
 function get_vertex(g::BufferGeometry, i::Int)

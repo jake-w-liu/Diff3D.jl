@@ -1513,10 +1513,7 @@ end
     bs.radius == 0 && geo.n_vertices == 0 && return false
     center = mat4_transform_point(world_mat, bs.center)
     # Column lengths of the upper-left 3×3 give the per-axis scale factors.
-    cx = sqrt(mat4_get(world_mat,1,1)^2 + mat4_get(world_mat,2,1)^2 + mat4_get(world_mat,3,1)^2)
-    cy = sqrt(mat4_get(world_mat,1,2)^2 + mat4_get(world_mat,2,2)^2 + mat4_get(world_mat,3,2)^2)
-    cz = sqrt(mat4_get(world_mat,1,3)^2 + mat4_get(world_mat,2,3)^2 + mat4_get(world_mat,3,3)^2)
-    r = bs.radius * max(cx, cy, cz)
+    r = bs.radius * _mat4_linear_max_scale(world_mat)
     return frustum_intersects_sphere(frustum, BoundingSphere(center, r))
 end
 

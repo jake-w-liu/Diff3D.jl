@@ -298,9 +298,9 @@ function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
     fwd   = Vec3(mat4_get(V,3,1), mat4_get(V,3,2), mat4_get(V,3,3))
     p = Vec3(mat4_get(wm,1,4), mat4_get(wm,2,4), mat4_get(wm,3,4))
     # World scale = column norms of the world matrix (as in the WebGL sprite shader).
-    sx = sqrt(mat4_get(wm,1,1)^2 + mat4_get(wm,2,1)^2 + mat4_get(wm,3,1)^2)
-    sy = sqrt(mat4_get(wm,1,2)^2 + mat4_get(wm,2,2)^2 + mat4_get(wm,3,2)^2)
-    sz = sqrt(mat4_get(wm,1,3)^2 + mat4_get(wm,2,3)^2 + mat4_get(wm,3,3)^2)
+    sx = _mat4_linear_column_norm(wm, 1)
+    sy = _mat4_linear_column_norm(wm, 2)
+    sz = _mat4_linear_column_norm(wm, 3)
     Mat4((right.x*sx, right.y*sx, right.z*sx, 0.0,
           up.x*sy,    up.y*sy,    up.z*sy,    0.0,
           fwd.x*sz,   fwd.y*sz,   fwd.z*sz,   0.0,

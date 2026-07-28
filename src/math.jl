@@ -128,6 +128,21 @@ Mat4() = Mat4{Float64}()
 # Access by (row, col) — 1-based
 @inline mat4_get(m::Mat4, row::Int, col::Int) = m.e[(col-1)*4 + row]
 
+@inline function _mat4_linear_column_norm(m::Mat4, col::Int)
+    return hypot(
+        mat4_get(m, 1, col),
+        mat4_get(m, 2, col),
+        mat4_get(m, 3, col),
+    )
+end
+
+@inline function _mat4_linear_max_scale(m::Mat4)
+    sx = _mat4_linear_column_norm(m, 1)
+    sy = _mat4_linear_column_norm(m, 2)
+    sz = _mat4_linear_column_norm(m, 3)
+    return max(max(sx, sy), sz)
+end
+
 function mat4_multiply(a::Mat4, b::Mat4)
     T = promote_type(eltype(a.e), eltype(b.e))
     ae = a.e

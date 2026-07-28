@@ -21146,4 +21146,43 @@ end
             0.0, -1.0e308, 1.0, 1.0e308)
     end
 
+    @testset "fresh audit round 78 fixes" begin
+        same_large_coordinate = BufferGeometry(
+            [1.0e308, 0.0, 0.0, 1.0e308, 2.0, 0.0],
+            zeros(6), Float64[], Int[], 2, 0)
+        same_bounds = compute_bounding_sphere(same_large_coordinate)
+        @test same_bounds.center == Vec3(1.0e308, 1.0, 0.0)
+        @test same_bounds.radius == 1.0
+
+        opposite_coordinates = BufferGeometry(
+            [-1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0],
+            zeros(6), Float64[], Int[], 2, 0)
+        opposite_bounds = compute_bounding_sphere(opposite_coordinates)
+        @test opposite_bounds.center == Vec3(0.0, 0.0, 0.0)
+        @test opposite_bounds.radius == 1.0e308
+
+        extreme_linear = Mat4{Float64}((
+            1.0e308, 1.0e308, 0.0, 0.0,
+            0.0, 2.0, 0.0, 0.0,
+            0.0, 0.0, 3.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ))
+        @test Diff3D._mat4_linear_column_norm(extreme_linear, 1) ==
+              hypot(1.0e308, 1.0e308)
+        @test Diff3D._mat4_linear_max_scale(extreme_linear) ==
+              hypot(1.0e308, 1.0e308)
+
+        sprite = Sprite(SpriteMaterial())
+        sprite.scale = Vec3(1.0e308, 1.0e308, 1.0e308)
+        camera = PerspectiveCamera()
+        billboard = sprite_world_matrix(sprite, camera)
+        @test all(isfinite, billboard.e)
+        @test Diff3D._mat4_linear_column_norm(billboard, 1) == 1.0e308
+        @test Diff3D._mat4_linear_column_norm(billboard, 2) == 1.0e308
+        @test Diff3D._mat4_linear_column_norm(billboard, 3) == 1.0e308
+
+        @test_opt_alloc 64 compute_bounding_sphere(opposite_coordinates)
+        @test_opt_alloc 0 Diff3D._mat4_linear_max_scale(extreme_linear)
+    end
+
 end
