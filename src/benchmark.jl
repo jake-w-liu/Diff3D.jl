@@ -16,6 +16,16 @@ struct BenchResult
     alloc_bytes::Int
 end
 
+@inline function _sorted_median(values::AbstractVector{<:AbstractFloat})
+    n = length(values)
+    n > 0 || throw(ArgumentError("median requires at least one value"))
+    mid = n ÷ 2
+    isodd(n) && return values[mid + 1]
+    lo, hi = values[mid], values[mid + 1]
+    total = lo + hi
+    return isfinite(total) ? total / 2 : lo / 2 + hi / 2
+end
+
 """Total renderable triangles in a scene (hierarchically visible drawables
 only), including InstancedMesh instances."""
 function _scene_triangle_count_visible(obj::AbstractObject3D)
@@ -84,7 +94,7 @@ function benchmark_render(scene::Scene, camera::AbstractCamera, W::Int, H::Int;
         r == 1 && (alloc = res.bytes)
     end
     sort!(times)
-    med = times[(reps + 1) ÷ 2]
+    med = _sorted_median(times)
     q1 = times[clamp(round(Int, 0.25 * (reps + 1)), 1, reps)]
     q3 = times[clamp(round(Int, 0.75 * (reps + 1)), 1, reps)]
     return BenchResult(scene_triangle_count(scene), W, H, reps, med, q3 - q1, minimum(times), alloc)

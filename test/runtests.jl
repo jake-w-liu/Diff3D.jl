@@ -20474,4 +20474,20 @@ end
         @test_opt_alloc 0 eps(x)
     end
 
+    @testset "fresh audit round 65 fixes" begin
+        @test_throws ArgumentError("median requires at least one value") Diff3D._sorted_median(
+            Float64[])
+        @test Diff3D._sorted_median([3.0]) == 3.0
+        @test Diff3D._sorted_median([1.0, 9.0]) == 5.0
+        @test Diff3D._sorted_median([1.0, 3.0, 7.0]) == 3.0
+        @test Diff3D._sorted_median([1.0, 3.0, 7.0, 9.0]) == 5.0
+        @test Diff3D._sorted_median([floatmax(Float64), floatmax(Float64)]) ==
+              floatmax(Float64)
+        @test isfinite(Diff3D._sorted_median(
+            [prevfloat(floatmax(Float64)), floatmax(Float64)]))
+
+        sorted_times = [1.0, 3.0, 7.0, 9.0]
+        @test_opt_alloc 0 Diff3D._sorted_median(sorted_times)
+    end
+
 end
