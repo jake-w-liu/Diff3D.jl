@@ -17,16 +17,28 @@ function tone_map_reinhard(img::AbstractArray)
 end
 
 """ACES filmic tone map (Narkowicz approximation)."""
-function tone_map_aces(img::AbstractArray)
+@inline function _tone_map_aces_value(value)
     a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
+    x = Float64(value)
+    xc = x <= 0.0 ? 0.0 : x
+    isinf(xc) && return 1.0
+    mapped = (xc * (a*xc + b)) /
+             (xc * (c*xc + d) + e)
+    if !isfinite(mapped) && isfinite(xc) && xc > 0.0
+        # Divide the quadratic numerator and denominator by x². This retains
+        # the finite a/c limit without ever forming x² for extreme HDR input.
+        mapped = (a + b / xc) /
+                 (c + d / xc + (e / xc) / xc)
+    end
+    return clamp(mapped, 0.0, 1.0)
+end
+
+function tone_map_aces(img::AbstractArray)
     out = Array{Float64}(undef, size(img))
     @inbounds for i in eachindex(img)
         # Clamp unphysical negative radiance to black first (the ACES rational is
-        # positive for small negative x, so raw negatives map to spurious grays);
-        # +Inf maps to the x->Inf limit a/c≈1.03 -> 1, not Inf/Inf=NaN.
-        x = Float64(img[i])
-        xc = x <= 0.0 ? 0.0 : x
-        out[i] = isinf(xc) ? 1.0 : clamp((xc * (a*xc + b)) / (xc * (c*xc + d) + e), 0.0, 1.0)
+        # positive for small negative x, so raw negatives map to spurious grays).
+        out[i] = _tone_map_aces_value(img[i])
     end
     return out
 end

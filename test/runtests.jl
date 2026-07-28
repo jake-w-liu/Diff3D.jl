@@ -22617,4 +22617,14 @@ end
             image, 2, 2, 1, 1, 3, 3, 1, 0.2)
     end
 
+    @testset "fresh audit round 139 fixes" begin
+        largest = floatmax(Float64)
+        hdr = reshape([1.0e154, 1.0e200, largest], 1, 1, 3)
+        mapped = tone_map_aces(hdr)
+        @test mapped == ones(1, 1, 3)
+        @test Diff3D._tone_map_aces_value(Inf) == 1.0
+        @test Diff3D._tone_map_aces_value(-Inf) == 0.0
+        @test_opt_alloc 0 Diff3D._tone_map_aces_value(largest)
+    end
+
 end
