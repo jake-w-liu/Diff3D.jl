@@ -50,6 +50,16 @@ ADVar(x::ADVar) = x
 Base.convert(::Type{ADVar}, x::Real) = x isa ADVar ? x : ADVar(x)
 Base.convert(::Type{ADVar}, x::ADVar) = x
 Base.promote_rule(::Type{ADVar}, ::Type{<:Real}) = ADVar
+Base.promote_rule(
+    ::Type{ADVar},
+    ::Type{ForwardDiff.Dual{Tag,V,N}},
+) where {Tag,V,N} =
+    ForwardDiff.Dual{Tag,promote_type(ADVar, V),N}
+Base.promote_rule(
+    ::Type{ForwardDiff.Dual{Tag,V,N}},
+    ::Type{ADVar},
+) where {Tag,V,N} =
+    ForwardDiff.Dual{Tag,promote_type(V, ADVar),N}
 
 Base.Float64(x::ADVar) = x.val
 # `float` must preserve the ADVar (ForwardDiff.Dual convention): Base's generic
@@ -62,6 +72,22 @@ Base.float(::Type{ADVar}) = ADVar
 Base.convert(::Type{T}, x::ADVar) where {T<:AbstractFloat} = convert(T, x.val)
 Base.Bool(x::ADVar) = Bool(x.val)
 Base.hash(x::ADVar, h::UInt) = hash(x.val, h)
+
+# ForwardDiff defines each of these operations for `(Real, Dual)` and
+# `(Dual, Real)`, while reverse mode defines the corresponding broad
+# `(ADVar, Real)` methods below. Without an explicit intersection, combining
+# the two AD modes raises an ambiguous-method error. Delegate the intersection
+# to ForwardDiff's generic rule: it promotes the Dual's value and partials to
+# ADVar, preserving both the forward partial and the reverse tape.
+for op in (:+, :-, :*, :/, :^, :(==), :<, :<=, :>, :>=,
+           :isless, :min, :max, :hypot, :mod, :rem)
+    @eval begin
+        Base.$op(a::ADVar, b::ForwardDiff.Dual) =
+            invoke(Base.$op, Tuple{Real,ForwardDiff.Dual}, a, b)
+        Base.$op(a::ForwardDiff.Dual, b::ADVar) =
+            invoke(Base.$op, Tuple{ForwardDiff.Dual,Real}, a, b)
+    end
+end
 
 # ---- arithmetic ----
 Base.:+(a::ADVar, b::ADVar) = _ad_record(a.val + b.val, (a, b), (1.0, 1.0))

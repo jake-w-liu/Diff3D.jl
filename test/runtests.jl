@@ -21825,4 +21825,19 @@ end
             light, Vec3(), 1.0)
     end
 
+    @testset "fresh audit round 99 fixes" begin
+        nested_objective(x) = ForwardDiff.derivative(
+            y -> x[1] * y + x[1]^2 * y, 3.0)
+        @test nested_objective([2.0]) == 6.0
+        @test reverse_gradient(
+            nested_objective, [2.0]) == [5.0]
+
+        reverse_value = ADVar(2.0)
+        forward_value = ForwardDiff.Dual(3.0, 1.0)
+        mixed = reverse_value + forward_value
+        @test ForwardDiff.value(mixed) isa ADVar
+        @test Float64(ForwardDiff.value(mixed)) == 5.0
+        @test Float64(ForwardDiff.partials(mixed)[1]) == 1.0
+    end
+
 end
