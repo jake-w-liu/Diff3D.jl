@@ -21863,4 +21863,17 @@ end
             target, huge_scissor)
     end
 
+    @testset "fresh audit round 101 fixes" begin
+        shadow = ShadowMap(
+            fill(-1.0, 2, 2), Mat4{Float64}(), 0.0, 0)
+        point = Vec3()
+        @test shadow_visibility(
+            shadow, point; pcf_radius=typemax(Int)) == 0.0
+        @test shadow_visibility(
+            shadow, point; pcf_radius=typemax(Int)) ==
+              shadow_visibility(shadow, point; pcf_radius=2)
+        @test_opt_alloc 0 shadow_visibility(
+            shadow, point; pcf_radius=typemax(Int))
+    end
+
 end

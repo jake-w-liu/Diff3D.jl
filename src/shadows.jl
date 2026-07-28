@@ -378,8 +378,10 @@ function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius
     # Soft shadow: average the unoccluded fraction over the texel neighbourhood,
     # clamped to the map bounds. Empty (Inf) texels count as lit, matching the
     # single-sample early-out above.
-    x0 = max(px - r, 1); x1 = min(px + r, W)
-    y0 = max(py - r, 1); y1 = min(py + r, H)
+    x0 = r >= px - 1 ? 1 : px - r
+    x1 = r >= W - px ? W : px + r
+    y0 = r >= py - 1 ? 1 : py - r
+    y1 = r >= H - py ? H : py + r
     lit = 0
     total = 0
     thresh = ndcz - sm.bias
