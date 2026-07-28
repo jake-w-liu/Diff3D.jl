@@ -967,6 +967,41 @@ const _PLY_SIZE = Dict(:i8=>1, :u8=>1, :i16=>2, :u16=>2, :i32=>4, :u32=>4, :f32=
 # Integer scalar types: PLY colour channels stored as integers are normalised to [0,1].
 _ply_is_int(t::Symbol) = t in (:i8, :u8, :i16, :u16, :i32, :u32)
 
+@inline function _ply_integer_bounds(t::Symbol)
+    t === :i8 && return (-128.0, 127.0)
+    t === :u8 && return (0.0, 255.0)
+    t === :i16 && return (-32_768.0, 32_767.0)
+    t === :u16 && return (0.0, 65_535.0)
+    t === :i32 && return (-2_147_483_648.0, 2_147_483_647.0)
+    return (0.0, 4_294_967_295.0) # :u32
+end
+
+@noinline function _ply_ascii_declared_type_error(element::String, row::Int,
+                                                   prop::String, item::Int,
+                                                   t::Symbol)
+    location = item == 0 ?
+               "PLY $element row $row property $prop" :
+               "PLY $element row $row property $prop item $item"
+    error("$location is not representable as declared $t")
+end
+
+@inline function _ply_ascii_typed_value(value::Float64, t::Symbol,
+                                        element::String, row::Int,
+                                        prop::String, item::Int=0)
+    if _ply_is_int(t)
+        lo, hi = _ply_integer_bounds(t)
+        (value == trunc(value) && lo <= value <= hi) ||
+            _ply_ascii_declared_type_error(element, row, prop, item, t)
+        return value
+    elseif t === :f32
+        rounded = Float32(value)
+        isfinite(rounded) ||
+            _ply_ascii_declared_type_error(element, row, prop, item, t)
+        return Float64(rounded)
+    end
+    return value
+end
+
 @inline function _ply_color_integer_max(t::Symbol)
     t === :u8 && return 255.0
     t === :i8 && return 127.0
@@ -1180,11 +1215,12 @@ end
 @inline function _ply_validate_ascii_property_value(bytes::AbstractVector{UInt8},
                                                     first::Int, last::Int,
                                                     element::String, row::Int,
-                                                    prop::String, item::Int=0)
-    _, status = _ply_try_parse_ascii_float(bytes, first, last)
+                                                    prop::String, t::Symbol,
+                                                    item::Int=0)
+    value, status = _ply_try_parse_ascii_float(bytes, first, last)
     status == UInt8(0) ||
         _ply_ascii_property_value_error(element, row, prop, item, status)
-    return nothing
+    return _ply_ascii_typed_value(value, t, element, row, prop, item)
 end
 
 @noinline _ply_ascii_missing_property_error(element::String, row::Int, prop::String) =
@@ -1446,7 +1482,9 @@ function load_ply(path::String)
                         val = _ply_parse_ascii_vertex_float(bytes, first, last,
                                                             v + 1, c, props)
                         if prop[1] === :list
-                            nitems = checked_list_count(val)
+                            count_value = _ply_ascii_typed_value(
+                                val, prop[3], "vertex", v + 1, prop[2])
+                            nitems = checked_list_count(count_value)
                             for item in 1:nitems
                                 first, last, p = _ply_next_ascii_token(
                                     bytes, p, line_stop)
@@ -1455,29 +1493,33 @@ function load_ply(path::String)
                                         "vertex", v + 1, prop[2])
                                 _ply_validate_ascii_property_value(
                                     bytes, first, last, "vertex", v + 1,
-                                    prop[2], item)
+                                    prop[2], prop[4], item)
                             end
-                        elseif c == ix
-                            positions[b3+1] = val
-                        elseif c == iy
-                            positions[b3+2] = val
-                        elseif c == iz
-                            positions[b3+3] = val
-                        elseif have_normals && c == inx
-                            normals[b3+1] = val
-                        elseif have_normals && c == iny
-                            normals[b3+2] = val
-                        elseif have_normals && c == inz
-                            normals[b3+3] = val
-                        elseif have_color && c == ir
-                            colors[b3+1] = _ply_normalize_color(
-                                val, types[c], v + 1, prop[2])
-                        elseif have_color && c == ig
-                            colors[b3+2] = _ply_normalize_color(
-                                val, types[c], v + 1, prop[2])
-                        elseif have_color && c == ib
-                            colors[b3+3] = _ply_normalize_color(
-                                val, types[c], v + 1, prop[2])
+                        else
+                            val = _ply_ascii_typed_value(
+                                val, types[c], "vertex", v + 1, prop[2])
+                            if c == ix
+                                positions[b3+1] = val
+                            elseif c == iy
+                                positions[b3+2] = val
+                            elseif c == iz
+                                positions[b3+3] = val
+                            elseif have_normals && c == inx
+                                normals[b3+1] = val
+                            elseif have_normals && c == iny
+                                normals[b3+2] = val
+                            elseif have_normals && c == inz
+                                normals[b3+3] = val
+                            elseif have_color && c == ir
+                                colors[b3+1] = _ply_normalize_color(
+                                    val, types[c], v + 1, prop[2])
+                            elseif have_color && c == ig
+                                colors[b3+2] = _ply_normalize_color(
+                                    val, types[c], v + 1, prop[2])
+                            elseif have_color && c == ib
+                                colors[b3+3] = _ply_normalize_color(
+                                    val, types[c], v + 1, prop[2])
+                            end
                         end
                     end
                 end
@@ -1544,12 +1586,15 @@ function load_ply(path::String)
                                 "face", face_row, prop[2])
                         if prop[1] === :scalar
                             _ply_validate_ascii_property_value(
-                                bytes, first, last, "face", face_row, prop[2])
+                                bytes, first, last, "face", face_row,
+                                prop[2], prop[3])
                             continue
                         end
-                        nitems = checked_list_count(
-                            _ply_parse_ascii_face_float(
-                                bytes, first, last, face_row, :count))
+                        raw_count = _ply_parse_ascii_face_float(
+                            bytes, first, last, face_row, :count)
+                        count_value = _ply_ascii_typed_value(
+                            raw_count, prop[3], "face", face_row, prop[2])
+                        nitems = checked_list_count(count_value)
                         first_idx = 0
                         prev_idx = 0
                         for k in 1:nitems
@@ -1559,11 +1604,12 @@ function load_ply(path::String)
                                 _ply_ascii_missing_property_error(
                                     "face", face_row, prop[2])
                             if prop_col == list_col
-                                idx = checked_vertex_index(
-                                    _ply_parse_ascii_face_float(
-                                        bytes, first, last, face_row, :index, k),
-                                    nverts,
-                                )
+                                raw_index = _ply_parse_ascii_face_float(
+                                    bytes, first, last, face_row, :index, k)
+                                typed_index = _ply_ascii_typed_value(
+                                    raw_index, prop[4], "face", face_row,
+                                    prop[2], k)
+                                idx = checked_vertex_index(typed_index, nverts)
                                 if k == 1
                                     first_idx = idx
                                 elseif k == 2
@@ -1576,7 +1622,7 @@ function load_ply(path::String)
                             else
                                 _ply_validate_ascii_property_value(
                                     bytes, first, last, "face", face_row,
-                                    prop[2], k)
+                                    prop[2], prop[4], k)
                             end
                         end
                     end

@@ -20872,4 +20872,72 @@ end
         @test_opt_alloc 0 Diff3D._gltf_checked_integer(1, "test")
     end
 
+    @testset "fresh audit round 73 fixes" begin
+        mktempdir() do dir
+            file_counter = Ref(0)
+            ply_path = text -> begin
+                file_counter[] += 1
+                path = joinpath(dir, "case$(file_counter[]).ply")
+                write(path, text)
+                path
+            end
+            vertex_file = (properties, row) ->
+                "ply\nformat ascii 1.0\nelement vertex 1\n" *
+                properties * "\nend_header\n" * row * "\n"
+
+            @test_throws "property x is not representable as declared u8" load_ply(
+                ply_path(vertex_file(
+                    "property uchar x\nproperty float y\nproperty float z",
+                    "256 0 0")))
+            @test_throws "property x is not representable as declared u8" load_ply(
+                ply_path(vertex_file(
+                    "property uchar x\nproperty float y\nproperty float z",
+                    "1.5 0 0")))
+            @test_throws "property x is not representable as declared f32" load_ply(
+                ply_path(vertex_file(
+                    "property float x\nproperty float y\nproperty float z",
+                    "1e100 0 0")))
+
+            # Ignored scalar properties are still part of the declared row
+            # schema and must be representable by their declared type.
+            @test_throws "property tag is not representable as declared u8" load_ply(
+                ply_path(vertex_file(
+                    "property float x\nproperty float y\nproperty float z\n" *
+                    "property uchar tag",
+                    "0 0 0 300")))
+
+            # ASCII float properties now have the same Float32 value as their
+            # binary counterpart, instead of retaining undeclared precision.
+            g = load_ply(ply_path(vertex_file(
+                "property float x\nproperty float y\nproperty float z",
+                "0.1 0 0")))
+            @test g.positions[1] == Float64(Float32(0.1))
+
+            face_base =
+                "ply\nformat ascii 1.0\nelement vertex 3\n" *
+                "property float x\nproperty float y\nproperty float z\n" *
+                "element face 1\nproperty list uchar int vertex_indices\n" *
+                "end_header\n0 0 0\n1 0 0\n0 1 0\n"
+            @test_throws "property vertex_indices is not representable as declared u8" load_ply(
+                ply_path(face_base * "256\n"))
+            @test_throws "property vertex_indices item 3 is not representable as declared u8" load_ply(
+                ply_path(replace(
+                    face_base,
+                    "property list uchar int" => "property list uchar uchar",
+                ) * "3 0 1 256\n"))
+        end
+
+        @test Diff3D._ply_ascii_typed_value(
+            -128.0, :i8, "vertex", 1, "x") == -128.0
+        @test Diff3D._ply_ascii_typed_value(
+            4_294_967_295.0, :u32, "vertex", 1, "x") ==
+              4_294_967_295.0
+        @test_throws "not representable as declared i8" Diff3D._ply_ascii_typed_value(
+            -129.0, :i8, "vertex", 1, "x")
+        @test_throws "not representable as declared u32" Diff3D._ply_ascii_typed_value(
+            4_294_967_296.0, :u32, "vertex", 1, "x")
+        @test_opt_alloc 0 Diff3D._ply_ascii_typed_value(
+            255.0, :u8, "vertex", 1, "x")
+    end
+
 end
