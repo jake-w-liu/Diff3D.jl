@@ -199,8 +199,15 @@ Update the left/right eye cameras from a base camera: each eye is the base
 camera shifted by ∓`eye_sep`/2 along the camera's world right axis.
 """
 function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
-    z = normalize(cam.position - cam.target)
-    right = normalize(cross(cam.up, z))
+    view = view_matrix(cam)
+    # The first view-matrix row is the camera's normalized world-right axis.
+    # Reuse the overflow-safe look-at construction instead of subtracting
+    # opposite extreme eye/target coordinates here.
+    right = Vec3(
+        mat4_get(view, 1, 1),
+        mat4_get(view, 1, 2),
+        mat4_get(view, 1, 3),
+    )
     half = s.eye_sep / 2
     for (sub, sign) in ((s.cameraL, -1.0), (s.cameraR, 1.0))
         off = right * (sign * half)

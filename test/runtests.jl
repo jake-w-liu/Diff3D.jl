@@ -21746,4 +21746,23 @@ end
         @test normalize(Vec3()) == Vec3()
     end
 
+    @testset "fresh audit round 95 fixes" begin
+        camera = PerspectiveCamera()
+        camera.position = Vec3(1.0e308, 0.0, 0.0)
+        camera.target = Vec3(-1.0e308, 0.0, 0.0)
+        stereo = StereoCamera()
+        stereo_update!(stereo, camera)
+        for subcamera in (stereo.cameraL, stereo.cameraR)
+            @test all(isfinite, (
+                subcamera.position.x,
+                subcamera.position.y,
+                subcamera.position.z,
+                subcamera.target.x,
+                subcamera.target.y,
+                subcamera.target.z,
+            ))
+        end
+        @test_opt_alloc 0 stereo_update!(stereo, camera)
+    end
+
 end
