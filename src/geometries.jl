@@ -8,6 +8,46 @@ struct BufferAttribute{T}
     item_size::Int  # components per vertex (3 for position, 2 for uv, etc.)
 end
 
+# Generator keywords are user-controlled and several constructors multiply two
+# subdivision axes. Keep the existing one-million-subdivision policy, then cap
+# every generated flat buffer at six entries per subdivision (the index cost of
+# two triangles). This prevents individually valid axes from becoming
+# multi-terabyte cross-products while still allowing million-segment 1D meshes.
+const _GEOMETRY_MAX_SUBDIVISIONS = 1_000_000
+const _GEOMETRY_MAX_BUFFER_ELEMENTS = 6 * _GEOMETRY_MAX_SUBDIVISIONS
+
+@inline function _geometry_checked_add(a::Int, b::Int, label::String)
+    try
+        return Base.checked_add(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label is too large"))
+    end
+end
+
+@inline function _geometry_checked_mul(a::Int, b::Int, label::String)
+    try
+        return Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label is too large"))
+    end
+end
+
+function _geometry_mesh_buffer_lengths(n_vertices::Int, n_faces::Int,
+                                       label::String)
+    n_vertices >= 0 || throw(ArgumentError("$label vertex count is too large"))
+    n_faces >= 0 || throw(ArgumentError("$label face count is too large"))
+    position_len = _geometry_checked_mul(3, n_vertices, "$label position buffer")
+    uv_len = _geometry_checked_mul(2, n_vertices, "$label UV buffer")
+    index_len = _geometry_checked_mul(3, n_faces, "$label index buffer")
+    max(position_len, uv_len, index_len) <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
+        throw(ArgumentError(
+            "$label generated buffer exceeds the " *
+            "$_GEOMETRY_MAX_BUFFER_ELEMENTS-element safety limit"))
+    return position_len, uv_len, index_len
+end
+
 mutable struct BufferGeometry
     positions::Vector{Float64}   # flat: [x1,y1,z1, x2,y2,z2, ...]
     normals::Vector{Float64}     # flat: [nx1,ny1,nz1, ...]
@@ -97,6 +137,8 @@ _geometry_int(value, label::String) = throw(ArgumentError("$label must be an int
 function _geometry_nonnegative_int(value::Integer, label::String)
     n = _geometry_int(value, label)
     n >= 0 || throw(ArgumentError("$label must be non-negative"))
+    n <= _GEOMETRY_MAX_SUBDIVISIONS ||
+        throw(ArgumentError("$label must not exceed $_GEOMETRY_MAX_SUBDIVISIONS"))
     return n
 end
 _geometry_nonnegative_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
@@ -104,6 +146,8 @@ _geometry_nonnegative_int(value, label::String) = throw(ArgumentError("$label mu
 function _geometry_positive_int(value::Integer, label::String)
     n = _geometry_int(value, label)
     n >= 1 || throw(ArgumentError("$label must be positive"))
+    n <= _GEOMETRY_MAX_SUBDIVISIONS ||
+        throw(ArgumentError("$label must not exceed $_GEOMETRY_MAX_SUBDIVISIONS"))
     return n
 end
 _geometry_positive_int(value, label::String) = throw(ArgumentError("$label must be an integer"))
@@ -659,6 +703,9 @@ function _geometry_segment_count(name::String, value)
     try
         n = Int(value)
         n >= 1 || throw(ArgumentError("$name must be at least 1"))
+        n <= _GEOMETRY_MAX_SUBDIVISIONS ||
+            throw(ArgumentError(
+                "$name must not exceed $_GEOMETRY_MAX_SUBDIVISIONS"))
         return n
     catch err
         err isa ArgumentError && rethrow()
@@ -757,10 +804,12 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
                    (ws + 1) * (ds + 1) +
                    (ds + 1) * (hs + 1))
     n_faces = 4 * (ws * hs + ws * ds + ds * hs)
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "BoxGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     use_quad_faces = ws == 1 && hs == 1 && ds == 1
 
     vi = 0
@@ -796,8 +845,8 @@ end
 
 # Coerce a segment-count keyword to an Int >= lo, finite-safe. A non-finite
 # (NaN/Inf) or absurdly large value would throw InexactError in Int(floor(...));
-# clamp into [lo, 1_000_000] first (1e6 is a sanity ceiling — no primitive needs
-# more segments than that) and map non-finite to the minimum.
+# clamp into the generator subdivision range first and map non-finite to the
+# minimum.
 function _clamp_seg(s::Real, lo::Int, label::String)
     s isa Bool && throw(ArgumentError("$label must be numeric"))
     sf = try
@@ -805,7 +854,9 @@ function _clamp_seg(s::Real, lo::Int, label::String)
     catch
         throw(ArgumentError("$label must be numeric"))
     end
-    return isfinite(sf) ? Int(floor(clamp(sf, Float64(lo), 1.0e6))) : lo
+    return isfinite(sf) ?
+           Int(floor(clamp(sf, Float64(lo),
+                           Float64(_GEOMETRY_MAX_SUBDIVISIONS)))) : lo
 end
 _clamp_seg(s, lo::Int, label::String) = throw(ArgumentError("$label must be numeric"))
 @inline _clamp_seg(s, lo::Int) = _clamp_seg(s, lo, "segment count")
@@ -820,10 +871,12 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
     height_segments = _clamp_seg(height_segments, 2, "SphereGeometry height_segments")
     n_verts = (height_segments + 1) * (width_segments + 1)
     n_faces = 2 * width_segments * (height_segments - 1)
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "SphereGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     for j in 0:height_segments
         v = j / height_segments
@@ -897,10 +950,12 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
     height_segments = _clamp_seg(height_segments, 1, "PlaneGeometry height_segments")
     n_verts = (width_segments + 1) * (height_segments + 1)
     n_faces = 2 * width_segments * height_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "PlaneGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     hw, hh = width/2, height/2
     dw = width / width_segments
@@ -960,10 +1015,12 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     cap_count = (top_cap ? 1 : 0) + (bottom_cap ? 1 : 0)
     n_verts = side_vertices + cap_count * (radial_segments + 2)
     n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "CylinderGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     vi = 0
 
     half_h = height / 2
@@ -1105,10 +1162,12 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
     n_verts = (radial_segments + 1) * (tubular_segments + 1)
     n_faces = 2 * radial_segments * tubular_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "TorusGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     for j in 0:radial_segments
         vj = j / radial_segments
@@ -1184,10 +1243,12 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     radial_segments = _clamp_seg(radial_segments, 3, "TorusKnotGeometry radial_segments")
     n_verts = (tubular_segments + 1) * (radial_segments + 1)
     n_faces = 2 * tubular_segments * radial_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "TorusKnotGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     q_over_p = q_val / p_val
 
     function knot_point(t)
@@ -1272,10 +1333,12 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
     phi_segments = _clamp_seg(phi_segments, 1, "RingGeometry phi_segments")
     n_verts = (phi_segments + 1) * (theta_segments + 1)
     n_faces = 2 * theta_segments * phi_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "RingGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     uvd = outer_radius == 0 ? 1.0 : outer_radius
 
     for j in 0:phi_segments
@@ -1329,10 +1392,12 @@ function CircleGeometry(; radius=1.0, segments=32)
     segments = _clamp_seg(segments, 3, "CircleGeometry segments")
     n_verts = segments + 2
     n_faces = segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals_arr = Vector{Float64}(undef, 3 * n_verts)
-    uvs_arr = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "CircleGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals_arr = Vector{Float64}(undef, position_len)
+    uvs_arr = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     positions[1] = 0.0
     positions[2] = 0.0
     positions[3] = 0.0

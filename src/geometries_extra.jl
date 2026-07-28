@@ -64,12 +64,17 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
             throw(ArgumentError("PolyhedronGeometry face indices must reference base vertices"))
     end
     cols = detail + 1
-    n_faces = length(base_faces) * cols * cols
-    n_verts = 3 * n_faces
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    face_columns = _geometry_checked_mul(
+        cols, cols, "PolyhedronGeometry subdivision count")
+    n_faces = _geometry_checked_mul(
+        length(base_faces), face_columns, "PolyhedronGeometry face count")
+    n_verts = _geometry_checked_mul(3, n_faces, "PolyhedronGeometry vertex count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "PolyhedronGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     vi = 0
     out = 1
     for (i1, i2, i3) in base_faces
@@ -299,16 +304,19 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
         hull = _convex_face_hull(clean, face_indices, normal, eps)
         length(hull) >= 3 || continue
         push!(hulls, (hull, normal))
-        n_faces += length(hull) - 2
+        n_faces = _geometry_checked_add(
+            n_faces, length(hull) - 2, "ConvexGeometry face count")
     end
     n_faces >= 4 ||
         throw(ArgumentError("ConvexGeometry produced no non-degenerate hull volume"))
 
-    n_verts = 3 * n_faces
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, n_verts)
+    n_verts = _geometry_checked_mul(3, n_faces, "ConvexGeometry vertex count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "ConvexGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     vi = 0
     @inbounds for (hull, normal) in hulls
         origin = clean[hull[1]]
@@ -359,12 +367,16 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
     segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
 
-    n_verts = (segments + 1) * np
-    n_faces = 2 * segments * (np - 1)
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    n_verts = _geometry_checked_mul(
+        segments + 1, np, "LatheGeometry vertex count")
+    n_faces = _geometry_checked_mul(
+        2 * segments, np - 1, "LatheGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "LatheGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     for i in 0:segments
         u = i / segments
         phi = phi_start + u * phi_length
@@ -427,12 +439,15 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     rs1 = radial_segments + 1
-    n_verts = n * rs1
-    n_faces = 2 * (n - 1) * radial_segments
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    n_verts = _geometry_checked_mul(n, rs1, "TubeGeometry vertex count")
+    n_faces = _geometry_checked_mul(
+        2 * (n - 1), radial_segments, "TubeGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "TubeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     # Initial frame from the first tangent, parallel-transported along the path
     # (as in three.js computeFrenetFrames) so the frame never flips between rings.
@@ -596,8 +611,12 @@ function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
 end
 
 function CatmullRomCurveGeometry(curve::CatmullRomCurve; segments::Integer=200)
-    segs = _geometry_positive_int(segments, "catmull_rom_points segments")
-    positions = Vector{Float64}(undef, 3 * (segs + 1))
+    segs = _geometry_positive_int(
+        segments, "CatmullRomCurveGeometry segments")
+    n_vertices = segs + 1
+    position_len, _, _ =
+        _geometry_mesh_buffer_lengths(n_vertices, 0, "CatmullRomCurveGeometry")
+    positions = Vector{Float64}(undef, position_len)
     for i in 0:segs
         p = catmull_rom_point(curve, i / segs)
         base = 3i + 1
@@ -605,7 +624,7 @@ function CatmullRomCurveGeometry(curve::CatmullRomCurve; segments::Integer=200)
         positions[base + 1] = p.y
         positions[base + 2] = p.z
     end
-    return BufferGeometry(positions, Float64[], Float64[], Int[], segs + 1, 0)
+    return BufferGeometry(positions, Float64[], Float64[], Int[], n_vertices, 0)
 end
 
 # ========================== NURBS / Parametric Geometry ==========================
@@ -751,7 +770,16 @@ function _nurbs_span(degree::Int, knots::Vector{Float64}, npoints::Int, u::Float
     return mid
 end
 
-_nurbs_basis_scratch(degree::Int) = Vector{Float64}(undef, 3 * (degree + 1))
+function _nurbs_basis_scratch(degree::Int)
+    degree >= 0 || throw(ArgumentError("NURBS degree must be non-negative"))
+    n = _geometry_checked_add(degree, 1, "NURBS basis size")
+    len = _geometry_checked_mul(3, n, "NURBS basis size")
+    len <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
+        throw(ArgumentError(
+            "NURBS basis exceeds the " *
+            "$_GEOMETRY_MAX_BUFFER_ELEMENTS-element safety limit"))
+    return Vector{Float64}(undef, len)
+end
 
 function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
                        degree::Int, knots::Vector{Float64})
@@ -885,7 +913,10 @@ end
 
 function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
     segs = _geometry_positive_int(segments, "NURBSCurveGeometry segments")
-    positions = Vector{Float64}(undef, 3 * (segs + 1))
+    n_vertices = segs + 1
+    position_len, _, _ =
+        _geometry_mesh_buffer_lengths(n_vertices, 0, "NURBSCurveGeometry")
+    positions = Vector{Float64}(undef, position_len)
     basis = _nurbs_basis_scratch(curve.degree)
     for i in 0:segs
         p = _nurbs_point(curve, i / segs, basis)
@@ -894,7 +925,7 @@ function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
         positions[base + 1] = p.y
         positions[base + 2] = p.z
     end
-    return BufferGeometry(positions, Float64[], Float64[], Int[], segs + 1, 0)
+    return BufferGeometry(positions, Float64[], Float64[], Int[], n_vertices, 0)
 end
 
 function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, nvertices::Int)
@@ -928,9 +959,13 @@ function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20
     us = _geometry_positive_int(slices, "ParametricGeometry slices")
     vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
     row = us + 1
-    nvertices = row * (vs + 1)
-    positions = Vector{Float64}(undef, 3 * nvertices)
-    uvs = Vector{Float64}(undef, 2 * nvertices)
+    nvertices = _geometry_checked_mul(
+        row, vs + 1, "ParametricGeometry vertex count")
+    nfaces = _geometry_checked_mul(2 * us, vs, "ParametricGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(nvertices, nfaces, "ParametricGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
     for j in 0:vs, i in 0:us
         u = i / us
         v = j / vs
@@ -948,7 +983,7 @@ function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20
         uvs[ubase] = u
         uvs[ubase + 1] = 1.0 - v
     end
-    indices = Vector{Int}(undef, 6 * us * vs)
+    indices = Vector{Int}(undef, index_len)
     out = 1
     for j in 0:(vs - 1), i in 0:(us - 1)
         a = j * row + i + 1
@@ -964,17 +999,23 @@ function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20
         out += 6
     end
     normals = _parametric_normals(positions, indices, nvertices)
-    return BufferGeometry(positions, normals, uvs, indices, nvertices, 2 * us * vs)
+    return BufferGeometry(positions, normals, uvs, indices, nvertices, nfaces)
 end
 
 function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
                               stacks::Integer=20)
-    us = _geometry_positive_int(slices, "ParametricGeometry slices")
-    vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
+    us = _geometry_positive_int(slices, "NURBSSurfaceGeometry slices")
+    vs = _geometry_positive_int(stacks, "NURBSSurfaceGeometry stacks")
     row = us + 1
-    nvertices = row * (vs + 1)
-    positions = Vector{Float64}(undef, 3 * nvertices)
-    uvs = Vector{Float64}(undef, 2 * nvertices)
+    nvertices = _geometry_checked_mul(
+        row, vs + 1, "NURBSSurfaceGeometry vertex count")
+    nfaces = _geometry_checked_mul(
+        2 * us, vs, "NURBSSurfaceGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(
+            nvertices, nfaces, "NURBSSurfaceGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
     basis_u = _nurbs_basis_scratch(surface.degree_u)
     basis_v = _nurbs_basis_scratch(surface.degree_v)
     for j in 0:vs, i in 0:us
@@ -990,7 +1031,7 @@ function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
         uvs[ubase] = u
         uvs[ubase + 1] = 1.0 - v
     end
-    indices = Vector{Int}(undef, 6 * us * vs)
+    indices = Vector{Int}(undef, index_len)
     out = 1
     for j in 0:(vs - 1), i in 0:(us - 1)
         a = j * row + i + 1
@@ -1006,7 +1047,7 @@ function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
         out += 6
     end
     normals = _parametric_normals(positions, indices, nvertices)
-    return BufferGeometry(positions, normals, uvs, indices, nvertices, 2 * us * vs)
+    return BufferGeometry(positions, normals, uvs, indices, nvertices, nfaces)
 end
 
 # ========================== Shape / Extrude ==========================
@@ -1122,12 +1163,26 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     np = length(shape)
     nr = length(path)
     segments = closed ? nr : nr - 1
-    n_verts = nr * np + (closed ? 0 : 2 * np)
-    n_faces = 2 * segments * np + (closed ? 0 : 2 * (np - 2))
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    ring_vertices = _geometry_checked_mul(
+        nr, np, "ExtrudeGeometry path vertex count")
+    cap_vertices = closed ? 0 :
+                   _geometry_checked_mul(2, np, "ExtrudeGeometry cap vertex count")
+    n_verts = _geometry_checked_add(
+        ring_vertices, cap_vertices, "ExtrudeGeometry vertex count")
+    side_faces = _geometry_checked_mul(
+        _geometry_checked_mul(2, segments, "ExtrudeGeometry side face count"),
+        np, "ExtrudeGeometry side face count")
+    cap_faces = closed ? 0 :
+                _geometry_checked_mul(
+                    2, np - 2, "ExtrudeGeometry cap face count")
+    n_faces = _geometry_checked_add(
+        side_faces, cap_faces, "ExtrudeGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "ExtrudeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     T = tangents[1]
     refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -1242,10 +1297,12 @@ function ShapeGeometry(shape::Vector{<:Vec2})
     shape = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     np = length(shape)
     n_faces = np - 2
-    positions = Vector{Float64}(undef, 3 * np)
-    normals = Vector{Float64}(undef, 3 * np)
-    uvs = Vector{Float64}(undef, 2 * np)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(np, n_faces, "ShapeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     @inbounds for i in 1:np
         pt = shape[i]
         pbase = 3i - 2
@@ -1276,12 +1333,16 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     # side-wall normals stay consistent with the winding for any input orientation.
     shape = _extrude_clean_shape(shape)
     np = length(shape)
-    n_verts = 6 * np
-    n_faces = 4 * np - 4
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    n_verts = _geometry_checked_mul(6, np, "ExtrudeGeometry vertex count")
+    n_faces = _geometry_checked_add(
+        _geometry_checked_mul(4, np, "ExtrudeGeometry face count"),
+        -4, "ExtrudeGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "ExtrudeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
 
     @inbounds for i in 1:np
         pt = shape[i]
@@ -1367,7 +1428,14 @@ function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segmen
     cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
     half = length / 2
-    np = 2 * (cap_segments + 1)
+    np = _geometry_checked_mul(
+        2, cap_segments + 1, "CapsuleGeometry profile point count")
+    n_verts = _geometry_checked_mul(
+        radial_segments + 1, np, "CapsuleGeometry vertex count")
+    n_faces = _geometry_checked_mul(
+        2 * radial_segments, np - 1, "CapsuleGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(n_verts, n_faces, "CapsuleGeometry")
     profile_r = Vector{Float64}(undef, np)
     profile_y = Vector{Float64}(undef, np)
     for i in 0:cap_segments                          # top hemisphere: pole → equator
@@ -1382,12 +1450,10 @@ function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segmen
         profile_r[idx] = radius * cos(a)
         profile_y[idx] = -half - radius * sin(a)
     end
-    n_verts = (radial_segments + 1) * np
-    n_faces = 2 * radial_segments * (np - 1)
-    positions = Vector{Float64}(undef, 3 * n_verts)
-    normals = Vector{Float64}(undef, 3 * n_verts)
-    uvs = Vector{Float64}(undef, 2 * n_verts)
-    indices = Vector{Int}(undef, 3 * n_faces)
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     @inbounds for s in 0:radial_segments
         u = s / radial_segments
         phi = u * 2π

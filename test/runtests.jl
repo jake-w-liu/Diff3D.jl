@@ -20792,4 +20792,54 @@ end
         @test_opt_alloc 0 Diff3D._ply_normalize_color(32768.0, :u16, 1, "green")
     end
 
+    @testset "fresh audit round 71 fixes" begin
+        curve = CatmullRomCurve([Vec3(0.0, 0.0, 0.0),
+                                 Vec3(1.0, 0.0, 0.0)])
+        @test_throws "must not exceed 1000000" CatmullRomCurveGeometry(
+            curve; segments=typemax(Int))
+        @test_throws "must not exceed 1000000" BoxGeometry(
+            width_segments=typemax(Int))
+
+        # Multi-axis generators must reject the combined output size before
+        # allocating buffers or invoking a user callback.
+        callback_calls = Ref(0)
+        callback = (u, v) -> begin
+            callback_calls[] += 1
+            Vec3(u, v, 0.0)
+        end
+        @test_throws "generated buffer exceeds" ParametricGeometry(
+            callback, 1_000_000, 1_000_000)
+        @test callback_calls[] == 0
+        @test_throws "generated buffer exceeds" PlaneGeometry(
+            width_segments=1_000_000, height_segments=1_000_000)
+        @test_throws "generated buffer exceeds" SphereGeometry(
+            width_segments=1_000_000, height_segments=1_000_000)
+        @test_throws "generated buffer exceeds" TorusGeometry(
+            radial_segments=1_000_000, tubular_segments=1_000_000)
+        @test_throws "generated buffer exceeds" CapsuleGeometry(
+            cap_segments=1_000_000, radial_segments=1_000_000)
+        @test_throws "generated buffer exceeds" PolyhedronGeometry(
+            Vec3{Float64}[Vec3(1.0, 0.0, 0.0),
+                          Vec3(0.0, 1.0, 0.0),
+                          Vec3(0.0, 0.0, 1.0)],
+            NTuple{3,Int}[(1, 2, 3)]; detail=1_000_000)
+        @test_throws "generated buffer exceeds" TeapotGeometry(
+            1.0, 1_000_000)
+
+        @test Diff3D._geometry_mesh_buffer_lengths(
+            1_000_001, 0, "curve") == (3_000_003, 2_000_002, 0)
+        @test_throws "position buffer is too large" Diff3D._geometry_mesh_buffer_lengths(
+            typemax(Int), 0, "mesh")
+        @test_opt_alloc 0 Diff3D._geometry_mesh_buffer_lengths(10, 20, "mesh")
+
+        let g = ParametricGeometry((u, v) -> Vec3(u, v, u * v), 3, 2)
+            @test g.n_vertices == 12
+            @test g.n_faces == 12
+            @test length(g.positions) == 3g.n_vertices
+            @test length(g.normals) == 3g.n_vertices
+            @test length(g.uvs) == 2g.n_vertices
+            @test length(g.indices) == 3g.n_faces
+        end
+    end
+
 end

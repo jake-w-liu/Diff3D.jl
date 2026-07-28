@@ -75,6 +75,10 @@ end
 function _teapot_segments(segments::Real)
     sf = Float64(segments)
     isfinite(sf) || throw(ArgumentError("TeapotGeometry segments must be finite"))
+    sf <= _GEOMETRY_MAX_SUBDIVISIONS ||
+        throw(ArgumentError(
+            "TeapotGeometry segments must not exceed " *
+            "$_GEOMETRY_MAX_SUBDIVISIONS"))
     return max(2, floor(Int, sf))
 end
 
@@ -179,11 +183,20 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
     for surf0 in min_patch:(max_patch - 1)
         (lid || (surf0 < 20 || surf0 >= 28)) && (patch_count += 1)
     end
-    nvertices = patch_count * row * row
-    positions = Vector{Float64}(undef, 3 * nvertices)
-    normals = Vector{Float64}(undef, 3 * nvertices)
-    uvs = Vector{Float64}(undef, 2 * nvertices)
-    indices = Vector{Int}(undef, 6 * patch_count * segs * segs)
+    vertices_per_patch = _geometry_checked_mul(
+        row, row, "TeapotGeometry vertices per patch")
+    nvertices = _geometry_checked_mul(
+        patch_count, vertices_per_patch, "TeapotGeometry vertex count")
+    faces_per_patch = _geometry_checked_mul(
+        2 * segs, segs, "TeapotGeometry faces per patch")
+    nfaces = _geometry_checked_mul(
+        patch_count, faces_per_patch, "TeapotGeometry face count")
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(nvertices, nfaces, "TeapotGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    indices = Vector{Int}(undef, index_len)
     vi = 0
     iout = 1
 
