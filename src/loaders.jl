@@ -4,6 +4,72 @@
 # Pure Julia, no external dependencies.
 # --------------------------------------------------------------------------
 
+function _compute_vertex_normals_scaled!(
+        acc::Vector{Float64}, geo::BufferGeometry)
+    fill!(acc, 0.0)
+    no_exponent = typemin(Int)
+    normal_exponents = fill(no_exponent, geo.n_vertices)
+    @inbounds for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        v1 = get_vertex(geo, i1)
+        v2 = get_vertex(geo, i2)
+        v3 = get_vertex(geo, i3)
+        face_normal = _float_representation_cross(
+            _float_vector_difference(v1, v2),
+            _float_vector_difference(v1, v3),
+        )
+        face_exponent = no_exponent
+        for component in face_normal
+            component.nonzero &&
+                (face_exponent = max(
+                    face_exponent, component.exponent))
+        end
+        face_exponent == no_exponent && continue
+
+        for idx in (i1, i2, i3)
+            base = (idx - 1) * 3
+            vertex_exponent = normal_exponents[idx]
+            if vertex_exponent == no_exponent
+                vertex_exponent = face_exponent
+                normal_exponents[idx] = vertex_exponent
+            elseif face_exponent > vertex_exponent
+                rescale = ldexp(
+                    1.0, vertex_exponent - face_exponent)
+                acc[base+1] *= rescale
+                acc[base+2] *= rescale
+                acc[base+3] *= rescale
+                vertex_exponent = face_exponent
+                normal_exponents[idx] = vertex_exponent
+            end
+            for axis in 1:3
+                component = face_normal[axis]
+                component.nonzero || continue
+                acc[base+axis] += ldexp(
+                    component.mantissa,
+                    component.exponent - vertex_exponent)
+            end
+        end
+    end
+
+    @inbounds for vi in 1:geo.n_vertices
+        base = (vi - 1) * 3
+        nx, ny, nz = acc[base+1], acc[base+2], acc[base+3]
+        len = _norm3(nx, ny, nz)
+        exponent = normal_exponents[vi]
+        if exponent != no_exponent &&
+           ldexp(len, exponent) > 1e-20
+            acc[base+1] = nx / len
+            acc[base+2] = ny / len
+            acc[base+3] = nz / len
+        else
+            acc[base+1] = 0.0
+            acc[base+2] = 0.0
+            acc[base+3] = 1.0
+        end
+    end
+    return acc
+end
+
 """
     compute_vertex_normals!(geo) -> geo
 
@@ -19,20 +85,47 @@ function compute_vertex_normals!(geo::BufferGeometry)
     else
         zeros(Float64, nv * 3)
     end
+    needs_scaled_fallback = false
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
+        (isfinite(v1.x) && isfinite(v1.y) && isfinite(v1.z) &&
+         isfinite(v2.x) && isfinite(v2.y) && isfinite(v2.z) &&
+         isfinite(v3.x) && isfinite(v3.y) && isfinite(v3.z)) ||
+            throw(ArgumentError(
+                "compute_vertex_normals! positions must be finite"))
         # Cross product is proportional to face area, giving area weighting.
         fn = cross(v2 - v1, v3 - v1)
+        needs_scaled_fallback |=
+            !(isfinite(fn.x) && isfinite(fn.y) && isfinite(fn.z))
         for idx in (i1, i2, i3)
             base = (idx - 1) * 3
-            acc[base+1] += fn.x; acc[base+2] += fn.y; acc[base+3] += fn.z
+            nx = acc[base+1] + fn.x
+            ny = acc[base+2] + fn.y
+            nz = acc[base+3] + fn.z
+            needs_scaled_fallback |=
+                !(isfinite(nx) && isfinite(ny) && isfinite(nz))
+            acc[base+1] = nx
+            acc[base+2] = ny
+            acc[base+3] = nz
         end
     end
+
+    if needs_scaled_fallback
+        # A face cross product, or the area-weighted sum of several faces, can
+        # exceed Float64 even though its unit direction is representable. Keep
+        # one shared binary exponent per vertex and accumulate scaled mantissas
+        # only on this exceptional path. Ordinary meshes retain the allocation-
+        # free buffer-reuse path above.
+        _compute_vertex_normals_scaled!(acc, geo)
+        geo.normals = acc
+        return geo
+    end
+
     @inbounds for vi in 1:nv
         base = (vi - 1) * 3
         nx, ny, nz = acc[base+1], acc[base+2], acc[base+3]
-        len = sqrt(nx*nx + ny*ny + nz*nz)
+        len = _norm3(nx, ny, nz)
         if len > 1e-20
             acc[base+1] = nx/len; acc[base+2] = ny/len; acc[base+3] = nz/len
         else

@@ -22734,4 +22734,52 @@ end
             color_attribute, 1, 2, 3)
     end
 
+    @testset "fresh audit round 145 fixes" begin
+        scale = 1.0e154
+        positions = [
+            0.0, 0.0, 0.0,
+            0.0, scale, 0.0,
+            0.0, 0.0, scale,
+        ]
+        one_face = BufferGeometry(
+            copy(positions), Float64[], Float64[],
+            [1, 2, 3], 3, 1)
+        compute_vertex_normals!(one_face)
+        @test all(
+            i -> get_normal(one_face, i) == Vec3(1.0, 0.0, 0.0),
+            1:3)
+
+        repeated_face = BufferGeometry(
+            copy(positions), Float64[], Float64[],
+            [1, 2, 3, 1, 2, 3], 3, 2)
+        compute_vertex_normals!(repeated_face)
+        @test all(
+            i -> get_normal(repeated_face, i) ==
+                Vec3(1.0, 0.0, 0.0),
+            1:3)
+
+        largest = floatmax(Float64)
+        overflowing_edges = BufferGeometry(
+            [
+                0.0, -largest, -largest,
+                0.0, largest, -largest,
+                0.0, -largest, largest,
+            ],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        compute_vertex_normals!(overflowing_edges)
+        @test all(
+            i -> get_normal(overflowing_edges, i) ==
+                Vec3(1.0, 0.0, 0.0),
+            1:3)
+
+        @test_throws ArgumentError compute_vertex_normals!(
+            BufferGeometry(
+                [0.0, 0.0, 0.0,
+                 Inf, 0.0, 0.0,
+                 0.0, 1.0, 0.0],
+                Float64[], Float64[], [1, 2, 3], 3, 1))
+        @test_opt_alloc 4096 compute_vertex_normals!(
+            overflowing_edges)
+    end
+
 end
