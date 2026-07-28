@@ -21263,4 +21263,27 @@ end
             0.0, 1.0, -1.0e308, 0.0, 1.0e308, 0.0)
     end
 
+    @testset "fresh audit round 81 fixes" begin
+        huge_inside = signed_distance_to_triangle(
+            0.0, 1.0,
+            -1.0e308, 0.0, 1.0e308, 0.0, 0.0, 1.0e308)
+        huge_outside = signed_distance_to_triangle(
+            0.0, -1.0,
+            -1.0e308, 0.0, 1.0e308, 0.0, 0.0, 1.0e308)
+        huge_center = signed_distance_to_triangle(
+            0.0, 0.0,
+            -1.0e308, -1.0e308,
+            1.0e308, -1.0e308,
+            0.0, 1.0e308)
+        @test huge_inside == 1.0
+        @test huge_outside == -sqrt(1.0 + 1.0e-12)
+        @test isfinite(huge_center)
+        @test huge_center > 0.0
+
+        @test signed_distance_to_triangle(
+            2.0, 2.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0) > 0.0
+        @test_opt_alloc 0 signed_distance_to_triangle(
+            2.0, 2.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0)
+    end
+
 end

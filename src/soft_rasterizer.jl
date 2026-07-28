@@ -630,7 +630,65 @@ end
 Signed distance from point (px,py) to triangle defined by (ax,ay), (bx,by), (cx,cy).
 Positive inside, negative outside.
 """
+@noinline function _soft_edge_sign_bigfloat(ax::Float64, ay::Float64,
+                                            bx::Float64, by::Float64,
+                                            px::Float64, py::Float64)
+    return setprecision(BigFloat, 256) do
+        bax = BigFloat(bx) - BigFloat(ax)
+        bay = BigFloat(by) - BigFloat(ay)
+        pax = BigFloat(px) - BigFloat(ax)
+        pay = BigFloat(py) - BigFloat(ay)
+        value = pax * bay - pay * bax
+        value > 0 ? 1 : value < 0 ? -1 : 0
+    end
+end
+
+@inline function _soft_edge_sign_float(ax::Float64, ay::Float64,
+                                       bx::Float64, by::Float64,
+                                       px::Float64, py::Float64)
+    value = edge_function(ax, ay, bx, by, px, py)
+    if isfinite(value)
+        return value > 0.0 ? 1 : value < 0.0 ? -1 : 0
+    end
+    return _soft_edge_sign_bigfloat(ax, ay, bx, by, px, py)
+end
+
+function _soft_extreme_signed_distance_float(
+        px::Float64, py::Float64,
+        ax::Float64, ay::Float64, bx::Float64, by::Float64,
+        cx::Float64, cy::Float64)
+    area_sign = _soft_edge_sign_float(ax, ay, bx, by, cx, cy)
+    area_sign == 0 && return -1.0e10
+    s0 = _soft_edge_sign_float(bx, by, cx, cy, px, py)
+    s1 = _soft_edge_sign_float(cx, cy, ax, ay, px, py)
+    s2 = _soft_edge_sign_float(ax, ay, bx, by, px, py)
+    inside = area_sign > 0 ?
+             (s0 >= 0 && s1 >= 0 && s2 >= 0) :
+             (s0 <= 0 && s1 <= 0 && s2 <= 0)
+    if inside
+        return min(
+            point_line_distance(px, py, ax, ay, bx, by),
+            point_line_distance(px, py, bx, by, cx, cy),
+            point_line_distance(px, py, cx, cy, ax, ay),
+        )
+    end
+    return -min(
+        point_segment_distance(px, py, ax, ay, bx, by),
+        point_segment_distance(px, py, bx, by, cx, cy),
+        point_segment_distance(px, py, cx, cy, ax, ay),
+    )
+end
+
 function _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
+    if area isa Float64 && !isfinite(area) &&
+       px isa Float64 && py isa Float64 &&
+       ax isa Float64 && ay isa Float64 &&
+       bx isa Float64 && by isa Float64 &&
+       cx isa Float64 && cy isa Float64
+        return _soft_extreme_signed_distance_float(
+            px, py, ax, ay, bx, by, cx, cy)
+    end
+
     # Barycentric test
     if abs(area) < 1e-20
         return typeof(px)(-1e10)
