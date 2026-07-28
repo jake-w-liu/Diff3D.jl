@@ -12836,7 +12836,7 @@ end
         let M = mat4_translation(1.0,2.0,3.0) * quat_to_mat4(Quaternion(0.0, sin(pi/4), 0.0, cos(pi/4))) * mat4_scaling(2.0,3.0,4.0); pos, rot, scl = Diff3D._gltf_decompose(M); g = Group(); g.position = pos; g.rotation = rot; g.scale = scl; w = compute_world_matrix(g); p_world = mat4_transform_point(w, Vec3(1.0,0.0,0.0)); p_ref = mat4_transform_point(M, Vec3(1.0,0.0,0.0)); @test isapprox(p_world.x, p_ref.x; atol=1e-9) && isapprox(p_world.y, p_ref.y; atol=1e-9) && isapprox(p_world.z, p_ref.z; atol=1e-9); @test isapprox(scl.x, 2.0; atol=1e-9) && isapprox(scl.y, 3.0; atol=1e-9) && isapprox(scl.z, 4.0; atol=1e-9) end
 
         # [E:loaders] #19 _gltf_accessor ignores bufferView.byteStride; interleaved buffers decode to garbage
-        let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteStride"=>12.0)]); out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
+        let buf = UInt8[]; for e in 0:2; append!(buf, reinterpret(UInt8, Float32[e+1.0f0, e+10.0f0])); append!(buf, UInt8[0xAA,0xBB,0xCC,0xDD]) end; gltf = Dict{String,Any}("accessors"=>[Dict{String,Any}("bufferView"=>0.0,"count"=>3.0,"type"=>"VEC2","componentType"=>5126.0)], "bufferViews"=>[Dict{String,Any}("buffer"=>0.0,"byteOffset"=>0.0,"byteLength"=>length(buf),"byteStride"=>12.0)]); out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0); @test ncomp == 2 && cnt == 3; @test isapprox(out[1],1.0) && isapprox(out[2],10.0) && isapprox(out[3],2.0) && isapprox(out[4],11.0) && isapprox(out[5],3.0) && isapprox(out[6],12.0) end
 
         let float_buf = UInt8[0x00, 0x00, 0xa0, 0x3f],
             int_buf = UInt8[0x80, 0xff, 0xff, 0xff]
@@ -12867,7 +12867,8 @@ end
                     "accessors"=>[Dict{String,Any}("bufferView"=>0.0, "count"=>3.0,
                                                    "type"=>"SCALAR", "componentType"=>5120.0,
                                                    "normalized"=>true)],
-                    "bufferViews"=>[Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0)])
+                    "bufferViews"=>[Dict{String,Any}("buffer"=>0.0, "byteOffset"=>0.0,
+                                                     "byteLength"=>length(buf))])
                 out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0)
                 @test ncomp == 1 && cnt == 3
                 @test out[1] ≈ -1.0
@@ -12889,9 +12890,12 @@ end
                             "indices"=>Dict{String,Any}("bufferView"=>1.0, "componentType"=>5123.0),
                             "values"=>Dict{String,Any}("bufferView"=>2.0)))],
                     "bufferViews"=>[
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset)),
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset)),
-                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(sparse_value_offset))])
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset),
+                                         "byteLength"=>index_offset - value_offset),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset),
+                                         "byteLength"=>sparse_value_offset - index_offset),
+                        Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(sparse_value_offset),
+                                         "byteLength"=>length(buf) - sparse_value_offset)])
                 out, ncomp, cnt = Diff3D._gltf_accessor(gltf, [buf], 0)
                 @test ncomp == 1 && cnt == 3
                 @test out == [0.0, 5.0, 0.0]
@@ -19044,8 +19048,10 @@ end
                         "indices"=>Dict{String,Any}("bufferView"=>0.0, "componentType"=>5123.0),
                         "values"=>Dict{String,Any}("bufferView"=>1.0)))],
                 "bufferViews"=>[
-                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset)),
-                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset))])
+                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(index_offset),
+                                     "byteLength"=>value_offset - index_offset),
+                    Dict{String,Any}("buffer"=>0.0, "byteOffset"=>Float64(value_offset),
+                                     "byteLength"=>length(buf) - value_offset)])
             @test_throws "glTF sparse accessor indices must be strictly increasing" Diff3D._gltf_accessor(gltf, [buf], 0)
         end
     end
@@ -20552,6 +20558,71 @@ end
                 rm(path; force=true)
             end
         end
+    end
+
+    @testset "fresh audit round 67 fixes" begin
+        # Accessors are bounded by their bufferView, not merely by bytes that
+        # happen to follow that view in the containing buffer.
+        let buf = zeros(UInt8, 12),
+            gltf = Dict{String,Any}(
+                "accessors" => [Dict{String,Any}(
+                    "bufferView" => 0, "count" => 1, "type" => "VEC3",
+                    "componentType" => 5126)],
+                "bufferViews" => [Dict{String,Any}(
+                    "buffer" => 0, "byteOffset" => 0, "byteLength" => 4)])
+            @test_throws "glTF accessor exceeds bufferView byteLength" Diff3D._gltf_accessor(
+                gltf, [buf], 0)
+        end
+
+        # Reject an overflowing output shape before attempting allocation.
+        let gltf = Dict{String,Any}(
+                "accessors" => [Dict{String,Any}(
+                    "count" => typemax(Int) ÷ 16 + 1,
+                    "type" => "MAT4", "componentType" => 5126)])
+            @test_throws "glTF accessor output length is too large" Diff3D._gltf_accessor(
+                gltf, Vector{UInt8}[], 0)
+        end
+
+        # Sparse payloads are independently bounded by their declared views.
+        let buf = zeros(UInt8, 5),
+            gltf = Dict{String,Any}(
+                "accessors" => [Dict{String,Any}(
+                    "count" => 1, "type" => "SCALAR", "componentType" => 5126,
+                    "sparse" => Dict{String,Any}(
+                        "count" => 1,
+                        "indices" => Dict{String,Any}(
+                            "bufferView" => 0, "componentType" => 5121),
+                        "values" => Dict{String,Any}("bufferView" => 1)))],
+                "bufferViews" => [
+                    Dict{String,Any}(
+                        "buffer" => 0, "byteOffset" => 0, "byteLength" => 0),
+                    Dict{String,Any}(
+                        "buffer" => 0, "byteOffset" => 1, "byteLength" => 4)])
+            @test_throws "glTF sparse indices payload exceeds bufferView byteLength" Diff3D._gltf_accessor(
+                gltf, [buf], 0)
+        end
+
+        # The primitive-index path uses the same sparse view validation.
+        let buf = UInt8[0x00, 0x00],
+            gltf = Dict{String,Any}(
+                "accessors" => [Dict{String,Any}(
+                    "count" => 1, "type" => "SCALAR", "componentType" => 5121,
+                    "sparse" => Dict{String,Any}(
+                        "count" => 1,
+                        "indices" => Dict{String,Any}(
+                            "bufferView" => 0, "componentType" => 5121),
+                        "values" => Dict{String,Any}("bufferView" => 1)))],
+                "bufferViews" => [
+                    Dict{String,Any}(
+                        "buffer" => 0, "byteOffset" => 0, "byteLength" => 1),
+                    Dict{String,Any}(
+                        "buffer" => 0, "byteOffset" => 1, "byteLength" => 0)])
+            @test_throws "glTF sparse values payload exceeds bufferView byteLength" Diff3D._gltf_primitive_indices(
+                gltf, [buf], 0, 1)
+        end
+
+        @test_throws "glTF accessor byte range is outside the supported integer range" Diff3D._gltf_read_component(
+            UInt8[], typemax(Int), 5126, false)
     end
 
 end

@@ -8232,54 +8232,69 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
     normalized = _gltf_checked_bool(get(acc, "normalized", false), "accessor normalized")
     dense_payload = haskey(acc, "bufferView")
-    out = dense_payload ? Vector{Float64}(undef, count * ncomp) :
-          zeros(Float64, count * ncomp)
-
     compbytes = _gltf_component_bytes(ctype)
+    out_len = _checked_mul_int(count, ncomp, "glTF accessor output length")
+    _checked_mul_int(out_len, sizeof(Float64), "glTF accessor output byte size")
 
-    if dense_payload
-        buffer_views = get(gltf, "bufferViews", Any[])
-        bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views), "accessor bufferView") + 1]
-        buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]
-        offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0), "bufferView byteOffset") +
-                 _gltf_checked_nonnegative_integer(get(acc, "byteOffset", 0.0), "accessor byteOffset")
-        raw_stride = _gltf_checked_nonnegative_integer(get(bv, "byteStride", 0.0), "bufferView byteStride")
-        stride = raw_stride == 0 ? ncomp * compbytes : raw_stride
-        stride >= ncomp * compbytes || error("glTF bufferView byteStride is smaller than accessor element size")
-        stride % compbytes == 0 || error("glTF bufferView byteStride must be a multiple of component size")
-        _gltf_read_accessor_payload!(out, buf, offset, count, ncomp, ctype, stride, normalized)
+    dense_layout = if dense_payload
+        _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp, ctype, count,
+                                     "accessor")
+    else
+        nothing
     end
 
+    sparse_layout = nothing
     if haskey(acc, "sparse")
         sparse = acc["sparse"]
+        sparse isa AbstractDict || error("glTF accessor sparse must be an object")
         scount = _gltf_checked_nonnegative_integer(sparse["count"], "sparse accessor count")
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
         indices_def = sparse["indices"]
         values_def = sparse["values"]
-        buffer_views = get(gltf, "bufferViews", Any[])
-        ibv = buffer_views[_gltf_checked_index(indices_def["bufferView"], length(buffer_views), "sparse indices bufferView") + 1]
-        vbv = buffer_views[_gltf_checked_index(values_def["bufferView"], length(buffer_views), "sparse values bufferView") + 1]
-        ibuf = buffers[_gltf_checked_index(ibv["buffer"], length(buffers), "sparse indices buffer") + 1]
-        vbuf = buffers[_gltf_checked_index(vbv["buffer"], length(buffers), "sparse values buffer") + 1]
-        ioffset = _gltf_checked_nonnegative_integer(get(ibv, "byteOffset", 0.0), "sparse indices bufferView byteOffset") +
-                  _gltf_checked_nonnegative_integer(get(indices_def, "byteOffset", 0.0), "sparse indices byteOffset")
-        voffset = _gltf_checked_nonnegative_integer(get(vbv, "byteOffset", 0.0), "sparse values bufferView byteOffset") +
-                  _gltf_checked_nonnegative_integer(get(values_def, "byteOffset", 0.0), "sparse values byteOffset")
+        indices_def isa AbstractDict ||
+            error("glTF sparse accessor indices must be an object")
+        values_def isa AbstractDict ||
+            error("glTF sparse accessor values must be an object")
         ictype = _gltf_checked_component_type(indices_def["componentType"], "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes = _gltf_component_bytes(ictype)
-        vstride = ncomp * compbytes
-        tmp = Vector{Float64}(undef, ncomp)
+        vstride = _checked_mul_int(ncomp, compbytes, "glTF sparse accessor value size")
+        ibuf, ioffset = _gltf_sparse_buffer_layout(
+            gltf, buffers, indices_def, scount, icompbytes, "sparse indices")
+        vbuf, voffset = _gltf_sparse_buffer_layout(
+            gltf, buffers, values_def, scount, vstride, "sparse values")
+        sparse_layout = (scount, ictype, icompbytes, vstride,
+                         ibuf, ioffset, vbuf, voffset)
+    end
+
+    out = dense_payload ? Vector{Float64}(undef, out_len) :
+          zeros(Float64, out_len)
+    if dense_layout !== nothing
+        buf, offset, stride = dense_layout
+        _gltf_read_accessor_payload!(out, buf, offset, count, ncomp, ctype, stride,
+                                     normalized)
+    end
+
+    if sparse_layout !== nothing
+        scount, ictype, icompbytes, vstride, ibuf, ioffset, vbuf, voffset =
+            sparse_layout
         prev_idx = -1
         for s in 0:scount-1
-            idx = Int(_gltf_read_component(ibuf, ioffset + s * icompbytes, ictype, false))
+            raw_idx = _gltf_read_unsigned_index_component(
+                ibuf, ioffset + s * icompbytes, ictype, "sparse accessor index")
+            raw_idx <= UInt64(typemax(Int)) ||
+                error("glTF sparse accessor index is outside the supported integer range")
+            idx = Int(raw_idx)
             0 <= idx < count || error("glTF sparse accessor index $idx out of bounds")
             idx > prev_idx || error("glTF sparse accessor indices must be strictly increasing")
             prev_idx = idx
-            _gltf_read_accessor_payload!(tmp, vbuf, voffset + s * vstride, 1, ncomp,
-                                         ctype, vstride, normalized)
-            copyto!(out, idx * ncomp + 1, tmp, 1, ncomp)
+            src = voffset + s * vstride
+            dst = idx * ncomp
+            for c in 0:ncomp-1
+                out[dst + c + 1] = _gltf_read_component(
+                    vbuf, src + c * compbytes, ctype, normalized)
+            end
         end
     end
     return (out, ncomp, count)
@@ -8305,7 +8320,8 @@ end
 function _gltf_read_component(buf::AbstractVector{UInt8}, offset::Int, ctype::Int,
                               normalized::Bool)
     sz = _gltf_component_bytes(ctype)
-    (offset >= 0 && offset + sz <= length(buf)) ||
+    end_offset = _gltf_checked_byte_end(offset, sz, "accessor")
+    (offset >= 0 && end_offset <= length(buf)) ||
         error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
     i = offset + 1
     if ctype == 5126
@@ -8367,6 +8383,35 @@ function _gltf_checked_accessor_span(count::Int, element_size::Int, stride::Int,
     end
 end
 
+function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
+                                    count::Int, element_size::Int,
+                                    label::String)::Tuple{AbstractVector{UInt8},Int}
+    buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
+    bv = buffer_views[_gltf_checked_index(sparse_def["bufferView"],
+                                          length(buffer_views),
+                                          "$label bufferView") + 1]::AbstractDict
+    haskey(bv, "byteStride") &&
+        error("glTF $label bufferView must not define byteStride")
+    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
+                                      "$label buffer") + 1]::AbstractVector{UInt8}
+    view_offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
+                                                    "$label bufferView byteOffset")
+    view_len = _gltf_checked_nonnegative_integer(bv["byteLength"],
+                                                 "$label bufferView byteLength")
+    view_end = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
+    view_end <= length(buf) ||
+        error("glTF $label bufferView byteLength $view_len at byteOffset " *
+              "$view_offset exceeds buffer length $(length(buf))")
+    payload_offset = _gltf_checked_nonnegative_integer(
+        get(sparse_def, "byteOffset", 0.0), "$label byteOffset")
+    payload_offset <= view_len ||
+        error("glTF $label byteOffset exceeds bufferView byteLength")
+    span = _gltf_checked_accessor_span(count, element_size, element_size, label)
+    span <= view_len - payload_offset ||
+        error("glTF $label payload exceeds bufferView byteLength")
+    return buf, _gltf_checked_byte_end(view_offset, payload_offset, "$label offset")
+end
+
 function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int,
                                       count::Int, label::String)::Tuple{AbstractVector{UInt8},Int,Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
@@ -8395,9 +8440,13 @@ function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int
     stride % compbytes == 0 ||
         error("glTF bufferView byteStride must be a multiple of component size")
     span::Int = _gltf_checked_accessor_span(count, element_size, stride, label)
-    span <= view_len - accessor_offset ||
-        error("glTF $label accessor exceeds bufferView byteLength")
-    return buf, view_offset + accessor_offset, stride
+    if span > view_len - accessor_offset
+        error(label == "accessor" ?
+              "glTF accessor exceeds bufferView byteLength" :
+              "glTF $label accessor exceeds bufferView byteLength")
+    end
+    return buf, _gltf_checked_byte_end(view_offset, accessor_offset,
+                                       "$label accessor offset"), stride
 end
 
 @inline function _gltf_read_unsigned_index_component(buf::AbstractVector{UInt8},
@@ -8547,9 +8596,10 @@ function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::S
     offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                "bufferView byteOffset")
     len = _gltf_checked_nonnegative_integer(bv["byteLength"], "bufferView byteLength")
-    offset + len <= length(buf) ||
+    view_end = _gltf_checked_byte_end(offset, len, "image bufferView")
+    view_end <= length(buf) ||
         error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
-    return len == 0 ? view(buf, 1:0) : @view buf[(offset + 1):(offset + len)]
+    return len == 0 ? view(buf, 1:0) : @view buf[(offset + 1):view_end]
 end
 
 function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
@@ -9104,19 +9154,18 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
         error("glTF primitive indices accessor normalized must be false")
     count::Int = _gltf_checked_nonnegative_integer(acc["count"],
                                                   "primitive indices accessor count")
-    out::Vector{Int} = Vector{Int}(undef, count)
-    if haskey(acc, "bufferView")
-        layout = _gltf_accessor_buffer_layout(
+    _checked_mul_int(count, sizeof(Int), "glTF primitive indices output byte size")
+    dense_payload = haskey(acc, "bufferView")
+    dense_layout = if dense_payload
+        _gltf_accessor_buffer_layout(
             gltf, buffers, acc, 1, ctype, count, "primitive indices")
-        buf = layout[1]
-        offset::Int = layout[2]
-        stride::Int = layout[3]
-        _gltf_fill_primitive_indices!(out, buf, offset, stride, ctype, nverts)
     else
-        count == 0 || nverts > 0 ||
-            error("glTF primitive index 0.0 out of bounds for 0 vertices")
-        fill!(out, 1)
+        nothing
     end
+    !dense_payload && count > 0 && nverts <= 0 &&
+        error("glTF primitive index 0.0 out of bounds for 0 vertices")
+
+    sparse_layout = nothing
     if haskey(acc, "sparse")
         sparse = acc["sparse"]::AbstractDict
         scount::Int = _gltf_checked_nonnegative_integer(sparse["count"],
@@ -9124,31 +9173,30 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
         indices_def = sparse["indices"]::AbstractDict
         values_def = sparse["values"]::AbstractDict
-        buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
-        ibv = buffer_views[_gltf_checked_index(indices_def["bufferView"],
-                                               length(buffer_views),
-                                               "sparse indices bufferView") + 1]::AbstractDict
-        vbv = buffer_views[_gltf_checked_index(values_def["bufferView"],
-                                               length(buffer_views),
-                                               "sparse values bufferView") + 1]::AbstractDict
-        ibuf = buffers[_gltf_checked_index(ibv["buffer"], length(buffers),
-                                           "sparse indices buffer") + 1]::AbstractVector{UInt8}
-        vbuf = buffers[_gltf_checked_index(vbv["buffer"], length(buffers),
-                                           "sparse values buffer") + 1]::AbstractVector{UInt8}
-        ioffset::Int = _gltf_checked_nonnegative_integer(get(ibv, "byteOffset", 0.0),
-                                                         "sparse indices bufferView byteOffset") +
-                       _gltf_checked_nonnegative_integer(get(indices_def, "byteOffset", 0.0),
-                                                         "sparse indices byteOffset")
-        voffset::Int = _gltf_checked_nonnegative_integer(get(vbv, "byteOffset", 0.0),
-                                                         "sparse values bufferView byteOffset") +
-                       _gltf_checked_nonnegative_integer(get(values_def, "byteOffset", 0.0),
-                                                         "sparse values byteOffset")
         ictype::Int = _gltf_checked_component_type(indices_def["componentType"],
                                                   "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes::Int = _gltf_component_bytes(ictype)
         vcompbytes::Int = _gltf_component_bytes(ctype)
+        ibuf, ioffset = _gltf_sparse_buffer_layout(
+            gltf, buffers, indices_def, scount, icompbytes, "sparse indices")
+        vbuf, voffset = _gltf_sparse_buffer_layout(
+            gltf, buffers, values_def, scount, vcompbytes, "sparse values")
+        sparse_layout = (scount, ictype, icompbytes, vcompbytes,
+                         ibuf, ioffset, vbuf, voffset)
+    end
+
+    out::Vector{Int} = Vector{Int}(undef, count)
+    if dense_layout !== nothing
+        buf, offset, stride = dense_layout
+        _gltf_fill_primitive_indices!(out, buf, offset, stride, ctype, nverts)
+    else
+        fill!(out, 1)
+    end
+    if sparse_layout !== nothing
+        scount, ictype, icompbytes, vcompbytes, ibuf, ioffset, vbuf, voffset =
+            sparse_layout
         prev_idx::Int = -1
         for s in 0:scount-1
             sparse_raw::UInt64 = _gltf_read_unsigned_index_component(
