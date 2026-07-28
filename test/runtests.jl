@@ -21680,4 +21680,26 @@ end
         @test point_distance == Inf
     end
 
+    @testset "fresh audit round 91 fixes" begin
+        @test interpolate_linear(
+            [0.0, 1.0], [-1.0e308, 1.0e308], 0.5) == 0.0
+        @test interpolate_linear(
+            [0.0, 1.0],
+            [Vec3(-1.0e308, 0.0, 0.0),
+             Vec3(1.0e308, 0.0, 0.0)],
+            0.5,
+        ) == Vec3()
+
+        smallest = nextfloat(0.0)
+        @test Diff3D.lerp(
+            Vec3(smallest, 0.0, 0.0),
+            Vec3(smallest, 0.0, 0.0),
+            0.5,
+        ).x == smallest
+        @test reverse_gradient(
+            x -> interpolate_linear([0.0, 1.0], x, 0.25),
+            [2.0, 6.0],
+        ) ≈ [0.75, 0.25]
+    end
+
 end

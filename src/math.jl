@@ -66,7 +66,22 @@ function normalize(a::Vec3)
     scaled = a / scale
     return scaled / _norm3(scaled.x, scaled.y, scaled.z)
 end
-lerp(a::Vec3, b::Vec3, t::Real) = a * (1 - t) + b * t
+
+@inline function _stable_lerp(a, b, t)
+    iszero(t) && return a
+    t == one(t) && return b
+    if (a >= zero(a) && b >= zero(b)) ||
+       (a <= zero(a) && b <= zero(b))
+        return a + (b - a) * t
+    end
+    return a * (one(t) - t) + b * t
+end
+
+lerp(a::Vec3, b::Vec3, t::Real) = Vec3(
+    _stable_lerp(a.x, b.x, t),
+    _stable_lerp(a.y, b.y, t),
+    _stable_lerp(a.z, b.z, t),
+)
 distance(a::Vec3, b::Vec3) = norm(a - b)
 
 # Vec2 arithmetic
@@ -1024,16 +1039,6 @@ line3_center(l::Line3) = Vec3(
     _stable_midpoint(l.start.z, l.finish.z),
 )
 
-@inline function _stable_lerp(a, b, t)
-    iszero(t) && return a
-    t == one(t) && return b
-    if (a >= zero(a) && b >= zero(b)) ||
-       (a <= zero(a) && b <= zero(b))
-        return a + (b - a) * t
-    end
-    return a * (one(t) - t) + b * t
-end
-
 line3_at(l::Line3, t) = Vec3(
     _stable_lerp(l.start.x, l.finish.x, t),
     _stable_lerp(l.start.y, l.finish.y, t),
@@ -1194,7 +1199,7 @@ function interpolate_linear(times::AbstractVector, values::AbstractVector, t)
     α = (t - times[lo]) / (times[hi] - times[lo])
     return _lerp_value(values[lo], values[hi], α)
 end
-_lerp_value(a::Real, b::Real, α) = a + (b - a) * α
+_lerp_value(a::Real, b::Real, α) = _stable_lerp(a, b, α)
 _lerp_value(a::Vec3, b::Vec3, α) = lerp(a, b, α)
 
 # ========================== Frustum (+ culling) ==========================
