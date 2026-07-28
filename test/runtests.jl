@@ -20291,7 +20291,7 @@ end
             Vec3{Bool}[Vec3{Bool}(true, false, false), Vec3{Bool}(false, true, false),
                        Vec3{Bool}(false, false, true)],
             [(1, 2, 3)])
-        @test_throws "ConvexGeometry points must be finite" ConvexGeometry(
+        @test_throws "ConvexGeometry points must be representable as Float64" ConvexGeometry(
             Vec3{BigFloat}[Vec3{BigFloat}(parse(BigFloat, "1e10000"), 0, 0),
                            Vec3{BigFloat}(0, 1, 0), Vec3{BigFloat}(0, 0, 1),
                            Vec3{BigFloat}(1, 1, 1)])
