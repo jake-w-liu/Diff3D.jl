@@ -22551,4 +22551,17 @@ end
             "test", finite_times)
     end
 
+    @testset "fresh audit round 135 fixes" begin
+        @test_throws ArgumentError interpolate_linear(
+            [-Inf, Inf], [0.0, 1.0], 0.0)
+        @test_throws ArgumentError interpolate_catmull_rom(
+            [-Inf, 0.0, Inf], [0.0, 1.0, 2.0], 0.0)
+        finite_times = [0.0, 1.0]
+        finite_values = [0.0, 1.0]
+        @test interpolate_linear(
+            finite_times, finite_values, 0.5) == 0.5
+        @test_opt_alloc 0 Diff3D._validate_interpolant_inputs(
+            "test", finite_times, finite_values)
+    end
+
 end

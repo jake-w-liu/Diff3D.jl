@@ -1565,7 +1565,10 @@ function _validate_interpolant_inputs(kind::AbstractString, times::AbstractVecto
     length(times) == length(values) ||
         throw(ArgumentError("$kind times and values must have the same length"))
     isempty(times) && throw(ArgumentError("$kind requires at least one keyframe"))
-    for i in 2:length(times)
+    for i in eachindex(times)
+        isfinite(times[i]) ||
+            throw(ArgumentError("$kind times must be finite"))
+        i == firstindex(times) && continue
         times[i] > times[i - 1] ||
             throw(ArgumentError("$kind times must be strictly increasing"))
     end
