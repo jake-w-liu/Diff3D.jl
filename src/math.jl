@@ -261,6 +261,13 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
              -dot(x, eye), -dot(y, eye), -dot(z, eye), one(T)))
 end
 
+@inline function _mat4_divide_product(value, a, b)
+    # Divide by the larger factor first. Forming a*b can overflow/underflow,
+    # and dividing by a tiny factor first can overflow an intermediate even
+    # when value/(a*b) is representable.
+    return abs(a) >= abs(b) ? (value / a) / b : (value / b) / a
+end
+
 function mat4_perspective(fov, aspect, near, far)
     isfinite(fov) && 0 < fov < Float64(pi) ||
         throw(ArgumentError("mat4_perspective fov must be finite and between 0 and pi radians"))
@@ -276,12 +283,37 @@ function mat4_perspective(fov, aspect, near, far)
     # far == Inf is a supported config (infinite far clip plane, matching three.js
     # makePerspective); the limit of the depth terms is c=-1, d=-2·near. Without
     # this the Inf/Inf forms below are NaN, poisoning the whole projection.
-    c = isinf(far) ? -one(T) : -(far + near) / (far - near)
-    d = isinf(far) ? -2 * near : -2 * far * near / (far - near)
-    Mat4{T}((one(T)/(aspect*t), zero(T), zero(T), zero(T),
-             zero(T), one(T)/t, zero(T), zero(T),
-             zero(T), zero(T), T(c), -one(T),
-             zero(T), zero(T), T(d), zero(T)))
+    if isinf(far)
+        c = -one(T)
+        d = -2 * near
+    else
+        ratio = near / far
+        denominator = one(ratio) - ratio
+        c = -(one(ratio) + ratio) / denominator
+        d = -2 * (near / denominator)
+    end
+    xscale = _mat4_divide_product(one(T), aspect, t)
+    yscale = one(T) / t
+    (isfinite(xscale) && isfinite(yscale) && isfinite(c) && isfinite(d)) ||
+        throw(ArgumentError(
+            "mat4_perspective parameters produce unrepresentable coefficients"))
+    Mat4{T}((convert(T, xscale), zero(T), zero(T), zero(T),
+             zero(T), convert(T, yscale), zero(T), zero(T),
+             zero(T), zero(T), convert(T, c), -one(T),
+             zero(T), zero(T), convert(T, d), zero(T)))
+end
+
+function _mat4_orthographic_axis(lo, hi, label::String)
+    scale = max(abs(lo), abs(hi))
+    iszero(scale) && throw(ArgumentError("$label bounds must differ"))
+    lo_scaled = lo / scale
+    hi_scaled = hi / scale
+    span = hi_scaled - lo_scaled
+    coefficient = _mat4_divide_product(one(span) + one(span), scale, span)
+    offset = -(hi_scaled + lo_scaled) / span
+    (isfinite(coefficient) && isfinite(offset)) ||
+        throw(ArgumentError("$label bounds produce unrepresentable coefficients"))
+    return coefficient, offset
 end
 
 function mat4_orthographic(left, right, bottom, top, near, far)
@@ -294,24 +326,22 @@ function mat4_orthographic(left, right, bottom, top, near, far)
     isfinite(near) && isfinite(far) ||
         throw(ArgumentError("mat4_orthographic near and far must be finite"))
     far != near || throw(ArgumentError("mat4_orthographic near and far must differ"))
-    T = promote_type(typeof(left), typeof(right), typeof(bottom), typeof(top),
-                     typeof(near), typeof(far), Float64)
-    rl = T(right - left)
-    tb = T(top - bottom)
-    fn = T(far - near)
-    Mat4{T}((2/rl, zero(T), zero(T), zero(T),
-             zero(T), 2/tb, zero(T), zero(T),
-             zero(T), zero(T), -2/fn, zero(T),
-             -(T(right)+T(left))/rl, -(T(top)+T(bottom))/tb, -(T(far)+T(near))/fn, one(T)))
+    sx, tx = _mat4_orthographic_axis(
+        left, right, "mat4_orthographic left/right")
+    sy, ty = _mat4_orthographic_axis(
+        bottom, top, "mat4_orthographic bottom/top")
+    sz, tz = _mat4_orthographic_axis(
+        near, far, "mat4_orthographic near/far")
+    T = promote_type(typeof(sx), typeof(tx), typeof(sy), typeof(ty),
+                     typeof(sz), typeof(tz), Float64)
+    Mat4{T}((convert(T, sx), zero(T), zero(T), zero(T),
+             zero(T), convert(T, sy), zero(T), zero(T),
+             zero(T), zero(T), convert(T, -sz), zero(T),
+             convert(T, tx), convert(T, ty), convert(T, tz), one(T)))
 end
 
 @inline function _mat4_inverse_unscale(value, column_scale, row_scale)
-    # Divide by the larger scale first. Multiplying the scales can overflow or
-    # underflow, while dividing by a tiny scale first can overflow an
-    # intermediate even when the final quotient is representable.
-    return abs(column_scale) >= abs(row_scale) ?
-           (value / column_scale) / row_scale :
-           (value / row_scale) / column_scale
+    return _mat4_divide_product(value, column_scale, row_scale)
 end
 
 @inline _mat4_inverse_scale_value(value) = value

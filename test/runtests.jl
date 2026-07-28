@@ -21475,4 +21475,48 @@ end
             1.0, 1.0e-308, 1.0e308)
     end
 
+    @testset "fresh audit round 87 fixes" begin
+        extreme_perspective = mat4_perspective(
+            pi / 2, 1.0, 1.0, 1.0e308)
+        @test all(isfinite, extreme_perspective.e)
+        @test mat4_get(extreme_perspective, 3, 3) == -1.0
+        @test mat4_get(extreme_perspective, 3, 4) == -2.0
+
+        wide_perspective = mat4_perspective(
+            2.5, 1.0e308, 0.1, 100.0)
+        @test all(isfinite, wide_perspective.e)
+        @test mat4_get(wide_perspective, 1, 1) > 0.0
+        @test mat4_get(wide_perspective, 1, 1) ≈
+              (1.0 / 1.0e308) / tan(1.25)
+
+        extreme_orthographic = mat4_orthographic(
+            -1.0e308, 1.0e308, -1.0e308, 1.0e308,
+            -1.0e308, 1.0e308)
+        @test all(isfinite, extreme_orthographic.e)
+        @test mat4_get(extreme_orthographic, 1, 1) ≈ 1.0e-308
+        @test mat4_get(extreme_orthographic, 2, 2) ≈ 1.0e-308
+        @test mat4_get(extreme_orthographic, 3, 3) ≈ -1.0e-308
+        @test mat4_get(extreme_orthographic, 1, 4) == 0.0
+        @test mat4_get(extreme_orthographic, 2, 4) == 0.0
+        @test mat4_get(extreme_orthographic, 3, 4) == 0.0
+
+        @test ForwardDiff.derivative(
+            x -> mat4_get(
+                mat4_perspective(x, 1.0, 0.1, 100.0), 1, 1),
+            1.0) ≈ ForwardDiff.derivative(x -> inv(tan(x / 2)), 1.0)
+        @test reverse_gradient(
+            x -> mat4_get(
+                mat4_perspective(x[1], 1.0, 0.1, 100.0), 1, 1),
+            [1.0]) ≈ [ForwardDiff.derivative(
+                x -> inv(tan(x / 2)), 1.0)]
+
+        @test_throws "mat4_perspective parameters produce unrepresentable" mat4_perspective(
+            pi / 2, 1.0, 1.0e308, Inf)
+        @test_opt_alloc 0 mat4_perspective(pi / 2, 1.0, 0.1, 100.0)
+        @test_opt_alloc 0 mat4_orthographic(
+            -2.0, 2.0, -3.0, 3.0, 0.1, 100.0)
+        @test_opt_alloc 0 Diff3D._mat4_divide_product(
+            1.0, 1.0e-308, 1.0e308)
+    end
+
 end
