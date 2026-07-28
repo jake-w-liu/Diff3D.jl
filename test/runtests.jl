@@ -23054,4 +23054,19 @@ end
             0.0; strict=true)
     end
 
+    @testset "fresh audit round 157 fixes" begin
+        largest = floatmax(Float64)
+        triangle = [
+            Vec2(-largest, -1.0),
+            Vec2(largest, 0.0),
+            Vec2(-largest, 1.0),
+        ]
+        @test Diff3D._font_point_in_loop(
+            Vec2(-largest / 4, 0.5), triangle)
+        @test !Diff3D._font_point_in_loop(
+            Vec2(largest / 4, 0.5), triangle)
+        @test_opt_alloc 0 Diff3D._font_point_in_loop(
+            Vec2(-largest / 4, 0.5), triangle)
+    end
+
 end

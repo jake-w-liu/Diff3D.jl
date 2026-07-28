@@ -3113,7 +3113,11 @@ function _font_point_in_loop(p::Vec2{Float64}, loop::Vector{Vec2{Float64}})
         a = loop[i]
         b = loop[j]
         if ((a.y > p.y) != (b.y > p.y))
-            x = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
+            y_span = _float_difference_representation(a.y, b.y)
+            y_offset = _float_difference_representation(a.y, p.y)
+            t = _float_representation_ratio(
+                y_offset, y_span)
+            x = _stable_lerp(a.x, b.x, t)
             x > p.x && (inside = !inside)
         end
         j = i
