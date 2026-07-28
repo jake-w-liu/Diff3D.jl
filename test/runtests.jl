@@ -22060,4 +22060,23 @@ end
             repeated, 1.0e8 + 0.375, 0.5)
     end
 
+    @testset "fresh audit round 110 fixes" begin
+        largest = floatmax(Float64)
+        even = Texture(
+            fill(largest, 2, 2, 1); colorspace=:linear)
+        generate_mipmaps!(even)
+        @test even.mipmaps[1][1, 1, 1] == largest
+
+        odd = Texture(
+            fill(largest, 3, 3, 1); colorspace=:linear)
+        generate_mipmaps!(odd)
+        @test odd.mipmaps[end][1, 1, 1] == largest
+
+        smallest = nextfloat(0.0)
+        subnormal = Texture(
+            fill(smallest, 2, 2, 1); colorspace=:linear)
+        generate_mipmaps!(subnormal)
+        @test subnormal.mipmaps[1][1, 1, 1] == smallest
+    end
+
 end

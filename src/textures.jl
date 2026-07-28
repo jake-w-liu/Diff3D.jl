@@ -466,8 +466,11 @@ function _box_mipmap_even(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
     @inbounds for c in 1:C, j in 1:nw, i in 1:nh
         si = 2i - 1
         sj = 2j - 1
-        nxt[i, j, c] = (cur[si, sj, c] + cur[si, sj + 1, c] +
-                        cur[si + 1, sj, c] + cur[si + 1, sj + 1, c]) * 0.25
+        top = _stable_midpoint(
+            cur[si, sj, c], cur[si, sj + 1, c])
+        bottom = _stable_midpoint(
+            cur[si + 1, sj, c], cur[si + 1, sj + 1, c])
+        nxt[i, j, c] = _stable_midpoint(top, bottom)
     end
     return nxt
 end
@@ -479,7 +482,6 @@ function _box_mipmap_weighted(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
     H, W, _ = size(cur)
     row_step = H / nh
     col_step = W / nw
-    inv_area = (nh / H) * (nw / W)
     nxt = Array{Float64}(undef, nh, nw, C)
     @inbounds for c in 1:C, j in 1:nw
         col_lo = (j - 1) * col_step
@@ -491,15 +493,25 @@ function _box_mipmap_weighted(cur::Array{Float64,3}, nh::Int, nw::Int, C::Int)
             row_hi = i * row_step
             si_first = floor(Int, row_lo) + 1
             si_last = min(ceil(Int, row_hi), H)
-            acc = 0.0
+            average = 0.0
+            total_weight = 0.0
             for sj in sj_first:sj_last
                 wj = _box_filter_overlap(col_lo, col_hi, sj)
                 for si in si_first:si_last
                     wi = _box_filter_overlap(row_lo, row_hi, si)
-                    acc += wi * wj * cur[si, sj, c]
+                    weight = wi * wj
+                    next_weight = total_weight + weight
+                    if total_weight == 0.0
+                        average = cur[si, sj, c]
+                    else
+                        average = _stable_lerp(
+                            average, cur[si, sj, c],
+                            weight / next_weight)
+                    end
+                    total_weight = next_weight
                 end
             end
-            nxt[i, j, c] = acc * inv_area
+            nxt[i, j, c] = average
         end
     end
     return nxt
