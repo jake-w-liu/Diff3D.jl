@@ -6104,16 +6104,49 @@ end
 
 function _svg_clip_signed_distance(p::Vec2{Float64}, a::Vec2{Float64},
                                    b::Vec2{Float64}, ccw::Bool)
-    cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
-    return ccw ? cross : -cross
+    edge_x = b.x - a.x
+    edge_y = b.y - a.y
+    point_x = p.x - a.x
+    point_y = p.y - a.y
+    if isfinite(edge_x) && isfinite(edge_y) &&
+       isfinite(point_x) && isfinite(point_y)
+        cross_value = _float_product_difference(
+            edge_x, point_y, edge_y, point_x)
+        isfinite(cross_value) &&
+            return ccw ? cross_value : -cross_value
+    end
+
+    scale_x = max(1.0, max(abs(a.x), max(abs(b.x), abs(p.x))))
+    scale_y = max(1.0, max(abs(a.y), max(abs(b.y), abs(p.y))))
+    edge_x = b.x / scale_x - a.x / scale_x
+    edge_y = b.y / scale_y - a.y / scale_y
+    point_x = p.x / scale_x - a.x / scale_x
+    point_y = p.y / scale_y - a.y / scale_y
+    normalized_cross = _float_product_difference(
+        edge_x, point_y, edge_y, point_x)
+    representation = _float_representation_multiply(
+        _float_representation_multiply(
+            _float_value_representation(normalized_cross),
+            _float_value_representation(scale_x)),
+        _float_value_representation(scale_y),
+    )
+    cross_value = _float_representation_value(representation)
+    return ccw ? cross_value : -cross_value
 end
 
 function _svg_clip_edge_intersection(s::Vec2{Float64}, e::Vec2{Float64},
-                                     ds::Float64, de::Float64)
-    denom = ds - de
-    abs(denom) > 1e-15 || return e
-    t = ds / denom
-    return Vec2(s.x + (e.x - s.x) * t, s.y + (e.y - s.y) * t)
+                                     a::Vec2{Float64}, b::Vec2{Float64})
+    params = _svg_line_intersection_parameters(s, e, a, b)
+    params === nothing && return e
+    candidate = _svg_lerp_point(
+        s, e, clamp(params[1], 0.0, 1.0))
+    residual = _svg_clip_signed_distance(
+        candidate, a, b, true)
+    if isfinite(residual) && abs(residual) <= 1e-9
+        return candidate
+    end
+    precise = _svg_line_intersection_big(s, e, a, b)
+    return precise === nothing ? e : precise[1]
 end
 
 function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
@@ -6137,12 +6170,12 @@ function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
                 !s_inside &&
                     _svg_push_unique_point!(out,
                                             _svg_clip_edge_intersection(s, e,
-                                                                        ds, de))
+                                                                        a, b))
                 _svg_push_unique_point!(out, e)
             elseif s_inside
                 _svg_push_unique_point!(out,
                                         _svg_clip_edge_intersection(s, e,
-                                                                    ds, de))
+                                                                    a, b))
             end
             s = e
             ds = de
@@ -6168,7 +6201,7 @@ function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
         in1 = d1 >= -1e-9
         in0 && in1 && continue
         (!in0 && !in1) && return nothing
-        hit = _svg_clip_edge_intersection(p0, p1, d0, d1)
+        hit = _svg_clip_edge_intersection(p0, p1, c, d)
         if in0
             p1 = hit
         else
@@ -6221,48 +6254,151 @@ function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
     )
 end
 
+function _svg_lerp_point(
+        a::Vec2{Float64}, b::Vec2{Float64}, t::BigFloat)
+    return setprecision(BigFloat, 4352) do
+        x = BigFloat(a.x) +
+            (BigFloat(b.x) - BigFloat(a.x)) * t
+        y = BigFloat(a.y) +
+            (BigFloat(b.y) - BigFloat(a.y)) * t
+        xf = Float64(x)
+        yf = Float64(y)
+        (isfinite(xf) && isfinite(yf)) ||
+            throw(ArgumentError(
+                "SVG clipped point is outside the Float64 range"))
+        Vec2(xf, yf)
+    end
+end
+
+function _svg_clip_segment_interval_to_loop_big(
+        a::Vec2{Float64}, b::Vec2{Float64},
+        clip_loop::Vector{Vec2{Float64}})
+    return setprecision(BigFloat, 4352) do
+        ax = BigFloat(a.x)
+        ay = BigFloat(a.y)
+        bx = BigFloat(b.x)
+        by = BigFloat(b.y)
+        t0 = BigFloat(0)
+        t1 = BigFloat(1)
+        ccw = _font_polygon_area(clip_loop) >= 0.0
+        inside_tolerance = BigFloat("-1e-9")
+        segment_length = hypot(bx - ax, by - ay)
+        interval_tolerance = BigFloat("1e-12") /
+                             max(segment_length, one(segment_length))
+        for i in eachindex(clip_loop)
+            c = clip_loop[i]
+            d = clip_loop[
+                i == length(clip_loop) ? 1 : i + 1]
+            cx = BigFloat(c.x)
+            cy = BigFloat(c.y)
+            dx = BigFloat(d.x)
+            dy = BigFloat(d.y)
+            edge_x = dx - cx
+            edge_y = dy - cy
+            da = edge_x * (ay - cy) -
+                 edge_y * (ax - cx)
+            db = edge_x * (by - cy) -
+                 edge_y * (bx - cx)
+            !ccw && ((da, db) = (-da, -db))
+            ina = da >= inside_tolerance
+            inb = db >= inside_tolerance
+            ina && inb && continue
+            (!ina && !inb) && return nothing
+            denom = da - db
+            iszero(denom) && return nothing
+            t = clamp(da / denom, zero(da), one(da))
+            if ina
+                t1 = min(t1, t)
+            else
+                t0 = max(t0, t)
+            end
+            t1 - t0 > interval_tolerance ||
+                return nothing
+        end
+        return t0, t1
+    end
+end
+
 function _svg_clip_segment_interval_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
                                             clip_loop::Vector{Vec2{Float64}})
     t0 = 0.0
     t1 = 1.0
+    segment_length = hypot(b.x - a.x, b.y - a.y)
+    interval_tolerance =
+        1e-12 / max(segment_length, 1.0)
     ccw = _font_polygon_area(clip_loop) >= 0.0
     for i in eachindex(clip_loop)
         c = clip_loop[i]
         d = clip_loop[i == length(clip_loop) ? 1 : i + 1]
         da = _svg_clip_signed_distance(a, c, d, ccw)
         db = _svg_clip_signed_distance(b, c, d, ccw)
+        (!isfinite(da) || !isfinite(db)) &&
+            return _svg_clip_segment_interval_to_loop_big(
+                a, b, clip_loop)
         ina = da >= -1e-9
         inb = db >= -1e-9
         ina && inb && continue
         (!ina && !inb) && return nothing
-        denom = da - db
-        abs(denom) > 1e-15 || return nothing
-        t = clamp(da / denom, 0.0, 1.0)
+        params = _svg_line_intersection_parameters(a, b, c, d)
+        params === nothing &&
+            return _svg_clip_segment_interval_to_loop_big(
+                a, b, clip_loop)
+        t = clamp(params[1], 0.0, 1.0)
+        candidate = _svg_lerp_point(a, b, t)
+        residual = _svg_clip_signed_distance(
+            candidate, c, d, true)
+        (!isfinite(residual) || abs(residual) > 1e-9) &&
+            return _svg_clip_segment_interval_to_loop_big(
+                a, b, clip_loop)
         if ina
             t1 = min(t1, t)
         else
             t0 = max(t0, t)
         end
-        t1 - t0 > 1e-12 || return nothing
+        t1 - t0 > interval_tolerance || return nothing
     end
     return t0, t1
 end
 
-function _svg_merge_intervals(intervals::Vector{NTuple{2,Float64}})
+function _svg_merge_intervals(
+        intervals::Vector{NTuple{2,Float64}},
+        merge_tolerance::Float64,
+        minimum_width::Float64)
     isempty(intervals) && return intervals
     sort!(intervals, by=first)
     merged = NTuple{2,Float64}[]
     lo, hi = intervals[1]
     for i in 2:length(intervals)
         next_lo, next_hi = intervals[i]
-        if next_lo <= hi + 1e-9
+        if next_lo <= hi + merge_tolerance
             hi = max(hi, next_hi)
         else
-            hi - lo > 1e-12 && push!(merged, (lo, hi))
+            hi - lo > minimum_width && push!(merged, (lo, hi))
             lo, hi = next_lo, next_hi
         end
     end
-    hi - lo > 1e-12 && push!(merged, (lo, hi))
+    hi - lo > minimum_width && push!(merged, (lo, hi))
+    return merged
+end
+
+function _svg_merge_intervals(
+        intervals::Vector{NTuple{2,BigFloat}},
+        tolerance::BigFloat,
+        minimum_width::BigFloat)
+    isempty(intervals) && return intervals
+    sort!(intervals, by=first)
+    merged = NTuple{2,BigFloat}[]
+    lo, hi = intervals[1]
+    for i in 2:length(intervals)
+        next_lo, next_hi = intervals[i]
+        if next_lo <= hi + tolerance
+            hi = max(hi, next_hi)
+        else
+            hi - lo > minimum_width && push!(merged, (lo, hi))
+            lo, hi = next_lo, next_hi
+        end
+    end
+    hi - lo > minimum_width && push!(merged, (lo, hi))
     return merged
 end
 
@@ -6283,11 +6419,37 @@ function _svg_clip_open_path_to_union(path::SVGPath,
         b = path.points[i + 1]
         _font_same_point(a, b) && continue
         intervals = NTuple{2,Float64}[]
+        precise_intervals = NTuple{2,BigFloat}[]
         for clip_loop in clip_loops
             interval = _svg_clip_segment_interval_to_loop(a, b, clip_loop)
-            interval === nothing || push!(intervals, interval)
+            if interval isa NTuple{2,BigFloat}
+                push!(precise_intervals, interval)
+            elseif interval !== nothing
+                push!(intervals, interval)
+            end
         end
-        for (lo, hi) in _svg_merge_intervals(intervals)
+        merged_intervals = if isempty(precise_intervals)
+            segment_length = hypot(b.x - a.x, b.y - a.y)
+            scale = max(segment_length, 1.0)
+            _svg_merge_intervals(
+                intervals, 1e-9 / scale, 1e-12 / scale)
+        else
+            for (lo, hi) in intervals
+                push!(precise_intervals, (
+                    BigFloat(lo), BigFloat(hi)))
+            end
+            setprecision(BigFloat, 4352) do
+                segment_length = hypot(
+                    BigFloat(b.x) - BigFloat(a.x),
+                    BigFloat(b.y) - BigFloat(a.y))
+                scale = max(segment_length, one(segment_length))
+                _svg_merge_intervals(
+                    precise_intervals,
+                    BigFloat("1e-9") / scale,
+                    BigFloat("1e-12") / scale)
+            end
+        end
+        for (lo, hi) in merged_intervals
             p0 = _svg_lerp_point(a, b, lo)
             p1 = _svg_lerp_point(a, b, hi)
             if isempty(current)
@@ -6301,14 +6463,16 @@ function _svg_clip_open_path_to_union(path::SVGPath,
                 push!(current, p1)
             end
         end
-        isempty(intervals) && flush_current!()
+        isempty(intervals) && isempty(precise_intervals) &&
+            flush_current!()
     end
     flush_current!()
     return fragments
 end
 
-function _svg_segment_intersection_point(a::Vec2{Float64}, b::Vec2{Float64},
-                                         c::Vec2{Float64}, d::Vec2{Float64})
+function _svg_line_intersection_parameters(
+        a::Vec2{Float64}, b::Vec2{Float64},
+        c::Vec2{Float64}, d::Vec2{Float64})
     scale_x = max(
         1.0,
         max(max(abs(a.x), abs(b.x)),
@@ -6334,10 +6498,61 @@ function _svg_segment_intersection_point(a::Vec2{Float64}, b::Vec2{Float64},
     qy = cn.y - an.y
     t = (qx * sy - qy * sx) / denom
     u = (qx * ry - qy * rx) / denom
+    return t, u
+end
+
+function _svg_line_intersection_big(
+        a::Vec2{Float64}, b::Vec2{Float64},
+        c::Vec2{Float64}, d::Vec2{Float64})
+    return setprecision(BigFloat, 4352) do
+        ax = BigFloat(a.x)
+        ay = BigFloat(a.y)
+        bx = BigFloat(b.x)
+        by = BigFloat(b.y)
+        cx = BigFloat(c.x)
+        cy = BigFloat(c.y)
+        dx = BigFloat(d.x)
+        dy = BigFloat(d.y)
+        rx = bx - ax
+        ry = by - ay
+        sx = dx - cx
+        sy = dy - cy
+        denom = rx * sy - ry * sx
+        iszero(denom) && return nothing
+        qx = cx - ax
+        qy = cy - ay
+        t = (qx * sy - qy * sx) / denom
+        u = (qx * ry - qy * rx) / denom
+        x = Float64(ax + rx * t)
+        y = Float64(ay + ry * t)
+        (isfinite(x) && isfinite(y)) || return nothing
+        return Vec2(x, y), t, u
+    end
+end
+
+function _svg_segment_intersection_point(a::Vec2{Float64}, b::Vec2{Float64},
+                                         c::Vec2{Float64}, d::Vec2{Float64})
+    params = _svg_line_intersection_parameters(a, b, c, d)
+    params === nothing && return nothing
+    t, u = params
     -1e-9 <= t <= 1.0 + 1e-9 || return nothing
     -1e-9 <= u <= 1.0 + 1e-9 || return nothing
     t = clamp(t, 0.0, 1.0)
-    return _svg_lerp_point(a, b, t)
+    candidate = _svg_lerp_point(a, b, t)
+    residual = _svg_clip_signed_distance(
+        candidate, c, d, true)
+    if isfinite(residual) && abs(residual) <= 1e-9
+        return candidate
+    end
+    precise = _svg_line_intersection_big(a, b, c, d)
+    precise === nothing && return nothing
+    point, precise_t, precise_u = precise
+    big_tolerance = BigFloat("1e-9")
+    -big_tolerance <= precise_t <= one(BigFloat) + big_tolerance ||
+        return nothing
+    -big_tolerance <= precise_u <= one(BigFloat) + big_tolerance ||
+        return nothing
+    return point
 end
 
 function _svg_loop_edges(loops::Vector{Vector{Vec2{Float64}}})

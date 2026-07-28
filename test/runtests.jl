@@ -23100,4 +23100,52 @@ end
             Vec2(largest, -1.0))
     end
 
+    @testset "fresh audit round 159 fixes" begin
+        largest = floatmax(Float64)
+        clip_loop = [
+            Vec2(-1.0, -1.0),
+            Vec2(1.0, -1.0),
+            Vec2(1.0, 1.0),
+            Vec2(-1.0, 1.0),
+        ]
+        clipped = Diff3D._svg_clip_segment_to_loop(
+            Vec2(-largest, 0.0),
+            Vec2(largest, 0.0), clip_loop)
+        @test clipped ==
+            (Vec2(-1.0, 0.0), Vec2(1.0, 0.0))
+
+        interval =
+            Diff3D._svg_clip_segment_interval_to_loop(
+                Vec2(-largest, 0.0),
+                Vec2(largest, 0.0), clip_loop)
+        @test interval isa NTuple{2,BigFloat}
+        @test Diff3D._svg_lerp_point(
+            Vec2(-largest, 0.0),
+            Vec2(largest, 0.0), interval[1]) ==
+            Vec2(-1.0, 0.0)
+        @test Diff3D._svg_lerp_point(
+            Vec2(-largest, 0.0),
+            Vec2(largest, 0.0), interval[2]) ==
+            Vec2(1.0, 0.0)
+
+        path = Diff3D.SVGPath(
+            :line,
+            [Vec2(-largest, 0.0),
+             Vec2(largest, 0.0)],
+            false)
+        fragments = Diff3D._svg_clip_open_path_to_union(
+            path, [clip_loop])
+        @test length(fragments) == 1
+        @test fragments[1].points ==
+            [Vec2(-1.0, 0.0), Vec2(1.0, 0.0)]
+
+        @test_opt_alloc 0 Diff3D._svg_clip_segment_to_loop(
+            Vec2(-2.0, 0.0),
+            Vec2(2.0, 0.0), clip_loop)
+        @test_opt_alloc 0 Diff3D._svg_clip_signed_distance(
+            Vec2(0.0, 1.0),
+            Vec2(-2.0, -1.0),
+            Vec2(2.0, 1.0), true)
+    end
+
 end
