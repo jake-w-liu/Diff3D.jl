@@ -851,22 +851,61 @@ function _nurbs_finish_point(x::Float64, y::Float64, z::Float64, w::Float64)
     return Vec3(x / w, y / w, z / w)
 end
 
+@inline function _nurbs_weighted_point(
+        point::Vec3{Float64}, total_weight::Float64,
+        control_point::Vec4{Float64}, weight::Float64)
+    next_weight = total_weight + weight
+    next_point = iszero(total_weight) ?
+        Vec3(control_point.x, control_point.y, control_point.z) :
+        lerp(
+            point,
+            Vec3(control_point.x, control_point.y, control_point.z),
+            weight / next_weight,
+        )
+    return next_point, next_weight
+end
+
+@inline function _nurbs_finish_weighted_point(
+        point::Vec3{Float64}, total_weight::Float64)
+    abs(total_weight) > eps(Float64) ||
+        throw(ArgumentError(
+            "NURBS evaluation produced zero homogeneous weight"))
+    return point
+end
+
 function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     npoints = length(curve.control_points)
     u = _nurbs_parameter(t, curve.knots, curve.degree, npoints,
                          "NURBS curve parameter t")
     span = _nurbs_span(curve.degree, curve.knots, npoints, u)
     _nurbs_basis!(basis, span, u, curve.degree, curve.knots)
-    x = 0.0; y = 0.0; z = 0.0; w = 0.0
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    weight = 0.0
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
         coeff = basis[j + 1] * cp.w
         x += cp.x * coeff
         y += cp.y * coeff
         z += cp.z * coeff
-        w += coeff
+        weight += coeff
     end
-    return _nurbs_finish_point(x, y, z, w)
+    if isfinite(x) && isfinite(y) && isfinite(z) &&
+       isfinite(weight)
+        return _nurbs_finish_point(x, y, z, weight)
+    end
+
+    point = Vec3(0.0, 0.0, 0.0)
+    total_weight = 0.0
+    for j in 0:curve.degree
+        cp = curve.control_points[span - curve.degree + j + 1]
+        coeff = basis[j + 1] * cp.w
+        point, total_weight =
+            _nurbs_weighted_point(
+                point, total_weight, cp, coeff)
+    end
+    return _nurbs_finish_weighted_point(point, total_weight)
 end
 
 function nurbs_point(curve::NURBSCurve, t::Real)
@@ -885,16 +924,33 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
     span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
     _nurbs_basis!(basis_u, span_u, uu, surface.degree_u, surface.knots_u)
     _nurbs_basis!(basis_v, span_v, vv, surface.degree_v, surface.knots_v)
-    x = 0.0; y = 0.0; z = 0.0; w = 0.0
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    weight = 0.0
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
         coeff = basis_u[i + 1] * basis_v[j + 1] * cp.w
         x += cp.x * coeff
         y += cp.y * coeff
         z += cp.z * coeff
-        w += coeff
+        weight += coeff
     end
-    return _nurbs_finish_point(x, y, z, w)
+    if isfinite(x) && isfinite(y) && isfinite(z) &&
+       isfinite(weight)
+        return _nurbs_finish_point(x, y, z, weight)
+    end
+
+    point = Vec3(0.0, 0.0, 0.0)
+    total_weight = 0.0
+    for i in 0:surface.degree_u, j in 0:surface.degree_v
+        cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
+        coeff = basis_u[i + 1] * basis_v[j + 1] * cp.w
+        point, total_weight =
+            _nurbs_weighted_point(
+                point, total_weight, cp, coeff)
+    end
+    return _nurbs_finish_weighted_point(point, total_weight)
 end
 
 function nurbs_point(surface::NURBSSurface, u::Real, v::Real)
@@ -920,7 +976,10 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     _nurbs_basis!(basis_u, span_u, uu, volume.degree_u, volume.knots_u)
     _nurbs_basis!(basis_v, span_v, vv, volume.degree_v, volume.knots_v)
     _nurbs_basis!(basis_w, span_w, ww, volume.degree_w, volume.knots_w)
-    x = 0.0; y = 0.0; z = 0.0; weight = 0.0
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    weight = 0.0
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
         coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] * cp.w
@@ -929,7 +988,21 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
         z += cp.z * coeff
         weight += coeff
     end
-    return _nurbs_finish_point(x, y, z, weight)
+    if isfinite(x) && isfinite(y) && isfinite(z) &&
+       isfinite(weight)
+        return _nurbs_finish_point(x, y, z, weight)
+    end
+
+    point = Vec3(0.0, 0.0, 0.0)
+    total_weight = 0.0
+    for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
+        cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
+        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] * cp.w
+        point, total_weight =
+            _nurbs_weighted_point(
+                point, total_weight, cp, coeff)
+    end
+    return _nurbs_finish_weighted_point(point, total_weight)
 end
 
 function nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real)

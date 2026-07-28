@@ -22866,4 +22866,33 @@ end
             (largest, -largest))
     end
 
+    @testset "fresh audit round 149 fixes" begin
+        largest = floatmax(Float64)
+        knots = [0.0, 0.0, 1.0, 1.0]
+        control_point =
+            Vec4(largest, largest, largest, largest)
+
+        curve = NURBSCurve(
+            1, knots, fill(control_point, 2))
+        @test nurbs_point(curve, 0.5) ==
+            Vec3(largest, largest, largest)
+
+        surface = NURBSSurface(
+            1, 1, knots, knots,
+            [fill(control_point, 2) for _ in 1:2])
+        @test nurbs_point(surface, 0.5, 0.5) ==
+            Vec3(largest, largest, largest)
+
+        volume = NURBSVolume(
+            1, 1, 1, knots, knots, knots,
+            [[fill(control_point, 2) for _ in 1:2]
+             for _ in 1:2])
+        @test nurbs_point(volume, 0.5, 0.5, 0.5) ==
+            Vec3(largest, largest, largest)
+
+        @test_opt_alloc 0 Diff3D._nurbs_weighted_point(
+            Vec3(largest, largest, largest), largest / 2,
+            control_point, largest / 2)
+    end
+
 end
