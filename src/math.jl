@@ -50,11 +50,21 @@ cross(a::Vec3, b::Vec3) = Vec3(
     a.z * b.x - a.x * b.z,
     a.x * b.y - a.y * b.x
 )
-norm(a::Vec3) = sqrt(dot(a, a))
+@inline _norm3(x, y, z) = hypot(x, y, z)
+@inline _norm4(x, y, z, w) = hypot(x, y, z, w)
+
+norm(a::Vec3) = _norm3(a.x, a.y, a.z)
 function normalize(a::Vec3)
     l = norm(a)
-    l > 1e-20 || return Vec3(zero(a.x), zero(a.y), zero(a.z))
-    return a / l
+    l > zero(l) || return Vec3(zero(a.x), zero(a.y), zero(a.z))
+    isfinite(l) && return a / l
+
+    # A finite vector can have a mathematical length larger than typemax(T).
+    # Scale first in that case so its unit direction remains representable.
+    scale = max(max(abs(a.x), abs(a.y)), abs(a.z))
+    isfinite(scale) || return a / l
+    scaled = a / scale
+    return scaled / _norm3(scaled.x, scaled.y, scaled.z)
 end
 lerp(a::Vec3, b::Vec3, t::Real) = a * (1 - t) + b * t
 distance(a::Vec3, b::Vec3) = norm(a - b)
@@ -422,11 +432,21 @@ function quat_to_mat4(q::Quaternion)
 end
 
 function quat_normalize(q::Quaternion)
-    l = sqrt(q.x^2 + q.y^2 + q.z^2 + q.w^2)
-    if l < 1e-20    # zero quaternion: return identity (three.js Quaternion.normalize)
+    l = _norm4(q.x, q.y, q.z, q.w)
+    if l == zero(l)    # zero quaternion: return identity (three.js Quaternion.normalize)
         return Quaternion(zero(q.x), zero(q.y), zero(q.z), one(q.w))
     end
-    Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
+    isfinite(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
+
+    # Preserve the direction of finite components even when their true
+    # four-dimensional length exceeds the floating-point range.
+    scale = max(max(abs(q.x), abs(q.y)), max(abs(q.z), abs(q.w)))
+    if isfinite(scale) && scale > zero(scale)
+        x, y, z, w = q.x/scale, q.y/scale, q.z/scale, q.w/scale
+        sl = _norm4(x, y, z, w)
+        return Quaternion(x/sl, y/sl, z/sl, w/sl)
+    end
+    return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
 end
 
 # ========================== Euler ==========================
@@ -604,7 +624,20 @@ end
 function cartesian_to_spherical(v::Vec3)
     r = norm(v)
     r == 0 && return Spherical(zero(r), zero(r), zero(r))
-    Spherical(r, acos(clamp(v.y / r, -one(r), one(r))), atan(v.x, v.z))
+    phi = if isfinite(r)
+        acos(clamp(v.y / r, -one(r), one(r)))
+    else
+        # The radius itself may be unrepresentable even though every component
+        # is finite. Scale only for the angular calculation in that case.
+        scale = max(max(abs(v.x), abs(v.y)), abs(v.z))
+        if isfinite(scale) && scale > zero(scale)
+            sx, sy, sz = v.x/scale, v.y/scale, v.z/scale
+            atan(hypot(sx, sz), sy)
+        else
+            acos(clamp(v.y / r, -one(r), one(r)))
+        end
+    end
+    Spherical(r, phi, atan(v.x, v.z))
 end
 
 struct Cylindrical{T<:Real}
@@ -616,7 +649,7 @@ end
 cylindrical_to_cartesian(c::Cylindrical) =
     Vec3(c.radius * sin(c.theta), c.y, c.radius * cos(c.theta))
 cartesian_to_cylindrical(v::Vec3) =
-    Cylindrical(sqrt(v.x^2 + v.z^2), atan(v.x, v.z), v.y)
+    Cylindrical(hypot(v.x, v.z), atan(v.x, v.z), v.y)
 
 # ========================== Interpolant ==========================
 
@@ -658,9 +691,24 @@ struct Frustum{T<:Real}
 end
 
 @inline function _make_plane(a, b, c, d)
-    n = sqrt(a*a + b*b + c*c)
-    inv = n > 0 ? one(n)/n : one(n)
-    Plane(Vec3(a*inv, b*inv, c*inv), d*inv)
+    n = _norm3(a, b, c)
+    if isfinite(n)
+        inv = n > zero(n) ? one(n)/n : one(n)
+        return Plane(Vec3(a*inv, b*inv, c*inv), d*inv)
+    end
+
+    # Keep finite plane coefficients normalizable when their mathematical norm
+    # exceeds the scalar range. Dividing d by the same scale preserves a·x+d=0.
+    scale = max(max(abs(a), abs(b)), abs(c))
+    if isfinite(scale) && scale > zero(scale)
+        sa, sb, sc = a/scale, b/scale, c/scale
+        inv = one(n) / _norm3(sa, sb, sc)
+        return Plane(Vec3(sa*inv, sb*inv, sc*inv), (d/scale)*inv)
+    end
+
+    # Preserve the previous propagation behavior for non-finite coefficients.
+    inv = n > zero(n) ? one(n)/n : one(n)
+    return Plane(Vec3(a*inv, b*inv, c*inv), d*inv)
 end
 
 """

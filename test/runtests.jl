@@ -20336,4 +20336,55 @@ end
                                [1.0e308, 0.0, 0.0]) == [1.0, 0.0, 0.0]
     end
 
+    @testset "fresh audit round 61 fixes" begin
+        huge_axis = Vec3(1.0e308, 0.0, 0.0)
+        tiny_axis = Vec3(1.0e-300, 0.0, 0.0)
+        @test norm(huge_axis) == 1.0e308
+        @test norm(tiny_axis) == 1.0e-300
+        @test normalize(huge_axis) == Vec3(1.0, 0.0, 0.0)
+        @test normalize(tiny_axis) == Vec3(1.0, 0.0, 0.0)
+        @test normalize(Vec3()) == Vec3()
+
+        overrange = Vec3(1.1e308, 1.1e308, 1.1e308)
+        @test isinf(norm(overrange))
+        @test norm(normalize(overrange)) ≈ 1.0
+
+        huge_q = quat_normalize(Quaternion(1.1e308, 1.1e308, 1.1e308, 1.1e308))
+        tiny_q = quat_normalize(Quaternion(1.0e-300, 0.0, 0.0, 0.0))
+        @test [huge_q.x, huge_q.y, huge_q.z, huge_q.w] ≈ fill(0.5, 4)
+        @test tiny_q == Quaternion(1.0, 0.0, 0.0, 0.0)
+        @test quat_normalize(Quaternion(0.0, 0.0, 0.0, 0.0)) ==
+              Quaternion(0.0, 0.0, 0.0, 1.0)
+
+        cylindrical = cartesian_to_cylindrical(Vec3(1.0e308, 2.0, 1.0e308))
+        @test cylindrical.radius ≈ hypot(1.0e308, 1.0e308)
+        @test cylindrical.theta ≈ π / 4
+
+        spherical = cartesian_to_spherical(overrange)
+        @test isinf(spherical.radius)
+        @test spherical.phi ≈ acos(inv(sqrt(3.0)))
+        @test spherical.theta ≈ π / 4
+
+        plane = Diff3D._make_plane(1.1e308, 1.1e308, 1.1e308, -1.1e308)
+        @test norm(plane.normal) ≈ 1.0
+        @test [plane.normal.x, plane.normal.y, plane.normal.z] ≈
+              fill(inv(sqrt(3.0)), 3)
+        @test plane.constant ≈ -inv(sqrt(3.0))
+
+        @test ForwardDiff.gradient(x -> norm(Vec3(x...)), [1.0, 2.0, 3.0]) ≈
+              [1.0, 2.0, 3.0] / sqrt(14.0)
+        @test reverse_gradient(x -> norm(Vec3(x[1], x[2], x[3])),
+                               [1.0e-300, 0.0, 0.0]) == [1.0, 0.0, 0.0]
+        @test reverse_gradient(x -> norm(Vec3(x[1], x[2], x[3])),
+                               [1.0e308, 0.0, 0.0]) == [1.0, 0.0, 0.0]
+
+        ordinary_v = Vec3(1.0, 2.0, 3.0)
+        ordinary_q = Quaternion(1.0, 2.0, 3.0, 4.0)
+        @test_opt_alloc 0 norm(ordinary_v)
+        @test_opt_alloc 0 normalize(ordinary_v)
+        @test_opt_alloc 0 quat_normalize(ordinary_q)
+        @test_opt_alloc 0 cartesian_to_cylindrical(ordinary_v)
+        @test_opt_alloc 0 Diff3D._make_plane(1.0, 2.0, 3.0, 4.0)
+    end
+
 end
