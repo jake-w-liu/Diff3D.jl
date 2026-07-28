@@ -22895,4 +22895,27 @@ end
             control_point, largest / 2)
     end
 
+    @testset "fresh audit round 150 fixes" begin
+        largest = floatmax(Float64)
+        extreme_plane(u, v) = Vec3(
+            0.0,
+            iszero(u) ? -largest : largest,
+            iszero(v) ? -largest : largest,
+        )
+        geometry = ParametricGeometry(
+            extreme_plane, 1, 1)
+        @test all(isfinite, geometry.normals)
+        @test all(
+            i -> get_normal(geometry, i) ==
+                Vec3(1.0, 0.0, 0.0),
+            1:geometry.n_vertices)
+
+        ordinary = ParametricGeometry(
+            (u, v) -> Vec3(u, v, 0.0), 2, 2)
+        @test all(
+            i -> get_normal(ordinary, i) ==
+                Vec3(0.0, 0.0, 1.0),
+            1:ordinary.n_vertices)
+    end
+
 end

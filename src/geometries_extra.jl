@@ -1030,6 +1030,7 @@ end
 
 function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, nvertices::Int)
     normals = zeros(Float64, 3 * nvertices)
+    needs_scaled_fallback = false
     for fi in 1:(length(indices) ÷ 3)
         i1 = indices[3fi - 2]
         i2 = indices[3fi - 1]
@@ -1038,12 +1039,27 @@ function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, n
         p2 = Vec3(positions[3i2 - 2], positions[3i2 - 1], positions[3i2])
         p3 = Vec3(positions[3i3 - 2], positions[3i3 - 1], positions[3i3])
         fn = cross(p2 - p1, p3 - p1)
+        needs_scaled_fallback |=
+            !(isfinite(fn.x) && isfinite(fn.y) && isfinite(fn.z))
         for idx in (i1, i2, i3)
             base = 3idx - 2
-            normals[base] += fn.x
-            normals[base + 1] += fn.y
-            normals[base + 2] += fn.z
+            nx = normals[base] + fn.x
+            ny = normals[base + 1] + fn.y
+            nz = normals[base + 2] + fn.z
+            needs_scaled_fallback |=
+                !(isfinite(nx) && isfinite(ny) && isfinite(nz))
+            normals[base] = nx
+            normals[base + 1] = ny
+            normals[base + 2] = nz
         end
+    end
+    if needs_scaled_fallback
+        nfaces = length(indices) ÷ 3
+        geometry = BufferGeometry(
+            positions, normals, Float64[], indices,
+            nvertices, nfaces)
+        _compute_vertex_normals_scaled!(normals, geometry)
+        return normals
     end
     for vi in 1:nvertices
         base = 3vi - 2
