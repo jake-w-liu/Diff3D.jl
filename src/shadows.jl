@@ -84,8 +84,19 @@ end
 
 _safe_up(dir::Vec3) = abs(dir.y) > 0.99 ? Vec3(1.0, 0.0, 0.0) : Vec3(0.0, 1.0, 0.0)
 
+function _shadow_direction(from::Vec3, to::Vec3)
+    direction = to - from
+    if isfinite(direction.x) && isfinite(direction.y) &&
+       isfinite(direction.z)
+        return normalize(direction)
+    end
+    scaled, _, nonzero =
+        _difference_direction_and_logscale(from, to)
+    return nonzero ? normalize(scaled) : normalize(direction)
+end
+
 function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
-    dir = normalize(light.position - light.target)        # toward the light
+    dir = _shadow_direction(light.target, light.position) # toward the light
     eye = center + dir * (radius * 2.0)
     lv = mat4_look_at(eye, center, _safe_up(dir))
     s = radius * 1.1
@@ -110,14 +121,16 @@ function _perspective_shadow_planes(light_pos::Vec3, center::Vec3, radius)
 end
 
 function _light_view_proj(light::SpotLight, center::Vec3, radius)
-    lv = mat4_look_at(light.position, light.target, _safe_up(normalize(light.target - light.position)))
+    lv = mat4_look_at(
+        light.position, light.target,
+        _safe_up(_shadow_direction(light.position, light.target)))
     near, far = _perspective_shadow_planes(light.position, center, radius)
     lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
     return lp * lv
 end
 
 function _light_view_proj(light::PointLight, center::Vec3, radius)
-    dir = normalize(center - light.position)
+    dir = _shadow_direction(light.position, center)
     lv = mat4_look_at(light.position, center, _safe_up(dir))
     near, far = _perspective_shadow_planes(light.position, center, radius)
     lp = mat4_perspective(π/2, 1.0, near, far)

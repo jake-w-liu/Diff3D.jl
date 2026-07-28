@@ -21812,4 +21812,17 @@ end
         @test all(isfinite, (center.x, center.y, center.z, radius))
     end
 
+    @testset "fresh audit round 98 fixes" begin
+        light = DirectionalLight(
+            position=Vec3(1.0e308, 0.0, 0.0))
+        light.target = Vec3(-1.0e308, 0.0, 0.0)
+        @test Diff3D._shadow_direction(
+            light.target, light.position) == Vec3(1.0, 0.0, 0.0)
+        light_vp = Diff3D._light_view_proj(
+            light, Vec3(), 1.0)
+        @test all(isfinite, light_vp.e)
+        @test_opt_alloc 0 Diff3D._light_view_proj(
+            light, Vec3(), 1.0)
+    end
+
 end
