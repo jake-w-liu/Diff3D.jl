@@ -20323,4 +20323,17 @@ end
             negative_vertices, Float64[])
     end
 
+    @testset "fresh audit round 60 fixes" begin
+        @test reverse_gradient(x -> x[1] / x[1], [1.0e-300]) == [0.0]
+        @test reverse_gradient(x -> x[1] / x[1], [1.0e308]) == [0.0]
+        @test reverse_gradient(x -> 1.0e-300 / x[1], [1.0e-300])[1] ≈ -1.0e300
+
+        # Base's stable n-argument hypot uses ADVar division internally. These
+        # gradients exercise both the underflow and overflow branches.
+        @test reverse_gradient(x -> hypot(x[1], x[2], x[3]),
+                               [1.0e-300, 0.0, 0.0]) == [1.0, 0.0, 0.0]
+        @test reverse_gradient(x -> hypot(x[1], x[2], x[3]),
+                               [1.0e308, 0.0, 0.0]) == [1.0, 0.0, 0.0]
+    end
+
 end

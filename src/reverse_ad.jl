@@ -68,7 +68,11 @@ Base.:*(a::ADVar, b::ADVar) = _ad_record(a.val * b.val, (a, b), (b.val, a.val))
 Base.:*(a::ADVar, b::Real)  = (bf = Float64(b); _ad_record(a.val * bf, (a,), (bf,)))
 Base.:*(a::Real, b::ADVar)  = (af = Float64(a); _ad_record(af * b.val, (b,), (af,)))
 function Base.:/(a::ADVar, b::ADVar)
-    _ad_record(a.val / b.val, (a, b), (1.0 / b.val, -a.val / (b.val * b.val)))
+    quotient = a.val / b.val
+    inv_b = 1.0 / b.val
+    # Form ∂(a/b)/∂b as -(a/b)/b.  Computing -a/(b*b) first can
+    # overflow or underflow `b*b` even when the derivative is representable.
+    _ad_record(quotient, (a, b), (inv_b, -quotient * inv_b))
 end
 function Base.:/(a::ADVar, b::Real)
     bf = Float64(b)
@@ -76,7 +80,9 @@ function Base.:/(a::ADVar, b::Real)
 end
 function Base.:/(a::Real, b::ADVar)
     af = Float64(a)
-    _ad_record(af / b.val, (b,), (-af / (b.val * b.val),))
+    quotient = af / b.val
+    inv_b = 1.0 / b.val
+    _ad_record(quotient, (b,), (-quotient * inv_b,))
 end
 
 # ---- powers ----
