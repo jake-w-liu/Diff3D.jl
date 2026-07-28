@@ -22079,4 +22079,18 @@ end
         @test subnormal.mipmaps[1][1, 1, 1] == smallest
     end
 
+    @testset "fresh audit round 111 fixes" begin
+        texture = Texture(
+            reshape(collect(1.0:16.0), 4, 4, 1);
+            colorspace=:linear)
+        generate_mipmaps!(texture)
+        sample = sample_texture_aniso(
+            texture, 0.5, 0.5, 1.0, nextfloat(0.0);
+            max_aniso=8)
+        @test all(isfinite, (sample.r, sample.g, sample.b))
+        @test_opt_alloc 0 sample_texture_aniso(
+            texture, 0.5, 0.5, 1.0, nextfloat(0.0);
+            max_aniso=8)
+    end
+
 end

@@ -689,7 +689,8 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
     end
 
     # Number of probes along the major axis (discrete, value-only).
-    N = clamp(ceil(Int, ratio), 1, max_aniso)
+    N = ratio >= max_aniso ? max_aniso :
+        clamp(ceil(Int, ratio), 1, max_aniso)
     if N <= 1
         return sample_texture_auto(tex, u, v, major)
     end
