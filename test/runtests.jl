@@ -21234,4 +21234,33 @@ end
             1.0e308, -1.0e308, 1.0e308)
     end
 
+    @testset "fresh audit round 80 fixes" begin
+        expected_smoothed_distance = sqrt(1.0 + 1.0e-12)
+
+        @test point_line_distance(
+            0.0, 1.0, -1.0e308, 0.0, 1.0e308, 0.0) == 1.0
+        @test point_line_distance(
+            1.0e308, 1.0, -1.0e308, 0.0, 0.0, 0.0) == 1.0
+        @test point_segment_distance(
+            0.0, 1.0, -1.0e308, 0.0, 1.0e308, 0.0) ==
+              expected_smoothed_distance
+        @test point_segment_distance(
+            1.0e308, 1.0, -1.0e308, 0.0, 1.0e308, 0.0) ==
+              expected_smoothed_distance
+
+        # The ordinary differentiable path remains finite and retains its
+        # expected derivative after the Float64 extreme-value specialization.
+        gradient = ForwardDiff.gradient(
+            p -> point_segment_distance(
+                p[1], p[2], 0.0, 0.0, 2.0, 0.0),
+            [1.0, 0.0])
+        @test all(isfinite, gradient)
+        @test gradient == [0.0, 0.0]
+
+        @test_opt_alloc 0 point_line_distance(
+            0.0, 1.0, -1.0e308, 0.0, 1.0e308, 0.0)
+        @test_opt_alloc 0 point_segment_distance(
+            0.0, 1.0, -1.0e308, 0.0, 1.0e308, 0.0)
+    end
+
 end

@@ -663,10 +663,71 @@ end
 """
 Distance from point to infinite line through (ax,ay)-(bx,by).
 """
+@inline _soft_zero_product(a::Float64, b::Float64) =
+    (iszero(a) || iszero(b)) ? 0.0 : a * b
+
+@inline function _soft_max_abs_coordinate(px::Float64, py::Float64,
+                                          ax::Float64, ay::Float64,
+                                          bx::Float64, by::Float64)
+    pscale = max(abs(px), abs(py))
+    ascale = max(abs(ax), abs(ay))
+    bscale = max(abs(bx), abs(by))
+    return max(max(pscale, ascale), bscale)
+end
+
+@inline function _soft_line_unit_float(ax::Float64, ay::Float64,
+                                       bx::Float64, by::Float64)
+    dx, dy = bx - ax, by - ay
+    len = hypot(dx, dy)
+    if len > 0.0 && isfinite(len)
+        return dx / len, dy / len, len
+    end
+
+    endpoint_scale = max(max(abs(ax), abs(ay)), max(abs(bx), abs(by)))
+    endpoint_scale > 0.0 || return 0.0, 0.0, 0.0
+    sdx = bx / endpoint_scale - ax / endpoint_scale
+    sdy = by / endpoint_scale - ay / endpoint_scale
+    scaled_len = hypot(sdx, sdy)
+    scaled_len > 0.0 || return 0.0, 0.0, 0.0
+    return sdx / scaled_len, sdy / scaled_len, Inf
+end
+
+@inline function point_line_distance(px::Float64, py::Float64,
+                                     ax::Float64, ay::Float64,
+                                     bx::Float64, by::Float64)
+    ux, uy, len = _soft_line_unit_float(ax, ay, bx, by)
+    if len > 0.0
+        # Measuring from the midpoint keeps both extreme endpoints close enough
+        # to subtract. Exact zero products avoid the indeterminate Inf*0 form
+        # for an axis-aligned line and a far-away point.
+        mx = _geometry_midpoint(ax, bx)
+        my = _geometry_midpoint(ay, by)
+        ox, oy = px - mx, py - my
+        signed_distance =
+            _soft_zero_product(ox, uy) - _soft_zero_product(oy, ux)
+        if isfinite(signed_distance)
+            length_floor = isfinite(len) ? len / max(len, 1.0e-20) : 1.0
+            return abs(signed_distance) * length_floor
+        end
+    end
+
+    # Fully scale all coordinates only when the direct calculation cannot
+    # represent an intermediate. Line distance is homogeneous under this scale.
+    scale = _soft_max_abs_coordinate(px, py, ax, ay, bx, by)
+    scale > 0.0 || return 0.0
+    spx, spy = px / scale, py / scale
+    sax, say = ax / scale, ay / scale
+    sbx, sby = bx / scale, by / scale
+    dx, dy = sbx - sax, sby - say
+    scaled_len = hypot(dx, dy)
+    numerator = abs((spx - sax) * dy - (spy - say) * dx)
+    return numerator * scale / max(scaled_len, 1.0e-20 / scale)
+end
+
 @inline function point_line_distance(px, py, ax, ay, bx, by)
     dx = bx - ax
     dy = by - ay
-    len = sqrt(dx^2 + dy^2)
+    len = hypot(dx, dy)
     abs((px - ax) * dy - (py - ay) * dx) / max(len, 1e-20)
 end
 
@@ -674,6 +735,54 @@ end
 Distance from point to line segment (ax,ay)-(bx,by).
 AD-friendly: uses smooth min/max via clamping.
 """
+@inline function _soft_segment_parameter_float(px::Float64, py::Float64,
+                                               ax::Float64, ay::Float64,
+                                               bx::Float64, by::Float64,
+                                               len::Float64)
+    dx, dy = bx - ax, by - ay
+    if isfinite(len) && isfinite(dx) && isfinite(dy)
+        ox, oy = px - ax, py - ay
+        qx, qy = ox / len, oy / len
+        t = _soft_zero_product(qx, dx / len) +
+            _soft_zero_product(qy, dy / len)
+        isnan(t) || return clamp(t, 0.0, 1.0)
+    end
+
+    # The projection parameter is invariant under a common coordinate scale.
+    scale = _soft_max_abs_coordinate(px, py, ax, ay, bx, by)
+    scale > 0.0 || return 0.0
+    spx, spy = px / scale, py / scale
+    sax, say = ax / scale, ay / scale
+    sbx, sby = bx / scale, by / scale
+    sdx, sdy = sbx - sax, sby - say
+    denominator = sdx * sdx + sdy * sdy
+    if denominator > 0.0
+        t = ((spx - sax) * sdx + (spy - say) * sdy) / denominator
+        isnan(t) || return clamp(t, 0.0, 1.0)
+    end
+
+    # If scaling erased an exceptionally short segment, either endpoint is an
+    # adequate projection reference; choose the nearer one deterministically.
+    da = hypot(spx - sax, spy - say)
+    db = hypot(spx - sbx, spy - sby)
+    return da <= db ? 0.0 : 1.0
+end
+
+function point_segment_distance(px::Float64, py::Float64,
+                                ax::Float64, ay::Float64,
+                                bx::Float64, by::Float64)
+    dx, dy = bx - ax, by - ay
+    len = hypot(dx, dy)
+    smoothing = 1.0e-6
+    if len < 1.0e-10
+        return hypot(px - ax, py - ay, smoothing)
+    end
+    t = _soft_segment_parameter_float(px, py, ax, ay, bx, by, len)
+    proj_x = (1.0 - t) * ax + t * bx
+    proj_y = (1.0 - t) * ay + t * by
+    return hypot(px - proj_x, py - proj_y, smoothing)
+end
+
 function point_segment_distance(px, py, ax, ay, bx, by)
     dx = bx - ax
     dy = by - ay
