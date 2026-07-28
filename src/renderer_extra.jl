@@ -72,10 +72,35 @@ function downsample!(out::AbstractArray, img::AbstractArray, ss::Int)
     inv = 1.0 / (Float64(ss) * Float64(ss))
     @inbounds for c in 1:3, j in 1:W, i in 1:H
         s = 0.0
+        finite_samples = true
         for di in 0:ss-1, dj in 0:ss-1
-            s += img[(i-1)*ss + di + 1, (j-1)*ss + dj + 1, c]
+            sample =
+                Float64(img[(i-1)*ss + di + 1,
+                            (j-1)*ss + dj + 1, c])
+            s += sample
+            finite_samples &= isfinite(sample)
         end
-        out[i, j, c] = s * inv
+        average = s * inv
+        if !isfinite(average) && finite_samples
+            represented_sum =
+                _float_zero_representation(Float64)
+            for di in 0:ss-1, dj in 0:ss-1
+                sample =
+                    Float64(img[(i-1)*ss + di + 1,
+                                (j-1)*ss + dj + 1, c])
+                represented_sum = _float_representation_add(
+                    represented_sum,
+                    _float_value_representation(sample),
+                )
+            end
+            represented_average = _float_representation_multiply(
+                represented_sum,
+                _float_value_representation(inv),
+            )
+            average =
+                _float_representation_value(represented_average)
+        end
+        out[i, j, c] = average
     end
     return out
 end

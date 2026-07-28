@@ -22586,4 +22586,21 @@ end
             0.5, 1.0, :repeat, -1, false)
     end
 
+    @testset "fresh audit round 137 fixes" begin
+        largest = floatmax(Float64)
+        hdr = fill(largest, 2, 2, 3)
+        out = zeros(1, 1, 3)
+        Diff3D.downsample!(out, hdr, 2)
+        @test out == fill(largest, 1, 1, 3)
+
+        cancellation = fill(0.0, 2, 2, 3)
+        cancellation[1, 1, :] .= largest
+        cancellation[1, 2, :] .= largest
+        cancellation[2, 1, :] .= -largest
+        cancellation[2, 2, :] .= -largest
+        Diff3D.downsample!(out, cancellation, 2)
+        @test out == zeros(1, 1, 3)
+        @test_opt_alloc 0 Diff3D.downsample!(out, hdr, 2)
+    end
+
 end
