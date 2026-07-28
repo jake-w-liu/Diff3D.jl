@@ -20387,4 +20387,24 @@ end
         @test_opt_alloc 0 Diff3D._make_plane(1.0, 2.0, 3.0, 4.0)
     end
 
+    @testset "fresh audit round 62 fixes" begin
+        @test Diff3D._OBJECT_ID_COUNTER isa Threads.Atomic{Int}
+
+        counter = Threads.Atomic{Int}(0)
+        ids = Vector{Int}(undef, 2048)
+        Threads.@threads for i in eachindex(ids)
+            ids[i] = Diff3D._next_id!(counter)
+        end
+        @test sort(ids) == collect(eachindex(ids))
+        @test counter[] == length(ids)
+
+        exhausted = Threads.Atomic{Int}(typemax(Int) - 1)
+        @test Diff3D._next_id!(exhausted) == typemax(Int)
+        @test_throws OverflowError("Object3D ID counter exhausted") Diff3D._next_id!(exhausted)
+        @test exhausted[] == typemax(Int)
+
+        alloc_counter = Threads.Atomic{Int}(0)
+        @test_opt_alloc 0 Diff3D._next_id!(alloc_counter)
+    end
+
 end

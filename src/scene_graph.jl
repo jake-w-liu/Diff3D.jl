@@ -17,11 +17,20 @@ mutable struct Object3D <: AbstractObject3D
 end
 
 # Global ID counter
-const _OBJECT_ID_COUNTER = Ref(0)
-function _next_id()
-    _OBJECT_ID_COUNTER[] += 1
-    return _OBJECT_ID_COUNTER[]
+const _OBJECT_ID_COUNTER = Threads.Atomic{Int}(0)
+
+@inline function _next_id!(counter::Threads.Atomic{Int})
+    current = counter[]
+    while current != typemax(Int)
+        next = current + 1
+        observed = Threads.atomic_cas!(counter, current, next)
+        observed == current && return next
+        current = observed
+    end
+    throw(OverflowError("Object3D ID counter exhausted"))
 end
+
+_next_id() = _next_id!(_OBJECT_ID_COUNTER)
 
 function Object3D(; name="")
     Object3D(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
