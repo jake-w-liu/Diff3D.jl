@@ -21030,4 +21030,66 @@ end
         @test_opt_alloc 0 Diff3D._texture_check_rgb_square_size(4, "texture")
     end
 
+    @testset "fresh audit round 76 fixes" begin
+        data = ones(Float64, 2, 2, 3)
+        @test_throws ArgumentError("Texture rotation must be finite") Texture(
+            data; rotation=NaN)
+        @test_throws ArgumentError("Texture offset.x must be finite") Texture(
+            data; offset=Vec2(Inf, 0.0))
+        @test_throws ArgumentError("Texture repeat.y must be finite") Texture(
+            data; repeat=Vec2(1.0, NaN))
+        @test_throws ArgumentError("Texture center.y must be finite") Texture(
+            data; center=Vec2(0.0, Inf))
+
+        bad_matrix = Mat3{Float64}((
+            NaN, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,
+        ))
+        @test_throws ArgumentError("Texture matrix[1] must be finite") Texture(
+            data; matrix=bad_matrix, matrix_auto_update=false)
+        @test_throws ArgumentError("Texture tex_coord must be 0 or 1") Texture(
+            data; tex_coord=2)
+        @test_throws ArgumentError("Texture tex_coord must be an integer") Texture(
+            data; tex_coord=true)
+        @test_throws ArgumentError(
+            "Texture tex_coord is outside the supported integer range") Texture(
+            data; tex_coord=big(typemax(Int)) + 1)
+        @test_throws ArgumentError("Texture max_anisotropy must be numeric") Texture(
+            data; max_anisotropy="bad")
+
+        # Mutated transform state is checked at both sampling and export sites;
+        # it is no longer converted into an unrelated UV or JSON zero.
+        auto = Texture(data)
+        auto.rotation = NaN
+        @test_throws ArgumentError("Texture rotation must be finite") sample_texture(
+            auto, 0.5, 0.5)
+        @test_throws ArgumentError("Texture rotation must be finite") Diff3D._web_texture_json(
+            auto)
+
+        manual = Texture(data; matrix_auto_update=false)
+        manual.matrix = bad_matrix
+        @test_throws ArgumentError("Texture matrix[1] must be finite") sample_texture(
+            manual, 0.5, 0.5)
+
+        invalid_uv_set = Texture(data)
+        invalid_uv_set.tex_coord = 2
+        @test_throws ArgumentError("Texture tex_coord must be 0 or 1") Diff3D._texture_uv_set(
+            invalid_uv_set)
+        @test_throws ArgumentError("Texture tex_coord must be 0 or 1") Diff3D._web_texture_json(
+            invalid_uv_set)
+
+        overflowing_transform = Texture(data)
+        overflowing_transform.repeat = Vec2(1.0e308, 1.0e308)
+        overflowing_transform.center = Vec2(1.0e308, 1.0e308)
+        @test_throws "Texture matrix" texture_update_matrix!(
+            overflowing_transform)
+
+        ordinary_auto = Texture(data)
+        ordinary_manual = Texture(data; matrix_auto_update=false)
+        @test_opt_alloc 64 sample_texture(ordinary_auto, 0.5, 0.5)
+        @test_opt_alloc 64 sample_texture(ordinary_manual, 0.5, 0.5)
+        @test_opt_alloc 0 Diff3D._texture_tex_coord(1)
+    end
+
 end

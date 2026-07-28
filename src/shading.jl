@@ -175,7 +175,8 @@ end
     (attr.data[b + 1], attr.data[b + 2])
 end
 
-@inline _texture_uv_set(tex) = tex isa Texture ? tex.tex_coord : 0
+@inline _texture_uv_set(tex) =
+    tex isa Texture ? _texture_tex_coord(tex.tex_coord) : 0
 @inline _map_uv(tex, u, v, u2, v2; default_uv2::Bool=false) =
     (_texture_uv_set(tex) == 1 || (default_uv2 && _texture_uv_set(tex) == 0)) ? (u2, v2) : (u, v)
 

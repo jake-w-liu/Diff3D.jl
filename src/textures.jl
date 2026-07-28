@@ -65,10 +65,77 @@ function _texture_colorspace_symbol(v)::Symbol
 end
 
 function _texture_max_anisotropy(v)::Float64
-    f = Float64(v)
+    f = try
+        Float64(v)
+    catch
+        throw(ArgumentError("Texture max_anisotropy must be numeric"))
+    end
     isfinite(f) || throw(ArgumentError("Texture max_anisotropy must be finite"))
     f >= 1.0 || throw(ArgumentError("Texture max_anisotropy must be at least 1"))
     return f
+end
+
+function _texture_finite_float(value, label::String)
+    f = try
+        Float64(value)
+    catch
+        throw(ArgumentError("$label must be finite"))
+    end
+    isfinite(f) || throw(ArgumentError("$label must be finite"))
+    return f
+end
+
+@inline function _texture_require_finite(value::Float64, label::String)
+    isfinite(value) || throw(ArgumentError("$label must be finite"))
+    return value
+end
+
+function _texture_finite_vec2(value, label::String)
+    return Vec2(_texture_finite_float(value.x, "$label.x"),
+                _texture_finite_float(value.y, "$label.y"))
+end
+
+function _texture_finite_matrix(matrix)
+    values = ntuple(
+        i -> _texture_finite_float(matrix.e[i], "Texture matrix[$i]"), 9)
+    return Mat3{Float64}(values)
+end
+
+@noinline _texture_matrix_finite_error(index::Int) =
+    throw(ArgumentError("Texture matrix[$index] must be finite"))
+
+@inline function _texture_validate_matrix(matrix::Mat3{Float64})
+    @inbounds for i in 1:9
+        isfinite(matrix.e[i]) || _texture_matrix_finite_error(i)
+    end
+    return matrix
+end
+
+@inline function _texture_validate_transform_parameters(tex::Texture)
+    _texture_require_finite(tex.offset.x, "Texture offset.x")
+    _texture_require_finite(tex.offset.y, "Texture offset.y")
+    _texture_require_finite(tex.repeat.x, "Texture repeat.x")
+    _texture_require_finite(tex.repeat.y, "Texture repeat.y")
+    _texture_require_finite(tex.rotation, "Texture rotation")
+    _texture_require_finite(tex.center.x, "Texture center.x")
+    _texture_require_finite(tex.center.y, "Texture center.y")
+    return tex
+end
+
+function _texture_tex_coord(value::Integer)
+    value isa Bool &&
+        throw(ArgumentError("Texture tex_coord must be an integer"))
+    tex_coord = try
+        Int(value)
+    catch
+        throw(ArgumentError(
+            "Texture tex_coord is outside the supported integer range"))
+    end
+    tex_coord >= 0 ||
+        throw(ArgumentError("Texture tex_coord must be non-negative"))
+    tex_coord <= 1 ||
+        throw(ArgumentError("Texture tex_coord must be 0 or 1"))
+    return tex_coord
 end
 
 function _texture_positive_size(value::Integer, label::String)
@@ -117,21 +184,23 @@ function Texture(data::Array{Float64,3}; wrap_s=:repeat, wrap_t=:repeat, filter=
                  rotation::Real=0.0, center=Vec2(0.0, 0.0),
                  matrix=Mat3(), matrix_auto_update::Bool=true, tex_coord::Integer=0,
                  max_anisotropy=1.0, needs_update::Bool=false)
-    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     base_filter = _texture_filter_symbol(filter)
     minf = min_filter === nothing ? _texture_min_filter_symbol(base_filter) :
            _texture_min_filter_symbol(min_filter)
     magf = mag_filter === nothing ? _texture_mag_filter_symbol(base_filter) :
            _texture_mag_filter_symbol(mag_filter)
+    offset_value = _texture_finite_vec2(offset, "Texture offset")
+    repeat_value = _texture_finite_vec2(repeat, "Texture repeat")
+    rotation_value = _texture_finite_float(rotation, "Texture rotation")
+    center_value = _texture_finite_vec2(center, "Texture center")
+    matrix_value = _texture_finite_matrix(matrix)
+    tex_coord_value = _texture_tex_coord(tex_coord)
     tex = Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
                   base_filter, minf, magf, mipmaps,
                   _texture_colorspace_symbol(colorspace),
-                  Vec2(Float64(offset.x), Float64(offset.y)),
-                  Vec2(Float64(repeat.x), Float64(repeat.y)),
-                  Float64(rotation),
-                  Vec2(Float64(center.x), Float64(center.y)),
-                  Mat3{Float64}(Tuple(Float64(x) for x in matrix.e)),
-                  matrix_auto_update, _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord),
+                  offset_value, repeat_value, rotation_value, center_value,
+                  matrix_value, matrix_auto_update, _TEXTURE_MATRIX_INVALID_KEY,
+                  tex_coord_value,
                   _texture_max_anisotropy(max_anisotropy), needs_update)
     matrix_auto_update ? texture_update_matrix!(tex) : tex
 end
@@ -142,13 +211,17 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
                  center::Vec2{Float64}, matrix::Mat3{Float64},
                  matrix_auto_update::Bool, tex_coord::Integer)
-    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
             _texture_mag_filter_symbol(mag_filter), mipmaps,
             _texture_colorspace_symbol(colorspace),
-            offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
-            _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord), 1.0, false)
+            _texture_finite_vec2(offset, "Texture offset"),
+            _texture_finite_vec2(repeat, "Texture repeat"),
+            _texture_finite_float(rotation, "Texture rotation"),
+            _texture_finite_vec2(center, "Texture center"),
+            _texture_finite_matrix(matrix), matrix_auto_update,
+            _TEXTURE_MATRIX_INVALID_KEY, _texture_tex_coord(tex_coord), 1.0,
+            false)
 end
 function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter::Symbol,
                  min_filter::Symbol, mag_filter::Symbol,
@@ -156,13 +229,16 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
                  center::Vec2{Float64}, matrix::Mat3{Float64},
                  matrix_auto_update::Bool, tex_coord::Integer, max_anisotropy)
-    tex_coord >= 0 || throw(ArgumentError("Texture tex_coord must be non-negative"))
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
             _texture_mag_filter_symbol(mag_filter), mipmaps,
             _texture_colorspace_symbol(colorspace),
-            offset, repeat, Float64(rotation), center, matrix, matrix_auto_update,
-            _TEXTURE_MATRIX_INVALID_KEY, Int(tex_coord),
+            _texture_finite_vec2(offset, "Texture offset"),
+            _texture_finite_vec2(repeat, "Texture repeat"),
+            _texture_finite_float(rotation, "Texture rotation"),
+            _texture_finite_vec2(center, "Texture center"),
+            _texture_finite_matrix(matrix), matrix_auto_update,
+            _TEXTURE_MATRIX_INVALID_KEY, _texture_tex_coord(tex_coord),
             _texture_max_anisotropy(max_anisotropy), false)
 end
 DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
@@ -213,7 +289,11 @@ end
 end
 
 @inline function texture_transform_uv(tex::Texture, u, v)
-    tex.matrix_auto_update && _texture_update_matrix_if_stale!(tex)
+    if tex.matrix_auto_update
+        _texture_update_matrix_if_stale!(tex)
+    else
+        _texture_validate_matrix(tex.matrix)
+    end
     e = tex.matrix.e
     return (e[1] * u + e[2] * v + e[3],
             e[4] * u + e[5] * v + e[6])
@@ -226,15 +306,18 @@ Recompute `tex.matrix` from `offset`, `repeat`, `rotation`, and `center`,
 matching three.js `Texture.updateMatrix`/`Matrix3.setUvTransform`.
 """
 function texture_update_matrix!(tex::Texture)
+    _texture_validate_transform_parameters(tex)
     sx, sy = tex.repeat.x, tex.repeat.y
     tx, ty = tex.offset.x, tex.offset.y
     cx, cy = tex.center.x, tex.center.y
     c = cos(tex.rotation)
     s = sin(tex.rotation)
-    tex.matrix = Mat3{Float64}((
+    matrix = Mat3{Float64}((
         sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx,
        -sy * s, sy * c,  sy * (s * cx - c * cy) + cy + ty,
         0.0,    0.0,     1.0))
+    _texture_validate_matrix(matrix)
+    tex.matrix = matrix
     tex.matrix_cache_key = _texture_matrix_key(tex)
     return tex
 end
@@ -245,6 +328,7 @@ end
 end
 
 @inline function _texture_update_matrix_if_stale!(tex::Texture)
+    _texture_validate_transform_parameters(tex)
     key = _texture_matrix_key(tex)
     tex.matrix_cache_key == key || texture_update_matrix!(tex)
     return tex
