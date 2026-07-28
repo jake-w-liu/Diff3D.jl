@@ -3059,15 +3059,39 @@ function _font_loop_points(shape::Vector{Vec2{Float64}})
     return points
 end
 
+function _font_polygon_area_big(shape::Vector{Vec2{Float64}})
+    # A Float64 product spans roughly 2^(-2148)..2^2048. The extra margin
+    # covers cancellation across every polygon size admitted by the geometry
+    # buffer limits, so this exceptional path preserves the final Float64 sign
+    # and magnitude instead of returning NaN after overflowing edge products.
+    return setprecision(BigFloat, 4352) do
+        area = BigFloat(0)
+        n = length(shape)
+        for i in 1:n
+            a = shape[i]
+            b = shape[i == n ? 1 : i + 1]
+            area += BigFloat(a.x) * BigFloat(b.y) -
+                    BigFloat(b.x) * BigFloat(a.y)
+        end
+        Float64(area / 2)
+    end
+end
+
 function _font_polygon_area(shape::Vector{Vec2{Float64}})
-    area = 0.0
+    area = _float_zero_representation(Float64)
     n = length(shape)
     for i in 1:n
         a = shape[i]
         b = shape[i == n ? 1 : i + 1]
-        area += a.x * b.y - b.x * a.y
+        edge_area = _float_product_difference(
+            a.x, b.y, b.x, a.y)
+        isfinite(edge_area) ||
+            return _font_polygon_area_big(shape)
+        area = _float_representation_add(
+            area, _float_value_representation(edge_area))
     end
-    return area / 2.0
+    area.nonzero || return 0.0
+    return ldexp(area.mantissa, area.exponent - 1)
 end
 
 function _font_orient_loop(shape::Vector{Vec2{Float64}}, ccw::Bool)

@@ -22938,4 +22938,33 @@ end
         @test bounds.max == Vec3(scale, scale, scale)
     end
 
+    @testset "fresh audit round 152 fixes" begin
+        x0 = 1.0e308
+        x1 = nextfloat(x0)
+        y0 = 1.0
+        y1 = nextfloat(y0)
+        polygon = [
+            Vec2(x0, y0),
+            Vec2(x1, y0),
+            Vec2(x1, y1),
+            Vec2(x0, y1),
+        ]
+        expected = (x1 - x0) * (y1 - y0)
+        @test Diff3D._font_polygon_area(polygon) == expected
+        @test Diff3D._font_polygon_area(
+            reverse(polygon)) == -expected
+
+        low = 9.0e307
+        high = 1.1e308
+        overflowing_polygon = [
+            Vec2(low, low),
+            Vec2(high, low),
+            Vec2(high, high),
+            Vec2(low, high),
+        ]
+        @test Diff3D._font_polygon_area(
+            overflowing_polygon) == Inf
+        @test_opt_alloc 0 Diff3D._font_polygon_area(polygon)
+    end
+
 end
