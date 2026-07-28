@@ -17,6 +17,8 @@ mutable struct ADVar <: Real
     partials::Union{Tuple{},Tuple{Float64},Tuple{Float64,Float64}}
 end
 
+@inline _mat4_inverse_scale_value(value::ADVar) = value.val
+
 # Per-task stack of active tapes (operations recorded in creation = topological
 # order). Task-local so concurrent reverse_gradient calls (e.g. Threads.@threads
 # over independent gradients) never corrupt each other's tape, and a STACK so a
@@ -43,6 +45,7 @@ end
 _ad_constant(x::Real) = ADVar(Float64(x), 0.0, (), ())
 
 ADVar(x::Real) = _ad_record(Float64(x), (), ())     # leaf / constant
+ADVar(x::ADVar) = x
 
 Base.convert(::Type{ADVar}, x::Real) = x isa ADVar ? x : ADVar(x)
 Base.convert(::Type{ADVar}, x::ADVar) = x

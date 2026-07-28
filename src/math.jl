@@ -305,12 +305,95 @@ function mat4_orthographic(left, right, bottom, top, near, far)
              -(T(right)+T(left))/rl, -(T(top)+T(bottom))/tb, -(T(far)+T(near))/fn, one(T)))
 end
 
+@inline function _mat4_inverse_unscale(value, column_scale, row_scale)
+    # Divide by the larger scale first. Multiplying the scales can overflow or
+    # underflow, while dividing by a tiny scale first can overflow an
+    # intermediate even when the final quotient is representable.
+    return abs(column_scale) >= abs(row_scale) ?
+           (value / column_scale) / row_scale :
+           (value / row_scale) / column_scale
+end
+
+@inline _mat4_inverse_scale_value(value) = value
+@inline _mat4_inverse_scale_value(value::ForwardDiff.Dual) =
+    _mat4_inverse_scale_value(ForwardDiff.value(value))
+
+@inline function _mat4_zero_like(value)
+    z = zero(value)
+    return Mat4((z, z, z, z,
+                 z, z, z, z,
+                 z, z, z, z,
+                 z, z, z, z))
+end
+
 function mat4_inverse(m::Mat4)
     e = m.e
     a00, a10, a20, a30 = e[1], e[2], e[3], e[4]
     a01, a11, a21, a31 = e[5], e[6], e[7], e[8]
     a02, a12, a22, a32 = e[9], e[10], e[11], e[12]
     a03, a13, a23, a33 = e[13], e[14], e[15], e[16]
+
+    # Balance finite matrices by rows and then columns before evaluating the
+    # adjugate. The unscaled cofactor formula overflows for large, perfectly
+    # invertible transforms (for example scaling(1e308, 1e308, 1e308)) and
+    # underflows their small counterparts to a false zero determinant.
+    balanced = all(isfinite, e)
+    if balanced
+        r0 = max(max(abs(_mat4_inverse_scale_value(a00)),
+                     abs(_mat4_inverse_scale_value(a01))),
+                 max(abs(_mat4_inverse_scale_value(a02)),
+                     abs(_mat4_inverse_scale_value(a03))))
+        r1 = max(max(abs(_mat4_inverse_scale_value(a10)),
+                     abs(_mat4_inverse_scale_value(a11))),
+                 max(abs(_mat4_inverse_scale_value(a12)),
+                     abs(_mat4_inverse_scale_value(a13))))
+        r2 = max(max(abs(_mat4_inverse_scale_value(a20)),
+                     abs(_mat4_inverse_scale_value(a21))),
+                 max(abs(_mat4_inverse_scale_value(a22)),
+                     abs(_mat4_inverse_scale_value(a23))))
+        r3 = max(max(abs(_mat4_inverse_scale_value(a30)),
+                     abs(_mat4_inverse_scale_value(a31))),
+                 max(abs(_mat4_inverse_scale_value(a32)),
+                     abs(_mat4_inverse_scale_value(a33))))
+        if iszero(r0) || iszero(r1) || iszero(r2) || iszero(r3)
+            return _mat4_zero_like(a00)
+        end
+
+        a00 /= r0; a01 /= r0; a02 /= r0; a03 /= r0
+        a10 /= r1; a11 /= r1; a12 /= r1; a13 /= r1
+        a20 /= r2; a21 /= r2; a22 /= r2; a23 /= r2
+        a30 /= r3; a31 /= r3; a32 /= r3; a33 /= r3
+
+        c0 = max(max(abs(_mat4_inverse_scale_value(a00)),
+                     abs(_mat4_inverse_scale_value(a10))),
+                 max(abs(_mat4_inverse_scale_value(a20)),
+                     abs(_mat4_inverse_scale_value(a30))))
+        c1 = max(max(abs(_mat4_inverse_scale_value(a01)),
+                     abs(_mat4_inverse_scale_value(a11))),
+                 max(abs(_mat4_inverse_scale_value(a21)),
+                     abs(_mat4_inverse_scale_value(a31))))
+        c2 = max(max(abs(_mat4_inverse_scale_value(a02)),
+                     abs(_mat4_inverse_scale_value(a12))),
+                 max(abs(_mat4_inverse_scale_value(a22)),
+                     abs(_mat4_inverse_scale_value(a32))))
+        c3 = max(max(abs(_mat4_inverse_scale_value(a03)),
+                     abs(_mat4_inverse_scale_value(a13))),
+                 max(abs(_mat4_inverse_scale_value(a23)),
+                     abs(_mat4_inverse_scale_value(a33))))
+        if iszero(c0) || iszero(c1) || iszero(c2) || iszero(c3)
+            return _mat4_zero_like(a00)
+        end
+
+        a00 /= c0; a10 /= c0; a20 /= c0; a30 /= c0
+        a01 /= c1; a11 /= c1; a21 /= c1; a31 /= c1
+        a02 /= c2; a12 /= c2; a22 /= c2; a32 /= c2
+        a03 /= c3; a13 /= c3; a23 /= c3; a33 /= c3
+    else
+        # Preserve ordinary NaN/Inf propagation for non-finite inputs.
+        one_e = one(a00)
+        r0 = r1 = r2 = r3 = one_e
+        c0 = c1 = c2 = c3 = one_e
+    end
 
     b00 = a00*a11 - a01*a10
     b01 = a00*a12 - a02*a10
@@ -327,27 +410,50 @@ function mat4_inverse(m::Mat4)
 
     det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06
     if iszero(det)                  # singular matrix: return zero matrix (three.js Matrix4.invert)
-        T = eltype(e)
-        return Mat4{T}(ntuple(_ -> zero(T), 16))
+        return _mat4_zero_like(a00)
     end
     inv_det = one(det) / det
 
-    Mat4(( (a11*b11 - a12*b10 + a13*b09)*inv_det,
-           (-a10*b11 + a12*b08 - a13*b07)*inv_det,
-           (a10*b10 - a11*b08 + a13*b06)*inv_det,
-           (-a10*b09 + a11*b07 - a12*b06)*inv_det,
-           (-a01*b11 + a02*b10 - a03*b09)*inv_det,
-           (a00*b11 - a02*b08 + a03*b07)*inv_det,
-           (-a00*b10 + a01*b08 - a03*b06)*inv_det,
-           (a00*b09 - a01*b07 + a02*b06)*inv_det,
-           (a31*b05 - a32*b04 + a33*b03)*inv_det,
-           (-a30*b05 + a32*b02 - a33*b01)*inv_det,
-           (a30*b04 - a31*b02 + a33*b00)*inv_det,
-           (-a30*b03 + a31*b01 - a32*b00)*inv_det,
-           (-a21*b05 + a22*b04 - a23*b03)*inv_det,
-           (a20*b05 - a22*b02 + a23*b01)*inv_det,
-           (-a20*b04 + a21*b02 - a23*b00)*inv_det,
-           (a20*b03 - a21*b01 + a22*b00)*inv_det ))
+    i00 = (a11*b11 - a12*b10 + a13*b09)*inv_det
+    i10 = (-a10*b11 + a12*b08 - a13*b07)*inv_det
+    i20 = (a10*b10 - a11*b08 + a13*b06)*inv_det
+    i30 = (-a10*b09 + a11*b07 - a12*b06)*inv_det
+    i01 = (-a01*b11 + a02*b10 - a03*b09)*inv_det
+    i11 = (a00*b11 - a02*b08 + a03*b07)*inv_det
+    i21 = (-a00*b10 + a01*b08 - a03*b06)*inv_det
+    i31 = (a00*b09 - a01*b07 + a02*b06)*inv_det
+    i02 = (a31*b05 - a32*b04 + a33*b03)*inv_det
+    i12 = (-a30*b05 + a32*b02 - a33*b01)*inv_det
+    i22 = (a30*b04 - a31*b02 + a33*b00)*inv_det
+    i32 = (-a30*b03 + a31*b01 - a32*b00)*inv_det
+    i03 = (-a21*b05 + a22*b04 - a23*b03)*inv_det
+    i13 = (a20*b05 - a22*b02 + a23*b01)*inv_det
+    i23 = (-a20*b04 + a21*b02 - a23*b00)*inv_det
+    i33 = (a20*b03 - a21*b01 + a22*b00)*inv_det
+
+    if balanced
+        i00 = _mat4_inverse_unscale(i00, c0, r0)
+        i10 = _mat4_inverse_unscale(i10, c1, r0)
+        i20 = _mat4_inverse_unscale(i20, c2, r0)
+        i30 = _mat4_inverse_unscale(i30, c3, r0)
+        i01 = _mat4_inverse_unscale(i01, c0, r1)
+        i11 = _mat4_inverse_unscale(i11, c1, r1)
+        i21 = _mat4_inverse_unscale(i21, c2, r1)
+        i31 = _mat4_inverse_unscale(i31, c3, r1)
+        i02 = _mat4_inverse_unscale(i02, c0, r2)
+        i12 = _mat4_inverse_unscale(i12, c1, r2)
+        i22 = _mat4_inverse_unscale(i22, c2, r2)
+        i32 = _mat4_inverse_unscale(i32, c3, r2)
+        i03 = _mat4_inverse_unscale(i03, c0, r3)
+        i13 = _mat4_inverse_unscale(i13, c1, r3)
+        i23 = _mat4_inverse_unscale(i23, c2, r3)
+        i33 = _mat4_inverse_unscale(i33, c3, r3)
+    end
+
+    return Mat4((i00, i10, i20, i30,
+                 i01, i11, i21, i31,
+                 i02, i12, i22, i32,
+                 i03, i13, i23, i33))
 end
 
 function mat4_transpose(m::Mat4)

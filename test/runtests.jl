@@ -21432,4 +21432,47 @@ end
         @test_opt_alloc 0 Diff3D._helper_line_position_length(7, "helper")
     end
 
+    @testset "fresh audit round 86 fixes" begin
+        @test reverse_gradient(
+            x -> mat4_get(mat4_scaling(x[1], 2.0, 3.0), 1, 1),
+            [2.0]) == [1.0]
+        @test reverse_gradient(
+            x -> mat4_get(mat4_translation(x[1], 2.0, 3.0), 1, 4),
+            [2.0]) == [1.0]
+
+        for scale in (1.0e-308, 1.0e-200, 1.0e200, 1.0e308)
+            matrix = mat4_scaling(scale, scale, scale)
+            inverse = mat4_inverse(matrix)
+            @test all(isfinite, inverse.e)
+            @test isapprox(mat4_get(inverse, 1, 1), inv(scale); rtol=2.0e-15)
+            @test isapprox(mat4_get(inverse, 2, 2), inv(scale); rtol=2.0e-15)
+            @test isapprox(mat4_get(inverse, 3, 3), inv(scale); rtol=2.0e-15)
+            @test isapprox(mat4_get(inverse, 4, 4), 1.0; rtol=2.0e-15)
+            product = matrix * inverse
+            @test all(isfinite, product.e)
+            @test all(i -> isapprox(
+                product.e[i], i in (1, 6, 11, 16) ? 1.0 : 0.0;
+                atol=2.0e-15), eachindex(product.e))
+        end
+
+        translated = mat4_translation(1.0e308, -1.0e308, 1.0e308)
+        translated_inverse = mat4_inverse(translated)
+        @test all(isfinite, translated_inverse.e)
+        @test mat4_get(translated_inverse, 1, 4) == -1.0e308
+        @test mat4_get(translated_inverse, 2, 4) == 1.0e308
+        @test mat4_get(translated_inverse, 3, 4) == -1.0e308
+
+        @test ForwardDiff.derivative(
+            x -> mat4_get(mat4_inverse(mat4_scaling(x, 2.0, 3.0)), 1, 1),
+            2.0) ≈ -0.25
+        @test reverse_gradient(
+            x -> mat4_get(mat4_inverse(mat4_scaling(x[1], 2.0, 3.0)), 1, 1),
+            [2.0]) ≈ [-0.25]
+
+        allocation_matrix = mat4_scaling(2.0, 3.0, 4.0)
+        @test_opt_alloc 0 mat4_inverse(allocation_matrix)
+        @test_opt_alloc 0 Diff3D._mat4_inverse_unscale(
+            1.0, 1.0e-308, 1.0e308)
+    end
+
 end
