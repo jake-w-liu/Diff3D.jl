@@ -340,19 +340,26 @@ end
 Sample the texture at UV `(u,v)` ∈ [0,1]² (outside handled by the wrap modes),
 using nearest or bilinear filtering. `v=0` is the bottom row.
 """
-# Sanitize a UV coordinate before the integer texel conversion: a non-finite UV
-# (NaN/Inf from a procedural/loaded geometry's uvs) becomes 0, and an absurdly
-# large finite UV (|uv| > 1e7 — more than ten million texture repeats, beyond any
-# real use) is clamped, so `round/floor(Int, u*W-0.5)` can never throw
-# InexactError and abort the render. The fast path (a normal finite UV) returns
-# the value unchanged and keeps the AD element type for the differentiable path.
+# Sanitize a non-finite UV from procedural or loaded geometry before sampling.
+# Finite coordinates are reduced exactly according to their wrap mode below,
+# before any conversion to an integer texel coordinate.
 @inline function _sanitize_uv(x)
-    # isfinite / comparison / clamp all work directly on Float64, ForwardDiff.Dual,
-    # and ADVar — do NOT call Float64(x): Float64(::ForwardDiff.Dual) is undefined
-    # and would crash differentiable texture sampling.
     isfinite(x) || return zero(x)
-    (x < -1.0e7 || x > 1.0e7) && return clamp(x, -1.0e7, 1.0e7)
     return x
+end
+
+@inline function _sampling_uv(x, mode::Symbol)
+    x = _sanitize_uv(x)
+    if mode === :repeat
+        return mod(x, one(x))
+    elseif mode === :clamp
+        return clamp(x, zero(x), one(x))
+    elseif mode === :mirror
+        period = one(x) + one(x)
+        wrapped = mod(x, period)
+        return wrapped <= one(x) ? wrapped : period - wrapped
+    end
+    throw(ArgumentError("unsupported texture wrap mode: $mode"))
 end
 
 @inline function _texture_sample_uv(tex::Texture, u, v)
@@ -366,7 +373,8 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     wrap_s = _texture_wrap_symbol(wrap_s)
     wrap_t = _texture_wrap_symbol(wrap_t)
     filter = _texture_filter_symbol(filter)
-    u = _sanitize_uv(u); v = _sanitize_uv(v)
+    u = _sampling_uv(u, wrap_s)
+    v = _sampling_uv(v, wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
     if filter === :nearest
@@ -413,7 +421,8 @@ function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     _texture_wrap_symbol(tex.wrap_t)
     filter = _texture_filter_symbol(tex.filter)
     u, v = texture_transform_uv(tex, u, v)
-    u = _sanitize_uv(u); v = _sanitize_uv(v)
+    u = _sampling_uv(u, tex.wrap_s)
+    v = _sampling_uv(v, tex.wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
     if filter === :nearest

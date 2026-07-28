@@ -22031,4 +22031,33 @@ end
             homogeneous_scale, point)
     end
 
+    @testset "fresh audit round 109 fixes" begin
+        data = reshape([0.1, 0.2, 0.3, 0.4], 1, 4, 1)
+        repeated = Texture(
+            data; wrap_s=:repeat, wrap_t=:clamp,
+            filter=:nearest, colorspace=:linear)
+        @test sample_texture(
+            repeated, 1.0e8 + 0.375, 0.5).r == 0.2
+        @test sample_texture(
+            repeated, -1.0e8 + 0.375, 0.5).r == 0.2
+
+        mirrored = Texture(
+            data; wrap_s=:mirror, wrap_t=:clamp,
+            filter=:nearest, colorspace=:linear)
+        @test sample_texture(
+            mirrored, 1.0e8 + 1.375, 0.5).r ==
+              sample_texture(mirrored, 1.375, 0.5).r
+
+        bilinear = Texture(
+            reshape([0.0, 1.0], 1, 2, 1);
+            wrap_s=:repeat, wrap_t=:clamp,
+            filter=:bilinear, colorspace=:linear)
+        @test ForwardDiff.derivative(
+            u -> sample_texture(bilinear, u, 0.5).r,
+            0.25,
+        ) == 2.0
+        @test_opt_alloc 0 sample_texture(
+            repeated, 1.0e8 + 0.375, 0.5)
+    end
+
 end
