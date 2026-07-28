@@ -245,7 +245,15 @@ end
 
 function mat4_transform_point(m::Mat4, p::Vec3)
     v = mat4_transform_vec4(m, Vec4(p.x, p.y, p.z, one(p.x)))
-    Vec3(v.x / v.w, v.y / v.w, v.z / v.w)
+    result = Vec3(v.x / v.w, v.y / v.w, v.z / v.w)
+    if result.x isa AbstractFloat &&
+       !(isfinite(result.x) && isfinite(result.y) && isfinite(result.z)) &&
+       all(isfinite, m.e) &&
+       isfinite(p.x) && isfinite(p.y) && isfinite(p.z)
+        stable, valid = _stable_float_mat4_transform_point(m, p)
+        valid && return stable
+    end
+    return result
 end
 
 function mat4_transform_direction(m::Mat4, d::Vec3)
@@ -1032,7 +1040,8 @@ end
     )
 end
 
-@inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
+@inline function _stable_float_mat4_row_representation(
+        m::Mat4, row::Int, v::Vec4)
     m1, m2, m3, m4, x, y, z, w = promote(
         mat4_get(m, row, 1), mat4_get(m, row, 2),
         mat4_get(m, row, 3), mat4_get(m, row, 4),
@@ -1050,8 +1059,12 @@ end
         _float_value_representation(z),
         _float_value_representation(w),
     )
+    return _float_representation_dot4(matrix_row, vector)
+end
+
+@inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
     return _float_representation_value(
-        _float_representation_dot4(matrix_row, vector))
+        _stable_float_mat4_row_representation(m, row, v))
 end
 
 @inline function _stable_float_mat4_transform(m::Mat4, v::Vec4)
@@ -1061,6 +1074,20 @@ end
         _stable_float_mat4_row(m, 3, v),
         _stable_float_mat4_row(m, 4, v),
     )
+end
+
+@inline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)
+    homogeneous = Vec4(p.x, p.y, p.z, one(p.x))
+    x = _stable_float_mat4_row_representation(m, 1, homogeneous)
+    y = _stable_float_mat4_row_representation(m, 2, homogeneous)
+    z = _stable_float_mat4_row_representation(m, 3, homogeneous)
+    w = _stable_float_mat4_row_representation(m, 4, homogeneous)
+    result = Vec3(
+        _float_representation_ratio(x, w),
+        _float_representation_ratio(y, w),
+        _float_representation_ratio(z, w),
+    )
+    return result, w.nonzero
 end
 
 @inline function _stable_float_mat4_product(a::Mat4, b::Mat4)

@@ -22009,4 +22009,26 @@ end
         @test_opt_alloc 0 left * right
     end
 
+    @testset "fresh audit round 108 fixes" begin
+        scale = 1.0e308
+        homogeneous_scale = Mat4{Float64}((
+            scale, 0.0, 0.0, 0.0,
+            0.0, scale, 0.0, 0.0,
+            0.0, 0.0, scale, 0.0,
+            0.0, 0.0, 0.0, scale,
+        ))
+        point = Vec3(2.0, 3.0, 4.0)
+        @test mat4_transform_point(
+            homogeneous_scale, point) == point
+
+        @test ForwardDiff.derivative(
+            x -> mat4_transform_point(
+                mat4_translation(x, 0.0, 0.0),
+                Vec3(2.0, 0.0, 0.0)).x,
+            1.0,
+        ) == 1.0
+        @test_opt_alloc 0 mat4_transform_point(
+            homogeneous_scale, point)
+    end
+
 end
