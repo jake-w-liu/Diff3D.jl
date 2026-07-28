@@ -431,12 +431,35 @@ function _validate_tube_path(path::Vector{<:Vec3})
     return nothing
 end
 
-@inline _tube_tangent(path::Vector{<:Vec3}, i::Int, n::Int) =
-    normalize(path[min(i + 1, n)] - path[max(i - 1, 1)])
+@inline function _tube_unit_delta(a::Vec3, b::Vec3)
+    return _geometry_unit_delta3(
+        Float64(a.x), Float64(a.y), Float64(a.z),
+        Float64(b.x), Float64(b.y), Float64(b.z),
+    )
+end
+
+@inline function _tube_tangent(path::Vector{<:Vec3}, i::Int, n::Int)
+    prev = path[max(i - 1, 1)]
+    next = path[min(i + 1, n)]
+    tangent = _tube_unit_delta(prev, next)
+    norm(tangent) > 0.0 && return tangent
+    # A 180-degree reversal can make the centered difference zero despite both
+    # adjacent segments being valid. Prefer the forward segment at the cusp.
+    i < n && return _tube_unit_delta(path[i], path[i + 1])
+    return _tube_unit_delta(path[i - 1], path[i])
+end
 
 function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
     n = length(path)
     _validate_tube_path(path)
+    @inbounds for i in 2:n
+        _geometry_delta_norm3(
+            Float64(path[i - 1].x), Float64(path[i - 1].y),
+            Float64(path[i - 1].z), Float64(path[i].x),
+            Float64(path[i].y), Float64(path[i].z)) > 0.0 ||
+            throw(ArgumentError(
+                "TubeGeometry path needs consecutive distinct points"))
+    end
     radius = _geometry_finite_float(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
@@ -1060,11 +1083,31 @@ end
 # path. Caps are fan-triangulated (correct for convex shapes).
 
 function _shape_area2(shape::AbstractVector{<:Vec2})
+    xmin = Inf
+    xmax = -Inf
+    ymin = Inf
+    ymax = -Inf
+    @inbounds for p in shape
+        xmin = min(xmin, p.x)
+        xmax = max(xmax, p.x)
+        ymin = min(ymin, p.y)
+        ymax = max(ymax, p.y)
+    end
+    cx = _geometry_midpoint(xmin, xmax)
+    cy = _geometry_midpoint(ymin, ymax)
+    xscale = max(abs(xmin - cx), abs(xmax - cx))
+    yscale = max(abs(ymin - cy), abs(ymax - cy))
+    (xscale > 0.0 && yscale > 0.0) || return 0.0
+
     area2 = 0.0
-    for i in eachindex(shape)
+    @inbounds for i in eachindex(shape)
         p1 = shape[i]
         p2 = shape[i == lastindex(shape) ? firstindex(shape) : i + 1]
-        area2 += p1.x * p2.y - p2.x * p1.y
+        x1 = (p1.x - cx) / xscale
+        y1 = (p1.y - cy) / yscale
+        x2 = (p2.x - cx) / xscale
+        y2 = (p2.y - cy) / yscale
+        area2 += x1 * y2 - x2 * y1
     end
     return area2
 end
@@ -1072,52 +1115,67 @@ end
 _shape_len(v::Vec2) = hypot(v.x, v.y)
 _shape_normalize(v::Vec2) = v * (1 / _shape_len(v))
 
+@inline function _extrude_component_close(a::Float64, b::Float64,
+                                          relative_tolerance::Float64)
+    scale = max(max(abs(a), abs(b)), 1.0)
+    return abs(a - b) <= relative_tolerance * scale
+end
+
+@inline function _extrude_shape_points_close(a::Vec2{Float64},
+                                             b::Vec2{Float64})
+    return _extrude_component_close(a.x, b.x, 1.0e-12) &&
+           _extrude_component_close(a.y, b.y, 1.0e-12)
+end
+
 function _extrude_clean_shape(shape::AbstractVector{<:Vec2})
     length(shape) >= 3 || throw(ArgumentError("ExtrudeGeometry shape needs at least three points"))
     clean = Vec2{Float64}[]
-    scale = 1.0
     for p in shape
         q = Vec2(_geometry_finite_float(p.x, "ExtrudeGeometry shape points"),
                  _geometry_finite_float(p.y, "ExtrudeGeometry shape points"))
-        scale = max(scale, abs(q.x), abs(q.y))
-        if isempty(clean) || _shape_len(q - clean[end]) > 1e-12 * scale
+        if isempty(clean) || !_extrude_shape_points_close(q, clean[end])
             push!(clean, q)
         end
     end
-    if length(clean) > 1 && _shape_len(clean[end] - clean[1]) <= 1e-12 * scale
+    if length(clean) > 1 && _extrude_shape_points_close(clean[end], clean[1])
         pop!(clean)
     end
     length(clean) >= 3 || throw(ArgumentError("ExtrudeGeometry shape needs at least three points"))
-    _shape_area2(clean) > 0.0 || reverse!(clean)
-    abs(_shape_area2(clean)) > 1e-12 * scale^2 ||
+    area2 = _shape_area2(clean)
+    abs(area2) > 1.0e-12 ||
         throw(ArgumentError("ExtrudeGeometry shape area must be non-zero"))
+    area2 > 0.0 || reverse!(clean)
     return clean
+end
+
+@inline function _extrude_path_points_close(a::Vec3{Float64},
+                                            b::Vec3{Float64})
+    return _extrude_component_close(a.x, b.x, 1.0e-9) &&
+           _extrude_component_close(a.y, b.y, 1.0e-9) &&
+           _extrude_component_close(a.z, b.z, 1.0e-9)
 end
 
 function _extrude_clean_path(path::AbstractVector{<:Vec3})
     length(path) >= 2 || throw(ArgumentError("ExtrudeGeometry extrude_path needs at least two points"))
     raw = Vec3{Float64}[]
-    scale = 1.0
     for p in path
         q = Vec3(_geometry_finite_float(p.x, "ExtrudeGeometry extrude_path points"),
                  _geometry_finite_float(p.y, "ExtrudeGeometry extrude_path points"),
                  _geometry_finite_float(p.z, "ExtrudeGeometry extrude_path points"))
-        scale = max(scale, abs(q.x), abs(q.y), abs(q.z))
         push!(raw, q)
     end
-    eps = 1e-9 * scale
-    closed = norm(raw[end] - raw[1]) <= eps
+    closed = _extrude_path_points_close(raw[end], raw[1])
     clean_last = closed ? length(raw) - 1 : length(raw)
     filtered = Vec3{Float64}[]
     for i in 1:clean_last
         p = raw[i]
-        if isempty(filtered) || norm(p - filtered[end]) > eps
+        if isempty(filtered) || !_extrude_path_points_close(p, filtered[end])
             push!(filtered, p)
         end
     end
     length(filtered) >= 2 ||
         throw(ArgumentError("ExtrudeGeometry extrude_path needs at least two distinct points"))
-    return filtered, closed, eps
+    return filtered, closed, 1.0e-9
 end
 
 function _extrude_path_tangents(path::Vector{Vec3{Float64}}, closed::Bool, eps::Float64)
@@ -1126,15 +1184,22 @@ function _extrude_path_tangents(path::Vector{Vec3{Float64}}, closed::Bool, eps::
     @inbounds for i in 1:n
         prev = closed ? path[mod1(i - 1, n)] : path[max(i - 1, 1)]
         nxt = closed ? path[mod1(i + 1, n)] : path[min(i + 1, n)]
-        t = nxt - prev
+        t = _geometry_unit_delta3(
+            prev.x, prev.y, prev.z, nxt.x, nxt.y, nxt.z)
         if norm(t) <= eps
-            forward = path[mod1(i + 1, n)] - path[i]
-            backward = path[i] - path[mod1(i - 1, n)]
+            next_point = path[mod1(i + 1, n)]
+            prev_point = path[mod1(i - 1, n)]
+            forward = _geometry_unit_delta3(
+                path[i].x, path[i].y, path[i].z,
+                next_point.x, next_point.y, next_point.z)
+            backward = _geometry_unit_delta3(
+                prev_point.x, prev_point.y, prev_point.z,
+                path[i].x, path[i].y, path[i].z)
             t = norm(forward) > eps ? forward : backward
         end
         norm(t) > eps ||
             throw(ArgumentError("ExtrudeGeometry extrude_path contains degenerate segment"))
-        tangents[i] = normalize(t)
+        tangents[i] = t
     end
     return tangents
 end
@@ -1145,10 +1210,10 @@ function _extrude_shape_vertex_normals(shape::Vector{Vec2{Float64}})
     @inbounds for i in 1:np
         p1 = shape[i]
         p2 = shape[mod1(i + 1, np)]
-        edge = p2 - p1
-        len = _shape_len(edge)
-        len > 0.0 || throw(ArgumentError("ExtrudeGeometry shape contains degenerate edge"))
-        edge_normals[i] = Vec2(edge.y / len, -edge.x / len)
+        dx, dy = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
+        (dx != 0.0 || dy != 0.0) ||
+            throw(ArgumentError("ExtrudeGeometry shape contains degenerate edge"))
+        edge_normals[i] = Vec2(dy, -dx)
     end
     normals = Vector{Vec2{Float64}}(undef, np)
     @inbounds for i in 1:np
@@ -1210,6 +1275,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
             normal2 = shape_normals[j]
             p = path[i] + N * pt.x + B * pt.y
             n = normalize(N * normal2.x + B * normal2.y)
+            _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = (i - 1) * np + j
             pbase = 3vi - 2
             positions[pbase] = p.x
@@ -1249,6 +1315,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         @inbounds for j in 1:np
             pt = shape[j]
             p = path[1] + first_N * pt.x + first_B * pt.y
+            _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
             positions[pbase] = p.x
@@ -1273,6 +1340,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         @inbounds for j in 1:np
             pt = shape[j]
             p = path[nr] + last_N * pt.x + last_B * pt.y
+            _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
             positions[pbase] = p.x

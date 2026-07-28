@@ -21345,4 +21345,38 @@ end
         @test_opt_alloc 0 Diff3D._geometry_check_abs_sum(1.0, 2.0, "geometry")
     end
 
+    @testset "fresh audit round 83 fixes" begin
+        anisotropic_shape = [
+            Vec2(-1.0e308, -1.0), Vec2(1.0e308, -1.0),
+            Vec2(1.0e308, 1.0), Vec2(-1.0e308, 1.0),
+        ]
+        flat_shape = ShapeGeometry(anisotropic_shape)
+        extruded_shape = ExtrudeGeometry(anisotropic_shape; depth=1.0)
+        @test all(isfinite, flat_shape.positions)
+        @test all(isfinite, flat_shape.normals)
+        @test all(isfinite, extruded_shape.positions)
+        @test all(isfinite, extruded_shape.normals)
+
+        extreme_path = [
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0),
+        ]
+        tube = TubeGeometry(extreme_path; radius=1.0, radial_segments=3)
+        path_extrusion = ExtrudeGeometry(
+            [Vec2(-1.0, -1.0), Vec2(1.0, -1.0), Vec2(0.0, 1.0)];
+            extrude_path=extreme_path)
+        @test all(isfinite, tube.positions)
+        @test all(isfinite, tube.normals)
+        @test all(isfinite, path_extrusion.positions)
+        @test all(isfinite, path_extrusion.normals)
+        @test all(i -> isapprox(
+            norm(get_normal(tube, i)), 1.0; atol=2.0e-15),
+            1:tube.n_vertices)
+
+        @test_throws "TubeGeometry path needs consecutive distinct points" TubeGeometry(
+            [Vec3(), Vec3()]; radial_segments=3)
+        @test_opt_alloc 0 Diff3D._geometry_unit_delta3(
+            -1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0)
+    end
+
 end

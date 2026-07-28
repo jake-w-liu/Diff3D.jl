@@ -226,6 +226,30 @@ end
     )
 end
 
+@inline function _geometry_delta_norm3(ax::Float64, ay::Float64, az::Float64,
+                                       bx::Float64, by::Float64, bz::Float64)
+    return hypot(bx - ax, by - ay, bz - az)
+end
+
+@inline function _geometry_unit_delta3(ax::Float64, ay::Float64, az::Float64,
+                                       bx::Float64, by::Float64, bz::Float64)
+    dx, dy, dz = bx - ax, by - ay, bz - az
+    if isfinite(dx) && isfinite(dy) && isfinite(dz)
+        return normalize(Vec3(dx, dy, dz))
+    end
+
+    scale = max(
+        max(max(abs(ax), abs(ay)), abs(az)),
+        max(max(abs(bx), abs(by)), abs(bz)),
+    )
+    scale > 0.0 || return Vec3(0.0, 0.0, 0.0)
+    return normalize(Vec3(
+        bx / scale - ax / scale,
+        by / scale - ay / scale,
+        bz / scale - az / scale,
+    ))
+end
+
 function _geometry_nonzero_finite_scalar(value, label::String)
     _geometry_finite_scalar(value, label)
     value != zero(value) || throw(ArgumentError("$label must be finite and non-zero"))
