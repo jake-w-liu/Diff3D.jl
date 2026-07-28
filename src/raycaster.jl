@@ -40,6 +40,60 @@ in units of `dir`. `side` culls by winding like three.js `Ray.intersectTriangle`
     return t > eps ? t : nothing
 end
 
+@inline _ray_float_vector_representation(v::Vec3{T}) where
+        {T<:AbstractFloat} = (
+    _float_difference_representation(zero(T), v.x),
+    _float_difference_representation(zero(T), v.y),
+    _float_difference_representation(zero(T), v.z),
+)
+
+@inline function _ray_representation_abs_compare(
+        value::_FloatRepresentation, epsilon)
+    value.nonzero || return -1
+    iszero(epsilon) && return 1
+    epsilon_mantissa, epsilon_exponent = frexp(float(epsilon))
+    value.exponent < epsilon_exponent && return -1
+    value.exponent > epsilon_exponent && return 1
+    magnitude = abs(value.mantissa)
+    magnitude < epsilon_mantissa && return -1
+    magnitude > epsilon_mantissa && return 1
+    return 0
+end
+
+@inline function _ray_triangle_intersect_unchecked(
+        origin::Vec3{T}, dir::Vec3{T}, a::Vec3{T}, b::Vec3{T}, c::Vec3{T},
+        eps, side::Symbol) where {T<:AbstractFloat}
+    edge_b = _float_vector_difference(a, b)
+    edge_c = _float_vector_difference(a, c)
+    direction = _ray_float_vector_representation(dir)
+    p = _float_representation_cross(direction, edge_c)
+    determinant = _float_representation_dot(edge_b, p)
+    determinant_vs_epsilon =
+        _ray_representation_abs_compare(determinant, eps)
+    if side === :front
+        (determinant.nonzero && determinant.mantissa > zero(T) &&
+         determinant_vs_epsilon > 0) || return nothing
+    elseif side === :back
+        (determinant.nonzero && determinant.mantissa < zero(T) &&
+         determinant_vs_epsilon > 0) || return nothing
+    else
+        (determinant.nonzero && determinant_vs_epsilon >= 0) ||
+            return nothing
+    end
+
+    origin_offset = _float_vector_difference(a, origin)
+    u = _float_representation_ratio(
+        _float_representation_dot(origin_offset, p), determinant)
+    (isfinite(u) && zero(T) <= u <= one(T)) || return nothing
+    q = _float_representation_cross(origin_offset, edge_b)
+    v = _float_representation_ratio(
+        _float_representation_dot(direction, q), determinant)
+    (isfinite(v) && v >= zero(T) && u + v <= one(T)) || return nothing
+    t = _float_representation_ratio(
+        _float_representation_dot(edge_c, q), determinant)
+    return t > eps ? t : nothing
+end
+
 function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Vec3;
                                 eps=1e-9, side::Symbol=:double)
     side in (:front, :back, :double) ||
@@ -48,7 +102,7 @@ function ray_triangle_intersect(origin::Vec3, dir::Vec3, a::Vec3, b::Vec3, c::Ve
         throw(ArgumentError("ray_triangle_intersect eps must be finite and non-negative"))
     _finite_vec3(origin) || throw(ArgumentError("ray_triangle_intersect origin must be finite"))
     _finite_vec3(dir) || throw(ArgumentError("ray_triangle_intersect direction must be finite"))
-    dot(dir, dir) > zero(dot(dir, dir)) ||
+    (!iszero(dir.x) || !iszero(dir.y) || !iszero(dir.z)) ||
         throw(ArgumentError("ray_triangle_intersect direction must be non-zero"))
     (_finite_vec3(a) && _finite_vec3(b) && _finite_vec3(c)) ||
         throw(ArgumentError("ray_triangle_intersect triangle vertices must be finite"))

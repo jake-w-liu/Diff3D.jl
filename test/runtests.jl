@@ -21604,4 +21604,44 @@ end
             extreme_line, origin)
     end
 
+    @testset "fresh audit round 89 fixes" begin
+        wide_triangle = (
+            Vec3(0.0, 0.25, 1.0),
+            Vec3(0.0, 0.0, -1.0),
+            Vec3(-1.0e308, 0.0, 0.0),
+            Vec3(1.0e308, 0.0, 0.0),
+            Vec3(-1.0e308, 1.0, 0.0),
+        )
+        @test ray_triangle_intersect(wide_triangle...; eps=0.0) == 1.0
+        @test ray_triangle_intersect(
+            wide_triangle...; eps=0.0, side=:front) == 1.0
+        @test ray_triangle_intersect(
+            wide_triangle...; eps=0.0, side=:back) === nothing
+
+        tiny_direction = Vec3(0.0, 0.0, -1.0e-308)
+        @test ray_triangle_intersect(
+            Vec3(0.25, 0.25, 1.0),
+            tiny_direction,
+            Vec3(),
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(0.0, 1.0, 0.0);
+            eps=0.0,
+        ) == 1.0e308
+
+        extreme_geometry = BufferGeometry(
+            [-1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0,
+             -1.0e308, 1.0, 0.0],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        extreme_mesh = Mesh(
+            extreme_geometry, MeshBasicMaterial(side=:double))
+        hits = raycast(
+            Raycaster(Vec3(0.0, 0.25, 1.0), Vec3(0.0, 0.0, -1.0)),
+            extreme_mesh;
+            recursive=false,
+        )
+        @test length(hits) == 1
+        @test hits[1].distance == 1.0
+        @test hits[1].point == Vec3(0.0, 0.25, 0.0)
+    end
+
 end
