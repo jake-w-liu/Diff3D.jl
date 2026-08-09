@@ -24531,3 +24531,127 @@ end
     validation_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
 end
+
+@testset "fresh audit round 179 fixes" begin
+    opacity_constructors = (
+        value -> MeshBasicMaterial(opacity=value),
+        value -> SpriteMaterial(opacity=value),
+        value -> MeshLambertMaterial(opacity=value),
+        value -> MeshPhongMaterial(opacity=value),
+        value -> MeshStandardMaterial(opacity=value),
+        value -> MeshNormalMaterial(opacity=value),
+        value -> LineBasicMaterial(opacity=value),
+        value -> LineDashedMaterial(opacity=value),
+        value -> PointsMaterial(opacity=value),
+        value -> MeshPhysicalMaterial(opacity=value),
+        value -> MeshToonMaterial(opacity=value),
+        value -> MeshMatcapMaterial(opacity=value),
+        value -> MeshDepthMaterial(opacity=value),
+    )
+    for constructor in opacity_constructors
+        @test_throws "material opacity must be finite and between 0 and 1" constructor(NaN)
+        @test getproperty(constructor(0.0), :opacity) == 0.0
+        @test getproperty(constructor(1.0), :opacity) == 1.0
+    end
+    for value in (Inf, -0.01, 1.01, true)
+        @test_throws "material opacity must be finite and between 0 and 1" Diff3D._validated_material_opacity(
+            value)
+    end
+
+    alpha_test_constructors = (
+        value -> MeshBasicMaterial(alpha_test=value),
+        value -> SpriteMaterial(alpha_test=value),
+        value -> MeshLambertMaterial(alpha_test=value),
+        value -> MeshPhongMaterial(alpha_test=value),
+        value -> MeshStandardMaterial(alpha_test=value),
+        value -> PointsMaterial(alpha_test=value),
+        value -> MeshPhysicalMaterial(alpha_test=value),
+        value -> MeshToonMaterial(alpha_test=value),
+        value -> MeshMatcapMaterial(alpha_test=value),
+        value -> MeshDepthMaterial(alpha_test=value),
+    )
+    for constructor in alpha_test_constructors
+        @test_throws "material alpha_test must be finite and between 0 and 1" constructor(NaN)
+        @test getproperty(constructor(0.0), :alpha_test) == 0.0
+        @test getproperty(constructor(1.0), :alpha_test) == 1.0
+    end
+    for value in (Inf, -0.01, 1.01, false)
+        @test_throws "material alpha_test must be finite and between 0 and 1" Diff3D._validated_material_alpha_test(
+            value)
+    end
+
+    invalid_plane = Plane(Vec3(NaN, 0.0, 0.0), Inf)
+    clipping_constructors = (
+        value -> MeshBasicMaterial(clipping_planes=value),
+        value -> MeshLambertMaterial(clipping_planes=value),
+        value -> MeshPhongMaterial(clipping_planes=value),
+        value -> MeshStandardMaterial(clipping_planes=value),
+        value -> MeshNormalMaterial(clipping_planes=value),
+        value -> MeshPhysicalMaterial(clipping_planes=value),
+        value -> MeshToonMaterial(clipping_planes=value),
+        value -> MeshMatcapMaterial(clipping_planes=value),
+        value -> MeshDepthMaterial(clipping_planes=value),
+    )
+    for constructor in clipping_constructors
+        @test_throws "material clipping plane 1 must be finite" constructor([invalid_plane])
+    end
+    @test_throws "material clipping plane 1 must be a Plane" MeshBasicMaterial(
+        clipping_planes=Any[1.0])
+
+    # Legacy positional construction and mutable plane vectors can bypass
+    # constructor validation. Accessors and output boundaries must reject them.
+    direct_bad_opacity = MeshBasicMaterial(
+        Color3(1.0, 1.0, 1.0), NaN, false, false, :front,
+        nothing, nothing, nothing, nothing, 1.0, 1.0, false, 0.0, true, true)
+    direct_bad_alpha_test = MeshBasicMaterial(
+        Color3(1.0, 1.0, 1.0), 1.0, false, false, :front,
+        nothing, nothing, nothing, nothing, 1.0, 1.0, false, NaN, true, true)
+    direct_bad_clipping = MeshBasicMaterial(
+        clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])
+    direct_bad_clipping.clipping_planes[1] = invalid_plane
+
+    @test_throws "material opacity must be finite and between 0 and 1" material_opacity(
+        direct_bad_opacity)
+    @test_throws "material alpha_test must be finite and between 0 and 1" material_alpha_test(
+        direct_bad_alpha_test)
+    @test_throws "material clipping plane 1 must be finite" Diff3D.material_clipping_planes(
+        direct_bad_clipping)
+
+    geometry = PlaneGeometry()
+    invalid_materials = (
+        (direct_bad_opacity, "material opacity must be finite and between 0 and 1"),
+        (direct_bad_alpha_test, "material alpha_test must be finite and between 0 and 1"),
+        (direct_bad_clipping, "material clipping plane 1 must be finite"),
+    )
+    for (material, message) in invalid_materials
+        mesh = Mesh(geometry, material)
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_drawable_json(web_io, mesh, Mat4())
+        @test position(web_io) == 0
+        if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+            scene = Scene()
+            add!(scene, mesh)
+            camera = PerspectiveCamera()
+            camera.position = Vec3(0.0, 0.0, 3.0)
+            @test_throws message render!(RenderTarget(16, 16), scene, camera)
+        end
+    end
+
+    valid_plane = Plane(Vec3(1.0, 0.0, 0.0), 0.25)
+    valid = MeshBasicMaterial(opacity=0.5, alpha_test=0.25,
+                              clipping_planes=[valid_plane])
+    valid_json = Diff3D._web_drawable_json(Mesh(geometry, valid), Mat4())
+    @test occursin("\"opacity\":0.5", valid_json)
+    @test occursin("\"alphaTest\":0.25", valid_json)
+    @test occursin("\"clippingPlanes\":[[1,0,0,0.25]]", valid_json)
+
+    opacity_probe = () -> (@allocated material_opacity(valid))
+    alpha_test_probe = () -> (@allocated material_alpha_test(valid))
+    clipping_probe = () -> (@allocated Diff3D.material_clipping_planes(valid))
+    opacity_probe()
+    alpha_test_probe()
+    clipping_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || opacity_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || alpha_test_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || clipping_probe() == 0
+end

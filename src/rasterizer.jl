@@ -1766,15 +1766,24 @@ function _sort_meshes_by_depth!(meshes::Vector{Mesh},
 end
 
 # Material transparency helpers (some materials lack these fields).
-material_opacity(m::AbstractMaterial) = hasfield(typeof(m), :opacity) ? getfield(m, :opacity) : 1.0
+material_opacity(m::AbstractMaterial) = hasfield(typeof(m), :opacity) ?
+    _validated_material_opacity(getfield(m, :opacity)) : 1.0
 material_transparent(m::AbstractMaterial) = hasfield(typeof(m), :transparent) ? getfield(m, :transparent) : false
-is_transparent_material(m::AbstractMaterial) = material_transparent(m)
+function is_transparent_material(m::AbstractMaterial)
+    material_opacity(m)
+    return material_transparent(m)
+end
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
-material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ? Float64(getfield(m, :alpha_test)) : 0.0
+material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ?
+    _validated_material_alpha_test(getfield(m, :alpha_test)) : 0.0
 material_wireframe(m::AbstractMaterial) = hasfield(typeof(m), :wireframe) ? getfield(m, :wireframe) : false
-material_clipping_planes(m::AbstractMaterial) =
-    hasfield(typeof(m), :clipping_planes) ? getfield(m, :clipping_planes) : _NO_PLANES
+function material_clipping_planes(m::AbstractMaterial)
+    hasfield(typeof(m), :clipping_planes) || return _NO_PLANES
+    planes = getfield(m, :clipping_planes)
+    _validate_material_clipping_planes(planes)
+    return planes
+end
 
 @inline function _shade_flat_shader_face(geo, fi::Int, world_mat::Mat4,
                                          mat::ShaderMaterial, lights,

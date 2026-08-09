@@ -587,9 +587,11 @@ _web_material_dash_size(mat) = mat isa LineDashedMaterial ? mat.dash_size : 1.0
 _web_material_gap_size(mat) = mat isa LineDashedMaterial ? mat.gap_size : 0.0
 _web_material_dash_scale(mat) = mat isa LineDashedMaterial ? mat.scale : 1.0
 _web_material_glow(mat) = mat isa MeshBasicMaterial ? 0.35 : mat isa PointsMaterial ? 1.0 : 0.08
-_web_material_opacity(mat) = hasproperty(mat, :opacity) ? clamp(Float64(getproperty(mat, :opacity)), 0.0, 1.0) : 1.0
+_web_material_opacity(mat) = hasproperty(mat, :opacity) ?
+    _validated_material_opacity(getproperty(mat, :opacity)) : 1.0
 _web_material_alpha_test(mat) =
-    hasproperty(mat, :alpha_test) ? clamp(Float64(getproperty(mat, :alpha_test)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :alpha_test) ?
+    _validated_material_alpha_test(getproperty(mat, :alpha_test)) : 0.0
 _web_material_alpha_texture(mat) =
     hasproperty(mat, :alpha_map) && getproperty(mat, :alpha_map) isa Texture ? getproperty(mat, :alpha_map) : nothing
 _web_material_emissive_texture(mat) =
@@ -644,8 +646,12 @@ _web_material_anisotropy_texture(mat) =
     hasproperty(mat, :anisotropy_map) && getproperty(mat, :anisotropy_map) isa Texture ? getproperty(mat, :anisotropy_map) : nothing
 _web_material_env_texture(mat) =
     hasproperty(mat, :envmap) && getproperty(mat, :envmap) isa CubeTexture ? getproperty(mat, :envmap) : nothing
-_web_material_clipping_planes(mat) =
-    hasproperty(mat, :clipping_planes) ? getproperty(mat, :clipping_planes) : Plane{Float64}[]
+function _web_material_clipping_planes(mat)
+    hasproperty(mat, :clipping_planes) || return _NO_PLANES
+    planes = getproperty(mat, :clipping_planes)
+    _validate_material_clipping_planes(planes)
+    return planes
+end
 _web_material_emissive_color(mat) =
     hasproperty(mat, :emissive) ? getproperty(mat, :emissive) : Color3(0.0, 0.0, 0.0)
 _web_material_emissive_intensity(mat) =
@@ -2474,6 +2480,9 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     # Validate before writing so positional constructors cannot cause a partial
     # JSON object when they bypass the keyword-constructor checks.
     hasproperty(mat, :side) && _validated_material_side(getproperty(mat, :side))
+    _web_material_opacity(mat)
+    _web_material_alpha_test(mat)
+    _web_material_clipping_planes(mat)
     _web_material_size(mat)
     _web_material_linewidth(mat)
     _validate_depth_material(mat)
