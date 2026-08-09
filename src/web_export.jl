@@ -607,7 +607,8 @@ _web_material_metalness_texture(mat) =
 _web_material_normal_texture(mat) =
     hasproperty(mat, :normal_map) && getproperty(mat, :normal_map) isa Texture ? getproperty(mat, :normal_map) : nothing
 _web_material_normal_scale(mat) =
-    hasproperty(mat, :normal_scale) ? Float64(getproperty(mat, :normal_scale)) : 1.0
+    hasproperty(mat, :normal_scale) ?
+    _validated_material_normal_scale(getproperty(mat, :normal_scale)) : 1.0
 _web_material_matcap_texture(mat) =
     hasproperty(mat, :matcap) && getproperty(mat, :matcap) isa Texture ? getproperty(mat, :matcap) : nothing
 _web_material_gradient_texture(mat) =
@@ -619,7 +620,9 @@ _web_material_clearcoat_roughness_texture(mat) =
 _web_material_clearcoat_normal_texture(mat) =
     hasproperty(mat, :clearcoat_normal_map) && getproperty(mat, :clearcoat_normal_map) isa Texture ? getproperty(mat, :clearcoat_normal_map) : nothing
 _web_material_clearcoat_normal_scale(mat) =
-    hasproperty(mat, :clearcoat_normal_scale) ? Float64(getproperty(mat, :clearcoat_normal_scale)) : 1.0
+    hasproperty(mat, :clearcoat_normal_scale) ?
+    _validated_material_clearcoat_normal_scale(
+        getproperty(mat, :clearcoat_normal_scale)) : 1.0
 _web_material_transmission_texture(mat) =
     hasproperty(mat, :transmission_map) && getproperty(mat, :transmission_map) isa Texture ? getproperty(mat, :transmission_map) : nothing
 _web_material_thickness_texture(mat) =
@@ -655,11 +658,17 @@ end
 _web_material_emissive_color(mat) =
     hasproperty(mat, :emissive) ? getproperty(mat, :emissive) : Color3(0.0, 0.0, 0.0)
 _web_material_emissive_intensity(mat) =
-    hasproperty(mat, :emissive_intensity) ? Float64(getproperty(mat, :emissive_intensity)) : 1.0
+    hasproperty(mat, :emissive_intensity) ?
+    _validated_material_emissive_intensity(
+        getproperty(mat, :emissive_intensity)) : 1.0
 _web_material_ao_intensity(mat) =
-    hasproperty(mat, :ao_map_intensity) ? Float64(getproperty(mat, :ao_map_intensity)) : 1.0
+    hasproperty(mat, :ao_map_intensity) ?
+    _validated_material_ao_map_intensity(
+        getproperty(mat, :ao_map_intensity)) : 1.0
 _web_material_light_intensity(mat) =
-    hasproperty(mat, :light_map_intensity) ? Float64(getproperty(mat, :light_map_intensity)) : 1.0
+    hasproperty(mat, :light_map_intensity) ?
+    _validated_material_light_map_intensity(
+        getproperty(mat, :light_map_intensity)) : 1.0
 _web_material_roughness(mat) =
     hasproperty(mat, :roughness) ?
     _validated_material_roughness(getproperty(mat, :roughness)) : 0.65
@@ -667,7 +676,9 @@ _web_material_metalness(mat) =
     hasproperty(mat, :metalness) ?
     _validated_material_metalness(getproperty(mat, :metalness)) : 0.0
 _web_material_env_intensity(mat) =
-    hasproperty(mat, :env_map_intensity) ? Float64(getproperty(mat, :env_map_intensity)) : 1.0
+    hasproperty(mat, :env_map_intensity) ?
+    _validated_material_env_map_intensity(
+        getproperty(mat, :env_map_intensity)) : 1.0
 _web_material_clearcoat(mat) =
     hasproperty(mat, :clearcoat) ?
     _validated_material_unit_interval(getproperty(mat, :clearcoat), :clearcoat) : 0.0
@@ -948,7 +959,8 @@ end
 _web_material_toon_steps(mat) =
     hasproperty(mat, :gradient_steps) ? max(Float64(getproperty(mat, :gradient_steps)), 1.0) : 3.0
 _web_material_sprite_rotation(mat) =
-    hasproperty(mat, :rotation) ? Float64(getproperty(mat, :rotation)) : 0.0
+    hasproperty(mat, :rotation) ?
+    _validated_material_sprite_rotation(getproperty(mat, :rotation)) : 0.0
 _web_material_sprite_size_attenuation(mat) =
     hasproperty(mat, :size_attenuation) ? Bool(getproperty(mat, :size_attenuation)) : true
 _web_material_point_size_attenuation(mat) =

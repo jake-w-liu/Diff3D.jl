@@ -1963,6 +1963,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                        cache::Union{Nothing,RenderCache},
                                        state::_SpriteRenderState)
+    _validate_material_parameters(mat)
     state.stamp_id += 1
     stamp_id = state.stamp_id
     M = sprite_world_matrix(obj, camera, world)

@@ -25049,3 +25049,129 @@ end
     validation_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
 end
+
+@testset "fresh audit round 184 fixes" begin
+    function material_with_control(material_type, field::Symbol, value)
+        kwargs = NamedTuple{(field,)}((value,))
+        return material_type(; kwargs...)
+    end
+
+    finite_control_cases = (
+        (MeshBasicMaterial, :ao_map_intensity),
+        (MeshBasicMaterial, :light_map_intensity),
+        (MeshLambertMaterial, :normal_scale),
+        (MeshLambertMaterial, :emissive_intensity),
+        (MeshLambertMaterial, :ao_map_intensity),
+        (MeshLambertMaterial, :light_map_intensity),
+        (MeshPhongMaterial, :normal_scale),
+        (MeshPhongMaterial, :emissive_intensity),
+        (MeshPhongMaterial, :ao_map_intensity),
+        (MeshPhongMaterial, :light_map_intensity),
+        (MeshStandardMaterial, :normal_scale),
+        (MeshStandardMaterial, :emissive_intensity),
+        (MeshStandardMaterial, :ao_map_intensity),
+        (MeshStandardMaterial, :light_map_intensity),
+        (MeshStandardMaterial, :env_map_intensity),
+        (MeshPhysicalMaterial, :normal_scale),
+        (MeshPhysicalMaterial, :clearcoat_normal_scale),
+        (MeshPhysicalMaterial, :emissive_intensity),
+        (MeshPhysicalMaterial, :ao_map_intensity),
+        (MeshPhysicalMaterial, :light_map_intensity),
+        (MeshPhysicalMaterial, :env_map_intensity),
+        (MeshToonMaterial, :normal_scale),
+        (MeshToonMaterial, :emissive_intensity),
+        (MeshToonMaterial, :ao_map_intensity),
+        (MeshToonMaterial, :light_map_intensity),
+        (MeshMatcapMaterial, :normal_scale),
+        (SpriteMaterial, :rotation),
+    )
+    for (material_type, field) in finite_control_cases
+        message = "material $field must be finite"
+        for value in (NaN, Inf, -Inf, true)
+            @test_throws message material_with_control(material_type, field, value)
+        end
+        @test getproperty(material_with_control(material_type, field, -2.0), field) ==
+              -2.0
+    end
+
+    function bypass_material_control(material, field::Symbol, value)
+        T = typeof(material)
+        return T((name === field ? value : getfield(material, name)
+                  for name in fieldnames(T))...)
+    end
+
+    direct_specs = (
+        (MeshBasicMaterial(), :ao_map_intensity),
+        (MeshLambertMaterial(), :normal_scale),
+        (MeshPhongMaterial(), :emissive_intensity),
+        (MeshStandardMaterial(), :env_map_intensity),
+        (MeshPhysicalMaterial(), :clearcoat_normal_scale),
+        (MeshMatcapMaterial(), :normal_scale),
+    )
+    geometry = PlaneGeometry()
+    lights = AbstractLight[AmbientLight(intensity=1.0)]
+    sentinel_color = Color3(0.25, 0.5, 0.75)
+    for (valid_material, field) in direct_specs
+        message = "material $field must be finite"
+        invalid_material = bypass_material_control(valid_material, field, NaN)
+        @test_throws message Diff3D._validate_material_parameters(invalid_material)
+        @test_throws message is_transparent_material(invalid_material)
+        sentinel = fill(sentinel_color, geometry.n_faces)
+        @test_throws message Diff3D.shade_mesh_faces!(
+            sentinel, geometry, Mat4(), invalid_material, lights,
+            Vec3(0.0, 0.0, 3.0))
+        @test all(==(sentinel_color), sentinel)
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_drawable_json(
+            web_io, Mesh(geometry, invalid_material), Mat4())
+        @test position(web_io) == 0
+    end
+
+    direct_sprite = bypass_material_control(SpriteMaterial(), :rotation, NaN)
+    rotation_message = "material rotation must be finite"
+    @test_throws rotation_message Diff3D._validate_material_parameters(direct_sprite)
+    @test_throws rotation_message is_transparent_material(direct_sprite)
+    @test_throws rotation_message Diff3D._web_material_sprite_rotation(direct_sprite)
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        camera = PerspectiveCamera()
+        camera.position = Vec3(0.0, 0.0, 3.0)
+        invalid_scene = Scene()
+        add!(invalid_scene, Sprite(direct_sprite))
+        invalid_target = RenderTarget(16, 16)
+        @test_throws rotation_message render!(invalid_target, invalid_scene, camera)
+        @test all(iszero, invalid_target.color)
+
+        valid_scene = Scene()
+        add!(valid_scene, Sprite(SpriteMaterial(rotation=-pi / 4)))
+        valid_target = RenderTarget(16, 16)
+        render!(valid_target, valid_scene, camera)
+        @test sum(valid_target.color) > 0.0
+    end
+
+    valid_basic = MeshBasicMaterial(ao_map_intensity=-1.0,
+                                    light_map_intensity=2.0)
+    valid_physical = MeshPhysicalMaterial(
+        normal_scale=-1.0, clearcoat_normal_scale=0.5,
+        emissive_intensity=2.0, ao_map_intensity=-0.5,
+        light_map_intensity=1.5, env_map_intensity=-2.0)
+    valid_sprite = SpriteMaterial(rotation=-pi)
+    @test Diff3D._web_material_normal_scale(valid_physical) == -1.0
+    @test Diff3D._web_material_clearcoat_normal_scale(valid_physical) == 0.5
+    @test Diff3D._web_material_emissive_intensity(valid_physical) == 2.0
+    @test Diff3D._web_material_ao_intensity(valid_physical) == -0.5
+    @test Diff3D._web_material_light_intensity(valid_physical) == 1.5
+    @test Diff3D._web_material_env_intensity(valid_physical) == -2.0
+    @test Diff3D._web_material_sprite_rotation(valid_sprite) == -pi
+    basic_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(valid_basic))
+    physical_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(valid_physical))
+    sprite_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(valid_sprite))
+    basic_probe()
+    physical_probe()
+    sprite_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || basic_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || physical_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sprite_probe() == 0
+end

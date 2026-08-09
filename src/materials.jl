@@ -63,6 +63,20 @@ end
     _validated_material_unit_interval(value, :metalness)
 @inline _validated_material_roughness(value) =
     _validated_material_unit_interval(value, :roughness)
+@inline _validated_material_normal_scale(value) =
+    _validated_material_finite(value, :normal_scale)
+@inline _validated_material_clearcoat_normal_scale(value) =
+    _validated_material_finite(value, :clearcoat_normal_scale)
+@inline _validated_material_emissive_intensity(value) =
+    _validated_material_finite(value, :emissive_intensity)
+@inline _validated_material_ao_map_intensity(value) =
+    _validated_material_finite(value, :ao_map_intensity)
+@inline _validated_material_light_map_intensity(value) =
+    _validated_material_finite(value, :light_map_intensity)
+@inline _validated_material_env_map_intensity(value) =
+    _validated_material_finite(value, :env_map_intensity)
+@inline _validated_material_sprite_rotation(value) =
+    _validated_material_finite(value, :rotation)
 
 @inline _validate_material_parameters(::AbstractMaterial) = nothing
 
@@ -97,8 +111,10 @@ function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                            clipping_planes=Plane{Float64}[])
     MeshBasicMaterial(color, _validated_material_opacity(opacity), transparent, wireframe,
                       _validated_material_side(side), map, alpha_map,
-                      ao_map, light_map, Float64(ao_map_intensity),
-                      Float64(light_map_intensity), vertex_colors,
+                      ao_map, light_map,
+                      _validated_material_ao_map_intensity(ao_map_intensity),
+                      _validated_material_light_map_intensity(light_map_intensity),
+                      vertex_colors,
                       _validated_material_alpha_test(alpha_test),
                       depth_test, depth_write,
                       _material_clipping_planes(clipping_planes))
@@ -118,6 +134,12 @@ end
 MeshBasicMaterial(args::Vararg{Any,15}) =
     MeshBasicMaterial(args..., Plane{Float64}[])
 
+@inline function _validate_material_parameters(material::MeshBasicMaterial)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
+    return nothing
+end
+
 struct SpriteMaterial <: AbstractMaterial
     color::Color3{Float64}
     opacity::Float64
@@ -135,7 +157,8 @@ function SpriteMaterial(color::Color3, opacity, transparent::Bool, map,
                         rotation, size_attenuation::Bool, depth_test::Bool,
                         depth_write::Bool)
     SpriteMaterial(color, _validated_material_opacity(opacity), transparent, map, nothing,
-                   Float64(rotation), size_attenuation, 0.0,
+                   _validated_material_sprite_rotation(rotation),
+                   size_attenuation, 0.0,
                    depth_test, depth_write)
 end
 
@@ -144,9 +167,14 @@ function SpriteMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                         rotation=0.0, size_attenuation=true, alpha_test=0.0,
                         depth_test=true, depth_write=true)
     SpriteMaterial(color, _validated_material_opacity(opacity), transparent, map, alpha_map,
-                   Float64(rotation), size_attenuation,
+                   _validated_material_sprite_rotation(rotation), size_attenuation,
                    _validated_material_alpha_test(alpha_test),
                    depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::SpriteMaterial)
+    _validated_material_sprite_rotation(material.rotation)
+    return nothing
 end
 
 # ========================== MeshLambertMaterial ==========================
@@ -190,9 +218,12 @@ function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
     MeshLambertMaterial(color, emissive, _validated_material_opacity(opacity),
                         transparent, wireframe,
                         _validated_material_side(side), map,
-                        normal_map, Float64(normal_scale), alpha_map, ao_map,
-                        emissive_map, Float64(emissive_intensity),
-                        Float64(ao_map_intensity), Float64(light_map_intensity), vertex_colors,
+                        normal_map, _validated_material_normal_scale(normal_scale),
+                        alpha_map, ao_map, emissive_map,
+                        _validated_material_emissive_intensity(emissive_intensity),
+                        _validated_material_ao_map_intensity(ao_map_intensity),
+                        _validated_material_light_map_intensity(light_map_intensity),
+                        vertex_colors,
                         light_map, _validated_material_alpha_test(alpha_test),
                         depth_test, depth_write,
                         _material_clipping_planes(clipping_planes))
@@ -214,8 +245,10 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              emissive_intensity, vertex_colors::Bool, light_map,
                              alpha_test, depth_test::Bool, depth_write::Bool)
     MeshLambertMaterial(color, emissive, opacity, transparent, wireframe, side, map,
-                        normal_map, Float64(normal_scale), alpha_map, ao_map,
-                        emissive_map, Float64(emissive_intensity), 1.0, 1.0, vertex_colors,
+                        normal_map, _validated_material_normal_scale(normal_scale),
+                        alpha_map, ao_map, emissive_map,
+                        _validated_material_emissive_intensity(emissive_intensity),
+                        1.0, 1.0, vertex_colors,
                         light_map, Float64(alpha_test), depth_test, depth_write)
 end
 
@@ -228,9 +261,12 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
     MeshLambertMaterial(color, emissive, _validated_material_opacity(opacity),
                         transparent, wireframe,
                         _validated_material_side(side), map,
-                        normal_map, Float64(normal_scale), alpha_map, ao_map,
-                        emissive_map, Float64(emissive_intensity),
-                        Float64(ao_map_intensity), Float64(light_map_intensity), vertex_colors,
+                        normal_map, _validated_material_normal_scale(normal_scale),
+                        alpha_map, ao_map, emissive_map,
+                        _validated_material_emissive_intensity(emissive_intensity),
+                        _validated_material_ao_map_intensity(ao_map_intensity),
+                        _validated_material_light_map_intensity(light_map_intensity),
+                        vertex_colors,
                         light_map, _validated_material_alpha_test(alpha_test),
                         depth_test, depth_write,
                         Plane{Float64}[])
@@ -254,6 +290,14 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                         nothing, 1.0, nothing, ao_map, emissive_map, 1.0,
                         1.0, 1.0, vertex_colors, light_map, 0.0,
                         depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::MeshLambertMaterial)
+    _validated_material_normal_scale(material.normal_scale)
+    _validated_material_emissive_intensity(material.emissive_intensity)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
+    return nothing
 end
 
 # ========================== MeshPhongMaterial ==========================
@@ -380,12 +424,15 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                       transparent, wireframe,
                       _validated_material_side(side), map,
                       specular_map, glossiness_map, normal_map,
-                      Float64(normal_scale), alpha_map, ao_map, emissive_map,
+                      _validated_material_normal_scale(normal_scale),
+                      alpha_map, ao_map, emissive_map,
                       light_map, vertex_colors,
                       _validated_material_alpha_test(alpha_test),
                       _material_clipping_planes(clipping_planes),
-                      Float64(emissive_intensity), Float64(ao_map_intensity),
-                      Float64(light_map_intensity), depth_test, depth_write)
+                      _validated_material_emissive_intensity(emissive_intensity),
+                      _validated_material_ao_map_intensity(ao_map_intensity),
+                      _validated_material_light_map_intensity(light_map_intensity),
+                      depth_test, depth_write)
 end
 
 function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3, shininess,
@@ -504,11 +551,13 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3,
                       _validated_material_opacity(opacity),
                       transparent, wireframe, _validated_material_side(side), map,
                       specular_map, glossiness_map, normal_map,
-                      Float64(normal_scale), alpha_map,
+                      _validated_material_normal_scale(normal_scale), alpha_map,
                       ao_map, emissive_map, light_map, vertex_colors,
                       _validated_material_alpha_test(alpha_test),
-                      Plane{Float64}[], Float64(emissive_intensity),
-                      Float64(ao_map_intensity), Float64(light_map_intensity),
+                      Plane{Float64}[],
+                      _validated_material_emissive_intensity(emissive_intensity),
+                      _validated_material_ao_map_intensity(ao_map_intensity),
+                      _validated_material_light_map_intensity(light_map_intensity),
                       depth_test, depth_write)
 end
 
@@ -517,6 +566,10 @@ end
     glossiness =
         _validated_material_unit_interval(material.glossiness, :glossiness)
     _validate_material_phong_parameter_pair(shininess, glossiness)
+    _validated_material_normal_scale(material.normal_scale)
+    _validated_material_emissive_intensity(material.emissive_intensity)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
     return nothing
 end
 
@@ -570,11 +623,16 @@ function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
                          _validated_material_roughness(roughness),
                          _validated_material_opacity(opacity), transparent,
                          _validated_material_side(side),
-                         map, normal_map, Float64(normal_scale), roughness_map, metalness_map, alpha_map,
+                         map, normal_map,
+                         _validated_material_normal_scale(normal_scale),
+                         roughness_map, metalness_map, alpha_map,
                          ao_map, emissive_map, vertex_colors,
                          _validated_material_alpha_test(alpha_test), envmap, light_map,
-                         emissive_intensity, ao_map_intensity, light_map_intensity,
-                         env_map_intensity, depth_test, depth_write,
+                         _validated_material_emissive_intensity(emissive_intensity),
+                         _validated_material_ao_map_intensity(ao_map_intensity),
+                         _validated_material_light_map_intensity(light_map_intensity),
+                         _validated_material_env_map_intensity(env_map_intensity),
+                         depth_test, depth_write,
                          _material_clipping_planes(clipping_planes))
 end
 
@@ -584,6 +642,11 @@ MeshStandardMaterial(args::Vararg{Any,25}) =
 @inline function _validate_material_parameters(material::MeshStandardMaterial)
     _validated_material_metalness(material.metalness)
     _validated_material_roughness(material.roughness)
+    _validated_material_normal_scale(material.normal_scale)
+    _validated_material_emissive_intensity(material.emissive_intensity)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
+    _validated_material_env_map_intensity(material.env_map_intensity)
     return nothing
 end
 
@@ -843,9 +906,14 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          _validated_material_at_least_one(ior, :ior),
                          _validated_material_opacity(opacity), transparent,
                          _validated_material_side(side),
-                          envmap, map, normal_map, Float64(normal_scale), roughness_map, metalness_map, ao_map,
-                          emissive_map, alpha_map, emissive_intensity, ao_map_intensity,
-                          light_map_intensity, env_map_intensity,
+                          envmap, map, normal_map,
+                          _validated_material_normal_scale(normal_scale),
+                          roughness_map, metalness_map, ao_map,
+                          emissive_map, alpha_map,
+                          _validated_material_emissive_intensity(emissive_intensity),
+                          _validated_material_ao_map_intensity(ao_map_intensity),
+                          _validated_material_light_map_intensity(light_map_intensity),
+                          _validated_material_env_map_intensity(env_map_intensity),
                           _validated_material_alpha_test(alpha_test),
                          _validated_material_unit_interval(sheen, :sheen), sheen_color,
                          _validated_material_unit_interval(sheen_roughness,
@@ -865,7 +933,9 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          _validated_material_unit_interval(specular_intensity,
                                                            :specular_intensity), specular_color,
                          specular_intensity_map, specular_color_map, vertex_colors,
-                         clearcoat_normal_map, Float64(clearcoat_normal_scale),
+                         clearcoat_normal_map,
+                         _validated_material_clearcoat_normal_scale(
+                             clearcoat_normal_scale),
                          _validated_material_nonnegative(dispersion, :dispersion),
                          _validated_material_unit_interval(anisotropy, :anisotropy),
                          _validated_material_finite(anisotropy_rotation,
@@ -880,6 +950,11 @@ MeshPhysicalMaterial(args::Vararg{Any,56}) =
 @inline function _validate_material_parameters(material::MeshPhysicalMaterial)
     _validated_material_metalness(material.metalness)
     _validated_material_roughness(material.roughness)
+    _validated_material_normal_scale(material.normal_scale)
+    _validated_material_emissive_intensity(material.emissive_intensity)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
+    _validated_material_env_map_intensity(material.env_map_intensity)
     _validated_material_unit_interval(material.clearcoat, :clearcoat)
     _validated_material_unit_interval(material.clearcoat_roughness, :clearcoat_roughness)
     _validated_material_unit_interval(material.transmission, :transmission)
@@ -897,6 +972,7 @@ MeshPhysicalMaterial(args::Vararg{Any,56}) =
     _validated_material_nonnegative(material.dispersion, :dispersion)
     _validated_material_unit_interval(material.anisotropy, :anisotropy)
     _validated_material_finite(material.anisotropy_rotation, :anisotropy_rotation)
+    _validated_material_clearcoat_normal_scale(material.clearcoat_normal_scale)
     return nothing
 end
 
@@ -947,9 +1023,12 @@ struct MeshToonMaterial <: AbstractMaterial
                               depth_write::Bool, clipping_planes)
         new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
-            map, normal_map, Float64(normal_scale), alpha_map, ao_map, light_map,
-            emissive_map, Float64(emissive_intensity), Float64(ao_map_intensity),
-            Float64(light_map_intensity), _validated_material_alpha_test(alpha_test),
+            map, normal_map, _validated_material_normal_scale(normal_scale),
+            alpha_map, ao_map, light_map, emissive_map,
+            _validated_material_emissive_intensity(emissive_intensity),
+            _validated_material_ao_map_intensity(ao_map_intensity),
+            _validated_material_light_map_intensity(light_map_intensity),
+            _validated_material_alpha_test(alpha_test),
             _validated_material_opacity(opacity),
             transparent, _validated_material_side(side), depth_test, depth_write,
             _material_clipping_planes(clipping_planes))
@@ -1033,6 +1112,14 @@ function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
                      depth_write)
 end
 
+@inline function _validate_material_parameters(material::MeshToonMaterial)
+    _validated_material_normal_scale(material.normal_scale)
+    _validated_material_emissive_intensity(material.emissive_intensity)
+    _validated_material_ao_map_intensity(material.ao_map_intensity)
+    _validated_material_light_map_intensity(material.light_map_intensity)
+    return nothing
+end
+
 # ========================== MeshMatcapMaterial ==========================
 # Material-capture shading: appearance baked into a sphere image indexed by the
 # view-space normal. `matcap` is an optional texture; without one a procedural
@@ -1062,7 +1149,7 @@ function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
                              depth_test=true, depth_write=true,
                              clipping_planes=Plane{Float64}[])
     MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
-                       Float64(normal_scale), alpha_map,
+                       _validated_material_normal_scale(normal_scale), alpha_map,
                        _validated_material_alpha_test(alpha_test),
                        wireframe, _validated_material_opacity(opacity), transparent,
                        _validated_material_side(side), depth_test, depth_write,
@@ -1074,7 +1161,7 @@ function MeshMatcapMaterial(color::Color3, matcap, map, normal_map, normal_scale
                             transparent::Bool, side::Symbol, depth_test::Bool,
                             depth_write::Bool)
     MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
-                       Float64(normal_scale), alpha_map,
+                       _validated_material_normal_scale(normal_scale), alpha_map,
                        _validated_material_alpha_test(alpha_test),
                        wireframe, _validated_material_opacity(opacity), transparent,
                        _validated_material_side(side), depth_test, depth_write,
@@ -1096,6 +1183,11 @@ MeshMatcapMaterial(args::Vararg{Any,7}) =
 
 MeshMatcapMaterial(args::Vararg{Any,13}) =
     MeshMatcapMaterial(args..., Plane{Float64}[])
+
+@inline function _validate_material_parameters(material::MeshMatcapMaterial)
+    _validated_material_normal_scale(material.normal_scale)
+    return nothing
+end
 
 # ========================== MeshDepthMaterial ==========================
 # Renders normalized camera-space depth. `:basic` displays near → bright;
