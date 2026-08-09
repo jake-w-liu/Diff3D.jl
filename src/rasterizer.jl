@@ -137,6 +137,14 @@ end
 # carry the encoded value, so no per-fragment log is required.
 @inline _encode_log_depth(w, inv_log_far) = log2(max(1.0e-6, w + 1.0)) * inv_log_far
 
+# An infinite far plane has no finite normalization distance. Use the largest
+# representable view distance so finite clip-space w values retain a monotone
+# encoded depth in [0, 1] instead of all collapsing to zero.
+@inline function _inverse_log_depth_far(far::Float64)
+    normalization_far = isinf(far) ? floatmax(Float64) : far
+    return 1.0 / log2(normalization_far + 1.0)
+end
+
 # Intersect view-space edge a→b with the near plane (view-space z = -near).
 @inline function _clip_intersect_near(a::Vec4, b::Vec4, near)
     t = (-near - a.z) / (b.z - a.z)
@@ -1159,7 +1167,8 @@ required for correct alpha blending.
 
 `logarithmic_depth=false` mirrors `WebGLRenderer.logarithmicDepthBuffer`. When
 enabled, the z-buffer stores `log2(max(1e-6, w + 1)) / log2(far + 1)` (with `w`
-the clip-space w, i.e. the positive view distance) instead of NDC z. The encoding
+the clip-space w, i.e. the positive view distance) instead of NDC z. An infinite
+far plane uses `floatmax(Float64)` as the finite normalization limit. The encoding
 is monotone in distance, so the "nearer fragment wins" depth test is unchanged,
 while precision is spread logarithmically to stay usable across very large
 far/near ratios where linear NDC z collapses onto the far plane. The encoding is
@@ -1253,8 +1262,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # carries distance under a perspective projection. Orthographic clip w is
     # constant, so the encoding would flatten all depths; fall back to NDC z there.
     log_depth = logarithmic_depth && (camera isa PerspectiveCamera)
-    # Precompute 1/log2(far+1) once per frame for the logarithmic depth encoding.
-    inv_log_far = log_depth ? 1.0 / log2(far + 1.0) : 1.0
+    # Precompute the normalization once per frame for logarithmic depth.
+    inv_log_far = log_depth ? _inverse_log_depth_far(far) : 1.0
 
     # Orthographic cameras project along a constant direction, so back-face
     # culling must test against that direction (the camera's backward axis)

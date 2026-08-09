@@ -23401,3 +23401,61 @@ end
         "resolved_material_rotation", [material_rotation_track])), 0.5)
     @test sprite.material.rotation == 0.5
 end
+
+@testset "fresh audit round 164 fixes" begin
+    finite_far = 10_000.0
+    finite_inverse = Diff3D._inverse_log_depth_far(finite_far)
+    @test finite_inverse == 1.0 / log2(finite_far + 1.0)
+
+    infinite_inverse = Diff3D._inverse_log_depth_far(Inf)
+    @test isfinite(infinite_inverse)
+    @test infinite_inverse > 0.0
+    @test Diff3D._encode_log_depth(5.0, infinite_inverse) <
+          Diff3D._encode_log_depth(6.0, infinite_inverse)
+    @test Diff3D._encode_log_depth(floatmax(Float64), infinite_inverse) == 1.0
+    allocation_probe = () -> (@allocated Diff3D._inverse_log_depth_far(Inf))
+    allocation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || allocation_probe() == 0
+
+    function logarithmic_depth_scene(; reverse_order=false)
+        scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        near_mesh = Mesh(
+            BoxGeometry(width=2.0, height=2.0, depth=0.1),
+            MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0)))
+        far_mesh = Mesh(
+            BoxGeometry(width=2.0, height=2.0, depth=0.1),
+            MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0)))
+        far_mesh.position = Vec3(0.0, 0.0, -1.0)
+        if reverse_order
+            add!(scene, near_mesh)
+            add!(scene, far_mesh)
+        else
+            add!(scene, far_mesh)
+            add!(scene, near_mesh)
+        end
+        return scene
+    end
+
+    camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=Inf)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    camera.target = Vec3()
+
+    infinite_target = RenderTarget(48, 48)
+    render!(infinite_target, logarithmic_depth_scene(), camera;
+            logarithmic_depth=true, sort_objects=false)
+    @test infinite_target.color[24, 24, 1] > 0.5
+    @test infinite_target.color[24, 24, 3] < 0.5
+    @test 0.0 < infinite_target.depth[24, 24] < 1.0
+
+    reverse_target = RenderTarget(48, 48)
+    render!(reverse_target, logarithmic_depth_scene(reverse_order=true), camera;
+            logarithmic_depth=true, sort_objects=false)
+    @test reverse_target.color == infinite_target.color
+
+    camera.far = finite_far
+    finite_target = RenderTarget(48, 48)
+    render!(finite_target, logarithmic_depth_scene(), camera;
+            logarithmic_depth=true, sort_objects=false)
+    @test finite_target.color == infinite_target.color
+end
