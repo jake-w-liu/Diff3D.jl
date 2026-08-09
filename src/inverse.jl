@@ -18,10 +18,10 @@ end
 const _INVERSE_AUTO_REVERSE_MIN_PARAMS = 16
 
 function _inverse_ad_mode(ad)
-    mode = ad isa Symbol ? ad : Symbol(ad)
-    mode in (:auto, :forward, :reverse) ||
-        throw(ArgumentError("inverse rendering ad must be :auto, :forward, or :reverse"))
-    return mode
+    (ad === :auto || (ad isa AbstractString && ad == "auto")) && return :auto
+    (ad === :forward || (ad isa AbstractString && ad == "forward")) && return :forward
+    (ad === :reverse || (ad isa AbstractString && ad == "reverse")) && return :reverse
+    throw(ArgumentError("inverse rendering ad must be :auto, :forward, or :reverse"))
 end
 
 function _forwarddiff_value_gradient_config(objective::F,

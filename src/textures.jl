@@ -30,38 +30,52 @@ const _TEXTURE_MATRIX_INVALID_KEY =
     (NaN, NaN, NaN, NaN, NaN, NaN, NaN)
 
 function _texture_wrap_symbol(v)::Symbol
-    s = Symbol(v)
-    s in (:repeat, :clamp, :mirror) && return s
-    throw(ArgumentError("unsupported texture wrap mode: $s"))
+    (v === :repeat || (v isa AbstractString && v == "repeat")) && return :repeat
+    (v === :clamp || (v isa AbstractString && v == "clamp")) && return :clamp
+    (v === :mirror || (v isa AbstractString && v == "mirror")) && return :mirror
+    throw(ArgumentError("unsupported texture wrap mode: $v"))
 end
 
 function _texture_filter_symbol(v)::Symbol
-    s = Symbol(v)
-    s === :nearest && return :nearest
-    (s === :linear || s === :bilinear) && return :bilinear
-    throw(ArgumentError("unsupported texture filter: $s"))
+    (v === :nearest || (v isa AbstractString && v == "nearest")) && return :nearest
+    (v === :linear || v === :bilinear ||
+     (v isa AbstractString && (v == "linear" || v == "bilinear"))) &&
+        return :bilinear
+    throw(ArgumentError("unsupported texture filter: $v"))
 end
 
 function _texture_mag_filter_symbol(v)::Symbol
-    s = Symbol(v)
-    s === :nearest && return :nearest
-    (s === :linear || s === :bilinear) && return :linear
-    throw(ArgumentError("unsupported texture mag_filter: $s"))
+    (v === :nearest || (v isa AbstractString && v == "nearest")) && return :nearest
+    (v === :linear || v === :bilinear ||
+     (v isa AbstractString && (v == "linear" || v == "bilinear"))) &&
+        return :linear
+    throw(ArgumentError("unsupported texture mag_filter: $v"))
 end
 
 function _texture_min_filter_symbol(v)::Symbol
-    s = Symbol(v)
-    s === :nearest && return :nearest
-    (s === :linear || s === :bilinear) && return :linear
-    s in (:nearest_mipmap_nearest, :nearest_mipmap_linear,
-          :linear_mipmap_nearest, :linear_mipmap_linear) && return s
-    throw(ArgumentError("unsupported texture min_filter: $s"))
+    (v === :nearest || (v isa AbstractString && v == "nearest")) && return :nearest
+    (v === :linear || v === :bilinear ||
+     (v isa AbstractString && (v == "linear" || v == "bilinear"))) &&
+        return :linear
+    (v === :nearest_mipmap_nearest ||
+     (v isa AbstractString && v == "nearest_mipmap_nearest")) &&
+        return :nearest_mipmap_nearest
+    (v === :nearest_mipmap_linear ||
+     (v isa AbstractString && v == "nearest_mipmap_linear")) &&
+        return :nearest_mipmap_linear
+    (v === :linear_mipmap_nearest ||
+     (v isa AbstractString && v == "linear_mipmap_nearest")) &&
+        return :linear_mipmap_nearest
+    (v === :linear_mipmap_linear ||
+     (v isa AbstractString && v == "linear_mipmap_linear")) &&
+        return :linear_mipmap_linear
+    throw(ArgumentError("unsupported texture min_filter: $v"))
 end
 
 function _texture_colorspace_symbol(v)::Symbol
-    s = Symbol(v)
-    s in (:srgb, :linear) && return s
-    throw(ArgumentError("unsupported texture colorspace: $s"))
+    (v === :srgb || (v isa AbstractString && v == "srgb")) && return :srgb
+    (v === :linear || (v isa AbstractString && v == "linear")) && return :linear
+    throw(ArgumentError("unsupported texture colorspace: $v"))
 end
 
 function _texture_max_anisotropy(v)::Float64

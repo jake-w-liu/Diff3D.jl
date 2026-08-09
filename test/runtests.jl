@@ -23230,3 +23230,83 @@ end
     @test get(Diff3D._MORPH_POSITION_SYMBOLS, high_index, nothing) ===
           target_name
 end
+
+@testset "fresh audit round 162 fixes" begin
+    symbol_is_interned(value::String) =
+        ccall(:jl_symbol_lookup, Ptr{Cvoid}, (Cstring,), value) != C_NULL
+
+    invalid_wrap = "diff3d_invalid_wrap_$(time_ns())"
+    @test !symbol_is_interned(invalid_wrap)
+    @test_throws ArgumentError Diff3D._texture_wrap_symbol(invalid_wrap)
+    @test !symbol_is_interned(invalid_wrap)
+
+    invalid_filter = "diff3d_invalid_filter_$(time_ns())"
+    @test !symbol_is_interned(invalid_filter)
+    @test_throws ArgumentError Diff3D._texture_filter_symbol(invalid_filter)
+    @test !symbol_is_interned(invalid_filter)
+
+    invalid_mag_filter = "diff3d_invalid_mag_filter_$(time_ns())"
+    @test !symbol_is_interned(invalid_mag_filter)
+    @test_throws ArgumentError Diff3D._texture_mag_filter_symbol(invalid_mag_filter)
+    @test !symbol_is_interned(invalid_mag_filter)
+
+    invalid_min_filter = "diff3d_invalid_min_filter_$(time_ns())"
+    @test !symbol_is_interned(invalid_min_filter)
+    @test_throws ArgumentError Diff3D._texture_min_filter_symbol(invalid_min_filter)
+    @test !symbol_is_interned(invalid_min_filter)
+
+    invalid_colorspace = "diff3d_invalid_colorspace_$(time_ns())"
+    @test !symbol_is_interned(invalid_colorspace)
+    @test_throws ArgumentError Diff3D._texture_colorspace_symbol(invalid_colorspace)
+    @test !symbol_is_interned(invalid_colorspace)
+
+    invalid_depth_packing = "diff3d_invalid_depth_packing_$(time_ns())"
+    @test !symbol_is_interned(invalid_depth_packing)
+    @test_throws ArgumentError Diff3D._depth_packing_symbol(invalid_depth_packing)
+    @test !symbol_is_interned(invalid_depth_packing)
+
+    invalid_ad = "diff3d_invalid_inverse_ad_$(time_ns())"
+    @test !symbol_is_interned(invalid_ad)
+    @test_throws ArgumentError Diff3D._inverse_ad_mode(invalid_ad)
+    @test !symbol_is_interned(invalid_ad)
+
+    invalid_interpolation = "diff3d_invalid_gltf_interpolation_$(time_ns())"
+    @test !symbol_is_interned(invalid_interpolation)
+    @test_throws ArgumentError Diff3D._gltf_animation_interpolation(
+        invalid_interpolation)
+    @test !symbol_is_interned(invalid_interpolation)
+
+    invalid_animation = Dict{String,Any}(
+        "nodes" => [Dict{String,Any}()],
+        "animations" => [Dict{String,Any}(
+            "samplers" => [Dict{String,Any}(
+                "input" => 0,
+                "output" => 0,
+                "interpolation" => invalid_interpolation,
+            )],
+            "channels" => [Dict{String,Any}(
+                "sampler" => 0,
+                "target" => Dict{String,Any}(
+                    "node" => 0,
+                    "path" => "rotation",
+                ),
+            )],
+        )],
+    )
+    node_objects = Dict{Int,AbstractObject3D}(0 => Object3D())
+    @test_throws ArgumentError Diff3D._gltf_animation_clips(
+        invalid_animation, Vector{Vector{UInt8}}(), node_objects)
+    @test !symbol_is_interned(invalid_interpolation)
+
+    @test Diff3D._texture_wrap_symbol("repeat") === :repeat
+    @test Diff3D._texture_filter_symbol("linear") === :bilinear
+    @test Diff3D._texture_mag_filter_symbol("bilinear") === :linear
+    @test Diff3D._texture_min_filter_symbol("linear_mipmap_linear") ===
+          :linear_mipmap_linear
+    @test Diff3D._texture_colorspace_symbol("srgb") === :srgb
+    @test Diff3D._depth_packing_symbol("rgba") === :rgba
+    @test Diff3D._inverse_ad_mode("reverse") === :reverse
+    @test Diff3D._gltf_animation_interpolation("CUBICSPLINE") === :cubicspline
+    @test_opt_alloc 0 Diff3D._texture_wrap_symbol("repeat")
+    @test_opt_alloc 0 Diff3D._inverse_ad_mode("forward")
+end

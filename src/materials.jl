@@ -848,16 +848,19 @@ MeshMatcapMaterial(args::Vararg{Any,13}) =
 # packed modes encode depth into color channels for depth-texture style output.
 
 function _depth_packing_symbol(depth_packing)
-    s = if depth_packing isa Symbol
-        depth_packing
-    elseif depth_packing isa AbstractString
-        Symbol(depth_packing)
-    else
-        throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
-    end
-    (s === :basic || s === :rgba || s === :rgb || s === :rg) ||
-        throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
-    return s
+    (depth_packing === :basic ||
+     (depth_packing isa AbstractString && depth_packing == "basic")) &&
+        return :basic
+    (depth_packing === :rgba ||
+     (depth_packing isa AbstractString && depth_packing == "rgba")) &&
+        return :rgba
+    (depth_packing === :rgb ||
+     (depth_packing isa AbstractString && depth_packing == "rgb")) &&
+        return :rgb
+    (depth_packing === :rg ||
+     (depth_packing isa AbstractString && depth_packing == "rg")) &&
+        return :rg
+    throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
 end
 
 struct MeshDepthMaterial <: AbstractMaterial

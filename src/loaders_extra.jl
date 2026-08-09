@@ -10284,6 +10284,20 @@ function _gltf_cubic_quat_values(data::Vector{Float64}, ncomp::Int, key_count::I
     return ins, vals, outs
 end
 
+function _gltf_animation_interpolation(value)
+    raw = try
+        String(value)
+    catch
+        throw(ArgumentError(
+            "glTF animation interpolation must be LINEAR, STEP, or CUBICSPLINE"))
+    end
+    normalized = lowercase(raw)
+    normalized == "linear" && return :linear
+    normalized == "step" && return :step
+    normalized == "cubicspline" && return :cubicspline
+    throw(ArgumentError("unsupported glTF animation interpolation: $raw"))
+end
+
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
@@ -10303,7 +10317,8 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             sampler_idx = _gltf_checked_zero_based_index(
                 ch["sampler"], length(samplers), "animation sampler")
             sampler = samplers[sampler_idx + 1]
-            interpolation = Symbol(lowercase(String(get(sampler, "interpolation", "LINEAR"))))
+            interpolation = _gltf_animation_interpolation(
+                get(sampler, "interpolation", "LINEAR"))
             input_accessor = _gltf_checked_accessor_index(gltf, sampler["input"],
                                                           "animation input")
             times, tncomp, tcount = _gltf_accessor(gltf, buffers, input_accessor)
