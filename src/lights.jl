@@ -365,6 +365,8 @@ set_parent!(o::AmbientLight, p) = (o.parent = p)
 
 function _validated_shadow_bias(v)
     v === nothing && return nothing
+    v isa Real && !(v isa Bool) ||
+        throw(ArgumentError("shadow_bias must be finite"))
     b = Float64(v)
     isfinite(b) || throw(ArgumentError("shadow_bias must be finite"))
     return b
@@ -372,10 +374,17 @@ end
 
 function _validated_shadow_pcf_radius(v)
     v === nothing && return nothing
-    v isa Integer || throw(ArgumentError("shadow_pcf_radius must be an integer or nothing"))
-    r = Int(v)
-    r >= 0 || throw(ArgumentError("shadow_pcf_radius must be >= 0, got $r"))
-    return r
+    v isa Integer && !(v isa Bool) ||
+        throw(ArgumentError("shadow_pcf_radius must be an integer or nothing"))
+    v >= 0 || throw(ArgumentError("shadow_pcf_radius must be >= 0, got $v"))
+    v <= typemax(Int) ||
+        throw(ArgumentError("shadow_pcf_radius must fit in Int"))
+    return Int(v)
+end
+
+@inline function _validated_light_cast_shadow(value)
+    value isa Bool || throw(ArgumentError("light cast_shadow must be Bool"))
+    return value
 end
 
 _light_shadow_bias(light, fallback::Real=3e-3) =
@@ -408,7 +417,8 @@ end
 DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
                  color, intensity, target, cast_shadow) =
     DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
-                     color, intensity, target, cast_shadow, nothing, nothing)
+                     color, intensity, target,
+                     _validated_light_cast_shadow(cast_shadow), nothing, nothing)
 
 function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
@@ -417,7 +427,8 @@ function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
     DirectionalLight(position, Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
                      _validated_light_color(color, :color),
-                     _validated_light_intensity(intensity), Vec3(), cast_shadow,
+                     _validated_light_intensity(intensity), Vec3(),
+                     _validated_light_cast_shadow(cast_shadow),
                      _validated_shadow_bias(shadow_bias),
                      _validated_shadow_pcf_radius(shadow_pcf_radius))
 end
@@ -454,8 +465,8 @@ end
 PointLight(position, rotation, scale, parent, children, visible, name, id,
            color, intensity, distance, decay, cast_shadow, ies_profile) =
     PointLight(position, rotation, scale, parent, children, visible, name, id,
-               color, intensity, distance, decay, cast_shadow, nothing, nothing,
-               ies_profile)
+               color, intensity, distance, decay,
+               _validated_light_cast_shadow(cast_shadow), nothing, nothing, ies_profile)
 
 function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                     distance=0.0, decay=2.0, position=Vec3(),
@@ -466,7 +477,8 @@ function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                _validated_light_color(color, :color),
                _validated_light_intensity(intensity),
                _validated_light_finite(distance, :distance),
-               _validated_light_finite(decay, :decay), cast_shadow,
+               _validated_light_finite(decay, :decay),
+               _validated_light_cast_shadow(cast_shadow),
                _validated_shadow_bias(shadow_bias),
                _validated_shadow_pcf_radius(shadow_pcf_radius),
                _validated_light_ies_profile(ies_profile))
@@ -509,7 +521,7 @@ SpotLight(position, rotation, scale, parent, children, visible, name, id,
           ies_profile) =
     SpotLight(position, rotation, scale, parent, children, visible, name, id,
               color, intensity, distance, angle, penumbra, decay, target,
-              cast_shadow, nothing, nothing, ies_profile)
+              _validated_light_cast_shadow(cast_shadow), nothing, nothing, ies_profile)
 
 function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
@@ -524,7 +536,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
               _validated_light_finite(angle, :angle),
               _validated_light_finite(penumbra, :penumbra),
               _validated_light_finite(decay, :decay),
-              target, cast_shadow, _validated_shadow_bias(shadow_bias),
+              target, _validated_light_cast_shadow(cast_shadow),
+              _validated_shadow_bias(shadow_bias),
               _validated_shadow_pcf_radius(shadow_pcf_radius),
               _validated_light_ies_profile(ies_profile))
 end
@@ -699,6 +712,21 @@ end
     return nothing
 end
 
+@inline _validate_light_shadow_parameters(::AbstractLight) = nothing
+
+@inline function _validate_light_shadow_parameters(
+        light::Union{DirectionalLight, PointLight, SpotLight})
+    _validated_shadow_bias(light.shadow_bias)
+    _validated_shadow_pcf_radius(light.shadow_pcf_radius)
+    return nothing
+end
+
+@inline function _validate_light_object(light::AbstractLight)
+    _validate_light_parameters(light)
+    _validate_light_shadow_parameters(light)
+    return nothing
+end
+
 @_compute_world_matrix_method(AmbientLight,
     Scene, Group, Object3D, Mesh, LineObject, PointsObject,
     PerspectiveCamera, OrthographicCamera,
@@ -757,7 +785,7 @@ end
 function _fill_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D, i::Int)
     is_visible(obj) || return i
     if obj isa AbstractLight
-        _validate_light_parameters(obj)
+        _validate_light_object(obj)
         lights[i] = obj
         i += 1
     end
@@ -770,7 +798,7 @@ end
 function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
     is_visible(obj) || return nothing
     if obj isa AbstractLight
-        _validate_light_parameters(obj)
+        _validate_light_object(obj)
         push!(lights, obj)
     end
     for child in get_children(obj)

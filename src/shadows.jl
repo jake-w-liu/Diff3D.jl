@@ -295,7 +295,7 @@ function _compute_shadow_map_from_drawables(meshes, instanced, light,
                                             resolution::Int=512, bias=nothing,
                                             pcf_radius=nothing,
                                             clipping_planes=_NO_PLANES)
-    _validate_light_parameters(light)
+    _validate_light_object(light)
     res = _validated_shadow_resolution(resolution)
     size(depth) == (res, res) ||
         throw(ArgumentError("shadow depth scratch must match resolution"))
@@ -347,7 +347,7 @@ end
 
 function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                             clipping_planes=_NO_PLANES)
-    _validate_light_parameters(light)
+    _validate_light_object(light)
     res = _validated_shadow_resolution(resolution)
     meshes = collect_meshes(scene)
     _append_skinned_render_meshes!(meshes, scene)

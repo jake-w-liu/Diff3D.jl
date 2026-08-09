@@ -25762,3 +25762,104 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || point_validation_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_validation_probe() == 0
 end
+
+@testset "fresh audit round 189 fixes" begin
+    shadow_light_types = (DirectionalLight, PointLight, SpotLight)
+    bias_message = "shadow_bias must be finite"
+    pcf_type_message =
+        "shadow_pcf_radius must be an integer or nothing"
+    cast_message = "light cast_shadow must be Bool"
+
+    for light_type in shadow_light_types
+        for invalid in (NaN, Inf, -Inf, true, "1", missing, 1.0 + 0.0im)
+            @test_throws bias_message light_type(shadow_bias=invalid)
+        end
+        for invalid in (true, 1.5, "1", missing)
+            @test_throws pcf_type_message light_type(shadow_pcf_radius=invalid)
+        end
+        @test_throws "shadow_pcf_radius must be >= 0, got -1" light_type(
+            shadow_pcf_radius=-1)
+        @test_throws "shadow_pcf_radius must fit in Int" light_type(
+            shadow_pcf_radius=big(typemax(Int)) + 1)
+        for invalid in (0, 1, nothing, "true", missing)
+            @test_throws cast_message light_type(cast_shadow=invalid)
+        end
+
+        @test light_type(shadow_bias=nothing).shadow_bias === nothing
+        @test light_type(shadow_pcf_radius=nothing).shadow_pcf_radius === nothing
+        @test light_type(shadow_bias=-2.0).shadow_bias == -2.0
+        @test light_type(shadow_pcf_radius=2).shadow_pcf_radius == 2
+        @test light_type(cast_shadow=true).cast_shadow
+        @test !light_type(cast_shadow=false).cast_shadow
+    end
+
+    @test_throws cast_message DirectionalLight(
+        Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+        AbstractObject3D[], true, "invalid legacy directional", 100_001,
+        Color3(1.0, 1.0, 1.0), 1.0, Vec3(), 1)
+
+    mutable_shadow_cases = (
+        (DirectionalLight(), :shadow_bias, NaN, bias_message),
+        (DirectionalLight(), :shadow_pcf_radius, -1,
+         "shadow_pcf_radius must be >= 0, got -1"),
+        (PointLight(), :shadow_bias, NaN, bias_message),
+        (PointLight(), :shadow_pcf_radius, -1,
+         "shadow_pcf_radius must be >= 0, got -1"),
+        (SpotLight(), :shadow_bias, NaN, bias_message),
+        (SpotLight(), :shadow_pcf_radius, -1,
+         "shadow_pcf_radius must be >= 0, got -1"),
+    )
+    scene_for_web = Scene()
+    for (light, field, value, message) in mutable_shadow_cases
+        setproperty!(light, field, value)
+        @test Diff3D._validate_light_parameters(light) === nothing
+        @test_throws message Diff3D._validate_light_shadow_parameters(light)
+        @test_throws message Diff3D._validate_light_object(light)
+
+        light_scene = Scene()
+        add!(light_scene, light)
+        @test_throws message collect_lights(light_scene)
+        @test_throws message compute_shadow_map(Scene(), light; resolution=8)
+
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_light_json(
+            web_io, light, scene_for_web)
+        @test position(web_io) == 0
+    end
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        background = Color3(0.2, 0.3, 0.4)
+        render_scene = Scene(background=background)
+        invalid_point = PointLight()
+        invalid_point.shadow_pcf_radius = -1
+        add!(render_scene, invalid_point)
+        target = RenderTarget(8, 8)
+        fill!(target.color, 0.75)
+        @test_throws "shadow_pcf_radius must be >= 0, got -1" render!(
+            target, render_scene, PerspectiveCamera())
+        @test all(target.color[:, :, 1] .== background.r)
+        @test all(target.color[:, :, 2] .== background.g)
+        @test all(target.color[:, :, 3] .== background.b)
+    end
+
+    valid_directional = DirectionalLight(
+        cast_shadow=true, shadow_bias=-0.01, shadow_pcf_radius=2)
+    valid_point = PointLight(
+        cast_shadow=true, shadow_bias=-0.02, shadow_pcf_radius=3)
+    valid_spot = SpotLight(
+        cast_shadow=true, shadow_bias=-0.03, shadow_pcf_radius=4)
+    for light in (valid_directional, valid_point, valid_spot)
+        @test Diff3D._validate_light_shadow_parameters(light) === nothing
+        @test Diff3D._validate_light_object(light) === nothing
+        @test Diff3D._web_light_json(light, scene_for_web) isa String
+    end
+
+    shadow_probe = () ->
+        (@allocated Diff3D._validate_light_shadow_parameters(valid_spot))
+    object_probe = () ->
+        (@allocated Diff3D._validate_light_object(valid_spot))
+    shadow_probe()
+    object_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || shadow_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || object_probe() == 0
+end
