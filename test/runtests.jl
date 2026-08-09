@@ -24949,3 +24949,103 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || standard_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || physical_probe() == 0
 end
+
+@testset "fresh audit round 183 fixes" begin
+    shininess_message =
+        "material shininess must be finite and between 0 and 19998"
+    for value in (NaN, Inf, -Inf, -0.01, 19998.01, true)
+        @test_throws shininess_message MeshPhongMaterial(shininess=value)
+    end
+    glossiness_message =
+        "material glossiness must be finite and between 0 and 1"
+    for value in (NaN, Inf, -Inf, -0.01, 1.01, true)
+        @test_throws glossiness_message MeshPhongMaterial(glossiness=value)
+    end
+
+    for shininess in (0.0, 0.0001, 4.0, 64.0,
+                      Diff3D._PHONG_SHININESS_MAX)
+        material = MeshPhongMaterial(shininess=shininess)
+        @test material.shininess == shininess
+        @test material.glossiness ≈
+              Diff3D._phong_glossiness_from_shininess(shininess)
+        @test Diff3D._validate_material_parameters(material) === nothing
+        @test Diff3D._web_material_shininess(material) ==
+              max(shininess, Diff3D._PHONG_SHININESS_FLOOR)
+    end
+    for glossiness in (0.0, 0.25, 0.75, 1.0)
+        material = MeshPhongMaterial(glossiness=glossiness)
+        @test material.glossiness == glossiness
+        @test material.shininess ≈
+              Diff3D._phong_shininess_from_glossiness(glossiness)
+        @test Diff3D._validate_material_parameters(material) === nothing
+    end
+
+    consistent_glossiness = 0.4
+    consistent_shininess =
+        Diff3D._phong_shininess_from_glossiness(consistent_glossiness)
+    consistent = MeshPhongMaterial(shininess=consistent_shininess,
+                                   glossiness=consistent_glossiness)
+    @test consistent.shininess == consistent_shininess
+    @test consistent.glossiness == consistent_glossiness
+    mismatch_message =
+        "material shininess and glossiness must describe the same surface"
+    @test_throws mismatch_message MeshPhongMaterial(shininess=4.0,
+                                                    glossiness=0.9)
+
+    unit_map = Texture(ones(Float64, 1, 1, 4); filter=:nearest,
+                       colorspace=:linear)
+    mapped_source = MeshPhongMaterial(
+        shininess=4.0, glossiness=Diff3D._phong_glossiness_from_shininess(4.0),
+        glossiness_map=unit_map)
+    mapped_result = Diff3D._apply_phong_maps(
+        mapped_source, nothing, unit_map, 0.5, 0.5)
+    _, mapped_terms_shininess = Diff3D._phong_mapped_terms(
+        mapped_source, nothing, unit_map, 0.5, 0.5, 0.5, 0.5)
+    @test mapped_result.shininess ≈ mapped_source.shininess atol=1e-12
+    @test mapped_terms_shininess ≈ mapped_source.shininess atol=1e-12
+
+    function bypass_phong_parameter_validation(field::Symbol, value)
+        material = MeshPhongMaterial()
+        T = typeof(material)
+        return T((name === field ? value : getfield(material, name)
+                  for name in fieldnames(T))...)
+    end
+
+    invalid_direct_cases = (
+        (:shininess, NaN, shininess_message),
+        (:shininess, Diff3D._PHONG_SHININESS_MAX + 1.0, shininess_message),
+        (:glossiness, NaN, glossiness_message),
+        (:glossiness, 0.9, mismatch_message),
+    )
+    normal = Vec3(0.0, 0.0, 1.0)
+    lights = AbstractLight[AmbientLight(intensity=1.0)]
+    geometry = PlaneGeometry()
+    for (field, value, message) in invalid_direct_cases
+        material = bypass_phong_parameter_validation(field, value)
+        @test_throws message Diff3D._validate_material_parameters(material)
+        @test_throws message shade_face(normal, normal, Vec3(), material, lights)
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_drawable_json(
+            web_io, Mesh(geometry, material), Mat4())
+        @test position(web_io) == 0
+    end
+
+    direct_mismatch = bypass_phong_parameter_validation(:glossiness, 0.9)
+    sentinel = fill(Color3(0.25, 0.5, 0.75), geometry.n_faces)
+    @test_throws mismatch_message Diff3D.shade_mesh_faces!(
+        sentinel, geometry, Mat4(), direct_mismatch, lights,
+        Vec3(0.0, 0.0, 3.0))
+    @test all(==(Color3(0.25, 0.5, 0.75)), sentinel)
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        scene = Scene()
+        add!(scene, Mesh(geometry, direct_mismatch))
+        camera = PerspectiveCamera()
+        camera.position = Vec3(0.0, 0.0, 3.0)
+        @test_throws mismatch_message render!(RenderTarget(16, 16), scene, camera)
+    end
+
+    validation_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(consistent))
+    validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end

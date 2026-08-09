@@ -260,18 +260,74 @@ end
 # Blinn-Phong shading
 
 const _PHONG_GLOSSINESS_EPS = 1e-4
+# The browser shader uses the same epsilon in the inverse glossiness mapping,
+# so larger exponents cannot be represented consistently across CPU, mapped,
+# and WebGL paths.
+const _PHONG_SHININESS_MAX = 2.0 / _PHONG_GLOSSINESS_EPS - 2.0
+const _PHONG_SHININESS_FLOOR = 1e-4
 
 @inline function _phong_shininess_from_glossiness(glossiness)
     g = clamp(Float64(glossiness), 0.0, 1.0)
     rough = 1.0 - g
     # glTF spec-gloss defines microfacet alpha as (1 - glossiness)^2; the
     # Blinn exponent relation alpha ~= sqrt(2 / (n + 2)) gives n below.
-    return max(2.0 / max(rough^4, _PHONG_GLOSSINESS_EPS) - 2.0, 0.0001)
+    return max(2.0 / max(rough^4, _PHONG_GLOSSINESS_EPS) - 2.0,
+               _PHONG_SHININESS_FLOOR)
 end
 
 @inline function _phong_glossiness_from_shininess(shininess)
-    n = max(Float64(shininess), 0.0001)
+    n = max(Float64(shininess), _PHONG_SHININESS_FLOOR)
     return clamp(1.0 - (2.0 / (n + 2.0))^0.25, 0.0, 1.0)
+end
+
+@noinline function _throw_material_shininess()
+    throw(ArgumentError(
+        "material shininess must be finite and between 0 and 19998"))
+end
+
+@inline function _validated_material_shininess(value)
+    value isa Bool && _throw_material_shininess()
+    result = Float64(value)
+    isfinite(result) && 0.0 <= result <= _PHONG_SHININESS_MAX ||
+        _throw_material_shininess()
+    return result
+end
+
+@noinline function _throw_material_phong_parameter_mismatch()
+    throw(ArgumentError(
+        "material shininess and glossiness must describe the same surface"))
+end
+
+@inline function _validate_material_phong_parameter_pair(shininess::Float64,
+                                                          glossiness::Float64)
+    expected = _phong_shininess_from_glossiness(glossiness)
+    represented = max(shininess, _PHONG_SHININESS_FLOOR)
+    tolerance = 64 * eps(Float64) * max(1.0, abs(expected))
+    abs(represented - expected) <= tolerance ||
+        _throw_material_phong_parameter_mismatch()
+    return nothing
+end
+
+function _resolve_material_phong_parameters(shininess, glossiness)
+    if shininess === nothing
+        if glossiness === nothing
+            return 30.0, _phong_glossiness_from_shininess(30.0)
+        end
+        resolved_glossiness =
+            _validated_material_unit_interval(glossiness, :glossiness)
+        return _phong_shininess_from_glossiness(resolved_glossiness),
+               resolved_glossiness
+    end
+    resolved_shininess = _validated_material_shininess(shininess)
+    if glossiness === nothing
+        return resolved_shininess,
+               _phong_glossiness_from_shininess(resolved_shininess)
+    end
+    resolved_glossiness =
+        _validated_material_unit_interval(glossiness, :glossiness)
+    _validate_material_phong_parameter_pair(resolved_shininess,
+                                            resolved_glossiness)
+    return resolved_shininess, resolved_glossiness
 end
 
 struct MeshPhongMaterial <: AbstractMaterial
@@ -317,13 +373,8 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             ao_map_intensity=1.0, light_map_intensity=1.0,
                             clipping_planes=Plane{Float64}[],
                             depth_test=true, depth_write=true)
-    resolved_shininess = shininess === nothing ?
-                         (glossiness === nothing ? 30.0 :
-                          _phong_shininess_from_glossiness(glossiness)) :
-                         Float64(shininess)
-    resolved_glossiness = glossiness === nothing ?
-                          _phong_glossiness_from_shininess(resolved_shininess) :
-                          Float64(glossiness)
+    resolved_shininess, resolved_glossiness =
+        _resolve_material_phong_parameters(shininess, glossiness)
     MeshPhongMaterial(color, specular, emissive, resolved_shininess,
                       resolved_glossiness, _validated_material_opacity(opacity),
                       transparent, wireframe,
@@ -446,14 +497,27 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3,
                            alpha_test, emissive_intensity, ao_map_intensity,
                            light_map_intensity, depth_test::Bool,
                            depth_write::Bool)
-    MeshPhongMaterial(color, specular, emissive, shininess, glossiness,
+    resolved_shininess, resolved_glossiness =
+        _resolve_material_phong_parameters(shininess, glossiness)
+    MeshPhongMaterial(color, specular, emissive, resolved_shininess,
+                      resolved_glossiness,
                       _validated_material_opacity(opacity),
                       transparent, wireframe, _validated_material_side(side), map,
-                      specular_map, glossiness_map, normal_map, normal_scale, alpha_map,
+                      specular_map, glossiness_map, normal_map,
+                      Float64(normal_scale), alpha_map,
                       ao_map, emissive_map, light_map, vertex_colors,
                       _validated_material_alpha_test(alpha_test),
-                      Plane{Float64}[], emissive_intensity, ao_map_intensity,
-                      light_map_intensity, depth_test, depth_write)
+                      Plane{Float64}[], Float64(emissive_intensity),
+                      Float64(ao_map_intensity), Float64(light_map_intensity),
+                      depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::MeshPhongMaterial)
+    shininess = _validated_material_shininess(material.shininess)
+    glossiness =
+        _validated_material_unit_interval(material.glossiness, :glossiness)
+    _validate_material_phong_parameter_pair(shininess, glossiness)
+    return nothing
 end
 
 # ========================== MeshStandardMaterial ==========================

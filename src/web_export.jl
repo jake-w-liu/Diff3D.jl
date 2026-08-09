@@ -728,9 +728,12 @@ _web_material_dispersion(mat) =
     hasproperty(mat, :dispersion) ?
     _validated_material_nonnegative(getproperty(mat, :dispersion), :dispersion) : 0.0
 _web_material_shininess(mat) =
-    hasproperty(mat, :shininess) ? max(Float64(getproperty(mat, :shininess)), 0.0001) : 32.0
+    hasproperty(mat, :shininess) ?
+    max(_validated_material_shininess(getproperty(mat, :shininess)),
+        _PHONG_SHININESS_FLOOR) : 32.0
 _web_material_glossiness(mat) =
-    hasproperty(mat, :glossiness) ? clamp(Float64(getproperty(mat, :glossiness)), 0.0, 1.0) :
+    hasproperty(mat, :glossiness) ?
+    _validated_material_unit_interval(getproperty(mat, :glossiness), :glossiness) :
     _phong_glossiness_from_shininess(_web_material_shininess(mat))
 
 function _web_texture_average_color(tex::Texture)
