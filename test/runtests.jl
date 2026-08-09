@@ -23731,3 +23731,77 @@ end
     sample_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sample_probe() == 0
 end
+
+@testset "fresh audit round 170 fixes" begin
+    geometry = BufferGeometry(
+        [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0,
+         0.0, 0.0, 1.0],
+        Float64[], Int[], 2, 0)
+    source_tangents = Float32[
+        1.0, 0.0, 0.0, -1.0, 7.0,
+        0.0, 2.0, 0.0, 1.0, 9.0]
+    set_attribute!(geometry, :tangent, source_tangents, 5)
+    set_attribute!(geometry, :color, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3)
+
+    matrix = mat4_rotation_z(pi / 2) * mat4_scaling(2.0, 3.0, 4.0)
+    transformed = transform_geometry(geometry, matrix)
+    tangents = get_attribute(transformed, :tangent)
+    @test tangents.item_size == 5
+    @test tangents.data isa Vector{Float64}
+    @test tangents.data[1] ≈ 0.0 atol=1.0e-15
+    @test tangents.data[2] ≈ 1.0 atol=1.0e-15
+    @test tangents.data[3] == 0.0
+    @test tangents.data[4:5] == [-1.0, 7.0]
+    @test tangents.data[6] ≈ -1.0 atol=1.0e-15
+    @test tangents.data[7] ≈ 0.0 atol=1.0e-15
+    @test tangents.data[8] == 0.0
+    @test tangents.data[9:10] == [1.0, 9.0]
+    @test source_tangents == Float32[
+        1.0, 0.0, 0.0, -1.0, 7.0,
+        0.0, 2.0, 0.0, 1.0, 9.0]
+    @test get_attribute(transformed, :color).data !==
+          get_attribute(geometry, :color).data
+
+    get_attribute(transformed, :tangent).data[5] = 11.0
+    @test get_attribute(geometry, :tangent).data[5] == 7.0f0
+
+    malformed_positions = BufferGeometry(
+        Float64[], Float64[], Float64[], [1, 1, 1], 1, 1)
+    @test_throws "transform_geometry positions length must cover n_vertices" transform_geometry(
+        malformed_positions, Mat4())
+    malformed_indices = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], [1, 1, 2], 1, 1)
+    @test_throws "transform_geometry face indices must reference vertices" transform_geometry(
+        malformed_indices, Mat4())
+    partial_normals = BufferGeometry(
+        [0.0, 0.0, 0.0], [0.0], Float64[], Int[], 1, 0)
+    @test_throws "transform_geometry normals length must cover n_vertices" transform_geometry(
+        partial_normals, Mat4())
+
+    short_tangent = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    set_attribute!(short_tangent, :tangent, [1.0, 0.0], 2)
+    @test_throws "transform_geometry tangent item_size must be at least 3" transform_geometry(
+        short_tangent, Mat4())
+    incomplete_tangent = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    incomplete_tangent.attributes[:tangent] =
+        BufferAttribute([1.0, 0.0, 0.0], 4)
+    @test_throws "transform_geometry tangent data must cover n_vertices" transform_geometry(
+        incomplete_tangent, Mat4())
+    nonfinite_tangent = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    set_attribute!(nonfinite_tangent, :tangent, [NaN, 0.0, 0.0, 1.0], 4)
+    @test_throws "transform_geometry tangent data must be finite" transform_geometry(
+        nonfinite_tangent, Mat4())
+
+    validation_probe = () ->
+        (@allocated Diff3D._validate_transform_geometry(geometry))
+    transform_probe = () -> (@allocated transform_geometry(geometry, matrix))
+    validation_probe()
+    transform_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || transform_probe() <= 8_192
+end

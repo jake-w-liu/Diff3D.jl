@@ -351,7 +351,49 @@ function csg_evaluate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
     throw(ArgumentError("unsupported CSG operation: $operation"))
 end
 
+function _validate_transform_geometry(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "transform_geometry")
+    required_normal_values = 3 * geo.n_vertices
+    (isempty(geo.normals) || length(geo.normals) >= required_normal_values) ||
+        throw(ArgumentError(
+            "transform_geometry normals length must cover n_vertices"))
+    has_attribute(geo, :tangent) || return nothing
+    tangent = get_attribute(geo, :tangent)
+    tangent.item_size >= 3 ||
+        throw(ArgumentError(
+            "transform_geometry tangent item_size must be at least 3"))
+    geo.n_vertices <= typemax(Int) ÷ tangent.item_size ||
+        throw(ArgumentError("transform_geometry tangent buffer is too large"))
+    length(tangent.data) >= geo.n_vertices * tangent.item_size ||
+        throw(ArgumentError(
+            "transform_geometry tangent data must cover n_vertices"))
+    return nothing
+end
+
+function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
+                                       geo::BufferGeometry, matrix::Mat4)
+    has_attribute(geo, :tangent) || return attributes
+    source = get_attribute(geo, :tangent)
+    item_size = source.item_size
+    data = Vector{Float64}(undef, length(source.data))
+    @inbounds for i in eachindex(source.data)
+        data[i] = _geometry_finite_float(
+            source.data[i], "transform_geometry tangent data")
+    end
+    @inbounds for vi in 1:geo.n_vertices
+        base = (vi - 1) * item_size
+        tangent = Vec3(data[base + 1], data[base + 2], data[base + 3])
+        transformed = normalize(mat4_transform_direction(matrix, tangent))
+        data[base + 1] = transformed.x
+        data[base + 2] = transformed.y
+        data[base + 3] = transformed.z
+    end
+    attributes[:tangent] = BufferAttribute(data, item_size)
+    return attributes
+end
+
 function transform_geometry(geo::BufferGeometry, matrix::Mat4)
+    _validate_transform_geometry(geo)
     normal_matrix = mat4_transpose(mat4_inverse(matrix))
     positions = Vector{Float64}(undef, 3 * geo.n_vertices)
     normals = Vector{Float64}(undef, 3 * geo.n_vertices)
@@ -374,6 +416,8 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     end
     # deepcopy the attributes: copy(Dict) shares the BufferAttribute values' data
     # arrays, so the transformed geometry would alias the source's custom attributes.
+    attributes = deepcopy(geo.attributes)
+    _transform_geometry_tangents!(attributes, geo, matrix)
     return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces,
-                          deepcopy(geo.attributes), copy(geo.groups), geo.draw_range)
+                          attributes, copy(geo.groups), geo.draw_range)
 end
