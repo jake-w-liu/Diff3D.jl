@@ -1388,6 +1388,10 @@ end
 
 function triangle_contains_point(tri::Triangle, p::Vec3; atol=1e-9)
     bc = triangle_barycentric(tri, p)
+    # `triangle_barycentric` uses the zero vector as its finite sentinel for a
+    # degenerate triangle.  A zero-area triangle has no interior,
+    # so do not let that sentinel satisfy the component-wise containment test.
+    iszero(bc.x) && iszero(bc.y) && iszero(bc.z) && return false
     bc.x >= -atol && bc.y >= -atol && bc.z >= -atol
 end
 

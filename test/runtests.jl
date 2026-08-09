@@ -23163,3 +23163,30 @@ end
     end
 
 end
+
+@testset "fresh audit round 160 fixes" begin
+    repeated = Triangle(
+        Vec3(0.0, 0.0, 0.0),
+        Vec3(0.0, 0.0, 0.0),
+        Vec3(0.0, 0.0, 0.0),
+    )
+    collinear = Triangle(
+        Vec3(0.0, 0.0, 0.0),
+        Vec3(1.0, 0.0, 0.0),
+        Vec3(2.0, 0.0, 0.0),
+    )
+    @test !triangle_contains_point(
+        repeated, Vec3(100.0, 100.0, 100.0))
+    @test !triangle_contains_point(
+        collinear, Vec3(0.5, 0.0, 0.0))
+
+    ordinary = Triangle(
+        Vec3(0.0, 0.0, 0.0),
+        Vec3(1.0, 0.0, 0.0),
+        Vec3(0.0, 1.0, 0.0),
+    )
+    @test triangle_contains_point(
+        ordinary, Vec3(0.25, 0.25, 1.0))
+    @test_opt_alloc 0 triangle_contains_point(
+        repeated, Vec3(100.0, 100.0, 100.0))
+end
