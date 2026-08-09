@@ -354,7 +354,7 @@ function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u
         Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
     end
     glossiness = glossiness_map === nothing ? m.glossiness :
-                 m.glossiness * sample_texture_channel(glossiness_map, u, v, 4)
+                 m.glossiness * _sample_texture_unit_channel(glossiness_map, u, v, 4)
     return _phong_with_maps(m, specular, glossiness)
 end
 
@@ -366,7 +366,7 @@ function _apply_phong_maps(m::MeshPhongMaterial, specular_map, glossiness_map, u
         Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
     end
     glossiness = glossiness_map === nothing ? m.glossiness :
-                 m.glossiness * sample_texture_channel(glossiness_map, gu, gv, 4)
+                 m.glossiness * _sample_texture_unit_channel(glossiness_map, gu, gv, 4)
     return _phong_with_maps(m, specular, glossiness)
 end
 
@@ -379,7 +379,7 @@ function _phong_mapped_terms(m::MeshPhongMaterial, specular_map, glossiness_map,
         Color3(m.specular.r * s.r, m.specular.g * s.g, m.specular.b * s.b)
     end
     glossiness = glossiness_map === nothing ? m.glossiness :
-                 m.glossiness * sample_texture_channel(glossiness_map, gu, gv, 4)
+                 m.glossiness * _sample_texture_unit_channel(glossiness_map, gu, gv, 4)
     return specular, _phong_shininess_from_glossiness(glossiness)
 end
 function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
@@ -582,8 +582,10 @@ function _physical_pbr_map(m::MeshPhysicalMaterial)
 end
 
 function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, u, v)
-    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
-    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, u, v).b
+    roughness = roughness_map === nothing ? m.roughness :
+                m.roughness * _sample_texture_unit_channel(roughness_map, u, v, 2)
+    metalness = metalness_map === nothing ? m.metalness :
+                m.metalness * _sample_texture_unit_channel(metalness_map, u, v, 3)
     MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                          roughness=roughness, opacity=m.opacity, transparent=m.transparent,
                           side=m.side, map=m.map, normal_map=m.normal_map,
@@ -602,8 +604,10 @@ end
 function _apply_pbr_maps(m::MeshStandardMaterial, roughness_map, metalness_map, u, v, u2, v2)
     ru, rv = roughness_map === nothing ? (u, v) : _map_uv(roughness_map, u, v, u2, v2)
     mu, mv = metalness_map === nothing ? (u, v) : _map_uv(metalness_map, u, v, u2, v2)
-    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
-    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
+    roughness = roughness_map === nothing ? m.roughness :
+                m.roughness * _sample_texture_unit_channel(roughness_map, ru, rv, 2)
+    metalness = metalness_map === nothing ? m.metalness :
+                m.metalness * _sample_texture_unit_channel(metalness_map, mu, mv, 3)
     MeshStandardMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                          roughness=roughness, opacity=m.opacity, transparent=m.transparent,
                          side=m.side, map=m.map, normal_map=m.normal_map,
@@ -624,31 +628,33 @@ function _standard_mapped_terms(m::MeshStandardMaterial, roughness_map, metalnes
     ru, rv = roughness_map === nothing ? (u, v) : _map_uv(roughness_map, u, v, u2, v2)
     mu, mv = metalness_map === nothing ? (u, v) : _map_uv(metalness_map, u, v, u2, v2)
     roughness = roughness_map === nothing ? Float64(m.roughness) :
-                Float64(m.roughness * sample_texture(roughness_map, ru, rv).g)
+                m.roughness * _sample_texture_unit_channel(roughness_map, ru, rv, 2)
     metalness = metalness_map === nothing ? Float64(m.metalness) :
-                Float64(m.metalness * sample_texture(metalness_map, mu, mv).b)
+                m.metalness * _sample_texture_unit_channel(metalness_map, mu, mv, 3)
     return metalness, roughness
 end
 function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v)
-    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, u, v).g
-    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, u, v).b
-    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, u, v, 1)
-    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, u, v, 2)
-    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, u, v, 1)
-    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, u, v, 2)
+    roughness = roughness_map === nothing ? m.roughness :
+                m.roughness * _sample_texture_unit_channel(roughness_map, u, v, 2)
+    metalness = metalness_map === nothing ? m.metalness :
+                m.metalness * _sample_texture_unit_channel(metalness_map, u, v, 3)
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * _sample_texture_unit_channel(m.clearcoat_map, u, v, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * _sample_texture_unit_channel(m.clearcoat_roughness_map, u, v, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * _sample_texture_unit_channel(m.transmission_map, u, v, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * _sample_texture_unit_channel(m.thickness_map, u, v, 2)
     sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
         c = sample_texture_linear(m.sheen_color_map, u, v)
         Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
     end
-    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, u, v, 4)
-    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, u, v, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, u, v, 2)
-    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, u, v, 4)
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, u, v, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, u, v, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, u, v, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, u, v, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, u, v)
         Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
     end
-    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, u, v, 3)
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * _sample_texture_unit_channel(m.anisotropy_map, u, v, 3)
     MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                           roughness=roughness, clearcoat=clearcoat, clearcoat_roughness=clearcoat_roughness,
                           transmission=transmission, ior=m.ior, opacity=m.opacity,
@@ -704,25 +710,27 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
     siu, siv = uv_for(m.specular_intensity_map)
     spcu, spcv = uv_for(m.specular_color_map)
     au, av = uv_for(m.anisotropy_map)
-    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
-    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
-    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, cu, cv, 1)
-    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, cru, crv, 2)
-    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, tu, tv, 1)
-    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, thu, thv, 2)
+    roughness = roughness_map === nothing ? m.roughness :
+                m.roughness * _sample_texture_unit_channel(roughness_map, ru, rv, 2)
+    metalness = metalness_map === nothing ? m.metalness :
+                m.metalness * _sample_texture_unit_channel(metalness_map, mu, mv, 3)
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * _sample_texture_unit_channel(m.clearcoat_map, cu, cv, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * _sample_texture_unit_channel(m.clearcoat_roughness_map, cru, crv, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * _sample_texture_unit_channel(m.transmission_map, tu, tv, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * _sample_texture_unit_channel(m.thickness_map, thu, thv, 2)
     sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
         c = sample_texture_linear(m.sheen_color_map, scu, scv)
         Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
     end
-    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, sru, srv, 4)
-    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, iu, iv, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, itu, itv, 2)
-    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, siu, siv, 4)
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, itu, itv, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, spcu, spcv)
         Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
     end
-    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, au, av, 3)
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * _sample_texture_unit_channel(m.anisotropy_map, au, av, 3)
     MeshPhysicalMaterial(color=m.color, emissive=m.emissive, metalness=metalness,
                          roughness=roughness, clearcoat=clearcoat,
                          clearcoat_roughness=clearcoat_roughness,
@@ -802,25 +810,27 @@ function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
     siu, siv = uv_for(m.specular_intensity_map)
     spcu, spcv = uv_for(m.specular_color_map)
     au, av = uv_for(m.anisotropy_map)
-    roughness = roughness_map === nothing ? m.roughness : m.roughness * sample_texture(roughness_map, ru, rv).g
-    metalness = metalness_map === nothing ? m.metalness : m.metalness * sample_texture(metalness_map, mu, mv).b
-    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * sample_texture_channel(m.clearcoat_map, cu, cv, 1)
-    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * sample_texture_channel(m.clearcoat_roughness_map, cru, crv, 2)
-    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * sample_texture_channel(m.transmission_map, tu, tv, 1)
-    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * sample_texture_channel(m.thickness_map, thu, thv, 2)
+    roughness = roughness_map === nothing ? m.roughness :
+                m.roughness * _sample_texture_unit_channel(roughness_map, ru, rv, 2)
+    metalness = metalness_map === nothing ? m.metalness :
+                m.metalness * _sample_texture_unit_channel(metalness_map, mu, mv, 3)
+    clearcoat = m.clearcoat_map === nothing ? m.clearcoat : m.clearcoat * _sample_texture_unit_channel(m.clearcoat_map, cu, cv, 1)
+    clearcoat_roughness = m.clearcoat_roughness_map === nothing ? m.clearcoat_roughness : m.clearcoat_roughness * _sample_texture_unit_channel(m.clearcoat_roughness_map, cru, crv, 2)
+    transmission = m.transmission_map === nothing ? m.transmission : m.transmission * _sample_texture_unit_channel(m.transmission_map, tu, tv, 1)
+    thickness = m.thickness_map === nothing ? m.thickness : m.thickness * _sample_texture_unit_channel(m.thickness_map, thu, thv, 2)
     sheen_color = m.sheen_color_map === nothing ? m.sheen_color : begin
         c = sample_texture_linear(m.sheen_color_map, scu, scv)
         Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
     end
-    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * sample_texture_channel(m.sheen_roughness_map, sru, srv, 4)
-    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * sample_texture_channel(m.iridescence_map, iu, iv, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * sample_texture_channel(m.iridescence_thickness_map, itu, itv, 2)
-    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * sample_texture_channel(m.specular_intensity_map, siu, siv, 4)
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
+    iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
+    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, itu, itv, 2)
+    specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, spcu, spcv)
         Color3(m.specular_color.r * c.r, m.specular_color.g * c.g, m.specular_color.b * c.b)
     end
-    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * sample_texture_channel(m.anisotropy_map, au, av, 3)
+    anisotropy = m.anisotropy_map === nothing ? m.anisotropy : m.anisotropy * _sample_texture_unit_channel(m.anisotropy_map, au, av, 3)
     return _PhysicalMappedTerms(Float64(metalness), Float64(roughness),
                                 Float64(clearcoat), Float64(clearcoat_roughness),
                                 Float64(transmission), Float64(thickness),

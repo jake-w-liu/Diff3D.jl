@@ -24836,3 +24836,116 @@ end
     validation_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
 end
+
+@testset "fresh audit round 182 fixes" begin
+    scalar_texture(value; filter=:nearest) =
+        Texture(fill(Float64(value), 1, 1, 4); filter=filter,
+                colorspace=:linear, wrap_s=:clamp, wrap_t=:clamp)
+
+    scalar_cases = ((2.0, 1.0), (-1.0, 0.0), (NaN, 0.0),
+                    (Inf, 0.0), (-Inf, 0.0), (0.25, 0.25))
+    for (value, expected) in scalar_cases
+        texture = scalar_texture(value)
+        @test Diff3D._texture_unit_interval_value(value) == expected
+        @test Diff3D._sample_texture_unit_channel(texture, 0.5, 0.5, 2) == expected
+        @test Diff3D._web_texture_unit_byte(value) == round(Int, 255 * expected)
+    end
+
+    # Normalize each texel before filtering, matching normalized texture upload.
+    bilinear_data = zeros(Float64, 1, 2, 4)
+    bilinear_data[1, 1, :] .= -2.0
+    bilinear_data[1, 2, :] .= 0.5
+    bilinear_texture = Texture(bilinear_data; filter=:bilinear,
+                               colorspace=:linear, wrap_s=:clamp, wrap_t=:clamp)
+    @test Diff3D.sample_texture_channel(bilinear_texture, 0.5, 0.5, 2) == -0.75
+    @test Diff3D._sample_texture_unit_channel(
+        bilinear_texture, 0.5, 0.5, 2) == 0.25
+    raw_texture = scalar_texture(2.0)
+    @test Diff3D.sample_texture_channel(raw_texture, 0.5, 0.5, 2) == 2.0
+
+    for (value, factor) in scalar_cases
+        texture = scalar_texture(value)
+        standard = MeshStandardMaterial(
+            metalness=0.8, roughness=0.6,
+            metalness_map=texture, roughness_map=texture)
+        standard_direct = Diff3D._apply_pbr_maps(
+            standard, texture, texture, 0.5, 0.5)
+        standard_uv2 = Diff3D._apply_pbr_maps(
+            standard, texture, texture, 0.5, 0.5, 0.5, 0.5)
+        standard_terms = Diff3D._standard_mapped_terms(
+            standard, texture, texture, 0.5, 0.5, 0.5, 0.5)
+        for mapped in (standard_direct, standard_uv2)
+            @test mapped.metalness == 0.8 * factor
+            @test mapped.roughness == 0.6 * factor
+        end
+        @test standard_terms == (0.8 * factor, 0.6 * factor)
+
+        physical = MeshPhysicalMaterial(
+            metalness=0.8, roughness=0.6, clearcoat=0.7,
+            clearcoat_roughness=0.5, transmission=0.4, thickness=2.0,
+            sheen_roughness=0.3, iridescence=0.9,
+            iridescence_thickness=400.0, specular_intensity=0.75,
+            anisotropy=0.25, metalness_map=texture, roughness_map=texture,
+            clearcoat_map=texture, clearcoat_roughness_map=texture,
+            transmission_map=texture, thickness_map=texture,
+            sheen_roughness_map=texture, iridescence_map=texture,
+            iridescence_thickness_map=texture,
+            specular_intensity_map=texture, anisotropy_map=texture)
+        physical_direct = Diff3D._apply_pbr_maps(
+            physical, texture, texture, 0.5, 0.5)
+        physical_uv2 = Diff3D._apply_pbr_maps(
+            physical, texture, texture, 0.5, 0.5, 0.5, 0.5)
+        physical_terms = Diff3D._physical_mapped_terms(
+            physical, texture, texture, 0.5, 0.5, 0.5, 0.5)
+        expected_fields = (
+            metalness=0.8 * factor, roughness=0.6 * factor,
+            clearcoat=0.7 * factor, clearcoat_roughness=0.5 * factor,
+            transmission=0.4 * factor, thickness=2.0 * factor,
+            sheen_roughness=0.3 * factor, iridescence=0.9 * factor,
+            iridescence_thickness=400.0 * factor,
+            specular_intensity=0.75 * factor, anisotropy=0.25 * factor,
+        )
+        for (field, expected) in pairs(expected_fields)
+            @test getproperty(physical_direct, field) == expected
+            @test getproperty(physical_uv2, field) == expected
+            @test getproperty(physical_terms, field) == expected
+        end
+
+        phong = MeshPhongMaterial(glossiness=0.8, glossiness_map=texture)
+        phong_direct = Diff3D._apply_phong_maps(
+            phong, nothing, texture, 0.5, 0.5)
+        phong_uv2 = Diff3D._apply_phong_maps(
+            phong, nothing, texture, 0.5, 0.5, 0.5, 0.5)
+        _, phong_shininess = Diff3D._phong_mapped_terms(
+            phong, nothing, texture, 0.5, 0.5, 0.5, 0.5)
+        expected_glossiness = 0.8 * factor
+        @test phong_direct.glossiness == expected_glossiness
+        @test phong_uv2.glossiness == expected_glossiness
+        @test phong_shininess ==
+              Diff3D._phong_shininess_from_glossiness(expected_glossiness)
+    end
+
+    finite_map = scalar_texture(0.75)
+    allocation_standard = MeshStandardMaterial(
+        metalness=0.8, roughness=0.6,
+        metalness_map=finite_map, roughness_map=finite_map)
+    allocation_physical = MeshPhysicalMaterial(
+        metalness=0.8, roughness=0.6, metalness_map=finite_map,
+        roughness_map=finite_map, clearcoat=0.7, clearcoat_map=finite_map)
+    raw_probe = () -> (@allocated Diff3D.sample_texture_channel(
+        finite_map, 0.5, 0.5, 2))
+    unit_probe = () -> (@allocated Diff3D._sample_texture_unit_channel(
+        finite_map, 0.5, 0.5, 2))
+    standard_probe = () -> (@allocated Diff3D._standard_mapped_terms(
+        allocation_standard, finite_map, finite_map, 0.5, 0.5, 0.5, 0.5))
+    physical_probe = () -> (@allocated Diff3D._physical_mapped_terms(
+        allocation_physical, finite_map, finite_map, 0.5, 0.5, 0.5, 0.5))
+    raw_probe()
+    unit_probe()
+    standard_probe()
+    physical_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || raw_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || unit_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || standard_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || physical_probe() == 0
+end

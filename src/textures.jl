@@ -490,7 +490,18 @@ end
     return default
 end
 
-function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
+@inline _texture_channel_identity(value) = value
+
+# WebGL export uploads texture data as normalized bytes.  Scalar material maps
+# use the same per-texel normalization on the CPU so filtering cannot reintroduce
+# negative, over-range, or non-finite material factors.
+@inline function _texture_unit_interval_value(value)
+    result = Float64(value)
+    return isfinite(result) ? clamp(result, 0.0, 1.0) : 0.0
+end
+
+function _sample_texture_channel(tex::Texture, u, v, channel::Int, default,
+                                 transform::F) where {F}
     H, W, _ = _checked_texture_data_size(tex, "sample_texture_channel")
     _texture_wrap_symbol(tex.wrap_s)
     _texture_wrap_symbol(tex.wrap_t)
@@ -501,17 +512,29 @@ function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
     if filter === :nearest
-        return _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default)
+        return transform(
+            _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
-    c00 = _texel_channel(tex, x0,   y0,   channel, default)
-    c10 = _texel_channel(tex, x0+1, y0,   channel, default)
-    c01 = _texel_channel(tex, x0,   y0+1, channel, default)
-    c11 = _texel_channel(tex, x0+1, y0+1, channel, default)
+    c00 = transform(_texel_channel(tex, x0,   y0,   channel, default))
+    c10 = transform(_texel_channel(tex, x0+1, y0,   channel, default))
+    c01 = transform(_texel_channel(tex, x0,   y0+1, channel, default))
+    c11 = transform(_texel_channel(tex, x0+1, y0+1, channel, default))
     top = _stable_lerp(c00, c10, tx)
     bottom = _stable_lerp(c01, c11, tx)
     return _stable_lerp(top, bottom, ty)
+end
+
+function sample_texture_channel(tex::Texture, u, v, channel::Int; default=1.0)
+    return _sample_texture_channel(tex, u, v, channel, default,
+                                   _texture_channel_identity)
+end
+
+@inline function _sample_texture_unit_channel(tex::Texture, u, v, channel::Int;
+                                              default=1.0)
+    return _sample_texture_channel(tex, u, v, channel, default,
+                                   _texture_unit_interval_value)
 end
 
 """

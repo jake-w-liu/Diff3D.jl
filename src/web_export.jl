@@ -952,7 +952,7 @@ _web_material_point_size_attenuation(mat) =
     hasproperty(mat, :size_attenuation) ? Bool(getproperty(mat, :size_attenuation)) : true
 
 @inline _web_texture_unit_byte(v) =
-    round(Int, 255 * (isfinite(v) ? clamp(v, 0.0, 1.0) : 0.0))
+    round(Int, 255 * _texture_unit_interval_value(v))
 
 @inline function _web_write_byte(io::IO, b::Int)
     if b >= 100
