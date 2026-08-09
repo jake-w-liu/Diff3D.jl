@@ -24342,3 +24342,59 @@ end
     validation_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
 end
+
+@testset "fresh audit round 176 fixes" begin
+    invalid_side = :inside_out
+    constructors = (
+        () -> MeshBasicMaterial(side=invalid_side),
+        () -> MeshLambertMaterial(side=invalid_side),
+        () -> MeshPhongMaterial(side=invalid_side),
+        () -> MeshStandardMaterial(side=invalid_side),
+        () -> MeshNormalMaterial(side=invalid_side),
+        () -> MeshPhysicalMaterial(side=invalid_side),
+        () -> MeshToonMaterial(side=invalid_side),
+        () -> MeshMatcapMaterial(side=invalid_side),
+        () -> MeshDepthMaterial(side=invalid_side),
+        () -> ShaderMaterial(side=invalid_side),
+    )
+    for constructor in constructors
+        @test_throws "material side must be one of :front, :back, or :double" constructor()
+    end
+    @test_throws "material side must be one of :front, :back, or :double" MeshBasicMaterial(
+        side="front")
+
+    for side in (:front, :back, :double)
+        @test material_side(MeshBasicMaterial(side=side)) === side
+    end
+    @test material_side(LineBasicMaterial()) === :front
+
+    # The legacy 15-argument compatibility constructor can bypass keyword
+    # validation. Every consumer must still reject its invalid side.
+    direct_bad = MeshBasicMaterial(
+        Color3(1.0, 1.0, 1.0), 1.0, false, false, invalid_side,
+        nothing, nothing, nothing, nothing, 1.0, 1.0, false, 0.0, true, true)
+    @test_throws "material side must be one of :front, :back, or :double" material_side(
+        direct_bad)
+    @test_throws "material side must be one of :front, :back, or :double" Diff3D._web_material_side(
+        direct_bad)
+
+    geometry = PlaneGeometry()
+    mesh = Mesh(geometry, direct_bad)
+    web_io = IOBuffer()
+    @test_throws "material side must be one of :front, :back, or :double" Diff3D._web_write_drawable_json(
+        web_io, mesh, Mat4())
+    @test position(web_io) == 0
+    @test_throws "material side must be one of :front, :back, or :double" raycast(
+        Raycaster(Vec3(0.0, 0.0, 3.0), Vec3(0.0, 0.0, -1.0)), mesh;
+        recursive=false)
+    scene = Scene()
+    add!(scene, mesh)
+    camera = PerspectiveCamera()
+    @test_throws "material side must be one of :front, :back, or :double" render!(
+        RenderTarget(16, 16), scene, camera)
+
+    valid_material = MeshBasicMaterial(side=:double)
+    side_probe = () -> (@allocated material_side(valid_material))
+    side_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || side_probe() == 0
+end

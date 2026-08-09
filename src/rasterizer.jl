@@ -1622,7 +1622,8 @@ _mesh_is_flat(mesh::Mesh, default_shading::Symbol) =
     mesh.flat_shading === nothing ? (default_shading === :flat) : mesh.flat_shading
 
 # Material face side (defaults to front-facing/back-culled, matching three.js).
-material_side(m::AbstractMaterial) = hasfield(typeof(m), :side) ? getfield(m, :side) : :front
+material_side(m::AbstractMaterial) =
+    hasfield(typeof(m), :side) ? _validated_material_side(getfield(m, :side)) : :front
 
 # View-space z of a mesh's world origin (more negative = farther from camera).
 function _mesh_view_depth(mesh, view::Mat4)

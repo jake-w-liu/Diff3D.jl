@@ -880,7 +880,8 @@ end
 _web_material_transparent(mat) =
     (hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))) ||
     _web_material_opacity(mat) < 1.0
-_web_material_side(mat) = hasproperty(mat, :side) ? String(getproperty(mat, :side)) : "front"
+_web_material_side(mat) = hasproperty(mat, :side) ?
+    String(_validated_material_side(getproperty(mat, :side))) : "front"
 _web_material_depth_test(mat) =
     hasproperty(mat, :depth_test) ? Bool(getproperty(mat, :depth_test)) : true
 _web_material_depth_write(mat) =
@@ -2463,6 +2464,9 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     mat = obj.material
     mat isa ShaderMaterial &&
         throw(ArgumentError("WebGL export does not support ShaderMaterial; render it with the CPU path or use a built-in browser-exported material"))
+    # Validate before writing so positional constructors cannot cause a partial
+    # JSON object when they bypass the keyword-constructor checks.
+    hasproperty(mat, :side) && _validated_material_side(getproperty(mat, :side))
     if mode == "triangles" || mode == "sprite"
         _validate_triangle_geometry_indices(geo, "WebGL export")
     elseif mode == "lines" || mode == "line_strip" || mode == "line_loop" ||
