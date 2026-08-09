@@ -842,6 +842,7 @@ function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
     # drive an oversized result allocation.
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
     _validate_depth_material(material)
+    _validate_material_parameters(material)
     return _shade_mesh_faces_dispatch!(
         Vector{Color3{Float64}}(undef, geo.n_faces), geo, world_mat,
         material, lights, cam_pos; shadow_fn=shadow_fn)
@@ -930,6 +931,7 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                            shadow_fn=nothing)
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
     _validate_depth_material(material)
+    _validate_material_parameters(material)
     return _shade_mesh_faces_dispatch!(colors, geo, world_mat, material,
                                        lights, cam_pos; shadow_fn=shadow_fn)
 end
@@ -2216,6 +2218,7 @@ end
 
 function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                     lights::Vector{SceneLight}, shadow_fn)
+    _validate_material_parameters(m)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     @inbounds for i in eachindex(lights)
         light = lights[i]
@@ -2227,6 +2230,7 @@ end
 
 function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights,
                     shadow_fn)
+    _validate_material_parameters(m)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     for light in lights
         result = _accumulate_light(result, m, normal, view_dir, position, light,
@@ -2241,6 +2245,7 @@ shade_face(normal::Vec3, view_dir::Vec3, position::Vec3, material::LitMaterial, 
 function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                                  lights::Vector{SceneLight}, shadow_fn,
                                  vertex_color::Color3)
+    _validate_material_parameters(m)
     albedo = _modulate(m.color, vertex_color)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     @inbounds for i in eachindex(lights)
@@ -2254,6 +2259,7 @@ end
 
 function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                                  lights, shadow_fn, vertex_color::Color3)
+    _validate_material_parameters(m)
     albedo = _modulate(m.color, vertex_color)
     result = m.emissive * _material_scalar(m, :emissive_intensity)
     for light in lights

@@ -4,29 +4,34 @@
 
 abstract type AbstractMaterial end
 
+@noinline function _throw_material_unit_interval(name::Symbol)
+    throw(ArgumentError("material $name must be finite and between 0 and 1"))
+end
+
+@inline function _validated_material_unit_interval(value, name::Symbol)
+    value isa Bool && _throw_material_unit_interval(name)
+    result = Float64(value)
+    isfinite(result) && 0.0 <= result <= 1.0 ||
+        _throw_material_unit_interval(name)
+    return result
+end
+
 @inline function _validated_material_side(side)
     (side === :front || side === :back || side === :double) ||
         throw(ArgumentError("material side must be one of :front, :back, or :double"))
     return side
 end
 
-@inline function _validated_material_opacity(value)
-    value isa Bool &&
-        throw(ArgumentError("material opacity must be finite and between 0 and 1"))
-    opacity = Float64(value)
-    isfinite(opacity) && 0.0 <= opacity <= 1.0 ||
-        throw(ArgumentError("material opacity must be finite and between 0 and 1"))
-    return opacity
-end
+@inline _validated_material_opacity(value) =
+    _validated_material_unit_interval(value, :opacity)
+@inline _validated_material_alpha_test(value) =
+    _validated_material_unit_interval(value, :alpha_test)
+@inline _validated_material_metalness(value) =
+    _validated_material_unit_interval(value, :metalness)
+@inline _validated_material_roughness(value) =
+    _validated_material_unit_interval(value, :roughness)
 
-@inline function _validated_material_alpha_test(value)
-    value isa Bool &&
-        throw(ArgumentError("material alpha_test must be finite and between 0 and 1"))
-    alpha_test = Float64(value)
-    isfinite(alpha_test) && 0.0 <= alpha_test <= 1.0 ||
-        throw(ArgumentError("material alpha_test must be finite and between 0 and 1"))
-    return alpha_test
-end
+@inline _validate_material_parameters(::AbstractMaterial) = nothing
 
 # ========================== MeshBasicMaterial ==========================
 # Unlit, flat color
@@ -463,7 +468,9 @@ function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
                                light_map_intensity=1.0, env_map_intensity=1.0,
                                depth_test=true, depth_write=true,
                                clipping_planes=Plane{Float64}[])
-    MeshStandardMaterial(color, emissive, metalness, roughness,
+    MeshStandardMaterial(color, emissive,
+                         _validated_material_metalness(metalness),
+                         _validated_material_roughness(roughness),
                          _validated_material_opacity(opacity), transparent,
                          _validated_material_side(side),
                          map, normal_map, Float64(normal_scale), roughness_map, metalness_map, alpha_map,
@@ -476,6 +483,12 @@ end
 
 MeshStandardMaterial(args::Vararg{Any,25}) =
     MeshStandardMaterial(args..., Plane{Float64}[])
+
+@inline function _validate_material_parameters(material::MeshStandardMaterial)
+    _validated_material_metalness(material.metalness)
+    _validated_material_roughness(material.roughness)
+    return nothing
+end
 
 # ========================== MeshNormalMaterial ==========================
 # Maps normals to RGB
@@ -723,7 +736,9 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                anisotropy_map=nothing,
                                depth_test=true, depth_write=true,
                                clipping_planes=Plane{Float64}[])
-    MeshPhysicalMaterial(color, emissive, metalness, roughness, clearcoat,
+    MeshPhysicalMaterial(color, emissive,
+                         _validated_material_metalness(metalness),
+                         _validated_material_roughness(roughness), clearcoat,
                          clearcoat_roughness, transmission, ior,
                          _validated_material_opacity(opacity), transparent,
                          _validated_material_side(side),
@@ -748,6 +763,12 @@ end
 
 MeshPhysicalMaterial(args::Vararg{Any,56}) =
     MeshPhysicalMaterial(args..., Plane{Float64}[])
+
+@inline function _validate_material_parameters(material::MeshPhysicalMaterial)
+    _validated_material_metalness(material.metalness)
+    _validated_material_roughness(material.roughness)
+    return nothing
+end
 
 # ========================== MeshToonMaterial ==========================
 # Quantized (cel-shaded) diffuse, optionally sampled from a toon gradient map.

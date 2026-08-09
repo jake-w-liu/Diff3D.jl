@@ -661,9 +661,11 @@ _web_material_ao_intensity(mat) =
 _web_material_light_intensity(mat) =
     hasproperty(mat, :light_map_intensity) ? Float64(getproperty(mat, :light_map_intensity)) : 1.0
 _web_material_roughness(mat) =
-    hasproperty(mat, :roughness) ? clamp(Float64(getproperty(mat, :roughness)), 0.0, 1.0) : 0.65
+    hasproperty(mat, :roughness) ?
+    _validated_material_roughness(getproperty(mat, :roughness)) : 0.65
 _web_material_metalness(mat) =
-    hasproperty(mat, :metalness) ? clamp(Float64(getproperty(mat, :metalness)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :metalness) ?
+    _validated_material_metalness(getproperty(mat, :metalness)) : 0.0
 _web_material_env_intensity(mat) =
     hasproperty(mat, :env_map_intensity) ? Float64(getproperty(mat, :env_map_intensity)) : 1.0
 _web_material_clearcoat(mat) =
@@ -2483,6 +2485,9 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     _web_material_opacity(mat)
     _web_material_alpha_test(mat)
     _web_material_clipping_planes(mat)
+    _web_material_metalness(mat)
+    _web_material_roughness(mat)
+    _validate_material_parameters(mat)
     _web_material_size(mat)
     _web_material_linewidth(mat)
     _validate_depth_material(mat)

@@ -24655,3 +24655,76 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || alpha_test_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || clipping_probe() == 0
 end
+
+@testset "fresh audit round 180 fixes" begin
+    pbr_constructors = (
+        (value -> MeshStandardMaterial(metalness=value), :metalness),
+        (value -> MeshPhysicalMaterial(metalness=value), :metalness),
+        (value -> MeshStandardMaterial(roughness=value), :roughness),
+        (value -> MeshPhysicalMaterial(roughness=value), :roughness),
+    )
+    for (constructor, field) in pbr_constructors
+        message = "material $field must be finite and between 0 and 1"
+        for value in (NaN, Inf, -0.01, 1.01, true)
+            @test_throws message constructor(value)
+        end
+        @test getproperty(constructor(0.0), field) == 0.0
+        @test getproperty(constructor(1.0), field) == 1.0
+    end
+
+    function bypass_pbr_validation(material, field::Symbol, value)
+        T = typeof(material)
+        return T((name === field ? value : getfield(material, name)
+                  for name in fieldnames(T))...)
+    end
+
+    direct_bad_metalness = bypass_pbr_validation(
+        MeshStandardMaterial(), :metalness, NaN)
+    direct_bad_roughness = bypass_pbr_validation(
+        MeshStandardMaterial(), :roughness, NaN)
+    direct_bad_physical = bypass_pbr_validation(
+        MeshPhysicalMaterial(), :metalness, NaN)
+    invalid_materials = (
+        (direct_bad_metalness, "material metalness must be finite and between 0 and 1"),
+        (direct_bad_roughness, "material roughness must be finite and between 0 and 1"),
+        (direct_bad_physical, "material metalness must be finite and between 0 and 1"),
+    )
+    normal = Vec3(0.0, 0.0, 1.0)
+    lights = AbstractLight[AmbientLight(intensity=1.0)]
+    geometry = PlaneGeometry()
+    for (material, message) in invalid_materials
+        @test_throws message Diff3D._validate_material_parameters(material)
+        @test_throws message shade_face(normal, normal, Vec3(), material, lights)
+
+        colors = [Color3(0.25, 0.5, 0.75)]
+        @test_throws message Diff3D.shade_mesh_faces!(
+            colors, geometry, Mat4(), material, lights, Vec3(0.0, 0.0, 3.0))
+        @test colors == [Color3(0.25, 0.5, 0.75)]
+
+        mesh = Mesh(geometry, material)
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_drawable_json(web_io, mesh, Mat4())
+        @test position(web_io) == 0
+        if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+            scene = Scene()
+            add!(scene, mesh)
+            camera = PerspectiveCamera()
+            camera.position = Vec3(0.0, 0.0, 3.0)
+            @test_throws message render!(RenderTarget(16, 16), scene, camera)
+        end
+    end
+
+    valid = MeshStandardMaterial(metalness=0.25, roughness=0.75)
+    valid_color = shade_face(normal, normal, Vec3(), valid, lights)
+    @test isfinite(valid_color.r) && isfinite(valid_color.g) && isfinite(valid_color.b)
+    valid_json = Diff3D._web_drawable_json(Mesh(geometry, valid), Mat4())
+    @test occursin("\"metalness\":0.25", valid_json)
+    @test occursin("\"roughness\":0.75", valid_json)
+
+    validation_probe = () -> (@allocated Diff3D._validate_material_parameters(valid))
+    transparency_probe = () -> (@allocated is_transparent_material(valid))
+    validation_probe()
+    transparency_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || transparency_probe() == 0
+end

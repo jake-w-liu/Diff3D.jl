@@ -1770,6 +1770,7 @@ material_opacity(m::AbstractMaterial) = hasfield(typeof(m), :opacity) ?
     _validated_material_opacity(getfield(m, :opacity)) : 1.0
 material_transparent(m::AbstractMaterial) = hasfield(typeof(m), :transparent) ? getfield(m, :transparent) : false
 function is_transparent_material(m::AbstractMaterial)
+    _validate_material_parameters(m)
     material_opacity(m)
     return material_transparent(m)
 end
