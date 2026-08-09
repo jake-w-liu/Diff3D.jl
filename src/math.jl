@@ -182,6 +182,11 @@ struct Mat4{T<:Real}
     e::NTuple{16, T}
 end
 
+@inline Base.convert(::Type{Mat4{T}}, matrix::Mat4{T}) where {T<:Real} = matrix
+@inline Base.convert(::Type{Mat4{T}}, matrix::Mat4) where {T<:Real} =
+    Mat4{T}(ntuple(i -> convert(T, matrix.e[i]), Val(16)))
+@inline Mat4{T}(matrix::Mat4) where {T<:Real} = convert(Mat4{T}, matrix)
+
 function Mat4{T}() where T
     Mat4{T}((one(T), zero(T), zero(T), zero(T),
              zero(T), one(T), zero(T), zero(T),
@@ -627,6 +632,10 @@ end
 struct Mat3{T<:Real}
     e::NTuple{9, T}
 end
+@inline Base.convert(::Type{Mat3{T}}, matrix::Mat3{T}) where {T<:Real} = matrix
+@inline Base.convert(::Type{Mat3{T}}, matrix::Mat3) where {T<:Real} =
+    Mat3{T}(ntuple(i -> convert(T, matrix.e[i]), Val(9)))
+@inline Mat3{T}(matrix::Mat3) where {T<:Real} = convert(Mat3{T}, matrix)
 Mat3() = Mat3{Float64}((1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0))
 
 # ========================== Quaternion ==========================

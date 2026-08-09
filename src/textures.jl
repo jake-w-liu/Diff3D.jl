@@ -223,7 +223,7 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  min_filter::Symbol, mag_filter::Symbol,
                  mipmaps::Vector{Array{Float64,3}}, colorspace::Symbol,
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
-                 center::Vec2{Float64}, matrix::Mat3{Float64},
+                 center::Vec2{Float64}, matrix::Mat3,
                  matrix_auto_update::Bool, tex_coord::Integer)
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),
@@ -241,7 +241,7 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
                  min_filter::Symbol, mag_filter::Symbol,
                  mipmaps::Vector{Array{Float64,3}}, colorspace::Symbol,
                  offset::Vec2{Float64}, repeat::Vec2{Float64}, rotation::Real,
-                 center::Vec2{Float64}, matrix::Mat3{Float64},
+                 center::Vec2{Float64}, matrix::Mat3,
                  matrix_auto_update::Bool, tex_coord::Integer, max_anisotropy)
     Texture(data, _texture_wrap_symbol(wrap_s), _texture_wrap_symbol(wrap_t),
             _texture_filter_symbol(filter), _texture_min_filter_symbol(min_filter),

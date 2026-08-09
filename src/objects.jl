@@ -90,6 +90,14 @@ function InstancedMesh(geometry, material,
                   colors, draw_mode)
 end
 
+function InstancedMesh(geometry, material,
+                       instance_matrices::AbstractVector{<:Mat4}; kwargs...)
+    matrices = Mat4{Float64}[
+        convert(Mat4{Float64}, matrix) for matrix in instance_matrices
+    ]
+    return InstancedMesh(geometry, material, matrices; kwargs...)
+end
+
 function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
                        scale::Vec3{Float64},
                        parent::Union{Nothing, AbstractObject3D},
@@ -290,17 +298,18 @@ World matrix for a sprite: positioned at its world location, oriented so its
 local axes coincide with the camera's right/up/forward axes (screen-facing).
 """
 function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
-                             wm::Mat4{Float64}=compute_world_matrix(sprite))
+                             wm::Mat4=compute_world_matrix(sprite))
+    world = convert(Mat4{Float64}, wm)
     V = view_matrix(camera)
     # Rows 1..3 of the view matrix are the camera right/up/forward axes in world space.
     right = Vec3(mat4_get(V,1,1), mat4_get(V,1,2), mat4_get(V,1,3))
     up    = Vec3(mat4_get(V,2,1), mat4_get(V,2,2), mat4_get(V,2,3))
     fwd   = Vec3(mat4_get(V,3,1), mat4_get(V,3,2), mat4_get(V,3,3))
-    p = Vec3(mat4_get(wm,1,4), mat4_get(wm,2,4), mat4_get(wm,3,4))
+    p = Vec3(mat4_get(world,1,4), mat4_get(world,2,4), mat4_get(world,3,4))
     # World scale = column norms of the world matrix (as in the WebGL sprite shader).
-    sx = _mat4_linear_column_norm(wm, 1)
-    sy = _mat4_linear_column_norm(wm, 2)
-    sz = _mat4_linear_column_norm(wm, 3)
+    sx = _mat4_linear_column_norm(world, 1)
+    sy = _mat4_linear_column_norm(world, 2)
+    sz = _mat4_linear_column_norm(world, 3)
     Mat4((right.x*sx, right.y*sx, right.z*sx, 0.0,
           up.x*sy,    up.y*sy,    up.z*sy,    0.0,
           fwd.x*sz,   fwd.y*sz,   fwd.z*sz,   0.0,
@@ -463,16 +472,17 @@ function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      skin_indices, skin_weights; name="SkinnedMesh",
                      cast_shadow::Bool=false, receive_shadow::Bool=false,
                      morph_target_influences=Float64[], morph_target_names=String[],
-                     bind_mode::Symbol=:attached, bind_matrix::Mat4{Float64}=Mat4())
+                     bind_mode::Symbol=:attached, bind_matrix::Mat4=Mat4())
     bind_mode in (:attached, :detached) ||
         throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
+    matrix = convert(Mat4{Float64}, bind_matrix)
     SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                 true, name, _next_id(), geometry, material,
                 cast_shadow, receive_shadow, skeleton,
                 skin_indices, skin_weights,
                 collect(Float64, morph_target_influences),
                 collect(String, morph_target_names),
-                bind_mode, bind_matrix, mat4_inverse(bind_matrix))
+                bind_mode, matrix, mat4_inverse(matrix))
 end
 
 get_position(o::SkinnedMesh) = o.position
@@ -527,14 +537,15 @@ apply_morph_tangents(mesh::SkinnedMesh) =
     apply_morph_tangents(mesh.geometry, mesh.morph_target_influences)
 
 function bind_skeleton!(sm::SkinnedMesh, skeleton::Skeleton,
-                        bind_matrix::Union{Nothing,Mat4{Float64}}=nothing;
+                        bind_matrix::Union{Nothing,Mat4}=nothing;
                         bind_mode::Symbol=sm.bind_mode,
                         calculate_inverses::Bool=bind_matrix === nothing)
     bind_mode in (:attached, :detached) ||
         throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
     sm.skeleton = skeleton
     calculate_inverses && calculate_inverses!(skeleton)
-    matrix = bind_matrix === nothing ? compute_world_matrix(sm) : bind_matrix
+    matrix = bind_matrix === nothing ? compute_world_matrix(sm) :
+             convert(Mat4{Float64}, bind_matrix)
     sm.bind_mode = bind_mode
     sm.bind_matrix = matrix
     sm.bind_matrix_inverse = mat4_inverse(matrix)

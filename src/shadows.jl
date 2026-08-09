@@ -21,9 +21,14 @@ struct ShadowMap
     end
 end
 
+ShadowMap(depth::Matrix{Float64}, light_vp::Mat4, bias, pcf_radius) =
+    ShadowMap(depth, convert(Mat4{Float64}, light_vp), bias, pcf_radius)
+
 # Backward-compatible constructor: existing 3-arg callers get a hard shadow (r=0),
 # matching the original single-sample depth comparison byte-for-byte.
 ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias::Float64) =
+    ShadowMap(depth, light_vp, bias, 0)
+ShadowMap(depth::Matrix{Float64}, light_vp::Mat4, bias) =
     ShadowMap(depth, light_vp, bias, 0)
 
 struct _ShadowQuery{M}

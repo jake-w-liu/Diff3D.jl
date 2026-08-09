@@ -23535,3 +23535,90 @@ end
     set_from_camera!(center_raycaster, infinite_camera, 0.0, 0.0)
     @test !isempty(raycast(center_raycaster, scene))
 end
+
+@testset "fresh audit round 166 fixes" begin
+    matrix3_f32 = Mat3{Float32}((
+        1.0, 0.0, 0.0,
+        0.0, 2.0, 0.0,
+        0.25, -0.5, 1.0))
+    matrix3_f64 = convert(Mat3{Float64}, matrix3_f32)
+    @test matrix3_f64 isa Mat3{Float64}
+    @test matrix3_f64.e == ntuple(i -> Float64(matrix3_f32.e[i]), 9)
+    @test Mat3{Float64}(matrix3_f32) == matrix3_f64
+    @test convert(Mat3{Float32}, matrix3_f32) === matrix3_f32
+
+    matrix4_f32 = Mat4{Float32}((
+        2.0, 0.0, 0.0, 0.0,
+        0.0, 3.0, 0.0, 0.0,
+        0.0, 0.0, 4.0, 0.0,
+        1.0, -2.0, 3.0, 1.0))
+    matrix4_f64 = convert(Mat4{Float64}, matrix4_f32)
+    @test matrix4_f64 isa Mat4{Float64}
+    @test matrix4_f64.e == ntuple(i -> Float64(matrix4_f32.e[i]), 16)
+    @test Mat4{Float64}(matrix4_f32) == matrix4_f64
+    @test convert(Mat4{Float32}, matrix4_f32) === matrix4_f32
+
+    texture = Texture(ones(2, 2, 3); matrix_auto_update=false)
+    texture.matrix = matrix3_f32
+    @test texture.matrix == matrix3_f64
+    @test texture.matrix isa Mat3{Float64}
+    constructed_texture = Texture(
+        ones(2, 2, 3); matrix=matrix3_f32, matrix_auto_update=false)
+    @test constructed_texture.matrix == matrix3_f64
+
+    instanced = InstancedMesh(BoxGeometry(), MeshBasicMaterial(), 1)
+    set_instance_matrix!(instanced, 1, matrix4_f32)
+    @test get_instance_matrix(instanced, 1) == matrix4_f64
+    @test get_instance_matrix(instanced, 1) isa Mat4{Float64}
+    vector_instanced = InstancedMesh(
+        BoxGeometry(), MeshBasicMaterial(), Mat4{Float32}[matrix4_f32])
+    @test vector_instanced.instance_matrices == [matrix4_f64]
+
+    sprite = Sprite(SpriteMaterial())
+    camera = PerspectiveCamera()
+    sprite_f32 = sprite_world_matrix(sprite, camera, matrix4_f32)
+    sprite_f64 = sprite_world_matrix(sprite, camera, matrix4_f64)
+    @test sprite_f32 == sprite_f64
+    @test sprite_f32 isa Mat4{Float64}
+
+    shadow = ShadowMap(fill(Inf, 2, 2), matrix4_f32, 0.001, 1)
+    @test shadow.light_vp == matrix4_f64
+    @test shadow.light_vp isa Mat4{Float64}
+
+    bone = Bone()
+    converted_skeleton = Skeleton([bone], Mat4{Float32}[matrix4_f32])
+    @test converted_skeleton.bind_inverses == [matrix4_f64]
+    skeleton = Skeleton([bone])
+    geometry = BufferGeometry(
+        [0.5, -0.25, 1.0], Float64[], Float64[], Int[], 1, 0)
+    skin_indices = [(1, 1, 1, 1)]
+    skin_weights = [(1.0, 0.0, 0.0, 0.0)]
+    skinned = SkinnedMesh(
+        geometry, MeshBasicMaterial(), skeleton,
+        skin_indices, skin_weights;
+        bind_mode=:detached, bind_matrix=matrix4_f32)
+    @test skinned.bind_matrix == matrix4_f64
+    @test skinned.bind_matrix isa Mat4{Float64}
+    @test apply_skinning(skinned) == [Vec3(0.5, -0.25, 1.0)]
+    rebound = bind_skeleton!(
+        skinned, skeleton, matrix4_f32; calculate_inverses=false)
+    @test rebound === skinned
+    @test skinned.bind_matrix == matrix4_f64
+
+    matrix3_conversion_probe = () ->
+        (@allocated convert(Mat3{Float64}, matrix3_f32))
+    matrix4_conversion_probe = () ->
+        (@allocated convert(Mat4{Float64}, matrix4_f32))
+    instance_assignment_probe = () ->
+        (@allocated set_instance_matrix!(instanced, 1, matrix4_f32))
+    sprite_matrix_probe = () ->
+        (@allocated sprite_world_matrix(sprite, camera, matrix4_f32))
+    matrix3_conversion_probe()
+    matrix4_conversion_probe()
+    instance_assignment_probe()
+    sprite_matrix_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || matrix3_conversion_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || matrix4_conversion_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || instance_assignment_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sprite_matrix_probe() == 0
+end
