@@ -1824,8 +1824,7 @@ end
 
 function _web_write_skin_json(io::IO, obj, geo::BufferGeometry, num_buf::Vector{UInt8})
     obj isa SkinnedMesh || (write(io, "\"skin\":null"); return nothing)
-    length(obj.skin_indices) == geo.n_vertices || error("skinned mesh skin_indices length must match vertex count")
-    length(obj.skin_weights) == geo.n_vertices || error("skinned mesh skin_weights length must match vertex count")
+    _validate_skinned_mesh(obj, "SkinnedMesh")
     write(io, "\"basePositions\":")
     _js_write_array(io, geo.positions, num_buf)
     write(io, ",\"bindMode\":")
@@ -2273,6 +2272,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     else
         throw(ArgumentError("WebGL export draw mode is unsupported: $mode"))
     end
+    obj isa SkinnedMesh && _validate_skinned_mesh(obj, "WebGL export")
     m = matrix === nothing ? world : matrix
     rot = get_rotation(transform_obj)
     parent = get_parent(transform_obj)

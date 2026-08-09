@@ -24001,3 +24001,106 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || triangle_validation_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || indexed_validation_probe() == 0
 end
+
+@testset "fresh audit round 173 fixes" begin
+    one_vertex = BufferGeometry(
+        [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], Float64[], Int[], 1, 0)
+    one_bone = Skeleton([Bone()])
+    valid_indices = [(1, 1, 1, 1)]
+    valid_weights = [(1.0, 0.0, 0.0, 0.0)]
+    material = MeshBasicMaterial(side=:double)
+
+    @test_throws "SkinnedMesh skin_indices length must match geometry n_vertices" SkinnedMesh(
+        one_vertex, material, one_bone, NTuple{4,Int}[], valid_weights)
+    @test_throws "SkinnedMesh skin_weights length must match geometry n_vertices" SkinnedMesh(
+        one_vertex, material, one_bone, valid_indices, NTuple{4,Float64}[])
+    @test_throws "SkinnedMesh skin_indices must reference skeleton bones" SkinnedMesh(
+        one_vertex, material, one_bone, [(2, 1, 1, 1)], valid_weights)
+    @test_throws "SkinnedMesh skin_indices must reference skeleton bones" SkinnedMesh(
+        one_vertex, material, one_bone, [(1, 2, 1, 1)], valid_weights)
+    @test_throws "SkinnedMesh skin_weights must be finite and non-negative" SkinnedMesh(
+        one_vertex, material, one_bone, valid_indices,
+        [(NaN, 0.0, 0.0, 0.0)])
+    @test_throws "SkinnedMesh skin_weights must be finite and non-negative" SkinnedMesh(
+        one_vertex, material, one_bone, valid_indices,
+        [(-1.0, 1.0, 1.0, 0.0)])
+    @test_throws "SkinnedMesh skin_weights must sum to one per vertex" SkinnedMesh(
+        one_vertex, material, one_bone, valid_indices,
+        [(0.0, 0.0, 0.0, 0.0)])
+    @test_throws "SkinnedMesh skin_weights must sum to one per vertex" SkinnedMesh(
+        one_vertex, material, one_bone, valid_indices,
+        [(0.5, 0.0, 0.0, 0.0)])
+    @test_throws "SkinnedMesh skeleton bind_inverses length must match bones length" SkinnedMesh(
+        one_vertex, material, Skeleton([Bone()], Mat4{Float64}[]),
+        valid_indices, valid_weights)
+    malformed_positions = BufferGeometry(
+        Float64[], Float64[], Float64[], Int[], 1, 0)
+    @test_throws "SkinnedMesh positions length must cover n_vertices" SkinnedMesh(
+        malformed_positions, material, one_bone, valid_indices, valid_weights)
+
+    valid = SkinnedMesh(one_vertex, material, one_bone,
+                        valid_indices, valid_weights)
+    @test apply_skinning(valid) == [Vec3(1.0, 0.0, 0.0)]
+    @test valid.skin_indices === valid_indices
+    @test valid.skin_weights === valid_weights
+    converted = SkinnedMesh(
+        one_vertex, material, one_bone,
+        NTuple{4,Int32}[(1, 1, 1, 1)],
+        NTuple{4,Float32}[(1.0f0, 0.0f0, 0.0f0, 0.0f0)])
+    @test converted.skin_indices == valid_indices
+    @test converted.skin_indices isa Vector{NTuple{4,Int}}
+    @test converted.skin_weights == valid_weights
+    @test converted.skin_weights isa Vector{NTuple{4,Float64}}
+    tolerant = SkinnedMesh(one_vertex, material, one_bone, valid_indices,
+                           [(1.0 + 5.0e-7, 0.0, 0.0, 0.0)])
+    @test apply_skinning(tolerant)[1].x ≈ 1.0 + 5.0e-7
+
+    mutable_geo = PlaneGeometry(width=1.0, height=1.0)
+    mutable_sm = SkinnedMesh(
+        mutable_geo, material, Skeleton([Bone()]),
+        fill((1, 1, 1, 1), mutable_geo.n_vertices),
+        fill((1.0, 0.0, 0.0, 0.0), mutable_geo.n_vertices);
+        cast_shadow=true)
+    empty!(mutable_sm.skin_indices)
+    @test_throws "SkinnedMesh skin_indices length must match geometry n_vertices" apply_skinning(
+        mutable_sm)
+    mutable_sm.skin_indices = fill((1, 1, 1, 1), mutable_geo.n_vertices)
+    mutable_sm.skin_indices[2] = (2, 1, 1, 1)
+
+    scene = Scene()
+    add!(scene, mutable_sm)
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+    @test_throws "SkinnedMesh skin_indices must reference skeleton bones" render!(
+        RenderTarget(8, 8), scene, camera; frustum_cull=false)
+    @test_throws "SkinnedMesh skin_indices must reference skeleton bones" raycast(
+        Raycaster(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0)), mutable_sm)
+    @test_throws "WebGL export skin_indices must reference skeleton bones" Diff3D._web_case_json(
+        WebGLExportCase("bad_skin", "Bad skin", "indices", scene))
+    @test_throws "SkinnedMesh skin_indices must reference skeleton bones" compute_shadow_map(
+        scene, DirectionalLight(position=Vec3(0.0, 4.0, 3.0), cast_shadow=true);
+        resolution=8)
+
+    mutable_sm.skin_indices[2] = (1, 1, 1, 1)
+    proxy = Diff3D._skinned_render_geometry(mutable_sm)
+    proxy_positions = copy(proxy.positions)
+    mutable_sm.skin_weights[1] = (Inf, 0.0, 0.0, 0.0)
+    @test_throws "SkinnedMesh skin_weights must be finite and non-negative" Diff3D._update_skinned_render_geometry!(
+        proxy, mutable_sm)
+    @test proxy.positions == proxy_positions
+
+    mutable_sm.skin_weights[1] = (1.0, 0.0, 0.0, 0.0)
+    old_skeleton = mutable_sm.skeleton
+    invalid_skeleton = Skeleton([Bone()], Mat4{Float64}[])
+    @test_throws "SkinnedMesh skeleton bind_inverses length must match bones length" bind_skeleton!(
+        mutable_sm, invalid_skeleton, Mat4(); calculate_inverses=false)
+    @test mutable_sm.skeleton === old_skeleton
+    @test_throws "Skeleton bind_inverses length must match bones length" skeleton_matrices(
+        invalid_skeleton)
+
+    validation_probe = () ->
+        (@allocated Diff3D._validate_skinned_mesh(mutable_sm, "SkinnedMesh"))
+    validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end

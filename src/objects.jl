@@ -440,8 +440,7 @@ end
 
 """Per-bone skinning matrix = current world × inverse bind (identity in bind pose)."""
 function skeleton_matrices(s::Skeleton)
-    length(s.bind_inverses) == length(s.bones) ||
-        error("skeleton bind_inverses length must match bones length")
+    _validate_skeleton(s, "Skeleton", "bind_inverses")
     [compute_world_matrix(s.bones[i]) * s.bind_inverses[i] for i in eachindex(s.bones)]
 end
 
@@ -475,14 +474,22 @@ function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      bind_mode::Symbol=:attached, bind_matrix::Mat4=Mat4())
     bind_mode in (:attached, :detached) ||
         throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
+    geometry isa BufferGeometry ||
+        throw(ArgumentError("SkinnedMesh geometry must be a BufferGeometry"))
+    converted_indices = convert(Vector{NTuple{4,Int}}, skin_indices)
+    converted_weights = convert(Vector{NTuple{4,Float64}}, skin_weights)
+    _validate_skin_data(geometry, skeleton, converted_indices, converted_weights,
+                        "SkinnedMesh")
     matrix = convert(Mat4{Float64}, bind_matrix)
-    SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-                true, name, _next_id(), geometry, material,
-                cast_shadow, receive_shadow, skeleton,
-                skin_indices, skin_weights,
-                collect(Float64, morph_target_influences),
-                collect(String, morph_target_names),
-                bind_mode, matrix, mat4_inverse(matrix))
+    matrix_inverse = mat4_inverse(matrix)
+    sm = SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing,
+                     AbstractObject3D[], true, name, _next_id(), geometry,
+                     material, cast_shadow, receive_shadow, skeleton,
+                     converted_indices, converted_weights,
+                     collect(Float64, morph_target_influences),
+                     collect(String, morph_target_names),
+                     bind_mode, matrix, matrix_inverse)
+    return sm
 end
 
 get_position(o::SkinnedMesh) = o.position
@@ -542,13 +549,17 @@ function bind_skeleton!(sm::SkinnedMesh, skeleton::Skeleton,
                         calculate_inverses::Bool=bind_matrix === nothing)
     bind_mode in (:attached, :detached) ||
         throw(ArgumentError("SkinnedMesh bind_mode must be :attached or :detached"))
-    sm.skeleton = skeleton
     calculate_inverses && calculate_inverses!(skeleton)
+    geo = _skinned_buffer_geometry(sm)
+    _validate_skin_data(geo, skeleton, sm.skin_indices, sm.skin_weights,
+                        "SkinnedMesh")
     matrix = bind_matrix === nothing ? compute_world_matrix(sm) :
              convert(Mat4{Float64}, bind_matrix)
+    matrix_inverse = mat4_inverse(matrix)
+    sm.skeleton = skeleton
     sm.bind_mode = bind_mode
     sm.bind_matrix = matrix
-    sm.bind_matrix_inverse = mat4_inverse(matrix)
+    sm.bind_matrix_inverse = matrix_inverse
     return sm
 end
 
@@ -563,10 +574,60 @@ _skinned_bind_matrix_inverse(sm::SkinnedMesh) =
     return geo
 end
 
+function _validate_skeleton(skeleton::Skeleton, context::String, label::String)
+    n_bones = length(skeleton.bones)
+    length(skeleton.bind_inverses) == n_bones ||
+        throw(ArgumentError(
+            "$context $label length must match bones length"))
+    return n_bones
+end
+
+function _validate_skin_data(geo::BufferGeometry, skeleton::Skeleton,
+                             skin_indices::Vector{NTuple{4,Int}},
+                             skin_weights::Vector{NTuple{4,Float64}},
+                             context::String)
+    _validate_geometry_vertices(geo, context)
+    n_vertices = geo.n_vertices
+    length(skin_indices) == n_vertices ||
+        throw(ArgumentError(
+            "$context skin_indices length must match geometry n_vertices"))
+    length(skin_weights) == n_vertices ||
+        throw(ArgumentError(
+            "$context skin_weights length must match geometry n_vertices"))
+    n_bones = _validate_skeleton(
+        skeleton, context, "skeleton bind_inverses")
+    @inbounds for vi in 1:n_vertices
+        indices = skin_indices[vi]
+        weights = skin_weights[vi]
+        total_weight = 0.0
+        for k in 1:4
+            1 <= indices[k] <= n_bones ||
+                throw(ArgumentError(
+                    "$context skin_indices must reference skeleton bones"))
+            weight = weights[k]
+            isfinite(weight) && weight >= 0.0 ||
+                throw(ArgumentError(
+                    "$context skin_weights must be finite and non-negative"))
+            total_weight += weight
+        end
+        isfinite(total_weight) &&
+            isapprox(total_weight, 1.0; atol=1.0e-6, rtol=1.0e-6) ||
+            throw(ArgumentError(
+                "$context skin_weights must sum to one per vertex"))
+    end
+    return nothing
+end
+
+function _validate_skinned_mesh(sm::SkinnedMesh, context::String)
+    geo = _skinned_buffer_geometry(sm)
+    _validate_skin_data(geo, sm.skeleton, sm.skin_indices, sm.skin_weights,
+                        context)
+    return geo
+end
+
 function _skinning_matrices(sm::SkinnedMesh)
     skel = sm.skeleton
-    length(skel.bind_inverses) == length(skel.bones) ||
-        error("skeleton bind_inverses length must match bones length")
+    _validate_skeleton(skel, "SkinnedMesh", "skeleton bind_inverses")
     bind = sm.bind_matrix
     bind_inv = _skinned_bind_matrix_inverse(sm)
     [bind_inv * compute_world_matrix(skel.bones[i]) * skel.bind_inverses[i] * bind
@@ -575,8 +636,7 @@ end
 
 function _skinning_matrices!(out::Vector{Mat4{Float64}}, sm::SkinnedMesh)
     skel = sm.skeleton
-    length(skel.bind_inverses) == length(skel.bones) ||
-        error("skeleton bind_inverses length must match bones length")
+    _validate_skeleton(skel, "SkinnedMesh", "skeleton bind_inverses")
     resize!(out, length(skel.bones))
     bind = sm.bind_matrix
     bind_inv = _skinned_bind_matrix_inverse(sm)
@@ -603,8 +663,8 @@ Linear blend skinning: deform each geometry vertex by the weighted sum of its
 bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
 """
 function apply_skinning(sm::SkinnedMesh)
+    geo = _validate_skinned_mesh(sm, "SkinnedMesh")
     mats = _skinning_matrices(sm)
-    geo = _skinned_buffer_geometry(sm)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     @inbounds for vi in 1:geo.n_vertices
@@ -735,7 +795,7 @@ function _copy_skinned_attributes(sm::SkinnedMesh, mats)
 end
 
 function _skinned_render_geometry(sm::SkinnedMesh)
-    geo = _skinned_buffer_geometry(sm)
+    geo = _validate_skinned_mesh(sm, "SkinnedMesh")
     mats = _skinning_matrices(sm)
     positions = Vector{Float64}(undef, geo.n_vertices * 3)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
@@ -807,7 +867,7 @@ end
 function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh,
                                           mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
                                           morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
-    geo = _skinned_buffer_geometry(sm)
+    geo = _validate_skinned_mesh(sm, "SkinnedMesh")
     _skinned_proxy_geometry_matches(proxy, geo) || return _skinned_render_geometry(sm)
     mats = mats_scratch === nothing ? _skinning_matrices(sm) :
            _skinning_matrices!(mats_scratch, sm)

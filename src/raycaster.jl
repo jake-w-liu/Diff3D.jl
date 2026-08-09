@@ -463,6 +463,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         # a visibly-rendered skinned mesh is pickable (was silently skipped).
         geo = _skinned_buffer_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")
+        _validate_skinned_mesh(obj, "SkinnedMesh")
         mats = _skinning_matrices!(rc.skinning_matrices, obj)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         side = material_side(obj.material)
