@@ -24258,3 +24258,87 @@ end
     @test occursin("\"mode\":\"lines\"", line_json)
     @test occursin("\"morphWeights\":[0.5]", line_json)
 end
+
+@testset "fresh audit round 175 fixes" begin
+    scene = Scene()
+    @test_throws "WebGLExportCase target must be a finite Vec3" WebGLExportCase(
+        "bad", "Bad", "target", scene; target=Vec3(NaN, 0.0, 0.0))
+    @test_throws "WebGLExportCase target must be a finite Vec3" WebGLExportCase(
+        "bad", "Bad", "target", scene; target=(0.0, 0.0, 0.0))
+    @test_throws "WebGLExportCase radius must be finite and positive" WebGLExportCase(
+        "bad", "Bad", "radius", scene; radius=NaN)
+    @test_throws "WebGLExportCase radius must be finite and positive" WebGLExportCase(
+        "bad", "Bad", "radius", scene; radius=Inf)
+    @test_throws "WebGLExportCase radius must be finite and positive" WebGLExportCase(
+        "bad", "Bad", "radius", scene; radius=0.0)
+    @test_throws "WebGLExportCase radius must be finite and positive" WebGLExportCase(
+        "bad", "Bad", "radius", scene; radius=true)
+    @test_throws "WebGLExportCase height must be finite" WebGLExportCase(
+        "bad", "Bad", "height", scene; height=Inf)
+    @test_throws "WebGLExportCase height must be finite" WebGLExportCase(
+        "bad", "Bad", "height", scene; height=false)
+    @test_throws "WebGLExportCase fov must be finite and between 0 and pi radians" WebGLExportCase(
+        "bad", "Bad", "fov", scene; fov=0.0)
+    @test_throws "WebGLExportCase fov must be finite and between 0 and pi radians" WebGLExportCase(
+        "bad", "Bad", "fov", scene; fov=pi)
+    @test_throws "WebGLExportCase fov must be finite and between 0 and pi radians" WebGLExportCase(
+        "bad", "Bad", "fov", scene; fov=NaN)
+    @test_throws "tone_exposure must be finite and non-negative" WebGLExportCase(
+        "bad", "Bad", "exposure", scene; tone_exposure=true)
+    @test_throws "WebGLExportCase clipping plane 1 must be finite" WebGLExportCase(
+        "bad", "Bad", "clip", scene;
+        clipping_planes=[Plane(Vec3(NaN, 0.0, 0.0), 0.0)])
+
+    camera = PerspectiveCamera()
+    camera_case = WebGLExportCase("camera", "Camera", "mutable", scene; camera=camera)
+    camera.fov = NaN
+    camera_io = IOBuffer()
+    @test_throws "PerspectiveCamera fov must be finite" Diff3D._web_write_camera_json(
+        camera_io, camera)
+    @test position(camera_io) == 0
+    case_io = IOBuffer()
+    @test_throws "PerspectiveCamera fov must be finite" Diff3D._web_write_case_json(
+        case_io, camera_case)
+    @test position(case_io) == 0
+
+    camera.fov = pi / 4
+    camera.up = Vec3()
+    @test_throws "WebGL export PerspectiveCamera up must be non-zero" Diff3D._web_camera_json(
+        camera)
+    camera.up = Vec3(0.0, 1.0, 0.0)
+    camera.position = Vec3(Inf, 0.0, 0.0)
+    @test_throws "WebGL export PerspectiveCamera position must be finite" Diff3D._web_camera_json(
+        camera)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+
+    direct_bad = WebGLExportCase(
+        "direct", "Direct", "bypass", scene, Vec3(), NaN, 3.0, pi / 4,
+        :none, 1.0, :srgb, AnimationClip[], Plane{Float64}[], nothing)
+    direct_io = IOBuffer()
+    @test_throws "WebGLExportCase radius must be finite and positive" Diff3D._web_write_case_json(
+        direct_io, direct_bad)
+    @test position(direct_io) == 0
+    data_io = IOBuffer()
+    valid_case = WebGLExportCase(
+        "valid", "Valid", "finite", scene; target=Vec3(1.0, 2.0, 3.0),
+        radius=4.0, height=-2.0, fov=0.7,
+        clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.25)])
+    @test_throws "WebGLExportCase radius must be finite and positive" Diff3D._web_write_data_json(
+        data_io, [valid_case, direct_bad])
+    @test position(data_io) == 0
+
+    output_path = tempname()
+    @test_throws "WebGLExportCase radius must be finite and positive" save_webgl_html(
+        output_path, [direct_bad])
+    @test !isfile(output_path)
+    isfile(output_path) && rm(output_path; force=true)
+
+    valid_json = Diff3D._web_case_json(valid_case)
+    @test occursin("\"target\":[1,2,3]", valid_json)
+    @test occursin("\"radius\":4", valid_json)
+    @test occursin("\"height\":-2", valid_json)
+    @test occursin("\"fov\":0.69999999999999996", valid_json)
+    validation_probe = () -> (@allocated Diff3D._validate_webgl_export_case(valid_case))
+    validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end

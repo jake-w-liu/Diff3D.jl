@@ -29,6 +29,110 @@ const _WEB_EMPTY_INTS = Int[]
 const _WEB_EMPTY_BOOLS = Bool[]
 const _WEB_EMPTY_ID_SET = Set{Int}()
 
+@noinline function _throw_web_case_parameter(label::String, requirement::String)
+    throw(ArgumentError("WebGLExportCase $label must be $requirement"))
+end
+
+function _web_case_finite(value::Real, label::String)
+    value isa Bool && _throw_web_case_parameter(label, "finite")
+    out = Float64(value)
+    isfinite(out) || _throw_web_case_parameter(label, "finite")
+    return out
+end
+
+function _web_case_positive(value::Real, label::String)
+    value isa Bool && _throw_web_case_parameter(label, "finite and positive")
+    out = Float64(value)
+    isfinite(out) && out > 0.0 ||
+        _throw_web_case_parameter(label, "finite and positive")
+    return out
+end
+
+function _web_case_fov(value::Real)
+    value isa Bool &&
+        _throw_web_case_parameter("fov", "finite and between 0 and pi radians")
+    out = Float64(value)
+    isfinite(out) && 0.0 < out < Float64(pi) ||
+        _throw_web_case_parameter("fov", "finite and between 0 and pi radians")
+    return out
+end
+
+@noinline _throw_web_case_vec3(label::String) =
+    throw(ArgumentError("WebGLExportCase $label must be a finite Vec3"))
+
+function _web_case_vec3(value::Vec3, label::String)
+    out = Vec3(Float64(value.x), Float64(value.y), Float64(value.z))
+    isfinite(out.x) && isfinite(out.y) && isfinite(out.z) ||
+        _throw_web_case_vec3(label)
+    return out
+end
+
+_web_case_vec3(value, label::String) = _throw_web_case_vec3(label)
+
+@noinline function _throw_web_case_clipping_plane(index::Int)
+    throw(ArgumentError("WebGLExportCase clipping plane $index must be finite"))
+end
+
+function _web_validate_case_clipping_planes(clipping_planes::AbstractVector{<:Plane})
+    for (index, plane) in enumerate(clipping_planes)
+        normal = plane.normal
+        isfinite(normal.x) && isfinite(normal.y) && isfinite(normal.z) &&
+            isfinite(plane.constant) || _throw_web_case_clipping_plane(index)
+    end
+    return nothing
+end
+
+function _web_case_clipping_planes(clipping_planes::AbstractVector{<:Plane})
+    _web_validate_case_clipping_planes(clipping_planes)
+    return [Plane(Vec3(Float64(plane.normal.x), Float64(plane.normal.y),
+                       Float64(plane.normal.z)), Float64(plane.constant))
+            for plane in clipping_planes]
+end
+
+@noinline _throw_web_camera_vector(kind::String, label::String) =
+    throw(ArgumentError("WebGL export $kind $label must be finite"))
+
+function _web_validate_camera_vectors(camera, kind::String)
+    for (label, value) in (("position", camera.position),
+                           ("target", camera.target), ("up", camera.up))
+        isfinite(value.x) && isfinite(value.y) && isfinite(value.z) ||
+            _throw_web_camera_vector(kind, label)
+    end
+    up = camera.up
+    max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 ||
+        throw(ArgumentError("WebGL export $kind up must be non-zero"))
+    return nothing
+end
+
+_web_validate_camera(::Nothing) = nothing
+
+function _web_validate_camera(camera::PerspectiveCamera)
+    _validated_perspective_params(camera.fov, camera.aspect, camera.near, camera.far)
+    _validated_camera_zoom(camera.zoom)
+    _web_validate_camera_vectors(camera, "PerspectiveCamera")
+    return nothing
+end
+
+function _web_validate_camera(camera::OrthographicCamera)
+    _validated_orthographic_params(camera.left, camera.right, camera.bottom,
+                                   camera.top, camera.near, camera.far)
+    _validated_camera_zoom(camera.zoom)
+    _web_validate_camera_vectors(camera, "OrthographicCamera")
+    return nothing
+end
+
+function _web_validate_camera(camera::ArrayCamera)
+    length(camera.cameras) == length(camera.viewports) ||
+        throw(ArgumentError("ArrayCamera cameras and viewports lengths must match"))
+    for subcamera in camera.cameras
+        _web_validate_camera(subcamera)
+    end
+    return nothing
+end
+
+_web_validate_camera(camera) =
+    throw(ArgumentError("WebGLExportCase camera must be nothing, PerspectiveCamera, OrthographicCamera, or ArrayCamera"))
+
 function WebGLExportCase(id::String, title::String, subtitle::String, scene::Scene;
                          target=Vec3(0.0, 0.0, 0.0), radius::Real=8.0,
                          height::Real=3.0, fov::Real=pi/4,
@@ -40,17 +144,19 @@ function WebGLExportCase(id::String, title::String, subtitle::String, scene::Sce
                          camera=nothing)
     _web_tone_mapping_id(tone_mapping)
     _web_output_color_space_id(output_color_space)
-    camera === nothing || camera isa AbstractCamera || camera isa ArrayCamera ||
-        throw(ArgumentError("WebGLExportCase camera must be nothing, PerspectiveCamera, OrthographicCamera, or ArrayCamera"))
+    _web_validate_camera(camera)
+    tone_exposure isa Bool &&
+        throw(ArgumentError("tone_exposure must be finite and non-negative"))
     exposure = Float64(tone_exposure)
     (isfinite(exposure) && exposure >= 0.0) ||
         throw(ArgumentError("tone_exposure must be finite and non-negative"))
-    WebGLExportCase(id, title, subtitle, scene, target, Float64(radius),
-                    Float64(height), Float64(fov), tone_mapping, exposure,
+    WebGLExportCase(id, title, subtitle, scene, _web_case_vec3(target, "target"),
+                    _web_case_positive(radius, "radius"),
+                    _web_case_finite(height, "height"), _web_case_fov(fov),
+                    tone_mapping, exposure,
                     output_color_space,
                     collect(AnimationClip, animations),
-                    [Plane(Vec3(Float64(p.normal.x), Float64(p.normal.y), Float64(p.normal.z)),
-                           Float64(p.constant)) for p in clipping_planes],
+                    _web_case_clipping_planes(clipping_planes),
                     camera)
 end
 
@@ -66,6 +172,20 @@ function _web_output_color_space_id(output_color_space::Symbol)
     output_color_space === :linear && return 0
     output_color_space === :srgb && return 1
     throw(ArgumentError("unsupported WebGL export output_color_space: $output_color_space"))
+end
+
+function _validate_webgl_export_case(case::WebGLExportCase)
+    _web_case_vec3(case.target, "target")
+    _web_case_positive(case.radius, "radius")
+    _web_case_finite(case.height, "height")
+    _web_case_fov(case.fov)
+    _web_tone_mapping_id(case.tone_mapping)
+    isfinite(case.tone_exposure) && case.tone_exposure >= 0.0 ||
+        throw(ArgumentError("tone_exposure must be finite and non-negative"))
+    _web_output_color_space_id(case.output_color_space)
+    _web_validate_case_clipping_planes(case.clipping_planes)
+    _web_validate_camera(case.camera)
+    return nothing
 end
 
 # Escape `<` to its \uXXXX form so no embedded user string can trip the HTML
@@ -660,7 +780,7 @@ function _web_camera_json_sizehint(camera)
     return 256
 end
 
-function _web_write_camera_json(io::IO, camera, num_buf::Vector{UInt8})
+function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8})
     if camera === nothing
         write(io, "null")
         return nothing
@@ -728,7 +848,7 @@ function _web_write_camera_json(io::IO, camera, num_buf::Vector{UInt8})
         write(io, "{\"type\":\"array\",\"cameras\":[")
         for (i, cam) in enumerate(camera.cameras)
             i == 1 || write(io, ',')
-            _web_write_camera_json(io, cam, num_buf)
+            _web_write_camera_json_validated(io, cam, num_buf)
         end
         write(io, "],\"viewports\":[")
         for (i, viewport) in enumerate(camera.viewports)
@@ -741,13 +861,19 @@ function _web_write_camera_json(io::IO, camera, num_buf::Vector{UInt8})
     throw(ArgumentError("unsupported WebGL export camera type: $(typeof(camera))"))
 end
 
+function _web_write_camera_json(io::IO, camera, num_buf::Vector{UInt8})
+    _web_validate_camera(camera)
+    return _web_write_camera_json_validated(io, camera, num_buf)
+end
+
 function _web_write_camera_json(io::IO, camera)
     return _web_write_camera_json(io, camera, _web_num_buffer())
 end
 
 function _web_camera_json(camera)
+    _web_validate_camera(camera)
     io = IOBuffer(sizehint=_web_camera_json_sizehint(camera))
-    _web_write_camera_json(io, camera)
+    _web_write_camera_json_validated(io, camera, _web_num_buffer())
     return String(take!(io))
 end
 
@@ -3652,7 +3778,7 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, ",\"fov\":")
     _js_write_num(io, case.fov, num_buf)
     write(io, ",\"camera\":")
-    _web_write_camera_json(io, case.camera, num_buf)
+    _web_write_camera_json_validated(io, case.camera, num_buf)
     write(io, ",\"toneMapping\":")
     _js_write_str(io, String(case.tone_mapping))
     write(io, ",\"toneMappingMode\":")
@@ -3688,12 +3814,13 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
 end
 
 function _web_case_json(case::WebGLExportCase)
+    _validate_webgl_export_case(case)
     io = IOBuffer(sizehint=_web_case_json_stream_sizehint(case))
-    _web_write_case_json(io, case)
+    _web_write_case_json_validated(io, case)
     return String(take!(io))
 end
 
-function _web_write_case_json(io::IO, case::WebGLExportCase)
+function _web_write_case_json_validated(io::IO, case::WebGLExportCase)
     animation_target_ids = _web_case_animation_target_ids(case.animations)
     lights_json = _web_case_light_stream(case, animation_target_ids)
     nodes = _WebTransformNodeStream(case.scene, animation_target_ids)
@@ -3704,6 +3831,11 @@ function _web_write_case_json(io::IO, case::WebGLExportCase)
     _web_write_case_json_parts(io, case, lights_json, nodes, objects,
                                texture_registry, env_texture_registry, _web_num_buffer())
     return nothing
+end
+
+function _web_write_case_json(io::IO, case::WebGLExportCase)
+    _validate_webgl_export_case(case)
+    return _web_write_case_json_validated(io, case)
 end
 
 function _web_light_caps(cases::AbstractVector{WebGLExportCase})
@@ -3736,14 +3868,22 @@ function _web_light_caps(cases::AbstractVector{WebGLExportCase})
             hemi=max(1, max_hemi), rect=max(1, max_rect))
 end
 
-function _web_write_data_json(io::IO, cases::AbstractVector{WebGLExportCase})
+function _web_write_data_json_validated(io::IO,
+                                        cases::AbstractVector{WebGLExportCase})
     write(io, "{\"cases\":[")
     for (i, case) in enumerate(cases)
         i == 1 || write(io, ',')
-        _web_write_case_json(io, case)
+        _web_write_case_json_validated(io, case)
     end
     write(io, "]}")
     return nothing
+end
+
+function _web_write_data_json(io::IO, cases::AbstractVector{WebGLExportCase})
+    for case in cases
+        _validate_webgl_export_case(case)
+    end
+    return _web_write_data_json_validated(io, cases)
 end
 
 function _web_write_rewritten(io::IO, text::AbstractString, rewrites)
@@ -4723,6 +4863,9 @@ Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase")
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
+    for case in cases
+        _validate_webgl_export_case(case)
+    end
     light_caps = _web_light_caps(cases)
     data_marker = "__DIFF3D_DATA_JSON__"
     data_statement = "  const DATA = $data_marker;"
@@ -4730,7 +4873,7 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
     data_rewrite = data_statement => function (io::IO)
         data_inserted[] = true
         write(io, "  const DATA = ")
-        _web_write_data_json(io, cases)
+        _web_write_data_json_validated(io, cases)
         write(io, ';')
         return nothing
     end
