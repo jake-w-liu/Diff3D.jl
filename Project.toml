@@ -13,7 +13,7 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 ColorTypes = "0.12.1"
 ForwardDiff = "0.10"
 JpegTurbo = "0.1.6"
-julia = "1.9"
+julia = "1.10"
 
 [extras]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
