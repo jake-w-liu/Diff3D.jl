@@ -488,6 +488,12 @@ _morph_finite_float(value, ti::Int) = _throw_morph_influence(ti)
 @inline _morph_influence(weight::Real, ti::Int) =
     _morph_finite_float(weight, ti)
 
+@inline function _morph_active_weight(weight::Real, ti::Int)
+    weight isa Bool && _throw_morph_influence(ti)
+    iszero(weight) && return 0.0
+    return _morph_influence(weight, ti)
+end
+
 const _MORPH_SYMBOL_LOCK = ReentrantLock()
 const _MORPH_POSITION_SYMBOLS = Dict{Int,Symbol}()
 const _MORPH_NORMAL_SYMBOLS = Dict{Int,Symbol}()
@@ -540,10 +546,87 @@ end
     return out
 end
 
+@noinline _throw_morph_position_item_size(name::Symbol) =
+    throw(ArgumentError("$name attribute must have item size 3"))
+
+@noinline _throw_morph_vec3_item_size(name::Symbol) =
+    throw(ArgumentError("$name attribute must have at least 3 components"))
+
+@noinline _throw_morph_attribute_count(name::Symbol) =
+    throw(ArgumentError("$name count does not match geometry"))
+
+@noinline _throw_morph_attribute_size(name::Symbol) =
+    throw(ArgumentError("$name attribute buffer is too large"))
+
+function _validate_morph_position_attribute(attr::BufferAttribute, name::Symbol,
+                                            n_vertices::Int)
+    attr.item_size == 3 || _throw_morph_position_item_size(name)
+    0 <= n_vertices <= typemax(Int) ÷ 3 || _throw_morph_attribute_size(name)
+    length(attr.data) == 3 * n_vertices || _throw_morph_attribute_count(name)
+    @inbounds for vi in 1:n_vertices
+        base = 3vi - 2
+        _morph_attribute_value(attr, base, name)
+        _morph_attribute_value(attr, base + 1, name)
+        _morph_attribute_value(attr, base + 2, name)
+    end
+    return nothing
+end
+
+function _validate_morph_vec3_attribute(attr::BufferAttribute, name::Symbol,
+                                        n_vertices::Int)
+    attr.item_size >= 3 || _throw_morph_vec3_item_size(name)
+    0 <= n_vertices <= typemax(Int) ÷ attr.item_size ||
+        _throw_morph_attribute_size(name)
+    length(attr.data) >= n_vertices * attr.item_size ||
+        _throw_morph_attribute_count(name)
+    @inbounds for vi in 1:n_vertices
+        base = (vi - 1) * attr.item_size + 1
+        _morph_attribute_value(attr, base, name)
+        _morph_attribute_value(attr, base + 1, name)
+        _morph_attribute_value(attr, base + 2, name)
+    end
+    return nothing
+end
+
+function _validate_morph_influences(influences::AbstractVector{<:Real})
+    @inbounds for ti in eachindex(influences)
+        _morph_active_weight(influences[ti], ti)
+    end
+    return nothing
+end
+
+function _validate_morph_position_targets(g::BufferGeometry,
+                                          influences::AbstractVector{<:Real})
+    for (ti, weight) in enumerate(influences)
+        w = _morph_active_weight(weight, ti)
+        w == 0.0 && continue
+        name = _morph_position_symbol(ti)
+        has_attribute(g, name) || continue
+        _validate_morph_position_attribute(get_attribute(g, name), name, g.n_vertices)
+    end
+    return nothing
+end
+
+@inline _morph_vec3_symbol(::Val{:normal}, ti::Int) = _morph_normal_symbol(ti)
+@inline _morph_vec3_symbol(::Val{:tangent}, ti::Int) = _morph_tangent_symbol(ti)
+
+function _validate_morph_vec3_targets(g::BufferGeometry,
+                                      influences::AbstractVector{<:Real}, kind::Val)
+    for (ti, weight) in enumerate(influences)
+        w = _morph_active_weight(weight, ti)
+        w == 0.0 && continue
+        name = _morph_vec3_symbol(kind, ti)
+        has_attribute(g, name) || continue
+        _validate_morph_vec3_attribute(get_attribute(g, name), name, g.n_vertices)
+    end
+    return nothing
+end
+
 function _apply_morph_position_attr!(out::Vector{Vec3{Float64}}, attr::BufferAttribute,
                                      w::Float64, name::Symbol, n_vertices::Int)
-    attr.item_size == 3 || error("$name attribute must have item size 3")
-    length(attr.data) == n_vertices * 3 || error("$name count does not match geometry")
+    attr.item_size == 3 || _throw_morph_position_item_size(name)
+    0 <= n_vertices <= typemax(Int) ÷ 3 || _throw_morph_attribute_size(name)
+    length(attr.data) == n_vertices * 3 || _throw_morph_attribute_count(name)
     @inbounds for vi in 1:n_vertices
         base = 3vi - 2
         delta = Vec3(_morph_attribute_value(attr, base, name),
@@ -563,9 +646,9 @@ end
     return _apply_morph_position_attr!(out, attr, w, name, n_vertices)
 end
 
-function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
-                              influences::AbstractVector{<:Real})
-    _validate_geometry_vertices(g, "apply_morph_targets")
+function _apply_morph_targets_validated!(out::Vector{Vec3{Float64}},
+                                         g::BufferGeometry,
+                                         influences::AbstractVector{<:Real})
     resize!(out, g.n_vertices)
     positions = g.positions
     @inbounds for vi in 1:g.n_vertices
@@ -573,9 +656,7 @@ function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
         out[vi] = Vec3(positions[base], positions[base + 1], positions[base + 2])
     end
     for (ti, weight) in enumerate(influences)
-        weight isa Bool && _throw_morph_influence(ti)
-        iszero(weight) && continue
-        w = _morph_influence(weight, ti)
+        w = _morph_active_weight(weight, ti)
         w == 0.0 && continue
         name = _morph_position_symbol(ti)
         has_attribute(g, name) || continue
@@ -585,10 +666,18 @@ function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
     return out
 end
 
+function apply_morph_targets!(out::Vector{Vec3{Float64}}, g::BufferGeometry,
+                              influences::AbstractVector{<:Real})
+    _validate_geometry_vertices(g, "apply_morph_targets")
+    _validate_morph_position_targets(g, influences)
+    return _apply_morph_targets_validated!(out, g, influences)
+end
+
 function apply_morph_targets(g::BufferGeometry, influences::AbstractVector{<:Real})
     _validate_geometry_vertices(g, "apply_morph_targets")
-    return apply_morph_targets!(Vector{Vec3{Float64}}(undef, g.n_vertices),
-                                g, influences)
+    _validate_morph_position_targets(g, influences)
+    return _apply_morph_targets_validated!(
+        Vector{Vec3{Float64}}(undef, g.n_vertices), g, influences)
 end
 
 function _object_morph_positions(obj, geo::BufferGeometry)
@@ -635,8 +724,11 @@ end
 function _apply_morph_attribute3_attr!(out::Vector{Float64}, attr::BufferAttribute,
                                        w::Float64, name::Symbol, n_vertices::Int,
                                        dst_item_size::Int)
-    attr.item_size >= 3 || error("$name attribute must have at least 3 components")
-    length(attr.data) >= n_vertices * attr.item_size || error("$name count does not match geometry")
+    attr.item_size >= 3 || _throw_morph_vec3_item_size(name)
+    0 <= n_vertices <= typemax(Int) ÷ attr.item_size ||
+        _throw_morph_attribute_size(name)
+    length(attr.data) >= n_vertices * attr.item_size ||
+        _throw_morph_attribute_count(name)
     @inbounds for vi in 1:n_vertices
         dst = (vi - 1) * dst_item_size + 1
         src = (vi - 1) * attr.item_size + 1
@@ -658,6 +750,21 @@ end
         out, attr, w, name, n_vertices, dst_item_size)
 end
 
+function _apply_morph_normals_validated!(out::Vector{Float64}, g::BufferGeometry,
+                                         influences::AbstractVector{<:Real})
+    resize!(out, length(g.normals))
+    copyto!(out, 1, g.normals, 1, length(g.normals))
+    for (ti, weight) in enumerate(influences)
+        w = _morph_active_weight(weight, ti)
+        w == 0.0 && continue
+        name = _morph_normal_symbol(ti)
+        has_attribute(g, name) || continue
+        attr = get_attribute(g, name)
+        _apply_morph_attribute3_attr_dispatch!(out, attr, w, name, g.n_vertices, 3)
+    end
+    return _normalize_attribute3!(out, g.n_vertices, 3)
+end
+
 """
     apply_morph_normals(geo, influences)
 
@@ -667,7 +774,9 @@ normal. Returns a flat normal buffer.
 function apply_morph_normals(g::BufferGeometry, influences::AbstractVector{<:Real})
     _validate_geometry_vertex_count(g, "apply_morph_normals")
     length(g.normals) >= g.n_vertices * 3 || return copy(g.normals)
-    return apply_morph_normals!(_float64_copy(g.normals), g, influences)
+    _validate_morph_vec3_targets(g, influences, Val(:normal))
+    return _apply_morph_normals_validated!(
+        Vector{Float64}(undef, length(g.normals)), g, influences)
 end
 
 function apply_morph_normals!(out::Vector{Float64}, g::BufferGeometry,
@@ -678,19 +787,8 @@ function apply_morph_normals!(out::Vector{Float64}, g::BufferGeometry,
         length(g.normals) > 0 && copyto!(out, 1, g.normals, 1, length(g.normals))
         return out
     end
-    resize!(out, length(g.normals))
-    copyto!(out, 1, g.normals, 1, length(g.normals))
-    for (ti, weight) in enumerate(influences)
-        weight isa Bool && _throw_morph_influence(ti)
-        iszero(weight) && continue
-        w = _morph_influence(weight, ti)
-        w == 0.0 && continue
-        name = _morph_normal_symbol(ti)
-        has_attribute(g, name) || continue
-        attr = get_attribute(g, name)
-        _apply_morph_attribute3_attr_dispatch!(out, attr, w, name, g.n_vertices, 3)
-    end
-    return _normalize_attribute3!(out, g.n_vertices, 3)
+    _validate_morph_vec3_targets(g, influences, Val(:normal))
+    return _apply_morph_normals_validated!(out, g, influences)
 end
 
 """
@@ -705,28 +803,22 @@ function apply_morph_tangents(g::BufferGeometry, influences::AbstractVector{<:Re
     _validate_geometry_vertex_count(g, "apply_morph_tangents")
     has_attribute(g, :tangent) || return Float64[]
     base_attr = get_attribute(g, :tangent)
-    base_attr.item_size >= 3 && length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
+    base_attr.item_size >= 3 &&
+        g.n_vertices <= typemax(Int) ÷ base_attr.item_size &&
+        length(base_attr.data) >= g.n_vertices * base_attr.item_size ||
         return _float64_copy(base_attr.data)
-    return apply_morph_tangents!(_float64_copy(base_attr.data), g, influences)
+    _validate_morph_vec3_targets(g, influences, Val(:tangent))
+    return _apply_morph_tangents_validated!(
+        Vector{Float64}(undef, length(base_attr.data)), g, influences, base_attr)
 end
 
-function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
-                               influences::AbstractVector{<:Real})
-    _validate_geometry_vertex_count(g, "apply_morph_tangents")
-    has_attribute(g, :tangent) || (empty!(out); return out)
-    base_attr = get_attribute(g, :tangent)
-    if !(base_attr.item_size >= 3 &&
-         length(base_attr.data) >= g.n_vertices * base_attr.item_size)
-        resize!(out, length(base_attr.data))
-        length(base_attr.data) > 0 && copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
-        return out
-    end
+function _apply_morph_tangents_validated!(out::Vector{Float64}, g::BufferGeometry,
+                                          influences::AbstractVector{<:Real},
+                                          base_attr::BufferAttribute)
     resize!(out, length(base_attr.data))
     copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
     for (ti, weight) in enumerate(influences)
-        weight isa Bool && _throw_morph_influence(ti)
-        iszero(weight) && continue
-        w = _morph_influence(weight, ti)
+        w = _morph_active_weight(weight, ti)
         w == 0.0 && continue
         name = _morph_tangent_symbol(ti)
         has_attribute(g, name) || continue
@@ -735,6 +827,22 @@ function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
             out, attr, w, name, g.n_vertices, base_attr.item_size)
     end
     return _normalize_attribute3!(out, g.n_vertices, base_attr.item_size)
+end
+
+function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
+                               influences::AbstractVector{<:Real})
+    _validate_geometry_vertex_count(g, "apply_morph_tangents")
+    has_attribute(g, :tangent) || (empty!(out); return out)
+    base_attr = get_attribute(g, :tangent)
+    if !(base_attr.item_size >= 3 &&
+         g.n_vertices <= typemax(Int) ÷ base_attr.item_size &&
+         length(base_attr.data) >= g.n_vertices * base_attr.item_size)
+        resize!(out, length(base_attr.data))
+        length(base_attr.data) > 0 && copyto!(out, 1, base_attr.data, 1, length(base_attr.data))
+        return out
+    end
+    _validate_morph_vec3_targets(g, influences, Val(:tangent))
+    return _apply_morph_tangents_validated!(out, g, influences, base_attr)
 end
 
 function _compute_bounding_box_validated(g::BufferGeometry)

@@ -5013,8 +5013,8 @@ end
         @test occursin("!o.hasMorphTargets", html)
         @test occursin("o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice()", html)
         @test occursin("o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice()", html)
-        @test occursin("o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map", html)
-        @test occursin("o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map", html)
+        @test occursin("o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map(m=>m?m.slice():null)", html)
+        @test occursin("o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map(m=>m?m.slice():null)", html)
         @test occursin("baseN=o.morphedNormals||o.baseNormals", html)
         @test occursin("baseT=o.morphedTangents||o.baseTangents", html)
         @test occursin("o.skinIndexBuf=buf", html)
@@ -20167,6 +20167,8 @@ end
         @test_opt_alloc 0 Diff3D.apply_morph_tangents!(morph_alloc_tangent_out,
                                                         morph_alloc_geo,
                                                         morph_alloc_influences)
+        apply_morph_normals(morph_alloc_geo, morph_alloc_influences)
+        apply_morph_tangents(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_targets(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_normals(morph_alloc_geo, morph_alloc_influences)
         @test_opt_alloc 4096 apply_morph_tangents(morph_alloc_geo, morph_alloc_influences)
@@ -24103,4 +24105,156 @@ end
         (@allocated Diff3D._validate_skinned_mesh(mutable_sm, "SkinnedMesh"))
     validation_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end
+
+@testset "fresh audit round 174 fixes" begin
+    position_geo = BufferGeometry(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        Float64[], Int[], 2, 0)
+    position_out = [Vec3(9.0, 8.0, 7.0)]
+    position_sentinel = copy(position_out)
+
+    set_attribute!(position_geo, :morphPosition0, zeros(4), 2)
+    @test_throws "morphPosition0 attribute must have item size 3" Diff3D.apply_morph_targets!(
+        position_out, position_geo, [1.0])
+    @test position_out == position_sentinel
+
+    set_attribute!(position_geo, :morphPosition0, zeros(3), 3)
+    @test_throws "morphPosition0 count does not match geometry" Diff3D.apply_morph_targets!(
+        position_out, position_geo, [1.0])
+    @test position_out == position_sentinel
+
+    set_attribute!(position_geo, :morphPosition0,
+                   [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 3)
+    set_attribute!(position_geo, :morphPosition1,
+                   [NaN, 0.0, 0.0, 0.0, 0.0, 0.0], 3)
+    @test_throws "morphPosition1 attribute data must be finite" Diff3D.apply_morph_targets!(
+        position_out, position_geo, [1.0, 1.0])
+    @test position_out == position_sentinel
+
+    set_attribute!(position_geo, :morphPosition1, zeros(6), 3)
+    @test_throws "morph target influence 2 must be finite" Diff3D.apply_morph_targets!(
+        position_out, position_geo, [1.0, NaN])
+    @test position_out == position_sentinel
+
+    normal_out = [9.0]
+    normal_sentinel = copy(normal_out)
+    set_attribute!(position_geo, :morphNormal0, zeros(4), 2)
+    @test_throws "morphNormal0 attribute must have at least 3 components" Diff3D.apply_morph_normals!(
+        normal_out, position_geo, [1.0])
+    @test normal_out == normal_sentinel
+    set_attribute!(position_geo, :morphNormal0,
+                   [0.0, Inf, 0.0, 0.0, 0.0, 0.0], 3)
+    @test_throws "morphNormal0 attribute data must be finite" Diff3D.apply_morph_normals!(
+        normal_out, position_geo, [1.0])
+    @test normal_out == normal_sentinel
+
+    set_attribute!(position_geo, :tangent,
+                   [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, -1.0], 4)
+    tangent_out = [9.0]
+    tangent_sentinel = copy(tangent_out)
+    set_attribute!(position_geo, :morphTangent0, zeros(4), 2)
+    @test_throws "morphTangent0 attribute must have at least 3 components" Diff3D.apply_morph_tangents!(
+        tangent_out, position_geo, [1.0])
+    @test tangent_out == tangent_sentinel
+    set_attribute!(position_geo, :morphTangent0,
+                   [0.0, 0.0, NaN, 0.0, 0.0, 0.0], 3)
+    @test_throws "morphTangent0 attribute data must be finite" Diff3D.apply_morph_tangents!(
+        tangent_out, position_geo, [1.0])
+    @test tangent_out == tangent_sentinel
+
+    valid_delta = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    set_attribute!(position_geo, :morphPosition0, valid_delta, 3)
+    delete!(position_geo.attributes, :morphPosition1)
+    set_attribute!(position_geo, :morphNormal0,
+                   [0.0, 1.0, 0.0, 0.0, 1.0, 0.0], 3)
+    set_attribute!(position_geo, :morphTangent0,
+                   [0.0, 1.0, 0.0, 0.0, 1.0, 0.0], 3)
+    influences = [0.5]
+    resize!(position_out, position_geo.n_vertices)
+    resize!(normal_out, length(position_geo.normals))
+    resize!(tangent_out, length(get_attribute(position_geo, :tangent).data))
+    Diff3D.apply_morph_targets!(position_out, position_geo, influences)
+    Diff3D.apply_morph_normals!(normal_out, position_geo, influences)
+    Diff3D.apply_morph_tangents!(tangent_out, position_geo, influences)
+    @test position_out == [Vec3(0.0, 0.0, 0.5), Vec3(1.0, 0.0, 0.5)]
+    @test normal_out[2] ≈ inv(sqrt(5.0))
+    @test tangent_out[2] ≈ inv(sqrt(5.0))
+    position_validation_probe = () ->
+        (@allocated Diff3D._validate_morph_position_targets(position_geo, influences))
+    normal_validation_probe = () ->
+        (@allocated Diff3D._validate_morph_vec3_targets(
+            position_geo, influences, Val(:normal)))
+    tangent_validation_probe = () ->
+        (@allocated Diff3D._validate_morph_vec3_targets(
+            position_geo, influences, Val(:tangent)))
+    position_validation_probe()
+    normal_validation_probe()
+    tangent_validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || position_validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || normal_validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || tangent_validation_probe() == 0
+    @test_opt_alloc 0 Diff3D.apply_morph_targets!(position_out, position_geo, influences)
+    @test_opt_alloc 0 Diff3D.apply_morph_normals!(normal_out, position_geo, influences)
+    @test_opt_alloc 0 Diff3D.apply_morph_tangents!(tangent_out, position_geo, influences)
+
+    web_geo = BufferGeometry(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        Float64[], Int[1, 2, 3], 3, 1)
+    set_attribute!(web_geo, :morphPosition0, zeros(6), 2)
+    web_skin = SkinnedMesh(
+        web_geo, MeshBasicMaterial(), Skeleton([Bone()]),
+        fill((1, 1, 1, 1), 3), fill((1.0, 0.0, 0.0, 0.0), 3);
+        morph_target_influences=[1.0])
+    web_scene = Scene()
+    add!(web_scene, web_skin)
+    @test_throws "morphPosition0 attribute must have item size 3" Diff3D._web_case_json(
+        WebGLExportCase("bad_morph", "Bad morph", "layout", web_scene))
+    web_io = IOBuffer()
+    @test_throws "morphPosition0 attribute must have item size 3" Diff3D._web_write_drawable_json(
+        web_io, web_skin, Mat4())
+    @test position(web_io) == 0
+
+    set_attribute!(web_geo, :morphPosition0,
+                   [NaN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3)
+    @test_throws "morphPosition0 attribute data must be finite" Diff3D._web_case_json(
+        WebGLExportCase("bad_morph", "Bad morph", "finite", web_scene))
+
+    sparse_geo = BufferGeometry(
+        copy(web_geo.positions), copy(web_geo.normals), Float64[], copy(web_geo.indices), 3, 1)
+    set_attribute!(sparse_geo, :tangent,
+                   repeat([1.0, 0.0, 0.0, 1.0], 3), 4)
+    set_attribute!(sparse_geo, :morphPosition1,
+                   repeat([0.0, 0.0, 1.0], 3), 3)
+    set_attribute!(sparse_geo, :morphNormal1,
+                   repeat([0.0, 1.0, 0.0], 3), 3)
+    set_attribute!(sparse_geo, :morphTangent1,
+                   repeat([0.0, 1.0, 0.0], 3), 3)
+    sparse_skin = SkinnedMesh(
+        sparse_geo, MeshBasicMaterial(), Skeleton([Bone()]),
+        fill((1, 1, 1, 1), 3), fill((1.0, 0.0, 0.0, 0.0), 3);
+        morph_target_influences=[0.0, 0.5])
+    sparse_json = Diff3D._web_morph_targets_json(sparse_skin, sparse_geo)
+    @test occursin("\"morphTargets\":[null,[0,0,1,0,0,1,0,0,1]]", sparse_json)
+    @test occursin("\"morphNormals\":[null,[0,1,0,0,1,0,0,1,0]]", sparse_json)
+    @test occursin("\"morphTangents\":[null,[0,1,0,0,1,0,0,1,0]]", sparse_json)
+    @test occursin("\"morphWeights\":[0,0.5]", sparse_json)
+    @test apply_morph_targets(sparse_skin)[1] == Vec3(0.0, 0.0, 0.5)
+
+    point_geo = BufferGeometry([0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    set_attribute!(point_geo, :morphPosition0, [0.0, 0.0, 1.0], 3)
+    point_obj = PointsObject(point_geo, PointsMaterial(); morph_target_influences=[0.5])
+    point_json = Diff3D._web_drawable_json(point_obj, Mat4(); mode="points")
+    @test occursin("\"mode\":\"points\"", point_json)
+    @test occursin("\"morphWeights\":[0.5]", point_json)
+
+    line_geo = BufferGeometry(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0], Float64[], Float64[], Int[], 2, 0)
+    set_attribute!(line_geo, :morphPosition0, valid_delta, 3)
+    line_obj = LineSegments(line_geo, LineBasicMaterial(); morph_target_influences=[0.5])
+    line_json = Diff3D._web_drawable_json(line_obj, Mat4(); mode="lines")
+    @test occursin("\"mode\":\"lines\"", line_json)
+    @test occursin("\"morphWeights\":[0.5]", line_json)
 end

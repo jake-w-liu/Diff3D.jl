@@ -1654,7 +1654,7 @@ function _web_morph_position_target_count(geo::BufferGeometry)
         name = _morph_position_symbol(i + 1)
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
-        attr.item_size == 3 && length(attr.data) == length(geo.positions) || break
+        _validate_morph_position_attribute(attr, name, geo.n_vertices)
         i += 1
     end
     return i
@@ -1666,7 +1666,7 @@ function _web_morph_vec3_target_count(geo::BufferGeometry, ::Val{:normal})
         name = _morph_normal_symbol(i + 1)
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
-        attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
+        _validate_morph_vec3_attribute(attr, name, geo.n_vertices)
         i += 1
     end
     return i
@@ -1678,10 +1678,62 @@ function _web_morph_vec3_target_count(geo::BufferGeometry, ::Val{:tangent})
         name = _morph_tangent_symbol(i + 1)
         has_attribute(geo, name) || break
         attr = get_attribute(geo, name)
-        attr.item_size >= 3 && length(attr.data) >= geo.n_vertices * attr.item_size || break
+        _validate_morph_vec3_attribute(attr, name, geo.n_vertices)
         i += 1
     end
     return i
+end
+
+@noinline function _throw_web_morph_target_limit()
+    throw(ArgumentError(
+        "WebGL export morph target count must not exceed $_GEOMETRY_MAX_SUBDIVISIONS"))
+end
+
+function _web_morph_target_scan_limit(obj)
+    limit = length(getproperty(obj, :morph_target_influences))
+    hasproperty(obj, :morph_target_names) &&
+        (limit = max(limit, length(getproperty(obj, :morph_target_names))))
+    limit <= _GEOMETRY_MAX_SUBDIVISIONS || _throw_web_morph_target_limit()
+    return limit
+end
+
+function _web_morph_target_counts(obj, geo::BufferGeometry)
+    influences = getproperty(obj, :morph_target_influences)
+    _validate_morph_influences(influences)
+    isempty(geo.attributes) && return 0, 0, 0
+    position_count = 0
+    normal_count = 0
+    tangent_count = 0
+    declared_count = _web_morph_target_scan_limit(obj)
+    ti = 1
+    while true
+        position_name = _morph_position_symbol(ti)
+        has_position = has_attribute(geo, position_name)
+        if has_position
+            _validate_morph_position_attribute(
+                get_attribute(geo, position_name), position_name, geo.n_vertices)
+            position_count = ti
+        end
+        normal_name = _morph_normal_symbol(ti)
+        has_normal = has_attribute(geo, normal_name)
+        if has_normal
+            _validate_morph_vec3_attribute(
+                get_attribute(geo, normal_name), normal_name, geo.n_vertices)
+            normal_count = ti
+        end
+        tangent_name = _morph_tangent_symbol(ti)
+        has_tangent = has_attribute(geo, tangent_name)
+        if has_tangent
+            _validate_morph_vec3_attribute(
+                get_attribute(geo, tangent_name), tangent_name, geo.n_vertices)
+            tangent_count = ti
+        end
+        has_target = has_position || has_normal || has_tangent
+        !has_target && ti > declared_count && break
+        ti == _GEOMETRY_MAX_SUBDIVISIONS && return position_count, normal_count, tangent_count
+        ti += 1
+    end
+    return position_count, normal_count, tangent_count
 end
 
 function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::Int,
@@ -1689,8 +1741,12 @@ function _web_write_morph_position_targets(io::IO, geo::BufferGeometry, count::I
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
-        attr = get_attribute(geo, _morph_position_symbol(i + 1))
-        _js_write_array(io, attr.data, num_buf)
+        name = _morph_position_symbol(i + 1)
+        if has_attribute(geo, name)
+            _js_write_array(io, get_attribute(geo, name).data, num_buf)
+        else
+            write(io, "null")
+        end
     end
     write(io, ']')
     return nothing
@@ -1706,9 +1762,14 @@ function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
-        attr = get_attribute(geo, _morph_normal_symbol(i + 1))
-        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
-                                             geo.n_vertices, num_buf)
+        name = _morph_normal_symbol(i + 1)
+        if has_attribute(geo, name)
+            attr = get_attribute(geo, name)
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                                 geo.n_vertices, num_buf)
+        else
+            write(io, "null")
+        end
     end
     write(io, ']')
     return nothing
@@ -1720,9 +1781,14 @@ function _web_write_morph_vec3_targets(io::IO, geo::BufferGeometry,
     write(io, '[')
     for i in 0:(count - 1)
         i == 0 || write(io, ',')
-        attr = get_attribute(geo, _morph_tangent_symbol(i + 1))
-        _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
-                                             geo.n_vertices, num_buf)
+        name = _morph_tangent_symbol(i + 1)
+        if has_attribute(geo, name)
+            attr = get_attribute(geo, name)
+            _js_write_attribute_components_array(io, attr.data, attr.item_size, 3,
+                                                 geo.n_vertices, num_buf)
+        else
+            write(io, "null")
+        end
     end
     write(io, ']')
     return nothing
@@ -1737,18 +1803,20 @@ function _web_morph_targets_sizehint(obj, geo::BufferGeometry, target_count::Int
                                      normal_count::Int, tangent_count::Int,
                                      has_morph_channels::Bool)
     n_nums = obj isa SkinnedMesh ? 0 : length(geo.positions)
-    n_nums += 3 * geo.n_vertices * (target_count + normal_count + tangent_count)
-    has_morph_channels && (n_nums += length(obj.morph_target_influences))
+    channel_count = _web_sizehint_add(
+        target_count, _web_sizehint_add(normal_count, tangent_count))
+    n_nums = _web_sizehint_add(
+        n_nums, _web_sizehint_mul(_web_sizehint_mul(3, geo.n_vertices), channel_count))
+    has_morph_channels &&
+        (n_nums = _web_sizehint_add(n_nums, length(obj.morph_target_influences)))
     return 256 + _web_num_array_sizehint(n_nums)
 end
 
-function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
-                                       num_buf::Vector{UInt8})
-    hasproperty(obj, :morph_target_influences) ||
+function _web_write_morph_targets_json_validated(
+        io::IO, obj, geo::BufferGeometry, num_buf::Vector{UInt8}, counts)
+    counts === nothing &&
         (write(io, "\"morphTargets\":[],\"morphWeights\":[]"); return nothing)
-    target_count = _web_morph_position_target_count(geo)
-    normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
-    tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
+    target_count, normal_count, tangent_count = counts
     has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
     if !(obj isa SkinnedMesh)
         write(io, "\"basePositions\":")
@@ -1767,17 +1835,24 @@ function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
     return nothing
 end
 
+function _web_write_morph_targets_json(io::IO, obj, geo::BufferGeometry,
+                                       num_buf::Vector{UInt8})
+    counts = hasproperty(obj, :morph_target_influences) ?
+        _web_morph_target_counts(obj, geo) : nothing
+    return _web_write_morph_targets_json_validated(io, obj, geo, num_buf, counts)
+end
+
 function _web_morph_targets_json(obj, geo::BufferGeometry)
     hasproperty(obj, :morph_target_influences) ||
         return "\"morphTargets\":[],\"morphWeights\":[]"
-    target_count = _web_morph_position_target_count(geo)
-    normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
-    tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
+    counts = _web_morph_target_counts(obj, geo)
+    target_count, normal_count, tangent_count = counts
     has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
     io = IOBuffer(sizehint=_web_morph_targets_sizehint(obj, geo, target_count,
                                                        normal_count, tangent_count,
                                                        has_morph_channels))
-    _web_write_morph_targets_json(io, obj, geo, _web_num_buffer())
+    _web_write_morph_targets_json_validated(
+        io, obj, geo, _web_num_buffer(), counts)
     return String(take!(io))
 end
 
@@ -2218,9 +2293,7 @@ function _web_drawable_json_sizehint(obj, geo::BufferGeometry,
                                      position_float_count::Integer)
     hint = _web_sizehint_add(8192, _web_geo_object_sizehint(geo, position_float_count))
     if hasproperty(obj, :morph_target_influences)
-        target_count = _web_morph_position_target_count(geo)
-        normal_count = _web_morph_vec3_target_count(geo, Val(:normal))
-        tangent_count = _web_morph_vec3_target_count(geo, Val(:tangent))
+        target_count, normal_count, tangent_count = _web_morph_target_counts(obj, geo)
         has_morph_channels = target_count > 0 || normal_count > 0 || tangent_count > 0
         hint = _web_sizehint_add(hint,
                                  _web_morph_targets_sizehint(obj, geo, target_count,
@@ -2273,6 +2346,8 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
         throw(ArgumentError("WebGL export draw mode is unsupported: $mode"))
     end
     obj isa SkinnedMesh && _validate_skinned_mesh(obj, "WebGL export")
+    morph_counts = hasproperty(obj, :morph_target_influences) ?
+        _web_morph_target_counts(obj, geo) : nothing
     m = matrix === nothing ? world : matrix
     rot = get_rotation(transform_obj)
     parent = get_parent(transform_obj)
@@ -2541,7 +2616,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"morphTargetIds\":")
     _web_write_morph_target_ids_json(io, morph_target_ids, transform_obj.id, num_buf)
     write(io, ',')
-    _web_write_morph_targets_json(io, obj, geo, num_buf)
+    _web_write_morph_targets_json_validated(io, obj, geo, num_buf, morph_counts)
     write(io, ',')
     _web_write_skin_json(io, obj, geo, num_buf)
     write(io, ',')
@@ -4144,7 +4219,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     o.parentMatrix=(o.parentMatrix||M4.ident()).slice(); o.instanceMatrices=(o.instanceMatrices&&o.instanceMatrices.length)?o.instanceMatrices.map(m=>m.slice()):null; o.instanceColors=(o.instanceColors&&o.instanceColors.length)?o.instanceColors.map(c=>c.slice()):null; o.instanceSource=!!(o.instanceMatrix||o.instanceMatrices); o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident(); o.bindMode=o.bindMode||"attached"; o.bindMatrix=(o.bindMatrix||M4.ident()).slice(); o.bindMatrixInverse=(o.bindMatrixInverse||M4.ident()).slice(); o.basePosition=(o.basePosition||[0,0,0]).slice(); o.baseEuler=(o.baseEuler||[0,0,0]).slice(); o.baseEulerOrder=o.baseEulerOrder||"XYZ"; o.baseScale=(o.baseScale||[1,1,1]).slice(); o.baseQuaternion=(o.baseQuaternion||eulerToQuat(o.baseEuler,o.baseEulerOrder)).slice(); o.baseMatrix=o.matrix.slice(); o.baseTransparent=!!o.transparent; o.animTransparent=o.baseTransparent; o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice();
     o.baseRenderable={visible:o.visible,color:o.color.slice(),opacity:o.opacity,transparent:o.transparent,alphaTest:o.alphaTest,depthTest:o.depthTest,depthWrite:o.depthWrite,normalScale:o.normalScale,depthNear:o.depthNear,depthFar:o.depthFar,toonSteps:o.toonSteps,roughness:o.roughness,metalness:o.metalness,clearcoat:o.clearcoat,clearcoatRoughness:o.clearcoatRoughness,clearcoatNormalScale:o.clearcoatNormalScale,transmission:o.transmission,thickness:o.thickness,attenuationDistance:o.attenuationDistance,attenuationColor:(o.attenuationColor||[1,1,1]).slice(),ior:o.ior,sheen:o.sheen,sheenColor:(o.sheenColor||[1,1,1]).slice(),sheenRoughness:o.sheenRoughness,iridescence:o.iridescence,iridescenceIor:o.iridescenceIor,iridescenceThickness:o.iridescenceThickness,specularIntensity:o.specularIntensity,specularColor:(o.specularColor||[1,1,1]).slice(),anisotropy:o.anisotropy,anisotropyRotation:o.anisotropyRotation,dispersion:o.dispersion,shininess:o.shininess,glossiness:o.glossiness,emissive:(o.emissive||[0,0,0]).slice(),emissiveIntensity:o.emissiveIntensity,aoIntensity:o.aoIntensity,lightMapIntensity:o.lightMapIntensity,envMapIntensity:o.envMapIntensity,pointSize:o.pointSize,pointSizeAttenuation:o.pointSizeAttenuation,linewidth:o.linewidth,lineDashed:o.lineDashed,dashSize:o.dashSize,gapSize:o.gapSize,dashScale:o.dashScale,spriteRotation:o.spriteRotation,spriteSizeAttenuation:o.spriteSizeAttenuation,glow:o.glow};
     o.visibilityStates=(o.visibilityStates&&o.visibilityStates.length)?o.visibilityStates:[{id:o.id,visible:o.visible!==false}]; for(const s of o.visibilityStates) s.baseVisible=s.visible!==false;
-    o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice():new Array(o.positions.length).fill(0); o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice():[]; o.hasTangents=!!o.hasTangents; o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map(m=>m.slice()):[]; o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map(m=>m.slice()):[]; o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.hasMorphTargets=!!((o.morphTargets&&o.morphTargets.length)||(o.baseMorphNormals&&o.baseMorphNormals.length)||(o.baseMorphTangents&&o.baseMorphTangents.length)); o.morphedPositions=null; o.morphedNormals=null; o.morphedTangents=null; o.morphDirty=o.hasMorphTargets;
+    o.basePositions=(o.basePositions&&o.basePositions.length)?o.basePositions.slice():o.positions.slice(); o.baseNormals=(o.normals&&o.normals.length)?o.normals.slice():new Array(o.positions.length).fill(0); o.baseTangents=(o.tangents&&o.tangents.length)?o.tangents.slice():[]; o.hasTangents=!!o.hasTangents; o.baseMorphNormals=(o.morphNormals&&o.morphNormals.length)?o.morphNormals.map(m=>m?m.slice():null):[]; o.baseMorphTangents=(o.morphTangents&&o.morphTangents.length)?o.morphTangents.map(m=>m?m.slice():null):[]; o.baseMorphWeights=(o.morphWeights||[]).slice(); o.morphWeights=o.baseMorphWeights.slice(); o.hasMorphTargets=!!((o.morphTargets&&o.morphTargets.length)||(o.baseMorphNormals&&o.baseMorphNormals.length)||(o.baseMorphTangents&&o.baseMorphTangents.length)); o.morphedPositions=null; o.morphedNormals=null; o.morphedTangents=null; o.morphDirty=o.hasMorphTargets;
     o.shaderSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&o.skin.bones.length<=MAX_BONES&&!o.hasMorphTargets);
     o.textureSkin=!!(o.skin&&o.skin.bones&&o.skin.bones.length>MAX_BONES&&boneTexturesEnabled&&!o.hasMorphTargets);
     o.skinDirty=!!(o.skin&&o.skin.bones&&o.skin.bones.length&&!(o.shaderSkin||o.textureSkin)); if(o.skin){ for(const b of o.skin.bones){ b.parentMatrix=(b.parentMatrix||M4.ident()).slice(); b.basePosition=(b.basePosition||[0,0,0]).slice(); b.baseEuler=(b.baseEuler||[0,0,0]).slice(); b.baseEulerOrder=b.baseEulerOrder||"XYZ"; b.baseScale=(b.baseScale||[1,1,1]).slice(); b.baseQuaternion=(b.baseQuaternion||eulerToQuat(b.baseEuler,b.baseEulerOrder)).slice(); b.baseMatrix=b.matrix.slice(); b.matrix=b.baseMatrix.slice(); b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); } }
