@@ -24728,3 +24728,111 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || transparency_probe() == 0
 end
+
+@testset "fresh audit round 181 fixes" begin
+    function physical_material_with(field::Symbol, value)
+        kwargs = NamedTuple{(field,)}((value,))
+        return MeshPhysicalMaterial(; kwargs...)
+    end
+
+    unit_interval_fields = (
+        :clearcoat, :clearcoat_roughness, :transmission, :sheen,
+        :sheen_roughness, :iridescence, :specular_intensity, :anisotropy,
+    )
+    for field in unit_interval_fields
+        message = "material $field must be finite and between 0 and 1"
+        for value in (NaN, Inf, -0.01, 1.01, true)
+            @test_throws message physical_material_with(field, value)
+        end
+        @test getproperty(physical_material_with(field, 0.0), field) == 0.0
+        @test getproperty(physical_material_with(field, 1.0), field) == 1.0
+    end
+
+    nonnegative_fields = (
+        :thickness, :attenuation_distance, :iridescence_thickness, :dispersion,
+    )
+    for field in nonnegative_fields
+        message = "material $field must be finite and non-negative"
+        for value in (NaN, Inf, -0.01, false)
+            @test_throws message physical_material_with(field, value)
+        end
+        @test getproperty(physical_material_with(field, 0.0), field) == 0.0
+        @test getproperty(physical_material_with(field, 2.0), field) == 2.0
+    end
+
+    for field in (:ior, :iridescence_ior)
+        message = "material $field must be finite and at least 1"
+        for value in (NaN, Inf, 0.99, true)
+            @test_throws message physical_material_with(field, value)
+        end
+        @test getproperty(physical_material_with(field, 1.0), field) == 1.0
+        @test getproperty(physical_material_with(field, 2.0), field) == 2.0
+    end
+
+    for value in (NaN, Inf, true)
+        @test_throws "material anisotropy_rotation must be finite" MeshPhysicalMaterial(
+            anisotropy_rotation=value)
+    end
+    @test MeshPhysicalMaterial(anisotropy_rotation=-pi).anisotropy_rotation == -pi
+
+    function bypass_physical_scalar_validation(field::Symbol, value)
+        material = MeshPhysicalMaterial()
+        T = typeof(material)
+        return T((name === field ? value : getfield(material, name)
+                  for name in fieldnames(T))...)
+    end
+
+    invalid_direct_cases = (
+        ((field, NaN, "material $field must be finite and between 0 and 1")
+         for field in unit_interval_fields)...,
+        ((field, -1.0, "material $field must be finite and non-negative")
+         for field in nonnegative_fields)...,
+        ((field, 0.5, "material $field must be finite and at least 1")
+         for field in (:ior, :iridescence_ior))...,
+        (:anisotropy_rotation, NaN, "material anisotropy_rotation must be finite"),
+    )
+    normal = Vec3(0.0, 0.0, 1.0)
+    lights = AbstractLight[AmbientLight(intensity=1.0)]
+    geometry = PlaneGeometry()
+    for (field, value, message) in invalid_direct_cases
+        material = bypass_physical_scalar_validation(field, value)
+        @test_throws message Diff3D._validate_material_parameters(material)
+        @test_throws message shade_face(normal, normal, Vec3(), material, lights)
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_drawable_json(
+            web_io, Mesh(geometry, material), Mat4())
+        @test position(web_io) == 0
+    end
+
+    sentinel = [Color3(0.25, 0.5, 0.75)]
+    direct_bad_clearcoat = bypass_physical_scalar_validation(:clearcoat, NaN)
+    @test_throws "material clearcoat must be finite and between 0 and 1" Diff3D.shade_mesh_faces!(
+        sentinel, geometry, Mat4(), direct_bad_clearcoat, lights, Vec3(0.0, 0.0, 3.0))
+    @test sentinel == [Color3(0.25, 0.5, 0.75)]
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        scene = Scene()
+        add!(scene, Mesh(geometry, direct_bad_clearcoat))
+        camera = PerspectiveCamera()
+        camera.position = Vec3(0.0, 0.0, 3.0)
+        @test_throws "material clearcoat must be finite and between 0 and 1" render!(
+            RenderTarget(16, 16), scene, camera)
+    end
+
+    valid = MeshPhysicalMaterial(
+        clearcoat=0.8, clearcoat_roughness=0.2, transmission=0.4,
+        ior=1.4, sheen=0.3, sheen_roughness=0.7, iridescence=0.5,
+        iridescence_ior=1.3, iridescence_thickness=400.0,
+        thickness=0.2, attenuation_distance=2.0, specular_intensity=0.6,
+        dispersion=0.25, anisotropy=0.4, anisotropy_rotation=-0.5)
+    valid_color = shade_face(normal, normal, Vec3(), valid, lights)
+    @test isfinite(valid_color.r) && isfinite(valid_color.g) && isfinite(valid_color.b)
+    valid_json = Diff3D._web_drawable_json(Mesh(geometry, valid), Mat4())
+    @test occursin("\"clearcoat\":0.80000000000000004", valid_json)
+    @test occursin("\"transmission\":0.40000000000000002", valid_json)
+    @test occursin("\"ior\":1.3999999999999999", valid_json)
+    @test occursin("\"anisotropyRotation\":-0.5", valid_json)
+
+    validation_probe = () -> (@allocated Diff3D._validate_material_parameters(valid))
+    validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end

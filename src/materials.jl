@@ -16,6 +16,39 @@ end
     return result
 end
 
+@noinline function _throw_material_nonnegative(name::Symbol)
+    throw(ArgumentError("material $name must be finite and non-negative"))
+end
+
+@inline function _validated_material_nonnegative(value, name::Symbol)
+    value isa Bool && _throw_material_nonnegative(name)
+    result = Float64(value)
+    isfinite(result) && result >= 0.0 || _throw_material_nonnegative(name)
+    return result
+end
+
+@noinline function _throw_material_at_least_one(name::Symbol)
+    throw(ArgumentError("material $name must be finite and at least 1"))
+end
+
+@inline function _validated_material_at_least_one(value, name::Symbol)
+    value isa Bool && _throw_material_at_least_one(name)
+    result = Float64(value)
+    isfinite(result) && result >= 1.0 || _throw_material_at_least_one(name)
+    return result
+end
+
+@noinline function _throw_material_finite(name::Symbol)
+    throw(ArgumentError("material $name must be finite"))
+end
+
+@inline function _validated_material_finite(value, name::Symbol)
+    value isa Bool && _throw_material_finite(name)
+    result = Float64(value)
+    isfinite(result) || _throw_material_finite(name)
+    return result
+end
+
 @inline function _validated_material_side(side)
     (side === :front || side === :back || side === :double) ||
         throw(ArgumentError("material side must be one of :front, :back, or :double"))
@@ -738,25 +771,41 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                clipping_planes=Plane{Float64}[])
     MeshPhysicalMaterial(color, emissive,
                          _validated_material_metalness(metalness),
-                         _validated_material_roughness(roughness), clearcoat,
-                         clearcoat_roughness, transmission, ior,
+                         _validated_material_roughness(roughness),
+                         _validated_material_unit_interval(clearcoat, :clearcoat),
+                         _validated_material_unit_interval(clearcoat_roughness,
+                                                           :clearcoat_roughness),
+                         _validated_material_unit_interval(transmission, :transmission),
+                         _validated_material_at_least_one(ior, :ior),
                          _validated_material_opacity(opacity), transparent,
                          _validated_material_side(side),
                           envmap, map, normal_map, Float64(normal_scale), roughness_map, metalness_map, ao_map,
                           emissive_map, alpha_map, emissive_intensity, ao_map_intensity,
                           light_map_intensity, env_map_intensity,
                           _validated_material_alpha_test(alpha_test),
-                         sheen, sheen_color, sheen_roughness,
-                         iridescence, iridescence_ior, iridescence_thickness, light_map,
+                         _validated_material_unit_interval(sheen, :sheen), sheen_color,
+                         _validated_material_unit_interval(sheen_roughness,
+                                                           :sheen_roughness),
+                         _validated_material_unit_interval(iridescence, :iridescence),
+                         _validated_material_at_least_one(iridescence_ior,
+                                                          :iridescence_ior),
+                         _validated_material_nonnegative(iridescence_thickness,
+                                                         :iridescence_thickness), light_map,
                          clearcoat_map, clearcoat_roughness_map, transmission_map,
-                         Float64(thickness), thickness_map, Float64(attenuation_distance),
+                         _validated_material_nonnegative(thickness, :thickness), thickness_map,
+                         _validated_material_nonnegative(attenuation_distance,
+                                                         :attenuation_distance),
                          attenuation_color,
                          sheen_color_map, sheen_roughness_map, iridescence_map,
-                         iridescence_thickness_map, specular_intensity, specular_color,
+                         iridescence_thickness_map,
+                         _validated_material_unit_interval(specular_intensity,
+                                                           :specular_intensity), specular_color,
                          specular_intensity_map, specular_color_map, vertex_colors,
                          clearcoat_normal_map, Float64(clearcoat_normal_scale),
-                         Float64(dispersion), Float64(anisotropy),
-                         Float64(anisotropy_rotation), anisotropy_map,
+                         _validated_material_nonnegative(dispersion, :dispersion),
+                         _validated_material_unit_interval(anisotropy, :anisotropy),
+                         _validated_material_finite(anisotropy_rotation,
+                                                    :anisotropy_rotation), anisotropy_map,
                          depth_test, depth_write,
                          _material_clipping_planes(clipping_planes))
 end
@@ -767,6 +816,23 @@ MeshPhysicalMaterial(args::Vararg{Any,56}) =
 @inline function _validate_material_parameters(material::MeshPhysicalMaterial)
     _validated_material_metalness(material.metalness)
     _validated_material_roughness(material.roughness)
+    _validated_material_unit_interval(material.clearcoat, :clearcoat)
+    _validated_material_unit_interval(material.clearcoat_roughness, :clearcoat_roughness)
+    _validated_material_unit_interval(material.transmission, :transmission)
+    _validated_material_at_least_one(material.ior, :ior)
+    _validated_material_unit_interval(material.sheen, :sheen)
+    _validated_material_unit_interval(material.sheen_roughness, :sheen_roughness)
+    _validated_material_unit_interval(material.iridescence, :iridescence)
+    _validated_material_at_least_one(material.iridescence_ior, :iridescence_ior)
+    _validated_material_nonnegative(material.iridescence_thickness,
+                                    :iridescence_thickness)
+    _validated_material_nonnegative(material.thickness, :thickness)
+    _validated_material_nonnegative(material.attenuation_distance,
+                                    :attenuation_distance)
+    _validated_material_unit_interval(material.specular_intensity, :specular_intensity)
+    _validated_material_nonnegative(material.dispersion, :dispersion)
+    _validated_material_unit_interval(material.anisotropy, :anisotropy)
+    _validated_material_finite(material.anisotropy_rotation, :anisotropy_rotation)
     return nothing
 end
 

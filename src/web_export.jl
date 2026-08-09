@@ -669,42 +669,64 @@ _web_material_metalness(mat) =
 _web_material_env_intensity(mat) =
     hasproperty(mat, :env_map_intensity) ? Float64(getproperty(mat, :env_map_intensity)) : 1.0
 _web_material_clearcoat(mat) =
-    hasproperty(mat, :clearcoat) ? clamp(Float64(getproperty(mat, :clearcoat)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :clearcoat) ?
+    _validated_material_unit_interval(getproperty(mat, :clearcoat), :clearcoat) : 0.0
 _web_material_clearcoat_roughness(mat) =
-    hasproperty(mat, :clearcoat_roughness) ? clamp(Float64(getproperty(mat, :clearcoat_roughness)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :clearcoat_roughness) ?
+    _validated_material_unit_interval(getproperty(mat, :clearcoat_roughness),
+                                      :clearcoat_roughness) : 0.0
 _web_material_transmission(mat) =
-    hasproperty(mat, :transmission) ? clamp(Float64(getproperty(mat, :transmission)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :transmission) ?
+    _validated_material_unit_interval(getproperty(mat, :transmission), :transmission) : 0.0
 _web_material_thickness(mat) =
-    hasproperty(mat, :thickness) ? max(Float64(getproperty(mat, :thickness)), 0.0) : 0.0
+    hasproperty(mat, :thickness) ?
+    _validated_material_nonnegative(getproperty(mat, :thickness), :thickness) : 0.0
 _web_material_attenuation_distance(mat) =
-    hasproperty(mat, :attenuation_distance) ? max(Float64(getproperty(mat, :attenuation_distance)), 0.0) : 0.0
+    hasproperty(mat, :attenuation_distance) ?
+    _validated_material_nonnegative(getproperty(mat, :attenuation_distance),
+                                    :attenuation_distance) : 0.0
 _web_material_attenuation_color(mat) =
     hasproperty(mat, :attenuation_color) ? getproperty(mat, :attenuation_color) : Color3(1.0, 1.0, 1.0)
 _web_material_ior(mat) =
-    hasproperty(mat, :ior) ? max(Float64(getproperty(mat, :ior)), 1.0) : 1.5
+    hasproperty(mat, :ior) ?
+    _validated_material_at_least_one(getproperty(mat, :ior), :ior) : 1.5
 _web_material_sheen(mat) =
-    hasproperty(mat, :sheen) ? clamp(Float64(getproperty(mat, :sheen)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :sheen) ?
+    _validated_material_unit_interval(getproperty(mat, :sheen), :sheen) : 0.0
 _web_material_sheen_color(mat) =
     hasproperty(mat, :sheen_color) ? getproperty(mat, :sheen_color) : Color3(1.0, 1.0, 1.0)
 _web_material_sheen_roughness(mat) =
-    hasproperty(mat, :sheen_roughness) ? clamp(Float64(getproperty(mat, :sheen_roughness)), 0.0, 1.0) : 1.0
+    hasproperty(mat, :sheen_roughness) ?
+    _validated_material_unit_interval(getproperty(mat, :sheen_roughness),
+                                      :sheen_roughness) : 1.0
 _web_material_iridescence(mat) =
-    hasproperty(mat, :iridescence) ? clamp(Float64(getproperty(mat, :iridescence)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :iridescence) ?
+    _validated_material_unit_interval(getproperty(mat, :iridescence), :iridescence) : 0.0
 _web_material_iridescence_ior(mat) =
-    hasproperty(mat, :iridescence_ior) ? max(Float64(getproperty(mat, :iridescence_ior)), 1.0) : 1.3
+    hasproperty(mat, :iridescence_ior) ?
+    _validated_material_at_least_one(getproperty(mat, :iridescence_ior),
+                                     :iridescence_ior) : 1.3
 _web_material_iridescence_thickness(mat) =
-    hasproperty(mat, :iridescence_thickness) ? max(Float64(getproperty(mat, :iridescence_thickness)), 0.0) : 400.0
+    hasproperty(mat, :iridescence_thickness) ?
+    _validated_material_nonnegative(getproperty(mat, :iridescence_thickness),
+                                    :iridescence_thickness) : 400.0
 _web_material_specular_intensity(mat) =
-    hasproperty(mat, :specular_intensity) ? clamp(Float64(getproperty(mat, :specular_intensity)), 0.0, 1.0) : 1.0
+    hasproperty(mat, :specular_intensity) ?
+    _validated_material_unit_interval(getproperty(mat, :specular_intensity),
+                                      :specular_intensity) : 1.0
 _web_material_specular_color(mat) =
     hasproperty(mat, :specular_color) ? getproperty(mat, :specular_color) :
     hasproperty(mat, :specular) ? getproperty(mat, :specular) : Color3(1.0, 1.0, 1.0)
 _web_material_anisotropy(mat) =
-    hasproperty(mat, :anisotropy) ? clamp(Float64(getproperty(mat, :anisotropy)), 0.0, 1.0) : 0.0
+    hasproperty(mat, :anisotropy) ?
+    _validated_material_unit_interval(getproperty(mat, :anisotropy), :anisotropy) : 0.0
 _web_material_anisotropy_rotation(mat) =
-    hasproperty(mat, :anisotropy_rotation) ? Float64(getproperty(mat, :anisotropy_rotation)) : 0.0
+    hasproperty(mat, :anisotropy_rotation) ?
+    _validated_material_finite(getproperty(mat, :anisotropy_rotation),
+                               :anisotropy_rotation) : 0.0
 _web_material_dispersion(mat) =
-    hasproperty(mat, :dispersion) ? max(Float64(getproperty(mat, :dispersion)), 0.0) : 0.0
+    hasproperty(mat, :dispersion) ?
+    _validated_material_nonnegative(getproperty(mat, :dispersion), :dispersion) : 0.0
 _web_material_shininess(mat) =
     hasproperty(mat, :shininess) ? max(Float64(getproperty(mat, :shininess)), 0.0001) : 32.0
 _web_material_glossiness(mat) =
