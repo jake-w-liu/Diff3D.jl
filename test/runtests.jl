@@ -24473,3 +24473,61 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || size_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || draw_probe() == 0
 end
+
+@testset "fresh audit round 178 fixes" begin
+    for near in (NaN, Inf, -1.0, true)
+        @test_throws "MeshDepthMaterial near must be finite and non-negative" MeshDepthMaterial(
+            near=near, far=10.0)
+    end
+    for far in (NaN, Inf, 1.0, 0.5, false)
+        @test_throws "MeshDepthMaterial far must be finite and greater than near" MeshDepthMaterial(
+            near=1.0, far=far)
+    end
+    @test MeshDepthMaterial(near=0.0, far=10.0).near == 0.0
+    @test_throws "MeshDepthMaterial far must be finite and greater than near" MeshDepthMaterial(
+        1.0, 1.0, 1.0, false, :front, true, true)
+    @test_throws "MeshDepthMaterial near must be finite and non-negative" MeshDepthMaterial(
+        NaN, 10.0, :rgba, 1.0, false, :front, true, true)
+
+    # The legacy 12-argument compatibility constructor appends clipping planes
+    # directly and can bypass the validated convenience constructors.
+    direct_bad = MeshDepthMaterial(
+        NaN, Inf, :basic, nothing, nothing, 0.0, false, 1.0, false,
+        :front, true, true)
+    geometry = PlaneGeometry()
+    sentinel = [Color3(0.25, 0.5, 0.75)]
+    colors = copy(sentinel)
+    @test_throws "MeshDepthMaterial near must be finite and non-negative" Diff3D.shade_mesh_faces!(
+        colors, geometry, Mat4(), direct_bad, AbstractLight[], Vec3(0.0, 0.0, 3.0))
+    @test colors == sentinel
+    @test_throws "MeshDepthMaterial near must be finite and non-negative" shade_mesh_faces(
+        geometry, Mat4(), direct_bad, AbstractLight[], Vec3(0.0, 0.0, 3.0))
+
+    mesh = Mesh(geometry, direct_bad)
+    web_io = IOBuffer()
+    @test_throws "MeshDepthMaterial near must be finite and non-negative" Diff3D._web_write_drawable_json(
+        web_io, mesh, Mat4())
+    @test position(web_io) == 0
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        scene = Scene()
+        add!(scene, mesh)
+        camera = PerspectiveCamera()
+        @test_throws "MeshDepthMaterial near must be finite and non-negative" render!(
+            RenderTarget(16, 16), scene, camera; shading=:flat)
+        @test_throws "MeshDepthMaterial near must be finite and non-negative" render!(
+            RenderTarget(16, 16), scene, camera; shading=:smooth)
+    end
+
+    valid = MeshDepthMaterial(near=0.0, far=10.0)
+    valid_colors = shade_mesh_faces(
+        geometry, Mat4(), valid, AbstractLight[], Vec3(0.0, 0.0, 3.0))
+    @test all(color -> isfinite(color.r) && isfinite(color.g) && isfinite(color.b),
+              valid_colors)
+    valid_json = Diff3D._web_drawable_json(Mesh(geometry, valid), Mat4())
+    @test occursin("\"depthNear\":0", valid_json)
+    @test occursin("\"depthFar\":10", valid_json)
+
+    validation_probe = () -> (@allocated Diff3D._validate_depth_material(valid))
+    validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
+end

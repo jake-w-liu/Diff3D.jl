@@ -887,10 +887,16 @@ _web_material_depth_test(mat) =
     hasproperty(mat, :depth_test) ? Bool(getproperty(mat, :depth_test)) : true
 _web_material_depth_write(mat) =
     hasproperty(mat, :depth_write) ? Bool(getproperty(mat, :depth_write)) : true
-_web_material_depth_near(mat) =
-    hasproperty(mat, :near) ? max(Float64(getproperty(mat, :near)), 1e-6) : 0.1
-_web_material_depth_far(mat) =
-    hasproperty(mat, :far) ? max(Float64(getproperty(mat, :far)), _web_material_depth_near(mat) + 1e-6) : 100.0
+function _web_material_depth_near(mat)
+    mat isa MeshDepthMaterial || return 0.1
+    near, _ = _validated_depth_material_params(mat.near, mat.far)
+    return near
+end
+function _web_material_depth_far(mat)
+    mat isa MeshDepthMaterial || return 100.0
+    _, far = _validated_depth_material_params(mat.near, mat.far)
+    return far
+end
 function _web_material_depth_packing(mat)
     hasproperty(mat, :depth_packing) || return "basic"
     p = getproperty(mat, :depth_packing)
@@ -2470,6 +2476,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     hasproperty(mat, :side) && _validated_material_side(getproperty(mat, :side))
     _web_material_size(mat)
     _web_material_linewidth(mat)
+    _validate_depth_material(mat)
     if mode == "triangles" || mode == "sprite"
         _validate_triangle_geometry_indices(geo, "WebGL export")
     elseif mode == "lines" || mode == "line_strip" || mode == "line_loop" ||

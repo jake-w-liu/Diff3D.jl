@@ -904,6 +904,20 @@ function _depth_packing_symbol(depth_packing)
     throw(ArgumentError("depth_packing must be one of :basic, :rgba, :rgb, or :rg"))
 end
 
+function _validated_depth_material_params(near, far)
+    near isa Bool &&
+        throw(ArgumentError("MeshDepthMaterial near must be finite and non-negative"))
+    far isa Bool &&
+        throw(ArgumentError("MeshDepthMaterial far must be finite and greater than near"))
+    n = Float64(near)
+    fr = Float64(far)
+    isfinite(n) && n >= 0.0 ||
+        throw(ArgumentError("MeshDepthMaterial near must be finite and non-negative"))
+    isfinite(fr) && fr > n ||
+        throw(ArgumentError("MeshDepthMaterial far must be finite and greater than near"))
+    return n, fr
+end
+
 struct MeshDepthMaterial <: AbstractMaterial
     near::Float64
     far::Float64
@@ -922,7 +936,8 @@ end
 
 function MeshDepthMaterial(near::Real, far::Real, opacity::Real, transparent::Bool,
                            side::Symbol, depth_test::Bool, depth_write::Bool)
-    MeshDepthMaterial(Float64(near), Float64(far), :basic, nothing, nothing, 0.0,
+    n, fr = _validated_depth_material_params(near, far)
+    MeshDepthMaterial(n, fr, :basic, nothing, nothing, 0.0,
                       false, Float64(opacity), transparent,
                       _validated_material_side(side), depth_test,
                       depth_write, Plane{Float64}[])
@@ -931,7 +946,8 @@ end
 function MeshDepthMaterial(near::Real, far::Real, depth_packing, opacity::Real,
                            transparent::Bool, side::Symbol, depth_test::Bool,
                            depth_write::Bool)
-    MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
+    n, fr = _validated_depth_material_params(near, far)
+    MeshDepthMaterial(n, fr, _depth_packing_symbol(depth_packing),
                       nothing, nothing, 0.0, false, Float64(opacity), transparent,
                       _validated_material_side(side), depth_test, depth_write,
                       Plane{Float64}[])
@@ -943,7 +959,8 @@ function MeshDepthMaterial(; near=0.1, far=100.0, depth_packing=:basic,
                            opacity=1.0, transparent=false, side=:front,
                            depth_test=true, depth_write=true,
                            clipping_planes=Plane{Float64}[])
-    MeshDepthMaterial(Float64(near), Float64(far), _depth_packing_symbol(depth_packing),
+    n, fr = _validated_depth_material_params(near, far)
+    MeshDepthMaterial(n, fr, _depth_packing_symbol(depth_packing),
                       map, alpha_map, Float64(alpha_test), wireframe,
                       Float64(opacity), transparent, _validated_material_side(side),
                       depth_test, depth_write,
@@ -952,6 +969,13 @@ end
 
 MeshDepthMaterial(args::Vararg{Any,12}) =
     MeshDepthMaterial(args..., Plane{Float64}[])
+
+@inline _validate_depth_material(_) = nothing
+
+@inline function _validate_depth_material(material::MeshDepthMaterial)
+    _validated_depth_material_params(material.near, material.far)
+    return nothing
+end
 
 # ========================== ShaderMaterial ==========================
 # Placeholder for custom GLSL

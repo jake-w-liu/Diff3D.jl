@@ -841,6 +841,7 @@ function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
     # Validate before allocating; malformed counts or backing buffers must not
     # drive an oversized result allocation.
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    _validate_depth_material(material)
     return _shade_mesh_faces_dispatch!(
         Vector{Color3{Float64}}(undef, geo.n_faces), geo, world_mat,
         material, lights, cam_pos; shadow_fn=shadow_fn)
@@ -928,6 +929,7 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                            lights::Vector{<:AbstractLight}, cam_pos::Vec3;
                            shadow_fn=nothing)
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    _validate_depth_material(material)
     return _shade_mesh_faces_dispatch!(colors, geo, world_mat, material,
                                        lights, cam_pos; shadow_fn=shadow_fn)
 end
