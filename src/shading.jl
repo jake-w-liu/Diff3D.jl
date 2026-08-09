@@ -1206,7 +1206,8 @@ end
 
 function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
                     material::MeshBasicMaterial, lights; shadow_fn=nothing)
-    material.color
+    _validate_material_parameters(material)
+    return material.color
 end
 
 # --------------------------------------------------------------------------
@@ -2284,7 +2285,8 @@ end
                                           position::Vec3,
                                           material::MeshBasicMaterial, lights,
                                           vertex_color::Color3; shadow_fn=nothing)
-    _modulate(material.color, vertex_color)
+    _validate_material_parameters(material)
+    return _modulate(material.color, vertex_color)
 end
 
 @inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
@@ -2317,6 +2319,7 @@ end
 
 function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
                     material::MeshMatcapMaterial, lights; shadow_fn=nothing)
+    _validate_material_parameters(material)
     if material.matcap isa Texture
         # View-dependent matcap basis (matches the web-export shader / three.js):
         # for an un-rolled camera, mx/my are the camera's right/up axes, so the
@@ -2471,6 +2474,7 @@ end
 
 # Special handling for ambient in shade functions
 function shade_face_with_ambient(normal, view_dir, position, material, lights)
+    _validate_material_parameters(material)
     result = Color3(0.0, 0.0, 0.0)
     for light in lights
         if light isa AmbientLight

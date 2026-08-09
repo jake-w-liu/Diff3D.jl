@@ -811,6 +811,7 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                               xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                               log_depth::Bool, inv_log_far::Float64, ortho_dir,
                               stamp, stamp_id::Int) where {M<:AbstractMaterial}
+    _validate_material_parameters(mat)
     _validate_depth_material(mat)
     W, H = rt.width, rt.height
     mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing

@@ -25175,3 +25175,200 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || physical_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sprite_probe() == 0
 end
+
+@testset "fresh audit round 185 fixes" begin
+    function material_with_color(material_type, field::Symbol, color)
+        kwargs = NamedTuple{(field,)}((color,))
+        return material_type(; kwargs...)
+    end
+
+    material_color_cases = (
+        (MeshBasicMaterial, :color),
+        (SpriteMaterial, :color),
+        (MeshLambertMaterial, :color),
+        (MeshLambertMaterial, :emissive),
+        (MeshPhongMaterial, :color),
+        (MeshPhongMaterial, :specular),
+        (MeshPhongMaterial, :emissive),
+        (MeshStandardMaterial, :color),
+        (MeshStandardMaterial, :emissive),
+        (LineBasicMaterial, :color),
+        (LineDashedMaterial, :color),
+        (PointsMaterial, :color),
+        (MeshPhysicalMaterial, :color),
+        (MeshPhysicalMaterial, :emissive),
+        (MeshPhysicalMaterial, :sheen_color),
+        (MeshPhysicalMaterial, :attenuation_color),
+        (MeshPhysicalMaterial, :specular_color),
+        (MeshToonMaterial, :color),
+        (MeshToonMaterial, :emissive),
+        (MeshMatcapMaterial, :color),
+    )
+    for (material_type, field) in material_color_cases
+        message = "material $field must be a Color3 with finite components"
+        for invalid in (NaN, Inf, -Inf)
+            @test_throws message material_with_color(
+                material_type, field, Color3(invalid, 0.25, 0.5))
+            @test_throws message material_with_color(
+                material_type, field, Color3(0.25, invalid, 0.5))
+            @test_throws message material_with_color(
+                material_type, field, Color3(0.25, 0.5, invalid))
+        end
+    end
+    @test_throws "material color must be a Color3 with finite components" MeshBasicMaterial(
+        color=(1.0, 1.0, 1.0))
+
+    finite_hdr = Color3(-2.0, 0.25, 4.0)
+    for (material_type, field) in material_color_cases
+        material = material_with_color(material_type, field, finite_hdr)
+        @test getproperty(material, field) === finite_hdr
+        @test Diff3D._validate_material_parameters(material) === nothing
+    end
+
+    function bypass_material_color(material, field::Symbol, value)
+        T = typeof(material)
+        return T((name === field ? value : getfield(material, name)
+                  for name in fieldnames(T))...)
+    end
+    function web_color_getter(material, field::Symbol)
+        field === :color && return Diff3D._web_material_color(material)
+        field === :emissive && return Diff3D._web_material_emissive_color(material)
+        field === :specular && return Diff3D._web_material_specular_color(material)
+        field === :sheen_color && return Diff3D._web_material_sheen_color(material)
+        field === :attenuation_color &&
+            return Diff3D._web_material_attenuation_color(material)
+        field === :specular_color &&
+            return Diff3D._web_material_specular_color(material)
+        error("unhandled material color field: $field")
+    end
+
+    direct_color_cases = (
+        (MeshBasicMaterial(), :color),
+        (SpriteMaterial(), :color),
+        (MeshLambertMaterial(), :color),
+        (MeshLambertMaterial(), :emissive),
+        (MeshPhongMaterial(), :color),
+        (MeshPhongMaterial(), :specular),
+        (MeshPhongMaterial(), :emissive),
+        (MeshStandardMaterial(), :color),
+        (MeshStandardMaterial(), :emissive),
+        (LineBasicMaterial(), :color),
+        (LineDashedMaterial(), :color),
+        (PointsMaterial(), :color),
+        (MeshPhysicalMaterial(), :color),
+        (MeshPhysicalMaterial(), :emissive),
+        (MeshPhysicalMaterial(), :sheen_color),
+        (MeshPhysicalMaterial(), :attenuation_color),
+        (MeshPhysicalMaterial(), :specular_color),
+        (MeshMatcapMaterial(), :color),
+    )
+    invalid_color = Color3(NaN, 0.25, 0.5)
+    triangle_geometry = PlaneGeometry()
+    line_geometry = BufferGeometry(
+        [-0.5, 0.0, 0.0, 0.5, 0.0, 0.0], Float64[], Float64[], Int[], 2, 0)
+    point_geometry = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    for (valid_material, field) in direct_color_cases
+        message = "material $field must be a Color3 with finite components"
+        invalid_material = bypass_material_color(valid_material, field, invalid_color)
+        @test_throws message Diff3D._validate_material_parameters(invalid_material)
+        @test_throws message is_transparent_material(invalid_material)
+        @test_throws message web_color_getter(invalid_material, field)
+
+        if !(invalid_material isa SpriteMaterial)
+            drawable, mode = if invalid_material isa LineBasicMaterial ||
+                                invalid_material isa LineDashedMaterial
+                (LineSegments(line_geometry, invalid_material), "lines")
+            elseif invalid_material isa PointsMaterial
+                (PointsObject(point_geometry, invalid_material), "points")
+            else
+                (Mesh(triangle_geometry, invalid_material), "triangles")
+            end
+            web_io = IOBuffer()
+            @test_throws message Diff3D._web_write_drawable_json(
+                web_io, drawable, Mat4(); mode=mode)
+            @test position(web_io) == 0
+        end
+    end
+
+    normal = Vec3(0.0, 0.0, 1.0)
+    lights = AbstractLight[AmbientLight(intensity=1.0)]
+    direct_basic = bypass_material_color(MeshBasicMaterial(), :color,
+                                         invalid_color)
+    direct_matcap = bypass_material_color(MeshMatcapMaterial(), :color,
+                                          invalid_color)
+    direct_physical = bypass_material_color(MeshPhysicalMaterial(), :sheen_color,
+                                            invalid_color)
+    color_message = "material color must be a Color3 with finite components"
+    sheen_message =
+        "material sheen_color must be a Color3 with finite components"
+    @test_throws color_message shade_face(normal, normal, Vec3(), direct_basic, lights)
+    @test_throws color_message Diff3D._shade_face_vertex_color(
+        normal, normal, Vec3(), direct_basic, lights, Color3(1.0, 1.0, 1.0))
+    @test_throws color_message Diff3D.shade_face_with_ambient(
+        normal, normal, Vec3(), direct_basic, lights)
+    @test_throws color_message shade_face(normal, normal, Vec3(), direct_matcap, lights)
+    @test_throws sheen_message shade_face(normal, normal, Vec3(), direct_physical, lights)
+
+    sentinel_color = Color3(0.25, 0.5, 0.75)
+    sentinel = fill(sentinel_color, triangle_geometry.n_faces)
+    @test_throws color_message Diff3D.shade_mesh_faces!(
+        sentinel, triangle_geometry, Mat4(), direct_basic, lights,
+        Vec3(0.0, 0.0, 3.0))
+    @test all(==(sentinel_color), sentinel)
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        camera = PerspectiveCamera()
+        camera.position = Vec3(0.0, 0.0, 3.0)
+
+        direct_line = bypass_material_color(LineBasicMaterial(), :color,
+                                            invalid_color)
+        line_scene = Scene()
+        add!(line_scene, LineSegments(line_geometry, direct_line))
+        line_target = RenderTarget(16, 16)
+        @test_throws color_message render_lines!(line_target, line_scene, camera)
+        @test all(iszero, line_target.color)
+
+        direct_points = bypass_material_color(PointsMaterial(), :color,
+                                              invalid_color)
+        point_scene = Scene()
+        add!(point_scene, PointsObject(point_geometry, direct_points))
+        point_target = RenderTarget(16, 16)
+        @test_throws color_message render_points!(point_target, point_scene, camera)
+        @test all(iszero, point_target.color)
+
+        direct_sprite = bypass_material_color(SpriteMaterial(), :color,
+                                              invalid_color)
+        sprite_scene = Scene()
+        add!(sprite_scene, Sprite(direct_sprite))
+        sprite_target = RenderTarget(16, 16)
+        @test_throws color_message render_sprites!(sprite_target, sprite_scene, camera)
+        @test all(iszero, sprite_target.color)
+    end
+
+    valid_physical = MeshPhysicalMaterial(
+        color=finite_hdr, emissive=finite_hdr, sheen_color=finite_hdr,
+        attenuation_color=finite_hdr, specular_color=finite_hdr)
+    @test Diff3D._web_material_color(valid_physical) === finite_hdr
+    @test Diff3D._web_material_emissive_color(valid_physical) === finite_hdr
+    @test Diff3D._web_material_sheen_color(valid_physical) === finite_hdr
+    @test Diff3D._web_material_attenuation_color(valid_physical) === finite_hdr
+    @test Diff3D._web_material_specular_color(valid_physical) === finite_hdr
+
+    color_probe = () ->
+        (@allocated Diff3D._validated_material_color(finite_hdr, :color))
+    physical_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(valid_physical))
+    line_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(LineBasicMaterial()))
+    points_probe = () ->
+        (@allocated Diff3D._validate_material_parameters(PointsMaterial()))
+    color_probe()
+    physical_probe()
+    line_probe()
+    points_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || color_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || physical_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || line_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || points_probe() == 0
+end

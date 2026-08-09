@@ -1435,6 +1435,7 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                       stamp::Matrix{Int}, stamp_id::Int,
                                       morphed_positions, instance_color::Color3)
+    _validate_material_parameters(material)
     col = _point_material_color(material, instance_color)
     linewidth = hasfield(typeof(material), :linewidth) ?
         _line_material_width(getfield(material, :linewidth)) : 1.0
@@ -2209,6 +2210,7 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
                                 near, W::Int, H::Int, xlo::Int, xhi::Int,
                                 ylo::Int, yhi::Int, morphed_positions,
                                 instance_color::Color3)
+    _validate_material_parameters(material)
     col = _point_material_color(material, instance_color)
     alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
     depth_test = material_depth_test(material)

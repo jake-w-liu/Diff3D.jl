@@ -49,6 +49,18 @@ end
     return result
 end
 
+@noinline function _throw_material_color(name::Symbol)
+    throw(ArgumentError("material $name must be a Color3 with finite components"))
+end
+
+@inline function _validated_material_color(value, name::Symbol)
+    value isa Color3 || _throw_material_color(name)
+    color = convert(Color3{Float64}, value)
+    isfinite(color.r) && isfinite(color.g) && isfinite(color.b) ||
+        _throw_material_color(name)
+    return color
+end
+
 @inline function _validated_material_side(side)
     (side === :front || side === :back || side === :double) ||
         throw(ArgumentError("material side must be one of :front, :back, or :double"))
@@ -109,7 +121,8 @@ function MeshBasicMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                            vertex_colors=false, alpha_test=0.0,
                            depth_test=true, depth_write=true,
                            clipping_planes=Plane{Float64}[])
-    MeshBasicMaterial(color, _validated_material_opacity(opacity), transparent, wireframe,
+    MeshBasicMaterial(_validated_material_color(color, :color),
+                      _validated_material_opacity(opacity), transparent, wireframe,
                       _validated_material_side(side), map, alpha_map,
                       ao_map, light_map,
                       _validated_material_ao_map_intensity(ao_map_intensity),
@@ -123,7 +136,8 @@ end
 function MeshBasicMaterial(color::Color3, opacity, transparent::Bool, wireframe::Bool,
                            side::Symbol, map, alpha_map, vertex_colors::Bool,
                            alpha_test, depth_test::Bool, depth_write::Bool)
-    MeshBasicMaterial(color, _validated_material_opacity(opacity), transparent, wireframe,
+    MeshBasicMaterial(_validated_material_color(color, :color),
+                      _validated_material_opacity(opacity), transparent, wireframe,
                       _validated_material_side(side), map, alpha_map,
                       nothing, nothing, 1.0, 1.0, vertex_colors,
                       _validated_material_alpha_test(alpha_test),
@@ -135,6 +149,7 @@ MeshBasicMaterial(args::Vararg{Any,15}) =
     MeshBasicMaterial(args..., Plane{Float64}[])
 
 @inline function _validate_material_parameters(material::MeshBasicMaterial)
+    _validated_material_color(material.color, :color)
     _validated_material_ao_map_intensity(material.ao_map_intensity)
     _validated_material_light_map_intensity(material.light_map_intensity)
     return nothing
@@ -156,7 +171,8 @@ end
 function SpriteMaterial(color::Color3, opacity, transparent::Bool, map,
                         rotation, size_attenuation::Bool, depth_test::Bool,
                         depth_write::Bool)
-    SpriteMaterial(color, _validated_material_opacity(opacity), transparent, map, nothing,
+    SpriteMaterial(_validated_material_color(color, :color),
+                   _validated_material_opacity(opacity), transparent, map, nothing,
                    _validated_material_sprite_rotation(rotation),
                    size_attenuation, 0.0,
                    depth_test, depth_write)
@@ -166,13 +182,15 @@ function SpriteMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
                         transparent=false, map=nothing, alpha_map=nothing,
                         rotation=0.0, size_attenuation=true, alpha_test=0.0,
                         depth_test=true, depth_write=true)
-    SpriteMaterial(color, _validated_material_opacity(opacity), transparent, map, alpha_map,
+    SpriteMaterial(_validated_material_color(color, :color),
+                   _validated_material_opacity(opacity), transparent, map, alpha_map,
                    _validated_material_sprite_rotation(rotation), size_attenuation,
                    _validated_material_alpha_test(alpha_test),
                    depth_test, depth_write)
 end
 
 @inline function _validate_material_parameters(material::SpriteMaterial)
+    _validated_material_color(material.color, :color)
     _validated_material_sprite_rotation(material.rotation)
     return nothing
 end
@@ -215,7 +233,9 @@ function MeshLambertMaterial(; color=Color3(1.0, 1.0, 1.0),
                               light_map=nothing, alpha_test=0.0,
                               depth_test=true, depth_write=true,
                               clipping_planes=Plane{Float64}[])
-    MeshLambertMaterial(color, emissive, _validated_material_opacity(opacity),
+    MeshLambertMaterial(_validated_material_color(color, :color),
+                        _validated_material_color(emissive, :emissive),
+                        _validated_material_opacity(opacity),
                         transparent, wireframe,
                         _validated_material_side(side), map,
                         normal_map, _validated_material_normal_scale(normal_scale),
@@ -258,7 +278,9 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
                              emissive_intensity, ao_map_intensity, light_map_intensity,
                              vertex_colors::Bool, light_map, alpha_test,
                              depth_test::Bool, depth_write::Bool)
-    MeshLambertMaterial(color, emissive, _validated_material_opacity(opacity),
+    MeshLambertMaterial(_validated_material_color(color, :color),
+                        _validated_material_color(emissive, :emissive),
+                        _validated_material_opacity(opacity),
                         transparent, wireframe,
                         _validated_material_side(side), map,
                         normal_map, _validated_material_normal_scale(normal_scale),
@@ -293,6 +315,8 @@ function MeshLambertMaterial(color::Color3, emissive::Color3, opacity, transpare
 end
 
 @inline function _validate_material_parameters(material::MeshLambertMaterial)
+    _validated_material_color(material.color, :color)
+    _validated_material_color(material.emissive, :emissive)
     _validated_material_normal_scale(material.normal_scale)
     _validated_material_emissive_intensity(material.emissive_intensity)
     _validated_material_ao_map_intensity(material.ao_map_intensity)
@@ -419,7 +443,10 @@ function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
                             depth_test=true, depth_write=true)
     resolved_shininess, resolved_glossiness =
         _resolve_material_phong_parameters(shininess, glossiness)
-    MeshPhongMaterial(color, specular, emissive, resolved_shininess,
+    MeshPhongMaterial(_validated_material_color(color, :color),
+                      _validated_material_color(specular, :specular),
+                      _validated_material_color(emissive, :emissive),
+                      resolved_shininess,
                       resolved_glossiness, _validated_material_opacity(opacity),
                       transparent, wireframe,
                       _validated_material_side(side), map,
@@ -546,7 +573,10 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3,
                            depth_write::Bool)
     resolved_shininess, resolved_glossiness =
         _resolve_material_phong_parameters(shininess, glossiness)
-    MeshPhongMaterial(color, specular, emissive, resolved_shininess,
+    MeshPhongMaterial(_validated_material_color(color, :color),
+                      _validated_material_color(specular, :specular),
+                      _validated_material_color(emissive, :emissive),
+                      resolved_shininess,
                       resolved_glossiness,
                       _validated_material_opacity(opacity),
                       transparent, wireframe, _validated_material_side(side), map,
@@ -562,6 +592,9 @@ function MeshPhongMaterial(color::Color3, specular::Color3, emissive::Color3,
 end
 
 @inline function _validate_material_parameters(material::MeshPhongMaterial)
+    _validated_material_color(material.color, :color)
+    _validated_material_color(material.specular, :specular)
+    _validated_material_color(material.emissive, :emissive)
     shininess = _validated_material_shininess(material.shininess)
     glossiness =
         _validated_material_unit_interval(material.glossiness, :glossiness)
@@ -618,7 +651,8 @@ function MeshStandardMaterial(; color=Color3(1.0, 1.0, 1.0),
                                light_map_intensity=1.0, env_map_intensity=1.0,
                                depth_test=true, depth_write=true,
                                clipping_planes=Plane{Float64}[])
-    MeshStandardMaterial(color, emissive,
+    MeshStandardMaterial(_validated_material_color(color, :color),
+                         _validated_material_color(emissive, :emissive),
                          _validated_material_metalness(metalness),
                          _validated_material_roughness(roughness),
                          _validated_material_opacity(opacity), transparent,
@@ -640,6 +674,8 @@ MeshStandardMaterial(args::Vararg{Any,25}) =
     MeshStandardMaterial(args..., Plane{Float64}[])
 
 @inline function _validate_material_parameters(material::MeshStandardMaterial)
+    _validated_material_color(material.color, :color)
+    _validated_material_color(material.emissive, :emissive)
     _validated_material_metalness(material.metalness)
     _validated_material_roughness(material.roughness)
     _validated_material_normal_scale(material.normal_scale)
@@ -686,9 +722,15 @@ end
 
 function LineBasicMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0, opacity=1.0,
                            depth_test=true, depth_write=true)
-    LineBasicMaterial(color, _line_material_width(linewidth),
+    LineBasicMaterial(_validated_material_color(color, :color),
+                      _line_material_width(linewidth),
                       _validated_material_opacity(opacity),
                       depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::LineBasicMaterial)
+    _validated_material_color(material.color, :color)
+    return nothing
 end
 
 function _line_material_positive(name::Symbol, value)
@@ -746,11 +788,16 @@ function LineDashedMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0,
         _line_material_alias(gap_size, gapSize, 1.0, :gap_size, :gapSize))
     dash + gap > 0.0 ||
         throw(ArgumentError("dash_size and gap_size cannot both be zero"))
-    LineDashedMaterial(convert(Color3{Float64}, color),
+    LineDashedMaterial(_validated_material_color(color, :color),
                        _line_material_width(linewidth),
                        _line_material_positive(:scale, scale),
                        dash, gap, _validated_material_opacity(opacity),
                        depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::LineDashedMaterial)
+    _validated_material_color(material.color, :color)
+    return nothing
 end
 
 # ========================== PointsMaterial ==========================
@@ -772,7 +819,8 @@ function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0,
                         transparent=false, map=nothing, alpha_map=nothing,
                         alpha_test=0.0, size_attenuation=true,
                         depth_test=true, depth_write=true)
-    PointsMaterial(color, _point_material_size(size),
+    PointsMaterial(_validated_material_color(color, :color),
+                   _point_material_size(size),
                    _validated_material_opacity(opacity), transparent,
                    map, alpha_map, _validated_material_alpha_test(alpha_test), size_attenuation,
                    depth_test, depth_write)
@@ -781,7 +829,8 @@ end
 function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
                         alpha_map, alpha_test, depth_test::Bool,
                         depth_write::Bool)
-    PointsMaterial(color, _point_material_size(size),
+    PointsMaterial(_validated_material_color(color, :color),
+                   _point_material_size(size),
                    _validated_material_opacity(opacity), transparent,
                    map, alpha_map, _validated_material_alpha_test(alpha_test), true,
                    depth_test, depth_write)
@@ -789,9 +838,15 @@ end
 
 function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
                         depth_test::Bool, depth_write::Bool)
-    PointsMaterial(color, _point_material_size(size),
+    PointsMaterial(_validated_material_color(color, :color),
+                   _point_material_size(size),
                    _validated_material_opacity(opacity), transparent,
                    map, nothing, 0.0, true, depth_test, depth_write)
+end
+
+@inline function _validate_material_parameters(material::PointsMaterial)
+    _validated_material_color(material.color, :color)
+    return nothing
 end
 
 function _point_material_size(value)
@@ -896,7 +951,8 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                anisotropy_map=nothing,
                                depth_test=true, depth_write=true,
                                clipping_planes=Plane{Float64}[])
-    MeshPhysicalMaterial(color, emissive,
+    MeshPhysicalMaterial(_validated_material_color(color, :color),
+                         _validated_material_color(emissive, :emissive),
                          _validated_material_metalness(metalness),
                          _validated_material_roughness(roughness),
                          _validated_material_unit_interval(clearcoat, :clearcoat),
@@ -915,7 +971,8 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                           _validated_material_light_map_intensity(light_map_intensity),
                           _validated_material_env_map_intensity(env_map_intensity),
                           _validated_material_alpha_test(alpha_test),
-                         _validated_material_unit_interval(sheen, :sheen), sheen_color,
+                         _validated_material_unit_interval(sheen, :sheen),
+                         _validated_material_color(sheen_color, :sheen_color),
                          _validated_material_unit_interval(sheen_roughness,
                                                            :sheen_roughness),
                          _validated_material_unit_interval(iridescence, :iridescence),
@@ -927,11 +984,13 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          _validated_material_nonnegative(thickness, :thickness), thickness_map,
                          _validated_material_nonnegative(attenuation_distance,
                                                          :attenuation_distance),
-                         attenuation_color,
+                         _validated_material_color(attenuation_color,
+                                                   :attenuation_color),
                          sheen_color_map, sheen_roughness_map, iridescence_map,
                          iridescence_thickness_map,
                          _validated_material_unit_interval(specular_intensity,
-                                                           :specular_intensity), specular_color,
+                                                           :specular_intensity),
+                         _validated_material_color(specular_color, :specular_color),
                          specular_intensity_map, specular_color_map, vertex_colors,
                          clearcoat_normal_map,
                          _validated_material_clearcoat_normal_scale(
@@ -948,6 +1007,11 @@ MeshPhysicalMaterial(args::Vararg{Any,56}) =
     MeshPhysicalMaterial(args..., Plane{Float64}[])
 
 @inline function _validate_material_parameters(material::MeshPhysicalMaterial)
+    _validated_material_color(material.color, :color)
+    _validated_material_color(material.emissive, :emissive)
+    _validated_material_color(material.sheen_color, :sheen_color)
+    _validated_material_color(material.attenuation_color, :attenuation_color)
+    _validated_material_color(material.specular_color, :specular_color)
     _validated_material_metalness(material.metalness)
     _validated_material_roughness(material.roughness)
     _validated_material_normal_scale(material.normal_scale)
@@ -1021,7 +1085,8 @@ struct MeshToonMaterial <: AbstractMaterial
                               light_map_intensity, alpha_test, opacity,
                               transparent::Bool, side::Symbol, depth_test::Bool,
                               depth_write::Bool, clipping_planes)
-        new(convert(Color3{Float64}, color), convert(Color3{Float64}, emissive),
+        new(_validated_material_color(color, :color),
+            _validated_material_color(emissive, :emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
             map, normal_map, _validated_material_normal_scale(normal_scale),
             alpha_map, ao_map, light_map, emissive_map,
@@ -1113,6 +1178,8 @@ function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
 end
 
 @inline function _validate_material_parameters(material::MeshToonMaterial)
+    _validated_material_color(material.color, :color)
+    _validated_material_color(material.emissive, :emissive)
     _validated_material_normal_scale(material.normal_scale)
     _validated_material_emissive_intensity(material.emissive_intensity)
     _validated_material_ao_map_intensity(material.ao_map_intensity)
@@ -1148,7 +1215,7 @@ function MeshMatcapMaterial(; color=Color3(1.0,1.0,1.0), matcap=nothing,
                              opacity=1.0, transparent=false, side=:front,
                              depth_test=true, depth_write=true,
                              clipping_planes=Plane{Float64}[])
-    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
+    MeshMatcapMaterial(_validated_material_color(color, :color), matcap, map, normal_map,
                        _validated_material_normal_scale(normal_scale), alpha_map,
                        _validated_material_alpha_test(alpha_test),
                        wireframe, _validated_material_opacity(opacity), transparent,
@@ -1160,7 +1227,7 @@ function MeshMatcapMaterial(color::Color3, matcap, map, normal_map, normal_scale
                             alpha_map, alpha_test, wireframe::Bool, opacity,
                             transparent::Bool, side::Symbol, depth_test::Bool,
                             depth_write::Bool)
-    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, map, normal_map,
+    MeshMatcapMaterial(_validated_material_color(color, :color), matcap, map, normal_map,
                        _validated_material_normal_scale(normal_scale), alpha_map,
                        _validated_material_alpha_test(alpha_test),
                        wireframe, _validated_material_opacity(opacity), transparent,
@@ -1171,7 +1238,7 @@ end
 function MeshMatcapMaterial(color::Color3, matcap, opacity, transparent::Bool,
                             side::Symbol, depth_test::Bool, depth_write::Bool,
                             clipping_planes)
-    MeshMatcapMaterial(convert(Color3{Float64}, color), matcap, nothing, nothing,
+    MeshMatcapMaterial(_validated_material_color(color, :color), matcap, nothing, nothing,
                        1.0, nothing, 0.0, false,
                        _validated_material_opacity(opacity), transparent,
                        _validated_material_side(side), depth_test, depth_write,
@@ -1185,6 +1252,7 @@ MeshMatcapMaterial(args::Vararg{Any,13}) =
     MeshMatcapMaterial(args..., Plane{Float64}[])
 
 @inline function _validate_material_parameters(material::MeshMatcapMaterial)
+    _validated_material_color(material.color, :color)
     _validated_material_normal_scale(material.normal_scale)
     return nothing
 end

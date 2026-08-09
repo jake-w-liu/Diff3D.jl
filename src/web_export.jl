@@ -568,7 +568,7 @@ _web_color_mul(a::Color3, b::Color3) = Color3(a.r * b.r, a.g * b.g, a.b * b.b)
 
 function _web_material_color(mat)
     if hasproperty(mat, :color)
-        return getproperty(mat, :color)
+        return _validated_material_color(getproperty(mat, :color), :color)
     elseif mat isa MeshNormalMaterial
         return Color3(0.62, 0.86, 1.0)
     else
@@ -656,7 +656,9 @@ function _web_material_clipping_planes(mat)
     return planes
 end
 _web_material_emissive_color(mat) =
-    hasproperty(mat, :emissive) ? getproperty(mat, :emissive) : Color3(0.0, 0.0, 0.0)
+    hasproperty(mat, :emissive) ?
+    _validated_material_color(getproperty(mat, :emissive), :emissive) :
+    Color3(0.0, 0.0, 0.0)
 _web_material_emissive_intensity(mat) =
     hasproperty(mat, :emissive_intensity) ?
     _validated_material_emissive_intensity(
@@ -697,7 +699,10 @@ _web_material_attenuation_distance(mat) =
     _validated_material_nonnegative(getproperty(mat, :attenuation_distance),
                                     :attenuation_distance) : 0.0
 _web_material_attenuation_color(mat) =
-    hasproperty(mat, :attenuation_color) ? getproperty(mat, :attenuation_color) : Color3(1.0, 1.0, 1.0)
+    hasproperty(mat, :attenuation_color) ?
+    _validated_material_color(getproperty(mat, :attenuation_color),
+                              :attenuation_color) :
+    Color3(1.0, 1.0, 1.0)
 _web_material_ior(mat) =
     hasproperty(mat, :ior) ?
     _validated_material_at_least_one(getproperty(mat, :ior), :ior) : 1.5
@@ -705,7 +710,9 @@ _web_material_sheen(mat) =
     hasproperty(mat, :sheen) ?
     _validated_material_unit_interval(getproperty(mat, :sheen), :sheen) : 0.0
 _web_material_sheen_color(mat) =
-    hasproperty(mat, :sheen_color) ? getproperty(mat, :sheen_color) : Color3(1.0, 1.0, 1.0)
+    hasproperty(mat, :sheen_color) ?
+    _validated_material_color(getproperty(mat, :sheen_color), :sheen_color) :
+    Color3(1.0, 1.0, 1.0)
 _web_material_sheen_roughness(mat) =
     hasproperty(mat, :sheen_roughness) ?
     _validated_material_unit_interval(getproperty(mat, :sheen_roughness),
@@ -725,9 +732,15 @@ _web_material_specular_intensity(mat) =
     hasproperty(mat, :specular_intensity) ?
     _validated_material_unit_interval(getproperty(mat, :specular_intensity),
                                       :specular_intensity) : 1.0
-_web_material_specular_color(mat) =
-    hasproperty(mat, :specular_color) ? getproperty(mat, :specular_color) :
-    hasproperty(mat, :specular) ? getproperty(mat, :specular) : Color3(1.0, 1.0, 1.0)
+function _web_material_specular_color(mat)
+    if hasproperty(mat, :specular_color)
+        return _validated_material_color(getproperty(mat, :specular_color),
+                                         :specular_color)
+    elseif hasproperty(mat, :specular)
+        return _validated_material_color(getproperty(mat, :specular), :specular)
+    end
+    return Color3(1.0, 1.0, 1.0)
+end
 _web_material_anisotropy(mat) =
     hasproperty(mat, :anisotropy) ?
     _validated_material_unit_interval(getproperty(mat, :anisotropy), :anisotropy) : 0.0
