@@ -30,6 +30,18 @@ end
 @inline _validated_light_intensity(value) =
     _validated_light_finite(value, :intensity)
 
+@noinline function _throw_light_vec3(name::Symbol)
+    throw(ArgumentError("light $name must be a Vec3 with finite components"))
+end
+
+@inline function _validated_light_vec3(value, name::Symbol)
+    value isa Vec3 || _throw_light_vec3(name)
+    result = convert(Vec3{Float64}, value)
+    isfinite(result.x) && isfinite(result.y) && isfinite(result.z) ||
+        _throw_light_vec3(name)
+    return result
+end
+
 @noinline function _throw_light_probe_coeffs()
     throw(ArgumentError(
         "light coeffs must be a tuple of four Color3 values with finite components"))
@@ -424,7 +436,8 @@ function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
                            cast_shadow=false, shadow_bias=nothing,
                            shadow_pcf_radius=nothing)
-    DirectionalLight(position, Euler(), Vec3(1.0,1.0,1.0),
+    DirectionalLight(_validated_light_vec3(position, :position),
+                     Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
                      _validated_light_color(color, :color),
                      _validated_light_intensity(intensity), Vec3(),
@@ -472,7 +485,8 @@ function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                     distance=0.0, decay=2.0, position=Vec3(),
                     name="PointLight", cast_shadow=false, shadow_bias=nothing,
                     shadow_pcf_radius=nothing, ies_profile=nothing)
-    PointLight(position, Euler(), Vec3(1.0,1.0,1.0),
+    PointLight(_validated_light_vec3(position, :position),
+               Euler(), Vec3(1.0,1.0,1.0),
                nothing, AbstractObject3D[], true, name, _next_id(),
                _validated_light_color(color, :color),
                _validated_light_intensity(intensity),
@@ -528,7 +542,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    position=Vec3(0.0, 1.0, 0.0), name="SpotLight",
                    target=Vec3(), cast_shadow=false, shadow_bias=nothing,
                    shadow_pcf_radius=nothing, ies_profile=nothing)
-    SpotLight(position, Euler(), Vec3(1.0,1.0,1.0),
+    SpotLight(_validated_light_vec3(position, :position),
+              Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
               _validated_light_color(color, :color),
               _validated_light_intensity(intensity),
@@ -536,7 +551,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
               _validated_light_finite(angle, :angle),
               _validated_light_finite(penumbra, :penumbra),
               _validated_light_finite(decay, :decay),
-              target, _validated_light_cast_shadow(cast_shadow),
+              _validated_light_vec3(target, :target),
+              _validated_light_cast_shadow(cast_shadow),
               _validated_shadow_bias(shadow_bias),
               _validated_shadow_pcf_radius(shadow_pcf_radius),
               _validated_light_ies_profile(ies_profile))
@@ -606,7 +622,8 @@ end
 
 function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=1.0, height=1.0,
                         position=Vec3(0.0,1.0,0.0), name="RectAreaLight")
-    RectAreaLight(position, Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
+    RectAreaLight(_validated_light_vec3(position, :position),
+                  Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                   true, name, _next_id(), _validated_light_color(color, :color),
                   _validated_light_intensity(intensity),
                   _validated_light_finite(width, :width),
@@ -668,6 +685,8 @@ end
 @inline function _validate_light_parameters(light::DirectionalLight)
     _validated_light_color(light.color, :color)
     _validated_light_intensity(light.intensity)
+    _validated_light_vec3(light.position, :position)
+    _validated_light_vec3(light.target, :target)
     return nothing
 end
 
@@ -677,6 +696,7 @@ end
     _validated_light_finite(light.distance, :distance)
     _validated_light_finite(light.decay, :decay)
     _validated_light_ies_profile(light.ies_profile)
+    _validated_light_vec3(light.position, :position)
     return nothing
 end
 
@@ -688,6 +708,8 @@ end
     _validated_light_finite(light.penumbra, :penumbra)
     _validated_light_finite(light.decay, :decay)
     _validated_light_ies_profile(light.ies_profile)
+    _validated_light_vec3(light.position, :position)
+    _validated_light_vec3(light.target, :target)
     return nothing
 end
 
@@ -703,6 +725,8 @@ end
     _validated_light_intensity(light.intensity)
     _validated_light_finite(light.width, :width)
     _validated_light_finite(light.height, :height)
+    _validated_light_vec3(light.position, :position)
+    _validated_light_vec3(light.target, :target)
     return nothing
 end
 
@@ -714,6 +738,14 @@ end
 
 @inline _validate_light_shadow_parameters(::AbstractLight) = nothing
 
+@inline _validate_light_object_spatial_parameters(::AbstractLight) = nothing
+
+@inline function _validate_light_object_spatial_parameters(
+        light::Union{AmbientLight, HemisphereLight, LightProbe})
+    _validated_light_vec3(light.position, :position)
+    return nothing
+end
+
 @inline function _validate_light_shadow_parameters(
         light::Union{DirectionalLight, PointLight, SpotLight})
     _validated_shadow_bias(light.shadow_bias)
@@ -723,6 +755,7 @@ end
 
 @inline function _validate_light_object(light::AbstractLight)
     _validate_light_parameters(light)
+    _validate_light_object_spatial_parameters(light)
     _validate_light_shadow_parameters(light)
     return nothing
 end

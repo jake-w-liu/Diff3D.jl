@@ -25863,3 +25863,140 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || shadow_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || object_probe() == 0
 end
+
+@testset "fresh audit round 190 fixes" begin
+    function light_with_vector(light_type, field::Symbol, value)
+        kwargs = NamedTuple{(field,)}((value,))
+        return light_type(; kwargs...)
+    end
+
+    constructor_vector_cases = (
+        (DirectionalLight, :position),
+        (PointLight, :position),
+        (SpotLight, :position),
+        (SpotLight, :target),
+        (RectAreaLight, :position),
+    )
+    for (light_type, field) in constructor_vector_cases
+        message = "light $field must be a Vec3 with finite components"
+        for invalid in (NaN, Inf, -Inf)
+            @test_throws message light_with_vector(
+                light_type, field, Vec3(invalid, 0.25, 0.5))
+            @test_throws message light_with_vector(
+                light_type, field, Vec3(0.25, invalid, 0.5))
+            @test_throws message light_with_vector(
+                light_type, field, Vec3(0.25, 0.5, invalid))
+        end
+        for invalid in (true, (0.0, 0.0, 0.0), [0.0, 0.0, 0.0], missing,
+                        Color3(0.0, 0.0, 0.0))
+            @test_throws message light_with_vector(light_type, field, invalid)
+        end
+    end
+
+    finite_extreme = Vec3(-1.0e308, 0.25, 1.0e308)
+    for (light_type, field) in constructor_vector_cases
+        light = light_with_vector(light_type, field, finite_extreme)
+        @test getproperty(light, field) === finite_extreme
+        @test Diff3D._validate_light_object(light) === nothing
+    end
+
+    invalid_vector = Vec3(NaN, 0.25, 0.5)
+    spatial_mutation_cases = (
+        (AmbientLight(), :position, false, false),
+        (DirectionalLight(), :position, true, true),
+        (DirectionalLight(), :target, true, true),
+        (PointLight(), :position, true, true),
+        (SpotLight(), :position, true, true),
+        (SpotLight(), :target, true, true),
+        (HemisphereLight(), :position, false, false),
+        (RectAreaLight(), :position, true, false),
+        (RectAreaLight(), :target, true, false),
+        (LightProbe(), :position, false, false),
+    )
+    scene_for_web = Scene()
+    normal = Vec3(0.0, 1.0, 0.0)
+    view_direction = Vec3(0.0, 0.0, 1.0)
+    surface_position = Vec3()
+    material = MeshLambertMaterial()
+    for (light, field, shading_uses_field, supports_shadow) in spatial_mutation_cases
+        setproperty!(light, field, invalid_vector)
+        message = "light $field must be a Vec3 with finite components"
+        if shading_uses_field
+            @test_throws message Diff3D._validate_light_parameters(light)
+            @test_throws message Diff3D.light_contribution(light, surface_position)
+            @test_throws message shade_face(
+                normal, view_direction, surface_position, material,
+                AbstractLight[light])
+        else
+            @test Diff3D._validate_light_parameters(light) === nothing
+            @test_throws message Diff3D._validate_light_object_spatial_parameters(light)
+        end
+        @test_throws message Diff3D._validate_light_object(light)
+
+        light_scene = Scene()
+        add!(light_scene, light)
+        @test_throws message collect_lights(light_scene)
+        if supports_shadow
+            @test_throws message compute_shadow_map(
+                Scene(), light; resolution=8)
+        end
+
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_light_json(
+            web_io, light, scene_for_web)
+        @test position(web_io) == 0
+    end
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        background = Color3(0.2, 0.3, 0.4)
+        render_scene = Scene(background=background)
+        invalid_probe = LightProbe()
+        invalid_probe.position = invalid_vector
+        add!(render_scene, invalid_probe)
+        target = RenderTarget(8, 8)
+        fill!(target.color, 0.75)
+        @test_throws "light position must be a Vec3 with finite components" render!(
+            target, render_scene, PerspectiveCamera())
+        @test all(target.color[:, :, 1] .== background.r)
+        @test all(target.color[:, :, 2] .== background.g)
+        @test all(target.color[:, :, 3] .== background.b)
+    end
+
+    valid_directional = DirectionalLight(position=finite_extreme)
+    valid_directional.target = -finite_extreme
+    valid_point = PointLight(position=finite_extreme)
+    valid_spot = SpotLight(position=finite_extreme, target=-finite_extreme)
+    valid_rectangle = RectAreaLight(position=finite_extreme)
+    valid_rectangle.target = -finite_extreme
+    valid_probe = LightProbe()
+    valid_probe.position = finite_extreme
+    for light in (valid_directional, valid_point, valid_spot,
+                  valid_rectangle, valid_probe)
+        @test Diff3D._validate_light_object(light) === nothing
+    end
+
+    vector_probe = () ->
+        (@allocated Diff3D._validated_light_vec3(finite_extreme, :position))
+    directional_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_directional))
+    point_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_point))
+    spot_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_spot))
+    rectangle_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_rectangle))
+    probe_object_probe = () ->
+        (@allocated Diff3D._validate_light_object(valid_probe))
+    vector_probe()
+    directional_probe()
+    point_probe()
+    spot_probe()
+    rectangle_probe()
+    probe_object_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || vector_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || directional_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || point_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || rectangle_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || probe_object_probe() == 0
+end
