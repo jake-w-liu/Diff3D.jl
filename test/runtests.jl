@@ -7798,10 +7798,7 @@ end
         rtp = RenderTarget(40,40); render!(rtp, ps, cam)
         @test count(>(0.5), rtp.color[:,:,2]) >= 1          # point lit
         for bad_size in (Inf, NaN, 1.0e300)
-            bad_scene = Scene(background=Color3(0.0, 0.0, 0.0))
-            add!(bad_scene, PointsObject(pg, PointsMaterial(size=bad_size)))
-            @test_throws ArgumentError render_points!(RenderTarget(8, 8), bad_scene,
-                                                      cam; cache=RenderCache())
+            @test_throws ArgumentError PointsMaterial(size=bad_size)
         end
 
         point_cam = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
@@ -24397,4 +24394,82 @@ end
     side_probe = () -> (@allocated material_side(valid_material))
     side_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || side_probe() == 0
+end
+
+@testset "fresh audit round 177 fixes" begin
+    for width in (NaN, Inf, -1.0, 0.0, true)
+        @test_throws "linewidth must be a finite positive value" LineBasicMaterial(
+            linewidth=width)
+    end
+    @test_throws "linewidth is too large" LineBasicMaterial(
+        linewidth=Float64(typemax(Int)))
+    @test_throws "linewidth must be a finite positive value" LineDashedMaterial(
+        linewidth=false)
+    @test_throws "scale must be a finite positive value" LineDashedMaterial(scale=true)
+    @test_throws "dash_size must be a finite non-negative value" LineDashedMaterial(
+        dash_size=true)
+
+    for size in (NaN, Inf, -1.0, true)
+        @test_throws "point size must be finite and non-negative" PointsMaterial(size=size)
+    end
+    @test_throws "point size is too large" PointsMaterial(
+        size=Float64(typemax(Int)))
+    @test PointsMaterial(size=0.0).size == 0.0
+
+    direct_line = LineBasicMaterial(
+        Color3(1.0, 1.0, 1.0), NaN, 1.0, true, true)
+    direct_points = PointsMaterial(
+        Color3(1.0, 1.0, 1.0), NaN, 1.0, false, nothing, nothing,
+        0.0, true, true, true)
+    line_geometry = BufferGeometry(
+        [-0.5, 0.0, 0.0, 0.5, 0.0, 0.0], Float64[], Float64[], Int[], 2, 0)
+    point_geometry = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    line_object = LineSegments(line_geometry, direct_line)
+    point_object = PointsObject(point_geometry, direct_points)
+
+    line_io = IOBuffer()
+    @test_throws "linewidth must be a finite positive value" Diff3D._web_write_drawable_json(
+        line_io, line_object, Mat4(); mode="lines")
+    @test position(line_io) == 0
+    point_io = IOBuffer()
+    @test_throws "point size must be finite and non-negative" Diff3D._web_write_drawable_json(
+        point_io, point_object, Mat4(); mode="points")
+    @test position(point_io) == 0
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        camera = PerspectiveCamera()
+        line_scene = Scene()
+        add!(line_scene, line_object)
+        @test_throws "linewidth must be a finite positive value" render!(
+            RenderTarget(16, 16), line_scene, camera)
+        point_scene = Scene()
+        add!(point_scene, point_object)
+        @test_throws "point size must be finite and non-negative" render!(
+            RenderTarget(16, 16), point_scene, camera)
+    end
+
+    # Work for an oversized but representable line footprint must remain
+    # bounded by the render rectangle, and match an already viewport-covering
+    # reference width.
+    huge_target = RenderTarget(8, 8)
+    reference_target = RenderTarget(8, 8)
+    white = Color3(1.0, 1.0, 1.0)
+    Diff3D._draw_line!(huge_target, 4.0, 4.0, 0.0, 5.0, 4.0, 0.0,
+                       white, 1.0e12)
+    Diff3D._draw_line!(reference_target, 4.0, 4.0, 0.0, 5.0, 4.0, 0.0,
+                       white, 64.0)
+    @test huge_target.color == reference_target.color
+    @test all(==(1.0), huge_target.color)
+
+    width_probe = () -> (@allocated Diff3D._line_material_width(2.0))
+    size_probe = () -> (@allocated Diff3D._point_material_size(2.0))
+    draw_probe = () -> (@allocated Diff3D._draw_line!(
+        huge_target, 4.0, 4.0, 0.0, 5.0, 4.0, 0.0, white, 1.0e12))
+    width_probe()
+    size_probe()
+    draw_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || width_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || size_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || draw_probe() == 0
 end

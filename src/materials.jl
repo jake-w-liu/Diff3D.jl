@@ -462,17 +462,29 @@ end
 
 function LineBasicMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0, opacity=1.0,
                            depth_test=true, depth_write=true)
-    LineBasicMaterial(color, linewidth, opacity, depth_test, depth_write)
+    LineBasicMaterial(color, _line_material_width(linewidth), opacity,
+                      depth_test, depth_write)
 end
 
 function _line_material_positive(name::Symbol, value)
+    value isa Bool &&
+        throw(ArgumentError("$(name) must be a finite positive value"))
     x = Float64(value)
     isfinite(x) && x > 0.0 ||
         throw(ArgumentError("$(name) must be a finite positive value"))
     return x
 end
 
+function _line_material_width(value)
+    width = _line_material_positive(:linewidth, value)
+    width <= Float64(typemax(Int) ÷ 4) ||
+        throw(ArgumentError("linewidth is too large"))
+    return width
+end
+
 function _line_material_nonnegative(name::Symbol, value)
+    value isa Bool &&
+        throw(ArgumentError("$(name) must be a finite non-negative value"))
     x = Float64(value)
     isfinite(x) && x >= 0.0 ||
         throw(ArgumentError("$(name) must be a finite non-negative value"))
@@ -510,7 +522,7 @@ function LineDashedMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0,
     dash + gap > 0.0 ||
         throw(ArgumentError("dash_size and gap_size cannot both be zero"))
     LineDashedMaterial(convert(Color3{Float64}, color),
-                       _line_material_positive(:linewidth, linewidth),
+                       _line_material_width(linewidth),
                        _line_material_positive(:scale, scale),
                        dash, gap, Float64(opacity), depth_test, depth_write)
 end
@@ -534,21 +546,34 @@ function PointsMaterial(; color=Color3(1.0, 1.0, 1.0), size=1.0, opacity=1.0,
                         transparent=false, map=nothing, alpha_map=nothing,
                         alpha_test=0.0, size_attenuation=true,
                         depth_test=true, depth_write=true)
-    PointsMaterial(color, size, opacity, transparent, map, alpha_map,
-                   Float64(alpha_test), size_attenuation, depth_test, depth_write)
+    PointsMaterial(color, _point_material_size(size), opacity, transparent,
+                   map, alpha_map, Float64(alpha_test), size_attenuation,
+                   depth_test, depth_write)
 end
 
 function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
                         alpha_map, alpha_test, depth_test::Bool,
                         depth_write::Bool)
-    PointsMaterial(color, size, opacity, transparent, map, alpha_map,
-                   Float64(alpha_test), true, depth_test, depth_write)
+    PointsMaterial(color, _point_material_size(size), opacity, transparent,
+                   map, alpha_map, Float64(alpha_test), true,
+                   depth_test, depth_write)
 end
 
 function PointsMaterial(color::Color3, size, opacity, transparent::Bool, map,
                         depth_test::Bool, depth_write::Bool)
-    PointsMaterial(color, size, opacity, transparent, map, nothing, 0.0,
-                   true, depth_test, depth_write)
+    PointsMaterial(color, _point_material_size(size), opacity, transparent,
+                   map, nothing, 0.0, true, depth_test, depth_write)
+end
+
+function _point_material_size(value)
+    value isa Bool &&
+        throw(ArgumentError("point size must be finite and non-negative"))
+    size = Float64(value)
+    isfinite(size) && size >= 0.0 ||
+        throw(ArgumentError("point size must be finite and non-negative"))
+    size <= Float64(typemax(Int) ÷ 4) ||
+        throw(ArgumentError("point size is too large"))
+    return size
 end
 
 # ========================== MeshPhysicalMaterial ==========================

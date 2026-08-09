@@ -1315,8 +1315,16 @@ end
     end
     r = ceil(Int, radius)
     r2 = radius * radius
-    @inbounds for oy in -r:r, ox in -r:r
-        ox * ox + oy * oy <= r2 &&
+    # A very wide line still touches at most the active render rectangle. Clip
+    # the stamp offsets before iterating instead of scanning the full radius
+    # square, whose work would otherwise grow without relation to target size.
+    ox_lo = max(-r, max(1, xlo) - x)
+    ox_hi = min(r, min(rt.width, xhi) - x)
+    oy_lo = max(-r, max(1, ylo) - y)
+    oy_hi = min(r, min(rt.height, yhi) - y)
+    (ox_lo <= ox_hi && oy_lo <= oy_hi) || return nothing
+    @inbounds for oy in oy_lo:oy_hi, ox in ox_lo:ox_hi
+        Float64(ox) * ox + Float64(oy) * oy <= r2 &&
             _put_stamped_pixel!(rt, x + ox, y + oy, z, col, xlo, xhi, ylo, yhi,
                                 depth_test, depth_write, alpha, stamp, stamp_id)
     end
@@ -1355,10 +1363,11 @@ function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      depth_test::Bool=true, depth_write::Bool=true,
                      alpha::Float64=1.0,
                      stamp=nothing, stamp_id::Int=0)
+    width = _line_material_width(linewidth)
     # A non-finite projected endpoint has no well-defined rasterization; skip it.
     (isfinite(x0) && isfinite(y0) && isfinite(x1) && isfinite(y1)) || return nothing
     dx = x1 - x0; dy = y1 - y0
-    radius = max(0.5, Float64(linewidth) / 2)
+    radius = max(0.5, width / 2)
     # Clip the DDA parameter range to the viewport (expanded by the stamp radius)
     # so an endpoint projecting far off-screen drives a step count bounded by the
     # visible span — not the raw off-axis delta, which would hang the loop or
@@ -1427,7 +1436,8 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
                                       stamp::Matrix{Int}, stamp_id::Int,
                                       morphed_positions, instance_color::Color3)
     col = _point_material_color(material, instance_color)
-    linewidth = hasfield(typeof(material), :linewidth) ? Float64(getfield(material, :linewidth)) : 1.0
+    linewidth = hasfield(typeof(material), :linewidth) ?
+        _line_material_width(getfield(material, :linewidth)) : 1.0
     alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
@@ -2207,7 +2217,8 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
     alpha_map = _material_field(material, :alpha_map)
     use_color_map = albedo_map isa Texture
     use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
-    base_size = hasfield(typeof(material), :size) ? Float64(getfield(material, :size)) : 1.0
+    base_size = hasfield(typeof(material), :size) ?
+        _point_material_size(getfield(material, :size)) : 1.0
     size_attenuation = _material_field(material, :size_attenuation)
     size_attenuation === nothing && (size_attenuation = true)
     reference_depth = camera isa PerspectiveCamera ?

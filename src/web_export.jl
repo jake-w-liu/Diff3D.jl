@@ -576,10 +576,11 @@ function _web_material_color(mat)
     end
 end
 
-_web_material_size(mat) = hasproperty(mat, :size) ? Float64(getproperty(mat, :size)) : 4.0
+_web_material_size(mat) = hasproperty(mat, :size) ?
+    _point_material_size(getproperty(mat, :size)) : 4.0
 function _web_material_linewidth(mat)
-    w = hasproperty(mat, :linewidth) ? Float64(getproperty(mat, :linewidth)) : 1.0
-    return isfinite(w) && w > 0.0 ? w : 1.0
+    return hasproperty(mat, :linewidth) ?
+        _line_material_width(getproperty(mat, :linewidth)) : 1.0
 end
 _web_material_line_dashed(mat) = mat isa LineDashedMaterial
 _web_material_dash_size(mat) = mat isa LineDashedMaterial ? mat.dash_size : 1.0
@@ -2467,6 +2468,8 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     # Validate before writing so positional constructors cannot cause a partial
     # JSON object when they bypass the keyword-constructor checks.
     hasproperty(mat, :side) && _validated_material_side(getproperty(mat, :side))
+    _web_material_size(mat)
+    _web_material_linewidth(mat)
     if mode == "triangles" || mode == "sprite"
         _validate_triangle_geometry_indices(geo, "WebGL export")
     elseif mode == "lines" || mode == "line_strip" || mode == "line_loop" ||
