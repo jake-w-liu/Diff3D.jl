@@ -63,6 +63,16 @@ struct IESProfile
     max_candela::Float64       # peak candela, for normalization to [0,1]
 end
 
+@noinline function _throw_light_ies_profile()
+    throw(ArgumentError("light ies_profile must be an IESProfile or nothing"))
+end
+
+@inline function _validated_light_ies_profile(profile)
+    profile === nothing || profile isa IESProfile ||
+        _throw_light_ies_profile()
+    return profile
+end
+
 """
     IESProfile(angles, candela)
 
@@ -438,7 +448,7 @@ mutable struct PointLight <: AbstractLight
     cast_shadow::Bool
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
-    ies_profile::Any   # optional IESProfile photometric distribution (nothing = isotropic)
+    ies_profile::Union{Nothing, IESProfile}   # nothing = isotropic
 end
 
 PointLight(position, rotation, scale, parent, children, visible, name, id,
@@ -458,7 +468,8 @@ function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                _validated_light_finite(distance, :distance),
                _validated_light_finite(decay, :decay), cast_shadow,
                _validated_shadow_bias(shadow_bias),
-               _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
+               _validated_shadow_pcf_radius(shadow_pcf_radius),
+               _validated_light_ies_profile(ies_profile))
 end
 
 get_position(o::PointLight) = o.position
@@ -490,7 +501,7 @@ mutable struct SpotLight <: AbstractLight
     cast_shadow::Bool
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
-    ies_profile::Any   # optional IESProfile photometric distribution (nothing = analytic cone)
+    ies_profile::Union{Nothing, IESProfile}   # nothing = analytic cone
 end
 
 SpotLight(position, rotation, scale, parent, children, visible, name, id,
@@ -514,7 +525,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
               _validated_light_finite(penumbra, :penumbra),
               _validated_light_finite(decay, :decay),
               target, cast_shadow, _validated_shadow_bias(shadow_bias),
-              _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
+              _validated_shadow_pcf_radius(shadow_pcf_radius),
+              _validated_light_ies_profile(ies_profile))
 end
 
 get_position(o::SpotLight) = o.position
@@ -651,6 +663,7 @@ end
     _validated_light_intensity(light.intensity)
     _validated_light_finite(light.distance, :distance)
     _validated_light_finite(light.decay, :decay)
+    _validated_light_ies_profile(light.ies_profile)
     return nothing
 end
 
@@ -661,6 +674,7 @@ end
     _validated_light_finite(light.angle, :angle)
     _validated_light_finite(light.penumbra, :penumbra)
     _validated_light_finite(light.decay, :decay)
+    _validated_light_ies_profile(light.ies_profile)
     return nothing
 end
 

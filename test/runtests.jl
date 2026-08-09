@@ -25693,3 +25693,72 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || rectangle_probe() == 0
 end
+
+@testset "fresh audit round 188 fixes" begin
+    invalid_profile_message =
+        "light ies_profile must be an IESProfile or nothing"
+    for light_type in (PointLight, SpotLight)
+        for invalid in (42, true, "profile", missing, Color3(1.0, 1.0, 1.0))
+            @test_throws invalid_profile_message light_type(ies_profile=invalid)
+        end
+        @test light_type(ies_profile=nothing).ies_profile === nothing
+    end
+
+    profile = IESProfile(
+        [0.0, 5.0, 180.0], [1.0, 0.0, 0.0])
+    point = PointLight(
+        position=Vec3(0.0, 2.0, 0.0), decay=0.0,
+        ies_profile=profile)
+    spot = SpotLight(
+        position=Vec3(0.0, 2.0, 0.0), angle=pi / 2,
+        decay=0.0, ies_profile=profile)
+    @test point.ies_profile === profile
+    @test spot.ies_profile === profile
+    @test fieldtype(PointLight, :ies_profile) == Union{Nothing, IESProfile}
+    @test fieldtype(SpotLight, :ies_profile) == Union{Nothing, IESProfile}
+    @test Diff3D._validate_light_parameters(point) === nothing
+    @test Diff3D._validate_light_parameters(spot) === nothing
+
+    for light in (point, spot)
+        @test_throws MethodError (light.ies_profile = 42)
+        @test light.ies_profile === profile
+    end
+
+    on_axis = Vec3()
+    off_axis = Vec3(3.0, 0.0, 0.0)
+    _, point_on_intensity, _ = Diff3D.light_contribution(point, on_axis)
+    _, point_off_intensity, _ = Diff3D.light_contribution(point, off_axis)
+    _, spot_on_intensity, _ = Diff3D.light_contribution(spot, on_axis)
+    _, spot_off_intensity, _ = Diff3D.light_contribution(spot, off_axis)
+    @test point_on_intensity == 1.0
+    @test point_off_intensity == 0.0
+    @test spot_on_intensity == 1.0
+    @test spot_off_intensity == 0.0
+
+    scene_for_web = Scene()
+    @test Diff3D._web_light_json(point, scene_for_web) isa String
+    @test Diff3D._web_light_json(spot, scene_for_web) isa String
+    point_scene = Scene()
+    add!(point_scene, point)
+    @test collect_lights(point_scene) == Diff3D.SceneLight[point]
+    spot_scene = Scene()
+    add!(spot_scene, spot)
+    @test collect_lights(spot_scene) == Diff3D.SceneLight[spot]
+
+    point_contribution_probe = () ->
+        (@allocated Diff3D.light_contribution(point, on_axis))
+    spot_contribution_probe = () ->
+        (@allocated Diff3D.light_contribution(spot, on_axis))
+    point_validation_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(point))
+    spot_validation_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(spot))
+    point_contribution_probe()
+    spot_contribution_probe()
+    point_validation_probe()
+    spot_validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || point_contribution_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_contribution_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || point_validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_validation_probe() == 0
+end
