@@ -1029,9 +1029,16 @@ linearly blending between the two neighboring prefiltered levels.
 function sample_pmrem(pmrem::PMREM, dir::Vec3, roughness)
     n = length(pmrem.levels)
     n >= 1 || throw(ArgumentError("PMREM has no levels"))
-    n == 1 && return sample_cube(pmrem.levels[1], dir)
-    r = Float64(roughness)
+    r = try
+        Float64(roughness)
+    catch err
+        (err isa MethodError || err isa InexactError || err isa OverflowError ||
+         err isa DomainError || err isa TypeError || err isa ArgumentError) ||
+            rethrow()
+        throw(ArgumentError("PMREM roughness must be finite"))
+    end
     isfinite(r) || throw(ArgumentError("PMREM roughness must be finite"))
+    n == 1 && return sample_cube(pmrem.levels[1], dir)
     lod = clamp(r, 0.0, 1.0) * (n - 1)
     l0 = floor(Int, lod)
     frac = lod - l0

@@ -23695,3 +23695,39 @@ end
     sample_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sample_probe() == 0
 end
+
+@testset "fresh audit round 169 fixes" begin
+    direction = Vec3(1.0, 0.0, 0.0)
+    @test_throws "PMREM has no levels" sample_pmrem(
+        PMREM(CubeTexture[]), direction, NaN)
+
+    low_face = Texture(fill(0.2, 2, 2, 3); colorspace=:linear)
+    low_cube = CubeTexture(ntuple(_ -> low_face, 6))
+    single_level = PMREM([low_cube])
+    for invalid_roughness in (NaN, Inf, -Inf, "invalid")
+        @test_throws "PMREM roughness must be finite" sample_pmrem(
+            single_level, direction, invalid_roughness)
+    end
+    base_sample = sample_cube(low_cube, direction)
+    @test sample_pmrem(single_level, direction, -10.0) == base_sample
+    @test sample_pmrem(single_level, direction, 0) == base_sample
+    @test sample_pmrem(single_level, direction, Float32(10.0)) == base_sample
+
+    high_face = Texture(fill(0.8, 2, 2, 3); colorspace=:linear)
+    high_cube = CubeTexture(ntuple(_ -> high_face, 6))
+    two_levels = PMREM([low_cube, high_cube])
+    @test_throws "PMREM roughness must be finite" sample_pmrem(
+        two_levels, direction, NaN)
+    blended = sample_pmrem(two_levels, direction, 0.25)
+    @test blended.r ≈ 0.35
+    @test blended.g ≈ 0.35
+    @test blended.b ≈ 0.35
+    @test sample_pmrem(two_levels, direction, -1.0) == base_sample
+    @test sample_pmrem(two_levels, direction, 2.0) ==
+          sample_cube(high_cube, direction)
+
+    sample_probe = () ->
+        (@allocated sample_pmrem(single_level, direction, 0.5))
+    sample_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sample_probe() == 0
+end
