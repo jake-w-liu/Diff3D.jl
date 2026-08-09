@@ -7002,9 +7002,14 @@ end
         @test csg_evaluate(cube, shifted, :addition).n_faces == union_geo.n_faces
         @test csg_evaluate(cube, shifted, :subtraction).n_faces == subtract_geo.n_faces
         @test csg_evaluate(cube, shifted, :intersection).n_faces == intersect_geo.n_faces
-        @test_opt_alloc 80000 csg_union(cube, shifted)
-        @test_opt_alloc 78000 csg_subtract(cube, shifted)
-        @test_opt_alloc 78000 csg_intersect(cube, shifted)
+        # Vector backing-store allocation differs across supported Julia lines.
+        # Keep a tight ratchet for each line instead of relaxing the latest limit.
+        csg_alloc_limits = VERSION < v"1.11" ? (105_000, 102_000, 95_000) :
+                           VERSION < v"1.12" ? (100_000, 94_000, 85_000) :
+                           (80_000, 78_000, 78_000)
+        @test_opt_alloc csg_alloc_limits[1] csg_union(cube, shifted)
+        @test_opt_alloc csg_alloc_limits[2] csg_subtract(cube, shifted)
+        @test_opt_alloc csg_alloc_limits[3] csg_intersect(cube, shifted)
         csg_alloc_polys = Diff3D._csg_geometry_polygons(SphereGeometry(width_segments=32,
                                                                         height_segments=16))
         csg_alloc_node = Diff3D._csg_node(Diff3D._csg_clone_polygons(csg_alloc_polys))
@@ -23804,4 +23809,88 @@ end
     transform_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || validation_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || transform_probe() <= 8_192
+end
+
+@testset "fresh audit round 171 fixes" begin
+    expected_counts = (24, 16, 16)
+    for scale in (1.0e-300, 1.0e-9, 1.0e-3, 1.0, 1.0e3, 1.0e9, 1.0e300)
+        cube = BoxGeometry(width=2scale, height=2scale, depth=2scale)
+        shifted = transform_geometry(
+            BoxGeometry(width=2scale, height=2scale, depth=2scale),
+            mat4_translation(0.7scale, 0.0, 0.0))
+        results = (csg_union(cube, shifted),
+                   csg_subtract(cube, shifted),
+                   csg_intersect(cube, shifted))
+        @test map(result -> result.n_faces, results) == expected_counts
+        for result in results
+            @test result.n_vertices == 3 * result.n_faces
+            @test all(isfinite, result.positions)
+            @test all(isfinite, result.normals)
+        end
+        union_box = compute_bounding_box(results[1])
+        @test isapprox(union_box.min.x, -scale; rtol=1.0e-12, atol=0.0)
+        @test isapprox(union_box.max.x, 1.7scale; rtol=1.0e-12, atol=0.0)
+    end
+
+    for (offset, scale) in ((1.0e9, 1.0e-6),
+                            (1.0e12, 1.0e-3),
+                            (-1.0e12, 1.0e-3))
+        source = BoxGeometry(width=2scale, height=2scale, depth=2scale)
+        left = transform_geometry(source, mat4_translation(offset, 0.0, 0.0))
+        right = transform_geometry(
+            source, mat4_translation(offset + 0.7scale, 0.0, 0.0))
+        results = (csg_union(left, right),
+                   csg_subtract(left, right),
+                   csg_intersect(left, right))
+        @test map(result -> result.n_faces, results) == expected_counts
+        @test all(result -> all(isfinite, result.positions), results)
+    end
+
+    tiny_without_normals = BoxGeometry(
+        width=2.0e-300, height=2.0e-300, depth=2.0e-300)
+    tiny_without_normals.normals = Float64[]
+    shifted_without_normals = transform_geometry(
+        BoxGeometry(width=2.0e-300, height=2.0e-300, depth=2.0e-300),
+        mat4_translation(0.7e-300, 0.0, 0.0))
+    shifted_without_normals.normals = Float64[]
+    tiny_union = csg_union(tiny_without_normals, shifted_without_normals)
+    @test tiny_union.n_faces == 24
+    @test all(isfinite, tiny_union.normals)
+    @test all(normal -> isapprox(normal, 1.0; rtol=1.0e-12, atol=0.0),
+              norm(get_normal(tiny_union, vi)) for vi in 1:tiny_union.n_vertices)
+
+    invalid_positions = BoxGeometry()
+    invalid_positions.positions[1] = NaN
+    @test_throws "CSG positions must be finite" csg_union(
+        invalid_positions, BoxGeometry())
+    malformed_positions = BufferGeometry(
+        Float64[], Float64[], Float64[], [1, 1, 1], 1, 1)
+    @test_throws "CSG left operand positions length must cover n_vertices" csg_union(
+        malformed_positions, BoxGeometry())
+
+    allocation_left = BoxGeometry(width=2.0, height=2.0, depth=2.0)
+    allocation_right = transform_geometry(
+        BoxGeometry(width=2.0, height=2.0, depth=2.0),
+        mat4_translation(0.7, 0.0, 0.0))
+    frame_probe = () -> (@allocated Diff3D._csg_operation_frame(
+        allocation_left, allocation_right))
+    union_probe = () -> (@allocated csg_union(allocation_left, allocation_right))
+    subtract_probe = () -> (@allocated csg_subtract(
+        allocation_left, allocation_right))
+    intersect_probe = () -> (@allocated csg_intersect(
+        allocation_left, allocation_right))
+    frame_probe()
+    union_probe()
+    subtract_probe()
+    intersect_probe()
+    csg_alloc_limits = VERSION < v"1.11" ? (105_000, 102_000, 95_000) :
+                       VERSION < v"1.12" ? (100_000, 94_000, 85_000) :
+                       (80_000, 78_000, 78_000)
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || frame_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
+          union_probe() <= csg_alloc_limits[1]
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
+          subtract_probe() <= csg_alloc_limits[2]
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
+          intersect_probe() <= csg_alloc_limits[3]
 end

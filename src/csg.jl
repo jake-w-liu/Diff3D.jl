@@ -6,6 +6,15 @@
 
 const _CSG_EPS = 1e-5
 
+# Evaluate both operands in one canonical frame so BSP tolerances are invariant
+# under a shared finite translation and uniform scale.
+struct CSGFrame
+    center::Vec3{Float64}
+    scale::Float64
+end
+
+const _CSG_IDENTITY_FRAME = CSGFrame(Vec3(0.0, 0.0, 0.0), 1.0)
+
 struct CSGVertex
     pos::Vec3{Float64}
     normal::Vec3{Float64}
@@ -79,6 +88,14 @@ _csg_plane_flip(plane::CSGPlane) = CSGPlane(-plane.normal, -plane.w)
     return t < -_CSG_EPS ? 2 : (t > _CSG_EPS ? 1 : 0)
 end
 
+@inline function _csg_polygon_type(plane::CSGPlane, polygon::CSGPolygon)
+    polygon_type = 0
+    @inbounds for vertex in polygon.vertices
+        polygon_type |= _csg_vertex_type(plane, vertex)
+    end
+    return polygon_type
+end
+
 function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
                             coplanar_front::Vector{CSGPolygon},
                             coplanar_back::Vector{CSGPolygon},
@@ -88,11 +105,8 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     front_type = 1
     back_type = 2
     spanning = 3
-    polygon_type = 0
+    polygon_type = _csg_polygon_type(plane, polygon)
     n = length(polygon.vertices)
-    @inbounds for i in 1:n
-        polygon_type |= _csg_vertex_type(plane, polygon.vertices[i])
-    end
 
     if polygon_type == coplanar
         if dot(plane.normal, polygon.plane.normal) > 0.0
@@ -140,8 +154,6 @@ function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon})
     node.plane === nothing && (node.plane = polygons[1].plane)
     front = CSGPolygon[]
     back = CSGPolygon[]
-    sizehint!(front, length(polygons))
-    sizehint!(back, length(polygons))
     for p in polygons
         _csg_split_polygon(node.plane::CSGPlane, p, node.polygons,
                            node.polygons, front, back)
@@ -196,8 +208,6 @@ function _csg_clip_polygons(node::CSGNode, polygons::Vector{CSGPolygon})
     node.plane === nothing && return copy(polygons)
     front = CSGPolygon[]
     back = CSGPolygon[]
-    sizehint!(front, length(polygons))
-    sizehint!(back, length(polygons))
     for p in polygons
         _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back)
     end
@@ -215,15 +225,74 @@ function _csg_clip_to!(node::CSGNode, bsp::CSGNode)
     return node
 end
 
-function _csg_geometry_polygons(geo::BufferGeometry)
+@inline function _csg_frame_point(frame::CSGFrame, point::Vec3)
+    return Vec3((Float64(point.x) - frame.center.x) / frame.scale,
+                (Float64(point.y) - frame.center.y) / frame.scale,
+                (Float64(point.z) - frame.center.z) / frame.scale)
+end
+
+@inline function _csg_world_point(frame::CSGFrame, point::Vec3)
+    return Vec3(muladd(frame.scale, Float64(point.x), frame.center.x),
+                muladd(frame.scale, Float64(point.y), frame.center.y),
+                muladd(frame.scale, Float64(point.z), frame.center.z))
+end
+
+function _csg_operation_frame(a::BufferGeometry, b::BufferGeometry)
+    _validate_triangle_geometry_indices(a, "CSG left operand")
+    _validate_triangle_geometry_indices(b, "CSG right operand")
+
+    min_x = Inf
+    min_y = Inf
+    min_z = Inf
+    max_x = -Inf
+    max_y = -Inf
+    max_z = -Inf
+    found_vertex = false
+    for geo in (a, b)
+        @inbounds for fi in 1:geo.n_faces
+            base = (fi - 1) * 3
+            for offset in 1:3
+                vi = geo.indices[base + offset]
+                position_base = (vi - 1) * 3
+                x = geo.positions[position_base + 1]
+                y = geo.positions[position_base + 2]
+                z = geo.positions[position_base + 3]
+                (isfinite(x) && isfinite(y) && isfinite(z)) ||
+                    throw(ArgumentError("CSG positions must be finite"))
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                min_z = min(min_z, z)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+                max_z = max(max_z, z)
+                found_vertex = true
+            end
+        end
+    end
+    found_vertex || return _CSG_IDENTITY_FRAME
+
+    center = Vec3(_geometry_midpoint(min_x, max_x),
+                  _geometry_midpoint(min_y, max_y),
+                  _geometry_midpoint(min_z, max_z))
+    scale = max(abs(min_x - center.x), abs(max_x - center.x),
+                abs(min_y - center.y), abs(max_y - center.y),
+                abs(min_z - center.z), abs(max_z - center.z))
+    scale == 0.0 && return CSGFrame(center, 1.0)
+    return CSGFrame(center, scale)
+end
+
+function _csg_geometry_polygons(geo::BufferGeometry,
+                                frame::CSGFrame=_CSG_IDENTITY_FRAME)
     polygons = CSGPolygon[]
     sizehint!(polygons, geo.n_faces)
     for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        face_normal = compute_face_normal(geo, fi)
+        p1 = _csg_frame_point(frame, get_vertex(geo, i1))
+        p2 = _csg_frame_point(frame, get_vertex(geo, i2))
+        p3 = _csg_frame_point(frame, get_vertex(geo, i3))
+        face_normal = triangle_normal(Triangle(p1, p2, p3))
         vertices = Vector{CSGVertex}(undef, 3)
-        @inbounds for (out, idx) in enumerate((i1, i2, i3))
-            p = get_vertex(geo, idx)
+        @inbounds for (out, (idx, p)) in enumerate(((i1, p1), (i2, p2), (i3, p3)))
             n = length(geo.normals) >= 3idx ? get_normal(geo, idx) : face_normal
             norm(n) <= _CSG_EPS && (n = face_normal)
             uv = length(geo.uvs) >= 2idx ? Vec2(geo.uvs[2idx - 1], geo.uvs[2idx]) :
@@ -236,7 +305,8 @@ function _csg_geometry_polygons(geo::BufferGeometry)
     return polygons
 end
 
-function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon})
+function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon},
+                                   frame::CSGFrame=_CSG_IDENTITY_FRAME)
     n_faces = 0
     for poly in polygons
         length(poly.vertices) >= 3 || continue
@@ -264,9 +334,10 @@ function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon})
             for v in tri
                 vi += 1
                 pbase = 3vi - 2
-                positions[pbase] = v.pos.x
-                positions[pbase + 1] = v.pos.y
-                positions[pbase + 2] = v.pos.z
+                world = _csg_world_point(frame, v.pos)
+                positions[pbase] = world.x
+                positions[pbase + 1] = world.y
+                positions[pbase + 2] = world.z
                 normals[pbase] = v.normal.x
                 normals[pbase + 1] = v.normal.y
                 normals[pbase + 2] = v.normal.z
@@ -285,8 +356,9 @@ function _csg_clone_polygons(polygons::Vector{CSGPolygon})
 end
 
 function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
-    ap = _csg_geometry_polygons(a)
-    bp = _csg_geometry_polygons(b)
+    frame = _csg_operation_frame(a, b)
+    ap = _csg_geometry_polygons(a, frame)
+    bp = _csg_geometry_polygons(b, frame)
     # An empty operand has a degenerate BSP (root plane === nothing), which the
     # clip step would otherwise pass through wholesale, returning the other solid.
     # Resolve set-theoretically instead: ∅∪X=X, ∅-X=∅, X-∅=X, ∅∩X=∅.
@@ -300,7 +372,7 @@ function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
         else
             throw(ArgumentError("unsupported CSG operation: $operation"))
         end
-        return _csg_polygons_to_geometry(result)
+        return _csg_polygons_to_geometry(result, frame)
     end
     A = _csg_node(ap)
     B = _csg_node(bp)
@@ -332,7 +404,7 @@ function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
     else
         throw(ArgumentError("unsupported CSG operation: $operation"))
     end
-    return _csg_polygons_to_geometry(_csg_all_polygons(A))
+    return _csg_polygons_to_geometry(_csg_all_polygons(A), frame)
 end
 
 """Boolean union of two closed triangle `BufferGeometry` meshes."""
