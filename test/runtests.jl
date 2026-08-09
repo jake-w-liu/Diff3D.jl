@@ -23310,3 +23310,94 @@ end
     @test_opt_alloc 0 Diff3D._texture_wrap_symbol("repeat")
     @test_opt_alloc 0 Diff3D._inverse_ad_mode("forward")
 end
+
+@testset "fresh audit round 163 fixes" begin
+    symbol_is_interned(value::String) =
+        ccall(:jl_symbol_lookup, Ptr{Cvoid}, (Cstring,), value) != C_NULL
+
+    object = Object3D()
+    vec_values = [Vec3(), Vec3(1.0, 1.0, 1.0)]
+    quaternion_values = [Quaternion(), Quaternion()]
+    morph_values = [[0.0], [1.0]]
+    vec_tangents = [Vec3(), Vec3()]
+    quaternion_tangents = [Quaternion(0.0, 0.0, 0.0, 0.0),
+                           Quaternion(0.0, 0.0, 0.0, 0.0)]
+    morph_tangents = [[0.0], [0.0]]
+
+    constructors = (
+        path -> KeyframeTrack(object, path, [0.0, 1.0], vec_values),
+        path -> NumberKeyframeTrack(object, path, [0.0, 1.0], [0.0, 1.0]),
+        path -> QuaternionKeyframeTrack(
+            object, path, [0.0, 1.0], quaternion_values),
+        path -> MorphWeightsKeyframeTrack(
+            object, path, [0.0, 1.0], morph_values),
+        path -> CubicSplineKeyframeTrack(
+            object, path, [0.0, 1.0], vec_values,
+            vec_tangents, vec_tangents),
+        path -> CubicSplineQuaternionKeyframeTrack(
+            object, path, [0.0, 1.0], quaternion_values,
+            quaternion_tangents, quaternion_tangents),
+        path -> CubicSplineMorphWeightsKeyframeTrack(
+            object, path, [0.0, 1.0], morph_values,
+            morph_tangents, morph_tangents),
+    )
+    for (index, constructor) in pairs(constructors)
+        invalid = "diff3d_unknown_track_$(index)_$(time_ns())"
+        @test !symbol_is_interned(invalid)
+        @test_throws ArgumentError constructor(invalid)
+        @test !symbol_is_interned(invalid)
+    end
+
+    invalid_material = "diff3d_unknown_material_$(time_ns())"
+    material_path = "material.$invalid_material"
+    mesh = Mesh(BoxGeometry(), MeshBasicMaterial(opacity=0.25))
+    @test !symbol_is_interned(invalid_material)
+    @test_throws ArgumentError NumberKeyframeTrack(
+        mesh, material_path, [0.0, 1.0], [0.0, 1.0])
+    @test !symbol_is_interned(invalid_material)
+
+    invalid_texture_field = "diff3d_unknown_texture_$(time_ns())"
+    invalid_texture_path = "material.$invalid_texture_field.offset.x"
+    @test !symbol_is_interned(invalid_texture_field)
+    @test_throws ArgumentError NumberKeyframeTrack(
+        mesh, invalid_texture_path, [0.0, 1.0], [0.0, 1.0])
+    @test !symbol_is_interned(invalid_texture_field)
+
+    light = PointLight(intensity=1.0)
+    light_track = NumberKeyframeTrack(
+        light, "intensity", [0.0, 1.0], [1.0, 3.0])
+    material_track = NumberKeyframeTrack(
+        mesh, "material.opacity", [0.0, 1.0], [0.25, 0.75])
+    mixer_set_time!(AnimationMixer(AnimationClip(
+        "resolved_properties", [light_track, material_track])), 0.5)
+    @test light.intensity == 2.0
+    @test mesh.material.opacity == 0.5
+
+    parent = Group()
+    morph_mesh = Mesh(
+        BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.0])
+    add!(parent, morph_mesh)
+    morph_track = MorphWeightsKeyframeTrack(
+        parent, "morphTargetInfluences", [0.0, 1.0], [[0.0], [1.0]])
+    mixer_set_time!(AnimationMixer(AnimationClip(
+        "resolved_morph", [morph_track])), 0.5)
+    @test morph_mesh.morph_target_influences == [0.5]
+
+    texture = Texture(ones(2, 2, 3))
+    textured_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(map=texture))
+    texture_track = NumberKeyframeTrack(
+        textured_mesh, "material.map.offset.x", [0.0, 1.0], [0.0, 0.5])
+    canonical_texture_track = NumberKeyframeTrack(
+        textured_mesh, "map_offset.y", [0.0, 1.0], [0.0, 0.25])
+    mixer_set_time!(AnimationMixer(AnimationClip(
+        "resolved_texture", [texture_track, canonical_texture_track])), 1.0)
+    @test texture.offset.x == 0.5
+    @test texture.offset.y == 0.25
+
+    sprite = Sprite(SpriteMaterial(rotation=0.1))
+    material_rotation_track = NumberKeyframeTrack(
+        sprite, "material_rotation", [0.0, 1.0], [0.1, 0.9])
+    mixer_set_time!(AnimationMixer(AnimationClip(
+        "resolved_material_rotation", [material_rotation_track])), 0.5)
+    @test sprite.material.rotation == 0.5
+end

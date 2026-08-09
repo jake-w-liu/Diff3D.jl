@@ -834,17 +834,27 @@ const _TEXTURE_ANIMATION_TRACK_PROPERTIES = let
     end
     Dict(pairs)
 end
+const _TEXTURE_ANIMATION_CANONICAL_PROPERTIES = Dict(
+    String(property) => property for property in keys(_TEXTURE_ANIMATION_TRACK_PROPERTIES)
+)
+const _TEXTURE_ANIMATION_PATH_PROPERTIES = Dict(
+    (String(field), String(texture_property)) => property
+    for (property, (field, texture_property)) in _TEXTURE_ANIMATION_TRACK_PROPERTIES
+)
 
 function _texture_animation_property_symbol(s::AbstractString)
     parts = split(String(s), ".")
+    if length(parts) == 1
+        return get(_TEXTURE_ANIMATION_CANONICAL_PROPERTIES, parts[1], nothing)
+    end
     length(parts) == 2 || return nothing
     field = get(_TEXTURE_ANIMATION_FIELD_ALIASES, parts[1], nothing)
     property = get(_TEXTURE_ANIMATION_PROPERTY_ALIASES, parts[2], nothing)
     (field === nothing || property === nothing) && return nothing
-    return Symbol(field * "_" * property)
+    return get(_TEXTURE_ANIMATION_PATH_PROPERTIES, (field, property), nothing)
 end
 
-function _animation_property_symbol(s::AbstractString)
+function _animation_property_alias(s::AbstractString)
     texture_property = _texture_animation_property_symbol(s)
     texture_property !== nothing && return texture_property
     s = replace(s, "." => "_")
@@ -877,31 +887,105 @@ function _animation_property_symbol(s::AbstractString)
     s == "sizeAttenuation" && return :size_attenuation
     s == "morphTargetInfluences" && return :morph_target_influences
     s == "morph_target_influences" && return :morph_target_influences
-    s in ("position", "scale", "rotation", "quaternion") && return Symbol(s)
-    return Symbol(s)
+    s == "material_rotation" && return :material_rotation
+    s == "position" && return :position
+    s == "scale" && return :scale
+    s == "rotation" && return :rotation
+    s == "quaternion" && return :quaternion
+    return nothing
 end
 
-function _parse_animation_property_path(path::AbstractString)
+function _existing_animation_property(value, requested::AbstractString)
+    canonical = occursin('.', requested) ? replace(requested, "." => "_") : requested
+    for property in propertynames(value)
+        property isa Symbol || continue
+        name = String(property)
+        (name == requested || name == canonical) && return property
+    end
+    return nothing
+end
+
+function _animation_material(target::AbstractObject3D)
+    hasproperty(target, :material) || return nothing
+    return getproperty(target, :material)
+end
+
+function _resolved_animation_property(target::AbstractObject3D,
+                                      requested::AbstractString,
+                                      material_path::Bool)
+    alias = _animation_property_alias(requested)
+    material = _animation_material(target)
+
+    if alias !== nothing && haskey(_TEXTURE_ANIMATION_TRACK_PROPERTIES, alias)
+        material === nothing &&
+            throw(ArgumentError("animation target has no material for property path: $requested"))
+        field, _ = _TEXTURE_ANIMATION_TRACK_PROPERTIES[alias]
+        hasproperty(material, field) ||
+            throw(ArgumentError("animation material has no property path: $requested"))
+        return alias
+    end
+
+    if material_path
+        material === nothing &&
+            throw(ArgumentError("animation target has no material for property path: $requested"))
+        alias === :material_rotation && hasproperty(material, :rotation) &&
+            return :material_rotation
+        if alias !== nothing && hasproperty(material, alias)
+            return alias === :rotation ? :material_rotation : alias
+        end
+        property = _existing_animation_property(material, requested)
+        property === nothing &&
+            throw(ArgumentError("animation material has no property path: $requested"))
+        return property === :rotation ? :material_rotation : property
+    end
+
+    if alias === :quaternion && hasproperty(target, :rotation)
+        return :quaternion
+    elseif alias === :morph_target_influences
+        # Morph tracks may bind to a parent and update matching descendants.
+        return :morph_target_influences
+    elseif alias !== nothing && hasproperty(target, alias)
+        return alias
+    end
+
+    property = _existing_animation_property(target, requested)
+    property !== nothing && return property
+
+    if material !== nothing
+        alias === :material_rotation && hasproperty(material, :rotation) &&
+            return :material_rotation
+        alias !== nothing && hasproperty(material, alias) && return alias
+        property = _existing_animation_property(material, requested)
+        property !== nothing && return property
+    end
+
+    throw(ArgumentError("animation target has no property path: $requested"))
+end
+
+function _parse_animation_property_path(target::AbstractObject3D,
+                                        path::AbstractString)
     p = startswith(path, ".") ? path[2:end] : String(path)
+    isempty(p) && throw(ArgumentError("animation property path must not be empty"))
     material_path = startswith(p, "material.")
     material_path && (p = p[10:end])
+    isempty(p) && throw(ArgumentError("animation material property path must not be empty"))
     bracket = match(r"^(.+)\[([^\]]+)\]$", p)
     if bracket !== nothing
-        return _animation_property_symbol(bracket.captures[1]),
+        return _resolved_animation_property(target, bracket.captures[1], material_path),
                _animation_component_index(bracket.captures[2])
     end
     dot = match(r"^(.+)\.([A-Za-z])$", p)
     if dot !== nothing
-        return _animation_property_symbol(dot.captures[1]),
+        return _resolved_animation_property(target, dot.captures[1], material_path),
                _animation_component_index(dot.captures[2])
     end
-    material_path && p == "rotation" && return :material_rotation, 0
-    return _animation_property_symbol(p), 0
+    return _resolved_animation_property(target, p, material_path), 0
 end
 
-function _parse_animation_whole_property_path(path::AbstractString,
+function _parse_animation_whole_property_path(target::AbstractObject3D,
+                                              path::AbstractString,
                                               track_type::AbstractString)
-    property, component = _parse_animation_property_path(path)
+    property, component = _parse_animation_property_path(target, path)
     component == 0 ||
         throw(ArgumentError("$track_type component property paths require NumberKeyframeTrack"))
     return property
@@ -921,7 +1005,8 @@ KeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
               times::Vector{Float64}, values::Vector{Vec3{Float64}};
               interpolation::Symbol=:linear) =
     KeyframeTrack(target,
-                  _parse_animation_whole_property_path(property_path, "KeyframeTrack"),
+                  _parse_animation_whole_property_path(target, property_path,
+                                                       "KeyframeTrack"),
                   times, values; interpolation=interpolation)
 
 function NumberKeyframeTrack(target::AbstractObject3D, property::Symbol,
@@ -936,7 +1021,7 @@ end
 function NumberKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
                              times::Vector{Float64}, values::Vector{Float64};
                              interpolation::Symbol=:linear)
-    property, component = _parse_animation_property_path(property_path)
+    property, component = _parse_animation_property_path(target, property_path)
     NumberKeyframeTrack(target, property, times, values;
                         interpolation=interpolation, component=component)
 end
@@ -973,7 +1058,7 @@ QuaternionKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
                         values::Vector{Quaternion{Float64}};
                         interpolation::Symbol=:slerp) =
     QuaternionKeyframeTrack(target,
-                            _parse_animation_whole_property_path(property_path,
+                            _parse_animation_whole_property_path(target, property_path,
                                                                  "QuaternionKeyframeTrack"),
                             times, values; interpolation=interpolation)
 
@@ -1011,7 +1096,7 @@ function MorphWeightsKeyframeTrack(target::AbstractObject3D, property_path::Abst
                                    times::Vector{Float64},
                                    values::Vector{Vector{Float64}};
                                    interpolation::Symbol=:linear)
-    property = _parse_animation_whole_property_path(property_path,
+    property = _parse_animation_whole_property_path(target, property_path,
                                                     "MorphWeightsKeyframeTrack")
     return MorphWeightsKeyframeTrack(target, property, times, values;
                                      interpolation=interpolation)
@@ -1090,7 +1175,7 @@ CubicSplineKeyframeTrack(target::AbstractObject3D, property_path::AbstractString
                          in_tangents::Vector{Vec3{Float64}},
                          out_tangents::Vector{Vec3{Float64}}) =
     CubicSplineKeyframeTrack(target,
-                             _parse_animation_whole_property_path(property_path,
+                             _parse_animation_whole_property_path(target, property_path,
                                                                   "CubicSplineKeyframeTrack"),
                              times, values, in_tangents, out_tangents)
 
@@ -1102,7 +1187,7 @@ CubicSplineQuaternionKeyframeTrack(target::AbstractObject3D,
                                    out_tangents::Vector{Quaternion{Float64}}) =
     CubicSplineQuaternionKeyframeTrack(target,
                                        _parse_animation_whole_property_path(
-                                           property_path,
+                                           target, property_path,
                                            "CubicSplineQuaternionKeyframeTrack"),
                                        times, values, in_tangents, out_tangents)
 
@@ -1114,7 +1199,7 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
                                      out_tangents::Vector{Vector{Float64}}) =
     CubicSplineMorphWeightsKeyframeTrack(target,
                                          _parse_animation_whole_property_path(
-                                             property_path,
+                                             target, property_path,
                                              "CubicSplineMorphWeightsKeyframeTrack"),
                                          times, values, in_tangents, out_tangents)
 
