@@ -25372,3 +25372,201 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || line_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || points_probe() == 0
 end
+
+@testset "fresh audit round 186 fixes" begin
+    function light_with_parameter(light_type, field::Symbol, value)
+        kwargs = NamedTuple{(field,)}((value,))
+        return light_type(; kwargs...)
+    end
+
+    light_color_cases = (
+        (AmbientLight, :color),
+        (DirectionalLight, :color),
+        (PointLight, :color),
+        (SpotLight, :color),
+        (HemisphereLight, :color),
+        (HemisphereLight, :ground_color),
+        (RectAreaLight, :color),
+    )
+    for (light_type, field) in light_color_cases
+        message = "light $field must be a Color3 with finite components"
+        for invalid in (NaN, Inf, -Inf)
+            @test_throws message light_with_parameter(
+                light_type, field, Color3(invalid, 0.25, 0.5))
+            @test_throws message light_with_parameter(
+                light_type, field, Color3(0.25, invalid, 0.5))
+            @test_throws message light_with_parameter(
+                light_type, field, Color3(0.25, 0.5, invalid))
+        end
+    end
+    @test_throws "light color must be a Color3 with finite components" AmbientLight(
+        color=(1.0, 1.0, 1.0))
+
+    zero_color = Color3(0.0, 0.0, 0.0)
+    invalid_coeff_message =
+        "light coeffs must be a Color3 with finite components"
+    invalid_coeff_shape_message =
+        "light coeffs must be a tuple of four Color3 values with finite components"
+    for coefficient_index in 1:4, channel in 1:3, invalid in (NaN, Inf, -Inf)
+        coefficients = [zero_color, zero_color, zero_color, zero_color]
+        channels = [0.0, 0.0, 0.0]
+        channels[channel] = invalid
+        coefficients[coefficient_index] = Color3(channels...)
+        @test_throws invalid_coeff_message LightProbe(coeffs=Tuple(coefficients))
+    end
+    @test_throws invalid_coeff_shape_message LightProbe(
+        coeffs=(zero_color, zero_color, zero_color))
+    @test_throws invalid_coeff_shape_message LightProbe(
+        coeffs=[zero_color, zero_color, zero_color, zero_color])
+    @test_throws invalid_coeff_message LightProbe(
+        coeffs=(zero_color, zero_color, zero_color, (0.0, 0.0, 0.0)))
+
+    light_types = (
+        AmbientLight, DirectionalLight, PointLight, SpotLight,
+        HemisphereLight, RectAreaLight, LightProbe,
+    )
+    intensity_message = "light intensity must be finite"
+    for light_type in light_types
+        for invalid in (NaN, Inf, -Inf, true, nothing, "1", 1.0 + 0.0im)
+            @test_throws intensity_message light_type(intensity=invalid)
+        end
+    end
+
+    finite_hdr = Color3(-2.0, 0.25, 4.0)
+    for (light_type, field) in light_color_cases
+        light = light_with_parameter(light_type, field, finite_hdr)
+        @test getproperty(light, field) === finite_hdr
+        @test Diff3D._validate_light_parameters(light) === nothing
+    end
+    probe_coeffs = (finite_hdr, zero_color, finite_hdr, zero_color)
+    finite_probe = LightProbe(coeffs=probe_coeffs, intensity=-3.0)
+    @test finite_probe.coeffs === probe_coeffs
+    @test finite_probe.intensity == -3.0
+    for light_type in light_types
+        light = light_type(intensity=-3.0)
+        @test light.intensity == -3.0
+        @test Diff3D._validate_light_parameters(light) === nothing
+    end
+
+    scene_for_web = Scene()
+    normal = Vec3(0.0, 0.0, 1.0)
+    view_direction = Vec3(0.0, 0.0, 1.0)
+    surface_position = Vec3()
+    material = MeshLambertMaterial()
+
+    mutable_color_cases = (
+        (AmbientLight(), :color),
+        (DirectionalLight(), :color),
+        (PointLight(), :color),
+        (SpotLight(), :color),
+        (HemisphereLight(), :color),
+        (HemisphereLight(), :ground_color),
+        (RectAreaLight(), :color),
+    )
+    invalid_color = Color3(NaN, 0.25, 0.5)
+    for (light, field) in mutable_color_cases
+        setproperty!(light, field, invalid_color)
+        message = "light $field must be a Color3 with finite components"
+        @test_throws message Diff3D._validate_light_parameters(light)
+
+        light_scene = Scene()
+        add!(light_scene, light)
+        @test_throws message collect_lights(light_scene)
+        @test_throws message shade_face(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+        @test_throws message Diff3D.shade_face_with_ambient(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_light_json(
+            web_io, light, scene_for_web)
+        @test position(web_io) == 0
+    end
+
+    invalid_probe = LightProbe()
+    invalid_probe.coeffs =
+        (zero_color, invalid_color, zero_color, zero_color)
+    @test_throws invalid_coeff_message Diff3D._validate_light_parameters(invalid_probe)
+    probe_scene = Scene()
+    add!(probe_scene, invalid_probe)
+    @test_throws invalid_coeff_message collect_lights(probe_scene)
+    @test_throws invalid_coeff_message shade_face(
+        normal, view_direction, surface_position, material, AbstractLight[invalid_probe])
+    @test_throws invalid_coeff_message Diff3D.shade_face_with_ambient(
+        normal, view_direction, surface_position, material, AbstractLight[invalid_probe])
+    probe_web_io = IOBuffer()
+    @test_throws invalid_coeff_message Diff3D._web_write_light_json(
+        probe_web_io, invalid_probe, scene_for_web)
+    @test position(probe_web_io) == 0
+
+    for light_type in light_types
+        light = light_type()
+        light.intensity = NaN
+        @test_throws intensity_message Diff3D._validate_light_parameters(light)
+
+        light_scene = Scene()
+        add!(light_scene, light)
+        @test_throws intensity_message collect_lights(light_scene)
+        @test_throws intensity_message shade_face(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+        @test_throws intensity_message Diff3D.shade_face_with_ambient(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+
+        web_io = IOBuffer()
+        @test_throws intensity_message Diff3D._web_write_light_json(
+            web_io, light, scene_for_web)
+        @test position(web_io) == 0
+    end
+
+    invalid_directional = DirectionalLight()
+    invalid_directional.color = invalid_color
+    @test_throws "light color must be a Color3 with finite components" Diff3D.light_contribution(
+        invalid_directional, surface_position)
+    invalid_point = PointLight()
+    invalid_point.intensity = NaN
+    @test_throws intensity_message Diff3D.light_contribution(
+        invalid_point, surface_position)
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        background = Color3(0.2, 0.3, 0.4)
+        render_scene = Scene(background=background)
+        invalid_ambient = AmbientLight()
+        invalid_ambient.color = invalid_color
+        add!(render_scene, invalid_ambient)
+        target = RenderTarget(8, 8)
+        fill!(target.color, 0.75)
+        @test_throws "light color must be a Color3 with finite components" render!(
+            target, render_scene, PerspectiveCamera())
+        @test all(target.color[:, :, 1] .== background.r)
+        @test all(target.color[:, :, 2] .== background.g)
+        @test all(target.color[:, :, 3] .== background.b)
+    end
+
+    valid_ambient = AmbientLight(color=finite_hdr, intensity=-3.0)
+    ambient_json = Diff3D._web_light_json(valid_ambient, scene_for_web)
+    @test occursin("\"color\":[-2,0.25,4]", ambient_json)
+    @test occursin("\"intensity\":-3", ambient_json)
+
+    color_probe = () ->
+        (@allocated Diff3D._validated_light_color(finite_hdr, :color))
+    intensity_probe = () ->
+        (@allocated Diff3D._validated_light_intensity(-3.0))
+    ambient_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_ambient))
+    hemisphere = HemisphereLight(color=finite_hdr, ground_color=finite_hdr,
+                                  intensity=-3.0)
+    hemisphere_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(hemisphere))
+    light_probe_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(finite_probe))
+    color_probe()
+    intensity_probe()
+    ambient_probe()
+    hemisphere_probe()
+    light_probe_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || color_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || intensity_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || ambient_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || hemisphere_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || light_probe_probe() == 0
+end

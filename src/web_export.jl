@@ -1490,6 +1490,7 @@ end
 
 function _web_write_light_common_json(io::IO, typ::AbstractString, light::AbstractLight,
                                       num_buf::Vector{UInt8})
+    _validate_light_parameters(light)
     write(io, "{\"type\":")
     _js_write_str(io, typ)
     write(io, ",\"id\":")

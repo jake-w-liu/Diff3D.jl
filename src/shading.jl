@@ -1239,8 +1239,12 @@ end
     end
 end
 
-_fill_color(normal::Vec3, light::AmbientLight) = light.color * light.intensity
+function _fill_color(normal::Vec3, light::AmbientLight)
+    _validate_light_parameters(light)
+    return light.color * light.intensity
+end
 function _fill_color(normal::Vec3, light::HemisphereLight)
+    _validate_light_parameters(light)
     w = clamp(normal.y * 0.5 + 0.5, zero(normal.y), one(normal.y))
     blended = Color3(light.color.r * w + light.ground_color.r * (1 - w),
                      light.color.g * w + light.ground_color.g * (1 - w),
@@ -1286,6 +1290,7 @@ end
 
 # Order-1 SH irradiance, clamped to non-negative per channel.
 function _fill_color(normal::Vec3, light::LightProbe)
+    _validate_light_parameters(light)
     c = light.coeffs
     Color3(
         _light_probe_channel(
@@ -1684,6 +1689,7 @@ end
 end
 
 @inline function _rect_area_basis(light::RectAreaLight)
+    _validate_light_parameters(light)
     f = _direction_between(light.position, light.target)
     ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, f))
@@ -2393,15 +2399,18 @@ end
 end
 
 function light_contribution(light::AmbientLight, position::Vec3)
+    _validate_light_parameters(light)
     (light.color, light.intensity, Vec3(0.0, 1.0, 0.0))
 end
 
 function light_contribution(light::DirectionalLight, position::Vec3)
+    _validate_light_parameters(light)
     dir = _direction_between(light.target, light.position)
     (light.color, light.intensity, dir)
 end
 
 function light_contribution(light::PointLight, position::Vec3)
+    _validate_light_parameters(light)
     dir, dist =
         _light_direction_and_distance(position, light.position)
     attenuation = if light.distance > 0
@@ -2430,6 +2439,7 @@ function light_contribution(light::PointLight, position::Vec3)
 end
 
 function light_contribution(light::SpotLight, position::Vec3)
+    _validate_light_parameters(light)
     dir, dist =
         _light_direction_and_distance(position, light.position)
 
@@ -2461,12 +2471,14 @@ function light_contribution(light::SpotLight, position::Vec3)
 end
 
 function light_contribution(light::HemisphereLight, position::Vec3)
+    _validate_light_parameters(light)
     # Blend between sky and ground based on normal direction
     # We return the sky color; the shade function should handle hemisphere blending
     (light.color, light.intensity, Vec3(0.0, 1.0, 0.0))
 end
 
 function light_contribution(light::RectAreaLight, position::Vec3)
+    _validate_light_parameters(light)
     dir, _ =
         _light_direction_and_distance(position, light.position)
     (light.color, light.intensity, dir)
@@ -2477,6 +2489,7 @@ function shade_face_with_ambient(normal, view_dir, position, material, lights)
     _validate_material_parameters(material)
     result = Color3(0.0, 0.0, 0.0)
     for light in lights
+        _validate_light_parameters(light)
         if light isa AmbientLight
             mc = _material_color(material)
             result = result + mc * light.color * light.intensity

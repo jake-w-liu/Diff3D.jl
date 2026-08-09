@@ -4,6 +4,46 @@
 
 abstract type AbstractLight <: AbstractObject3D end
 
+@noinline function _throw_light_color(name::Symbol)
+    throw(ArgumentError("light $name must be a Color3 with finite components"))
+end
+
+@inline function _validated_light_color(value, name::Symbol)
+    value isa Color3 || _throw_light_color(name)
+    color = convert(Color3{Float64}, value)
+    isfinite(color.r) && isfinite(color.g) && isfinite(color.b) ||
+        _throw_light_color(name)
+    return color
+end
+
+@noinline function _throw_light_intensity()
+    throw(ArgumentError("light intensity must be finite"))
+end
+
+@inline function _validated_light_intensity(value)
+    value isa Real && !(value isa Bool) || _throw_light_intensity()
+    intensity = Float64(value)
+    isfinite(intensity) || _throw_light_intensity()
+    return intensity
+end
+
+@noinline function _throw_light_probe_coeffs()
+    throw(ArgumentError(
+        "light coeffs must be a tuple of four Color3 values with finite components"))
+end
+
+@inline function _validated_light_probe_coeffs(coeffs)
+    coeffs isa Tuple && length(coeffs) == 4 || _throw_light_probe_coeffs()
+    return (
+        _validated_light_color(coeffs[1], :coeffs),
+        _validated_light_color(coeffs[2], :coeffs),
+        _validated_light_color(coeffs[3], :coeffs),
+        _validated_light_color(coeffs[4], :coeffs),
+    )
+end
+
+@inline _validate_light_parameters(::AbstractLight) = nothing
+
 # ========================== IESProfile ==========================
 # Photometric profile for real-world luminaires (IESNA LM-63). A measured
 # luminaire is described by its luminous intensity (candela) as a function of the
@@ -298,7 +338,8 @@ end
 function AmbientLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0, name="AmbientLight")
     AmbientLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
                  nothing, AbstractObject3D[], true, name, _next_id(),
-                 color, intensity)
+                 _validated_light_color(color, :color),
+                 _validated_light_intensity(intensity))
 end
 
 get_position(o::AmbientLight) = o.position
@@ -362,7 +403,8 @@ function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            shadow_pcf_radius=nothing)
     DirectionalLight(position, Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
-                     color, intensity, Vec3(), cast_shadow,
+                     _validated_light_color(color, :color),
+                     _validated_light_intensity(intensity), Vec3(), cast_shadow,
                      _validated_shadow_bias(shadow_bias),
                      _validated_shadow_pcf_radius(shadow_pcf_radius))
 end
@@ -408,7 +450,8 @@ function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                     shadow_pcf_radius=nothing, ies_profile=nothing)
     PointLight(position, Euler(), Vec3(1.0,1.0,1.0),
                nothing, AbstractObject3D[], true, name, _next_id(),
-               color, intensity, distance, decay, cast_shadow,
+               _validated_light_color(color, :color),
+               _validated_light_intensity(intensity), distance, decay, cast_shadow,
                _validated_shadow_bias(shadow_bias),
                _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
 end
@@ -459,7 +502,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    shadow_pcf_radius=nothing, ies_profile=nothing)
     SpotLight(position, Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
-              color, intensity, distance, angle, penumbra, decay,
+              _validated_light_color(color, :color),
+              _validated_light_intensity(intensity), distance, angle, penumbra, decay,
               target, cast_shadow, _validated_shadow_bias(shadow_bias),
               _validated_shadow_pcf_radius(shadow_pcf_radius), ies_profile)
 end
@@ -493,7 +537,9 @@ function HemisphereLight(; color=Color3(1.0, 1.0, 1.0),
                           intensity=1.0, name="HemisphereLight")
     HemisphereLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
                     nothing, AbstractObject3D[], true, name, _next_id(),
-                    color, ground_color, intensity)
+                    _validated_light_color(color, :color),
+                    _validated_light_color(ground_color, :ground_color),
+                    _validated_light_intensity(intensity))
 end
 
 get_position(o::HemisphereLight) = o.position
@@ -527,7 +573,8 @@ end
 function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=1.0, height=1.0,
                         position=Vec3(0.0,1.0,0.0), name="RectAreaLight")
     RectAreaLight(position, Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-                  true, name, _next_id(), color, intensity, width, height, Vec3())
+                  true, name, _next_id(), _validated_light_color(color, :color),
+                  _validated_light_intensity(intensity), width, height, Vec3())
 end
 
 get_position(o::RectAreaLight) = o.position
@@ -559,7 +606,8 @@ function LightProbe(; coeffs=(Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0),
                               Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0)),
                      intensity=1.0, name="LightProbe")
     LightProbe(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-               true, name, _next_id(), coeffs, intensity)
+               true, name, _next_id(), _validated_light_probe_coeffs(coeffs),
+               _validated_light_intensity(intensity))
 end
 
 """Build a uniform (DC-only) light probe from an ambient colour."""
@@ -574,6 +622,49 @@ get_children(o::LightProbe) = o.children
 get_parent(o::LightProbe) = o.parent
 is_visible(o::LightProbe) = o.visible
 set_parent!(o::LightProbe, p) = (o.parent = p)
+
+@inline function _validate_light_parameters(light::AmbientLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::DirectionalLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::PointLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::SpotLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::HemisphereLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_color(light.ground_color, :ground_color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::RectAreaLight)
+    _validated_light_color(light.color, :color)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
+
+@inline function _validate_light_parameters(light::LightProbe)
+    _validated_light_probe_coeffs(light.coeffs)
+    _validated_light_intensity(light.intensity)
+    return nothing
+end
 
 @_compute_world_matrix_method(AmbientLight,
     Scene, Group, Object3D, Mesh, LineObject, PointsObject,
@@ -633,6 +724,7 @@ end
 function _fill_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D, i::Int)
     is_visible(obj) || return i
     if obj isa AbstractLight
+        _validate_light_parameters(obj)
         lights[i] = obj
         i += 1
     end
@@ -644,7 +736,10 @@ end
 
 function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
     is_visible(obj) || return nothing
-    obj isa AbstractLight && push!(lights, obj)
+    if obj isa AbstractLight
+        _validate_light_parameters(obj)
+        push!(lights, obj)
+    end
     for child in get_children(obj)
         _collect_lights!(lights, child)
     end
