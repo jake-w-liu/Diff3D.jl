@@ -23459,3 +23459,79 @@ end
             logarithmic_depth=true, sort_objects=false)
     @test finite_target.color == infinite_target.color
 end
+
+@testset "fresh audit round 165 fixes" begin
+    ndc_x = 0.25
+    ndc_y = -0.2
+    finite_camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.25, near=0.1, far=1_000.0)
+    finite_camera.position = Vec3(1.0, 2.0, 5.0)
+    finite_camera.target = Vec3(0.0, 0.0, 0.0)
+
+    inverse_view_projection = mat4_inverse(
+        projection_matrix(finite_camera) * view_matrix(finite_camera))
+    legacy_near = mat4_transform_point(
+        inverse_view_projection, Vec3(ndc_x, ndc_y, -1.0))
+    legacy_far = mat4_transform_point(
+        inverse_view_projection, Vec3(ndc_x, ndc_y, 1.0))
+    legacy_direction = Diff3D._raycaster_direction(legacy_far - legacy_near)
+
+    raycaster = Raycaster(Vec3(), Vec3(0.0, 0.0, -1.0))
+    set_from_camera!(raycaster, finite_camera, ndc_x, ndc_y)
+    @test raycaster.ray.origin == finite_camera.position
+    @test norm(raycaster.ray.direction - legacy_direction) <= 1.0e-14
+
+    infinite_camera = PerspectiveCamera(
+        fov=finite_camera.fov, aspect=finite_camera.aspect,
+        near=finite_camera.near, far=Inf)
+    infinite_camera.position = finite_camera.position
+    infinite_camera.target = finite_camera.target
+    infinite_camera.up = finite_camera.up
+    set_from_camera!(raycaster, infinite_camera, ndc_x, ndc_y)
+    @test raycaster.ray.origin == infinite_camera.position
+    @test all(isfinite, (
+        raycaster.ray.direction.x,
+        raycaster.ray.direction.y,
+        raycaster.ray.direction.z))
+    @test norm(raycaster.ray.direction) ≈ 1.0 atol=1.0e-14
+    @test norm(raycaster.ray.direction - legacy_direction) <= 1.0e-14
+
+    orthographic_camera = OrthographicCamera(
+        left=-2.0, right=2.0, bottom=-1.0, top=1.0,
+        near=0.1, far=100.0)
+    orthographic_camera.position = Vec3(1.0, 2.0, 5.0)
+    orthographic_camera.target = Vec3()
+    orthographic_inverse = mat4_inverse(
+        projection_matrix(orthographic_camera) *
+        view_matrix(orthographic_camera))
+    orthographic_near = mat4_transform_point(
+        orthographic_inverse, Vec3(ndc_x, ndc_y, -1.0))
+    orthographic_far = mat4_transform_point(
+        orthographic_inverse, Vec3(ndc_x, ndc_y, 1.0))
+    orthographic_direction = Diff3D._raycaster_direction(
+        orthographic_far - orthographic_near)
+    set_from_camera!(raycaster, orthographic_camera, ndc_x, ndc_y)
+    @test raycaster.ray.origin == orthographic_near
+    @test raycaster.ray.direction == orthographic_direction
+
+    finite_allocation_probe = () ->
+        (@allocated Diff3D._camera_ray(finite_camera, ndc_x, ndc_y))
+    infinite_allocation_probe = () ->
+        (@allocated Diff3D._camera_ray(infinite_camera, ndc_x, ndc_y))
+    orthographic_allocation_probe = () ->
+        (@allocated Diff3D._camera_ray(orthographic_camera, ndc_x, ndc_y))
+    finite_allocation_probe()
+    infinite_allocation_probe()
+    orthographic_allocation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || finite_allocation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || infinite_allocation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || orthographic_allocation_probe() == 0
+
+    scene = Scene()
+    add!(scene, Mesh(BoxGeometry(), MeshBasicMaterial(side=:double)))
+    center_raycaster = Raycaster(Vec3(), Vec3(0.0, 0.0, -1.0))
+    infinite_camera.position = Vec3(0.0, 0.0, 5.0)
+    infinite_camera.target = Vec3()
+    set_from_camera!(center_raycaster, infinite_camera, 0.0, 0.0)
+    @test !isempty(raycast(center_raycaster, scene))
+end

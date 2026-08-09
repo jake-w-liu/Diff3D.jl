@@ -387,14 +387,23 @@ end
 end
 
 # Build the world-space ray through normalized device coords (x,y ∈ [-1,1]).
+function _camera_ray(camera::PerspectiveCamera, ndc_x, ndc_y)
+    inv_vp = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
+    # NDC z=1 is the point at infinity when the perspective far plane is
+    # infinite. Any finite interior depth lies on the same camera ray; 0.5
+    # stays inside the clip interval and remains finite for both far modes.
+    point = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, 0.5))
+    origin = _raycaster_vec3(camera.position, "origin")
+    return Ray(origin, _raycaster_direction(point - origin))
+end
+
 function _camera_ray(camera::AbstractCamera, ndc_x, ndc_y)
     inv_vp = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
     p_near = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, -1.0))
     p_far  = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, 1.0))
-    # Perspective rays originate at the camera apex; orthographic rays originate
-    # at the unprojected near-plane point because they do not share an apex.
-    origin = camera isa PerspectiveCamera ? camera.position : p_near
-    Ray(_raycaster_vec3(origin, "origin"), _raycaster_direction(p_far - p_near))
+    # Orthographic rays originate at the unprojected near-plane point because
+    # they do not share a camera apex.
+    Ray(_raycaster_vec3(p_near, "origin"), _raycaster_direction(p_far - p_near))
 end
 
 """Aim the raycaster through screen NDC `(x,y)` from a camera (three.js `setFromCamera`)."""
