@@ -1307,6 +1307,15 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                               cache.skinned_matrices,
                                               cache.morph_positions)
     end
+    # Validate every triangle drawable before frustum, shadow, shader, or
+    # rasterization code can index its buffers. The checks are allocation-free.
+    for mesh in meshes
+        _validate_triangle_geometry_indices(_mesh_geometry(mesh), "render!")
+    end
+    for im in instanced
+        _instanced_triangle_drawable(im) || continue
+        _validate_triangle_geometry_indices(_instanced_geometry(im), "render!")
+    end
     shadow_fn = if shadows
         if cache === nothing
             _build_shadow_query_from_drawables!(IdDict{AbstractLight,ShadowMap}(), nothing,

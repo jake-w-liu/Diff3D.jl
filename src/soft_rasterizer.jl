@@ -895,8 +895,11 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     max_mesh_faces = 0
     for mesh in meshes
         geo = _mesh_geometry(mesh)
-        total_vertices += geo.n_vertices
-        total_faces += geo.n_faces
+        _validate_triangle_geometry_indices(geo, "soft_render_scene")
+        total_vertices = _geometry_checked_add(
+            total_vertices, geo.n_vertices, "soft_render_scene vertex count")
+        total_faces = _geometry_checked_add(
+            total_faces, geo.n_faces, "soft_render_scene face count")
         max_mesh_faces = max(max_mesh_faces, geo.n_faces)
     end
 

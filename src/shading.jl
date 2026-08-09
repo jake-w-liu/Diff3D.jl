@@ -834,10 +834,17 @@ _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m
 _apply_roughness_map(m::AbstractMaterial, rmap, u, v) = _apply_pbr_maps(m, rmap, nothing, u, v)
 
-shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
-                 lights::Vector{<:AbstractLight}, cam_pos::Vec3; shadow_fn=nothing) =
-    shade_mesh_faces!(Vector{Color3{Float64}}(undef, geo.n_faces),
-                      geo, world_mat, material, lights, cam_pos; shadow_fn=shadow_fn)
+function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
+                          material::AbstractMaterial,
+                          lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                          shadow_fn=nothing)
+    # Validate before allocating; malformed counts or backing buffers must not
+    # drive an oversized result allocation.
+    _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    return _shade_mesh_faces_dispatch!(
+        Vector{Color3{Float64}}(undef, geo.n_faces), geo, world_mat,
+        material, lights, cam_pos; shadow_fn=shadow_fn)
+end
 
 function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
                                  geo::BufferGeometry, world_mat::Mat4, material,
@@ -882,9 +889,11 @@ end
 
 _single_light_vector(light::T) where {T<:AbstractLight} = T[light]
 
-function shade_mesh_faces!(colors::Vector{Color3{Float64}},
-                           geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
-                           lights::Vector{AbstractLight}, cam_pos::Vec3; shadow_fn=nothing)
+function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
+                                     geo::BufferGeometry, world_mat::Mat4,
+                                     material::AbstractMaterial,
+                                     lights::Vector{AbstractLight}, cam_pos::Vec3;
+                                     shadow_fn=nothing)
     if !(material isa LitMaterial)
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights,
                                        cam_pos; shadow_fn=shadow_fn)
@@ -904,11 +913,23 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                    shadow_fn=shadow_fn)
 end
 
-function shade_mesh_faces!(colors::Vector{Color3{Float64}},
-                           geo::BufferGeometry, world_mat::Mat4, material::AbstractMaterial,
-                           lights::Vector{<:AbstractLight}, cam_pos::Vec3; shadow_fn=nothing)
+function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
+                                     geo::BufferGeometry, world_mat::Mat4,
+                                     material::AbstractMaterial,
+                                     lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                                     shadow_fn=nothing)
     return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
                                    shadow_fn=shadow_fn)
+end
+
+function shade_mesh_faces!(colors::Vector{Color3{Float64}},
+                           geo::BufferGeometry, world_mat::Mat4,
+                           material::AbstractMaterial,
+                           lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                           shadow_fn=nothing)
+    _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    return _shade_mesh_faces_dispatch!(colors, geo, world_mat, material,
+                                       lights, cam_pos; shadow_fn=shadow_fn)
 end
 
 function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},

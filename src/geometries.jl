@@ -108,19 +108,34 @@ function _validate_geometry_vertices(geo::BufferGeometry, context::String)
     return nothing
 end
 
-function _validate_triangle_geometry_indices(geo::BufferGeometry, context::String)
-    _validate_geometry_vertices(geo, context)
+function _validate_geometry_face_count(geo::BufferGeometry, context::String)
     geo.n_faces >= 0 || throw(ArgumentError("$context n_faces must be non-negative"))
     geo.n_faces <= typemax(Int) ÷ 3 ||
         throw(ArgumentError("$context n_faces is too large"))
+    return nothing
+end
+
+function _validate_geometry_index_values(geo::BufferGeometry, context::String,
+                                         label::String)
+    @inbounds for index in geo.indices
+        1 <= index <= geo.n_vertices ||
+            throw(ArgumentError("$context $label must reference vertices"))
+    end
+    return nothing
+end
+
+function _validate_indexed_geometry(geo::BufferGeometry, context::String)
+    _validate_geometry_vertices(geo, context)
+    _validate_geometry_index_values(geo, context, "indices")
+    return nothing
+end
+
+function _validate_triangle_geometry_indices(geo::BufferGeometry, context::String)
+    _validate_geometry_vertices(geo, context)
+    _validate_geometry_face_count(geo, context)
     length(geo.indices) >= 3 * geo.n_faces ||
         throw(ArgumentError("$context indices length must cover n_faces"))
-    @inbounds for fi in 1:geo.n_faces
-        base = (fi - 1) * 3
-        i1, i2, i3 = geo.indices[base + 1], geo.indices[base + 2], geo.indices[base + 3]
-        (1 <= i1 <= geo.n_vertices && 1 <= i2 <= geo.n_vertices && 1 <= i3 <= geo.n_vertices) ||
-            throw(ArgumentError("$context face indices must reference vertices"))
-    end
+    _validate_geometry_index_values(geo, context, "face indices")
     return nothing
 end
 
@@ -1590,17 +1605,33 @@ input's face count, and `material_index` equal to its 0-based position in `geos`
 Inputs that contribute no faces are skipped so empty groups are not emitted.
 """
 function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
-    n_positions = sum((length(g.positions) for g in geos); init=0)
-    n_normals = sum((length(g.normals) for g in geos); init=0)
-    n_uvs = sum((length(g.uvs) for g in geos); init=0)
-    n_indices = sum((length(g.indices) for g in geos); init=0)
+    n_positions = 0
+    n_normals = 0
+    n_uvs = 0
+    n_indices = 0
+    total_verts = 0
+    total_faces = 0
+    for g in geos
+        _validate_triangle_geometry_indices(g, "merge_geometries")
+        n_positions = _geometry_checked_add(
+            n_positions, length(g.positions), "merge_geometries positions length")
+        n_normals = _geometry_checked_add(
+            n_normals, length(g.normals), "merge_geometries normals length")
+        n_uvs = _geometry_checked_add(
+            n_uvs, length(g.uvs), "merge_geometries UV length")
+        n_indices = _geometry_checked_add(
+            n_indices, length(g.indices), "merge_geometries indices length")
+        total_verts = _geometry_checked_add(
+            total_verts, g.n_vertices, "merge_geometries vertex count")
+        total_faces = _geometry_checked_add(
+            total_faces, g.n_faces, "merge_geometries face count")
+    end
     positions = Vector{Float64}(undef, n_positions)
     normals_arr = Vector{Float64}(undef, n_normals)
     uvs_arr = Vector{Float64}(undef, n_uvs)
     indices = Vector{Int}(undef, n_indices)
     offset = 0
-    total_verts = 0
-    total_faces = 0
+    face_offset = 0
     groups = NTuple{3,Int}[]
     with_groups && sizehint!(groups, length(geos))
     pout = 1
@@ -1618,14 +1649,13 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
         end
         if with_groups && g.n_faces > 0
             # mat_idx is 1-based; material_index is 0-based (three.js convention).
-            push!(groups, (total_faces + 1, g.n_faces, mat_idx - 1))
+            push!(groups, (face_offset + 1, g.n_faces, mat_idx - 1))
         end
         pout += length(g.positions)
         nout += length(g.normals)
         uout += length(g.uvs)
         offset += g.n_vertices
-        total_verts += g.n_vertices
-        total_faces += g.n_faces
+        face_offset += g.n_faces
     end
 
     merged_groups = with_groups ? groups : NTuple{3,Int}[]
@@ -1639,7 +1669,13 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
             keep = all(g -> has_attribute(g, name) &&
                             get_attribute(g, name).item_size == attr.item_size, geos)
             keep || continue
-            data = similar(attr.data, sum(length(get_attribute(g, name).data) for g in geos))
+            data_length = 0
+            for g in geos
+                data_length = _geometry_checked_add(
+                    data_length, length(get_attribute(g, name).data),
+                    "merge_geometries attribute length")
+            end
+            data = similar(attr.data, data_length)
             out = 1
             for g in geos
                 src = get_attribute(g, name).data

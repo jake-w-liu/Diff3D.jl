@@ -1511,6 +1511,7 @@ function _draw_line_object!(rt::RenderTarget, obj::LineObject,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
+    _validate_indexed_geometry(geo, "render_lines!")
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, world, :line_strip, proj, view,
         near, xlo, xhi, ylo, yhi, stamp, stamp_id,
@@ -1525,6 +1526,7 @@ function _draw_line_object!(rt::RenderTarget, obj::LineSegments,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
+    _validate_indexed_geometry(geo, "render_lines!")
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, world, :lines, proj, view, near,
         xlo, xhi, ylo, yhi, stamp, stamp_id,
@@ -1539,6 +1541,7 @@ function _draw_line_object!(rt::RenderTarget, obj::LineLoop,
                             stamp::Matrix{Int}, stamp_id::Int,
                             morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _line_geometry(obj)
+    _validate_indexed_geometry(geo, "render_lines!")
     return _draw_line_geometry_from_material!(
         rt, geo, obj.material, world, :line_loop, proj, view, near,
         xlo, xhi, ylo, yhi, stamp, stamp_id,
@@ -1569,7 +1572,9 @@ function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
                                 proj::Mat4, view::Mat4, near,
                                 xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                 stamp::Matrix{Int}, stamp_id::Int)
-    _draw_instanced_lines_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
+    geo = _instanced_geometry(obj)
+    _validate_indexed_geometry(geo, "render_lines!")
+    _draw_instanced_lines_geometry!(rt, geo, _instanced_material(obj),
                                     obj.instance_matrices, obj.instance_colors,
                                     base, obj.draw_mode,
                                     proj, view, near, xlo, xhi, ylo, yhi,
@@ -2296,6 +2301,7 @@ function _draw_points_object!(rt::RenderTarget, obj::PointsObject,
                               ylo::Int, yhi::Int,
                               morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _points_geometry(obj)
+    _validate_indexed_geometry(geo, "render_points!")
     _draw_points_geometry_from_material!(
         rt, geo, obj.material, world, camera, proj, view, near,
         W, H, xlo, xhi, ylo, yhi,
@@ -2324,7 +2330,9 @@ function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
                                  camera::AbstractCamera, proj::Mat4, view::Mat4,
                                  near, W::Int, H::Int, xlo::Int, xhi::Int,
                                  ylo::Int, yhi::Int)
-    _draw_instanced_points_geometry!(rt, _instanced_geometry(obj), _instanced_material(obj),
+    geo = _instanced_geometry(obj)
+    _validate_indexed_geometry(geo, "render_points!")
+    _draw_instanced_points_geometry!(rt, geo, _instanced_material(obj),
                                      obj.instance_matrices, obj.instance_colors,
                                      base, camera, proj, view,
                                      near, W, H, xlo, xhi, ylo, yhi)

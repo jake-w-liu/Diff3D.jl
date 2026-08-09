@@ -298,6 +298,13 @@ function _compute_shadow_map_from_drawables(meshes, instanced, light,
     res = _validated_shadow_resolution(resolution)
     size(depth) == (res, res) ||
         throw(ArgumentError("shadow depth scratch must match resolution"))
+    for mesh in meshes
+        _validate_triangle_geometry_indices(_mesh_geometry(mesh), "compute_shadow_map")
+    end
+    for im in instanced
+        _instanced_triangle_drawable(im) || continue
+        _validate_triangle_geometry_indices(_instanced_geometry(im), "compute_shadow_map")
+    end
     fill!(depth, Inf)
     shadow_bias = bias === nothing ? _light_shadow_bias(light, 3e-3) :
                   _validated_shadow_bias(bias)

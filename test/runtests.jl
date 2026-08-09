@@ -23894,3 +23894,110 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
           intersect_probe() <= csg_alloc_limits[3]
 end
+
+@testset "fresh audit round 172 fixes" begin
+    malformed_positions = BufferGeometry(
+        Float64[], Float64[], Float64[], [1, 1, 1], 1, 1)
+    malformed_indices = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], [1, 1, 2], 1, 1)
+    trailing_malformed_index = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], [1, 1, 1, 2], 1, 1)
+    negative_faces = BufferGeometry(
+        Float64[], Float64[], Float64[], Int[], 0, -1)
+    material = MeshBasicMaterial(side=:double)
+    camera = PerspectiveCamera()
+    raycaster = Raycaster(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0))
+
+    malformed_scene(geo; cast_shadow=false) = begin
+        scene = Scene()
+        add!(scene, Mesh(geo, material; cast_shadow=cast_shadow))
+        scene
+    end
+
+    @test_throws "raycast positions length must cover n_vertices" raycast(
+        raycaster, Mesh(malformed_positions, material))
+    @test_throws "raycast face indices must reference vertices" raycast(
+        raycaster, Mesh(malformed_indices, material))
+
+    @test_throws "render! positions length must cover n_vertices" render!(
+        RenderTarget(8, 8), malformed_scene(malformed_positions), camera;
+        frustum_cull=false)
+    @test_throws "render! face indices must reference vertices" render!(
+        RenderTarget(8, 8), malformed_scene(malformed_indices), camera;
+        frustum_cull=false)
+
+    colors = [Color3(0.25, 0.5, 0.75)]
+    @test_throws "shade_mesh_faces positions length must cover n_vertices" Diff3D.shade_mesh_faces!(
+        colors, malformed_positions, Mat4(), material, AbstractLight[], Vec3())
+    @test colors == [Color3(0.25, 0.5, 0.75)]
+    @test_throws "shade_mesh_faces face indices must reference vertices" shade_mesh_faces(
+        malformed_indices, Mat4(), material, AbstractLight[], Vec3())
+    @test_throws "shade_mesh_faces n_faces must be non-negative" shade_mesh_faces(
+        negative_faces, Mat4(), material, AbstractLight[], Vec3())
+
+    @test_throws "merge_geometries positions length must cover n_vertices" merge_geometries(
+        [malformed_positions])
+    @test_throws "merge_geometries face indices must reference vertices" merge_geometries(
+        [malformed_indices])
+    @test_throws "merge_geometries face indices must reference vertices" merge_geometries(
+        [trailing_malformed_index])
+
+    @test_throws "soft_render_scene positions length must cover n_vertices" soft_render_scene(
+        malformed_scene(malformed_positions), camera, 4, 4)
+    shadow_scene = malformed_scene(malformed_positions; cast_shadow=true)
+    shadow_light = DirectionalLight(position=Vec3(0.0, 10.0, 0.0),
+                                    cast_shadow=true)
+    @test_throws "compute_shadow_map positions length must cover n_vertices" compute_shadow_map(
+        shadow_scene, shadow_light; resolution=8)
+
+    web_case = WebGLExportCase(
+        "malformed", "Malformed", "geometry", malformed_scene(malformed_positions))
+    @test_throws "WebGL export positions length must cover n_vertices" Diff3D._web_case_json(
+        web_case)
+
+    valid_mode_geometry = BufferGeometry(
+        [-1.0, 0.0, 0.0,
+          0.0, 1.0, 0.0,
+          1.0, 0.0, 0.0],
+        Float64[], Float64[], [1, 2, 3], 3, 0)
+    valid_mode_scene = Scene()
+    add!(valid_mode_scene, Mesh(BoxGeometry(), material))
+    add!(valid_mode_scene, LineObject(valid_mode_geometry, LineBasicMaterial()))
+    add!(valid_mode_scene, LineLoop(valid_mode_geometry, LineBasicMaterial()))
+    add!(valid_mode_scene, LineSegments(valid_mode_geometry, LineBasicMaterial()))
+    add!(valid_mode_scene, PointsObject(valid_mode_geometry, PointsMaterial()))
+    add!(valid_mode_scene, Sprite(MeshBasicMaterial()))
+    valid_mode_json = Diff3D._web_case_json(WebGLExportCase(
+        "modes", "Modes", "supported draw modes", valid_mode_scene))
+    for mode in ("triangles", "line_strip", "line_loop", "lines", "points", "sprite")
+        @test occursin("\"mode\":\"$mode\"", valid_mode_json)
+    end
+
+    malformed_line = BufferGeometry(
+        Float64[], Float64[], Float64[], [1, 1], 1, 0)
+    line_scene = Scene()
+    add!(line_scene, LineSegments(malformed_line, LineBasicMaterial()))
+    @test_throws "render_lines! positions length must cover n_vertices" render_lines!(
+        RenderTarget(8, 8), line_scene, camera)
+    @test_throws "WebGL export positions length must cover n_vertices" Diff3D._web_case_json(
+        WebGLExportCase("bad_line", "Bad line", "geometry", line_scene))
+
+    malformed_points = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], [2], 1, 0)
+    points_scene = Scene()
+    add!(points_scene, PointsObject(malformed_points, PointsMaterial()))
+    @test_throws "render_points! indices must reference vertices" render_points!(
+        RenderTarget(8, 8), points_scene, camera)
+    @test_throws "raycast indices must reference vertices" raycast(
+        raycaster, PointsObject(malformed_points, PointsMaterial()))
+
+    valid = BoxGeometry()
+    triangle_validation_probe = () ->
+        (@allocated Diff3D._validate_triangle_geometry_indices(valid, "test"))
+    indexed_validation_probe = () ->
+        (@allocated Diff3D._validate_indexed_geometry(valid, "test"))
+    triangle_validation_probe()
+    indexed_validation_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || triangle_validation_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || indexed_validation_probe() == 0
+end

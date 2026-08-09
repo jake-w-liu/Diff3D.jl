@@ -426,6 +426,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
     o = rc.ray.origin; d = rc.ray.direction
     if obj isa Mesh
         geo = _mesh_geometry(obj)
+        _validate_triangle_geometry_indices(geo, "raycast")
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = material_side(_mesh_material(obj))
         @inbounds for fi in _draw_face_range(geo)
@@ -442,6 +443,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         # Each instance is the geometry under world_matrix * instance_matrix; test
         # all of them (was silently skipped, so instanced scenes returned no hits).
         geo = _instanced_geometry(obj)
+        _validate_triangle_geometry_indices(geo, "raycast")
         side = material_side(_instanced_material(obj))
         @inbounds for im in obj.instance_matrices
             m = wm * im
@@ -460,6 +462,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         # Raycast the posed (skinned) geometry the rasterizer actually renders, so
         # a visibly-rendered skinned mesh is pickable (was silently skipped).
         geo = _skinned_buffer_geometry(obj)
+        _validate_triangle_geometry_indices(geo, "raycast")
         mats = _skinning_matrices!(rc.skinning_matrices, obj)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         side = material_side(obj.material)
@@ -475,6 +478,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         end
     elseif obj isa PointsObject
         geo = _points_geometry(obj)
+        _validate_indexed_geometry(geo, "raycast")
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.point_threshold
         @inbounds for entry in _draw_entry_range(geo)
@@ -488,6 +492,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         end
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         geo = _line_geometry(obj)
+        _validate_indexed_geometry(geo, "raycast")
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         thr = rc.line_threshold
         # LineSegments: disjoint pairs. LineObject: consecutive vertices.

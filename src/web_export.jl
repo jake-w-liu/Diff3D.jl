@@ -2265,6 +2265,14 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     mat = obj.material
     mat isa ShaderMaterial &&
         throw(ArgumentError("WebGL export does not support ShaderMaterial; render it with the CPU path or use a built-in browser-exported material"))
+    if mode == "triangles" || mode == "sprite"
+        _validate_triangle_geometry_indices(geo, "WebGL export")
+    elseif mode == "lines" || mode == "line_strip" || mode == "line_loop" ||
+           mode == "points"
+        _validate_indexed_geometry(geo, "WebGL export")
+    else
+        throw(ArgumentError("WebGL export draw mode is unsupported: $mode"))
+    end
     m = matrix === nothing ? world : matrix
     rot = get_rotation(transform_obj)
     parent = get_parent(transform_obj)
