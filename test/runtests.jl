@@ -23667,3 +23667,31 @@ end
     type_probe()
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || type_probe() == 0
 end
+
+@testset "fresh audit round 168 fixes" begin
+    face = Texture(fill(0.25, 2, 2, 3); colorspace=:linear)
+    cube = CubeTexture(ntuple(_ -> face, 6))
+    direction = Vec3(1.0, 0.0, 0.0)
+    for invalid_lod in (NaN, Inf, -Inf, "invalid")
+        @test_throws "cubemap lod must be finite" sample_cube_lod(
+            cube, direction, invalid_lod)
+    end
+
+    base_sample = sample_cube(cube, direction)
+    @test sample_cube_lod(cube, direction, -1.0) == base_sample
+    @test sample_cube_lod(cube, direction, 0) == base_sample
+    @test sample_cube_lod(cube, direction, Float32(4.5)) == base_sample
+
+    mipped_face = Texture(fill(0.5, 4, 4, 3); colorspace=:linear)
+    generate_mipmaps!(mipped_face)
+    mipped_cube = CubeTexture(ntuple(_ -> mipped_face, 6))
+    @test_throws "cubemap lod must be finite" sample_cube_lod(
+        mipped_cube, direction, NaN)
+    @test sample_cube_lod(mipped_cube, direction, 1.5) ==
+          Color3(0.5, 0.5, 0.5)
+
+    sample_probe = () ->
+        (@allocated sample_cube_lod(cube, direction, 0.5))
+    sample_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sample_probe() == 0
+end

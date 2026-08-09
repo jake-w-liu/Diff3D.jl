@@ -833,11 +833,18 @@ chain and blended between neighboring levels. Faces without mipmaps fall back
 to `sample_cube`.
 """
 function sample_cube_lod(ct::CubeTexture, dir::Vec3, lod)
+    lod_f = try
+        Float64(lod)
+    catch err
+        (err isa MethodError || err isa InexactError || err isa OverflowError ||
+         err isa DomainError || err isa TypeError || err isa ArgumentError) ||
+            rethrow()
+        throw(ArgumentError("cubemap lod must be finite"))
+    end
+    isfinite(lod_f) || throw(ArgumentError("cubemap lod must be finite"))
     face, u, v = _cube_face_uv(dir)
     tex = ct.faces[face]
     isempty(tex.mipmaps) && return sample_texture(tex, u, v)
-    lod_f = Float64(lod)
-    isfinite(lod_f) || throw(ArgumentError("cubemap lod must be finite"))
     lod_f <= 0 && return sample_texture(tex, u, v)
     nlevels = length(tex.mipmaps)
     lod_clamped = clamp(lod_f, 0.0, Float64(nlevels))
