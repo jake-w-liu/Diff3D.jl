@@ -23190,3 +23190,43 @@ end
     @test_opt_alloc 0 triangle_contains_point(
         repeated, Vec3(100.0, 100.0, 100.0))
 end
+
+@testset "fresh audit round 161 fixes" begin
+    sparse_cache = Dict{Int,Symbol}()
+    high_index = 99_999
+    high_symbol = Diff3D._morph_symbol!(
+        sparse_cache, :morphPosition, high_index)
+    @test high_symbol === Symbol(:morphPosition, high_index)
+    @test length(sparse_cache) == 1
+    @test sparse_cache[high_index] === high_symbol
+    @test_throws "morph target index must be non-negative" Diff3D._morph_symbol!(
+        sparse_cache, :morphPosition, -1)
+    @test_opt_alloc 0 Diff3D._morph_symbol!(
+        sparse_cache, :morphPosition, high_index)
+
+    @test Diff3D._MORPH_POSITION_SYMBOLS isa Dict{Int,Symbol}
+    @test Diff3D._MORPH_NORMAL_SYMBOLS isa Dict{Int,Symbol}
+    @test Diff3D._MORPH_TANGENT_SYMBOLS isa Dict{Int,Symbol}
+
+    concurrent_cache = Dict{Int,Symbol}()
+    Threads.@threads for i in 1:1_000
+        index = mod(i, 17)
+        Diff3D._morph_symbol!(concurrent_cache, :morphNormal, index) ===
+            Symbol(:morphNormal, index) || error("concurrent morph symbol mismatch")
+    end
+    @test length(concurrent_cache) == 17
+
+    sparse_geo = BufferGeometry(
+        [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+    target_count = high_index + 1
+    target_name = Symbol(:morphPosition, high_index)
+    set_attribute!(sparse_geo, target_name, [1.0, 2.0, 3.0], 3)
+    influences = zeros(Float64, target_count)
+    influences[end] = 1.0
+    cached_before = length(Diff3D._MORPH_POSITION_SYMBOLS)
+    @test apply_morph_targets(sparse_geo, influences) ==
+          [Vec3(1.0, 2.0, 3.0)]
+    @test length(Diff3D._MORPH_POSITION_SYMBOLS) <= cached_before + 1
+    @test get(Diff3D._MORPH_POSITION_SYMBOLS, high_index, nothing) ===
+          target_name
+end

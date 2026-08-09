@@ -474,19 +474,20 @@ _morph_finite_float(value, ti::Int) = _throw_morph_influence(ti)
     _morph_finite_float(weight, ti)
 
 const _MORPH_SYMBOL_LOCK = ReentrantLock()
-const _MORPH_POSITION_SYMBOLS = Symbol[]
-const _MORPH_NORMAL_SYMBOLS = Symbol[]
-const _MORPH_TANGENT_SYMBOLS = Symbol[]
+const _MORPH_POSITION_SYMBOLS = Dict{Int,Symbol}()
+const _MORPH_NORMAL_SYMBOLS = Dict{Int,Symbol}()
+const _MORPH_TANGENT_SYMBOLS = Dict{Int,Symbol}()
 
-function _morph_symbol!(cache::Vector{Symbol}, prefix::Symbol, zero_based_index::Int)
+function _morph_symbol!(cache::Dict{Int,Symbol}, prefix::Symbol,
+                        zero_based_index::Int)
     zero_based_index >= 0 || throw(ArgumentError("morph target index must be non-negative"))
-    one_based_index = zero_based_index + 1
     lock(_MORPH_SYMBOL_LOCK)
     try
-        while length(cache) < one_based_index
-            push!(cache, Symbol(prefix, length(cache)))
-        end
-        return @inbounds cache[one_based_index]
+        cached = get(cache, zero_based_index, nothing)
+        cached === nothing || return cached
+        name = Symbol(prefix, zero_based_index)
+        cache[zero_based_index] = name
+        return name
     finally
         unlock(_MORPH_SYMBOL_LOCK)
     end
