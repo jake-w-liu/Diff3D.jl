@@ -19,6 +19,7 @@ struct RenderTarget{T<:Real}
         size(depth) == (height, width) ||
             throw(ArgumentError(
                 "RenderTarget depth dimensions must be height×width"))
+        _render_target_type(T)
         return new{T}(width, height, color, depth)
     end
 end
@@ -46,7 +47,12 @@ function _render_target_type(::Type{T}) where {T}
         throw(ArgumentError(
             "RenderTarget element type must represent positive infinity"))
     end
-    isinf(infinity) ||
+    valid_infinity = try
+        infinity isa T && isinf(infinity) && infinity > zero(infinity)
+    catch
+        false
+    end
+    valid_infinity ||
         throw(ArgumentError(
             "RenderTarget element type must represent positive infinity"))
     return infinity

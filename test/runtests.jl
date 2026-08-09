@@ -23622,3 +23622,48 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || instance_assignment_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || sprite_matrix_probe() == 0
 end
+
+@testset "fresh audit round 167 fixes" begin
+    integer_color = zeros(Int, 2, 3, 3)
+    integer_depth = zeros(Int, 2, 3)
+    @test_throws "RenderTarget element type must represent positive infinity" RenderTarget(
+        3, 2, integer_color, integer_depth)
+    @test_throws "RenderTarget element type must represent positive infinity" RenderTarget{Int}(
+        3, 2, integer_color, integer_depth)
+
+    rational_color = zeros(Rational{Int}, 2, 3, 3)
+    rational_depth = zeros(Rational{Int}, 2, 3)
+    rational_target = RenderTarget(3, 2, rational_color, rational_depth)
+    clear!(rational_target, Color3())
+    @test all(isinf, rational_target.depth)
+    @test_throws "RenderTarget element type must represent positive infinity" RenderTarget(
+        1, 1, zeros(Bool, 1, 1, 3), zeros(Bool, 1, 1))
+
+    # Shape errors remain more specific than the element-type invariant.
+    @test_throws "RenderTarget color dimensions must be height×width×3" RenderTarget{Int}(
+        3, 2, zeros(Int, 1, 3, 3), integer_depth)
+    @test_throws "RenderTarget depth dimensions must be height×width" RenderTarget{Int}(
+        3, 2, integer_color, zeros(Int, 1, 3))
+
+    color32 = zeros(Float32, 2, 3, 3)
+    depth32 = zeros(Float32, 2, 3)
+    target32 = RenderTarget(3, 2, color32, depth32)
+    @test target32.color === color32
+    @test target32.depth === depth32
+    clear!(target32, Color3(0.25, 0.5, 0.75))
+    @test all(isinf, target32.depth)
+    @test target32.color[1, 1, :] == Float32[0.25, 0.5, 0.75]
+
+    target16 = RenderTarget(2, 2; T=Float16)
+    @test all(isinf, target16.depth)
+    target_big = RenderTarget(
+        1, 1, zeros(BigFloat, 1, 1, 3), zeros(BigFloat, 1, 1))
+    clear!(target_big, Color3())
+    @test isinf(target_big.depth[1, 1])
+
+    @test Diff3D._render_target_type(Float64) === Inf
+    @test Diff3D._render_target_type(Float32) === Float32(Inf)
+    type_probe = () -> (@allocated Diff3D._render_target_type(Float64))
+    type_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || type_probe() == 0
+end
