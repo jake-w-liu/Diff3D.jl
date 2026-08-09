@@ -25570,3 +25570,126 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || hemisphere_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || light_probe_probe() == 0
 end
+
+@testset "fresh audit round 187 fixes" begin
+    function light_with_scalar(light_type, field::Symbol, value)
+        kwargs = NamedTuple{(field,)}((value,))
+        return light_type(; kwargs...)
+    end
+
+    scalar_cases = (
+        (PointLight, :distance),
+        (PointLight, :decay),
+        (SpotLight, :distance),
+        (SpotLight, :angle),
+        (SpotLight, :penumbra),
+        (SpotLight, :decay),
+        (RectAreaLight, :width),
+        (RectAreaLight, :height),
+    )
+    invalid_scalars = (NaN, Inf, -Inf, true, nothing, "1", 1.0 + 0.0im)
+    for (light_type, field) in scalar_cases
+        message = "light $field must be finite"
+        for invalid in invalid_scalars
+            @test_throws message light_with_scalar(light_type, field, invalid)
+        end
+        for finite in (-3.0, 0.0, 2.0)
+            light = light_with_scalar(light_type, field, finite)
+            @test getproperty(light, field) == finite
+            @test Diff3D._validate_light_parameters(light) === nothing
+        end
+    end
+
+    normal = Vec3(0.0, 1.0, 0.0)
+    view_direction = Vec3(0.0, 0.0, 1.0)
+    surface_position = Vec3()
+    material = MeshLambertMaterial()
+    scene_for_web = Scene()
+    mutable_scalar_cases = (
+        (PointLight(position=Vec3(0.0, 2.0, 0.0)), :distance),
+        (PointLight(position=Vec3(0.0, 2.0, 0.0)), :decay),
+        (SpotLight(position=Vec3(0.0, 2.0, 0.0)), :distance),
+        (SpotLight(position=Vec3(0.0, 2.0, 0.0)), :angle),
+        (SpotLight(position=Vec3(0.0, 2.0, 0.0)), :penumbra),
+        (SpotLight(position=Vec3(0.0, 2.0, 0.0)), :decay),
+        (RectAreaLight(position=Vec3(0.0, 2.0, 0.0)), :width),
+        (RectAreaLight(position=Vec3(0.0, 2.0, 0.0)), :height),
+    )
+    for (light, field) in mutable_scalar_cases
+        setproperty!(light, field, NaN)
+        message = "light $field must be finite"
+        @test_throws message Diff3D._validate_light_parameters(light)
+
+        light_scene = Scene()
+        add!(light_scene, light)
+        @test_throws message collect_lights(light_scene)
+        @test_throws message Diff3D.light_contribution(light, surface_position)
+        @test_throws message shade_face(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+        @test_throws message Diff3D.shade_face_with_ambient(
+            normal, view_direction, surface_position, material, AbstractLight[light])
+
+        web_io = IOBuffer()
+        @test_throws message Diff3D._web_write_light_json(
+            web_io, light, scene_for_web)
+        @test position(web_io) == 0
+
+        if light isa PointLight || light isa SpotLight
+            @test_throws message compute_shadow_map(
+                Scene(), light; resolution=8)
+        end
+    end
+
+    if !DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        background = Color3(0.2, 0.3, 0.4)
+        render_scene = Scene(background=background)
+        invalid_rectangle = RectAreaLight()
+        invalid_rectangle.width = NaN
+        add!(render_scene, invalid_rectangle)
+        target = RenderTarget(8, 8)
+        fill!(target.color, 0.75)
+        @test_throws "light width must be finite" render!(
+            target, render_scene, PerspectiveCamera())
+        @test all(target.color[:, :, 1] .== background.r)
+        @test all(target.color[:, :, 2] .== background.g)
+        @test all(target.color[:, :, 3] .== background.b)
+    end
+
+    valid_point = PointLight(distance=-2.0, decay=-3.0)
+    point_json = Diff3D._web_light_json(valid_point, scene_for_web)
+    @test occursin("\"distance\":-2", point_json)
+    @test occursin("\"decay\":-3", point_json)
+
+    valid_spot = SpotLight(distance=-2.0, angle=-4.0,
+                           penumbra=2.0, decay=-3.0)
+    spot_json = Diff3D._web_light_json(valid_spot, scene_for_web)
+    @test occursin("\"distance\":-2", spot_json)
+    @test occursin("\"angle\":-4", spot_json)
+    @test occursin("\"penumbra\":2", spot_json)
+    @test occursin("\"decay\":-3", spot_json)
+
+    valid_rectangle = RectAreaLight(width=-5.0, height=-6.0)
+    rectangle_json = Diff3D._web_light_json(valid_rectangle, scene_for_web)
+    @test occursin("\"width\":-5", rectangle_json)
+    @test occursin("\"height\":-6", rectangle_json)
+    @test shade_face(
+        normal, view_direction, surface_position, material,
+        AbstractLight[valid_rectangle]) == Color3(0.0, 0.0, 0.0)
+
+    finite_probe = () ->
+        (@allocated Diff3D._validated_light_finite(-3.0, :distance))
+    point_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_point))
+    spot_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_spot))
+    rectangle_probe = () ->
+        (@allocated Diff3D._validate_light_parameters(valid_rectangle))
+    finite_probe()
+    point_probe()
+    spot_probe()
+    rectangle_probe()
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || finite_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || point_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || spot_probe() == 0
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || rectangle_probe() == 0
+end
