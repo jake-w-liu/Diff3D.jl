@@ -34,13 +34,23 @@ end
     end
 end
 
+@inline function _geometry_checked_mul(a::Int, b::Int, label::String,
+                                       context::String)
+    try
+        return Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label $context is too large"))
+    end
+end
+
 function _geometry_mesh_buffer_lengths(n_vertices::Int, n_faces::Int,
                                        label::String)
     n_vertices >= 0 || throw(ArgumentError("$label vertex count is too large"))
     n_faces >= 0 || throw(ArgumentError("$label face count is too large"))
-    position_len = _geometry_checked_mul(3, n_vertices, "$label position buffer")
-    uv_len = _geometry_checked_mul(2, n_vertices, "$label UV buffer")
-    index_len = _geometry_checked_mul(3, n_faces, "$label index buffer")
+    position_len = _geometry_checked_mul(3, n_vertices, label, "position buffer")
+    uv_len = _geometry_checked_mul(2, n_vertices, label, "UV buffer")
+    index_len = _geometry_checked_mul(3, n_faces, label, "index buffer")
     max(position_len, uv_len, index_len) <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
         throw(ArgumentError(
             "$label generated buffer exceeds the " *

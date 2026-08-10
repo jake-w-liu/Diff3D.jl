@@ -174,9 +174,19 @@ _texture_positive_size(value, label::String) =
     end
 end
 
+@inline function _texture_checked_mul(a::Int, b::Int, label::String,
+                                      context::String)
+    try
+        return Base.checked_mul(a, b)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("$label $context is too large"))
+    end
+end
+
 @inline function _texture_check_rgb_square_size(size_value::Int, label::String)
-    pixels = _texture_checked_mul(size_value, size_value, "$label pixel count")
-    _texture_checked_mul(pixels, 3, "$label element count")
+    pixels = _texture_checked_mul(size_value, size_value, label, "pixel count")
+    _texture_checked_mul(pixels, 3, label, "element count")
     return size_value
 end
 

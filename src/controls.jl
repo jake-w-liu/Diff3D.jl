@@ -2048,7 +2048,7 @@ end
 
 function _helper_line_position_length(n_segments::Int, label::String)
     n_segments >= 0 || throw(ArgumentError("$label must be non-negative"))
-    len = _geometry_checked_mul(6, n_segments, "$label position buffer")
+    len = _geometry_checked_mul(6, n_segments, label, "position buffer")
     len <= _GEOMETRY_MAX_BUFFER_ELEMENTS ||
         throw(ArgumentError(
             "$label position buffer exceeds the " *
