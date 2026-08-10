@@ -26694,3 +26694,22 @@ end
         mixer, floatmax(Float64))
     @test mixer.time == floatmax(Float64)
 end
+
+@testset "fresh audit round 203 fixes" begin
+    helper = PlaneHelper(Plane(Vec3(2.0, 0.0, 0.0), -4.0), 2.0)
+    positions = helper.geometry.positions
+    @test positions[25:27] == [2.0, 0.0, 0.0]
+    @test positions[28:30] == [3.0, 0.0, 0.0]
+    for plane in (Plane(Vec3(), 0.0),
+                  Plane(Vec3(NaN, 0.0, 0.0), 0.0),
+                  Plane(Vec3(1.0, 0.0, 0.0), Inf))
+        @test_throws ArgumentError PlaneHelper(plane)
+    end
+    @test_throws "PlaneHelper plane is too far from the origin to represent" PlaneHelper(
+        Plane(Vec3(nextfloat(0.0), 0.0, 0.0), floatmax(Float64)))
+
+    extreme = PlaneHelper(
+        Plane(Vec3(floatmax(Float64), floatmax(Float64), 0.0),
+              -floatmax(Float64)))
+    @test all(isfinite, extreme.geometry.positions)
+end

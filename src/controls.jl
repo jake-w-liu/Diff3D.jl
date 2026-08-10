@@ -2643,8 +2643,21 @@ plane normal from the plane's nearest point to the origin (three.js
 """
 function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0))
     size = _geometry_finite_float(size, "PlaneHelper size")
-    n = normalize(plane.normal)
-    center = n * (-plane.constant)          # closest point to the origin on the plane
+    normal = plane.normal
+    isfinite(normal.x) && isfinite(normal.y) && isfinite(normal.z) &&
+        isfinite(plane.constant) ||
+        throw(ArgumentError("PlaneHelper plane must be finite"))
+    normal_scale = max(abs(normal.x), abs(normal.y), abs(normal.z))
+    normal_scale > 0.0 ||
+        throw(ArgumentError("PlaneHelper plane normal must be non-zero"))
+    scaled_normal = normal / normal_scale
+    scaled_length = norm(scaled_normal)
+    n = scaled_normal / scaled_length
+    distance = -(plane.constant / normal_scale) / scaled_length
+    isfinite(distance) ||
+        throw(ArgumentError(
+            "PlaneHelper plane is too far from the origin to represent"))
+    center = n * distance                 # closest point to the origin on n⋅x+d=0
     u, v = _perp_basis(n)
     h = size / 2
     c1 = center + (u *  h + v *  h)
