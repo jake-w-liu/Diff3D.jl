@@ -948,6 +948,31 @@ function _validate_keyframe_values(kind::AbstractString, times::Vector{Float64},
     return nothing
 end
 
+@inline _finite_keyframe_value(value::Real) = isfinite(value)
+@inline _finite_keyframe_value(value::Vec3) =
+    isfinite(value.x) && isfinite(value.y) && isfinite(value.z)
+@inline _finite_keyframe_value(value::Quaternion) =
+    isfinite(value.x) && isfinite(value.y) &&
+    isfinite(value.z) && isfinite(value.w)
+@inline function _finite_keyframe_value(values::AbstractVector{<:Real})
+    @inbounds for value in values
+        isfinite(value) || return false
+    end
+    return true
+end
+
+@noinline function _throw_keyframe_values(kind::AbstractString)
+    throw(ArgumentError("$kind values and tangents must be finite"))
+end
+
+function _validate_finite_keyframe_values(kind::AbstractString,
+                                          values::AbstractVector)
+    @inbounds for value in values
+        _finite_keyframe_value(value) || _throw_keyframe_values(kind)
+    end
+    return nothing
+end
+
 function _validate_morph_value_widths(kind::AbstractString, values::Vector{Vector{Float64}})
     isempty(values) && return nothing
     width = length(values[1])
@@ -976,6 +1001,7 @@ struct KeyframeTrack <: AbstractKeyframeTrack
         interpolation in (:linear, :step, :cubic) ||
             throw(ArgumentError("unsupported keyframe interpolation: $interpolation"))
         _validate_keyframe_values("KeyframeTrack", times, values)
+        _validate_finite_keyframe_values("KeyframeTrack", values)
         new(target, property, times, values, interpolation)
     end
 end
@@ -995,6 +1021,7 @@ struct NumberKeyframeTrack <: AbstractKeyframeTrack
             throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
         component >= 0 || throw(ArgumentError("animation component index must be non-negative"))
         _validate_keyframe_values("NumberKeyframeTrack", times, values)
+        _validate_finite_keyframe_values("NumberKeyframeTrack", values)
         new(target, property, component, times, values, interpolation)
     end
 end
@@ -1282,6 +1309,7 @@ struct QuaternionKeyframeTrack <: AbstractKeyframeTrack
         interpolation in (:slerp, :step) ||
             throw(ArgumentError("unsupported quaternion keyframe interpolation: $interpolation"))
         _validate_keyframe_values("QuaternionKeyframeTrack", times, values)
+        _validate_finite_keyframe_values("QuaternionKeyframeTrack", values)
         new(target, property, times, values, interpolation)
     end
 end
@@ -1316,6 +1344,7 @@ struct MorphWeightsKeyframeTrack <: AbstractKeyframeTrack
             throw(ArgumentError("unsupported morph-weight interpolation: $interpolation"))
         _validate_keyframe_values("MorphWeightsKeyframeTrack", times, values)
         _validate_morph_value_widths("MorphWeightsKeyframeTrack", values)
+        _validate_finite_keyframe_values("MorphWeightsKeyframeTrack", values)
         new(target, property, times, values, interpolation)
     end
 end
@@ -1358,6 +1387,9 @@ struct CubicSplineKeyframeTrack <: AbstractKeyframeTrack
             throw(ArgumentError("CubicSplineKeyframeTrack in_tangents length must match times"))
         length(out_tangents) == length(times) ||
             throw(ArgumentError("CubicSplineKeyframeTrack out_tangents length must match times"))
+        _validate_finite_keyframe_values("CubicSplineKeyframeTrack", values)
+        _validate_finite_keyframe_values("CubicSplineKeyframeTrack", in_tangents)
+        _validate_finite_keyframe_values("CubicSplineKeyframeTrack", out_tangents)
         new(target, property, times, values, in_tangents, out_tangents)
     end
 end
@@ -1380,6 +1412,12 @@ struct CubicSplineQuaternionKeyframeTrack <: AbstractKeyframeTrack
             throw(ArgumentError("CubicSplineQuaternionKeyframeTrack in_tangents length must match times"))
         length(out_tangents) == length(times) ||
             throw(ArgumentError("CubicSplineQuaternionKeyframeTrack out_tangents length must match times"))
+        _validate_finite_keyframe_values(
+            "CubicSplineQuaternionKeyframeTrack", values)
+        _validate_finite_keyframe_values(
+            "CubicSplineQuaternionKeyframeTrack", in_tangents)
+        _validate_finite_keyframe_values(
+            "CubicSplineQuaternionKeyframeTrack", out_tangents)
         new(target, property, times, values, in_tangents, out_tangents)
     end
 end
@@ -1405,6 +1443,12 @@ struct CubicSplineMorphWeightsKeyframeTrack <: AbstractKeyframeTrack
         _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", values)
         _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", in_tangents)
         _validate_morph_value_widths("CubicSplineMorphWeightsKeyframeTrack", out_tangents)
+        _validate_finite_keyframe_values(
+            "CubicSplineMorphWeightsKeyframeTrack", values)
+        _validate_finite_keyframe_values(
+            "CubicSplineMorphWeightsKeyframeTrack", in_tangents)
+        _validate_finite_keyframe_values(
+            "CubicSplineMorphWeightsKeyframeTrack", out_tangents)
         new(target, property, times, values, in_tangents, out_tangents)
     end
 end
@@ -1832,10 +1876,13 @@ end
 
 function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
                               repetitions::Int, clamp_when_finished::Bool)
+    duration isa Bool &&
+        throw(ArgumentError("animation duration must be finite and non-negative"))
     d = Float64(duration)
     isfinite(d) && d >= 0.0 ||
         throw(ArgumentError("animation duration must be finite and non-negative"))
     d <= 0.0 && return 0.0
+    t isa Bool && throw(ArgumentError("animation time must be finite"))
     x = Float64(t)
     isfinite(x) ||
         throw(ArgumentError("animation time must be finite"))
@@ -2249,13 +2296,14 @@ end
 
 """Sample the clip at absolute time `t` and write each track's value to its target."""
 function mixer_set_time!(mixer::AnimationMixer, t)
+    t isa Real && !(t isa Bool) ||
+        throw(ArgumentError("mixer_set_time!: time must be finite"))
     time = Float64(t)
     isfinite(time) ||
         throw(ArgumentError("mixer_set_time!: time must be finite"))
     time_scale =
         _validated_animation_time_scale(mixer.time_scale)
-    mixer.time = time
-    sample_time = _animation_loop_time(mixer.time * time_scale,
+    sample_time = _animation_loop_time(time * time_scale,
                                        mixer.clip.duration,
                                        mixer.loop,
                                        mixer.repetitions,
@@ -2263,10 +2311,18 @@ function mixer_set_time!(mixer::AnimationMixer, t)
     for tr in mixer.clip.tracks
         _write_track_at_time!(tr, sample_time)
     end
+    mixer.time = time
     return mixer
 end
 
-mixer_update!(mixer::AnimationMixer, dt) = mixer_set_time!(mixer, mixer.time + dt)
+function mixer_update!(mixer::AnimationMixer, dt)
+    delta = _checked_control_scalar(dt, "mixer_update!: dt")
+    time = _checked_control_scalar(
+        mixer.time, "AnimationMixer current time")
+    next_time = _checked_control_scalar(
+        time + delta, "AnimationMixer updated time")
+    return mixer_set_time!(mixer, next_time)
+end
 
 # ========================== Helpers ==========================
 

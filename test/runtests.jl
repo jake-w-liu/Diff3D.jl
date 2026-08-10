@@ -26642,3 +26642,55 @@ end
     clock.last_time = 0.0
     @test_opt_alloc 0 Diff3D._validate_clock(clock)
 end
+
+@testset "fresh audit round 202 fixes" begin
+    object = Object3D()
+    times = [0.0, 1.0]
+    vec_values = [Vec3(), Vec3(1.0, 2.0, 3.0)]
+    @test_throws "KeyframeTrack values and tangents must be finite" KeyframeTrack(
+        object, :position, times,
+        [Vec3(), Vec3(NaN, 0.0, 0.0)])
+    @test_throws "NumberKeyframeTrack values and tangents must be finite" NumberKeyframeTrack(
+        object, :visible, times, [0.0, Inf])
+
+    identity_quaternion = Quaternion(0.0, 0.0, 0.0, 1.0)
+    @test_throws "QuaternionKeyframeTrack values and tangents must be finite" QuaternionKeyframeTrack(
+        object, :quaternion, times,
+        [identity_quaternion, Quaternion(NaN, 0.0, 0.0, 1.0)])
+    @test_throws "MorphWeightsKeyframeTrack values and tangents must be finite" MorphWeightsKeyframeTrack(
+        object, :morph_target_influences, times,
+        [[0.0, 1.0], [NaN, 0.0]])
+
+    @test_throws "CubicSplineKeyframeTrack values and tangents must be finite" CubicSplineKeyframeTrack(
+        object, :position, times, vec_values,
+        [Vec3(), Vec3(Inf, 0.0, 0.0)], vec_values)
+    quaternion_values = [identity_quaternion, identity_quaternion]
+    @test_throws "CubicSplineQuaternionKeyframeTrack values and tangents must be finite" CubicSplineQuaternionKeyframeTrack(
+        object, :quaternion, times, quaternion_values,
+        quaternion_values,
+        [identity_quaternion, Quaternion(0.0, 0.0, NaN, 0.0)])
+    morph_values = [[0.0, 1.0], [1.0, 0.0]]
+    @test_throws "CubicSplineMorphWeightsKeyframeTrack values and tangents must be finite" CubicSplineMorphWeightsKeyframeTrack(
+        object, :morph_target_influences, times, morph_values,
+        morph_values, [[0.0, 0.0], [0.0, Inf]])
+
+    @test Diff3D._validate_finite_keyframe_values(
+        "KeyframeTrack", vec_values) === nothing
+    @test_opt_alloc 0 Diff3D._validate_finite_keyframe_values(
+        "KeyframeTrack", vec_values)
+
+    empty_clip = AnimationClip(
+        "empty", 1.0, AbstractKeyframeTrack[])
+    mixer = AnimationMixer(empty_clip)
+    @test_throws "mixer_set_time!: time must be finite" mixer_set_time!(mixer, true)
+    mixer.time_scale = floatmax(Float64)
+    @test_throws "animation time must be finite" mixer_set_time!(mixer, 2.0)
+    @test mixer.time == 0.0
+    mixer.time_scale = 1.0
+    @test_throws "mixer_update!: dt must be finite" mixer_update!(mixer, Inf)
+    @test mixer.time == 0.0
+    mixer.time = floatmax(Float64)
+    @test_throws "AnimationMixer updated time must be finite" mixer_update!(
+        mixer, floatmax(Float64))
+    @test mixer.time == floatmax(Float64)
+end
