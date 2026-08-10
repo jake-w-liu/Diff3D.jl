@@ -6,6 +6,25 @@
 
 # ========================== Camera controls ==========================
 
+@noinline function _throw_control_finite(label::String)
+    throw(ArgumentError("$label must be finite"))
+end
+
+@inline function _checked_control_scalar(value, label::String)
+    value isa Real && !(value isa Bool) || _throw_control_finite(label)
+    result = Float64(value)
+    isfinite(result) || _throw_control_finite(label)
+    return result
+end
+
+@inline function _checked_control_vec3(value, label::String)
+    value isa Vec3 || _throw_control_finite(label)
+    result = convert(Vec3{Float64}, value)
+    isfinite(result.x) && isfinite(result.y) && isfinite(result.z) ||
+        _throw_control_finite(label)
+    return result
+end
+
 mutable struct OrbitControls
     camera::PerspectiveCamera
     target::Vec3{Float64}
@@ -36,19 +55,75 @@ end
 
 # Damping is a decay factor. Non-finite or >1 values either poison camera state
 # or make residual motion grow/oscillate instead of converging.
-function _checked_damping_factor(value::Real, label::String)
-    value isa Bool && throw(ArgumentError("$label must be finite and between 0 and 1"))
+function _checked_damping_factor(value, label::String)
+    value isa Real && !(value isa Bool) ||
+        throw(ArgumentError("$label must be finite and between 0 and 1"))
     f = Float64(value)
     isfinite(f) && 0.0 <= f <= 1.0 ||
         throw(ArgumentError("$label must be finite and between 0 and 1"))
     return f
 end
 
-function _checked_pointer_speed(value::Real, label::String)
-    value isa Bool && throw(ArgumentError("$label must be finite"))
-    f = Float64(value)
-    isfinite(f) || throw(ArgumentError("$label must be finite"))
-    return f
+_checked_pointer_speed(value, label::String) =
+    _checked_control_scalar(value, label)
+
+function _checked_orbit_distances(min_distance, max_distance)
+    minimum = _checked_control_scalar(min_distance, "min_distance")
+    minimum >= 0.0 ||
+        throw(ArgumentError("min_distance must be finite and non-negative"))
+    max_distance isa Real && !(max_distance isa Bool) ||
+        throw(ArgumentError("max_distance must be greater than or equal to min_distance"))
+    maximum = Float64(max_distance)
+    ((isfinite(maximum) || maximum == Inf) && maximum >= minimum) ||
+        throw(ArgumentError("max_distance must be greater than or equal to min_distance"))
+    return minimum, maximum
+end
+
+@noinline function _throw_polar_limit(context::String, label::String)
+    throw(ArgumentError("$context $label must be finite"))
+end
+
+function _checked_polar_limits(min_polar_angle, max_polar_angle,
+                               context::String)
+    min_polar_angle isa Real && !(min_polar_angle isa Bool) ||
+        _throw_polar_limit(context, "min_polar_angle")
+    max_polar_angle isa Real && !(max_polar_angle isa Bool) ||
+        _throw_polar_limit(context, "max_polar_angle")
+    minimum = Float64(min_polar_angle)
+    maximum = Float64(max_polar_angle)
+    isfinite(minimum) || _throw_polar_limit(context, "min_polar_angle")
+    isfinite(maximum) || _throw_polar_limit(context, "max_polar_angle")
+    0.0 <= minimum <= maximum <= Float64(pi) ||
+        throw(ArgumentError(
+            "$context polar angles must satisfy 0 <= min_polar_angle <= max_polar_angle <= pi"))
+    return minimum, maximum
+end
+
+function _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
+    min_azimuth_angle isa Real && !(min_azimuth_angle isa Bool) ||
+        throw(ArgumentError("OrbitControls azimuth limits must not be NaN"))
+    max_azimuth_angle isa Real && !(max_azimuth_angle isa Bool) ||
+        throw(ArgumentError("OrbitControls azimuth limits must not be NaN"))
+    minimum = Float64(min_azimuth_angle)
+    maximum = Float64(max_azimuth_angle)
+    !isnan(minimum) && !isnan(maximum) && minimum <= maximum ||
+        throw(ArgumentError("OrbitControls azimuth limits must not be NaN and min_azimuth_angle must be <= max_azimuth_angle"))
+    return minimum, maximum
+end
+
+function _validate_orbit_runtime(oc::OrbitControls)
+    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _checked_control_vec3(oc.target, "OrbitControls target")
+    _checked_orbit_distances(oc.min_distance, oc.max_distance)
+    _checked_polar_limits(oc.min_polar_angle, oc.max_polar_angle,
+                          "OrbitControls")
+    _checked_azimuth_limits(oc.min_azimuth_angle, oc.max_azimuth_angle)
+    _checked_damping_factor(oc.damping_factor, "damping_factor")
+    _checked_control_scalar(oc.v_azimuth, "OrbitControls azimuth velocity")
+    _checked_control_scalar(oc.v_polar, "OrbitControls polar velocity")
+    _checked_control_scalar(oc.v_zoom, "OrbitControls zoom velocity")
+    _checked_control_vec3(oc.v_pan, "OrbitControls pan velocity")
+    return nothing
 end
 
 # Positional/keyword constructors. The two original positional forms still work;
@@ -60,19 +135,23 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf)
-    min_distance <= max_distance ||
-        throw(ArgumentError("min_distance must be <= max_distance"))
-    min_polar_angle <= max_polar_angle ||
-        throw(ArgumentError("min_polar_angle must be <= max_polar_angle"))
-    min_azimuth_angle <= max_azimuth_angle ||
-        throw(ArgumentError("min_azimuth_angle must be <= max_azimuth_angle"))
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    checked_target = _checked_control_vec3(target, "OrbitControls target")
+    minimum_distance, maximum_distance =
+        _checked_orbit_distances(min_distance, max_distance)
+    minimum_polar, maximum_polar =
+        _checked_polar_limits(min_polar_angle, max_polar_angle,
+                              "OrbitControls")
+    minimum_azimuth, maximum_azimuth =
+        _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
     damping = _checked_damping_factor(damping_factor, "damping_factor")
-    OrbitControls(cam, target, enabled, enable_rotate, enable_zoom, enable_pan,
-                  enable_damping, damping,
-                  Float64(min_distance), Float64(max_distance),
-                  Float64(min_polar_angle), Float64(max_polar_angle),
-                  Float64(min_azimuth_angle), Float64(max_azimuth_angle),
-                  0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position, target)
+    OrbitControls(cam, checked_target, enabled, enable_rotate, enable_zoom,
+                  enable_pan, enable_damping, damping,
+                  minimum_distance, maximum_distance,
+                  minimum_polar, maximum_polar,
+                  minimum_azimuth, maximum_azimuth,
+                  0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
+                  checked_target)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -83,13 +162,31 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                        v_azimuth::Real, v_polar::Real, v_zoom::Real,
                        v_pan::Vec3{Float64}, position0::Vec3{Float64},
                        target0::Vec3{Float64})
+    _validated_camera_view_vectors(camera, :PerspectiveCamera)
+    checked_target = _checked_control_vec3(target, "OrbitControls target")
+    minimum_distance, maximum_distance =
+        _checked_orbit_distances(min_distance, max_distance)
+    minimum_polar, maximum_polar =
+        _checked_polar_limits(min_polar_angle, max_polar_angle,
+                              "OrbitControls")
+    minimum_azimuth, maximum_azimuth =
+        _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
     damping = _checked_damping_factor(damping_factor, "damping_factor")
-    OrbitControls(camera, target, true, true, true, true, enable_damping,
-                  damping, Float64(min_distance),
-                  Float64(max_distance), Float64(min_polar_angle),
-                  Float64(max_polar_angle), Float64(min_azimuth_angle),
-                  Float64(max_azimuth_angle), Float64(v_azimuth),
-                  Float64(v_polar), Float64(v_zoom), v_pan, position0, target0)
+    OrbitControls(camera, checked_target, true, true, true, true,
+                  enable_damping, damping, minimum_distance,
+                  maximum_distance, minimum_polar, maximum_polar,
+                  minimum_azimuth, maximum_azimuth,
+                  _checked_control_scalar(v_azimuth,
+                                          "OrbitControls azimuth velocity"),
+                  _checked_control_scalar(v_polar,
+                                          "OrbitControls polar velocity"),
+                  _checked_control_scalar(v_zoom,
+                                          "OrbitControls zoom velocity"),
+                  _checked_control_vec3(v_pan, "OrbitControls pan velocity"),
+                  _checked_control_vec3(position0,
+                                        "OrbitControls saved position"),
+                  _checked_control_vec3(target0,
+                                        "OrbitControls saved target"))
 end
 
 OrbitControls(cam::PerspectiveCamera; kwargs...) =
@@ -125,18 +222,29 @@ function _orbit_constrained(oc::OrbitControls, s::Spherical)
 end
 
 function _orbit_apply!(oc::OrbitControls, s::Spherical)
-    oc.camera.position = oc.target + spherical_to_cartesian(_orbit_constrained(oc, s))
+    position = oc.target + spherical_to_cartesian(_orbit_constrained(oc, s))
+    position = _checked_control_vec3(
+        position, "OrbitControls camera position")
+    oc.camera.position = position
     oc.camera.target = oc.target
     return oc
 end
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
 function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
-    _orbit_apply!(oc, Spherical(Float64(radius), Float64(polar), Float64(azimuth)))
+    _validate_orbit_runtime(oc)
+    checked_radius = _checked_control_scalar(radius, "OrbitControls radius")
+    checked_radius >= 0.0 ||
+        throw(ArgumentError("OrbitControls radius must be finite and non-negative"))
+    checked_polar = _checked_control_scalar(polar, "OrbitControls polar angle")
+    checked_azimuth = _checked_control_scalar(azimuth, "OrbitControls azimuth angle")
+    _orbit_apply!(oc, Spherical(checked_radius, checked_polar, checked_azimuth))
 end
 
 """Save the current camera position and target as the reset state."""
 function orbit_save_state!(oc::OrbitControls)
+    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _checked_control_vec3(oc.target, "OrbitControls target")
     oc.position0 = oc.camera.position
     oc.target0 = oc.target
     return oc
@@ -144,9 +252,12 @@ end
 
 """Restore the saved orbit state and clear any damped residual motion."""
 function orbit_reset!(oc::OrbitControls)
-    oc.camera.position = oc.position0
-    oc.target = oc.target0
-    oc.camera.target = oc.target0
+    position = _checked_control_vec3(
+        oc.position0, "OrbitControls saved position")
+    target = _checked_control_vec3(oc.target0, "OrbitControls saved target")
+    oc.camera.position = position
+    oc.target = target
+    oc.camera.target = target
     oc.v_azimuth = 0.0
     oc.v_polar = 0.0
     oc.v_zoom = 0.0
@@ -178,9 +289,13 @@ _orbit_pan_basis(oc::OrbitControls) = _camera_pan_basis(oc.camera, oc.target)
 function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     right, up = _orbit_pan_basis(oc)
     shift = right * dx + up * dy
-    oc.target = oc.target + shift
-    oc.camera.position = oc.camera.position + shift
-    oc.camera.target = oc.target
+    target = _checked_control_vec3(
+        oc.target + shift, "OrbitControls target")
+    position = _checked_control_vec3(
+        oc.camera.position + shift, "OrbitControls camera position")
+    oc.target = target
+    oc.camera.position = position
+    oc.camera.target = target
     return oc
 end
 
@@ -193,12 +308,23 @@ velocity instead, to be consumed by `orbit_update!`.
 """
 function orbit_rotate!(oc::OrbitControls, d_azimuth, d_polar)
     (oc.enabled && oc.enable_rotate) || return oc
+    _validate_orbit_runtime(oc)
+    azimuth_delta = _checked_control_scalar(
+        d_azimuth, "OrbitControls azimuth delta")
+    polar_delta = _checked_control_scalar(
+        d_polar, "OrbitControls polar delta")
     if oc.enable_damping
-        oc.v_azimuth += d_azimuth
-        oc.v_polar += d_polar
+        new_azimuth_velocity = _checked_control_scalar(
+            oc.v_azimuth + azimuth_delta,
+            "OrbitControls azimuth velocity")
+        new_polar_velocity = _checked_control_scalar(
+            oc.v_polar + polar_delta,
+            "OrbitControls polar velocity")
+        oc.v_azimuth = new_azimuth_velocity
+        oc.v_polar = new_polar_velocity
         return oc
     end
-    return _orbit_rotate_now!(oc, d_azimuth, d_polar)
+    return _orbit_rotate_now!(oc, azimuth_delta, polar_delta)
 end
 
 """
@@ -209,8 +335,9 @@ consumed by `orbit_update!`; non-damped behaviour is unchanged.
 """
 function orbit_zoom!(oc::OrbitControls, factor)
     (oc.enabled && oc.enable_zoom) || return oc
+    _validate_orbit_runtime(oc)
+    f = _checked_control_scalar(factor, "OrbitControls zoom factor")
     if oc.enable_damping
-        f = Float64(factor)
         # A multiplicative dolly factor must be positive; log() of a non-positive
         # factor would poison the residual with -Inf/NaN (sticking the controller
         # forever) or throw DomainError. Apply such an out-of-contract factor
@@ -218,10 +345,12 @@ function orbit_zoom!(oc::OrbitControls, factor)
         # into [min_distance, max_distance] — the same graceful handling the rest
         # of the controller uses.
         f > 0 || return _orbit_zoom_now!(oc, f)
-        oc.v_zoom += log(f)
+        zoom_velocity = _checked_control_scalar(
+            oc.v_zoom + log(f), "OrbitControls zoom velocity")
+        oc.v_zoom = zoom_velocity
         return oc
     end
-    return _orbit_zoom_now!(oc, factor)
+    return _orbit_zoom_now!(oc, f)
 end
 
 """
@@ -232,12 +361,17 @@ velocity consumed by `orbit_update!`; non-damped behaviour is unchanged.
 """
 function orbit_pan!(oc::OrbitControls, dx, dy)
     (oc.enabled && oc.enable_pan) || return oc
+    _validate_orbit_runtime(oc)
+    checked_dx = _checked_control_scalar(dx, "OrbitControls pan x delta")
+    checked_dy = _checked_control_scalar(dy, "OrbitControls pan y delta")
     if oc.enable_damping
         right, up = _orbit_pan_basis(oc)
-        oc.v_pan = oc.v_pan + right * dx + up * dy
+        pan = oc.v_pan + right * checked_dx + up * checked_dy
+        oc.v_pan = _checked_control_vec3(
+            pan, "OrbitControls pan velocity")
         return oc
     end
-    return _orbit_pan_now!(oc, dx, dy)
+    return _orbit_pan_now!(oc, checked_dx, checked_dy)
 end
 
 """
@@ -253,6 +387,7 @@ Velocity components below a small threshold are zeroed to avoid endless drift.
 function orbit_update!(oc::OrbitControls)
     oc.enabled || return oc
     oc.enable_damping || return oc
+    _validate_orbit_runtime(oc)
     decay = 1.0 - oc.damping_factor
     # Apply `damping_factor` of the residual velocities for this frame, so the
     # total motion converges to exactly the queued deltas (three.js applies
@@ -267,9 +402,13 @@ function orbit_update!(oc::OrbitControls)
     if oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
         # Pan velocity is already a world-space offset; apply its damped share.
         step = oc.v_pan * oc.damping_factor
-        oc.target = oc.target + step
-        oc.camera.position = oc.camera.position + step
-        oc.camera.target = oc.target
+        target = _checked_control_vec3(
+            oc.target + step, "OrbitControls target")
+        position = _checked_control_vec3(
+            oc.camera.position + step, "OrbitControls camera position")
+        oc.target = target
+        oc.camera.position = position
+        oc.camera.target = target
     end
     # Decay residual velocities; snap tiny remnants to zero.
     thresh = 1e-9
@@ -294,11 +433,17 @@ end
 
 function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=cam.target;
                            enabled::Bool=true)
-    TrackballControls(cam, target, enabled, cam.position, target, cam.up)
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    checked_target = _checked_control_vec3(
+        target, "TrackballControls target")
+    TrackballControls(cam, checked_target, enabled, cam.position,
+                      checked_target, cam.up)
 end
 
 """Save the current camera position, up vector, and target as the reset state."""
 function trackball_save_state!(tc::TrackballControls)
+    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _checked_control_vec3(tc.target, "TrackballControls target")
     tc.position0 = tc.camera.position
     tc.target0 = tc.target
     tc.up0 = tc.camera.up
@@ -307,42 +452,70 @@ end
 
 """Restore the saved trackball state."""
 function trackball_reset!(tc::TrackballControls)
-    tc.camera.position = tc.position0
-    tc.camera.up = tc.up0
-    tc.target = tc.target0
-    tc.camera.target = tc.target0
+    position = _checked_control_vec3(
+        tc.position0, "TrackballControls saved position")
+    up = _checked_control_vec3(tc.up0, "TrackballControls saved up")
+    max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 ||
+        throw(ArgumentError("TrackballControls saved up must be non-zero"))
+    target = _checked_control_vec3(
+        tc.target0, "TrackballControls saved target")
+    tc.camera.position = position
+    tc.camera.up = up
+    tc.target = target
+    tc.camera.target = target
     return tc
 end
 
 function _trackball_apply!(tc::TrackballControls, s::Spherical)
     radius = max(s.radius, 0.0)
     phi = clamp(s.phi, 1e-4, π - 1e-4)
-    tc.camera.position = tc.target + spherical_to_cartesian(Spherical(radius, phi, s.theta))
+    position = tc.target + spherical_to_cartesian(
+        Spherical(radius, phi, s.theta))
+    tc.camera.position = _checked_control_vec3(
+        position, "TrackballControls camera position")
     tc.camera.target = tc.target
     return tc
 end
 
 function trackball_rotate!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
+    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _checked_control_vec3(tc.target, "TrackballControls target")
+    checked_dx = _checked_control_scalar(dx, "TrackballControls x delta")
+    checked_dy = _checked_control_scalar(dy, "TrackballControls y delta")
     s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(tc, Spherical(s.radius, s.phi + dy, s.theta + dx))
+    return _trackball_apply!(
+        tc, Spherical(s.radius, s.phi + checked_dy, s.theta + checked_dx))
 end
 
 """Scale the camera distance from the trackball target. `factor < 1` zooms in."""
 function trackball_zoom!(tc::TrackballControls, factor)
     tc.enabled || return tc
+    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _checked_control_vec3(tc.target, "TrackballControls target")
+    checked_factor = _checked_control_scalar(
+        factor, "TrackballControls zoom factor")
     s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(tc, Spherical(s.radius * factor, s.phi, s.theta))
+    return _trackball_apply!(
+        tc, Spherical(s.radius * checked_factor, s.phi, s.theta))
 end
 
 """Pan the trackball target and camera in the view plane."""
 function trackball_pan!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
+    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _checked_control_vec3(tc.target, "TrackballControls target")
+    checked_dx = _checked_control_scalar(dx, "TrackballControls pan x delta")
+    checked_dy = _checked_control_scalar(dy, "TrackballControls pan y delta")
     right, up = _camera_pan_basis(tc.camera, tc.target)
-    shift = right * dx + up * dy
-    tc.target = tc.target + shift
-    tc.camera.position = tc.camera.position + shift
-    tc.camera.target = tc.target
+    shift = right * checked_dx + up * checked_dy
+    target = _checked_control_vec3(
+        tc.target + shift, "TrackballControls target")
+    position = _checked_control_vec3(
+        tc.camera.position + shift, "TrackballControls camera position")
+    tc.target = target
+    tc.camera.position = position
+    tc.camera.target = target
     return tc
 end
 
@@ -354,23 +527,37 @@ end
 """Translate the camera (and its target) along forward/right/up axes."""
 function fly_translate!(fc::FlyControls, forward, right, up)
     cam = fc.camera
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    checked_forward = _checked_control_scalar(
+        forward, "FlyControls forward delta")
+    checked_right = _checked_control_scalar(right, "FlyControls right delta")
+    checked_up = _checked_control_scalar(up, "FlyControls up delta")
     f = _direction_between(cam.position, cam.target)
-    r = normalize(cross(f, cam.up))
-    u = cross(r, f)
-    shift = f * forward + r * right + u * up
-    cam.position = cam.position + shift
-    cam.target = cam.target + shift
+    r, u = _camera_pan_basis(cam, cam.target)
+    shift = f * checked_forward + r * checked_right + u * checked_up
+    position = _checked_control_vec3(
+        cam.position + shift, "FlyControls camera position")
+    target = _checked_control_vec3(
+        cam.target + shift, "FlyControls camera target")
+    cam.position = position
+    cam.target = target
     return fc
 end
 
 """Yaw/pitch the camera in place (target orbits around the camera position)."""
 function fly_rotate!(fc::FlyControls, yaw, pitch)
     cam = fc.camera
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    checked_yaw = _checked_control_scalar(yaw, "FlyControls yaw")
+    checked_pitch = _checked_control_scalar(pitch, "FlyControls pitch")
     dist = norm(cam.target - cam.position)
     dir = normalize(cam.target - cam.position)
     s = cartesian_to_spherical(dir)
-    s2 = Spherical(1.0, clamp(s.phi - pitch, 1e-4, π - 1e-4), s.theta + yaw)
-    cam.target = cam.position + spherical_to_cartesian(s2) * dist
+    s2 = Spherical(1.0, clamp(s.phi - checked_pitch, 1e-4, π - 1e-4),
+                   s.theta + checked_yaw)
+    target = cam.position + spherical_to_cartesian(s2) * dist
+    cam.target = _checked_control_vec3(
+        target, "FlyControls camera target")
     return fc
 end
 
@@ -384,17 +571,19 @@ mutable struct PointerLockControls
 end
 function PointerLockControls(cam::PerspectiveCamera; pointer_speed::Real=1.0,
                              min_polar_angle::Real=0.0, max_polar_angle::Real=π)
-    min_polar_angle <= max_polar_angle ||
-        throw(ArgumentError("min_polar_angle must be <= max_polar_angle"))
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    minimum_polar, maximum_polar = _checked_polar_limits(
+        min_polar_angle, max_polar_angle, "PointerLockControls")
     speed = _checked_pointer_speed(pointer_speed, "pointer_speed")
-    PointerLockControls(cam, false, speed,
-                        Float64(min_polar_angle), Float64(max_polar_angle))
+    PointerLockControls(cam, false, speed, minimum_polar, maximum_polar)
 end
 
 pointerlock_lock!(pc::PointerLockControls) = (pc.is_locked = true; pc)
 pointerlock_unlock!(pc::PointerLockControls) = (pc.is_locked = false; pc)
 
 function _pointerlock_direction_distance(cam::PerspectiveCamera)
+    _validate_object_transform(cam)
+    _validated_camera_view_vectors(cam, :PerspectiveCamera)
     delta = cam.target - cam.position
     dist = norm(delta)
     if dist > 1e-12
@@ -409,16 +598,24 @@ end
 
 function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     pc.is_locked || return pc
-    speed = pc.pointer_speed
+    speed = _checked_pointer_speed(pc.pointer_speed, "pointer_speed")
+    min_polar, max_polar = _checked_polar_limits(
+        pc.min_polar_angle, pc.max_polar_angle, "PointerLockControls")
+    checked_x = _checked_control_scalar(
+        movement_x, "PointerLockControls movement_x")
+    checked_y = _checked_control_scalar(
+        movement_y, "PointerLockControls movement_y")
     cam = pc.camera
     dir, dist = _pointerlock_direction_distance(cam)
     s = cartesian_to_spherical(dir)
-    yaw = -Float64(movement_x) * 0.002 * speed
-    pitch = -Float64(movement_y) * 0.002 * speed
-    min_phi = max(pc.min_polar_angle, 1e-4)
-    max_phi = min(pc.max_polar_angle, π - 1e-4)
+    yaw = -checked_x * 0.002 * speed
+    pitch = -checked_y * 0.002 * speed
+    min_phi = max(min_polar, 1e-4)
+    max_phi = min(max_polar, π - 1e-4)
     s2 = Spherical(1.0, clamp(s.phi - pitch, min_phi, max_phi), s.theta + yaw)
-    cam.target = cam.position + spherical_to_cartesian(s2) * dist
+    target = cam.position + spherical_to_cartesian(s2) * dist
+    cam.target = _checked_control_vec3(
+        target, "PointerLockControls camera target")
     return pc
 end
 

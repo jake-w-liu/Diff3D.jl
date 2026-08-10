@@ -26478,3 +26478,100 @@ end
     @test norm(rc.ray.direction) ≈ 1.0
     @test_opt_alloc 0 Diff3D._validate_raycaster!(rc)
 end
+
+@testset "fresh audit round 200 fixes" begin
+    camera = PerspectiveCamera()
+    for kwargs in ((; min_distance=-1.0),
+                   (; max_distance=-Inf),
+                   (; min_polar_angle=-0.1),
+                   (; max_polar_angle=pi + 0.1),
+                   (; min_azimuth_angle=NaN),
+                   (; max_azimuth_angle=NaN))
+        @test_throws ArgumentError OrbitControls(camera; kwargs...)
+    end
+    @test_throws "OrbitControls target must be finite" OrbitControls(
+        camera, Vec3(NaN, 0.0, 0.0))
+
+    orbit = OrbitControls(camera; enable_damping=true)
+    orbit.damping_factor = NaN
+    @test_throws "damping_factor must be finite and between 0 and 1" orbit_update!(
+        orbit)
+    orbit.damping_factor = 0.05
+    orbit.target = Vec3(NaN, 0.0, 0.0)
+    @test_throws "OrbitControls target must be finite" orbit_rotate!(orbit, 0.1, 0.1)
+    orbit.target = Vec3()
+    @test_throws "OrbitControls radius must be finite and non-negative" orbit_set!(
+        orbit; azimuth=0.0, polar=pi / 2, radius=-1.0)
+    @test_throws "OrbitControls azimuth delta must be finite" orbit_rotate!(
+        orbit, NaN, 0.0)
+    @test_throws "OrbitControls pan x delta must be finite" orbit_pan!(
+        orbit, Inf, 0.0)
+    @test_throws "OrbitControls zoom factor must be finite" orbit_zoom!(orbit, Inf)
+    orbit.enable_damping = false
+    original_position = camera.position
+    @test_throws "OrbitControls camera position must be finite" orbit_zoom!(
+        orbit, floatmax(Float64))
+    @test camera.position == original_position
+    orbit.enable_damping = true
+    orbit.v_azimuth = 1.0e308
+    @test_throws "OrbitControls azimuth velocity must be finite" orbit_rotate!(
+        orbit, 1.0e308, 0.0)
+    @test orbit.v_azimuth == 1.0e308
+    orbit.v_azimuth = 0.0
+
+    trackball_camera = PerspectiveCamera()
+    @test_throws "TrackballControls target must be finite" TrackballControls(
+        trackball_camera, Vec3(0.0, NaN, 0.0))
+    trackball = TrackballControls(trackball_camera)
+    @test_throws "TrackballControls x delta must be finite" trackball_rotate!(
+        trackball, NaN, 0.0)
+    @test_throws "TrackballControls zoom factor must be finite" trackball_zoom!(
+        trackball, true)
+    @test_throws "TrackballControls pan y delta must be finite" trackball_pan!(
+        trackball, 0.0, Inf)
+    trackball_position = trackball_camera.position
+    @test_throws "TrackballControls camera position must be finite" trackball_zoom!(
+        trackball, floatmax(Float64))
+    @test trackball_camera.position == trackball_position
+
+    fly_camera = PerspectiveCamera()
+    fly = FlyControls(fly_camera)
+    @test_throws "FlyControls forward delta must be finite" fly_translate!(
+        fly, NaN, 0.0, 0.0)
+    @test_throws "FlyControls yaw must be finite" fly_rotate!(fly, Inf, 0.0)
+    pole_camera = PerspectiveCamera()
+    pole_camera.position = Vec3(0.0, 5.0, 0.0)
+    pole_camera.target = Vec3()
+    pole_fly = FlyControls(pole_camera)
+    fly_translate!(pole_fly, 0.0, 1.0, 1.0)
+    @test norm(pole_camera.position - Vec3(0.0, 5.0, 0.0)) ≈ sqrt(2.0)
+    @test all(isfinite, (pole_camera.position.x, pole_camera.position.y,
+                         pole_camera.position.z))
+    fly_camera.position = Vec3(floatmax(Float64), 0.0, 0.0)
+    fly_camera.target = Vec3()
+    fly_position = fly_camera.position
+    @test_throws "FlyControls camera position must be finite" fly_translate!(
+        fly, -floatmax(Float64), 0.0, 0.0)
+    @test fly_camera.position == fly_position
+
+    for kwargs in ((; min_polar_angle=-0.1),
+                   (; max_polar_angle=pi + 0.1))
+        @test_throws ArgumentError PointerLockControls(
+            PerspectiveCamera(); kwargs...)
+    end
+    pointer = PointerLockControls(PerspectiveCamera())
+    pointerlock_lock!(pointer)
+    @test_throws "PointerLockControls movement_x must be finite" pointerlock_move!(
+        pointer, NaN, 0.0)
+    pointer.pointer_speed = Inf
+    @test_throws "pointer_speed must be finite" pointerlock_move!(pointer, 0.0, 0.0)
+    pointer.pointer_speed = 1.0
+    pointer.max_polar_angle = Inf
+    @test_throws "PointerLockControls max_polar_angle must be finite" pointerlock_move!(
+        pointer, 0.0, 0.0)
+
+    valid_orbit = OrbitControls(PerspectiveCamera())
+    @test_opt_alloc 0 Diff3D._validate_orbit_runtime(valid_orbit)
+    @test_opt_alloc 0 Diff3D._checked_polar_limits(
+        0.0, pi, "OrbitControls")
+end
