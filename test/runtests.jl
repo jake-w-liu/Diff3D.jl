@@ -26575,3 +26575,70 @@ end
     @test_opt_alloc 0 Diff3D._checked_polar_limits(
         0.0, pi, "OrbitControls")
 end
+
+@testset "fresh audit round 201 fixes" begin
+    camera = PerspectiveCamera()
+    dragged = Group()
+    drag = DragControls([dragged], camera)
+    drag_start!(drag, dragged)
+    @test_throws "DragControls delta must be finite" drag_move!(
+        drag, Vec3(NaN, 0.0, 0.0))
+    dragged.position = Vec3(floatmax(Float64), 0.0, 0.0)
+    @test_throws "DragControls object position must be finite" drag_move!(
+        drag, Vec3(floatmax(Float64), 0.0, 0.0))
+    @test dragged.position == Vec3(floatmax(Float64), 0.0, 0.0)
+
+    @test_throws ArgumentError TransformControls(
+        camera; translation_snap=true)
+    transform = TransformControls(camera)
+    object = Group()
+    transform_attach!(transform, object)
+    @test_throws "TransformControls translation snap must be finite and positive" transform_set_translation_snap!(
+        transform, true)
+    @test_throws "TransformControls delta must be finite" transform_apply!(
+        transform, Vec3(0.0, NaN, 0.0))
+
+    transform.mode = :skew
+    @test_throws "unsupported transform mode: skew" transform_apply!(
+        transform, Vec3())
+    transform.mode = :translate
+    transform.space = :screen
+    @test_throws "unsupported transform space: screen" transform_apply!(
+        transform, Vec3())
+    transform.space = :world
+    transform.axis = :W
+    @test_throws "unsupported transform axis: W" transform_apply!(
+        transform, Vec3())
+    transform.axis = :XYZ
+    transform.translation_snap = NaN
+    @test_throws "TransformControls translation snap must be finite and positive" transform_apply!(
+        transform, Vec3())
+    transform.translation_snap = nothing
+
+    object.position = Vec3(floatmax(Float64), 0.0, 0.0)
+    @test_throws "TransformControls object position must be finite" transform_apply!(
+        transform, Vec3(floatmax(Float64), 0.0, 0.0))
+    @test object.position == Vec3(floatmax(Float64), 0.0, 0.0)
+    object.position = Vec3()
+    transform.mode = :scale
+    object.scale = Vec3(floatmax(Float64), 1.0, 1.0)
+    @test_throws "TransformControls object scale must be finite" transform_apply!(
+        transform, Vec3(2.0, 1.0, 1.0))
+    @test object.scale == Vec3(floatmax(Float64), 1.0, 1.0)
+
+    transform.mode = :translate
+    object.scale = Vec3(1.0, 1.0, 1.0)
+    @test_opt_alloc 0 Diff3D._validate_transform_runtime(transform)
+
+    clock = Clock()
+    @test_throws "Clock current time must be finite" clock_elapsed(clock, NaN)
+    clock.start_time = Inf
+    @test_throws "Clock start_time must be finite" clock_elapsed(clock, 1.0)
+    clock.start_time = 0.0
+    clock.last_time = -floatmax(Float64)
+    @test_throws "Clock delta must be finite" clock_delta!(
+        clock, floatmax(Float64))
+    @test clock.last_time == -floatmax(Float64)
+    clock.last_time = 0.0
+    @test_opt_alloc 0 Diff3D._validate_clock(clock)
+end

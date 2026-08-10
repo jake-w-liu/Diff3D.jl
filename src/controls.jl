@@ -683,7 +683,11 @@ end
 function drag_move!(dc::DragControls, delta::Vec3)
     obj = dc.selected
     obj === nothing && return dc
-    obj.position = obj.position + delta
+    _validate_object_transform(obj)
+    checked_delta = _checked_control_vec3(delta, "DragControls delta")
+    position = _checked_control_vec3(
+        obj.position + checked_delta, "DragControls object position")
+    obj.position = position
     return dc
 end
 
@@ -723,10 +727,22 @@ end
 
 function _transform_validate_snap(snap::Union{Nothing,Real}, label::String)
     snap === nothing && return nothing
+    snap isa Bool &&
+        throw(ArgumentError("TransformControls $label snap must be finite and positive"))
     value = Float64(snap)
     isfinite(value) && value > 0 ||
         throw(ArgumentError("TransformControls $label snap must be finite and positive"))
     return value
+end
+
+function _validate_transform_runtime(tc::TransformControls)
+    _transform_validate_mode(tc.mode)
+    _transform_validate_space(tc.space)
+    _transform_validate_axis(tc.axis)
+    _transform_validate_snap(tc.translation_snap, "translation")
+    _transform_validate_snap(tc.rotation_snap, "rotation")
+    _transform_validate_snap(tc.scale_snap, "scale")
+    return nothing
 end
 
 function TransformControls(camera::PerspectiveCamera;
@@ -840,19 +856,27 @@ end
 function transform_apply!(tc::TransformControls, delta::Vec3)
     obj = tc.object
     (obj === nothing || !tc.enabled || tc.axis === nothing) && return tc
+    _validate_transform_runtime(tc)
+    _validate_object_transform(obj)
+    checked_delta = _checked_control_vec3(delta, "TransformControls delta")
     if tc.mode === :translate
-        axis_delta = _transform_axis_vec(tc.axis, delta)
+        axis_delta = _transform_axis_vec(tc.axis, checked_delta)
         move = tc.space === :local ? _transform_local_delta(obj, axis_delta) : axis_delta
-        obj.position = obj.position + move
+        position = obj.position + move
         tc.translation_snap !== nothing &&
-            (obj.position = _transform_snap_position(obj.position, tc.translation_snap, tc.axis))
+            (position = _transform_snap_position(position, tc.translation_snap, tc.axis))
+        obj.position = _checked_control_vec3(
+            position, "TransformControls object position")
     elseif tc.mode === :scale
-        factors = _transform_axis_vec(tc.axis, delta; default=1.0)
-        obj.scale = Vec3(obj.scale.x * factors.x, obj.scale.y * factors.y, obj.scale.z * factors.z)
+        factors = _transform_axis_vec(tc.axis, checked_delta; default=1.0)
+        scale = Vec3(obj.scale.x * factors.x, obj.scale.y * factors.y,
+                     obj.scale.z * factors.z)
         tc.scale_snap !== nothing &&
-            (obj.scale = _transform_snap_scale(obj.scale, tc.scale_snap, tc.axis))
+            (scale = _transform_snap_scale(scale, tc.scale_snap, tc.axis))
+        obj.scale = _checked_control_vec3(
+            scale, "TransformControls object scale")
     elseif tc.mode === :rotate
-        angles = _transform_axis_vec(tc.axis, delta)
+        angles = _transform_axis_vec(tc.axis, checked_delta)
         if tc.rotation_snap !== nothing
             angles = Vec3(_transform_axis_has(tc.axis, 'X') ?
                           _transform_snap_value(angles.x, tc.rotation_snap) : angles.x,
@@ -861,8 +885,12 @@ function transform_apply!(tc::TransformControls, delta::Vec3)
                           _transform_axis_has(tc.axis, 'Z') ?
                           _transform_snap_value(angles.z, tc.rotation_snap) : angles.z)
         end
-        obj.rotation = Euler(obj.rotation.x + angles.x, obj.rotation.y + angles.y,
-                             obj.rotation.z + angles.z, obj.rotation.order)
+        rotation = _checked_control_vec3(
+            Vec3(obj.rotation.x + angles.x, obj.rotation.y + angles.y,
+                 obj.rotation.z + angles.z),
+            "TransformControls object rotation")
+        obj.rotation = Euler(rotation.x, rotation.y, rotation.z,
+                             obj.rotation.order)
     end
     return tc
 end
@@ -876,10 +904,24 @@ mutable struct Clock
 end
 Clock() = (t = time(); Clock(t, t, true))
 
-clock_elapsed(c::Clock, now=time()) = now - c.start_time
+function _validate_clock(c::Clock)
+    _checked_control_scalar(c.start_time, "Clock start_time")
+    _checked_control_scalar(c.last_time, "Clock last_time")
+    return nothing
+end
+
+function clock_elapsed(c::Clock, now=time())
+    _validate_clock(c)
+    current = _checked_control_scalar(now, "Clock current time")
+    return _checked_control_scalar(
+        current - c.start_time, "Clock elapsed time")
+end
+
 function clock_delta!(c::Clock, now=time())
-    d = now - c.last_time
-    c.last_time = now
+    _validate_clock(c)
+    current = _checked_control_scalar(now, "Clock current time")
+    d = _checked_control_scalar(current - c.last_time, "Clock delta")
+    c.last_time = current
     return d
 end
 
