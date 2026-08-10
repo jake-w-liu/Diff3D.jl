@@ -41,24 +41,19 @@ end
 
 const DIFF3D_CI_TEST_HEARTBEAT = _diff3d_start_ci_test_heartbeat()
 
+function _diff3d_test_opt_allocated(probe)
+    # Compile the zero-argument probe wrapper outside the allocation window.
+    # Test setup still warms transitive call paths when their first execution
+    # would otherwise include compiler work. The measured probe executes once.
+    Base.precompile(probe, ())
+    return @allocated probe()
+end
+
 macro test_opt_alloc(limit, expr)
     quote
         @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
-              (@allocated($(esc(expr))) <= $(esc(limit)))
-    end
-end
-
-# Use only for side-effect-free expressions: the first call compiles and warms
-# the probe, and the second call measures its steady-state runtime allocation.
-macro test_warmed_opt_alloc(limit, expr)
-    quote
-        if DIFF3D_ALLOC_ASSERTIONS_ENABLED
-            local probe = () -> (@allocated $(esc(expr)))
-            probe()
-            @test probe() <= $(esc(limit))
-        else
-            @test true
-        end
+              (_diff3d_test_opt_allocated(() -> $(esc(expr))) <=
+               $(esc(limit)))
     end
 end
 
@@ -280,7 +275,9 @@ function test_palette_png_bytes(indices::Matrix{UInt8}; bitdepth::Int=8,
     return take!(io)
 end
 
-@testset "Diff3D.jl" begin
+# Keep these groups as independent top-level compilation units. Wrapping the
+# full body in one testset makes LLVM compile a single 23,000-line method and
+# causes excessive compile time and memory use on supported Julia releases.
 
     @testset "Official examples parity registry" begin
         registry_path = joinpath(@__DIR__, "..", "examples", "examples_registry.toml")
@@ -2360,7 +2357,8 @@ end
         geo = PlaneGeometry(width=4.0, height=4.0)
         @test geo.n_vertices == 4
         @test geo.n_faces == 2
-        @test_opt_alloc 1024 PlaneGeometry(width=4.0, height=4.0)
+        # Julia 1.10 accounts 1,368 bytes here; Julia 1.12 accounts 912.
+        @test_opt_alloc 1536 PlaneGeometry(width=4.0, height=4.0)
     end
 
     @testset "CylinderGeometry" begin
@@ -2400,7 +2398,8 @@ end
         @test all(isfinite, geo.positions)
         @test all(isfinite, geo.normals)
         @test all(isfinite, geo.uvs)
-        @test_opt_alloc 4096 CircleGeometry(radius=1.0)
+        # Julia 1.10 accounts 4,128 bytes here; Julia 1.12 accounts 3,664.
+        @test_opt_alloc 4352 CircleGeometry(radius=1.0)
     end
 
     @testset "Scene graph" begin
@@ -4403,7 +4402,8 @@ end
                                                             light_alloc_scene;
                                                             num_buf=light_num_buf)
         Diff3D._web_lights_json(light_alloc_scene)
-        @test_opt_alloc 40000 Diff3D._web_lights_json(light_alloc_scene)
+        # Julia 1.10/1.12 account 50,368/32,160 bytes, respectively.
+        @test_opt_alloc 53248 Diff3D._web_lights_json(light_alloc_scene)
         light_alloc_case = WebGLExportCase("light_alloc", "Light Alloc", "streamed",
                                            light_alloc_scene; radius=4.0)
         Diff3D._web_write_case_json(devnull, light_alloc_case)
@@ -6062,7 +6062,8 @@ end
         loaded = load_stl(f)
         @test loaded.n_faces == geo.n_faces
         @test loaded.n_vertices == geo.n_faces * 3    # STL: independent verts
-        @test_opt_alloc 1024 save_stl_binary(f, geo)
+        # Julia 1.10/1.12 account 1,176/656 bytes, respectively.
+        @test_opt_alloc 1280 save_stl_binary(f, geo)
         stress = PlaneGeometry(width_segments=32, height_segments=32)
         save_stl_binary(f, stress)
         @test filesize(f) == 84 + 50 * stress.n_faces
@@ -6099,7 +6100,8 @@ end
         @test geo.n_vertices == 3
         @test get_vertex(geo, 2).x ≈ 1.0
         @test get_normal(geo, 1).z ≈ 1.0
-        @test_opt_alloc 1024 Diff3D._looks_binary_stl(f)
+        # Julia 1.10/1.12 account 1,432/880 bytes, respectively.
+        @test_opt_alloc 1536 Diff3D._looks_binary_stl(f)
         @test_opt_alloc 6000 load_stl(f)
         stress_io = IOBuffer()
         println(stress_io, "solid stress")
@@ -6855,7 +6857,8 @@ end
         cube_hull = ConvexGeometry(cube_points)
         @test cube_hull.n_faces == 12
         @test cube_hull.n_vertices == 36
-        @test_opt_alloc 18000 ConvexGeometry(cube_points)
+        # Julia 1.10/1.12 account 18,208/14,048 bytes, respectively.
+        @test_opt_alloc 18432 ConvexGeometry(cube_points)
         cube_box = compute_bounding_box(cube_hull)
         @test cube_box.min == Vec3(-1.0, -1.0, -1.0)
         @test cube_box.max == Vec3(1.0, 1.0, 1.0)
@@ -6935,7 +6938,8 @@ end
         @test geo.n_faces == 0
         @test get_vertex(geo, 1) == Vec3(0.0, 0.0, 0.0)
         @test get_vertex(geo, 10) == Vec3(3.0, 1.0, 0.0)
-        @test_opt_alloc 1024 CatmullRomCurveGeometry(curve; segments=9)
+        # Julia 1.10/1.12 account 1,336/800 bytes, respectively.
+        @test_opt_alloc 1536 CatmullRomCurveGeometry(curve; segments=9)
 
         for mode in (:centripetal, :chordal)
             mode_curve = CatmullRomCurve(points; curve_type=mode)
@@ -7090,7 +7094,8 @@ end
         @test param.n_vertices == 12
         @test param.n_faces == 12
         @test length(param.uvs) == 24
-        @test_opt_alloc 1024 NURBSCurveGeometry(line_curve; segments=4)
+        # Julia 1.10/1.12 account 1,304/752 bytes, respectively.
+        @test_opt_alloc 1536 NURBSCurveGeometry(line_curve; segments=4)
         @test_opt_alloc 4096 NURBSSurfaceGeometry(surface; slices=4, stacks=2)
         @test_opt_alloc 3072 ParametricGeometry((u, v) -> Vec3(u, v, u + v), 3, 2)
         @test_throws ArgumentError NURBSCurve(2, [0.0, 0.0, 1.0, 1.0],
@@ -7135,7 +7140,8 @@ end
         ]
         closed_ex = ExtrudeGeometry(tri; extrude_path=closed_path)
         @test closed_ex.n_faces == 4 * 3 * 2
-        @test_opt_alloc 4096 ExtrudeGeometry(tri; extrude_path=closed_path)
+        # Julia 1.10/1.12 account 4,256/3,600 bytes, respectively.
+        @test_opt_alloc 4352 ExtrudeGeometry(tri; extrude_path=closed_path)
         @test_throws ArgumentError ExtrudeGeometry(sq; extrude_path=[Vec3(0.0, 0.0, 0.0)])
         @test_throws ArgumentError ExtrudeGeometry([Vec2(0.0, 0.0), Vec2(1.0, 0.0)];
                                                    extrude_path=closed_path)
@@ -14033,7 +14039,8 @@ end
             ph = PlaneHelper(pl, 2.0)
             @test ph isa LineSegments
             @test ph.geometry.n_vertices == 10
-            @test_opt_alloc 1536 PlaneHelper(pl, 2.0)
+            # Julia 1.10/1.12 account 1,664/992 bytes, respectively.
+            @test_opt_alloc 1792 PlaneHelper(pl, 2.0)
 
             # PolarGridHelper: 16 spokes + 8 rings * 64 chords = 528 segs = 1056 verts.
             pg = PolarGridHelper(10.0, 16, 8)
@@ -15061,7 +15068,7 @@ end
             @test Diff3D.ies_intensity(p, 0.0) == 1.0           # peak
             @test Diff3D.ies_intensity(p, 120.0) == 0.0         # tail
             @test Diff3D.ies_intensity(p, 200.0) == 0.0         # clamp above
-            @test_warmed_opt_alloc 0 Diff3D.ies_intensity(p, 45.0)
+            @test_opt_alloc 0 Diff3D.ies_intensity(p, 45.0)
             ies_label_crlf = "IESNA:LM-63-2002\r\nTILT=NONE\r\n[TEST] ignored\r\n" *
                              "1,1000,1.0,3,1,1,1,0,0,0\r\n" *
                              "1,1,100\r\n0,90,180\r\n0\r\n10,5,0\r\n"
@@ -22359,7 +22366,7 @@ end
         @test spot_dir == Vec3(1.0, 0.0, 0.0)
         @test rectangle_intensity == 1.0
         @test rectangle_dir == Vec3(1.0, 0.0, 0.0)
-        @test_warmed_opt_alloc 64 Diff3D._light_direction_and_distance(
+        @test_opt_alloc 64 Diff3D._light_direction_and_distance(
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
@@ -22388,7 +22395,7 @@ end
             MeshLambertMaterial(), Vec3(1.0, 0.0, 0.0),
             Vec3(1.0, 0.0, 0.0), surface, light)
         @test response == Color3(0.0, 0.0, 0.0)
-        @test_warmed_opt_alloc 0 Diff3D._rect_area_sample_direction(
+        @test_opt_alloc 0 Diff3D._rect_area_sample_direction(
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
@@ -22493,7 +22500,7 @@ end
             Vec3(-1.0e308, 0.0, 0.0),
             Vec3(1.0e308, 0.0, 0.0)) ==
               Vec3(1.0, 0.0, 0.0)
-        @test_warmed_opt_alloc 0 Diff3D._direction_between(
+        @test_opt_alloc 0 Diff3D._direction_between(
             Vec3(), small)
     end
 
@@ -22522,7 +22529,7 @@ end
         lights_json = Diff3D._web_lights_json(scene)
         @test !occursin("NaN", lights_json)
         @test occursin("\"direction\":[1,0,0]", lights_json)
-        @test_warmed_opt_alloc 0 Diff3D._camera_pan_basis(
+        @test_opt_alloc 0 Diff3D._camera_pan_basis(
             camera, camera.target)
     end
 
@@ -23179,8 +23186,6 @@ end
             Vec2(-2.0, -1.0),
             Vec2(2.0, 1.0), true)
     end
-
-end
 
 @testset "fresh audit round 160 fixes" begin
     repeated = Triangle(
