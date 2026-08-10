@@ -26019,3 +26019,57 @@ end
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || rectangle_probe() == 0
     @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED || probe_object_probe() == 0
 end
+
+@testset "fresh audit round 191 fixes" begin
+    invalid_scalars = (true, false, "1", nothing, 1.0 + 0.0im)
+    for invalid in invalid_scalars
+        @test_throws "PerspectiveCamera fov must be finite" PerspectiveCamera(
+            fov=invalid)
+        @test_throws "PerspectiveCamera aspect must be finite and positive" PerspectiveCamera(
+            aspect=invalid)
+        @test_throws "PerspectiveCamera near must be finite and positive" PerspectiveCamera(
+            near=invalid)
+        @test_throws "PerspectiveCamera far must be finite and greater than near" PerspectiveCamera(
+            far=invalid)
+        @test_throws "camera zoom must be positive and finite" PerspectiveCamera(
+            zoom=invalid)
+
+        @test_throws "OrthographicCamera left and right must be finite" OrthographicCamera(
+            left=invalid)
+        @test_throws "OrthographicCamera left and right must be finite" OrthographicCamera(
+            right=invalid)
+        @test_throws "OrthographicCamera bottom and top must be finite" OrthographicCamera(
+            bottom=invalid)
+        @test_throws "OrthographicCamera bottom and top must be finite" OrthographicCamera(
+            top=invalid)
+        @test_throws "OrthographicCamera near must be finite and non-negative" OrthographicCamera(
+            near=invalid)
+        @test_throws "OrthographicCamera far must be finite and greater than near" OrthographicCamera(
+            far=invalid)
+        @test_throws "camera zoom must be positive and finite" OrthographicCamera(
+            zoom=invalid)
+
+        @test_throws "StereoCamera eye_sep must be finite" StereoCamera(
+            eye_sep=invalid)
+    end
+
+    perspective = PerspectiveCamera(
+        fov=Float32(pi / 3), aspect=3 // 2, near=1 // 10, far=2_000)
+    @test perspective.fov == Float64(Float32(pi / 3))
+    @test perspective.aspect == 1.5
+    @test perspective.near == 0.1
+    @test perspective.far == 2_000.0
+    orthographic = OrthographicCamera(
+        left=-2, right=2, bottom=-3 // 2, top=3 // 2,
+        near=0, far=Float32(100))
+    @test (orthographic.left, orthographic.right) == (-2.0, 2.0)
+    @test (orthographic.bottom, orthographic.top) == (-1.5, 1.5)
+    @test (orthographic.near, orthographic.far) == (0.0, 100.0)
+
+    @test_opt_alloc 0 Diff3D._validated_perspective_params(
+        pi / 3, 1.5, 0.1, 2_000.0)
+    @test_opt_alloc 0 Diff3D._validated_orthographic_params(
+        -2.0, 2.0, -1.5, 1.5, 0.0, 100.0)
+    @test_opt_alloc 0 Diff3D._validated_camera_zoom(1.0)
+    @test_opt_alloc 0 Diff3D._validated_stereo_eye_sep(0.064)
+end

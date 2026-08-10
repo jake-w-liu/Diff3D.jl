@@ -34,12 +34,22 @@ function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
 end
 
 function _validated_camera_zoom(zoom)
+    zoom isa Real && !(zoom isa Bool) ||
+        throw(ArgumentError("camera zoom must be positive and finite"))
     z = Float64(zoom)
     (isfinite(z) && z > 0.0) || throw(ArgumentError("camera zoom must be positive and finite"))
     return z
 end
 
 function _validated_perspective_params(fov, aspect, near, far)
+    fov isa Real && !(fov isa Bool) ||
+        throw(ArgumentError("PerspectiveCamera fov must be finite and between 0 and pi radians"))
+    aspect isa Real && !(aspect isa Bool) ||
+        throw(ArgumentError("PerspectiveCamera aspect must be finite and positive"))
+    near isa Real && !(near isa Bool) ||
+        throw(ArgumentError("PerspectiveCamera near must be finite and positive"))
+    far isa Real && !(far isa Bool) ||
+        throw(ArgumentError("PerspectiveCamera far must be finite and greater than near, or +Inf"))
     f = Float64(fov)
     a = Float64(aspect)
     n = Float64(near)
@@ -57,6 +67,16 @@ function _validated_perspective_params(fov, aspect, near, far)
 end
 
 function _validated_orthographic_params(left, right, bottom, top, near, far)
+    left isa Real && !(left isa Bool) &&
+        right isa Real && !(right isa Bool) ||
+        throw(ArgumentError("OrthographicCamera left and right must be finite"))
+    bottom isa Real && !(bottom isa Bool) &&
+        top isa Real && !(top isa Bool) ||
+        throw(ArgumentError("OrthographicCamera bottom and top must be finite"))
+    near isa Real && !(near isa Bool) ||
+        throw(ArgumentError("OrthographicCamera near must be finite and non-negative"))
+    far isa Real && !(far isa Bool) ||
+        throw(ArgumentError("OrthographicCamera far must be finite and greater than near"))
     l = Float64(left)
     r = Float64(right)
     b = Float64(bottom)
@@ -191,6 +211,8 @@ mutable struct StereoCamera
 end
 
 function _validated_stereo_eye_sep(eye_sep)
+    eye_sep isa Real && !(eye_sep isa Bool) ||
+        throw(ArgumentError("StereoCamera eye_sep must be finite"))
     separation = Float64(eye_sep)
     isfinite(separation) ||
         throw(ArgumentError("StereoCamera eye_sep must be finite"))
