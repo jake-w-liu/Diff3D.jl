@@ -26713,3 +26713,34 @@ end
               -floatmax(Float64)))
     @test all(isfinite, extreme.geometry.positions)
 end
+
+@testset "fresh audit round 204 fixes" begin
+    image = ones(Float64, 2, 3, 3)
+    empty_composer = EffectComposer()
+    @test compose(empty_composer, image) === image
+    @test_throws "EffectComposer expects an H×W×3 image" compose(
+        empty_composer, ones(2, 3))
+
+    scalar_composer = EffectComposer()
+    add_pass!(scalar_composer, _ -> 1.0)
+    @test_throws "EffectComposer pass 1 must return an H×W×3 array" compose(
+        scalar_composer, image)
+    resized_composer = EffectComposer()
+    add_pass!(resized_composer, _ -> ones(Float64, 1, 3, 3))
+    @test_throws "EffectComposer pass 1 output dimensions must match its input" compose(
+        resized_composer, image)
+
+    @test_throws "bloom_pass threshold must be finite" bloom_pass(
+        threshold=true)
+    @test_throws "bloom_pass intensity must be finite" bloom_pass(
+        intensity=false)
+    @test_throws "bloom_pass radius must be an integer" bloom_pass(radius=true)
+    @test_throws "outline_pass threshold must be finite" outline_pass(
+        ones(2, 3); threshold=true)
+    @test_throws "ssao_pass intensity must be finite" ssao_pass(
+        ones(2, 3); intensity=true)
+    @test_throws "ssao_pass samples must be an integer" ssao_pass(
+        ones(2, 3); samples=true)
+    @test_throws "bokeh_pass aperture must be finite" bokeh_pass(
+        ones(2, 3); focus_depth=1.0, aperture=true)
+end

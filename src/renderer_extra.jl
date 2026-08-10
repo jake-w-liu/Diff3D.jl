@@ -2457,11 +2457,26 @@ end
 EffectComposer() = EffectComposer(Function[])
 add_pass!(c::EffectComposer, f::Function) = (push!(c.passes, f); c)
 
+@noinline function _throw_effect_pass_output(index::Int, dimensions::Bool)
+    if dimensions
+        throw(ArgumentError(
+            "EffectComposer pass $index output dimensions must match its input"))
+    end
+    throw(ArgumentError("EffectComposer pass $index must return an H×W×3 array"))
+end
+
 """Run the image through every pass in order."""
 function compose(c::EffectComposer, img::AbstractArray)
+    height, width = _rgb_image_size(img, "EffectComposer")
     out = img
-    for p in c.passes
-        out = p(out)
+    for (index, pass) in pairs(c.passes)
+        result = pass(out)
+        result isa AbstractArray && ndims(result) == 3 &&
+            size(result, 3) == 3 ||
+            _throw_effect_pass_output(index, false)
+        size(result, 1) == height && size(result, 2) == width ||
+            _throw_effect_pass_output(index, true)
+        out = result
     end
     return out
 end
@@ -2511,6 +2526,7 @@ function _check_depth_size(depth::AbstractMatrix, H::Int, W::Int, label::Abstrac
 end
 
 function _postfx_finite_float(value, label::AbstractString)
+    value isa Bool && throw(ArgumentError("$label must be finite"))
     result = try
         Float64(value)
     catch
@@ -2523,10 +2539,12 @@ end
 # Build a 1-D Gaussian kernel of the given integer radius (σ = radius/2, clamped),
 # normalized to sum 1. Returned as an OffsetVector-free plain Vector indexed 1..2r+1
 # (centre at r+1).
-function _gaussian_kernel(radius::Int)
-    r = max(radius, 0)
-    r <= (typemax(Int) - 1) ÷ 2 ||
+function _gaussian_kernel(radius::Integer)
+    radius isa Bool &&
+        throw(ArgumentError("Gaussian blur radius must be an integer"))
+    radius <= (typemax(Int) - 1) ÷ 2 ||
         throw(ArgumentError("Gaussian blur radius is too large"))
+    r = radius <= 0 ? 0 : Int(radius)
     σ = max(r / 2, 1e-3)
     k = Vector{Float64}(undef, 2r + 1)
     s = 0.0
@@ -2576,10 +2594,15 @@ the given pixel `radius`, and adds the blurred glow back to the original image
 scaled by `intensity`. Returns a new H×W×3 image; the input is not mutated. The
 returned closure matches the [`EffectComposer`] pass convention (`img -> img`).
 """
-function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6, radius::Int=2)
+function bloom_pass(; threshold::Real=0.8, intensity::Real=0.6,
+                    radius::Integer=2)
     thr = _postfx_finite_float(threshold, "bloom_pass threshold")
     inten = _postfx_finite_float(intensity, "bloom_pass intensity")
-    rad = max(radius, 0)
+    radius isa Bool &&
+        throw(ArgumentError("bloom_pass radius must be an integer"))
+    radius <= (typemax(Int) - 1) ÷ 2 ||
+        throw(ArgumentError("Gaussian blur radius is too large"))
+    rad = radius <= 0 ? 0 : Int(radius)
     return function (img::AbstractArray)
         H, W = _rgb_image_size(img, "bloom_pass")
         if rad == 0
@@ -2777,14 +2800,19 @@ onto the normal). The accumulated occlusion darkens the pixel by up to
 H×W×3 image. The returned closure matches the [`EffectComposer`] pass convention;
 the depth buffer is captured here because the composer only forwards colour.
 """
-function ssao_pass(depth::AbstractMatrix; radius::Real=1.0, intensity::Real=1.0, samples::Int=8)
+function ssao_pass(depth::AbstractMatrix; radius::Real=1.0,
+                   intensity::Real=1.0, samples::Integer=8)
     # Bound the radius to a finite sane range so round(Int, rad*…) below can't
     # overflow on a NaN/Inf/huge radius (1e6 px exceeds any real SSAO kernel).
     r0 = Float64(radius)
     rad = isnan(r0) ? 1e-3 : clamp(r0, 1e-3, 1e6)
     inten = clamp(
         _postfx_finite_float(intensity, "ssao_pass intensity"), 0.0, 1.0)
-    ns = clamp(samples, 1, _POSTFX_MAX_SSAO_SAMPLES)
+    samples isa Bool &&
+        throw(ArgumentError("ssao_pass samples must be an integer"))
+    ns = samples <= 1 ? 1 :
+         (samples >= _POSTFX_MAX_SSAO_SAMPLES ?
+          _POSTFX_MAX_SSAO_SAMPLES : Int(samples))
     bias = 1e-4
     # Precompute fixed hemisphere sample offsets on the image-plane circle (in
     # pixels), distributed by angle with mild radial jitter for coverage. Fixed
