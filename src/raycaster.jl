@@ -531,13 +531,20 @@ end
 _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D) =
     _raycast_object!(hits, rc, obj, compute_world_matrix(obj))
 
+@inline function _raycast_recursive_child!(hits::Vector{Intersection}, rc::Raycaster,
+                                           child::T,
+                                           parent_world::Mat4{Float64}) where {T<:AbstractObject3D}
+    child_world = parent_world * compute_local_matrix(child)
+    return _raycast_recursive!(hits, rc, child, child_world)
+end
+
 function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
                              obj::AbstractObject3D, world::Mat4{Float64})
     is_visible(obj) || return hits
     _layers_test_object(obj, rc.layers) && _raycast_object!(hits, rc, obj, world)
     for child in get_children(obj)
         is_visible(child) || continue
-        _raycast_recursive!(hits, rc, child, world * compute_local_matrix(child))
+        _raycast_recursive_child!(hits, rc, child, world)
     end
     return hits
 end
