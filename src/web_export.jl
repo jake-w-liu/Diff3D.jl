@@ -175,6 +175,8 @@ function _web_output_color_space_id(output_color_space::Symbol)
 end
 
 function _validate_webgl_export_case(case::WebGLExportCase)
+    _validated_scene_color(case.scene.background, "Scene background")
+    _validate_fog(case.scene.fog)
     _web_case_vec3(case.target, "target")
     _web_case_positive(case.radius, "radius")
     _web_case_finite(case.height, "height")
@@ -811,10 +813,12 @@ end
 function _web_fog_json(fog)
     fog === nothing && return "null"
     if fog isa Fog
+        _validate_fog(fog)
         return "{\"type\":\"linear\",\"color\":" * _js_color(fog.color) *
                ",\"near\":" * _js_num(fog.near) *
                ",\"far\":" * _js_num(fog.far) * "}"
     elseif fog isa FogExp2
+        _validate_fog(fog)
         return "{\"type\":\"exp2\",\"color\":" * _js_color(fog.color) *
                ",\"density\":" * _js_num(fog.density) * "}"
     end

@@ -26119,3 +26119,63 @@ end
     @test_opt_alloc 0 Diff3D._validated_camera_vector(
         Vec3(1.0, 2.0, 3.0), :PerspectiveCamera, :position)
 end
+
+@testset "fresh audit round 193 fixes" begin
+    invalid_colors = (
+        Color3(NaN, 0.25, 0.5), Color3(0.25, Inf, 0.5),
+        Color3(0.25, 0.5, -Inf), (1.0, 1.0, 1.0),
+    )
+    for invalid in invalid_colors
+        @test_throws "Fog color must be a Color3 with finite components" Fog(
+            color=invalid)
+        @test_throws "FogExp2 color must be a Color3 with finite components" FogExp2(
+            color=invalid)
+        @test_throws "Scene background must be a Color3 with finite components" Scene(
+            background=invalid)
+    end
+
+    invalid_scalars = (NaN, Inf, -Inf, true, false, "1", nothing,
+                       1.0 + 0.0im)
+    for invalid in invalid_scalars
+        @test_throws "Fog near must be finite and non-negative" Fog(near=invalid)
+        @test_throws "Fog far must be finite and greater than near" Fog(far=invalid)
+        @test_throws "FogExp2 density must be finite and non-negative" FogExp2(
+            density=invalid)
+    end
+    @test_throws "Fog near must be finite and non-negative" Fog(near=-0.01)
+    @test_throws "Fog far must be finite and greater than near" Fog(
+        near=2.0, far=2.0)
+    @test_throws "Fog far must be finite and greater than near" Fog(
+        near=2.0, far=1.0)
+    @test_throws "FogExp2 density must be finite and non-negative" FogExp2(
+        density=-0.01)
+
+    linear = Fog(Color3{Float32}(0.25f0, 0.5f0, 0.75f0), 0, 10 // 1)
+    @test linear.color == Color3(0.25, 0.5, 0.75)
+    @test (linear.near, linear.far) == (0.0, 10.0)
+    exponential = FogExp2(Color3(0.25, 0.5, 0.75), 0)
+    @test exponential.density == 0.0
+    @test Diff3D._validate_fog(linear) === nothing
+    @test Diff3D._validate_fog(exponential) === nothing
+
+    target = RenderTarget(2, 2)
+    @test_throws "render background must have finite components" clear!(
+        target, Color3(NaN, 0.0, 0.0))
+    @test_throws "render background must have finite components" Diff3D.clear_rect!(
+        target, Color3(0.0, Inf, 0.0), 1, 2, 1, 2)
+    clear!(target, Color3(2.0, -1.0, 0.5))
+    @test target.color[:, :, 1] == fill(2.0, 2, 2)
+    @test target.color[:, :, 2] == fill(-1.0, 2, 2)
+
+    scene = Scene(fog=linear)
+    scene.background = Color3(NaN, 0.0, 0.0)
+    case = WebGLExportCase("fog", "Fog", "validation", scene)
+    @test_throws "Scene background must be a Color3 with finite components" Diff3D._web_case_json(
+        case)
+
+    @test_opt_alloc 0 Diff3D._validated_scene_color(
+        Color3(0.25, 0.5, 0.75), "Scene background")
+    @test_opt_alloc 0 Diff3D._validated_fog_range(0.0, 10.0)
+    @test_opt_alloc 0 Diff3D._validated_fog_density(0.01)
+    @test_opt_alloc 0 Diff3D._validate_fog(linear)
+end

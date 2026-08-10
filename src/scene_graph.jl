@@ -127,22 +127,82 @@ end
 
 abstract type AbstractFog end
 
+@noinline function _throw_scene_color(label::String)
+    throw(ArgumentError("$label must be a Color3 with finite components"))
+end
+
+@inline function _validated_scene_color(value, label::String)
+    value isa Color3 || _throw_scene_color(label)
+    color = convert(Color3{Float64}, value)
+    isfinite(color.r) && isfinite(color.g) && isfinite(color.b) ||
+        _throw_scene_color(label)
+    return color
+end
+
+function _validated_fog_range(near, far)
+    near isa Real && !(near isa Bool) ||
+        throw(ArgumentError("Fog near must be finite and non-negative"))
+    far isa Real && !(far isa Bool) ||
+        throw(ArgumentError("Fog far must be finite and greater than near"))
+    near_value = Float64(near)
+    far_value = Float64(far)
+    isfinite(near_value) && near_value >= 0.0 ||
+        throw(ArgumentError("Fog near must be finite and non-negative"))
+    isfinite(far_value) && far_value > near_value ||
+        throw(ArgumentError("Fog far must be finite and greater than near"))
+    return near_value, far_value
+end
+
 struct Fog <: AbstractFog
     color::Color3{Float64}
     near::Float64
     far::Float64
+
+    function Fog(color, near, far)
+        near_value, far_value = _validated_fog_range(near, far)
+        return new(_validated_scene_color(color, "Fog color"),
+                   near_value, far_value)
+    end
 end
 
-Fog(; color=Color3(1.0, 1.0, 1.0), near::Real=1.0, far::Real=1000.0) =
-    Fog(color, Float64(near), Float64(far))
+Fog(; color=Color3(1.0, 1.0, 1.0), near=1.0, far=1000.0) =
+    Fog(color, near, far)
+
+function _validated_fog_density(density)
+    density isa Real && !(density isa Bool) ||
+        throw(ArgumentError("FogExp2 density must be finite and non-negative"))
+    value = Float64(density)
+    isfinite(value) && value >= 0.0 ||
+        throw(ArgumentError("FogExp2 density must be finite and non-negative"))
+    return value
+end
 
 struct FogExp2 <: AbstractFog
     color::Color3{Float64}
     density::Float64
+
+    function FogExp2(color, density)
+        return new(_validated_scene_color(color, "FogExp2 color"),
+                   _validated_fog_density(density))
+    end
 end
 
-FogExp2(; color=Color3(1.0, 1.0, 1.0), density::Real=0.00025) =
-    FogExp2(color, Float64(density))
+FogExp2(; color=Color3(1.0, 1.0, 1.0), density=0.00025) =
+    FogExp2(color, density)
+
+@inline _validate_fog(::Nothing) = nothing
+
+@inline function _validate_fog(fog::Fog)
+    _validated_scene_color(fog.color, "Fog color")
+    _validated_fog_range(fog.near, fog.far)
+    return nothing
+end
+
+@inline function _validate_fog(fog::FogExp2)
+    _validated_scene_color(fog.color, "FogExp2 color")
+    _validated_fog_density(fog.density)
+    return nothing
+end
 
 # ========================== Scene ==========================
 
@@ -162,8 +222,10 @@ end
 function Scene(; background=Color3(0.0, 0.0, 0.0), fog=nothing, name="Scene")
     fog === nothing || fog isa AbstractFog ||
         throw(ArgumentError("Scene fog must be nothing, Fog, or FogExp2"))
+    _validate_fog(fog)
     Scene(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
-          nothing, AbstractObject3D[], true, name, _next_id(), background, fog)
+          nothing, AbstractObject3D[], true, name, _next_id(),
+          _validated_scene_color(background, "Scene background"), fog)
 end
 
 get_position(o::Scene) = o.position

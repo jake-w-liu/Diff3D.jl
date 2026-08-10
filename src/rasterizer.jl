@@ -71,6 +71,8 @@ function RenderTarget(width::Int, height::Int; T=Float64)
 end
 
 function clear!(rt::RenderTarget, bg::Color3)
+    isfinite(bg.r) && isfinite(bg.g) && isfinite(bg.b) ||
+        throw(ArgumentError("render background must have finite components"))
     rt.color[:, :, 1] .= bg.r
     rt.color[:, :, 2] .= bg.g
     rt.color[:, :, 3] .= bg.b
@@ -84,6 +86,8 @@ end
 # `clear!` above is unchanged and is used when scissor testing is off.
 function clear_rect!(rt::RenderTarget, bg::Color3, xlo::Int, xhi::Int, ylo::Int, yhi::Int)
     (xhi < xlo || yhi < ylo) && return rt
+    isfinite(bg.r) && isfinite(bg.g) && isfinite(bg.b) ||
+        throw(ArgumentError("render background must have finite components"))
     @inbounds for px in xlo:xhi, py in ylo:yhi
         rt.color[py, px, 1] = bg.r
         rt.color[py, px, 2] = bg.g
