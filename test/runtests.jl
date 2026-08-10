@@ -21690,7 +21690,7 @@ end
 
         segment_geometry = BufferGeometry(
             [-1.0e308, 0.0, 0.0, 1.0e308, 0.0, 0.0],
-            Float64[], Float64[], Int[], 3, 0)
+            Float64[], Float64[], Int[], 2, 0)
         segment_object = LineSegments(
             segment_geometry, LineBasicMaterial())
         hits = raycast(
