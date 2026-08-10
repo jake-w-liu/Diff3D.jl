@@ -77,7 +77,26 @@ get_parent(o::Object3D) = o.parent
 is_visible(o::Object3D) = o.visible
 set_parent!(o::Object3D, p) = (o.parent = p)
 
+@noinline function _throw_object_transform(kind::Symbol, label::Symbol)
+    throw(ArgumentError("$kind $label must have finite components"))
+end
+
+@inline function _validate_object_transform(obj::AbstractObject3D)
+    kind = nameof(typeof(obj))
+    position = get_position(obj)
+    isfinite(position.x) && isfinite(position.y) && isfinite(position.z) ||
+        _throw_object_transform(kind, :position)
+    rotation = get_rotation(obj)
+    isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) ||
+        _throw_object_transform(kind, :rotation)
+    scale = get_scale(obj)
+    isfinite(scale.x) && isfinite(scale.y) && isfinite(scale.z) ||
+        _throw_object_transform(kind, :scale)
+    return nothing
+end
+
 function compute_local_matrix(obj::AbstractObject3D)
+    _validate_object_transform(obj)
     pos = get_position(obj)
     rot = get_rotation(obj)
     scl = get_scale(obj)

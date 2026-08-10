@@ -26240,3 +26240,54 @@ end
     @test_opt_alloc 0 set_instance_matrix!(valid, 1, Mat4{Float64}())
     @test_opt_alloc 0 set_instance_color!(valid, 1, Color3(1.0, 1.0, 1.0))
 end
+
+@testset "fresh audit round 195 fixes" begin
+    object = Object3D()
+    object.position = Vec3(NaN, 0.0, 0.0)
+    @test_throws "Object3D position must have finite components" compute_local_matrix(
+        object)
+
+    group = Group()
+    group.rotation = Euler(0.0, Inf, 0.0)
+    @test_throws "Group rotation must have finite components" compute_local_matrix(
+        group)
+
+    mesh = Mesh(BoxGeometry(), MeshBasicMaterial())
+    mesh.scale = Vec3(1.0, 1.0, -Inf)
+    @test_throws "Mesh scale must have finite components" compute_local_matrix(mesh)
+
+    for (field, values) in (
+            (:position, (Vec3(Inf, 0.0, 0.0), Vec3(0.0, NaN, 0.0),
+                         Vec3(0.0, 0.0, -Inf))),
+            (:rotation, (Euler(Inf, 0.0, 0.0), Euler(0.0, NaN, 0.0),
+                         Euler(0.0, 0.0, -Inf))),
+            (:scale, (Vec3(Inf, 1.0, 1.0), Vec3(1.0, NaN, 1.0),
+                      Vec3(1.0, 1.0, -Inf))))
+        for value in values
+            candidate = Mesh(BoxGeometry(), MeshBasicMaterial())
+            setproperty!(candidate, field, value)
+            @test_throws "$field must have finite components" compute_world_matrix(
+                candidate)
+        end
+    end
+
+    invalid_scene = Scene()
+    invalid_mesh = Mesh(BoxGeometry(), MeshBasicMaterial(side=:double))
+    invalid_mesh.position = Vec3(0.0, NaN, 0.0)
+    add!(invalid_scene, invalid_mesh)
+    @test_throws "Mesh position must have finite components" render!(
+        RenderTarget(8, 8), invalid_scene, PerspectiveCamera();
+        frustum_cull=false)
+    @test_throws "Mesh position must have finite components" Diff3D._web_case_json(
+        WebGLExportCase("bad_transform", "Bad transform", "validation",
+                        invalid_scene))
+
+    valid = Mesh(BoxGeometry(), MeshBasicMaterial())
+    valid.position = Vec3(floatmax(Float64), -floatmax(Float64), 0.0)
+    valid.rotation = Euler(pi, -pi / 2, pi / 3)
+    valid.scale = Vec3(-2.0, 0.0, floatmax(Float64))
+    @test Diff3D._validate_object_transform(valid) === nothing
+    @test_opt_alloc 0 Diff3D._validate_object_transform(valid)
+    ordinary = Object3D()
+    @test_opt_alloc 64 compute_local_matrix(ordinary)
+end
