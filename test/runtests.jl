@@ -26073,3 +26073,49 @@ end
     @test_opt_alloc 0 Diff3D._validated_camera_zoom(1.0)
     @test_opt_alloc 0 Diff3D._validated_stereo_eye_sep(0.064)
 end
+
+@testset "fresh audit round 192 fixes" begin
+    for camera in (PerspectiveCamera(), OrthographicCamera())
+        kind = nameof(typeof(camera))
+        for field in (:position, :target, :up)
+            original = getproperty(camera, field)
+            for invalid in (NaN, Inf, -Inf)
+                setproperty!(camera, field, Vec3(invalid, 0.25, 0.5))
+                @test_throws "$kind $field must be a Vec3 with finite components" view_matrix(
+                    camera)
+                setproperty!(camera, field, Vec3(0.25, invalid, 0.5))
+                @test_throws "$kind $field must be a Vec3 with finite components" view_matrix(
+                    camera)
+                setproperty!(camera, field, Vec3(0.25, 0.5, invalid))
+                @test_throws "$kind $field must be a Vec3 with finite components" view_matrix(
+                    camera)
+            end
+            setproperty!(camera, field, original)
+        end
+        camera.up = Vec3()
+        @test_throws "$kind up must be non-zero" view_matrix(camera)
+        camera.up = Vec3(0.0, 1.0, 0.0)
+        @test all(isfinite, view_matrix(camera).e)
+    end
+
+    for invalid in (Vec3(NaN, 0.0, 0.0), Vec3(0.0, Inf, 0.0),
+                    Vec3(0.0, 0.0, -Inf), (0.0, 0.0, 0.0))
+        @test_throws "CubeCamera position must be a Vec3 with finite components" CubeCamera(
+            position=invalid)
+    end
+    cube = CubeCamera(position=Vec3{Float32}(1.0f0, 2.0f0, 3.0f0))
+    @test all(camera -> camera.position == Vec3(1.0, 2.0, 3.0),
+              cube.cameras)
+
+    extreme = PerspectiveCamera()
+    extreme.position = Vec3(1.0e308, 0.0, 0.0)
+    extreme.target = Vec3(-1.0e308, 0.0, 0.0)
+    @test all(isfinite, view_matrix(extreme).e)
+
+    perspective = PerspectiveCamera()
+    orthographic = OrthographicCamera()
+    @test_opt_alloc 0 view_matrix(perspective)
+    @test_opt_alloc 0 view_matrix(orthographic)
+    @test_opt_alloc 0 Diff3D._validated_camera_vector(
+        Vec3(1.0, 2.0, 3.0), :PerspectiveCamera, :position)
+end

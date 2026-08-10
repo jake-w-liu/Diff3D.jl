@@ -41,6 +41,31 @@ function _validated_camera_zoom(zoom)
     return z
 end
 
+@noinline function _throw_camera_vector(kind::Symbol, label::Symbol)
+    throw(ArgumentError("$kind $label must be a Vec3 with finite components"))
+end
+
+@inline function _validated_camera_vector(value, kind::Symbol, label::Symbol)
+    value isa Vec3 || _throw_camera_vector(kind, label)
+    result = convert(Vec3{Float64}, value)
+    isfinite(result.x) && isfinite(result.y) && isfinite(result.z) ||
+        _throw_camera_vector(kind, label)
+    return result
+end
+
+@noinline function _throw_camera_zero_up(kind::Symbol)
+    throw(ArgumentError("$kind up must be non-zero"))
+end
+
+@inline function _validated_camera_view_vectors(camera, kind::Symbol)
+    position = _validated_camera_vector(camera.position, kind, :position)
+    target = _validated_camera_vector(camera.target, kind, :target)
+    up = _validated_camera_vector(camera.up, kind, :up)
+    max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 ||
+        _throw_camera_zero_up(kind)
+    return position, target, up
+end
+
 function _validated_perspective_params(fov, aspect, near, far)
     fov isa Real && !(fov isa Bool) ||
         throw(ArgumentError("PerspectiveCamera fov must be finite and between 0 and pi radians"))
@@ -123,7 +148,9 @@ function projection_matrix(c::PerspectiveCamera)
 end
 
 function view_matrix(c::PerspectiveCamera)
-    mat4_look_at(c.position, c.target, c.up)
+    position, target, up =
+        _validated_camera_view_vectors(c, :PerspectiveCamera)
+    mat4_look_at(position, target, up)
 end
 
 mutable struct OrthographicCamera <: AbstractCamera
@@ -198,7 +225,9 @@ function projection_matrix(c::OrthographicCamera)
 end
 
 function view_matrix(c::OrthographicCamera)
-    mat4_look_at(c.position, c.target, c.up)
+    position, target, up =
+        _validated_camera_view_vectors(c, :OrthographicCamera)
+    mat4_look_at(position, target, up)
 end
 
 # ========================== StereoCamera ==========================
@@ -260,6 +289,7 @@ struct CubeCamera
 end
 
 function CubeCamera(; near=0.1, far=1000.0, position=Vec3())
+    cube_position = _validated_camera_vector(position, :CubeCamera, :position)
     faces = ((Vec3( 1.0,0,0), Vec3(0.0,-1,0)),
              (Vec3(-1.0,0,0), Vec3(0.0,-1,0)),
              (Vec3(0.0, 1,0), Vec3(0.0,0, 1)),
@@ -269,8 +299,8 @@ function CubeCamera(; near=0.1, far=1000.0, position=Vec3())
     cams = PerspectiveCamera[]
     for (dir, up) in faces
         c = PerspectiveCamera(fov=π/2, aspect=1.0, near=near, far=far)
-        c.position = position
-        c.target = position + dir
+        c.position = cube_position
+        c.target = cube_position + dir
         c.up = up
         push!(cams, c)
     end
