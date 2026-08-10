@@ -26403,3 +26403,33 @@ end
     @test_opt_alloc 0 lod_select(valid, 1.0)
     @test_opt_alloc 0 lod_update!(valid, 1.0)
 end
+
+@testset "fresh audit round 198 fixes" begin
+    for invalid in (NaN, Inf, -Inf)
+        @test_throws "Sprite center must be finite" Sprite(
+            SpriteMaterial(); center=Vec2(invalid, 0.5))
+        @test_throws "Sprite center must be finite" Sprite(
+            SpriteMaterial(); center=Vec2(0.5, invalid))
+    end
+
+    sprite = Sprite(SpriteMaterial(); center=Vec2(Float32(0.25), Float32(0.75)))
+    @test sprite.center === Vec2(0.25, 0.75)
+    scene = Scene()
+    add!(scene, sprite)
+    camera = PerspectiveCamera(fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+    target = RenderTarget(8, 8)
+    @test render_sprites!(target, scene, camera) === target
+    @test Diff3D._web_case_json(WebGLExportCase(
+        "sprite", "Sprite", "valid sprite", scene)) isa String
+
+    sprite.center = Vec2(NaN, 0.5)
+    @test_throws "Sprite render center must be finite" render_sprites!(
+        target, scene, camera)
+    @test_throws "WebGL export Sprite center must be finite" Diff3D._web_case_json(
+        WebGLExportCase("bad_sprite", "Bad sprite", "validation", scene))
+
+    valid = Sprite(SpriteMaterial())
+    @test_opt_alloc 0 Diff3D._validate_sprite_center(valid, "Sprite render")
+end

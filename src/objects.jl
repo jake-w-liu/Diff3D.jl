@@ -318,6 +318,16 @@ apply_morph_targets(line::LineLoop) =
 # ========================== Sprite ==========================
 # A camera-facing billboard.
 
+@noinline function _throw_sprite_center(context::String)
+    throw(ArgumentError("$context center must be finite"))
+end
+
+@inline function _validated_sprite_center(center::Vec2, context::String)
+    result = convert(Vec2{Float64}, center)
+    isfinite(result.x) && isfinite(result.y) || _throw_sprite_center(context)
+    return result
+end
+
 mutable struct Sprite <: AbstractObject3D
     position::Vec3{Float64}
     rotation::Euler{Float64}
@@ -331,9 +341,16 @@ mutable struct Sprite <: AbstractObject3D
     center::Vec2{Float64}
 end
 
+@inline function _validate_sprite_center(sprite::Sprite, context::String)
+    center = sprite.center
+    isfinite(center.x) && isfinite(center.y) || _throw_sprite_center(context)
+    return nothing
+end
+
 function Sprite(material; name="Sprite", center=Vec2(0.5, 0.5))
+    validated_center = _validated_sprite_center(center, "Sprite")
     Sprite(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-           true, name, _next_id(), material, center)
+           true, name, _next_id(), material, validated_center)
 end
 
 get_position(o::Sprite) = o.position

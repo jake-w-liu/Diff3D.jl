@@ -3199,6 +3199,7 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
                           lod_distance=lod_distance,
                           lod_hysteresis=lod_hysteresis)
         elseif obj isa Sprite
+            _validate_sprite_center(obj, "WebGL export Sprite")
             mat = obj.material
             geo = BufferGeometry(Float64[0.0, 0.0, 0.0,
                                          1.0, 0.0, 0.0,
