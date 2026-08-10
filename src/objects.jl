@@ -532,6 +532,7 @@ function SkinnedMesh(geometry, material, skeleton::Skeleton,
     _validate_skin_data(geometry, skeleton, converted_indices, converted_weights,
                         "SkinnedMesh")
     matrix = convert(Mat4{Float64}, bind_matrix)
+    _validate_object_matrix(matrix, "SkinnedMesh", "bind_matrix")
     matrix_inverse = mat4_inverse(matrix)
     sm = SkinnedMesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing,
                      AbstractObject3D[], true, name, _next_id(), geometry,
@@ -606,6 +607,7 @@ function bind_skeleton!(sm::SkinnedMesh, skeleton::Skeleton,
                         "SkinnedMesh")
     matrix = bind_matrix === nothing ? compute_world_matrix(sm) :
              convert(Mat4{Float64}, bind_matrix)
+    _validate_object_matrix(matrix, "SkinnedMesh", "bind_matrix")
     matrix_inverse = mat4_inverse(matrix)
     sm.skeleton = skeleton
     sm.bind_mode = bind_mode
@@ -630,7 +632,25 @@ function _validate_skeleton(skeleton::Skeleton, context::String, label::String)
     length(skeleton.bind_inverses) == n_bones ||
         throw(ArgumentError(
             "$context $label length must match bones length"))
+    @inbounds for index in eachindex(skeleton.bind_inverses)
+        _validate_object_matrix(
+            skeleton.bind_inverses[index], context, label, index)
+    end
     return n_bones
+end
+
+@noinline function _throw_object_matrix(context::String, label::String,
+                                        index::Int)
+    suffix = index == 0 ? "" : " $index"
+    throw(ArgumentError("$context $label$suffix must be finite"))
+end
+
+@inline function _validate_object_matrix(matrix::Mat4, context::String,
+                                         label::String, index::Int=0)
+    @inbounds for value in matrix.e
+        isfinite(value) || _throw_object_matrix(context, label, index)
+    end
+    return nothing
 end
 
 function _validate_skin_data(geo::BufferGeometry, skeleton::Skeleton,
@@ -670,6 +690,12 @@ function _validate_skin_data(geo::BufferGeometry, skeleton::Skeleton,
 end
 
 function _validate_skinned_mesh(sm::SkinnedMesh, context::String)
+    sm.bind_mode in (:attached, :detached) ||
+        throw(ArgumentError(
+            "$context bind_mode must be :attached or :detached"))
+    _validate_object_matrix(sm.bind_matrix, context, "bind_matrix")
+    _validate_object_matrix(
+        sm.bind_matrix_inverse, context, "bind_matrix_inverse")
     geo = _skinned_buffer_geometry(sm)
     _validate_skin_data(geo, sm.skeleton, sm.skin_indices, sm.skin_weights,
                         context)

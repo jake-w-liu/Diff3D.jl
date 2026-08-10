@@ -26291,3 +26291,52 @@ end
     ordinary = Object3D()
     @test_opt_alloc 64 compute_local_matrix(ordinary)
 end
+
+@testset "fresh audit round 196 fixes" begin
+    nonfinite_matrix = Mat4(ntuple(
+        i -> i == 8 ? NaN : (i in (1, 6, 11, 16) ? 1.0 : 0.0), 16))
+    bone = Bone()
+    invalid_skeleton = Skeleton([bone], [nonfinite_matrix])
+    @test_throws "Skeleton bind_inverses 1 must be finite" skeleton_matrices(
+        invalid_skeleton)
+
+    geometry = BufferGeometry(
+        [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], Float64[], Int[], 1, 0)
+    material = MeshBasicMaterial()
+    indices = [(1, 1, 1, 1)]
+    weights = [(1.0, 0.0, 0.0, 0.0)]
+    @test_throws "SkinnedMesh skeleton bind_inverses 1 must be finite" SkinnedMesh(
+        geometry, material, invalid_skeleton, indices, weights)
+    @test_throws "SkinnedMesh bind_matrix must be finite" SkinnedMesh(
+        geometry, material, Skeleton([Bone()]), indices, weights;
+        bind_matrix=nonfinite_matrix)
+
+    skinned = SkinnedMesh(
+        geometry, material, Skeleton([Bone()]), indices, weights)
+    skinned.bind_mode = :invalid
+    @test_throws "SkinnedMesh bind_mode must be :attached or :detached" apply_skinning(
+        skinned)
+    skinned.bind_mode = :detached
+    skinned.bind_matrix_inverse = nonfinite_matrix
+    @test_throws "SkinnedMesh bind_matrix_inverse must be finite" apply_skinning(
+        skinned)
+    skinned.bind_matrix_inverse = Mat4()
+    skinned.bind_matrix = nonfinite_matrix
+    @test_throws "SkinnedMesh bind_matrix must be finite" apply_skinning(skinned)
+
+    valid = SkinnedMesh(
+        geometry, material, Skeleton([Bone()]), indices, weights)
+    original_skeleton = valid.skeleton
+    original_matrix = valid.bind_matrix
+    @test_throws "SkinnedMesh bind_matrix must be finite" bind_skeleton!(
+        valid, Skeleton([Bone()]), nonfinite_matrix;
+        calculate_inverses=false)
+    @test valid.skeleton === original_skeleton
+    @test valid.bind_matrix == original_matrix
+
+    @test Diff3D._validate_skinned_mesh(valid, "SkinnedMesh") === geometry
+    @test_opt_alloc 0 Diff3D._validate_skeleton(
+        valid.skeleton, "SkinnedMesh", "skeleton bind_inverses")
+    @test_opt_alloc 0 Diff3D._validate_object_matrix(
+        Mat4(), "SkinnedMesh", "bind_matrix")
+end
