@@ -1672,8 +1672,22 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
         _line_subtree_may_draw(child) || continue
         # Keep drawable children type-narrowed; abstract recursive calls allocate
         # in scenes with many primitive objects.
-        if child isa LineObject || child isa LineSegments || child isa LineLoop ||
-           child isa InstancedMesh
+        if child isa LineObject
+            stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, cache,
+                                                          stamp, stamp_id)
+        elseif child isa LineSegments
+            stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, cache,
+                                                          stamp, stamp_id)
+        elseif child isa LineLoop
+            stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, cache,
+                                                          stamp, stamp_id)
+        elseif child isa InstancedMesh
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
@@ -1725,8 +1739,22 @@ function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObjec
         _line_subtree_may_draw(child) || continue
         # Keep drawable children type-narrowed; abstract recursive calls allocate
         # in scenes with many primitive objects.
-        if child isa LineObject || child isa LineSegments || child isa LineLoop ||
-           child isa InstancedMesh
+        if child isa LineObject
+            stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, stamp,
+                                                          stamp_id, morph_scratch)
+        elseif child isa LineSegments
+            stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, stamp,
+                                                          stamp_id, morph_scratch)
+        elseif child isa LineLoop
+            stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
+                                                          world,
+                                                          xlo, xhi, ylo, yhi, stamp,
+                                                          stamp_id, morph_scratch)
+        elseif child isa InstancedMesh
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
