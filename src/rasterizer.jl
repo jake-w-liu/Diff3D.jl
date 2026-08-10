@@ -1208,6 +1208,11 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
+    use_pooled_flat_path = colorbuf isa Vector{Color3{Float64}} &&
+                           !wireframe && shadow_fn === nothing &&
+                           isempty(mesh_clipping_planes) && !log_depth &&
+                           !material_transparent(mat) &&
+                           !_render_pooled_uses_fragment_alpha(geo, mat)
     flat_attr_tri = stamp_cache === nothing ? nothing : stamp_cache.smooth_tri
     flat_attr_clipped = stamp_cache === nothing ? nothing : stamp_cache.smooth_clipped
     flat_iw = stamp_cache === nothing ? nothing : stamp_cache.smooth_iw
@@ -1219,6 +1224,15 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
         if wireframe
             _render_wireframe_mesh_cached!(rt, geo, instance_material, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp_cache)
+        elseif use_pooled_flat_path
+            _rasterize_geo_flat_pooled!(rt, geo, world, instance_material,
+                                        lights, proj, view, near, cam_pos,
+                                        tri, clipped, sx, sy, sz, colorbuf;
+                                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                        ortho_dir=ortho_dir,
+                                        flat_attr_tri=flat_attr_tri,
+                                        flat_attr_clipped=flat_attr_clipped,
+                                        flat_iw=flat_iw)
         else
             _rasterize_geo_flat!(rt, geo, world, instance_material,
                                  lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
