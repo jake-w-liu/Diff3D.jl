@@ -1333,6 +1333,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _validate_triangle_geometry_indices(_mesh_geometry(mesh), "render!")
     end
     for im in instanced
+        _validate_instanced_mesh(im, "render!")
         _instanced_triangle_drawable(im) || continue
         _validate_triangle_geometry_indices(_instanced_geometry(im), "render!")
     end

@@ -26179,3 +26179,64 @@ end
     @test_opt_alloc 0 Diff3D._validated_fog_density(0.01)
     @test_opt_alloc 0 Diff3D._validate_fog(linear)
 end
+
+@testset "fresh audit round 194 fixes" begin
+    geometry = BoxGeometry()
+    material = MeshBasicMaterial(side=:double)
+    camera = PerspectiveCamera()
+
+    @test_throws "InstancedMesh instance matrix 1 must be finite" InstancedMesh(
+        geometry, material, [Mat4(ntuple(i -> i == 1 ? NaN : (i in (6, 11, 16) ? 1.0 : 0.0), 16))])
+    direct_colors = [Color3(NaN, 1.0, 1.0)]
+    @test_throws "InstancedMesh instance color 1 must be finite" InstancedMesh(
+        Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+        AbstractObject3D[], true, "invalid", 1, geometry, material,
+        false, false, [Mat4{Float64}()], direct_colors, :triangles)
+
+    instance = InstancedMesh(geometry, material, 1)
+    @test set_instance_matrix!(instance, 1, Mat4{Float32}()) == Mat4{Float64}()
+    @test set_instance_color!(instance, 1, Color3{Float32}(0.25f0, 0.5f0, 0.75f0)) ==
+          Color3(0.25, 0.5, 0.75)
+    @test get_instance_color(instance, 1) == Color3(0.25, 0.5, 0.75)
+    @test_throws "InstancedMesh instance matrix 1 must be finite" set_instance_matrix!(
+        instance, 1,
+        Mat4(ntuple(i -> i == 4 ? Inf : (i in (1, 6, 11, 16) ? 1.0 : 0.0), 16)))
+    @test_throws "InstancedMesh instance color 1 must be finite" set_instance_color!(
+        instance, 1, Color3(1.0, -Inf, 1.0))
+
+    mismatched = InstancedMesh(geometry, material, 1)
+    empty!(mismatched.instance_colors)
+    scene = Scene()
+    add!(scene, mismatched)
+    @test_throws "render! instance_colors length must match instance_matrices length" render!(
+        RenderTarget(8, 8), scene, camera; frustum_cull=false)
+    @test_throws "render_pooled! instance_colors length must match instance_matrices length" render_pooled!(
+        RenderTarget(8, 8), scene, camera, RenderCache())
+    @test_throws "render_tiled! instance_colors length must match instance_matrices length" render_tiled!(
+        RenderTarget(8, 8), scene, camera; tiles=1)
+    @test_throws "raycast instance_colors length must match instance_matrices length" raycast(
+        Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)), scene)
+    @test_throws "WebGL export instance_colors length must match instance_matrices length" Diff3D._web_case_json(
+        WebGLExportCase("bad_instances", "Bad instances", "validation", scene))
+
+    nonfinite = InstancedMesh(geometry, material, 1)
+    nonfinite.instance_matrices[1] = Mat4(ntuple(
+        i -> i == 13 ? NaN : (i in (1, 6, 11, 16) ? 1.0 : 0.0), 16))
+    @test_throws "render! instance matrix 1 must be finite" render!(
+        RenderTarget(8, 8), begin
+            invalid_scene = Scene()
+            add!(invalid_scene, nonfinite)
+            invalid_scene
+        end, camera; frustum_cull=false)
+
+    invalid_mode = InstancedMesh(geometry, material, 1)
+    invalid_mode.draw_mode = :invalid
+    @test_throws "unsupported InstancedMesh draw_mode: invalid" Diff3D._validate_instanced_mesh(
+        invalid_mode, "test")
+
+    valid = InstancedMesh(geometry, material, 1)
+    @test Diff3D._validate_instanced_mesh(valid, "test") === nothing
+    @test_opt_alloc 0 Diff3D._validate_instanced_mesh(valid, "test")
+    @test_opt_alloc 0 set_instance_matrix!(valid, 1, Mat4{Float64}())
+    @test_opt_alloc 0 set_instance_color!(valid, 1, Color3(1.0, 1.0, 1.0))
+end

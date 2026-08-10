@@ -1256,6 +1256,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                cache.smooth_iw)
     end
     for (instanced_slot, im) in pairs(cache.instanced)
+        _validate_instanced_mesh(im, "render_pooled!")
         base = cache.instanced_worlds[instanced_slot]
         _rasterize_instanced_geo_flat_pooled_from_instanced!(
             rt, im, instanced_slot, base, cache, proj, view, near, camera.position,
@@ -1583,6 +1584,7 @@ function _draw_instanced_lines!(rt::RenderTarget, obj::InstancedMesh,
                                 proj::Mat4, view::Mat4, near,
                                 xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                 stamp::Matrix{Int}, stamp_id::Int)
+    _validate_instanced_mesh(obj, "render_lines!")
     geo = _instanced_geometry(obj)
     _validate_indexed_geometry(geo, "render_lines!")
     _draw_instanced_lines_geometry!(rt, geo, _instanced_material(obj),
@@ -2372,6 +2374,7 @@ function _draw_instanced_points!(rt::RenderTarget, obj::InstancedMesh,
                                  camera::AbstractCamera, proj::Mat4, view::Mat4,
                                  near, W::Int, H::Int, xlo::Int, xhi::Int,
                                  ylo::Int, yhi::Int)
+    _validate_instanced_mesh(obj, "render_points!")
     geo = _instanced_geometry(obj)
     _validate_indexed_geometry(geo, "render_points!")
     _draw_instanced_points_geometry!(rt, geo, _instanced_material(obj),
@@ -3040,6 +3043,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     _collect_lights_into!(lights, scene)
     instanced_material_states = shared_cache.instanced_materials
     for (instanced_slot, im) in pairs(instanced)
+        _validate_instanced_mesh(im, "render_tiled!")
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
         _instanced_materials!(instanced_material_states, instanced_slot, im,
                               _instanced_material(im), im.instance_colors)

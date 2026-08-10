@@ -424,6 +424,7 @@ end
 function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
                           obj::AbstractObject3D, wm::Mat4{Float64})
     o = rc.ray.origin; d = rc.ray.direction
+    obj isa InstancedMesh && _validate_instanced_mesh(obj, "raycast")
     if obj isa Mesh
         geo = _mesh_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")

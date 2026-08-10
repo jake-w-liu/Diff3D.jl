@@ -32,6 +32,42 @@ function _validate_instanced_draw_mode(draw_mode::Symbol)
     return draw_mode
 end
 
+@noinline function _throw_instanced_matrix(context::String, index::Int)
+    throw(ArgumentError("$context instance matrix $index must be finite"))
+end
+
+@inline function _validate_instance_matrix(matrix::Mat4, context::String,
+                                           index::Int)
+    @inbounds for value in matrix.e
+        isfinite(value) || _throw_instanced_matrix(context, index)
+    end
+    return nothing
+end
+
+@noinline function _throw_instanced_color(context::String, index::Int)
+    throw(ArgumentError("$context instance color $index must be finite"))
+end
+
+@inline function _validate_instance_color(color::Color3, context::String,
+                                          index::Int)
+    isfinite(color.r) && isfinite(color.g) && isfinite(color.b) ||
+        _throw_instanced_color(context, index)
+    return nothing
+end
+
+function _validate_instanced_data(instance_matrices::Vector{Mat4{Float64}},
+                                  instance_colors::Vector{Color3{Float64}},
+                                  context::String)
+    length(instance_colors) == length(instance_matrices) ||
+        throw(ArgumentError(
+            "$context instance_colors length must match instance_matrices length"))
+    @inbounds for index in eachindex(instance_matrices)
+        _validate_instance_matrix(instance_matrices[index], context, index)
+        _validate_instance_color(instance_colors[index], context, index)
+    end
+    return nothing
+end
+
 mutable struct InstancedMesh <: AbstractObject3D
     position::Vec3{Float64}
     rotation::Euler{Float64}
@@ -59,8 +95,8 @@ mutable struct InstancedMesh <: AbstractObject3D
                            instance_matrices::Vector{Mat4{Float64}},
                            instance_colors::Vector{Color3{Float64}},
                            draw_mode::Symbol)
-        length(instance_colors) == length(instance_matrices) ||
-            throw(ArgumentError("instance_colors length must match instance_matrices length"))
+        _validate_instanced_data(instance_matrices, instance_colors,
+                                 "InstancedMesh")
         new(position, rotation, scale, parent, children, visible, name, id,
             geometry, material, cast_shadow, receive_shadow, instance_matrices,
             instance_colors, _validate_instanced_draw_mode(draw_mode))
@@ -138,15 +174,30 @@ is_visible(o::InstancedMesh) = o.visible
 set_parent!(o::InstancedMesh, p) = (o.parent = p)
 
 instanced_count(o::InstancedMesh) = length(o.instance_matrices)
-set_instance_matrix!(o::InstancedMesh, i::Int, m::Mat4) = (o.instance_matrices[i] = m)
+function set_instance_matrix!(o::InstancedMesh, i::Int, m::Mat4)
+    matrix = convert(Mat4{Float64}, m)
+    _validate_instance_matrix(matrix, "InstancedMesh", i)
+    o.instance_matrices[i] = matrix
+    return matrix
+end
 get_instance_matrix(o::InstancedMesh, i::Int) = o.instance_matrices[i]
-set_instance_color!(o::InstancedMesh, i::Int, color::Color3) =
-    (o.instance_colors[i] = convert(Color3{Float64}, color))
+function set_instance_color!(o::InstancedMesh, i::Int, color::Color3)
+    converted = convert(Color3{Float64}, color)
+    _validate_instance_color(converted, "InstancedMesh", i)
+    o.instance_colors[i] = converted
+    return converted
+end
 get_instance_color(o::InstancedMesh, i::Int) = o.instance_colors[i]
 _instanced_triangle_drawable(o::InstancedMesh) = o.draw_mode === :triangles
 _instanced_point_drawable(o::InstancedMesh) = o.draw_mode === :points
 _instanced_line_drawable(o::InstancedMesh) =
     o.draw_mode === :lines || o.draw_mode === :line_loop || o.draw_mode === :line_strip
+
+function _validate_instanced_mesh(o::InstancedMesh, context::String)
+    _validate_instanced_draw_mode(o.draw_mode)
+    _validate_instanced_data(o.instance_matrices, o.instance_colors, context)
+    return nothing
+end
 
 """Collect every `InstancedMesh` under `root` (used by the rasterizer)."""
 function _count_instanced(root::AbstractObject3D)

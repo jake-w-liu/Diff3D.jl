@@ -303,6 +303,7 @@ function _compute_shadow_map_from_drawables(meshes, instanced, light,
         _validate_triangle_geometry_indices(_mesh_geometry(mesh), "compute_shadow_map")
     end
     for im in instanced
+        _validate_instanced_mesh(im, "compute_shadow_map")
         _instanced_triangle_drawable(im) || continue
         _validate_triangle_geometry_indices(_instanced_geometry(im), "compute_shadow_map")
     end

@@ -3039,6 +3039,8 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
                    lod_group_id::Int=0, lod_distance::Real=0.0,
                    lod_hysteresis::Real=0.0)
         (is_visible(obj) || obj.id in forced_subtree_ids) || return
+        obj isa InstancedMesh &&
+            _validate_instanced_mesh(obj, "WebGL export")
         world = parent_world * compute_local_matrix(obj)
         if obj isa LOD
             push!(ancestor_ids, obj.id)
