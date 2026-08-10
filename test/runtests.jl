@@ -48,6 +48,20 @@ macro test_opt_alloc(limit, expr)
     end
 end
 
+# Use only for side-effect-free expressions: the first call compiles and warms
+# the probe, and the second call measures its steady-state runtime allocation.
+macro test_warmed_opt_alloc(limit, expr)
+    quote
+        if DIFF3D_ALLOC_ASSERTIONS_ENABLED
+            local probe = () -> (@allocated $(esc(expr)))
+            probe()
+            @test probe() <= $(esc(limit))
+        else
+            @test true
+        end
+    end
+end
+
 using Test
 using Base64
 using Diff3D
@@ -15047,7 +15061,7 @@ end
             @test Diff3D.ies_intensity(p, 0.0) == 1.0           # peak
             @test Diff3D.ies_intensity(p, 120.0) == 0.0         # tail
             @test Diff3D.ies_intensity(p, 200.0) == 0.0         # clamp above
-            @test_opt_alloc 0 Diff3D.ies_intensity(p, 45.0)
+            @test_warmed_opt_alloc 0 Diff3D.ies_intensity(p, 45.0)
             ies_label_crlf = "IESNA:LM-63-2002\r\nTILT=NONE\r\n[TEST] ignored\r\n" *
                              "1,1000,1.0,3,1,1,1,0,0,0\r\n" *
                              "1,1,100\r\n0,90,180\r\n0\r\n10,5,0\r\n"
@@ -22345,7 +22359,7 @@ end
         @test spot_dir == Vec3(1.0, 0.0, 0.0)
         @test rectangle_intensity == 1.0
         @test rectangle_dir == Vec3(1.0, 0.0, 0.0)
-        @test_opt_alloc 64 Diff3D._light_direction_and_distance(
+        @test_warmed_opt_alloc 64 Diff3D._light_direction_and_distance(
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
@@ -22374,7 +22388,7 @@ end
             MeshLambertMaterial(), Vec3(1.0, 0.0, 0.0),
             Vec3(1.0, 0.0, 0.0), surface, light)
         @test response == Color3(0.0, 0.0, 0.0)
-        @test_opt_alloc 0 Diff3D._rect_area_sample_direction(
+        @test_warmed_opt_alloc 0 Diff3D._rect_area_sample_direction(
             surface, Vec3(1.0e308, 0.0, 0.0))
     end
 
@@ -22479,7 +22493,7 @@ end
             Vec3(-1.0e308, 0.0, 0.0),
             Vec3(1.0e308, 0.0, 0.0)) ==
               Vec3(1.0, 0.0, 0.0)
-        @test_opt_alloc 0 Diff3D._direction_between(
+        @test_warmed_opt_alloc 0 Diff3D._direction_between(
             Vec3(), small)
     end
 
@@ -22508,7 +22522,7 @@ end
         lights_json = Diff3D._web_lights_json(scene)
         @test !occursin("NaN", lights_json)
         @test occursin("\"direction\":[1,0,0]", lights_json)
-        @test_opt_alloc 0 Diff3D._camera_pan_basis(
+        @test_warmed_opt_alloc 0 Diff3D._camera_pan_basis(
             camera, camera.target)
     end
 
