@@ -120,10 +120,17 @@ mutable struct Raycaster
     morph_positions::Vector{Vec3{Float64}}
 end
 
-Raycaster(ray::Ray{Float64}, near::Float64, far::Float64, layers::Layers,
-          point_threshold::Float64, line_threshold::Float64) =
-    Raycaster(ray, near, far, layers, point_threshold, line_threshold,
-              Mat4{Float64}[], Vec3{Float64}[])
+function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
+                   layers::Layers, point_threshold::Float64,
+                   line_threshold::Float64)
+    n, f = _raycaster_range(near, far)
+    normalized_ray = Ray(_raycaster_vec3(ray.origin, "origin"),
+                         _raycaster_direction(ray.direction))
+    return Raycaster(normalized_ray, n, f, layers,
+                     _raycaster_threshold(point_threshold, "point_threshold"),
+                     _raycaster_threshold(line_threshold, "line_threshold"),
+                     Mat4{Float64}[], Vec3{Float64}[])
+end
 
 _finite_vec3(v::Vec3) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
 
@@ -145,6 +152,10 @@ function _raycaster_direction(dir::Vec3)
 end
 
 function _raycaster_range(near, far)
+    near isa Real && !(near isa Bool) ||
+        throw(ArgumentError("Raycaster near must be finite and non-negative"))
+    far isa Real && !(far isa Bool) ||
+        throw(ArgumentError("Raycaster far must be greater than or equal to near"))
     n = Float64(near)
     f = Float64(far)
     isfinite(n) && n >= 0.0 ||
@@ -155,10 +166,28 @@ function _raycaster_range(near, far)
 end
 
 function _raycaster_threshold(value, label::AbstractString)
+    value isa Real && !(value isa Bool) ||
+        throw(ArgumentError("Raycaster $label must be finite and non-negative"))
     t = Float64(value)
     isfinite(t) && t >= 0.0 ||
         throw(ArgumentError("Raycaster $label must be finite and non-negative"))
     return t
+end
+
+function _validate_raycaster!(rc::Raycaster)
+    origin = _raycaster_vec3(rc.ray.origin, "origin")
+    direction = _raycaster_direction(rc.ray.direction)
+    near, far = _raycaster_range(rc.near, rc.far)
+    point_threshold = _raycaster_threshold(
+        rc.point_threshold, "point_threshold")
+    line_threshold = _raycaster_threshold(
+        rc.line_threshold, "line_threshold")
+    rc.ray = Ray(origin, direction)
+    rc.near = near
+    rc.far = far
+    rc.point_threshold = point_threshold
+    rc.line_threshold = line_threshold
+    return nothing
 end
 
 Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
@@ -573,6 +602,7 @@ hierarchically, matching the renderer: an object inside a `visible = false`
 ancestor is not pickable.
 """
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
+    _validate_raycaster!(rc)
     hits = Intersection[]
     if recursive
         _visible_in_tree(root) &&

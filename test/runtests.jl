@@ -26433,3 +26433,48 @@ end
     valid = Sprite(SpriteMaterial())
     @test_opt_alloc 0 Diff3D._validate_sprite_center(valid, "Sprite render")
 end
+
+@testset "fresh audit round 199 fixes" begin
+    origin = Vec3(0.0, 0.0, 3.0)
+    direction = Vec3(0.0, 0.0, -2.0)
+    for (keyword, invalid) in ((:near, true), (:far, false),
+                               (:point_threshold, true),
+                               (:line_threshold, false))
+        kwargs = (; keyword => invalid)
+        @test_throws ArgumentError Raycaster(origin, direction; kwargs...)
+    end
+
+    direct = Raycaster(Ray(origin, direction), 0.0, Inf,
+                       layers_enable_all!(Layers()), 1.0, 1.0)
+    @test norm(direct.ray.direction) ≈ 1.0
+
+    scene = Scene()
+    mesh = Mesh(BoxGeometry(), MeshBasicMaterial())
+    add!(scene, mesh)
+    rc = Raycaster(origin, direction)
+    @test !isempty(raycast(rc, scene))
+
+    rc.near = NaN
+    @test_throws "Raycaster near must be finite and non-negative" raycast(rc, scene)
+    rc.near = 0.0
+    rc.far = -1.0
+    @test_throws "Raycaster far must be greater than or equal to near" raycast(rc, scene)
+    rc.far = Inf
+    rc.point_threshold = NaN
+    @test_throws "Raycaster point_threshold must be finite and non-negative" raycast(
+        rc, scene)
+    rc.point_threshold = 1.0
+    rc.line_threshold = -1.0
+    @test_throws "Raycaster line_threshold must be finite and non-negative" raycast(
+        rc, scene)
+    rc.line_threshold = 1.0
+    rc.ray = Ray(Vec3(NaN, 0.0, 0.0), direction)
+    @test_throws "Raycaster origin must be finite" raycast(rc, scene)
+    rc.ray = Ray(origin, Vec3())
+    @test_throws "Raycaster direction must be finite and non-zero" raycast(rc, scene)
+
+    rc.ray = Ray(origin, direction)
+    @test !isempty(raycast(rc, scene))
+    @test norm(rc.ray.direction) ≈ 1.0
+    @test_opt_alloc 0 Diff3D._validate_raycaster!(rc)
+end
