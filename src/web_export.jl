@@ -2469,7 +2469,8 @@ function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{
             # below; otherwise every level's subtree is emitted twice with the
             # same node id.
             level_ids = Set{Int}()
-            for (_, _, child) in obj.levels
+            for level in obj.levels
+                child = level.object
                 push!(level_ids, child.id)
                 visit(child, world)
             end
@@ -3043,9 +3044,13 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
             _validate_instanced_mesh(obj, "WebGL export")
         world = parent_world * compute_local_matrix(obj)
         if obj isa LOD
+            _validate_lod_levels(obj, "WebGL export LOD")
             push!(ancestor_ids, obj.id)
             push!(ancestor_visibility, is_visible(obj))
-            for (distance, hysteresis, child) in obj.levels
+            for level in obj.levels
+                distance = level.distance
+                hysteresis = level.hysteresis
+                child = level.object
                 visit(child, world, obj.id, distance, hysteresis)
             end
             pop!(ancestor_ids)

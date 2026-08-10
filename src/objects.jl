@@ -370,6 +370,32 @@ end
 # ========================== LOD ==========================
 # Level-of-detail container: child objects keyed by minimum camera distance.
 
+struct LODLevel
+    distance::Float64
+    hysteresis::Float64
+    object::AbstractObject3D
+end
+
+# Preserve the tuple-like surface used by existing code while keeping each
+# level's scalar fields in a concrete layout. A vector of abstract-field tuples
+# boxes every scalar field access on Julia 1.10 and 1.12.
+Base.length(::LODLevel) = 3
+Base.firstindex(::LODLevel) = 1
+Base.lastindex(::LODLevel) = 3
+Base.first(level::LODLevel) = level.distance
+
+@inline function Base.getindex(level::LODLevel, index::Int)
+    index == 1 && return level.distance
+    index == 2 && return level.hysteresis
+    index == 3 && return level.object
+    throw(BoundsError(level, index))
+end
+
+@inline function Base.iterate(level::LODLevel, index::Int=1)
+    index > 3 && return nothing
+    return (level[index], index + 1)
+end
+
 mutable struct LOD <: AbstractObject3D
     position::Vec3{Float64}
     rotation::Euler{Float64}
@@ -379,12 +405,12 @@ mutable struct LOD <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
-    levels::Vector{Tuple{Float64, Float64, AbstractObject3D}}   # (min distance, hysteresis, object), ascending
+    levels::Vector{LODLevel}   # ascending by minimum distance
 end
 
 function LOD(; name="LOD")
     LOD(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-        true, name, _next_id(), Tuple{Float64, Float64, AbstractObject3D}[])
+        true, name, _next_id(), LODLevel[])
 end
 
 get_position(o::LOD) = o.position
@@ -395,25 +421,76 @@ get_parent(o::LOD) = o.parent
 is_visible(o::LOD) = o.visible
 set_parent!(o::LOD, p) = (o.parent = p)
 
-function add_lod_level!(lod::LOD, distance::Real, obj::AbstractObject3D; hysteresis::Real=0.0)
-    dist = Float64(distance)
-    hyst = Float64(hysteresis)
-    isfinite(dist) && dist >= 0 || throw(ArgumentError("LOD distance must be finite and non-negative"))
-    isfinite(hyst) && hyst >= 0 || throw(ArgumentError("LOD hysteresis must be finite and non-negative"))
+@noinline function _throw_lod_distance(label::String)
+    throw(ArgumentError("$label must be finite and non-negative"))
+end
+
+@inline function _validated_lod_distance(value, label::String)
+    value isa Real && !(value isa Bool) || _throw_lod_distance(label)
+    result = Float64(value)
+    isfinite(result) && result >= 0.0 || _throw_lod_distance(label)
+    return result
+end
+
+@noinline function _throw_lod_hysteresis()
+    throw(ArgumentError("LOD hysteresis must be finite and between 0 and 1"))
+end
+
+@inline function _validated_lod_hysteresis(value)
+    value isa Real && !(value isa Bool) || _throw_lod_hysteresis()
+    result = Float64(value)
+    isfinite(result) && 0.0 <= result <= 1.0 || _throw_lod_hysteresis()
+    return result
+end
+
+function _validate_lod_levels(lod::LOD, context::String)
+    previous_distance = -Inf
+    @inbounds for index in eachindex(lod.levels)
+        level = lod.levels[index]
+        distance = level.distance
+        _validated_lod_distance(distance, "LOD level distance")
+        _validated_lod_hysteresis(level.hysteresis)
+        distance >= previous_distance ||
+            throw(ArgumentError("$context levels must be sorted by distance"))
+        get_parent(level.object) === lod ||
+            throw(ArgumentError(
+                "$context level $index object must be a child of the LOD"))
+        previous_distance = distance
+    end
+    return nothing
+end
+
+function add_lod_level!(lod::LOD, distance, obj::AbstractObject3D;
+                        hysteresis=0.0)
+    dist = _validated_lod_distance(distance, "LOD distance")
+    hyst = _validated_lod_hysteresis(hysteresis)
     # add! first: it can throw (cycle/self guards). Pushing the level entry only
     # after it succeeds avoids leaving a phantom level whose object is not a child.
     add!(lod, obj)
-    push!(lod.levels, (dist, hyst, obj))
+    push!(lod.levels, LODLevel(dist, hyst, obj))
     sort!(lod.levels, by = first)
     return lod
 end
 
+function remove!(lod::LOD, child::AbstractObject3D)
+    children = get_children(lod)
+    index = findfirst(candidate -> candidate === child, children)
+    if index !== nothing
+        deleteat!(children, index)
+        set_parent!(child, nothing)
+    end
+    filter!(level -> level.object !== child, lod.levels)
+    return lod
+end
+
 """Highest-distance LOD level whose threshold ≤ `distance` (three.js `getObjectForDistance`)."""
-function lod_select(lod::LOD, distance::Real)
+function lod_select(lod::LOD, distance)
+    query_distance = _validated_lod_distance(distance, "LOD query distance")
+    _validate_lod_levels(lod, "LOD")
     isempty(lod.levels) && return nothing
-    chosen = lod.levels[1][3]
-    for (d, _, obj) in lod.levels
-        distance >= d ? (chosen = obj) : break
+    chosen = lod.levels[1].object
+    for level in lod.levels
+        query_distance >= level.distance ? (chosen = level.object) : break
     end
     return chosen
 end
@@ -422,15 +499,17 @@ end
 Update child visibility using three.js-style LOD thresholds and hysteresis.
 Returns the selected level object, or `nothing` when the LOD has no levels.
 """
-function lod_update!(lod::LOD, distance::Real)
+function lod_update!(lod::LOD, distance)
+    d = _validated_lod_distance(distance, "LOD update distance")
+    _validate_lod_levels(lod, "LOD")
     isempty(lod.levels) && return nothing
-    d = Float64(distance)
-    isfinite(d) || throw(ArgumentError("LOD update distance must be finite"))
 
     chosen_index = 1
     for i in 2:length(lod.levels)
-        threshold, hysteresis, obj = lod.levels[i]
-        level_distance = is_visible(obj) ? threshold * (1 - hysteresis) : threshold
+        level = lod.levels[i]
+        threshold = level.distance
+        level_distance = is_visible(level.object) ?
+            threshold * (1 - level.hysteresis) : threshold
         if d >= level_distance
             chosen_index = i
         else
@@ -441,8 +520,9 @@ function lod_update!(lod::LOD, distance::Real)
     # Compare by object identity, not index: if the same object is registered at
     # several levels, it must stay visible whenever any of its entries is chosen
     # (an index test would let a later non-chosen entry hide the chosen object).
-    chosen_obj = lod.levels[chosen_index][3]
-    for (_, _, obj) in lod.levels
+    chosen_obj = lod.levels[chosen_index].object
+    for level in lod.levels
+        obj = level.object
         hasproperty(obj, :visible) && setproperty!(obj, :visible, obj === chosen_obj)
     end
     return chosen_obj

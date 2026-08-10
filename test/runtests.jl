@@ -26340,3 +26340,66 @@ end
     @test_opt_alloc 0 Diff3D._validate_object_matrix(
         Mat4(), "SkinnedMesh", "bind_matrix")
 end
+
+@testset "fresh audit round 197 fixes" begin
+    invalid_values = (NaN, Inf, -Inf, -0.01, true, false, "1", nothing,
+                      1.0 + 0.0im)
+    for invalid in invalid_values
+        @test_throws "LOD distance must be finite and non-negative" add_lod_level!(
+            LOD(), invalid, Object3D())
+        @test_throws "LOD query distance must be finite and non-negative" lod_select(
+            LOD(), invalid)
+        @test_throws "LOD update distance must be finite and non-negative" lod_update!(
+            LOD(), invalid)
+    end
+    for invalid in (NaN, Inf, -Inf, -0.01, 1.01, true, false, "1", nothing)
+        @test_throws "LOD hysteresis must be finite and between 0 and 1" add_lod_level!(
+            LOD(), 0.0, Object3D(); hysteresis=invalid)
+    end
+
+    lod = LOD()
+    near = Object3D(name="near")
+    far = Object3D(name="far")
+    add_lod_level!(lod, 0, near; hysteresis=0)
+    add_lod_level!(lod, Float32(10), far; hysteresis=1 // 4)
+    @test lod_select(lod, 9.0) === near
+    @test lod_update!(lod, 10.0) === far
+    @test Diff3D._validate_lod_levels(lod, "LOD") === nothing
+
+    remove!(lod, far)
+    @test get_parent(far) === nothing
+    @test all(level -> level[3] !== far, lod.levels)
+    @test lod_select(lod, 100.0) === near
+
+    moved = Object3D(name="moved")
+    add_lod_level!(lod, 20.0, moved)
+    other_parent = Group()
+    add!(other_parent, moved)
+    @test all(level -> level[3] !== moved, lod.levels)
+    @test get_parent(moved) === other_parent
+
+    malformed = LOD()
+    first = Object3D()
+    second = Object3D()
+    add_lod_level!(malformed, 0.0, first)
+    add_lod_level!(malformed, 10.0, second)
+    malformed.levels[1], malformed.levels[2] =
+        malformed.levels[2], malformed.levels[1]
+    @test_throws "LOD levels must be sorted by distance" lod_select(
+        malformed, 5.0)
+    @test_throws "WebGL export LOD levels must be sorted by distance" Diff3D._web_case_json(
+        WebGLExportCase("bad_lod", "Bad LOD", "validation", begin
+            scene = Scene()
+            add!(scene, malformed)
+            scene
+        end))
+
+    valid = LOD()
+    add_lod_level!(valid, 0.0, Object3D(); hysteresis=0.25)
+    @test_opt_alloc 0 Diff3D._validated_lod_distance(
+        1.0, "LOD query distance")
+    @test_opt_alloc 0 Diff3D._validated_lod_hysteresis(0.25)
+    @test_opt_alloc 0 Diff3D._validate_lod_levels(valid, "LOD")
+    @test_opt_alloc 0 lod_select(valid, 1.0)
+    @test_opt_alloc 0 lod_update!(valid, 1.0)
+end
