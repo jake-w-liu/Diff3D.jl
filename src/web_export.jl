@@ -4956,6 +4956,18 @@ function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=
     return String(take!(io))
 end
 
+function _validate_webgl_case_ids(cases::AbstractVector{WebGLExportCase})
+    ids = Set{String}()
+    sizehint!(ids, length(cases))
+    for case in cases
+        case.id in ids &&
+            throw(ArgumentError(
+                "save_webgl_html requires unique WebGLExportCase ids; duplicate id $(repr(case.id))"))
+        push!(ids, case.id)
+    end
+    return nothing
+end
+
 """
     save_webgl_html(path, cases; title="Diff3D.jl Live WebGL Showcase")
 
@@ -4969,6 +4981,7 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
     for case in cases
         _validate_webgl_export_case(case)
     end
+    _validate_webgl_case_ids(cases)
     light_caps = _web_light_caps(cases)
     data_marker = "__DIFF3D_DATA_JSON__"
     data_statement = "  const DATA = $data_marker;"

@@ -27068,3 +27068,25 @@ end
         @test occursin("/MediaBox [0 0 0.5 0.5]", read(ordinary, String))
     end
 end
+
+@testset "fresh audit round 213 fixes" begin
+    mktempdir() do dir
+        scene = Scene()
+        first = WebGLExportCase("same", "First", "first", scene)
+        middle = WebGLExportCase("middle", "Middle", "middle", scene)
+        duplicate = WebGLExportCase(join(("sa", "me")),
+                                    "Duplicate", "duplicate", scene)
+        duplicate_path = joinpath(dir, "duplicate.html")
+        @test_throws "save_webgl_html requires unique WebGLExportCase ids; duplicate id \"same\"" save_webgl_html(
+            duplicate_path, [first, middle, duplicate])
+        @test !ispath(duplicate_path)
+
+        distinct = WebGLExportCase("Same", "Distinct", "case-sensitive", scene)
+        output = joinpath(dir, "distinct.html")
+        @test save_webgl_html(output, [first, distinct]) == output
+        html = read(output, String)
+        @test occursin("\"id\":\"same\"", html)
+        @test occursin("\"id\":\"Same\"", html)
+        @test occursin("b.onclick=()=>setCase(c.id)", html)
+    end
+end
