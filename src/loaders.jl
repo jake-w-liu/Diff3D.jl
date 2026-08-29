@@ -317,7 +317,8 @@ end
 function _load_stl_ascii(path::String)
     positions = Float64[]; normals = Float64[]; indices = Int[]
     cur_n = (0.0, 0.0, 0.0); vi = 0; vertices_in_facet = 0; in_facet = false
-    for raw in eachline(path)
+    open(path, "r") do io
+    for raw in eachline(io)
         line = strip(raw)
         if startswith(line, "facet normal")
             !in_facet || error("ASCII STL nested facet is invalid")
@@ -366,6 +367,7 @@ function _load_stl_ascii(path::String)
             in_facet = false
             vertices_in_facet = 0
         end
+    end
     end
     !in_facet || error("ASCII STL facet is missing endfacet")
     rem(length(indices), 3) == 0 ||
@@ -797,7 +799,8 @@ function load_obj(path::String)
     sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
     sizehint!(indices, emitted_hint)
 
-    for raw in eachline(path)
+    open(path, "r") do io
+    for raw in eachline(io)
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
         if _obj_is_face_record(line)
@@ -861,6 +864,7 @@ function load_obj(path::String)
                 third_state = next_state
             end
         end
+    end
     end
     nfaces = length(indices) ÷ 3
     geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],

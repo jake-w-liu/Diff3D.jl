@@ -2211,7 +2211,8 @@ function load_mtl(path::String)
                                        opacity=d, transparent=(d < 1.0),
                                        map=diffuse_map)
     end
-    for raw in eachline(path)
+    open(path, "r") do io
+    for raw in eachline(io)
         line = strip(raw)
         parts = eachsplit(line)
         tag_state = iterate(parts)
@@ -2246,6 +2247,7 @@ function load_mtl(path::String)
             diffuse_map = TextureLoader(isabspath(texpath) ? texpath : joinpath(dir, texpath))
         end
     end
+    end
     flush!()
     return mats
 end
@@ -2274,7 +2276,8 @@ function load_obj_groups(path::String)
     sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
     sizehint!(indices, emitted_hint)
     sizehint!(face_mtl, n_tri_hint)
-    for raw in eachline(path)
+    open(path, "r") do io
+    for raw in eachline(io)
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
         if _obj_is_face_record(line)
@@ -2345,6 +2348,7 @@ function load_obj_groups(path::String)
                 third_state = next_state
             end
         end
+    end
     end
     nfaces = length(indices) ÷ 3
     geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],

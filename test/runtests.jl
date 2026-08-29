@@ -27224,3 +27224,61 @@ end
     @test length(exact.indices) == 3 * exact.n_faces
     @test merge_geometries(BufferGeometry[]).n_vertices == 0
 end
+
+@testset "fresh audit round 218 fixes" begin
+    mktempdir() do dir
+        stl = joinpath(dir, "bad.stl")
+        obj = joinpath(dir, "bad.obj")
+        mtl = joinpath(dir, "bad.mtl")
+        grouped = joinpath(dir, "bad_grouped.obj")
+        write(stl, "solid x\nvertex 0 0 0\n")
+        write(obj, "v nope 0 0\n")
+        write(mtl, "newmtl m\nKd nope 0 0\n")
+        write(grouped, "v nope 0 0\n")
+
+        loaders = (
+            () -> load_stl(stl),
+            () -> load_obj(obj),
+            () -> load_mtl(mtl),
+            () -> load_obj_groups(grouped),
+        )
+        for loader in loaders
+            @test_throws Exception loader()
+        end
+
+        if Sys.isunix() && isdir("/dev/fd")
+            previous_gc_state = GC.enable(false)
+            try
+                before = length(readdir("/dev/fd"))
+                for _ in 1:5, loader in loaders
+                    try
+                        loader()
+                    catch
+                    end
+                end
+                after = length(readdir("/dev/fd"))
+                @test after <= before + 1
+            finally
+                GC.enable(previous_gc_state)
+                GC.gc()
+            end
+        end
+
+        valid_stl = joinpath(dir, "valid.stl")
+        write(valid_stl,
+              "solid x\nfacet normal 0 0 1\nouter loop\n" *
+              "vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n" *
+              "endloop\nendfacet\nendsolid x\n")
+        @test load_stl(valid_stl).n_faces == 1
+
+        valid_obj = joinpath(dir, "valid.obj")
+        write(valid_obj,
+              "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+        @test load_obj(valid_obj).n_faces == 1
+        @test load_obj_groups(valid_obj)[1].n_faces == 1
+
+        valid_mtl = joinpath(dir, "valid.mtl")
+        write(valid_mtl, "newmtl white\nKd 1 1 1\n")
+        @test haskey(load_mtl(valid_mtl), "white")
+    end
+end
