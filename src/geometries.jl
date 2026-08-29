@@ -922,6 +922,8 @@ end
 # ========================== Box Geometry ==========================
 
 function _geometry_segment_count(name::String, value)
+    value isa Bool &&
+        throw(ArgumentError("$name must be a positive integer"))
     try
         n = Int(value)
         n >= 1 || throw(ArgumentError("$name must be at least 1"))

@@ -27033,3 +27033,17 @@ end
     @test Diff3D._gltf_validate_attribute_shape(
         "COLOR_0", 4, 3, 3, (3, 4), "VEC3 or VEC4") === nothing
 end
+
+@testset "fresh audit round 211 fixes" begin
+    for keyword in (:width_segments, :height_segments, :depth_segments),
+        value in (true, false)
+        kwargs = (; keyword => value)
+        @test_throws "$(String(keyword)) must be a positive integer" BoxGeometry(
+            ; kwargs...)
+    end
+
+    @test BoxGeometry(
+        width_segments=1, height_segments=2, depth_segments=3).n_faces == 44
+    @test_throws "width_segments must be at least 1" BoxGeometry(
+        width_segments=0)
+end
