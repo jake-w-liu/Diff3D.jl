@@ -27373,3 +27373,38 @@ end
         @test load_stl(ordinary_path).n_faces == ordinary.n_faces
     end
 end
+
+@testset "fresh audit round 221 fixes" begin
+    integer_mask = ones(Int, 1, 1, 1)
+    integer_loss = loss_silhouette_iou(integer_mask, integer_mask)
+    @test integer_loss isa Float64
+    @test integer_loss < 1.0e-6
+    @test loss_silhouette_iou(
+        zeros(Int, 1, 1, 1), ones(Int, 1, 1, 1)) > 0.99
+
+    rational_mask = fill(1 // 1, 1, 1, 1)
+    @test loss_silhouette_iou(rational_mask, rational_mask) isa Float64
+    float32_mask = ones(Float32, 1, 1, 1)
+    @test loss_silhouette_iou(
+        float32_mask, float32_mask; threshold=0.05f0) isa Float32
+
+    alpha = reshape([0.0, 0.0, 0.0, 1.0], 1, 1, 4)
+    red = reshape([1.0, 0.0, 0.0, 0.0], 1, 1, 4)
+    @test loss_silhouette_iou(alpha, red) < 1.0e-6
+    channel5 = zeros(Float64, 1, 1, 5)
+    channel5[1, 1, 5] = 1.0
+    @test loss_silhouette_iou(channel5, channel5) < 1.0e-6
+    @test loss_silhouette_iou(channel5, zeros(1, 1, 5)) > 0.99
+
+    derivative = ForwardDiff.derivative(0.5) do value
+        image = reshape([value], 1, 1, 1)
+        loss_silhouette_iou(image, fill(0.75, 1, 1, 1);
+                            threshold=0.5)
+    end
+    @test isfinite(derivative)
+
+    for invalid in (true, false, "0.5", nothing, 0.5 + 0.0im)
+        @test_throws "loss_silhouette_iou: threshold must be finite and in [0, 1]" loss_silhouette_iou(
+            ones(1, 1, 1), ones(1, 1, 1); threshold=invalid)
+    end
+end

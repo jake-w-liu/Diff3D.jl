@@ -35,7 +35,7 @@ function _checked_ssim_constant(value, label::String)
 end
 
 function _checked_silhouette_threshold(threshold)
-    threshold isa Bool &&
+    threshold isa Real && !(threshold isa Bool) ||
         throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
     (isfinite(threshold) && 0 <= threshold <= 1) ||
         throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
@@ -203,10 +203,11 @@ end
 # end of the array with a BoundsError (the sibling losses accept any channel
 # count too).
 @inline function _silhouette_brightness(img, i, j)
-    C = size(img, 3)
-    C == 1 && return img[i, j, 1]
-    C == 2 && return max(img[i, j, 1], img[i, j, 2])
-    return max(img[i, j, 1], img[i, j, 2], img[i, j, 3])
+    value = img[i, j, 1]
+    @inbounds for channel in 2:size(img, 3)
+        value = max(value, img[i, j, channel])
+    end
+    return value
 end
 
 """
@@ -216,9 +217,11 @@ Compares binary silhouettes extracted from images.
 """
 function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
-    R = promote_type(T, S)
     H, W, _ = _checked_loss_image_size(image, target, "loss_silhouette_iou")
     threshold = _checked_silhouette_threshold(threshold)
+    R = float(promote_type(T, S, typeof(threshold)))
+    threshold_r = convert(R, threshold)
+    slope = convert(R, 200)
 
     # Convert to grayscale silhouettes via soft thresholding
     intersection = zero(R)
@@ -226,20 +229,22 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
 
     # Residual occupancy of a true-black pixel; subtracted below so exact
     # background reads occupancy 0 and empty silhouettes give union ~ 0.
-    occ0 = sigmoid_approx(-R(threshold) * 200)
+    occ0 = sigmoid_approx(-threshold_r * slope)
 
     for j in 1:W
         for i in 1:H
             # Brightness as max over the available channels (handles grayscale).
-            img_val = _silhouette_brightness(image, i, j)
-            tgt_val = _silhouette_brightness(target, i, j)
+            img_val = convert(R, _silhouette_brightness(image, i, j))
+            tgt_val = convert(R, _silhouette_brightness(target, i, j))
 
             # Soft occupancy. The slope must be steep enough that a true-black
             # background (brightness 0) reads ~0 occupancy: at slope 200 and
             # threshold 0.05, background -> sigmoid(-10) ~ 5e-5, while any lit
             # object pixel (>~0.08) -> ~1, so disjoint silhouettes give IoU ~ 0.
-            img_occ = (sigmoid_approx((img_val - threshold) * 200) - occ0) / (1 - occ0)
-            tgt_occ = (sigmoid_approx((tgt_val - threshold) * 200) - occ0) / (1 - occ0)
+            img_occ = (sigmoid_approx((img_val - threshold_r) * slope) - occ0) /
+                      (one(R) - occ0)
+            tgt_occ = (sigmoid_approx((tgt_val - threshold_r) * slope) - occ0) /
+                      (one(R) - occ0)
 
             intersection += min(img_occ, tgt_occ)
             union_val += max(img_occ, tgt_occ)
@@ -247,7 +252,7 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
     end
 
     # Smoothed IoU: two empty silhouettes give eps/eps = 1, i.e. loss 0.
-    eps = R(1e-8)
+    eps = convert(R, 1e-8)
     iou = (intersection + eps) / (union_val + eps)
     return one(R) - iou
 end
