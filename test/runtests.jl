@@ -27335,3 +27335,41 @@ end
     @test_throws "EXR PXR24 does not support UINT channels" Diff3D._exr_pxr24_inflated_size(
         1, 1, [("Y", 0)])
 end
+
+@testset "fresh audit round 220 fixes" begin
+    triangle_with_x(value) = BufferGeometry(
+        [value, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+
+    mktempdir() do dir
+        for (name, value) in (("overflow", 1.0e100),
+                              ("nan", NaN),
+                              ("positive_inf", Inf),
+                              ("negative_inf", -Inf))
+            path = joinpath(dir, "$name.stl")
+            @test_throws "save_stl_binary face 1 vertex 1 x must be representable as finite Float32" save_stl_binary(
+                path, triangle_with_x(value))
+            @test !ispath(path)
+        end
+
+        largest = Float64(floatmax(Float32))
+        extreme = BufferGeometry(
+            [-largest, 0.0, 0.0,
+              largest, 0.0, 0.0,
+              0.0, largest, 0.0],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        path = joinpath(dir, "extreme.stl")
+        @test save_stl_binary(path, extreme) == path
+        loaded = load_stl(path)
+        @test loaded.n_faces == 1
+        @test all(isfinite, loaded.positions)
+        @test all(isfinite, loaded.normals)
+
+        ordinary_path = joinpath(dir, "ordinary.stl")
+        ordinary = BoxGeometry()
+        save_stl_binary(ordinary_path, ordinary)
+        @test load_stl(ordinary_path).n_faces == ordinary.n_faces
+    end
+end
