@@ -902,7 +902,10 @@ mutable struct Clock
     last_time::Float64
     running::Bool
 end
-Clock() = (t = time(); Clock(t, t, true))
+
+@inline _clock_now() = Float64(time_ns()) / 1.0e9
+
+Clock() = (t = _clock_now(); Clock(t, t, true))
 
 function _validate_clock(c::Clock)
     _checked_control_scalar(c.start_time, "Clock start_time")
@@ -910,14 +913,14 @@ function _validate_clock(c::Clock)
     return nothing
 end
 
-function clock_elapsed(c::Clock, now=time())
+function clock_elapsed(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
     return _checked_control_scalar(
         current - c.start_time, "Clock elapsed time")
 end
 
-function clock_delta!(c::Clock, now=time())
+function clock_delta!(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
     d = _checked_control_scalar(current - c.last_time, "Clock delta")

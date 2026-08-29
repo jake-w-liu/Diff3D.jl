@@ -27111,3 +27111,20 @@ end
     @test short_many.color == short_reference.color
     @test short_many.depth == short_reference.depth
 end
+
+@testset "fresh audit round 215 fixes" begin
+    before = Diff3D._clock_now()
+    clock = Clock()
+    after = Diff3D._clock_now()
+    @test before <= clock.start_time <= after
+    @test clock.start_time == clock.last_time
+
+    samples = [Diff3D._clock_now() for _ in 1:1_000]
+    @test issorted(samples)
+    @test all(isfinite, samples)
+
+    injected = Clock(10.0, 10.0, true)
+    @test clock_elapsed(injected, 12.5) == 2.5
+    @test clock_delta!(injected, 10.25) == 0.25
+    @test injected.last_time == 10.25
+end
