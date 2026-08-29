@@ -1881,11 +1881,30 @@ end
 _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels, width::Int) =
     _exr_piz_decode(blockdata, nlines, channels, width, _ExrPizWorkspace())
 
+function _exr_pxr24_inflated_size(nlines::Int, width::Int, channels)
+    bytes_per_pixel = 0
+    for (_, pt) in channels
+        plane_bytes = pt == 1 ? 2 : pt == 2 ? 3 :
+            error("EXR PXR24 does not support UINT channels")
+        bytes_per_pixel = _checked_add_int(
+            bytes_per_pixel, plane_bytes, "EXR PXR24 block")
+    end
+    row_bytes = _checked_mul_int(
+        width, bytes_per_pixel, "EXR PXR24 block")
+    return _checked_mul_int(nlines, row_bytes, "EXR PXR24 block")
+end
+
 # Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
 function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width::Int,
                           compression::Int, channels, plinear,
                           piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing)
-    uncompressed = nlines * sum(width * _exr_chan_size(pt) for (_, pt) in channels)
+    bytes_per_pixel = 0
+    for (_, pt) in channels
+        bytes_per_pixel = _checked_add_int(
+            bytes_per_pixel, _exr_chan_size(pt), "EXR block")
+    end
+    row_bytes = _checked_mul_int(width, bytes_per_pixel, "EXR block")
+    uncompressed = _checked_mul_int(nlines, row_bytes, "EXR block")
     dsize = length(blockbytes)
     # A block is stored uncompressed (per OpenEXR) whenever its compressed size
     # would be >= the uncompressed size — common for small/incompressible data
@@ -1902,10 +1921,17 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
         _exr_deinterleave(_exr_unpredict!(_exr_rle_decompress(blockbytes, uncompressed)))
     elseif compression == 5                               # PXR24
         dsize >= 2 || error("EXR PXR24 block is truncated (too short for a zlib stream)")
-        _exr_pxr24_decode(zlib_inflate(blockbytes), nlines, channels, width)
+        expected = _exr_pxr24_inflated_size(
+            nlines, width, channels)
+        inflated = zlib_inflate(
+            blockbytes; max_output=_inflate_limit_for_exact(expected))
+        length(inflated) == expected ||
+            error("EXR PXR24 block inflated to $(length(inflated)) bytes, expected $expected")
+        _exr_pxr24_decode(inflated, nlines, channels, width)
     else                                                  # ZIP / ZIPS
         dsize >= 2 || error("EXR ZIP block is truncated (too short for a zlib stream)")
-        inflated = zlib_inflate(blockbytes)
+        inflated = zlib_inflate(
+            blockbytes; max_output=_inflate_limit_for_exact(uncompressed))
         length(inflated) == uncompressed ||
             error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
         _exr_deinterleave(_exr_unpredict!(inflated))
