@@ -26808,3 +26808,65 @@ end
     @test escaped["unicode"] == "€𝄞"
     @test Diff3D._json_parse("{\"value\":\" \"}")["value"] == " "
 end
+
+@testset "fresh audit round 208 fixes" begin
+    valid = Dict{String,Any}(
+        "asset" => Dict{String,Any}(
+            "version" => "2.17", "minVersion" => "2.0"))
+    @test Diff3D._gltf_validate_document(valid) === nothing
+
+    for invalid in Any[2.0, "2", "02.0", "2.00", "2.0.1", "+2.0"]
+        document = Dict{String,Any}(
+            "asset" => Dict{String,Any}("version" => invalid))
+        @test_throws "glTF asset.version must be a major.minor version string" Diff3D._gltf_validate_document(
+            document)
+    end
+    @test_throws "glTF document root must be an object" Diff3D._gltf_validate_document(
+        Any[])
+    @test_throws "glTF asset metadata is required and must be an object" Diff3D._gltf_validate_document(
+        Dict{String,Any}())
+    @test_throws "glTF asset.version is required" Diff3D._gltf_validate_document(
+        Dict{String,Any}("asset" => Dict{String,Any}()))
+    @test_throws "unsupported glTF asset version 1.0" Diff3D._gltf_validate_document(
+        Dict{String,Any}("asset" => Dict{String,Any}("version" => "1.0")))
+    @test_throws "unsupported glTF asset version 3.0" Diff3D._gltf_validate_document(
+        Dict{String,Any}("asset" => Dict{String,Any}("version" => "3.0")))
+    @test_throws "glTF asset.minVersion must not exceed asset.version" Diff3D._gltf_validate_document(
+        Dict{String,Any}("asset" => Dict{String,Any}(
+            "version" => "2.0", "minVersion" => "2.1")))
+    @test_throws "glTF asset requires unsupported minimum version 2.1" Diff3D._gltf_validate_document(
+        Dict{String,Any}("asset" => Dict{String,Any}(
+            "version" => "2.1", "minVersion" => "2.1")))
+
+    mktempdir() do dir
+        write_document(name, json) = begin
+            path = joinpath(dir, name)
+            write(path, json)
+            path
+        end
+        empty_scene(version) =
+            "{\"asset\":{\"version\":\"$version\"}," *
+            "\"scene\":0,\"scenes\":[{\"nodes\":[]}]}"
+
+        @test load_gltf(write_document("valid.gltf", empty_scene("2.9"))) isa Scene
+        @test_throws "unsupported glTF asset version 1.0" load_gltf(
+            write_document("v1.gltf", empty_scene("1.0")))
+        @test_throws "glTF asset metadata is required and must be an object" load_gltf(
+            write_document("missing_asset.gltf",
+                           "{\"scene\":0,\"scenes\":[{\"nodes\":[]}]}"))
+
+        json = Vector{UInt8}(codeunits(empty_scene("1.0")))
+        while length(json) % 4 != 0
+            push!(json, UInt8(' '))
+        end
+        le32(value) = UInt8[
+            value & 0xff, (value >> 8) & 0xff,
+            (value >> 16) & 0xff, (value >> 24) & 0xff]
+        total = 20 + length(json)
+        glb = vcat(le32(0x46546c67), le32(2), le32(total),
+                   le32(length(json)), le32(0x4e4f534a), json)
+        glb_path = joinpath(dir, "v1.glb")
+        write(glb_path, glb)
+        @test_throws "unsupported glTF asset version 1.0" load_glb(glb_path)
+    end
+end

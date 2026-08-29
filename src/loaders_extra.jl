@@ -8949,6 +8949,45 @@ function _gltf_check_required_extensions(gltf)
     return nothing
 end
 
+const _GLTF_ASSET_VERSION_PATTERN =
+    r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$"
+const _GLTF_SUPPORTED_VERSION = (2, 0)
+
+function _gltf_asset_version(value, label::String)
+    value isa AbstractString ||
+        error("glTF $label must be a major.minor version string")
+    matched = match(_GLTF_ASSET_VERSION_PATTERN, value)
+    matched === nothing &&
+        error("glTF $label must be a major.minor version string")
+    major = parse(Int, matched.captures[1])
+    minor = parse(Int, matched.captures[2])
+    return major, minor
+end
+
+@inline _gltf_version_le(left, right) =
+    left[1] < right[1] || (left[1] == right[1] && left[2] <= right[2])
+
+function _gltf_validate_document(gltf)
+    gltf isa AbstractDict || error("glTF document root must be an object")
+    asset = get(gltf, "asset", nothing)
+    asset isa AbstractDict || error("glTF asset metadata is required and must be an object")
+    haskey(asset, "version") || error("glTF asset.version is required")
+    version_raw = asset["version"]
+    version = _gltf_asset_version(version_raw, "asset.version")
+    version[1] == _GLTF_SUPPORTED_VERSION[1] ||
+        error("unsupported glTF asset version $version_raw; expected major version 2")
+    if haskey(asset, "minVersion")
+        minimum_raw = asset["minVersion"]
+        minimum = _gltf_asset_version(minimum_raw, "asset.minVersion")
+        _gltf_version_le(minimum, version) ||
+            error("glTF asset.minVersion must not exceed asset.version")
+        _gltf_version_le(minimum, _GLTF_SUPPORTED_VERSION) ||
+            error("glTF asset requires unsupported minimum version $minimum_raw")
+    end
+    _gltf_check_required_extensions(gltf)
+    return nothing
+end
+
 function _gltf_texture_transform(texinfo)
     ext = get(get(texinfo, "extensions", Dict{String,Any}()),
               "KHR_texture_transform", Dict{String,Any}())
@@ -10388,7 +10427,7 @@ in the GLB BIN chunk.
 """
 function load_gltf(path::String)
     gltf = _json_parse(read(path, String))
-    _gltf_check_required_extensions(gltf)
+    _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_scene(gltf, buffers; dir=dir)
@@ -10405,7 +10444,7 @@ nodes, and `weights` channels drive morph-target influences. Use
 """
 function load_gltf_asset(path::String)
     gltf = _json_parse(read(path, String))
-    _gltf_check_required_extensions(gltf)
+    _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
     return _gltf_build_asset(gltf, buffers; dir=dir)
@@ -10469,7 +10508,7 @@ function _parse_glb(path::String)
     have_json || error("GLB has no JSON chunk")
 
     gltf = _json_parse(json_bytes)
-    _gltf_check_required_extensions(gltf)
+    _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in _gltf_document_buffers(gltf)]
     return gltf, buffers, dir
