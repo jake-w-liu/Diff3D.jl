@@ -26870,3 +26870,65 @@ end
         @test_throws "unsupported glTF asset version 1.0" load_glb(glb_path)
     end
 end
+
+@testset "fresh audit round 209 fixes" begin
+    mktempdir() do dir
+        write_document(name, json) = begin
+            path = joinpath(dir, name)
+            write(path, json)
+            path
+        end
+
+        no_scenes = "{\"asset\":{\"version\":\"2.0\"}}"
+        no_scenes_path = write_document("no_scenes.gltf", no_scenes)
+        scene = load_gltf(no_scenes_path)
+        @test isempty(get_children(scene))
+        asset = load_gltf_asset(no_scenes_path)
+        @test isempty(get_children(asset.scene))
+        @test isempty(asset.animations)
+
+        missing_nodes =
+            "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{}]}"
+        @test isempty(get_children(load_gltf(
+            write_document("missing_nodes.gltf", missing_nodes))))
+        @test isempty(get_children(load_gltf(write_document(
+            "empty_scenes.gltf",
+            "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[]}"))))
+
+        populated =
+            "{\"asset\":{\"version\":\"2.0\"}," *
+            "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{}]}"
+        @test length(get_children(load_gltf(
+            write_document("populated.gltf", populated)))) == 1
+        @test_throws "glTF scene index 0 out of bounds" load_gltf(
+            write_document("missing_scenes.gltf",
+                           "{\"asset\":{\"version\":\"2.0\"},\"scene\":0}"))
+        @test_throws "glTF scene index 1 out of bounds" load_gltf(
+            write_document("bad_scene.gltf",
+                "{\"asset\":{\"version\":\"2.0\"},\"scene\":1," *
+                "\"scenes\":[{\"nodes\":[]}]}"))
+
+        json = Vector{UInt8}(codeunits(no_scenes))
+        while length(json) % 4 != 0
+            push!(json, UInt8(' '))
+        end
+        le32(value) = UInt8[
+            value & 0xff, (value >> 8) & 0xff,
+            (value >> 16) & 0xff, (value >> 24) & 0xff]
+        total = 20 + length(json)
+        glb = vcat(le32(0x46546c67), le32(2), le32(total),
+                   le32(length(json)), le32(0x4e4f534a), json)
+        glb_path = joinpath(dir, "no_scenes.glb")
+        write(glb_path, glb)
+        @test isempty(get_children(load_glb(glb_path)))
+        @test isempty(get_children(load_glb_asset(glb_path).scene))
+    end
+
+    @test_throws "glTF scenes must be an array" Diff3D._gltf_build_scene(
+        Dict{String,Any}("scenes" => Dict{String,Any}()), Any[])
+    @test_throws "glTF scene must be an object" Diff3D._gltf_build_scene(
+        Dict{String,Any}("scenes" => Any[1.0]), Any[])
+    @test_throws "glTF scene nodes must be an array" Diff3D._gltf_build_scene(
+        Dict{String,Any}("scenes" => Any[Dict{String,Any}("nodes" => 1.0)]),
+        Any[])
+end

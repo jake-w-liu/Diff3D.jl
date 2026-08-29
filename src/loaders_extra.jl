@@ -10236,11 +10236,22 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
     end
 
-    scene_idx = _gltf_checked_zero_based_index(
-        get(gltf, "scene", 0.0), length(get(gltf, "scenes", Any[])), "scene")
-    scene_def = gltf["scenes"][scene_idx + 1]
-    for n in scene_def["nodes"]
-        add_node!(scene, _gltf_checked_node_index(n, node_count, "scene root"))
+    scenes = get(gltf, "scenes", Any[])
+    scenes isa AbstractVector || error("glTF scenes must be an array")
+    if isempty(scenes)
+        haskey(gltf, "scene") &&
+            _gltf_checked_zero_based_index(gltf["scene"], 0, "scene")
+    else
+        scene_idx = _gltf_checked_zero_based_index(
+            get(gltf, "scene", 0.0), length(scenes), "scene")
+        scene_def = scenes[scene_idx + 1]
+        scene_def isa AbstractDict || error("glTF scene must be an object")
+        roots = get(scene_def, "nodes", Any[])
+        roots isa AbstractVector || error("glTF scene nodes must be an array")
+        for n in roots
+            add_node!(scene, _gltf_checked_node_index(
+                n, node_count, "scene root"))
+        end
     end
     for root_idx in skin_root_nodes
         root_idx in scene_linked_nodes || link_node_hierarchy!(root_idx)
