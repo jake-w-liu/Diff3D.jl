@@ -575,6 +575,9 @@ function save_pdf(filename::String, img::AbstractArray; dpi::Real=144)
     dpi_value = _checked_positive_finite_number(dpi, "save_pdf dpi")
     pw = round(W / dpi_value * 72; digits=2)
     ph = round(H / dpi_value * 72; digits=2)
+    (isfinite(pw) && isfinite(ph) && pw > 0.0 && ph > 0.0) ||
+        throw(ArgumentError(
+            "save_pdf page dimensions must be finite and positive at the requested dpi"))
     content = "q $pw 0 0 $ph 0 0 cm /Im0 Do Q"
     rgb_len = H * W * 3
     off = Vector{Int}(undef, 5)

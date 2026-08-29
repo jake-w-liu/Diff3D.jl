@@ -27047,3 +27047,24 @@ end
     @test_throws "width_segments must be at least 1" BoxGeometry(
         width_segments=0)
 end
+
+@testset "fresh audit round 212 fixes" begin
+    mktempdir() do dir
+        image = ones(Float64, 1, 1, 3)
+        for (name, dpi) in (("infinite.pdf", nextfloat(0.0)),
+                            ("zero.pdf", floatmax(Float64)))
+            path = joinpath(dir, name)
+            @test_throws "save_pdf page dimensions must be finite and positive at the requested dpi" save_pdf(
+                path, image; dpi=dpi)
+            @test !ispath(path)
+        end
+
+        smallest_page = joinpath(dir, "smallest.pdf")
+        @test save_pdf(smallest_page, image; dpi=7200.0) == smallest_page
+        @test occursin("/MediaBox [0 0 0.01 0.01]", read(smallest_page, String))
+
+        ordinary = joinpath(dir, "ordinary.pdf")
+        save_pdf(ordinary, image; dpi=144.0)
+        @test occursin("/MediaBox [0 0 0.5 0.5]", read(ordinary, String))
+    end
+end
