@@ -27175,3 +27175,52 @@ end
     @test mixer.time == original_time
     @test object.position == original_position
 end
+
+@testset "fresh audit round 217 fixes" begin
+    first = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         99.0, 99.0, 99.0],
+        [0.0, 0.0, 1.0,
+         0.0, 0.0, 1.0,
+         0.0, 0.0, 1.0,
+         9.0, 9.0, 9.0],
+        [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 9.0, 9.0],
+        [1, 2, 3, 1, 1, 1], 3, 1)
+    second = BufferGeometry(
+        [10.0, 0.0, 0.0,
+         11.0, 0.0, 0.0,
+         10.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0,
+         0.0, 0.0, 1.0,
+         0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        [1, 2, 3], 3, 1)
+    set_attribute!(first, :color, [1.0, 2.0, 3.0, 99.0], 1)
+    set_attribute!(second, :color, [4.0, 5.0, 6.0], 1)
+
+    merged = merge_geometries([first, second])
+    @test merged.n_vertices == 6
+    @test merged.n_faces == 2
+    @test length(merged.positions) == 18
+    @test length(merged.normals) == 18
+    @test length(merged.uvs) == 12
+    @test merged.indices == [1, 2, 3, 4, 5, 6]
+    @test get_face(merged, 2) == (4, 5, 6)
+    @test get_vertex(merged, 4) == Vec3(10.0, 0.0, 0.0)
+    @test get_attribute(merged, :color).data == [1.0, 2.0, 3.0,
+                                                  4.0, 5.0, 6.0]
+    @test get_groups(merged) == [(1, 1, 0), (2, 1, 1)]
+
+    @test length(first.positions) == 12
+    @test length(first.indices) == 6
+    @test get_attribute(first, :color).data[end] == 99.0
+
+    exact = merge_geometries([BoxGeometry(), SphereGeometry(
+        width_segments=8, height_segments=4)])
+    @test exact.n_vertices > 0
+    @test length(exact.positions) == 3 * exact.n_vertices
+    @test length(exact.indices) == 3 * exact.n_faces
+    @test merge_geometries(BufferGeometry[]).n_vertices == 0
+end
