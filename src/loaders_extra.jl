@@ -2742,6 +2742,8 @@ function _json_string(p)
             end
             p.i += 1
         else
+            c >= '\x20' ||
+                error("JSON string contains an unescaped control character")
             print(io, c)
             p.i = nextind(p.s, p.i)             # skip full (possibly multibyte) char
         end

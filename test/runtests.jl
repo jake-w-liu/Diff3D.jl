@@ -26789,3 +26789,22 @@ end
     @test ForwardDiff.derivative(
         value -> SoftRasterizerConfig(sigma=value).sigma, 1.0) == 1.0
 end
+
+@testset "fresh audit round 207 fixes" begin
+    for control in UInt8[0x00, 0x09, 0x0a, 0x0d, 0x1f]
+        malformed = String(vcat(
+            Vector{UInt8}(codeunits("{\"value\":\"a")),
+            control,
+            Vector{UInt8}(codeunits("b\"}"))))
+        @test_throws "JSON string contains an unescaped control character" Diff3D._json_parse(
+            malformed)
+        @test_throws "JSON string contains an unescaped control character" Diff3D._json_parse(
+            Vector{UInt8}(codeunits(malformed)))
+    end
+
+    escaped = Diff3D._json_parse(
+        "{\"value\":\"\\b\\f\\n\\r\\t\",\"unicode\":\"€𝄞\"}")
+    @test escaped["value"] == "\b\f\n\r\t"
+    @test escaped["unicode"] == "€𝄞"
+    @test Diff3D._json_parse("{\"value\":\" \"}")["value"] == " "
+end
