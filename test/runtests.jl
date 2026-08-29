@@ -26744,3 +26744,22 @@ end
     @test_throws "bokeh_pass aperture must be finite" bokeh_pass(
         ones(2, 3); focus_depth=1.0, aperture=true)
 end
+
+@testset "fresh audit round 205 fixes" begin
+    nonindexed = BufferGeometry(
+        [-1.0, -1.0, 0.0,
+          1.0, -1.0, 0.0,
+          0.0,  1.0, 0.0],
+        Float64[], Float64[], Int[], 3, 1)
+    scene = Scene()
+    add!(scene, Mesh(nonindexed, MeshBasicMaterial(side=:double)))
+    json = Diff3D._web_case_json(WebGLExportCase(
+        "nonindexed", "Non-indexed", "sequential triangle", scene))
+    @test occursin("\"indices\":[0,1,2]", json)
+
+    short = BufferGeometry(zeros(6), Float64[], Float64[], Int[], 2, 1)
+    invalid_scene = Scene()
+    add!(invalid_scene, Mesh(short, MeshBasicMaterial(side=:double)))
+    @test_throws "WebGL export vertices length must cover n_faces" Diff3D._web_case_json(
+        WebGLExportCase("short", "Short", "invalid triangle", invalid_scene))
+end

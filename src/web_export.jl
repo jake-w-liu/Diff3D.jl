@@ -2272,6 +2272,18 @@ function _web_write_geo_object(io::IO, geo::BufferGeometry,
     return nothing
 end
 
+function _validate_web_triangle_geometry(geo::BufferGeometry)
+    if isempty(geo.indices)
+        _validate_geometry_vertices(geo, "WebGL export")
+        _validate_geometry_face_count(geo, "WebGL export")
+        geo.n_vertices >= 3 * geo.n_faces ||
+            throw(ArgumentError(
+                "WebGL export vertices length must cover n_faces"))
+        return nothing
+    end
+    return _validate_triangle_geometry_indices(geo, "WebGL export")
+end
+
 function _web_geo_object(geo::BufferGeometry, positions::AbstractVector=geo.positions;
                          use_vertex_colors::Bool=true)
     io = IOBuffer(sizehint=_web_geo_object_sizehint(geo, positions;
@@ -2548,7 +2560,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     _web_material_linewidth(mat)
     _validate_depth_material(mat)
     if mode == "triangles" || mode == "sprite"
-        _validate_triangle_geometry_indices(geo, "WebGL export")
+        _validate_web_triangle_geometry(geo)
     elseif mode == "lines" || mode == "line_strip" || mode == "line_loop" ||
            mode == "points"
         _validate_indexed_geometry(geo, "WebGL export")
