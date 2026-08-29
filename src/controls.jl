@@ -2297,16 +2297,8 @@ function _write_track_at_time!(tr::CubicSplineMorphWeightsKeyframeTrack, t)
     return tr
 end
 
-"""Sample the clip at absolute time `t` and write each track's value to its target."""
-function mixer_set_time!(mixer::AnimationMixer, t)
-    t isa Real && !(t isa Bool) ||
-        throw(ArgumentError("mixer_set_time!: time must be finite"))
-    time = Float64(t)
-    isfinite(time) ||
-        throw(ArgumentError("mixer_set_time!: time must be finite"))
-    time_scale =
-        _validated_animation_time_scale(mixer.time_scale)
-    sample_time = _animation_loop_time(time * time_scale,
+function _mixer_apply_time!(mixer::AnimationMixer, time::Float64)
+    sample_time = _animation_loop_time(time,
                                        mixer.clip.duration,
                                        mixer.loop,
                                        mixer.repetitions,
@@ -2318,13 +2310,29 @@ function mixer_set_time!(mixer::AnimationMixer, t)
     return mixer
 end
 
+"""Set the clip to absolute time `t`, scaled once by `mixer.time_scale`."""
+function mixer_set_time!(mixer::AnimationMixer, t)
+    t isa Real && !(t isa Bool) ||
+        throw(ArgumentError("mixer_set_time!: time must be finite"))
+    time = Float64(t)
+    isfinite(time) ||
+        throw(ArgumentError("mixer_set_time!: time must be finite"))
+    time_scale = _validated_animation_time_scale(mixer.time_scale)
+    scaled_time = _checked_control_scalar(
+        time * time_scale, "animation time")
+    return _mixer_apply_time!(mixer, scaled_time)
+end
+
 function mixer_update!(mixer::AnimationMixer, dt)
     delta = _checked_control_scalar(dt, "mixer_update!: dt")
     time = _checked_control_scalar(
         mixer.time, "AnimationMixer current time")
+    time_scale = _validated_animation_time_scale(mixer.time_scale)
+    scaled_delta = _checked_control_scalar(
+        delta * time_scale, "AnimationMixer scaled delta")
     next_time = _checked_control_scalar(
-        time + delta, "AnimationMixer updated time")
-    return mixer_set_time!(mixer, next_time)
+        time + scaled_delta, "AnimationMixer updated time")
+    return _mixer_apply_time!(mixer, next_time)
 end
 
 # ========================== Helpers ==========================

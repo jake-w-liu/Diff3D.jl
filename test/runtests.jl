@@ -27128,3 +27128,50 @@ end
     @test clock_delta!(injected, 10.25) == 0.25
     @test injected.last_time == 10.25
 end
+
+@testset "fresh audit round 216 fixes" begin
+    object = Group()
+    track = KeyframeTrack(
+        object, :position, [0.0, 10.0],
+        [Vec3(), Vec3(10.0, 0.0, 0.0)])
+    clip = AnimationClip(
+        "scaled", 10.0, AbstractKeyframeTrack[track];
+        loop=:once, clamp_when_finished=true)
+    mixer = AnimationMixer(clip; time_scale=0.0)
+
+    mixer_update!(mixer, 1.0)
+    @test mixer.time == 0.0
+    @test object.position.x == 0.0
+    mixer.time_scale = 1.0
+    mixer_update!(mixer, 0.0)
+    @test mixer.time == 0.0
+    @test object.position.x == 0.0
+
+    mixer_update!(mixer, 1.0)
+    @test mixer.time == 1.0
+    @test object.position.x == 1.0
+    mixer.time_scale = 2.0
+    mixer_update!(mixer, 1.0)
+    @test mixer.time == 3.0
+    @test object.position.x == 3.0
+    mixer.time_scale = 0.5
+    mixer_update!(mixer, 2.0)
+    @test mixer.time == 4.0
+    @test object.position.x == 4.0
+
+    mixer.time_scale = 2.0
+    mixer_set_time!(mixer, 1.5)
+    @test mixer.time == 3.0
+    @test object.position.x == 3.0
+    mixer.time_scale = -1.0
+    mixer_update!(mixer, 1.0)
+    @test mixer.time == 2.0
+    @test object.position.x == 2.0
+
+    mixer.time_scale = floatmax(Float64)
+    original_time = mixer.time
+    original_position = object.position
+    @test_throws "animation time must be finite" mixer_set_time!(mixer, 2.0)
+    @test mixer.time == original_time
+    @test object.position == original_position
+end
