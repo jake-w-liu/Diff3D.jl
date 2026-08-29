@@ -26932,3 +26932,104 @@ end
         Dict{String,Any}("scenes" => Any[Dict{String,Any}("nodes" => 1.0)]),
         Any[])
 end
+
+@testset "fresh audit round 210 fixes" begin
+    function primitive_shape_fixture(;
+            position_type="VEC3", position_count=3,
+            normal_spec=nothing, extra_spec=nothing,
+            morph_spec=nothing, index_count=nothing)
+        buf = UInt8[]
+        views = Any[]
+        accessors = Any[]
+        components = Dict("SCALAR" => 1, "VEC2" => 2,
+                          "VEC3" => 3, "VEC4" => 4)
+        function add_float_accessor(type, count)
+            offset = length(buf)
+            values = zeros(Float32, components[type] * count)
+            append!(buf, reinterpret(UInt8, values))
+            push!(views, Dict{String,Any}(
+                "buffer" => 0, "byteOffset" => offset,
+                "byteLength" => length(buf) - offset))
+            push!(accessors, Dict{String,Any}(
+                "bufferView" => length(views) - 1,
+                "componentType" => 5126, "count" => count,
+                "type" => type))
+            return length(accessors) - 1
+        end
+
+        attributes = Dict{String,Any}(
+            "POSITION" => add_float_accessor(
+                position_type, position_count))
+        if normal_spec !== nothing
+            type, count = normal_spec
+            attributes["NORMAL"] = add_float_accessor(type, count)
+        end
+        if extra_spec !== nothing
+            name, type, count = extra_spec
+            attributes[name] = add_float_accessor(type, count)
+        end
+        primitive = Dict{String,Any}("attributes" => attributes)
+        if morph_spec !== nothing
+            name, type, count = morph_spec
+            primitive["targets"] = Any[Dict{String,Any}(
+                name => add_float_accessor(type, count))]
+        end
+        if index_count !== nothing
+            offset = length(buf)
+            indices = UInt16[mod(i, max(position_count, 1))
+                             for i in 0:(index_count - 1)]
+            append!(buf, reinterpret(UInt8, indices))
+            push!(views, Dict{String,Any}(
+                "buffer" => 0, "byteOffset" => offset,
+                "byteLength" => length(buf) - offset))
+            push!(accessors, Dict{String,Any}(
+                "bufferView" => length(views) - 1,
+                "componentType" => 5123, "count" => index_count,
+                "type" => "SCALAR"))
+            primitive["indices"] = length(accessors) - 1
+        end
+        gltf = Dict{String,Any}(
+            "scene" => 0, "scenes" => Any[Dict{String,Any}(
+                "nodes" => Any[0])],
+            "nodes" => Any[Dict{String,Any}("mesh" => 0)],
+            "meshes" => Any[Dict{String,Any}(
+                "primitives" => Any[primitive])],
+            "bufferViews" => views, "accessors" => accessors)
+        return gltf, Any[buf]
+    end
+
+    @test_throws "glTF POSITION accessor must be VEC3" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(position_type="VEC2")...)
+    @test_throws "glTF NORMAL count does not match POSITION" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(normal_spec=("VEC3", 1))...)
+    @test_throws "glTF TANGENT accessor must be VEC4" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(extra_spec=("TANGENT", "VEC3", 3))...)
+    @test_throws "glTF morph target POSITION accessor must be VEC3" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(morph_spec=("POSITION", "VEC2", 3))...)
+    @test_throws "glTF TRIANGLES index count must be divisible by 3" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(index_count=4)...)
+    @test_throws "glTF TRIANGLES vertex count must be divisible by 3" Diff3D._gltf_build_scene(
+        primitive_shape_fixture(position_count=4)...)
+
+    for (name, invalid_size, expected_type) in (
+            ("TEXCOORD_0", 3, "VEC2"),
+            ("TEXCOORD_1", 3, "VEC2"),
+            ("COLOR_0", 2, "VEC3 or VEC4"),
+            ("JOINTS_0", 3, "VEC4"),
+            ("WEIGHTS_0", 3, "VEC4"),
+            ("morph target NORMAL", 4, "VEC3"),
+            ("morph target TANGENT", 4, "VEC3"))
+        @test_throws "glTF $name accessor must be $expected_type" Diff3D._gltf_validate_attribute_shape(
+            name, invalid_size, 3, 3,
+            expected_type == "VEC3 or VEC4" ? (3, 4) :
+            expected_type == "VEC2" ? (2,) :
+            expected_type == "VEC3" ? (3,) : (4,),
+            expected_type)
+    end
+    @test_throws "glTF COLOR_0 count does not match POSITION" Diff3D._gltf_validate_attribute_shape(
+        "COLOR_0", 4, 2, 3, (3, 4), "VEC3 or VEC4")
+    @test Diff3D._gltf_validate_attribute_shape(
+        "COLOR_0", 3, 3, 3, (3, 4), "VEC3 or VEC4") === nothing
+    @test Diff3D._gltf_validate_attribute_shape(
+        "COLOR_0", 4, 3, 3, (3, 4), "VEC3 or VEC4") === nothing
+end

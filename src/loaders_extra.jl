@@ -9948,6 +9948,17 @@ function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
     return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16)) for i in 1:count]
 end
 
+function _gltf_validate_attribute_shape(name::String, item_size::Int,
+                                        count::Int, position_count::Int,
+                                        valid_sizes::Tuple,
+                                        expected_type::String)
+    item_size in valid_sizes ||
+        error("glTF $name accessor must be $expected_type")
+    count == position_count ||
+        error("glTF $name count does not match POSITION")
+    return nothing
+end
+
 # Build a `Scene` from a parsed glTF document and its decoded buffers. Shared by
 # `load_gltf` (text/embedded buffers) and `load_glb` (binary container, where
 # the BIN chunk is supplied as buffer 0). `buffers` must already contain the raw
@@ -10034,19 +10045,28 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         attrs = prim["attributes"]
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
-        pos, _, nverts = _gltf_accessor(gltf, buffers, position_accessor)
+        pos, position_size, nverts = _gltf_accessor(
+            gltf, buffers, position_accessor)
+        position_size == 3 || error("glTF POSITION accessor must be VEC3")
         normals = Float64[]
         if haskey(attrs, "NORMAL")
             normal_accessor = _gltf_checked_accessor_index(gltf, attrs["NORMAL"],
                                                            "NORMAL")
-            normals, _, _ = _gltf_accessor(gltf, buffers, normal_accessor)
+            normals, normal_size, normal_count = _gltf_accessor(
+                gltf, buffers, normal_accessor)
+            _gltf_validate_attribute_shape(
+                "NORMAL", normal_size, normal_count, nverts,
+                (3,), "VEC3")
         end
         uvs = Float64[]
         if haskey(attrs, "TEXCOORD_0")
             uv_accessor = _gltf_checked_accessor_index(gltf, attrs["TEXCOORD_0"],
                                                        "TEXCOORD_0")
-            uvs, uvcomp, _ = _gltf_accessor(gltf, buffers, uv_accessor)
-            uvcomp == 2 || error("glTF TEXCOORD_0 accessor must be VEC2")
+            uvs, uv_size, uv_count = _gltf_accessor(
+                gltf, buffers, uv_accessor)
+            _gltf_validate_attribute_shape(
+                "TEXCOORD_0", uv_size, uv_count, nverts,
+                (2,), "VEC2")
         end
         if haskey(prim, "indices")
             indices_accessor = _gltf_checked_zero_based_index(
@@ -10055,16 +10075,20 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         else
             indices = collect(1:nverts)
         end
+        if mode == 4 && length(indices) % 3 != 0
+            source = haskey(prim, "indices") ? "index" : "vertex"
+            error("glTF TRIANGLES $source count must be divisible by 3")
+        end
         tri_indices = mode == 5 || mode == 6 ? _gltf_triangulate_indices(indices, mode) : indices
         geo_indices = mode in (0, 1, 2, 3) ? Int[] : tri_indices
         geo = BufferGeometry(pos, normals, uvs, geo_indices, nverts,
                              mode in (0, 1, 2, 3) ? 0 : length(geo_indices) ÷ 3)
-        for (gltf_name, local_name) in (
-            ("TEXCOORD_1", :uv2),
-            ("COLOR_0", :color),
-            ("TANGENT", :tangent),
-            ("JOINTS_0", :skinIndex),
-            ("WEIGHTS_0", :skinWeight),
+        for (gltf_name, local_name, valid_sizes, expected_type) in (
+            ("TEXCOORD_1", :uv2, (2,), "VEC2"),
+            ("COLOR_0", :color, (3, 4), "VEC3 or VEC4"),
+            ("TANGENT", :tangent, (4,), "VEC4"),
+            ("JOINTS_0", :skinIndex, (4,), "VEC4"),
+            ("WEIGHTS_0", :skinWeight, (4,), "VEC4"),
         )
             haskey(attrs, gltf_name) || continue
             attr_accessor = _gltf_checked_zero_based_index(
@@ -10076,7 +10100,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     error("glTF JOINTS_0 componentType must be UNSIGNED_BYTE or UNSIGNED_SHORT")
             end
             data, item_size, attr_count = _gltf_accessor(gltf, buffers, attr_accessor)
-            attr_count == nverts || error("glTF $gltf_name count does not match POSITION")
+            _gltf_validate_attribute_shape(
+                gltf_name, item_size, attr_count, nverts,
+                valid_sizes, expected_type)
             set_attribute!(geo, local_name, data, item_size)
         end
         for (ti, target) in enumerate(get(prim, "targets", Any[]))
@@ -10089,7 +10115,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 target_accessor = _gltf_checked_accessor_index(
                     gltf, target[gltf_name], "morph target $gltf_name")
                 data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
-                attr_count == nverts || error("glTF morph target $gltf_name count does not match POSITION")
+                _gltf_validate_attribute_shape(
+                    "morph target $gltf_name", item_size, attr_count,
+                    nverts, (3,), "VEC3")
                 local_name = local_kind === :position ? _morph_position_symbol(ti) :
                              local_kind === :normal ? _morph_normal_symbol(ti) :
                              _morph_tangent_symbol(ti)
