@@ -27090,3 +27090,24 @@ end
         @test occursin("b.onclick=()=>setCase(c.id)", html)
     end
 end
+
+@testset "fresh audit round 214 fixes" begin
+    scene = Scene(background=Color3(0.1, 0.2, 0.3))
+    camera = PerspectiveCamera()
+
+    reference = RenderTarget(1, 1)
+    render_tiled!(reference, scene, camera; tiles=1, cache=[RenderCache()])
+    huge = RenderTarget(1, 1)
+    @test render_tiled!(huge, scene, camera;
+                        tiles=typemax(Int), cache=[RenderCache()]) === huge
+    @test huge.color == reference.color
+    @test huge.depth == reference.depth
+
+    short_reference = RenderTarget(2, 3)
+    render_tiled!(short_reference, scene, camera; tiles=3)
+    short_many = RenderTarget(2, 3)
+    render_tiled!(short_many, scene, camera; tiles=1_000,
+                  cache=[RenderCache() for _ in 1:min(3, Threads.nthreads())])
+    @test short_many.color == short_reference.color
+    @test short_many.depth == short_reference.depth
+end

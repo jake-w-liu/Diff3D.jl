@@ -3029,9 +3029,9 @@ they can run on separate threads (used when Julia is started with > 1 thread).
 Produces the same image as [`render!`] for opaque flat scenes.
 
 Passing a `cache` vector reuses scratch buffers across repeated calls. The vector
-must have at least `min(tiles, Threads.nthreads())` entries: each tile uses a
-dedicated cache when there are fewer tiles than Julia threads; otherwise each
-active worker thread uses one cache.
+must have at least `min(tiles, target.height, Threads.nthreads())` entries: each
+nonempty tile uses a dedicated cache when there are fewer tiles than Julia
+threads; otherwise each active worker thread uses one cache.
 """
 function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                        tiles::Int=max(Threads.nthreads(), 1), shading::Symbol=:flat,
@@ -3046,7 +3046,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     ortho_dir = camera isa OrthographicCamera ?
         _direction_between(camera.target, camera.position) : nothing
     H = rt.height
-    thread_count = min(tiles, max(Threads.nthreads(), 1))
+    active_tiles = min(tiles, H)
+    thread_count = min(active_tiles, max(Threads.nthreads(), 1))
     thread_caches = if cache === nothing
         [RenderCache() for _ in 1:thread_count]
     else
@@ -3077,22 +3078,23 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _instanced_materials!(instanced_material_states, instanced_slot, im,
                               _instanced_material(im), im.instance_colors)
     end
-    band = cld(H, tiles)
+    band = cld(H, active_tiles)
     if thread_count == 1
-        for t in 1:tiles
+        for t in 1:active_tiles
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
-            cache_idx = thread_count == tiles ? t : 1
+            cache_idx = thread_count == active_tiles ? t : 1
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
                                 lights, camera, proj, view,
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end
     else
-        Threads.@threads for t in 1:tiles
+        Threads.@threads for t in 1:active_tiles
             ylo = (t - 1) * band + 1
             yhi = min(t * band, H)
-            cache_idx = thread_count == tiles ? t : mod1(Threads.threadid() - 1, thread_count)
+            cache_idx = thread_count == active_tiles ? t :
+                        mod1(Threads.threadid() - 1, thread_count)
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
                                 lights, camera, proj, view,
