@@ -19,13 +19,16 @@ struct SoftRasterizerConfig{T<:Real}
 end
 
 function _soft_positive_finite(value, label::String)
-    value isa Bool && throw(ArgumentError("$label must be finite and positive"))
+    value isa Real && !(value isa Bool) ||
+        throw(ArgumentError("$label must be finite and positive"))
     (isfinite(value) && value > zero(value)) ||
         throw(ArgumentError("$label must be finite and positive"))
     return value
 end
 
-function _soft_finite_color(color::Color3, label::String)
+function _soft_finite_color(color, label::String)
+    color isa Color3 ||
+        throw(ArgumentError("$label must be a Color3 with finite components"))
     (isfinite(color.r) && isfinite(color.g) && isfinite(color.b)) ||
         throw(ArgumentError("$label must be finite"))
     return color
@@ -34,6 +37,10 @@ end
 function SoftRasterizerConfig(; sigma=1.0, gamma=1.0,
                                bg_color=Color3(0.0, 0.0, 0.0),
                                eps=1e-8)
+    _soft_positive_finite(sigma, "SoftRasterizerConfig sigma")
+    _soft_positive_finite(gamma, "SoftRasterizerConfig gamma")
+    _soft_positive_finite(eps, "SoftRasterizerConfig eps")
+    _soft_finite_color(bg_color, "SoftRasterizerConfig bg_color")
     T = promote_type(typeof(sigma), typeof(gamma), typeof(bg_color.r), typeof(eps))
     sigma_t = _soft_positive_finite(T(sigma), "SoftRasterizerConfig sigma")
     gamma_t = _soft_positive_finite(T(gamma), "SoftRasterizerConfig gamma")

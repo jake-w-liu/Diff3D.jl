@@ -26763,3 +26763,29 @@ end
     @test_throws "WebGL export vertices length must cover n_faces" Diff3D._web_case_json(
         WebGLExportCase("short", "Short", "invalid triangle", invalid_scene))
 end
+
+@testset "fresh audit round 206 fixes" begin
+    invalid_values = (true, false, "1", nothing, 1.0 + 0.0im)
+    for invalid in invalid_values
+        @test_throws "SoftRasterizerConfig sigma must be finite and positive" SoftRasterizerConfig(
+            sigma=invalid)
+        @test_throws "SoftRasterizerConfig gamma must be finite and positive" SoftRasterizerConfig(
+            gamma=invalid)
+        @test_throws "SoftRasterizerConfig eps must be finite and positive" SoftRasterizerConfig(
+            eps=invalid)
+    end
+    @test_throws "SoftRasterizerConfig bg_color must be a Color3 with finite components" SoftRasterizerConfig(
+        bg_color=(0.0, 0.0, 0.0))
+
+    smallest = SoftRasterizerConfig(sigma=nextfloat(0.0))
+    @test smallest.sigma == nextfloat(0.0)
+    mixed = SoftRasterizerConfig(
+        sigma=Float32(0.5), gamma=1 // 2,
+        bg_color=Color3(Float16(0.1), Float16(0.2), Float16(0.3)),
+        eps=Float32(1.0e-6))
+    @test mixed.sigma ≈ 0.5
+    @test mixed.gamma ≈ 0.5
+    @test all(isfinite, (mixed.bg_color.r, mixed.bg_color.g, mixed.bg_color.b))
+    @test ForwardDiff.derivative(
+        value -> SoftRasterizerConfig(sigma=value).sigma, 1.0) == 1.0
+end
