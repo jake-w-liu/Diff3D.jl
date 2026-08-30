@@ -10172,14 +10172,15 @@ function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
     typ = String(camdef["type"])
     cam = if typ == "perspective"
         p = camdef["perspective"]
+        far = haskey(p, "zfar") ?
+              _gltf_checked_finite_number(p["zfar"], "camera zfar") : Inf
         PerspectiveCamera(fov=_gltf_checked_finite_number(p["yfov"],
                                                           "camera yfov"),
                           aspect=_gltf_checked_finite_number(
                               get(p, "aspectRatio", 1.0), "camera aspectRatio"),
                           near=_gltf_checked_finite_number(p["znear"],
                                                            "camera znear"),
-                          far=_gltf_checked_finite_number(get(p, "zfar", 1000.0),
-                                                          "camera zfar"),
+                          far=far,
                           name=name)
     elseif typ == "orthographic"
         o = camdef["orthographic"]

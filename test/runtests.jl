@@ -32719,6 +32719,52 @@ end
     end
 end
 
+@testset "CRC74 — omitted glTF perspective zfar is infinite" begin
+    crc74_le32(value) = UInt8[
+        value & 0xff, (value >> 8) & 0xff,
+        (value >> 16) & 0xff, (value >> 24) & 0xff]
+    function crc74_glb(json::String)
+        json_bytes = Vector{UInt8}(codeunits(json))
+        while length(json_bytes) % 4 != 0
+            push!(json_bytes, UInt8(' '))
+        end
+        body = vcat(
+            crc74_le32(length(json_bytes)), crc74_le32(0x4e4f534a),
+            json_bytes)
+        return vcat(
+            crc74_le32(0x46546c67), crc74_le32(2),
+            crc74_le32(12 + length(body)), body)
+    end
+    function crc74_camera(json::String, binary::Bool)
+        mktempdir() do directory
+            path = joinpath(directory, binary ? "camera.glb" : "camera.gltf")
+            write(path, binary ? crc74_glb(json) : json)
+            return only(get_children(
+                binary ? load_glb(path) : load_gltf(path)))
+        end
+    end
+
+    infinite_json = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0]}],"nodes":[{"camera":0}],
+     "cameras":[{"type":"perspective",
+       "perspective":{"yfov":0.7,"aspectRatio":1.5,"znear":0.2}}]}
+    """
+    finite_json = replace(infinite_json, "\"znear\":0.2" =>
+                                         "\"znear\":0.2,\"zfar\":50")
+    for binary in (false, true)
+        infinite_camera = crc74_camera(infinite_json, binary)
+        @test infinite_camera isa PerspectiveCamera
+        @test infinite_camera.far === Inf
+        projection = projection_matrix(infinite_camera)
+        @test mat4_get(projection, 3, 3) == -1.0
+        @test mat4_get(projection, 3, 4) ≈ -0.4
+
+        finite_camera = crc74_camera(finite_json, binary)
+        @test finite_camera.far == 50.0
+    end
+end
+
 @testset "CRC68 — extreme and narrow loss accumulation" begin
     largest = floatmax(Float64)
     residual = 2sqrt(largest)
