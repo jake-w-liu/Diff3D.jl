@@ -684,7 +684,89 @@ end
                     tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
                     aoi = _material_scalar(material, :ao_map_intensity)
                     ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
-                    col = col * ao
+                    direct_col = Color3(0.0, 0.0, 0.0)
+                    if material isa LitMaterial
+                        direct_lights = _DirectLightView(lights)
+                        direct_view = _direction_between(wp, cam_pos)
+                        direct_col = if has_specular || has_glossiness
+                            specular, shininess = _phong_mapped_terms(
+                                material, specular_map, glossiness_map,
+                                u, v, u2, v2)
+                            use_surface_color ?
+                                _shade_phong_mapped_vertex_color(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, specular,
+                                    Float64(shininess), surface_color) :
+                                _shade_phong_mapped(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, specular,
+                                    Float64(shininess))
+                        elseif material isa MeshStandardMaterial &&
+                               (has_roughness || has_metalness) &&
+                               !has_physical_pbr
+                            metalness, roughness = _standard_mapped_terms(
+                                material, roughness_map, metalness_map,
+                                u, v, u2, v2)
+                            use_surface_color ?
+                                _shade_standard_mapped_vertex_color(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, metalness,
+                                    roughness, surface_color) :
+                                _shade_standard_mapped(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, metalness,
+                                    roughness)
+                        elseif material isa MeshPhysicalMaterial &&
+                               (has_roughness || has_metalness ||
+                                has_physical_pbr)
+                            terms = _physical_mapped_terms(
+                                material, roughness_map, metalness_map,
+                                u, v, u2, v2)
+                            use_surface_color ?
+                                _shade_physical_mapped_vertex_color(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, terms,
+                                    surface_color) :
+                                _shade_physical_mapped(
+                                    wn, direct_view, wp, material,
+                                    direct_lights, shadow_fn, terms)
+                        elseif has_roughness || has_metalness ||
+                               has_physical_pbr
+                            direct_material = _apply_pbr_maps(
+                                material, roughness_map, metalness_map,
+                                u, v, u2, v2)
+                            use_surface_color ?
+                                _shade_face_vertex_color(
+                                    wn, direct_view, wp, direct_material,
+                                    direct_lights, surface_color;
+                                    shadow_fn=shadow_fn) :
+                                shade_face(
+                                    wn, direct_view, wp, direct_material,
+                                    direct_lights; shadow_fn=shadow_fn)
+                        elseif use_surface_color
+                            _shade_face_vertex_color(
+                                wn, direct_view, wp, material,
+                                direct_lights, surface_color;
+                                shadow_fn=shadow_fn)
+                        else
+                            shade_face(
+                                wn, direct_view, wp, material,
+                                direct_lights; shadow_fn=shadow_fn)
+                        end
+                        if em !== nothing
+                            direct_col = Color3(
+                                direct_col.r - em.r * emi,
+                                direct_col.g - em.g * emi,
+                                direct_col.b - em.b * emi)
+                        end
+                        if has_albedo && !base_albedo_map
+                            au, av = _map_uv(
+                                albedo_map, u, v, u2, v2)
+                            direct_col = direct_col *
+                                sample_texture_linear(albedo_map, au, av)
+                        end
+                    end
+                    col = _apply_indirect_ao(col, direct_col, ao)
                 end
                 if has_lightmap
                     tu, tv = _map_uv(light_map, u, v, u2, v2; default_uv2=true)

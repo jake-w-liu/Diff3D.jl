@@ -30885,3 +30885,84 @@ end
           Diff3D._web_camera_json(world_camera)
     @test_opt_alloc 256 view_matrix(parented)
 end
+
+@testset "fresh audit round 272 fixes" begin
+    black_ao = Texture(
+        zeros(Float64, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    lit_materials = (
+        ao -> MeshLambertMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            side=:double),
+        ao -> MeshPhongMaterial(
+            color=Color3(1.0, 1.0, 1.0),
+            specular=Color3(0.0, 0.0, 0.0), ao_map=ao,
+            side=:double),
+        ao -> MeshStandardMaterial(
+            color=Color3(1.0, 1.0, 1.0), roughness=1.0,
+            metalness=0.0, ao_map=ao, side=:double),
+        ao -> MeshPhysicalMaterial(
+            color=Color3(1.0, 1.0, 1.0), roughness=1.0,
+            metalness=0.0, ao_map=ao, side=:double),
+        ao -> MeshToonMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            side=:double),
+    )
+    all_materials = (
+        (ao -> MeshBasicMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            side=:double)),
+        lit_materials...,
+    )
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    direct = DirectionalLight(
+        intensity=0.7, position=Vec3(0.0, 0.0, 5.0))
+    direct.target = Vec3()
+    ambient = AmbientLight(intensity=0.6)
+    function ao_render(material, lights, shading)
+        scene = Scene()
+        add!(scene, Mesh(
+            PlaneGeometry(width=4.0, height=4.0), material))
+        for light in lights
+            add!(scene, light)
+        end
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; shading=shading)
+        return copy(target.color[8, 8, :])
+    end
+
+    for make_material in lit_materials, shading in (:flat, :smooth)
+        direct_with_ao = ao_render(
+            make_material(black_ao), (direct,), shading)
+        direct_without_ao = ao_render(
+            make_material(nothing), (direct,), shading)
+        @test direct_with_ao ≈ direct_without_ao atol=1.0e-12
+        @test maximum(direct_with_ao) > 0.1
+
+        mixed_with_ao = ao_render(
+            make_material(black_ao), (ambient, direct), shading)
+        mixed_without_ao = ao_render(
+            make_material(nothing), (ambient, direct), shading)
+        @test mixed_with_ao ≈ direct_without_ao atol=1.0e-12
+        @test maximum(mixed_without_ao .- mixed_with_ao) > 0.1
+    end
+
+    for make_material in all_materials, shading in (:flat, :smooth)
+        fill_only = ao_render(
+            make_material(black_ao), (ambient,), shading)
+        @test maximum(abs, fill_only) < 1.0e-12
+    end
+
+    for shading in (:flat, :smooth)
+        emissive = MeshLambertMaterial(
+            color=Color3(0.0, 0.0, 0.0),
+            emissive=Color3(0.4, 0.2, 0.1),
+            emissive_intensity=1.0, ao_map=black_ao,
+            side=:double)
+        @test ao_render(emissive, (), shading) ≈
+              [0.4, 0.2, 0.1] atol=1.0e-12
+    end
+    @test_opt_alloc 0 Diff3D._apply_indirect_ao(
+        Color3(0.8, 0.6, 0.4), Color3(0.3, 0.2, 0.1), 0.5)
+end

@@ -853,6 +853,66 @@ _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m
 _apply_roughness_map(m::AbstractMaterial, rmap, u, v) = _apply_pbr_maps(m, rmap, nothing, u, v)
 
+struct _DirectLightView{L}
+    lights::L
+end
+
+function Base.iterate(view::_DirectLightView, state::Int=1)
+    while state <= length(view.lights)
+        light = @inbounds view.lights[state]
+        state += 1
+        _is_fill_light(light) || return light, state
+    end
+    return nothing
+end
+
+@inline function _apply_indirect_ao(total::Color3, direct::Color3, ao)
+    return Color3(
+        direct.r + (total.r - direct.r) * ao,
+        direct.g + (total.g - direct.g) * ao,
+        direct.b + (total.b - direct.b) * ao,
+    )
+end
+
+function _shade_mapped_lighting(
+        face_n, view_dir, center, material, lights, shadow_fn,
+        mapped_kind::Int, use_surface_color::Bool, surface_color,
+        eff_mat, phong_specular, phong_shininess,
+        standard_metalness, standard_roughness, physical_terms)
+    if mapped_kind == 1
+        return use_surface_color ?
+            _shade_phong_mapped_vertex_color(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                phong_specular, phong_shininess, surface_color) :
+            _shade_phong_mapped(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                phong_specular, phong_shininess)
+    elseif mapped_kind == 2
+        return use_surface_color ?
+            _shade_standard_mapped_vertex_color(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                standard_metalness, standard_roughness, surface_color) :
+            _shade_standard_mapped(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                standard_metalness, standard_roughness)
+    elseif mapped_kind == 3
+        return use_surface_color ?
+            _shade_physical_mapped_vertex_color(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                physical_terms, surface_color) :
+            _shade_physical_mapped(
+                face_n, view_dir, center, material, lights, shadow_fn,
+                physical_terms)
+    elseif use_surface_color
+        return _shade_face_vertex_color(
+            face_n, view_dir, center, eff_mat, lights, surface_color;
+            shadow_fn=shadow_fn)
+    end
+    return shade_face(
+        face_n, view_dir, center, eff_mat, lights;
+        shadow_fn=shadow_fn)
+end
+
 function _shade_depth_faces!(colors::Vector{Color3{Float64}},
                              geo::BufferGeometry, modelview::Mat4,
                              material::MeshDepthMaterial)
@@ -1171,39 +1231,19 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         end
 
         use_surface_color = use_vertex_colors || base_albedo_map
-        color = if mapped_kind == 1
-            use_surface_color ?
-                _shade_phong_mapped_vertex_color(face_n, view_dir, center,
-                                                 material, lights, shadow_fn,
-                                                 phong_specular, phong_shininess,
-                                                 surface_color) :
-                _shade_phong_mapped(face_n, view_dir, center, material, lights,
-                                    shadow_fn, phong_specular, phong_shininess)
-        elseif mapped_kind == 2
-            use_surface_color ?
-                _shade_standard_mapped_vertex_color(face_n, view_dir, center,
-                                                    material, lights, shadow_fn,
-                                                    standard_metalness,
-                                                    standard_roughness,
-                                                    surface_color) :
-                _shade_standard_mapped(face_n, view_dir, center, material,
-                                       lights, shadow_fn, standard_metalness,
-                                       standard_roughness)
-        elseif mapped_kind == 3
-            use_surface_color ?
-                _shade_physical_mapped_vertex_color(face_n, view_dir, center,
-                                                    material, lights, shadow_fn,
-                                                    physical_terms, surface_color) :
-                _shade_physical_mapped(face_n, view_dir, center, material,
-                                       lights, shadow_fn, physical_terms)
-        else
-            if use_surface_color
-                _shade_face_vertex_color(face_n, view_dir, center, eff_mat, lights,
-                                         surface_color; shadow_fn=shadow_fn)
-            else
-                shade_face(face_n, view_dir, center, eff_mat, lights; shadow_fn=shadow_fn)
-            end
-        end
+        color = _shade_mapped_lighting(
+            face_n, view_dir, center, material, lights, shadow_fn,
+            mapped_kind, use_surface_color, surface_color, eff_mat,
+            phong_specular, phong_shininess, standard_metalness,
+            standard_roughness, physical_terms)
+        direct_color = ao_map !== nothing && material isa LitMaterial ?
+            _shade_mapped_lighting(
+                face_n, view_dir, center, material,
+                _DirectLightView(lights), shadow_fn,
+                mapped_kind, use_surface_color, surface_color, eff_mat,
+                phong_specular, phong_shininess, standard_metalness,
+                standard_roughness, physical_terms) :
+            Color3(0.0, 0.0, 0.0)
 
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
@@ -1217,16 +1257,22 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             if em !== nothing
                 color = Color3(color.r - em.r * emi, color.g - em.g * emi,
                                color.b - em.b * emi)
+                direct_color = Color3(
+                    direct_color.r - em.r * emi,
+                    direct_color.g - em.g * emi,
+                    direct_color.b - em.b * emi)
             end
             if albedo_map !== nothing && !base_albedo_map
                 tu, tv = _map_uv(albedo_map, u, v, u2, v2)
-                color = color * sample_texture_linear(albedo_map, tu, tv)
+                albedo = sample_texture_linear(albedo_map, tu, tv)
+                color = color * albedo
+                direct_color = direct_color * albedo
             end
             if ao_map !== nothing
                 tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
                 aoi = _material_scalar(material, :ao_map_intensity)
                 ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
-                color = color * ao
+                color = _apply_indirect_ao(color, direct_color, ao)
             end
             # lightMap: baked indirect lighting, multiplied into the lit result
             # (like aoMap) so pre-baked GI tints the surface (three.js lightMap).
