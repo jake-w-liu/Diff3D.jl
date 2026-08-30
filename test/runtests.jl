@@ -28042,3 +28042,66 @@ end
     @test derivative > 0.0
     @test_opt_alloc 0 Diff3D._soft_near_value(clip_vertex, config.eps)
 end
+
+@testset "fresh audit round 237 fixes" begin
+    ranged_box = BoxGeometry()
+    set_draw_range!(ranged_box, 4, 6)
+    ranged_mesh = Mesh(ranged_box, MeshBasicMaterial())
+    @test scene_triangle_count(ranged_mesh) == 2
+    set_draw_range!(ranged_box, 2, 2)
+    @test scene_triangle_count(ranged_mesh) == 0
+    clear_draw_range!(ranged_box)
+    @test scene_triangle_count(ranged_mesh) == ranged_box.n_faces
+
+    unindexed = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         1.0, 0.0, 0.0,
+         1.0, 1.0, 0.0,
+         0.0, 1.0, 0.0],
+        Float64[], Float64[], Int[], 6, 2)
+    set_draw_range!(unindexed, 4, 3)
+    @test scene_triangle_count(
+        Mesh(unindexed, MeshBasicMaterial())) == 1
+
+    instanced_geometry = BoxGeometry()
+    set_draw_range!(instanced_geometry, 4, 6)
+    triangles = InstancedMesh(
+        instanced_geometry, MeshBasicMaterial(), 3;
+        draw_mode=:triangles)
+    lines = InstancedMesh(
+        instanced_geometry, MeshBasicMaterial(), 3;
+        draw_mode=:lines)
+    points = InstancedMesh(
+        instanced_geometry, MeshBasicMaterial(), 3;
+        draw_mode=:points)
+    @test scene_triangle_count(triangles) == 6
+    @test scene_triangle_count(lines) == 0
+    @test scene_triangle_count(points) == 0
+    invalid_mode = InstancedMesh(
+        instanced_geometry, MeshBasicMaterial(), 1)
+    invalid_mode.draw_mode = :invalid
+    @test_throws ArgumentError(
+        "unsupported InstancedMesh draw_mode: invalid") scene_triangle_count(
+            invalid_mode)
+
+    skin_geometry = PlaneGeometry()
+    set_draw_range!(skin_geometry, 1, 3)
+    bone = Bone()
+    skin = SkinnedMesh(
+        skin_geometry, MeshBasicMaterial(), Skeleton([bone]),
+        fill((1, 1, 1, 1), skin_geometry.n_vertices),
+        fill((1.0, 0.0, 0.0, 0.0), skin_geometry.n_vertices))
+    @test scene_triangle_count(skin) == 1
+
+    scene = Scene()
+    add!(scene, ranged_mesh)
+    add!(scene, triangles)
+    add!(scene, lines)
+    add!(scene, skin)
+    @test scene_triangle_count(scene) == ranged_box.n_faces + 6 + 1
+    triangles.visible = false
+    @test scene_triangle_count(scene) == ranged_box.n_faces + 1
+    @test_opt_alloc 256 scene_triangle_count(scene)
+end

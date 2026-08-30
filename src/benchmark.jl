@@ -26,22 +26,34 @@ end
     return isfinite(total) ? total / 2 : lo / 2 + hi / 2
 end
 
-"""Total renderable triangles in a scene (hierarchically visible drawables
-only), including InstancedMesh instances."""
+@inline _scene_geometry_triangle_count(geometry::BufferGeometry) =
+    length(_draw_face_range(geometry))
+
 function _scene_triangle_count_visible(obj::AbstractObject3D)
     is_visible(obj) || return 0
     n = 0
     if obj isa Mesh
-        n += count_triangles(_mesh_geometry(obj))
+        n = _scene_geometry_triangle_count(_mesh_geometry(obj))
+    elseif obj isa SkinnedMesh
+        n = _scene_geometry_triangle_count(_skinned_buffer_geometry(obj))
     elseif obj isa InstancedMesh
-        n += instanced_count(obj) * count_triangles(_instanced_geometry(obj))
+        _validate_instanced_draw_mode(obj.draw_mode)
+        if _instanced_triangle_drawable(obj)
+            n = _geometry_checked_mul(
+                instanced_count(obj),
+                _scene_geometry_triangle_count(_instanced_geometry(obj)),
+                "scene triangle count")
+        end
     end
     for child in get_children(obj)
-        n += _scene_triangle_count_visible(child)
+        n = _geometry_checked_add(
+            n, _scene_triangle_count_visible(child), "scene triangle count")
     end
     return n
 end
 
+"""Total renderable triangles in a scene (hierarchically visible drawables
+only), including instanced and skinned meshes."""
 function scene_triangle_count(scene::AbstractObject3D)
     return _scene_triangle_count_visible(scene)
 end
