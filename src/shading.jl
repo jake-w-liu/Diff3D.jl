@@ -853,6 +853,33 @@ _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v) = m
 _apply_pbr_maps(m::AbstractMaterial, roughness_map, metalness_map, u, v, u2, v2) = m
 _apply_roughness_map(m::AbstractMaterial, rmap, u, v) = _apply_pbr_maps(m, rmap, nothing, u, v)
 
+function _shade_depth_faces!(colors::Vector{Color3{Float64}},
+                             geo::BufferGeometry, modelview::Mat4,
+                             material::MeshDepthMaterial)
+    _validate_depth_material(material)
+    length(colors) == geo.n_faces || resize!(colors, geo.n_faces)
+    inverse_range = 1.0 / (material.far - material.near)
+    @inbounds for face in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, face)
+        v1 = mat4_transform_point(modelview, get_vertex(geo, i1))
+        v2 = mat4_transform_point(modelview, get_vertex(geo, i2))
+        v3 = mat4_transform_point(modelview, get_vertex(geo, i3))
+        view_depth = -_mean3_scaled(v1.z, v2.z, v3.z)
+        depth = clamp(
+            (view_depth - material.near) * inverse_range, 0.0, 1.0)
+        colors[face] = _depth_material_color(material, depth)
+    end
+    return colors
+end
+
+@inline function _depth_face_modelview(world_mat::Mat4, cam_pos::Vec3,
+                                       camera_view)
+    view = camera_view === nothing ?
+           mat4_translation(-cam_pos.x, -cam_pos.y, -cam_pos.z) :
+           camera_view
+    return view * world_mat
+end
+
 function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
                           material::AbstractMaterial,
                           lights::Vector{<:AbstractLight}, cam_pos::Vec3;
@@ -864,7 +891,21 @@ function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
     _validate_material_parameters(material)
     return _shade_mesh_faces_dispatch!(
         Vector{Color3{Float64}}(undef, geo.n_faces), geo, world_mat,
-        material, lights, cam_pos; shadow_fn=shadow_fn)
+                                       material, lights, cam_pos;
+                                       shadow_fn=shadow_fn)
+end
+
+function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
+                          material::MeshDepthMaterial,
+                          lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                          shadow_fn=nothing,
+                          camera_view::Union{Nothing,Mat4}=nothing)
+    _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    _validate_depth_material(material)
+    _validate_material_parameters(material)
+    return _shade_depth_faces!(
+        Vector{Color3{Float64}}(undef, geo.n_faces), geo,
+        _depth_face_modelview(world_mat, cam_pos, camera_view), material)
 end
 
 function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
@@ -951,8 +992,24 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
     _validate_depth_material(material)
     _validate_material_parameters(material)
-    return _shade_mesh_faces_dispatch!(colors, geo, world_mat, material,
-                                       lights, cam_pos; shadow_fn=shadow_fn)
+    return _shade_mesh_faces_dispatch!(colors, geo, world_mat,
+                                       material, lights, cam_pos;
+                                       shadow_fn=shadow_fn)
+end
+
+
+function shade_mesh_faces!(colors::Vector{Color3{Float64}},
+                           geo::BufferGeometry, world_mat::Mat4,
+                           material::MeshDepthMaterial,
+                           lights::Vector{<:AbstractLight}, cam_pos::Vec3;
+                           shadow_fn=nothing,
+                           camera_view::Union{Nothing,Mat4}=nothing)
+    _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    _validate_depth_material(material)
+    _validate_material_parameters(material)
+    return _shade_depth_faces!(
+        colors, geo,
+        _depth_face_modelview(world_mat, cam_pos, camera_view), material)
 end
 
 function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},

@@ -29686,6 +29686,7 @@ end
     geometry = PlaneGeometry(width=2.0, height=2.0)
     material = MeshDepthMaterial(
         near=1.0, far=9.0, side=:double)
+    no_depth_lights = AbstractLight[]
     expected_mid = Diff3D._depth_material_color(material, 0.5)
     centered_colors = Color3{Float64}[]
     off_axis_colors = Color3{Float64}[]
@@ -29697,6 +29698,40 @@ end
         mat4_translation(3.0, 0.0, -5.0), material)
     @test centered_colors == fill(expected_mid, geometry.n_faces)
     @test off_axis_colors == centered_colors
+
+    public_centered = shade_mesh_faces(
+        geometry, mat4_translation(0.0, 0.0, -5.0),
+        material, no_depth_lights, Vec3())
+    public_off_axis = shade_mesh_faces(
+        geometry, mat4_translation(3.0, 0.0, -5.0),
+        material, no_depth_lights, Vec3())
+    @test public_centered == centered_colors
+    @test public_off_axis == public_centered
+    public_buffer = Color3{Float64}[]
+    Diff3D.shade_mesh_faces!(
+        public_buffer, geometry,
+        mat4_translation(3.0, 0.0, -5.0),
+        material, no_depth_lights, Vec3())
+    @test public_buffer == public_centered
+    @test_opt_alloc 0 Diff3D.shade_mesh_faces!(
+        public_buffer, geometry,
+        mat4_translation(3.0, 0.0, -5.0),
+        material, no_depth_lights, Vec3())
+
+    side_camera = PerspectiveCamera(aspect=1.0)
+    side_camera.position = Vec3(5.0, 0.0, 0.0)
+    side_camera.target = Vec3()
+    side_view = view_matrix(side_camera)
+    side_orientation = mat4_rotation_y(pi / 2)
+    side_centered = shade_mesh_faces(
+        geometry, side_orientation, material, no_depth_lights,
+        side_camera.position; camera_view=side_view)
+    side_off_axis = shade_mesh_faces(
+        geometry, mat4_translation(0.0, 3.0, 0.0) * side_orientation,
+        material, no_depth_lights, side_camera.position;
+        camera_view=side_view)
+    @test side_centered == centered_colors
+    @test side_off_axis == side_centered
 
     camera = PerspectiveCamera(
         fov=pi / 2, aspect=1.0, near=0.5, far=20.0)

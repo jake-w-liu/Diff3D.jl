@@ -477,36 +477,46 @@ end
                                          geo::BufferGeometry, world_mat::Mat4,
                                          material::AbstractMaterial,
                                          lights::Vector{<:AbstractLight},
-                                         cam_pos::Vec3)
+                                         cam_pos::Vec3, camera_view::Mat4)
     return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos)
+end
+
+@inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
+                                         geo::BufferGeometry, world_mat::Mat4,
+                                         material::MeshDepthMaterial,
+                                         lights::Vector{<:AbstractLight},
+                                         cam_pos::Vec3, camera_view::Mat4)
+    return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos;
+                             camera_view=camera_view)
 end
 
 function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
                                           geo::BufferGeometry, world_mat::Mat4,
                                           mesh::Mesh,
                                           lights::Vector{<:AbstractLight},
-                                          cam_pos::Vec3)
+                                          cam_pos::Vec3,
+                                          camera_view::Mat4)
     mat = mesh.material
     if mat isa MeshBasicMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshLambertMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshPhongMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshStandardMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshPhysicalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshToonMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshNormalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshMatcapMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa MeshDepthMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     elseif mat isa AbstractMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
     else
         throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
     end
@@ -1006,7 +1016,7 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
 
         # Compute face colors
         _soft_shade_mesh_faces_for_mesh!(face_colors, geo, world_mat, mesh,
-                                         lights, camera.position)
+                                         lights, camera.position, view)
 
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)

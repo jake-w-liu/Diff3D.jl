@@ -1948,25 +1948,6 @@ end
         mat, lights; shadow_fn=shadow_fn))
 end
 
-function _shade_depth_faces!(colors::Vector{Color3{Float64}},
-                             geo::BufferGeometry, modelview::Mat4,
-                             material::MeshDepthMaterial)
-    _validate_depth_material(material)
-    length(colors) == geo.n_faces || resize!(colors, geo.n_faces)
-    inverse_range = 1.0 / (material.far - material.near)
-    @inbounds for face in 1:geo.n_faces
-        i1, i2, i3 = get_face(geo, face)
-        v1 = mat4_transform_point(modelview, get_vertex(geo, i1))
-        v2 = mat4_transform_point(modelview, get_vertex(geo, i2))
-        v3 = mat4_transform_point(modelview, get_vertex(geo, i3))
-        view_depth = -_mean3_scaled(v1.z, v2.z, v3.z)
-        depth = clamp(
-            (view_depth - material.near) * inverse_range, 0.0, 1.0)
-        colors[face] = _depth_material_color(material, depth)
-    end
-    return colors
-end
-
 function _combined_clipping_planes(global_planes, material_planes)
     isempty(material_planes) && return global_planes
     isempty(global_planes) && return material_planes
