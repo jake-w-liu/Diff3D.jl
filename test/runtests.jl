@@ -29537,3 +29537,47 @@ end
     @test_opt_alloc 0 shadow_visibility(
         synthetic, Vec3(0.0, 0.0, 0.5))
 end
+
+@testset "fresh audit round 255 fixes" begin
+    source_angles = [0.0, 45.0, 90.0]
+    source_candela = [10.0, 5.0, 0.0]
+    profile = IESProfile(source_angles, source_candela)
+    source_angles[2] = 30.0
+    source_candela[2] = 100.0
+    @test profile.angles == [0.0, 45.0, 90.0]
+    @test profile.candela == [10.0, 5.0, 0.0]
+    @test profile.max_candela == 10.0
+
+    exposed_angles = profile.angles
+    exposed_candela = profile.candela
+    exposed_angles[2] = 60.0
+    exposed_candela[2] = 100.0
+    @test profile.angles == [0.0, 45.0, 90.0]
+    @test profile.candela == [10.0, 5.0, 0.0]
+    @test ies_candela(profile, 45.0) == 5.0
+    @test ies_intensity(profile, 45.0) == 0.5
+    @test all(angle -> 0.0 <= ies_intensity(profile, angle) <= 1.0,
+              -10.0:1.0:190.0)
+    @test profile.angles !== profile.angles
+    @test profile.candela !== profile.candela
+
+    @test !applicable(
+        IESProfile, [0.0, 90.0], [1.0, 0.0], 1.0)
+
+    dense = IESProfile(
+        collect(range(0.0, 180.0; length=4096)),
+        collect(range(1.0, 0.0; length=4096)))
+    @test ies_candela(dense, 90.0) ≈ 0.5 atol=1.0e-12
+    @test_opt_alloc 0 ies_candela(dense, 90.0)
+    @test_opt_alloc 0 ies_intensity(dense, 90.0)
+
+    point = PointLight(
+        position=Vec3(), decay=0.0, ies_profile=profile)
+    spot = SpotLight(
+        position=Vec3(0.0, 1.0, 0.0), target=Vec3(),
+        angle=pi / 2, decay=0.0, ies_profile=profile)
+    @test isfinite(light_contribution(
+        point, Vec3(0.0, -1.0, 0.0))[2])
+    @test isfinite(light_contribution(
+        spot, Vec3(0.0, 0.0, 0.0))[2])
+end

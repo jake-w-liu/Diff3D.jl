@@ -73,6 +73,18 @@ struct IESProfile
     angles::Vector{Float64}    # vertical angles in degrees, ascending
     candela::Vector{Float64}   # luminous intensity (cd) at each angle
     max_candela::Float64       # peak candela, for normalization to [0,1]
+
+    function IESProfile(a::Vector{Float64}, c::Vector{Float64},
+                        mx::Float64, ::Val{:validated})
+        return new(copy(a), copy(c), mx)
+    end
+end
+
+function Base.getproperty(profile::IESProfile, name::Symbol)
+    if name === :angles || name === :candela
+        return copy(getfield(profile, name))
+    end
+    return getfield(profile, name)
 end
 
 @noinline function _throw_light_ies_profile()
@@ -90,7 +102,8 @@ end
 
 Build a photometric profile from vertical `angles` (degrees) and matching
 `candela` values. The peak candela is recorded so lookups can return a
-normalized [0,1] multiplier.
+normalized [0,1] multiplier. The profile stores immutable snapshots of both
+input arrays; accessing `angles` or `candela` returns a copy.
 """
 function IESProfile(angles::AbstractVector{<:Real}, candela::AbstractVector{<:Real})
     length(angles) == length(candela) ||
@@ -111,7 +124,7 @@ function _ies_profile_checked(a::Vector{Float64}, c::Vector{Float64})
             throw(ArgumentError("IESProfile: angles must be strictly increasing"))
     end
     mx = maximum(c)
-    IESProfile(a, c, mx)
+    IESProfile(a, c, mx, Val(:validated))
 end
 
 """
@@ -121,8 +134,8 @@ Linearly interpolate the candela value at a vertical angle (degrees), clamping
 to the tabulated endpoints outside `[angles[1], angles[end]]`.
 """
 function ies_candela(profile::IESProfile, angle_deg::Real)
-    a = profile.angles
-    c = profile.candela
+    a = getfield(profile, :angles)
+    c = getfield(profile, :candela)
     n = length(a)
     n == 1 && return c[1]
     θ = Float64(angle_deg)
@@ -146,8 +159,9 @@ profile peak) at a vertical angle in degrees. Used to modulate a light's
 intensity by its measured photometric distribution.
 """
 function ies_intensity(profile::IESProfile, angle_deg::Real)
-    profile.max_candela <= 0 && return 0.0
-    return ies_candela(profile, angle_deg) / profile.max_candela
+    max_candela = getfield(profile, :max_candela)
+    max_candela <= 0 && return 0.0
+    return ies_candela(profile, angle_deg) / max_candela
 end
 
 """
