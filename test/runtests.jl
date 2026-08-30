@@ -29725,3 +29725,37 @@ end
     @test_opt_alloc 256 render_pooled!(
         pooled, opaque_scene, camera, pooled_cache)
 end
+
+@testset "fresh audit round 258 fixes" begin
+    function plte_png(color_type, bitdepth, plte, raw)
+        io = IOBuffer()
+        write(io, Diff3D._PNG_SIGNATURE)
+        ihdr = UInt8[
+            0, 0, 0, 1, 0, 0, 0, 1,
+            bitdepth, color_type, 0, 0, 0]
+        Diff3D._png_chunk(io, "IHDR", ihdr)
+        Diff3D._png_chunk(io, "PLTE", plte)
+        Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(raw))
+        Diff3D._png_chunk(io, "IEND", UInt8[])
+        return take!(io)
+    end
+
+    @test_throws "PLTE chunk is not permitted for color type 0" Diff3D._decode_png(
+        plte_png(0, 8, UInt8[1, 2, 3], UInt8[0, 128]))
+    @test_throws "PLTE chunk is not permitted for color type 4" Diff3D._decode_png(
+        plte_png(4, 8, UInt8[1, 2, 3], UInt8[0, 128, 255]))
+    @test_throws "PLTE chunk is malformed" Diff3D._decode_png(
+        plte_png(2, 8, UInt8[1, 2], UInt8[0, 1, 2, 3]))
+    @test_throws "more entries than its bit depth permits" Diff3D._decode_png(
+        plte_png(3, 1,
+                 UInt8[255, 0, 0, 0, 255, 0, 0, 0, 255],
+                 UInt8[0, 0]))
+
+    suggested_rgb = Diff3D._decode_png(plte_png(
+        2, 8, UInt8[1, 2, 3], UInt8[0, 10, 20, 30]))
+    @test size(suggested_rgb) == (1, 1, 3)
+    @test vec(suggested_rgb[1, 1, :]) ≈ [10, 20, 30] ./ 255
+    suggested_rgba = Diff3D._decode_png(plte_png(
+        6, 8, UInt8[1, 2, 3], UInt8[0, 10, 20, 30, 40]))
+    @test size(suggested_rgba) == (1, 1, 4)
+end

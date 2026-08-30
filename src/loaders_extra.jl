@@ -706,6 +706,12 @@ function _decode_png(bytes::AbstractVector{UInt8})
             !seen_plte || error("PNG contains multiple PLTE chunks")
             !seen_idat || error("PNG PLTE chunk must appear before IDAT")
             !seen_trns || error("PNG PLTE chunk must appear before tRNS")
+            colortype in (2, 3, 6) ||
+                error("PNG PLTE chunk is not permitted for color type $colortype")
+            (len > 0 && len % 3 == 0 && len <= 768) ||
+                error("PNG PLTE chunk is malformed")
+            colortype != 3 || len ÷ 3 <= (1 << bitdepth) ||
+                error("PNG PLTE has more entries than its bit depth permits")
             palette = collect(@view bytes[pos:pos+len-1])
             seen_plte = true
         elseif is_trns
