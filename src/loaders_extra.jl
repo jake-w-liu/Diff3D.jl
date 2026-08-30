@@ -9909,6 +9909,16 @@ function _gltf_instance_attribute(gltf, buffers, attrs, name::String, ncomp::Int
     haskey(attrs, name) || return nothing
     accessor_index = _gltf_checked_accessor_index(
         gltf, attrs[name], "EXT_mesh_gpu_instancing $name")
+    if name == "ROTATION"
+        _gltf_validate_attribute_format(
+            gltf, accessor_index,
+            "EXT_mesh_gpu_instancing ROTATION",
+            (5126,), (5120, 5122))
+    else
+        _gltf_validate_attribute_format(
+            gltf, accessor_index,
+            "EXT_mesh_gpu_instancing $name", (5126,), ())
+    end
     data, item_size, count = _gltf_accessor(gltf, buffers, accessor_index)
     item_size == ncomp || error("EXT_mesh_gpu_instancing $name accessor must be $(ncomp == 3 ? "VEC3" : "VEC4")")
     return data, count

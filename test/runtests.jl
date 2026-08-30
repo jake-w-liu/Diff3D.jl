@@ -12944,8 +12944,12 @@ end
                 buf = UInt8[]
                 views = Any[]
                 accessors = Any[]
+                position_values = mode == 1 ?
+                    [0,0,0, 1,0,0, 0,1,0, 1,1,0] :
+                    [0,0,0, 1,0,0, 0,1,0]
                 pos = add_f32_accessor!(buf, views, accessors,
-                                        [0,0,0, 1,0,0, 0,1,0], "VEC3", 3)
+                                        position_values, "VEC3",
+                                        length(position_values) ÷ 3)
                 trans = add_f32_accessor!(buf, views, accessors,
                                           [0,0,0, 2,0,0], "VEC3", 2)
                 attrs = Dict{String,Any}("TRANSLATION"=>trans)
@@ -12999,6 +13003,54 @@ end
                        mat4_scaling(2.0, 3.0, 4.0)
             @test maximum(abs.(collect(get_instance_matrix(trs_inst, 2).e) .-
                                collect(expected.e))) < 1e-6
+
+            function instance_attribute_fixture(
+                    name, component_type, bytes;
+                    normalized=false)
+                type = name == "ROTATION" ? "VEC4" : "VEC3"
+                accessor = Dict{String,Any}(
+                    "bufferView" => 0,
+                    "componentType" => component_type,
+                    "count" => 1, "type" => type)
+                normalized && (accessor["normalized"] = true)
+                attrs = Dict{String,Any}(name => 0)
+                node = Dict{String,Any}(
+                    "extensions" => Dict{String,Any}(
+                        "EXT_mesh_gpu_instancing" => Dict{String,Any}(
+                            "attributes" => attrs)))
+                attribute_gltf = Dict{String,Any}(
+                    "bufferViews" => Any[Dict{String,Any}(
+                        "buffer" => 0, "byteOffset" => 0,
+                        "byteLength" => length(bytes))],
+                    "accessors" => Any[accessor])
+                return attribute_gltf, Any[bytes], node
+            end
+            @test_throws "EXT_mesh_gpu_instancing TRANSLATION accessor componentType/normalized combination is invalid" Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "TRANSLATION", 5121, zeros(UInt8, 3))...)
+            @test_throws "EXT_mesh_gpu_instancing SCALE accessor componentType/normalized combination is invalid" Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "SCALE", 5123, zeros(UInt8, 6))...)
+            @test_throws "EXT_mesh_gpu_instancing ROTATION accessor componentType/normalized combination is invalid" Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "ROTATION", 5120, UInt8[0, 0, 0, 127])...)
+            @test_throws "EXT_mesh_gpu_instancing ROTATION accessor componentType/normalized combination is invalid" Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "ROTATION", 5121, UInt8[0, 0, 0, 255];
+                    normalized=true)...)
+
+            byte_rotation = Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "ROTATION", 5120, UInt8[0, 0, 0, 127];
+                    normalized=true)...)
+            @test byte_rotation == [Mat4()]
+            short_rotation_bytes = collect(reinterpret(
+                UInt8, Int16[0, 0, 0, 32767]))
+            short_rotation = Diff3D._gltf_instance_matrices(
+                instance_attribute_fixture(
+                    "ROTATION", 5122, short_rotation_bytes;
+                    normalized=true)...)
+            @test short_rotation == [Mat4()]
 
             bad_counts, bad_count_buffers = instancing_fixture(scale=true, mismatch=true)
             @test_throws ErrorException Diff3D._gltf_build_scene(bad_counts, bad_count_buffers)
