@@ -73,8 +73,8 @@ const _TEAPOT_VERTICES = let data = """
 end
 
 function _teapot_segments(segments::Real)
-    sf = Float64(segments)
-    isfinite(sf) || throw(ArgumentError("TeapotGeometry segments must be finite"))
+    sf = _geometry_finite_float(
+        segments, "TeapotGeometry segments")
     sf <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError(
             "TeapotGeometry segments must not exceed " *
@@ -83,8 +83,8 @@ function _teapot_segments(segments::Real)
 end
 
 function _teapot_size(size::Real)
-    sf = Float64(size)
-    isfinite(sf) && sf >= 0.0 ||
+    sf = _geometry_finite_float(size, "TeapotGeometry size")
+    sf >= 0.0 ||
         throw(ArgumentError("TeapotGeometry size must be finite and non-negative"))
     return sf
 end

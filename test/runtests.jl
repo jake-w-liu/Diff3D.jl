@@ -33467,3 +33467,15 @@ end
     @test value == Inf
     @test gradient == [-Inf, 0.0]
 end
+
+@testset "CRC87 — TeapotGeometry rejects Boolean numerics" begin
+    for value in (true, false)
+        @test_throws "TeapotGeometry size must be finite" TeapotGeometry(
+            value, 2)
+        @test_throws "TeapotGeometry segments must be finite" TeapotGeometry(
+            1.0, value)
+    end
+    @test TeapotGeometry(1.0, 2.9).n_faces ==
+          TeapotGeometry(1.0, 2).n_faces
+    @test TeapotGeometry(0.0, 2).n_faces == 0
+end
