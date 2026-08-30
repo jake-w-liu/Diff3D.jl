@@ -864,6 +864,7 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     pixelDepth  = _rd_le32(bytes, 29)
     layerCount  = _rd_le32(bytes, 33)
     faceCount   = _rd_le32(bytes, 37)
+    levelCount  = _rd_le32(bytes, 41)
     superScheme = _rd_le32(bytes, 45)
     kvdOffset   = _rd_le32(bytes, 57)
     kvdLength   = _rd_le32(bytes, 61)
@@ -876,12 +877,14 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
         error("KTX2 vkFormat $vkFormat is not supported; only uncompressed 8-bit UNORM/SRGB and 16/32-bit SFLOAT R/RG/RGB/RGBA formats are implemented")
     (pixelWidth > 0 && pixelHeight > 0) ||
         error("KTX2 image has non-positive dimensions $(pixelWidth)x$(pixelHeight)")
-    pixelDepth <= 1 ||
+    pixelDepth == 0 ||
         error("KTX2 3D textures (pixelDepth=$pixelDepth) are not supported")
     faceCount == 1 ||
         error("KTX2 cube maps (faceCount=$faceCount) are not supported")
-    layerCount <= 1 ||
+    layerCount == 0 ||
         error("KTX2 texture arrays (layerCount=$layerCount) are not supported")
+    levelCount <= 1 ||
+        error("KTX2 mipmapped textures (levelCount=$levelCount) are not supported")
 
     channels, kind, _ = _KTX2_VKFORMATS[vkFormat]
     cbytes = _ktx2_comp_bytes(kind)

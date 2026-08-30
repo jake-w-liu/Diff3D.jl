@@ -29825,3 +29825,46 @@ end
             mode, count, "vertex") === nothing
     end
 end
+
+@testset "fresh audit round 260 fixes" begin
+    le32_260(x) = UInt8[x & 0xff, (x >> 8) & 0xff,
+                         (x >> 16) & 0xff, (x >> 24) & 0xff]
+    le64_260(x) = vcat(le32_260(x & 0xffffffff),
+                       le32_260((x >> 32) & 0xffffffff))
+    function ktx2_contract_fixture(; depth=0, layers=0, levels=1)
+        width = levels > 1 ? 2 : 1
+        height = levels > 1 ? 2 : 1
+        effective_levels = max(levels, 1)
+        index_end = 80 + 24 * effective_levels
+        bytes = copy(Diff3D._KTX2_IDENTIFIER)
+        for value in (9, 1, width, height, depth, layers, 1, levels, 0,
+                      0, 0, 0, 0)
+            append!(bytes, le32_260(value))
+        end
+        append!(bytes, le64_260(0)); append!(bytes, le64_260(0))
+        if effective_levels == 1
+            append!(bytes, le64_260(index_end))
+            append!(bytes, le64_260(width * height))
+            append!(bytes, le64_260(width * height))
+            append!(bytes, zeros(UInt8, width * height))
+        else
+            # Level 1 is stored first, padded to four bytes, followed by level 0.
+            append!(bytes, le64_260(index_end + 4))
+            append!(bytes, le64_260(4)); append!(bytes, le64_260(4))
+            append!(bytes, le64_260(index_end))
+            append!(bytes, le64_260(1)); append!(bytes, le64_260(1))
+            append!(bytes, UInt8[0, 0, 0, 0, 0, 0, 0, 0])
+        end
+        return bytes
+    end
+
+    @test size(Diff3D._decode_ktx2(ktx2_contract_fixture())) == (1, 1, 1)
+    @test size(Diff3D._decode_ktx2(
+        ktx2_contract_fixture(levels=0))) == (1, 1, 1)
+    @test_throws "3D textures (pixelDepth=1) are not supported" Diff3D._decode_ktx2(
+        ktx2_contract_fixture(depth=1))
+    @test_throws "texture arrays (layerCount=1) are not supported" Diff3D._decode_ktx2(
+        ktx2_contract_fixture(layers=1))
+    @test_throws "mipmapped textures (levelCount=2) are not supported" Diff3D._decode_ktx2(
+        ktx2_contract_fixture(levels=2))
+end
