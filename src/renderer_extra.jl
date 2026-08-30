@@ -230,6 +230,8 @@ mutable struct RenderCache
     skinned_meshes::Vector{Mesh}
     mesh_worlds::Vector{Mat4{Float64}}
     instanced_worlds::Vector{Mat4{Float64}}
+    primitives::Vector{AbstractObject3D}
+    primitive_worlds::Vector{Mat4{Float64}}
     transparent::Vector{Mesh}
     transparent_worlds::Vector{Mat4{Float64}}
     opaque_flat::Vector{Mesh}
@@ -245,6 +247,7 @@ mutable struct RenderCache
     sz::Vector{Float64}
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
+    primitive_stamp::Matrix{Int}
     wire_edges::Set{Tuple{Int,Int}}
     sprite_state::_SpriteRenderState
     primitive_flags::_RenderPrimitiveFlags
@@ -267,11 +270,13 @@ function RenderCache()
     RenderCache(Mesh[], SceneLight[], InstancedMesh[], _InstancedMaterialState[],
                 SkinnedMesh[],
                 Mesh[], Mat4{Float64}[], Mat4{Float64}[],
+                AbstractObject3D[], Mat4{Float64}[],
                 Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
                 Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
-                Color3{Float64}[], zeros(Int, 0, 0), Set{Tuple{Int,Int}}(),
+                Color3{Float64}[], zeros(Int, 0, 0), zeros(Int, 0, 0),
+                Set{Tuple{Int,Int}}(),
                 _SpriteRenderState(nothing, 0), _RenderPrimitiveFlags(),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
                 BufferGeometry[], BoundingSphere{Float64}[],
@@ -295,6 +300,27 @@ end
 @inline _line_geometry(obj::LineSegments)::BufferGeometry = obj.geometry
 @inline _line_geometry(obj::LineLoop)::BufferGeometry = obj.geometry
 @inline _points_geometry(obj::PointsObject)::BufferGeometry = obj.geometry
+
+@inline _render_primitive_material(object::Sprite)::AbstractMaterial =
+    object.material
+@inline _render_primitive_material(object::LineObject)::AbstractMaterial =
+    object.material
+@inline _render_primitive_material(object::LineSegments)::AbstractMaterial =
+    object.material
+@inline _render_primitive_material(object::LineLoop)::AbstractMaterial =
+    object.material
+@inline _render_primitive_material(object::PointsObject)::AbstractMaterial =
+    object.material
+@inline _render_primitive_material(object::InstancedMesh)::AbstractMaterial =
+    _instanced_material(object)
+
+@inline _render_primitive_item_kind(::Sprite) =
+    _TRANSPARENT_SPRITE_ITEM
+@inline _render_primitive_item_kind(
+    ::Union{LineObject,LineSegments,LineLoop}) =
+    _TRANSPARENT_LINE_ITEM
+@inline _render_primitive_item_kind(::PointsObject) =
+    _TRANSPARENT_POINT_ITEM
 
 @inline _same_instanced_base_material(a, b) = a === b || a == b
 
@@ -691,6 +717,15 @@ function _render_cache_stamp!(cache::RenderCache, H::Int, W::Int)
     return cache.stamp
 end
 
+function _render_cache_primitive_stamp!(cache::RenderCache, H::Int, W::Int)
+    if size(cache.primitive_stamp) != (H, W)
+        cache.primitive_stamp = zeros(Int, H, W)
+    else
+        fill!(cache.primitive_stamp, 0)
+    end
+    return cache.primitive_stamp
+end
+
 # Collect into a reused vector (clears then refills), avoiding per-frame allocation.
 function _collect_into!(out::Vector, root, pred)
     empty!(out)
@@ -748,6 +783,42 @@ function _collect_render_drawables_worlds_into!(meshes::Vector{Mesh},
                                             instanced_worlds, root, Mat4{Float64}(),
                                             primitive_flags)
     return meshes
+end
+
+@inline _is_render_primitive(obj::AbstractObject3D) =
+    obj isa Sprite || obj isa LineObject || obj isa LineSegments ||
+    obj isa LineLoop || obj isa PointsObject ||
+    (obj isa InstancedMesh &&
+     (_instanced_line_drawable(obj) || _instanced_point_drawable(obj)))
+
+function _collect_render_primitives_worlds_into!(
+        primitives::Vector{AbstractObject3D},
+        worlds::Vector{Mat4{Float64}}, root::AbstractObject3D)
+    empty!(primitives)
+    empty!(worlds)
+    _collect_render_primitives_worlds_visit!(
+        primitives, worlds, root, Mat4{Float64}())
+    return primitives
+end
+
+function _collect_render_primitives_worlds_visit!(
+        primitives::Vector{AbstractObject3D},
+        worlds::Vector{Mat4{Float64}}, obj::AbstractObject3D,
+        parent_world::Mat4{Float64})
+    is_visible(obj) || return nothing
+    children = get_children(obj)
+    primitive = _is_render_primitive(obj)
+    !primitive && isempty(children) && return nothing
+    world = parent_world * compute_local_matrix(obj)
+    if primitive
+        push!(primitives, obj)
+        push!(worlds, world)
+    end
+    @inbounds for child in children
+        _collect_render_primitives_worlds_visit!(
+            primitives, worlds, child, world)
+    end
+    return nothing
 end
 
 @inline _mark_render_primitive_flags!(::Nothing, obj::AbstractObject3D) = nothing
@@ -1819,7 +1890,7 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-            _render_cache_stamp!(cache, rt.height, rt.width)
+            _render_cache_primitive_stamp!(cache, rt.height, rt.width)
     seen = cache === nothing ? Set{Tuple{Int,Int}}() : cache.wire_edges
     empty!(seen)
     stamp_id = 0

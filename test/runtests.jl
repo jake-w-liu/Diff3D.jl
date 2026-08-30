@@ -31124,3 +31124,124 @@ end
         cached_target, cached_scene, camera;
         shading=:smooth, cache=cached)
 end
+
+@testset "fresh audit round 275 fixes" begin
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    red_mesh() = Mesh(
+        PlaneGeometry(width=4.0, height=4.0),
+        MeshBasicMaterial(
+            color=Color3(1.0, 0.0, 0.0), transparent=true,
+            opacity=0.5, depth_write=false, side=:double))
+    function blue_sprite(; opacity=0.5, z=-1.0)
+        sprite = Sprite(SpriteMaterial(
+            color=Color3(0.0, 0.0, 1.0),
+            transparent=opacity < 1.0, opacity=opacity,
+            depth_write=opacity >= 1.0))
+        sprite.position = Vec3(0.0, 0.0, z)
+        return sprite
+    end
+    function blue_line()
+        geometry = BufferGeometry(
+            [-2.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+            Float64[], Float64[], Int[], 2, 0)
+        line = LineSegments(
+            geometry, LineBasicMaterial(
+                color=Color3(0.0, 0.0, 1.0), linewidth=5.0,
+                opacity=0.5, depth_write=false))
+        line.position = Vec3(0.0, 0.0, -1.0)
+        return line
+    end
+    function blue_point()
+        geometry = BufferGeometry(
+            [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+        point = PointsObject(
+            geometry, PointsMaterial(
+                color=Color3(0.0, 0.0, 1.0), size=7.0,
+                opacity=0.5, depth_write=false))
+        point.position = Vec3(0.0, 0.0, -1.0)
+        return point
+    end
+    function blue_wireframe()
+        geometry = BufferGeometry(
+            [-2.0, 0.0, 0.0,
+              2.0, 0.0, 0.0,
+              0.0, 2.0, 0.0],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        wire = Mesh(
+            geometry, MeshBasicMaterial(
+                color=Color3(0.0, 0.0, 1.0), wireframe=true,
+                transparent=true, opacity=0.5, depth_write=false,
+                side=:double))
+        wire.position = Vec3(0.0, 0.0, -1.0)
+        return wire
+    end
+    function blue_instanced(draw_mode)
+        geometry = BufferGeometry(
+            draw_mode === :lines ?
+                [-2.0, 0.0, 0.0, 2.0, 0.0, 0.0] :
+                [0.0, 0.0, 0.0],
+            Float64[], Float64[], Int[],
+            draw_mode === :lines ? 2 : 1, 0)
+        material = draw_mode === :lines ?
+            LineBasicMaterial(
+                color=Color3(0.0, 0.0, 1.0), linewidth=5.0,
+                opacity=0.5, depth_write=false) :
+            PointsMaterial(
+                color=Color3(0.0, 0.0, 1.0), size=7.0,
+                opacity=0.5, depth_write=false)
+        instance = InstancedMesh(
+            geometry, material, 1; draw_mode=draw_mode)
+        set_instance_matrix!(
+            instance, 1, mat4_translation(0.0, 0.0, -1.0))
+        return instance
+    end
+    function pair_center(make_primitive; reverse=false, cache=nothing)
+        scene = Scene()
+        primitive = make_primitive()
+        mesh = red_mesh()
+        if reverse
+            add!(scene, mesh)
+            add!(scene, primitive)
+        else
+            add!(scene, primitive)
+            add!(scene, mesh)
+        end
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; cache=cache)
+        return copy(target.color[8, 7, :]), scene, target
+    end
+
+    expected = [0.5, 0.0, 0.25]
+    primitive_builders = (
+        blue_sprite, blue_line, blue_point, blue_wireframe,
+        () -> blue_instanced(:lines),
+        () -> blue_instanced(:points),
+    )
+    for make_primitive in primitive_builders
+        @test pair_center(make_primitive)[1] ≈ expected atol=1.0e-12
+        @test pair_center(make_primitive; reverse=true)[1] ≈
+              expected atol=1.0e-12
+    end
+
+    opaque_far, _, _ = pair_center(
+        () -> blue_sprite(opacity=1.0, z=-1.0))
+    @test opaque_far ≈ [0.5, 0.0, 0.5] atol=1.0e-12
+
+    front_scene = Scene()
+    add!(front_scene, blue_sprite(opacity=1.0, z=0.0))
+    far_mesh = red_mesh()
+    far_mesh.position = Vec3(0.0, 0.0, -1.0)
+    add!(front_scene, far_mesh)
+    front_target = RenderTarget(16, 16)
+    render!(front_target, front_scene, camera)
+    @test front_target.color[8, 7, :] == [0.0, 0.0, 1.0]
+
+    _, cached_scene, cached_target = pair_center(
+        blue_sprite; cache=RenderCache())
+    cached = RenderCache()
+    render!(cached_target, cached_scene, camera; cache=cached)
+    @test cached_target.color[8, 7, :] ≈ expected atol=1.0e-12
+    @test_opt_alloc 4096 render!(
+        cached_target, cached_scene, camera; cache=cached)
+end

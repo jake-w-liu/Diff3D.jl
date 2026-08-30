@@ -187,6 +187,7 @@ end
 const _NO_PLANES = Plane{Float64}[]
 const _ZERO_V3 = Vec3(0.0, 0.0, 0.0)
 const _ZERO_V2 = Vec2(0.0, 0.0)
+const _EMPTY_INT_STAMP = zeros(Int, 0, 0)
 
 @inline _inside_far_clip(z) = isfinite(z) && z <= one(z)
 @inline _inside_near_clip(z) = isfinite(z) && z >= -one(z)
@@ -1490,6 +1491,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
                                                instanced_worlds, scene,
                                                primitive_flags)
+        primitives = AbstractObject3D[]
+        primitive_worlds = Mat4{Float64}[]
+        _collect_render_primitives_worlds_into!(
+            primitives, primitive_worlds, scene)
         lights = collect_lights(scene)
     else
         primitive_flags = cache.primitive_flags
@@ -1500,6 +1505,10 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         mesh_worlds = cache.mesh_worlds
         instanced = cache.instanced
         instanced_worlds = cache.instanced_worlds
+        primitives = cache.primitives
+        primitive_worlds = cache.primitive_worlds
+        _collect_render_primitives_worlds_into!(
+            primitives, primitive_worlds, scene)
         lights = _collect_lights_into!(cache.lights, scene)
     end
     if cache === nothing
@@ -1666,7 +1675,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
-        (!material_wireframe(mat) && is_transparent_material(mat)) && continue
+        is_transparent_material(mat) && continue
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         instance_materials = cache === nothing ? nothing :
                              _instanced_materials!(cache.instanced_materials,
@@ -1718,6 +1727,62 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
                         worlds=smooth_worlds)
 
+    # Opaque wireframes and primitive objects participate in the depth pass
+    # before any transparent object is blended.
+    for i in eachindex(wireframe_meshes)
+        mesh = wireframe_meshes[i]
+        is_transparent_material(_mesh_material(mesh)) && continue
+        _render_wireframe_mesh_from_mesh!(
+            rt, mesh, wireframe_worlds[i], proj, view, near,
+            xlo, xhi, ylo, yhi, cache)
+    end
+
+    primitive_stamp = if primitive_flags.sprites || primitive_flags.lines
+        cache === nothing ? zeros(Int, H, W) :
+        _render_cache_primitive_stamp!(cache, H, W)
+    else
+        _EMPTY_INT_STAMP
+    end
+    sprite_state = cache === nothing ?
+        _SpriteRenderState(primitive_stamp, 0) : cache.sprite_state
+    vp = proj * view
+    for primitive_index in eachindex(primitives)
+        object = primitives[primitive_index]
+        material = _render_primitive_material(object)
+        is_transparent_material(material) && continue
+        world = primitive_worlds[primitive_index]
+        if object isa Sprite
+            fill!(primitive_stamp, 0)
+            sprite_state.stamp = primitive_stamp
+            sprite_state.stamp_id = 0
+            _draw_sprite_object!(
+                rt, object, world, camera, view, vp, W, H,
+                clipping_planes, xlo, xhi, ylo, yhi, cache,
+                sprite_state)
+        elseif object isa LineObject || object isa LineSegments ||
+               object isa LineLoop
+            fill!(primitive_stamp, 0)
+            _draw_line_object!(
+                rt, object, world, proj, view, near,
+                xlo, xhi, ylo, yhi, primitive_stamp, 0,
+                cache === nothing ? nothing : cache.morph_positions)
+        elseif object isa PointsObject
+            _draw_points_object!(
+                rt, object, world, camera, proj, view, near,
+                W, H, xlo, xhi, ylo, yhi,
+                cache === nothing ? nothing : cache.morph_positions)
+        elseif object isa InstancedMesh && _instanced_line_drawable(object)
+            fill!(primitive_stamp, 0)
+            _draw_instanced_lines!(
+                rt, object, world, proj, view, near,
+                xlo, xhi, ylo, yhi, primitive_stamp, 0)
+        else
+            _draw_instanced_points!(
+                rt, object::InstancedMesh, world, camera, proj, view,
+                near, W, H, xlo, xhi, ylo, yhi)
+        end
+    end
+
     # Transparent pass: merge ordinary meshes and individual instance
     # transforms into one back-to-front draw list. Depth writes follow each
     # material's `depth_write` field. The order is required for blending and is
@@ -1734,7 +1799,6 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         mat = _instanced_material(im)
-        material_wireframe(mat) && continue
         is_transparent_material(mat) || continue
         cache === nothing || _instanced_materials!(
             cache.instanced_materials, instanced_slot, im, mat,
@@ -1742,10 +1806,41 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         base = instanced_worlds[instanced_slot]
         for instance_index in eachindex(im.instance_matrices)
             world = base * im.instance_matrices[instance_index]
+            kind = material_wireframe(mat) ?
+                   _TRANSPARENT_INSTANCED_WIREFRAME_ITEM :
+                   _TRANSPARENT_INSTANCE_ITEM
             push!(transparent_items, _TransparentRenderItem(
                 _mesh_view_depth_world(world, view),
-                _TRANSPARENT_INSTANCE_ITEM, instanced_slot,
+                kind, instanced_slot,
                 instance_index))
+        end
+    end
+    @inbounds for index in eachindex(wireframe_meshes)
+        is_transparent_material(
+            _mesh_material(wireframe_meshes[index])) || continue
+        push!(transparent_items, _TransparentRenderItem(
+            _mesh_view_depth_world(wireframe_worlds[index], view),
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0))
+    end
+    @inbounds for primitive_index in eachindex(primitives)
+        object = primitives[primitive_index]
+        is_transparent_material(
+            _render_primitive_material(object)) || continue
+        base = primitive_worlds[primitive_index]
+        if object isa InstancedMesh
+            for instance_index in eachindex(object.instance_matrices)
+                world = base * object.instance_matrices[instance_index]
+                kind = _instanced_line_drawable(object) ?
+                       _TRANSPARENT_INSTANCED_LINE_ITEM :
+                       _TRANSPARENT_INSTANCED_POINT_ITEM
+                push!(transparent_items, _TransparentRenderItem(
+                    _mesh_view_depth_world(world, view), kind,
+                    primitive_index, instance_index))
+            end
+        else
+            push!(transparent_items, _TransparentRenderItem(
+                _mesh_view_depth_world(base, view),
+                _render_primitive_item_kind(object), primitive_index, 0))
         end
     end
     if !isempty(transparent_items)
@@ -1787,7 +1882,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
                         worlds=(world,))
                 end
-            else
+            elseif item.kind == _TRANSPARENT_INSTANCE_ITEM
                 instanced_slot = item.object_index
                 instance_index = item.instance_index
                 im = instanced[instanced_slot]
@@ -1833,31 +1928,82 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                          cache.smooth_clipped,
                         flat_iw=cache === nothing ? nothing : cache.smooth_iw)
                 end
+            elseif item.kind == _TRANSPARENT_WIREFRAME_ITEM
+                mesh = wireframe_meshes[item.object_index]
+                _render_wireframe_mesh_from_mesh!(
+                    rt, mesh, wireframe_worlds[item.object_index],
+                    proj, view, near, xlo, xhi, ylo, yhi, cache)
+            elseif item.kind == _TRANSPARENT_INSTANCED_WIREFRAME_ITEM
+                instanced_slot = item.object_index
+                instance_index = item.instance_index
+                object = instanced[instanced_slot]
+                base_material = _instanced_material(object)
+                instance_material = cache === nothing ?
+                    _with_vertex_color(
+                        base_material,
+                        object.instance_colors[instance_index]) :
+                    _cached_instanced_material_at(
+                        cache.instanced_materials, instanced_slot,
+                        instance_index, base_material)
+                world = instanced_worlds[instanced_slot] *
+                        object.instance_matrices[instance_index]
+                _render_wireframe_mesh_cached!(
+                    rt, _instanced_geometry(object), instance_material,
+                    world, proj, view, near, xlo, xhi, ylo, yhi, cache)
+            elseif item.kind == _TRANSPARENT_SPRITE_ITEM
+                fill!(primitive_stamp, 0)
+                sprite_state.stamp = primitive_stamp
+                sprite_state.stamp_id = 0
+                primitive_index = item.object_index
+                _draw_sprite_object!(
+                    rt, primitives[primitive_index]::Sprite,
+                    primitive_worlds[primitive_index], camera, view, vp,
+                    W, H, clipping_planes, xlo, xhi, ylo, yhi,
+                    cache, sprite_state)
+            elseif item.kind == _TRANSPARENT_LINE_ITEM
+                fill!(primitive_stamp, 0)
+                primitive_index = item.object_index
+                _draw_line_object!(
+                    rt, primitives[primitive_index],
+                    primitive_worlds[primitive_index], proj, view, near,
+                    xlo, xhi, ylo, yhi, primitive_stamp, 0,
+                    cache === nothing ? nothing : cache.morph_positions)
+            elseif item.kind == _TRANSPARENT_POINT_ITEM
+                primitive_index = item.object_index
+                _draw_points_object!(
+                    rt, primitives[primitive_index]::PointsObject,
+                    primitive_worlds[primitive_index], camera, proj, view,
+                    near, W, H, xlo, xhi, ylo, yhi,
+                    cache === nothing ? nothing : cache.morph_positions)
+            elseif item.kind == _TRANSPARENT_INSTANCED_LINE_ITEM
+                fill!(primitive_stamp, 0)
+                primitive_index = item.object_index
+                object = primitives[primitive_index]::InstancedMesh
+                instance_index = item.instance_index
+                geo = _instanced_geometry(object)
+                _validate_indexed_geometry(geo, "render_lines!")
+                _draw_line_geometry_from_material!(
+                    rt, geo, _instanced_material(object),
+                    primitive_worlds[primitive_index] *
+                    object.instance_matrices[instance_index],
+                    object.draw_mode, proj, view, near,
+                    xlo, xhi, ylo, yhi, primitive_stamp, 0, nothing,
+                    object.instance_colors[instance_index])
+            else
+                primitive_index = item.object_index
+                object = primitives[primitive_index]::InstancedMesh
+                instance_index = item.instance_index
+                geo = _instanced_geometry(object)
+                _validate_indexed_geometry(geo, "render_points!")
+                _draw_points_geometry_from_material!(
+                    rt, geo, _instanced_material(object),
+                    primitive_worlds[primitive_index] *
+                    object.instance_matrices[instance_index],
+                    camera, proj, view, near, W, H,
+                    xlo, xhi, ylo, yhi, nothing,
+                    object.instance_colors[instance_index])
             end
         end
-    end
-
-    # Camera-facing sprites (billboards), depth-tested against the mesh passes.
-    if primitive_flags.sprites
-        render_sprites!(rt, scene, camera; clipping_planes=clipping_planes,
-                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, cache=cache,
-                        assume_drawable=true)
-    end
-
-    for i in eachindex(wireframe_meshes)
-        mesh = wireframe_meshes[i]
-        _render_wireframe_mesh_from_mesh!(rt, mesh, wireframe_worlds[i], proj, view, near,
-                                          xlo, xhi, ylo, yhi, cache)
-    end
-
-    # Line and point primitives (depth-tested against the mesh passes).
-    if primitive_flags.lines
-        render_lines!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                      cache=cache, assume_drawable=true)
-    end
-    if primitive_flags.points
-        render_points!(rt, scene, camera; xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                       cache=cache, assume_drawable=true)
     end
 
     return rt
@@ -1964,6 +2110,13 @@ end
 
 const _TRANSPARENT_MESH_ITEM = UInt8(0)
 const _TRANSPARENT_INSTANCE_ITEM = UInt8(1)
+const _TRANSPARENT_WIREFRAME_ITEM = UInt8(2)
+const _TRANSPARENT_SPRITE_ITEM = UInt8(3)
+const _TRANSPARENT_LINE_ITEM = UInt8(4)
+const _TRANSPARENT_POINT_ITEM = UInt8(5)
+const _TRANSPARENT_INSTANCED_LINE_ITEM = UInt8(6)
+const _TRANSPARENT_INSTANCED_POINT_ITEM = UInt8(7)
+const _TRANSPARENT_INSTANCED_WIREFRAME_ITEM = UInt8(8)
 
 struct _TransparentRenderItem
     depth::Float64
