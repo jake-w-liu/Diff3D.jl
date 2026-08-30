@@ -32753,3 +32753,36 @@ end
     @test_opt_alloc 0 Diff3D._axis_difference(scale, adjacent)
     @test_opt_alloc 0 triangle_area(triangle)
 end
+
+@testset "CRC75 — subnormal interpolation" begin
+    lower = nextfloat(0.0)
+    upper = nextfloat(lower)
+    midpoint_oracle = setprecision(BigFloat, 256) do
+        Float64((BigFloat(lower) + BigFloat(upper)) / 2)
+    end
+    @test midpoint_oracle == upper
+    @test Diff3D._stable_lerp(lower, upper, 0.5) == midpoint_oracle
+    @test Diff3D._stable_midpoint(lower, upper) == midpoint_oracle
+
+    line = Line3(
+        Vec3(lower, 0.0, 0.0), Vec3(upper, 0.0, 0.0))
+    @test line3_center(line).x == midpoint_oracle
+    @test line3_at(line, 0.5).x == midpoint_oracle
+
+    geometry = BufferGeometry(
+        [lower, 0.0, 0.0, upper, 0.0, 0.0],
+        Float64[], Float64[], Int[], 2, 0)
+    sphere = compute_bounding_sphere(geometry)
+    @test sphere.center.x == midpoint_oracle
+    @test sphere.radius == lower
+
+    derivative = Diff3D.ForwardDiff.derivative(0.5) do parameter
+        Diff3D._stable_lerp(1.0, 3.0, parameter)
+    end
+    @test derivative == 2.0
+    @test Diff3D._stable_lerp(lower, upper, 0.0) == lower
+    @test Diff3D._stable_lerp(lower, upper, 1.0) == upper
+    @test_opt_alloc 0 Diff3D._stable_lerp(lower, upper, 0.5)
+    @test_opt_alloc 0 Diff3D._stable_midpoint(lower, upper)
+    @test_opt_alloc 0 compute_bounding_sphere(geometry)
+end

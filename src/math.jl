@@ -97,9 +97,14 @@ end
         t isa AbstractFloat || t isa Integer || t isa Rational
     constant_parameter && iszero(t) && return a
     constant_parameter && t == one(t) && return b
-    result = if (a >= zero(a) && b >= zero(b)) ||
+    same_sign = (a >= zero(a) && b >= zero(b)) ||
                 (a <= zero(a) && b <= zero(b))
-        a + (b - a) * t
+    result = if same_sign
+        if a isa AbstractFloat && b isa AbstractFloat && constant_parameter
+            _stable_float_lerp_fallback(a, b, t)
+        else
+            a + (b - a) * t
+        end
     else
         a * (one(t) - t) + b * t
     end
@@ -1416,11 +1421,7 @@ line3_delta(l::Line3)  = l.finish - l.start
 line3_length(l::Line3) = norm(line3_delta(l))
 
 @inline function _stable_midpoint(a, b)
-    if (a >= zero(a) && b >= zero(b)) ||
-       (a <= zero(a) && b <= zero(b))
-        return a + (b - a) / 2
-    end
-    return a / 2 + b / 2
+    return _stable_lerp(a, b, 0.5)
 end
 
 line3_center(l::Line3) = Vec3(

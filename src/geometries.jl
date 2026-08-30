@@ -865,10 +865,7 @@ end
 
 @inline function _geometry_midpoint(a::Float64, b::Float64)
     a == b && return a
-    if signbit(a) == signbit(b)
-        return a + (b - a) * 0.5
-    end
-    return a * 0.5 + b * 0.5
+    return _stable_midpoint(a, b)
 end
 
 """Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
