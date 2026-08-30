@@ -1010,6 +1010,18 @@ struct AudioBufferData
     sample_rate::Int
     channels::Int
     samples::Matrix{Float64}
+
+    function AudioBufferData(sample_rate::Int, channels::Int,
+                             samples::Matrix{Float64})
+        sample_rate > 0 ||
+            throw(ArgumentError("audio sample_rate must be positive"))
+        channels > 0 ||
+            throw(ArgumentError("audio channels must be positive"))
+        size(samples, 2) == channels ||
+            throw(ArgumentError(
+                "audio sample matrix has $(size(samples, 2)) channels, expected $channels"))
+        return new(sample_rate, channels, samples)
+    end
 end
 
 audio_duration(a::AudioBufferData) = size(a.samples, 1) / a.sample_rate

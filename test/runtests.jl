@@ -29922,3 +29922,24 @@ end
     @test_throws "uncompressedByteLength 2 does not match byteLength 1" Diff3D._decode_ktx2(
         ktx2_contract_fixture(uncompressed_length=2))
 end
+
+@testset "fresh audit round 261 fixes" begin
+    stereo_samples = zeros(Float64, 4, 2)
+    stereo = AudioBufferData(48_000, 2, stereo_samples)
+    @test stereo.sample_rate == 48_000
+    @test stereo.channels == 2
+    @test stereo.samples === stereo_samples
+    @test audio_duration(stereo) == 4 / 48_000
+
+    empty_audio = AudioBufferData(44_100, 1, zeros(Float64, 0, 1))
+    @test audio_duration(empty_audio) == 0.0
+    @test_throws ArgumentError("audio sample_rate must be positive") AudioBufferData(
+        0, 2, zeros(Float64, 1, 2))
+    @test_throws ArgumentError("audio sample_rate must be positive") AudioBufferData(
+        -1, 2, zeros(Float64, 1, 2))
+    @test_throws ArgumentError("audio channels must be positive") AudioBufferData(
+        48_000, 0, zeros(Float64, 1, 0))
+    @test_throws ArgumentError("audio sample matrix has 1 channels, expected 2") AudioBufferData(
+        48_000, 2, zeros(Float64, 1, 1))
+    @test_opt_alloc 0 audio_duration(stereo)
+end
