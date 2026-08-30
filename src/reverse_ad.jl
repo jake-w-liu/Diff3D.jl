@@ -167,7 +167,15 @@ Base.cosh(a::ADVar) = _ad_record(cosh(a.val), (a,), (sinh(a.val),))
 Base.tanh(a::ADVar) = (t = tanh(a.val); _ad_record(t, (a,), (1.0 - t * t,)))
 Base.asin(a::ADVar) = _ad_record(asin(a.val), (a,), (1.0 / sqrt(1.0 - a.val * a.val),))
 Base.acos(a::ADVar) = _ad_record(acos(a.val), (a,), (-1.0 / sqrt(1.0 - a.val * a.val),))
-Base.atan(a::ADVar) = _ad_record(atan(a.val), (a,), (1.0 / (1.0 + a.val * a.val),))
+@inline function _atan_derivative(x::Float64)
+    if abs(x) > 1.0
+        reciprocal = inv(x)
+        squared = reciprocal * reciprocal
+        return squared / (1.0 + squared)
+    end
+    return 1.0 / (1.0 + x * x)
+end
+Base.atan(a::ADVar) = _ad_record(atan(a.val), (a,), (_atan_derivative(a.val),))
 
 function _atan2_partials(y::Float64, x::Float64)
     scale = max(abs(x), abs(y))
@@ -186,8 +194,13 @@ end
 Base.exp2(a::ADVar)  = (e = exp2(a.val); _ad_record(e, (a,), (e * log(2.0),)))
 Base.exp10(a::ADVar) = (e = exp10(a.val); _ad_record(e, (a,), (e * log(10.0),)))
 Base.expm1(a::ADVar) = _ad_record(expm1(a.val), (a,), (exp(a.val),))
-Base.log2(a::ADVar)  = _ad_record(log2(a.val), (a,), (1.0 / (a.val * log(2.0)),))
-Base.log10(a::ADVar) = _ad_record(log10(a.val), (a,), (1.0 / (a.val * log(10.0)),))
+@inline function _log_base_derivative(x::Float64, log_base::Float64)
+    return abs(x) >= 1.0 ? inv(x) / log_base : inv(x * log_base)
+end
+Base.log2(a::ADVar)  = _ad_record(
+    log2(a.val), (a,), (_log_base_derivative(a.val, log(2.0)),))
+Base.log10(a::ADVar) = _ad_record(
+    log10(a.val), (a,), (_log_base_derivative(a.val, log(10.0)),))
 Base.log1p(a::ADVar) = _ad_record(log1p(a.val), (a,), (1.0 / (1.0 + a.val),))
 Base.cbrt(a::ADVar)  = (c = cbrt(a.val); _ad_record(c, (a,), (c == 0 ? 0.0 : 1.0 / (3.0 * c * c),)))
 function Base.hypot(a::ADVar, b::ADVar)

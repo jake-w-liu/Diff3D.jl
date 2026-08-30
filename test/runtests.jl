@@ -27518,6 +27518,31 @@ end
 
     origin = reverse_gradient(x -> atan(x[1], x[2]), [0.0, 0.0])
     @test all(isnan, origin)
+
+    atan_input = 1.0e160
+    atan_gradient = only(reverse_gradient(x -> atan(x[1]), [atan_input]))
+    atan_expected = setprecision(BigFloat, 256) do
+        xb = BigFloat(atan_input)
+        Float64(inv(1 + xb * xb))
+    end
+    @test atan_gradient > 0.0
+    @test abs(atan_gradient - atan_expected) <= 4eps(atan_expected)
+    @test only(reverse_gradient(x -> atan(x[1]), [-atan_input])) ==
+          atan_gradient
+
+    log10_input = 1.0e308
+    log10_gradient = only(reverse_gradient(
+        x -> log10(x[1]), [log10_input]))
+    log10_expected = setprecision(BigFloat, 256) do
+        xb = BigFloat(log10_input)
+        Float64(inv(xb * log(BigFloat(10))))
+    end
+    @test log10_gradient > 0.0
+    @test abs(log10_gradient - log10_expected) <= 4eps(log10_expected)
+    @test reverse_gradient(
+        x -> atan(x[1]) + log10(x[2]), [0.7, 4.0]) ≈
+          ForwardDiff.gradient(
+              x -> atan(x[1]) + log10(x[2]), [0.7, 4.0])
 end
 
 @testset "fresh audit round 223 fixes" begin
