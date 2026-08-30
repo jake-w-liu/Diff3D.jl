@@ -786,7 +786,8 @@ end
     position = get_position(light)::Vec3{Float64}
     parent = get_parent(light)
     parent === nothing && return position
-    return mat4_transform_point(compute_world_matrix(parent), position)
+    light_world = compute_world_matrix(light)::Mat4{Float64}
+    return Vec3(light_world.e[13], light_world.e[14], light_world.e[15])
 end
 
 @inline function _light_world_direction(
@@ -797,8 +798,8 @@ end
        rotation.z == 0.0
         return normalize(direction)
     end
-    return normalize(mat4_transform_direction(
-        compute_world_matrix(light), direction))
+    light_world = compute_world_matrix(light)::Mat4{Float64}
+    return normalize(mat4_transform_direction(light_world, direction))
 end
 
 @_compute_world_matrix_method(AmbientLight,
