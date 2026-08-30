@@ -27909,3 +27909,40 @@ end
     @test texture.rotation == 1.0
     @test texture.rotation isa Float64
 end
+
+@testset "fresh audit round 234 fixes" begin
+    polar_data = zeros(Float64, 2, 4, 3)
+    polar_data[1, :, 1] .= 4.0
+    polar_data[2, :, 3] .= 2.0
+
+    # Equirectangular projection semantics are independent of a source
+    # texture's ordinary 2-D wrap settings: longitude repeats while latitude
+    # terminates at the two poles.
+    inherited_wraps = Texture(
+        copy(polar_data); wrap_s=:clamp, wrap_t=:repeat,
+        filter=:bilinear, colorspace=:linear)
+    canonical_wraps = Texture(
+        copy(polar_data); wrap_s=:repeat, wrap_t=:clamp,
+        filter=:bilinear, colorspace=:linear)
+    inherited_cube = equirectangular_to_cubemap(inherited_wraps; size=3)
+    canonical_cube = equirectangular_to_cubemap(canonical_wraps; size=3)
+
+    @test sample_cube(inherited_cube, Vec3(0.0, 1.0, 0.0)) ==
+          Color3(4.0, 0.0, 0.0)
+    @test sample_cube(inherited_cube, Vec3(0.0, -1.0, 0.0)) ==
+          Color3(0.0, 0.0, 2.0)
+    @test all(inherited_cube.faces[index].data ==
+              canonical_cube.faces[index].data for index in 1:6)
+    @test inherited_wraps.wrap_s === :clamp
+    @test inherited_wraps.wrap_t === :repeat
+
+    longitudinal = reshape(
+        [1.0, 2.0, 3.0, 4.0], 1, 4, 1)
+    shifted = Texture(
+        longitudinal; offset=Vec2(0.25, 0.0), filter=:nearest)
+    unshifted = Texture(longitudinal; filter=:nearest)
+    @test Diff3D._sample_equirectangular(shifted, 0.0, 0.5) ==
+          sample_texture(unshifted, 0.25, 0.5)
+    @test_opt_alloc 0 Diff3D._sample_equirectangular(
+        inherited_wraps, 0.5, 1.0)
+end

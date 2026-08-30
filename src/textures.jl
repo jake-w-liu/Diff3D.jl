@@ -933,6 +933,12 @@ function _equirectangular_uv(dir::Vec3)
     return (u, v)
 end
 
+@inline function _sample_equirectangular(tex::Texture, u, v)
+    tu, tv = _texture_sample_uv(tex, u, v)
+    return _sample_texture_data(tex.data, :repeat, :clamp, tex.filter, tu, tv,
+                                "equirectangular_to_cubemap")
+end
+
 """
     equirectangular_to_cubemap(tex; size=max(1, min(H, W ÷ 2)),
                                generate_mipmaps=false) -> CubeTexture
@@ -954,7 +960,7 @@ function equirectangular_to_cubemap(tex::Texture; size::Integer=max(1, min(Base.
             u_face = (col - 0.5) / face_size
             v_face = 1.0 - (row - 0.5) / face_size
             u_env, v_env = _equirectangular_uv(_cube_face_direction(face, u_face, v_face))
-            c = sample_texture(tex, u_env, v_env)
+            c = _sample_equirectangular(tex, u_env, v_env)
             data[row, col, 1] = c.r
             data[row, col, 2] = c.g
             data[row, col, 3] = c.b
