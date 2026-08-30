@@ -219,7 +219,12 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
     H, W, _ = _checked_loss_image_size(image, target, "loss_silhouette_iou")
     threshold = _checked_silhouette_threshold(threshold)
-    R = float(promote_type(T, S, typeof(threshold)))
+    # Accumulating a large mask in Float16 stops changing once the running
+    # count reaches 2048, which can turn a valid IoU into an image-size-
+    # dependent result.  Keep the public numeric promotion behavior, but use
+    # at least Float32 for the occupancy sums.
+    R = promote_type(Float32,
+                     float(promote_type(T, S, typeof(threshold))))
     threshold_r = convert(R, threshold)
     slope = convert(R, 200)
 
