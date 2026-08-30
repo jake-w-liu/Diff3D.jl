@@ -251,8 +251,11 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
         end
     end
 
-    # Smoothed IoU: two empty silhouettes give eps/eps = 1, i.e. loss 0.
-    eps = convert(R, 1e-8)
-    iou = (intersection + eps) / (union_val + eps)
+    # Smoothed IoU: two empty silhouettes give ε/ε = 1, i.e. loss 0. The
+    # decimal guard rounds to zero in Float16, so fall back to that type's
+    # smallest positive value when conversion underflows.
+    smoothing = convert(R, 1e-8)
+    smoothing > zero(R) || (smoothing = nextfloat(zero(R)))
+    iou = (intersection + smoothing) / (union_val + smoothing)
     return one(R) - iou
 end

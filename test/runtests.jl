@@ -27452,6 +27452,17 @@ end
     float32_mask = ones(Float32, 1, 1, 1)
     @test loss_silhouette_iou(
         float32_mask, float32_mask; threshold=0.05f0) isa Float32
+    float16_empty = zeros(Float16, 2, 2, 1)
+    float16_loss = loss_silhouette_iou(
+        float16_empty, float16_empty; threshold=Float16(0.05))
+    @test float16_loss isa Float16
+    @test float16_loss == Float16(0)
+    @test isfinite(loss_silhouette_iou(
+        ones(Float16, 2, 2, 1), ones(Float16, 2, 2, 1);
+        threshold=Float16(0.05)))
+    @test loss_silhouette_iou(
+        float16_empty, ones(Float16, 2, 2, 1);
+        threshold=Float16(0.05)) > Float16(0.99)
 
     alpha = reshape([0.0, 0.0, 0.0, 1.0], 1, 1, 4)
     red = reshape([1.0, 0.0, 0.0, 0.0], 1, 1, 4)
