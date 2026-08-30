@@ -30406,6 +30406,20 @@ end
     @test scaled_child.position == Vec3(0.5, 0.5, 0.0)
     @test world_position(scaled_child) == Vec3(1.0, 2.0, 0.0)
 
+    singular_parent = Group()
+    singular_parent.scale = Vec3(0.0, 2.0, 1.0)
+    singular_child = Group()
+    singular_child.position = Vec3(3.0, 0.0, 0.0)
+    add!(singular_parent, singular_child)
+    singular_drag = DragControls(AbstractObject3D[singular_child], camera)
+    drag_start!(singular_drag, singular_child)
+    @test_throws "world-space movement cannot be represented by the parent transform" drag_move!(
+        singular_drag, Vec3(1.0, 0.0, 0.0))
+    @test singular_child.position == Vec3(3.0, 0.0, 0.0)
+    drag_move!(singular_drag, Vec3(0.0, 2.0, 0.0))
+    @test singular_child.position == Vec3(3.0, 1.0, 0.0)
+    @test world_position(singular_child) == Vec3(0.0, 2.0, 0.0)
+
     transform_parent = Group()
     transform_parent.rotation = Euler(0.0, 0.0, pi / 2)
     transformed = Group()
@@ -30435,6 +30449,23 @@ end
     transform_apply!(snap_control, Vec3(0.6, 0.0, 0.0))
     @test norm(world_position(world_snapped) - Vec3(1.0, 0.0, 0.0)) < 1.0e-12
     @test norm(world_snapped.position - Vec3(0.0, -1.0, 0.0)) < 1.0e-12
+
+    singular_control = TransformControls(
+        camera; mode=:translate, space=:world, axis=:XYZ)
+    transform_attach!(singular_control, singular_child)
+    @test_throws "world-space movement cannot be represented by the parent transform" transform_apply!(
+        singular_control, Vec3(1.0, 0.0, 0.0))
+    @test singular_child.position == Vec3(3.0, 1.0, 0.0)
+    transform_apply!(singular_control, Vec3(0.0, 2.0, 0.0))
+    @test singular_child.position == Vec3(3.0, 2.0, 0.0)
+
+    snapped_singular_control = TransformControls(
+        camera; mode=:translate, space=:world, axis=:Y,
+        translation_snap=2.0)
+    transform_attach!(snapped_singular_control, singular_child)
+    transform_apply!(snapped_singular_control, Vec3(0.0, 2.0, 0.0))
+    @test singular_child.position == Vec3(3.0, 3.0, 0.0)
+    @test world_position(singular_child) == Vec3(0.0, 6.0, 0.0)
 
     @test_opt_alloc 640 transform_apply!(
         world_control, Vec3(0.25, 0.0, 0.0))

@@ -814,16 +814,70 @@ function _transform_world_delta_to_parent(obj::AbstractObject3D,
                                           delta::Vec3)
     parent = get_parent(obj)
     parent === nothing && return delta
-    parent_inverse = mat4_inverse(compute_world_matrix(parent))
-    return mat4_transform_direction(parent_inverse, delta)
+    parent_world = compute_world_matrix(parent)::Mat4{Float64}
+    parent_inverse = mat4_inverse(parent_world)
+    if !all(iszero, parent_inverse.e)
+        return mat4_transform_direction(parent_inverse, delta)
+    end
+    return _transform_singular_world_vector_to_parent(
+        parent_world, delta, Vec3(), "world-space movement")
 end
 
 function _transform_world_position_to_parent(obj::AbstractObject3D,
                                              position::Vec3)
     parent = get_parent(obj)
     parent === nothing && return position
-    return mat4_transform_point(
-        mat4_inverse(compute_world_matrix(parent)), position)
+    parent_world = compute_world_matrix(parent)::Mat4{Float64}
+    parent_inverse = mat4_inverse(parent_world)
+    if !all(iszero, parent_inverse.e)
+        return mat4_transform_point(parent_inverse, position)
+    end
+    translation = Vec3(mat4_get(parent_world, 1, 4),
+                       mat4_get(parent_world, 2, 4),
+                       mat4_get(parent_world, 3, 4))
+    return _transform_singular_world_vector_to_parent(
+        parent_world, position - translation, obj.position,
+        "world-space snapped position")
+end
+
+function _transform_singular_world_vector_to_parent(
+        parent_world::Mat4, world_vector::Vec3, seed::Vec3,
+        label::String)
+    linear = Matrix{Float64}(undef, 3, 3)
+    @inbounds for column in 1:3, row in 1:3
+        linear[row, column] = mat4_get(parent_world, row, column)
+    end
+    all(isfinite, linear) ||
+        throw(ArgumentError("$label cannot be represented by the parent transform"))
+
+    # A singular parent has no ordinary inverse.  The pseudoinverse supplies
+    # the minimum-norm local vector; for positions, retain the object's
+    # existing null-space component so snapping does not change collapsed
+    # local coordinates that have no world-space effect.
+    pseudo = la_pinv(linear; rtol=0.0)
+    rhs = Float64[world_vector.x, world_vector.y, world_vector.z]
+    local_values = pseudo * rhs
+    if !iszero(seed.x) || !iszero(seed.y) || !iszero(seed.z)
+        seed_values = Float64[seed.x, seed.y, seed.z]
+        local_values .+= seed_values - pseudo * (linear * seed_values)
+    end
+    local_vector = Vec3(local_values[1], local_values[2], local_values[3])
+    reconstructed = mat4_transform_direction(parent_world, local_vector)
+    scale = max(abs(world_vector.x), abs(world_vector.y),
+                abs(world_vector.z), abs(reconstructed.x),
+                abs(reconstructed.y), abs(reconstructed.z))
+    error = if iszero(scale)
+        0.0
+    else
+        max(abs(reconstructed.x / scale - world_vector.x / scale),
+            abs(reconstructed.y / scale - world_vector.y / scale),
+            abs(reconstructed.z / scale - world_vector.z / scale))
+    end
+    (isfinite(local_vector.x) && isfinite(local_vector.y) &&
+     isfinite(local_vector.z) &&
+     isfinite(error) && error <= 256 * eps(Float64)) ||
+        throw(ArgumentError("$label cannot be represented by the parent transform"))
+    return local_vector
 end
 
 function _transform_parent_position_to_world(obj::AbstractObject3D,

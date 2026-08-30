@@ -18,7 +18,8 @@ Core subsystems:
 """
 module Diff3D
 
-using LinearAlgebra: norm as la_norm, dot as la_dot, cross as la_cross
+using LinearAlgebra: norm as la_norm, dot as la_dot, cross as la_cross,
+                     pinv as la_pinv
 using Printf
 using ForwardDiff
 using ColorTypes: RGB, red, green, blue
