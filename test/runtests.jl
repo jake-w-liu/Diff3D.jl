@@ -15676,6 +15676,13 @@ end
                 return vcat(le32(0x46546C67), le32(2),
                             le32(12 + length(chunk_body)), chunk_body)
             end
+            function glb_json_chunk(text)
+                bytes = Vector{UInt8}(codeunits(text))
+                while length(bytes) % 4 != 0
+                    push!(bytes, UInt8(' '))
+                end
+                return vcat(le32(length(bytes)), le32(0x4E4F534A), bytes)
+            end
             bin_first_path = tempname() * ".glb"
             write(bin_first_path, glb_with_body(bin_chunk, json_chunk))
             @test_throws "first chunk must be JSON" Diff3D._parse_glb(bin_first_path)
@@ -15690,6 +15697,58 @@ end
             write(trailing_unknown_path,
                   glb_with_body(json_chunk, bin_chunk, unknown_chunk))
             @test Diff3D.load_glb(trailing_unknown_path) isa Diff3D.Scene
+
+            duplicate_embedded_json = glb_json_chunk(
+                "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[" *
+                "{\"byteLength\":1},{\"byteLength\":1}]}")
+            duplicate_embedded_path = tempname() * ".glb"
+            write(duplicate_embedded_path, glb_with_body(
+                duplicate_embedded_json,
+                vcat(le32(4), le32(0x004E4942), UInt8[0x2a, 0, 0, 0])))
+            @test_throws "GLB buffer 1 has no uri; only buffer 0 may use the BIN chunk" Diff3D._parse_glb(
+                duplicate_embedded_path)
+
+            missing_bin_json = glb_json_chunk(
+                "{\"asset\":{\"version\":\"2.0\"}," *
+                "\"buffers\":[{\"byteLength\":1}]}")
+            missing_bin_path = tempname() * ".glb"
+            write(missing_bin_path, glb_with_body(missing_bin_json))
+            @test_throws "GLB buffer 0 has no uri but the BIN chunk is missing" Diff3D._parse_glb(
+                missing_bin_path)
+
+            padding_json = glb_json_chunk(
+                "{\"asset\":{\"version\":\"2.0\"}," *
+                "\"buffers\":[{\"byteLength\":1}]}")
+            three_padding_path = tempname() * ".glb"
+            write(three_padding_path, glb_with_body(
+                padding_json,
+                vcat(le32(4), le32(0x004E4942), UInt8[0x2a, 0, 0, 0])))
+            _, three_padding_buffers, _ = Diff3D._parse_glb(three_padding_path)
+            @test collect(only(three_padding_buffers)) == UInt8[0x2a]
+
+            excessive_padding_json = glb_json_chunk(
+                "{\"asset\":{\"version\":\"2.0\"}," *
+                "\"buffers\":[{\"byteLength\":4}]}")
+            excessive_padding_path = tempname() * ".glb"
+            write(excessive_padding_path, glb_with_body(
+                excessive_padding_json,
+                vcat(le32(8), le32(0x004E4942), UInt8[1, 2, 3, 4, 0, 0, 0, 0])))
+            @test_throws "GLB BIN chunk has 4 padding bytes; at most 3 are permitted" Diff3D._parse_glb(
+                excessive_padding_path)
+
+            # The URI payload intentionally exceeds byteLength by four bytes:
+            # BIN padding limits must not change ordinary URI-buffer trimming.
+            mixed_buffers_json = glb_json_chunk(
+                "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[" *
+                "{\"byteLength\":1}," *
+                "{\"byteLength\":1,\"uri\":\"data:application/octet-stream;base64,KwAAAAA=\"}]}")
+            mixed_buffers_path = tempname() * ".glb"
+            write(mixed_buffers_path, glb_with_body(
+                mixed_buffers_json,
+                vcat(le32(4), le32(0x004E4942), UInt8[0x2a, 0, 0, 0])))
+            _, mixed_buffers, _ = Diff3D._parse_glb(mixed_buffers_path)
+            @test [collect(buffer) for buffer in mixed_buffers] ==
+                  [UInt8[0x2a], UInt8[0x2b]]
 
             bad_total = copy(glb)
             bad_total[9:12] = le32(length(glb) + 4)
@@ -15723,6 +15782,11 @@ end
             rm(bin_first_path; force=true)
             rm(delayed_bin_path; force=true)
             rm(trailing_unknown_path; force=true)
+            rm(duplicate_embedded_path; force=true)
+            rm(missing_bin_path; force=true)
+            rm(three_padding_path; force=true)
+            rm(excessive_padding_path; force=true)
+            rm(mixed_buffers_path; force=true)
             rm(bad_total_path; force=true)
             rm(bad_align_path; force=true)
             rm(empty_path; force=true)

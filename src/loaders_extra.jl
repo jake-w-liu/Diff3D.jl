@@ -8762,11 +8762,16 @@ function _gltf_read_buffer(buf::Dict, dir::String)
     return _gltf_trim_declared_buffer(buf, data, "glTF buffer")
 end
 
-function _gltf_trim_declared_buffer(buf::Dict, data::AbstractVector{UInt8}, label::String)
+function _gltf_trim_declared_buffer(buf::Dict, data::AbstractVector{UInt8},
+                                    label::String;
+                                    max_padding::Union{Nothing,Int}=nothing)
     declared = get(buf, "byteLength", length(data))
     expected = _gltf_checked_declared_byte_length(declared, label)
     length(data) >= expected ||
         error("$label byteLength $expected exceeds available bytes $(length(data))")
+    padding = length(data) - expected
+    max_padding !== nothing && padding > max_padding &&
+        error("$label has $padding padding bytes; at most $max_padding are permitted")
     length(data) == expected && return data
     return expected == 0 ? view(data, 1:0) : @view data[1:expected]
 end
@@ -10841,21 +10846,20 @@ function load_gltf_asset(path::String)
     return _gltf_build_asset(gltf, buffers; dir=dir)
 end
 
-# Resolve a glTF buffer that may reference the GLB binary chunk. A buffer with no
-# `uri` is the embedded GLB binary buffer (buffer 0 by spec); otherwise behave
-# exactly like `_gltf_read_buffer`.
-function _glb_read_buffer(buf::Dict, dir::String, bin::AbstractVector{UInt8})
+# Resolve one indexed glTF buffer definition in a GLB container. Only buffer 0
+# may omit `uri` and consume the BIN chunk; URI-bearing buffers retain the
+# ordinary `.gltf` loading path.
+function _glb_read_buffer(buf::Dict, dir::String, bin::AbstractVector{UInt8},
+                          buffer_index::Int, have_bin::Bool)
     uri = get(buf, "uri", nothing)
-    uri !== nothing && (uri = String(uri))
-    data = if uri === nothing
-        bin
-    elseif startswith(uri, "data:")
-        _gltf_data_uri_parts(uri)[2]
-    else
-        read(_gltf_external_resource_path(dir, uri))
+    if uri !== nothing
+        return _gltf_read_buffer(buf, dir)
     end
-    label = uri === nothing ? "GLB BIN chunk" : "glTF buffer"
-    return _gltf_trim_declared_buffer(buf, data, label)
+    buffer_index == 0 ||
+        error("GLB buffer $buffer_index has no uri; only buffer 0 may use the BIN chunk")
+    have_bin || error("GLB buffer 0 has no uri but the BIN chunk is missing")
+    return _gltf_trim_declared_buffer(
+        buf, bin, "GLB BIN chunk"; max_padding=3)
 end
 
 @inline _rd_le32(b, i) = Int(b[i]) | (Int(b[i+1]) << 8) | (Int(b[i+2]) << 16) | (Int(b[i+3]) << 24)
@@ -10908,7 +10912,8 @@ function _parse_glb(path::String)
     gltf = _json_parse(json_bytes)
     _gltf_validate_document(gltf)
     dir = dirname(path)
-    buffers = [_glb_read_buffer(b, dir, bin_bytes) for b in _gltf_document_buffers(gltf)]
+    buffers = [_glb_read_buffer(buffer, dir, bin_bytes, index - 1, have_bin)
+               for (index, buffer) in enumerate(_gltf_document_buffers(gltf))]
     return gltf, buffers, dir
 end
 
