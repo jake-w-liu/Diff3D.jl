@@ -443,7 +443,8 @@ function _validate_transform_geometry(geo::BufferGeometry)
 end
 
 function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
-                                       geo::BufferGeometry, matrix::Mat4)
+                                       geo::BufferGeometry, matrix::Mat4,
+                                       reverse_orientation::Bool)
     has_attribute(geo, :tangent) || return attributes
     source = get_attribute(geo, :tangent)
     item_size = source.item_size
@@ -459,13 +460,37 @@ function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
         data[base + 1] = transformed.x
         data[base + 2] = transformed.y
         data[base + 3] = transformed.z
+        reverse_orientation && item_size >= 4 &&
+            (data[base + 4] = -data[base + 4])
     end
     attributes[:tangent] = BufferAttribute(data, item_size)
     return attributes
 end
 
+function _mat4_linear_orientation_sign(matrix::Mat4)
+    values = matrix.e
+    a, b, c = values[1], values[5], values[9]
+    d, e, f = values[2], values[6], values[10]
+    g, h, i = values[3], values[7], values[11]
+    determinant = a * (e * i - f * h) -
+                  b * (d * i - f * g) +
+                  c * (d * h - e * g)
+    isfinite(determinant) && !iszero(determinant) &&
+        return determinant < 0.0 ? -1 : 1
+    return setprecision(BigFloat, 256) do
+        ab, bb, cb = BigFloat(a), BigFloat(b), BigFloat(c)
+        db, eb, fb = BigFloat(d), BigFloat(e), BigFloat(f)
+        gb, hb, ib = BigFloat(g), BigFloat(h), BigFloat(i)
+        determinant_b = ab * (eb * ib - fb * hb) -
+                        bb * (db * ib - fb * gb) +
+                        cb * (db * hb - eb * gb)
+        determinant_b < 0 ? -1 : determinant_b > 0 ? 1 : 0
+    end
+end
+
 function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     _validate_transform_geometry(geo)
+    reverse_orientation = _mat4_linear_orientation_sign(matrix) < 0
     normal_matrix = mat4_transpose(mat4_inverse(matrix))
     positions = Vector{Float64}(undef, 3 * geo.n_vertices)
     normals = Vector{Float64}(undef, 3 * geo.n_vertices)
@@ -483,13 +508,21 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     end
     uvs = copy(geo.uvs)
     indices = copy(geo.indices)
+    if reverse_orientation
+        @inbounds for fi in 1:geo.n_faces
+            base = 3fi - 2
+            indices[base + 1], indices[base + 2] =
+                indices[base + 2], indices[base + 1]
+        end
+    end
     if isempty(geo.attributes) && isempty(geo.groups) && geo.draw_range === nothing
         return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces)
     end
     # deepcopy the attributes: copy(Dict) shares the BufferAttribute values' data
     # arrays, so the transformed geometry would alias the source's custom attributes.
     attributes = deepcopy(geo.attributes)
-    _transform_geometry_tangents!(attributes, geo, matrix)
+    _transform_geometry_tangents!(
+        attributes, geo, matrix, reverse_orientation)
     return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces,
                           attributes, copy(geo.groups), geo.draw_range)
 end

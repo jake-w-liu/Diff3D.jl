@@ -27717,3 +27717,62 @@ end
         1.0e-13, 2; bottom=false, body=false, lid=true)
     @test lid_only_tiny.n_faces == lid_only_reference.n_faces
 end
+
+@testset "fresh audit round 230 fixes" begin
+    function signed_volume(geometry)
+        volume = 0.0
+        for face in 1:geometry.n_faces
+            i1, i2, i3 = get_face(geometry, face)
+            a = get_vertex(geometry, i1)
+            b = get_vertex(geometry, i2)
+            c = get_vertex(geometry, i3)
+            volume += dot(a, cross(b, c)) / 6.0
+        end
+        volume
+    end
+
+    box = BoxGeometry()
+    source_face = get_face(box, 1)
+    reflected = transform_geometry(
+        box, mat4_scaling(-1.0, 1.0, 1.0))
+    @test signed_volume(box) > 0.0
+    @test signed_volume(reflected) > 0.0
+    @test signed_volume(reflected) ≈ signed_volume(box)
+    @test get_face(reflected, 1) ==
+          (source_face[1], source_face[3], source_face[2])
+    for face in 1:reflected.n_faces
+        i1, i2, i3 = get_face(reflected, face)
+        geometric = triangle_normal(Triangle(
+            get_vertex(reflected, i1), get_vertex(reflected, i2),
+            get_vertex(reflected, i3)))
+        @test dot(geometric, get_normal(reflected, i1)) > 0.99
+    end
+
+    union = csg_union(box, reflected)
+    intersection = csg_intersect(box, reflected)
+    @test union.n_faces == box.n_faces
+    @test intersection.n_faces == box.n_faces
+    @test compute_bounding_box(union) == compute_bounding_box(box)
+    @test compute_bounding_box(intersection) == compute_bounding_box(box)
+
+    tangent_box = BoxGeometry()
+    set_attribute!(tangent_box, :tangent,
+                   repeat([1.0, 0.0, 0.0, 1.0],
+                          tangent_box.n_vertices), 4)
+    reflected_tangent = transform_geometry(
+        tangent_box, mat4_scaling(-1.0, 1.0, 1.0))
+    tangent = get_attribute(reflected_tangent, :tangent).data
+    @test tangent[1:4] == [-1.0, 0.0, 0.0, -1.0]
+    positive_tangent = get_attribute(transform_geometry(
+        tangent_box, mat4_scaling(2.0, 1.0, 1.0)), :tangent).data
+    @test positive_tangent[1:4] == [1.0, 0.0, 0.0, 1.0]
+
+    singular = transform_geometry(box, mat4_scaling(0.0, 1.0, 1.0))
+    @test singular.indices == box.indices
+
+    surplus = deepcopy(box)
+    append!(surplus.indices, [1, 1, 1])
+    reflected_surplus = transform_geometry(
+        surplus, mat4_scaling(-1.0, 1.0, 1.0))
+    @test reflected_surplus.indices[end-2:end] == [1, 1, 1]
+end
