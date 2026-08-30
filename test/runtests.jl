@@ -31802,3 +31802,145 @@ end
     @test reverse_gradient(
         values -> 2.0 / values[1], [4.0]) == [-0.125]
 end
+
+@testset "CRC64 — CPU culling follows transformed winding" begin
+    positions = [
+        -0.8, -0.8, 0.0,
+         0.8, -0.8, 0.0,
+         0.0,  0.8, 0.0,
+    ]
+    function culling_geometry(normal_z)
+        normals = repeat([0.0, 0.0, Float64(normal_z)], 3)
+        return BufferGeometry(
+            copy(positions), normals, Float64[], [1, 2, 3], 3, 1)
+    end
+    function culling_scene(normal_z, side;
+                           reflected=false, instanced=false,
+                           normal_material=false)
+        material = normal_material ?
+            MeshNormalMaterial(side=side) :
+            MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), side=side)
+        scene = Scene()
+        if instanced
+            object = InstancedMesh(culling_geometry(normal_z), material, 1)
+            set_instance_matrix!(
+                object, 1,
+                reflected ? mat4_scaling(-1.0, 1.0, 1.0) : Mat4())
+            add!(scene, object)
+        else
+            object = Mesh(culling_geometry(normal_z), material)
+            reflected && (object.scale = Vec3(-1.0, 1.0, 1.0))
+            add!(scene, object)
+        end
+        return scene
+    end
+    function render_culling(scene, camera, shading; cache=nothing)
+        target = RenderTarget(24, 24)
+        render!(target, scene, camera;
+                shading=shading, frustum_cull=false, cache=cache)
+        return target
+    end
+
+    perspective = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    perspective.position = Vec3(0.0, 0.0, 3.0)
+    perspective.target = Vec3()
+    orthographic = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    orthographic.position = Vec3(0.0, 0.0, 3.0)
+    orthographic.target = Vec3()
+
+    for camera in (perspective, orthographic), shading in (:flat, :smooth)
+        authored_front = render_culling(
+            culling_scene(1.0, :front), camera, shading)
+        authored_back = render_culling(
+            culling_scene(-1.0, :front), camera, shading)
+        @test sum(authored_front.color) > 0.0
+        @test authored_back.color == authored_front.color
+        @test all(iszero, render_culling(
+            culling_scene(1.0, :back), camera, shading).color)
+
+        instanced_authored_back = render_culling(
+            culling_scene(-1.0, :front; instanced=true),
+            camera, shading)
+        @test instanced_authored_back.color == authored_front.color
+
+        reflected_front = render_culling(
+            culling_scene(1.0, :front; reflected=true),
+            camera, shading)
+        reflected_back = render_culling(
+            culling_scene(1.0, :back; reflected=true),
+            camera, shading)
+        @test all(iszero, reflected_front.color)
+        @test sum(reflected_back.color) > 0.0
+
+        reflected_instance_front = render_culling(
+            culling_scene(
+                1.0, :front; reflected=true, instanced=true),
+            camera, shading)
+        reflected_instance_back = render_culling(
+            culling_scene(
+                1.0, :back; reflected=true, instanced=true),
+            camera, shading)
+        @test all(iszero, reflected_instance_front.color)
+        @test reflected_instance_back.color == reflected_back.color
+    end
+
+    # Authored normals remain the shading source; only culling uses winding.
+    for shading in (:flat, :smooth)
+        target = render_culling(
+            culling_scene(-1.0, :double; normal_material=true),
+            perspective, shading)
+        @test target.color[12, 12, :] == [0.5, 0.5, 0.0]
+    end
+
+    pooled_scene = culling_scene(-1.0, :front)
+    pooled_target = RenderTarget(24, 24)
+    pooled_cache = RenderCache()
+    render_pooled!(pooled_target, pooled_scene, orthographic, pooled_cache)
+    @test sum(pooled_target.color) > 0.0
+    @test_opt_alloc 128 render_pooled!(
+        pooled_target, pooled_scene, orthographic, pooled_cache)
+
+    pooled_reflected_front = RenderTarget(24, 24)
+    render_pooled!(
+        pooled_reflected_front,
+        culling_scene(1.0, :front; reflected=true, instanced=true),
+        orthographic, RenderCache())
+    @test all(iszero, pooled_reflected_front.color)
+    pooled_reflected_back = RenderTarget(24, 24)
+    render_pooled!(
+        pooled_reflected_back,
+        culling_scene(1.0, :back; reflected=true, instanced=true),
+        orthographic, RenderCache())
+    @test sum(pooled_reflected_back.color) > 0.0
+
+    tiled_scene = culling_scene(
+        1.0, :back; reflected=true, instanced=true)
+    tiled_target = RenderTarget(24, 24)
+    tiled_cache = [RenderCache()]
+    render_tiled!(tiled_target, tiled_scene, orthographic;
+                  tiles=1, cache=tiled_cache)
+    @test tiled_target.color == pooled_reflected_back.color
+    @test_opt_alloc 256 render_tiled!(
+        tiled_target, tiled_scene, orthographic;
+        tiles=1, cache=tiled_cache)
+
+    cached_smooth_scene = culling_scene(
+        1.0, :back; reflected=true, instanced=true)
+    cached_smooth_target = RenderTarget(24, 24)
+    cached_smooth = RenderCache()
+    render!(cached_smooth_target, cached_smooth_scene, perspective;
+            shading=:smooth, frustum_cull=false, cache=cached_smooth)
+    @test sum(cached_smooth_target.color) > 0.0
+    @test_opt_alloc 4096 render!(
+        cached_smooth_target, cached_smooth_scene, perspective;
+        shading=:smooth, frustum_cull=false, cache=cached_smooth)
+
+    winding_triangle = Triangle(
+        Vec3(-0.8, -0.8, 0.0),
+        Vec3(0.8, -0.8, 0.0),
+        Vec3(0.0, 0.8, 0.0))
+    @test_opt_alloc 0 triangle_normal(winding_triangle)
+end

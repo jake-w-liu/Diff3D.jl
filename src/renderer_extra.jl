@@ -1041,12 +1041,11 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         if side !== :double
-            wc = mat4_transform_point(
-                world_mat, _mean3_vec3(v1, v2, v3))
-            fn = _flat_face_normal(geo, i1, i2, i3,
-                                   mat4_transform_point(world_mat, v1),
-                                   mat4_transform_point(world_mat, v2),
-                                   mat4_transform_point(world_mat, v3), normal_mat, has_normals)
+            w1 = mat4_transform_point(world_mat, v1)
+            w2 = mat4_transform_point(world_mat, v2)
+            w3 = mat4_transform_point(world_mat, v3)
+            wc = _mean3_vec3(w1, w2, w3)
+            fn = triangle_normal(Triangle(w1, w2, w3))
             facing = ortho_dir === nothing ?
                 dot(fn, _direction_between(wc, cam_pos)) :
                 dot(fn, ortho_dir)

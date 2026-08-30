@@ -1159,7 +1159,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
             w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
             wc = _mean3_vec3(w1, w2, w3)
-            fn = _flat_face_normal(geo, i1, i2, i3, w1, w2, w3, normal_mat, has_normals)
+            fn = triangle_normal(Triangle(w1, w2, w3))
             # Orthographic rays are parallel, so facing is judged against the
             # constant view direction; the eye-point vector is perspective-only.
             facing = ortho_dir === nothing ?
@@ -2428,12 +2428,11 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         # Back-face culling (skipped for double-sided materials).
         if side !== :double
-            wc = mat4_transform_point(
-                world_mat, _mean3_vec3(v1, v2, v3))
-            fn = _flat_face_normal(geo, i1, i2, i3,
-                                   mat4_transform_point(world_mat, v1),
-                                   mat4_transform_point(world_mat, v2),
-                                   mat4_transform_point(world_mat, v3), normal_mat, has_normals)
+            w1 = mat4_transform_point(world_mat, v1)
+            w2 = mat4_transform_point(world_mat, v2)
+            w3 = mat4_transform_point(world_mat, v3)
+            wc = _mean3_vec3(w1, w2, w3)
+            fn = triangle_normal(Triangle(w1, w2, w3))
             # Orthographic rays are parallel, so facing is judged against the
             # constant view direction; the eye-point vector is perspective-only.
             facing = ortho_dir === nothing ?
