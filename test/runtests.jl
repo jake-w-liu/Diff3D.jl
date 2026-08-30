@@ -32765,6 +32765,147 @@ end
     end
 end
 
+@testset "CRC76 — glTF cameras ignore ancestor scale" begin
+    crc76_le32(value) = UInt8[
+        value & 0xff, (value >> 8) & 0xff,
+        (value >> 16) & 0xff, (value >> 24) & 0xff]
+    function crc76_glb(json::String)
+        json_bytes = Vector{UInt8}(codeunits(json))
+        while length(json_bytes) % 4 != 0
+            push!(json_bytes, UInt8(' '))
+        end
+        body = vcat(
+            crc76_le32(length(json_bytes)), crc76_le32(0x4e4f534a),
+            json_bytes)
+        return vcat(
+            crc76_le32(0x46546c67), crc76_le32(2),
+            crc76_le32(12 + length(body)), body)
+    end
+    function crc76_scene(json::String, binary::Bool)
+        mktempdir() do directory
+            path = joinpath(directory, binary ? "camera.glb" : "camera.gltf")
+            write(path, binary ? crc76_glb(json) : json)
+            return binary ? load_glb(path) : load_gltf(path)
+        end
+    end
+
+    parent_angle = pi / 6
+    child_angle = pi / 4
+    parent_sin = sin(parent_angle / 2)
+    parent_cos = cos(parent_angle / 2)
+    child_sin = sin(child_angle / 2)
+    child_cos = cos(child_angle / 2)
+    camera_json = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0]}],
+     "nodes":[
+       {"translation":[3,4,5],
+        "rotation":[0,0,$parent_sin,$parent_cos],
+        "scale":[-2,3,0.5],"children":[1,2]},
+       {"translation":[1,2,3],
+        "rotation":[0,$child_sin,0,$child_cos],
+        "scale":[4,5,6],"camera":0},
+       {"translation":[1,2,3],
+        "rotation":[0,$child_sin,0,$child_cos],
+        "scale":[4,5,6],"camera":1}],
+     "cameras":[
+       {"type":"perspective","perspective":{"yfov":0.7,"znear":0.2}},
+       {"type":"orthographic","orthographic":{
+          "xmag":2,"ymag":1,"znear":0.1,"zfar":20}}]}
+    """
+
+    parent_world = mat4_translation(3.0, 4.0, 5.0) *
+                   mat4_rotation_z(parent_angle) *
+                   mat4_scaling(-2.0, 3.0, 0.5)
+    expected_position = mat4_transform_point(
+        parent_world, Vec3(1.0, 2.0, 3.0))
+    expected_rotation = mat4_rotation_z(parent_angle) *
+                        mat4_rotation_y(child_angle)
+    expected_direction = normalize(mat4_transform_direction(
+        expected_rotation, Vec3(0.0, 0.0, -1.0)))
+    expected_up = normalize(mat4_transform_direction(
+        expected_rotation, Vec3(0.0, 1.0, 0.0)))
+
+    for binary in (false, true)
+        loaded_scene = crc76_scene(camera_json, binary)
+        parent = only(get_children(loaded_scene))
+        cameras = get_children(parent)
+        @test length(cameras) == 2
+        @test cameras[1] isa PerspectiveCamera
+        @test cameras[2] isa OrthographicCamera
+        for camera in cameras
+            @test camera.ignore_parent_scale
+            @test camera.scale == Vec3(4.0, 5.0, 6.0)
+            world_position, world_target, world_up =
+                Diff3D._camera_world_pose(camera)
+            @test norm(world_position - expected_position) < 1e-12
+            @test norm(normalize(world_target - world_position) -
+                       expected_direction) < 1e-12
+            @test norm(world_up - expected_up) < 1e-12
+
+            equivalent = PerspectiveCamera(aspect=1.0)
+            equivalent.position = expected_position
+            equivalent.target = expected_position + expected_direction
+            equivalent.up = expected_up
+            @test maximum(abs.(
+                collect(view_matrix(camera).e) .-
+                collect(view_matrix(equivalent).e))) < 1e-12
+        end
+
+        # Loaded cameras retain the public target/up control contract; retargeting
+        # still ignores ancestor scale while applying ancestor rotation.
+        retargeted = cameras[1]
+        retargeted.target = retargeted.position + Vec3(0.0, 0.0, -1.0)
+        retargeted.up = Vec3(0.0, 1.0, 0.0)
+        world_position, world_target, world_up =
+            Diff3D._camera_world_pose(retargeted)
+        parent_rotation = mat4_rotation_z(parent_angle)
+        @test norm(normalize(world_target - world_position) -
+                   Vec3(0.0, 0.0, -1.0)) < 1e-12
+        @test norm(world_up - normalize(mat4_transform_direction(
+            parent_rotation, Vec3(0.0, 1.0, 0.0)))) < 1e-12
+    end
+
+    # Ordinary cameras keep the historical target/up contract, including full
+    # parent-scale transformation.
+    for camera in (PerspectiveCamera(), OrthographicCamera())
+        generic_parent = Group()
+        generic_parent.position = Vec3(3.0, 4.0, 5.0)
+        generic_parent.rotation = Euler(0.0, 0.0, parent_angle)
+        generic_parent.scale = Vec3(-2.0, 3.0, 0.5)
+        camera.position = Vec3(1.0, 2.0, 3.0)
+        camera.target = Vec3(2.0, 1.0, 1.0)
+        camera.up = normalize(Vec3(1.0, 2.0, 0.5))
+        add!(generic_parent, camera)
+        @test !camera.ignore_parent_scale
+        parent_matrix = compute_world_matrix(generic_parent)
+        expected_generic = (
+            mat4_transform_point(parent_matrix, camera.position),
+            mat4_transform_point(parent_matrix, camera.target),
+            normalize(mat4_transform_direction(parent_matrix, camera.up)),
+        )
+        actual_generic = Diff3D._camera_world_pose(camera)
+        @test norm(actual_generic[1] - expected_generic[1]) < 1e-12
+        @test norm(actual_generic[2] - expected_generic[2]) < 1e-12
+        @test norm(actual_generic[3] - expected_generic[3]) < 1e-12
+    end
+
+    # Preserve both pre-flag positional constructor contracts.
+    legacy_perspective = PerspectiveCamera(
+        Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+        AbstractObject3D[], true, "legacy", 1,
+        0.7, 1.5, 0.2, 50.0, 1.25, Vec3(), Vec3(0.0, 1.0, 0.0))
+    @test legacy_perspective.zoom == 1.25
+    @test !legacy_perspective.ignore_parent_scale
+    legacy_orthographic = OrthographicCamera(
+        Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+        AbstractObject3D[], true, "legacy", 2,
+        -2.0, 2.0, -1.0, 1.0, 0.1, 20.0, 1.5,
+        Vec3(), Vec3(0.0, 1.0, 0.0))
+    @test legacy_orthographic.zoom == 1.5
+    @test !legacy_orthographic.ignore_parent_scale
+end
+
 @testset "CRC68 — extreme and narrow loss accumulation" begin
     largest = floatmax(Float64)
     residual = 2sqrt(largest)

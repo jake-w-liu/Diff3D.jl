@@ -10201,8 +10201,17 @@ function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
     cam.position = pos
     cam.rotation = rot
     cam.scale = scl
-    cam.target = pos + _gltf_transform_direction(M, Vec3(0.0, 0.0, -1.0))
-    cam.up = _gltf_transform_direction(M, Vec3(0.0, 1.0, 0.0))
+    # glTF camera view matrices ignore scale. Encode the camera node's local
+    # rotation in target/up, then let `_camera_world_pose` apply ancestor
+    # rotations without their scales while still transforming the position by
+    # the full parent matrix.
+    local_rotation = quat_to_mat4(quat_from_euler(
+        rot.x, rot.y, rot.z; order=rot.order))
+    cam.target = pos + normalize(mat4_transform_direction(
+        local_rotation, Vec3(0.0, 0.0, -1.0)))
+    cam.up = normalize(mat4_transform_direction(
+        local_rotation, Vec3(0.0, 1.0, 0.0)))
+    cam.ignore_parent_scale = true
     return cam
 end
 

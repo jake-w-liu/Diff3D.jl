@@ -20,6 +20,19 @@ mutable struct PerspectiveCamera <: AbstractCamera
     zoom::Float64
     target::Vec3{Float64}  # look-at target
     up::Vec3{Float64}
+    ignore_parent_scale::Bool
+end
+
+function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
+                           scale::Vec3{Float64},
+                           parent::Union{Nothing, AbstractObject3D},
+                           children::Vector{AbstractObject3D}, visible::Bool,
+                           name::String, id::Int, fov, aspect, near, far, zoom,
+                           target::Vec3{Float64}, up::Vec3{Float64})
+    f, a, n, fr = _validated_perspective_params(fov, aspect, near, far)
+    PerspectiveCamera(position, rotation, scale, parent, children, visible,
+                      name, id, f, a, n, fr, _validated_camera_zoom(zoom),
+                      target, up, false)
 end
 
 function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
@@ -30,7 +43,7 @@ function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                            target::Vec3{Float64}, up::Vec3{Float64})
     f, a, n, fr = _validated_perspective_params(fov, aspect, near, far)
     PerspectiveCamera(position, rotation, scale, parent, children, visible,
-                      name, id, f, a, n, fr, 1.0, target, up)
+                      name, id, f, a, n, fr, 1.0, target, up, false)
 end
 
 function _validated_camera_zoom(zoom)
@@ -74,6 +87,30 @@ function _camera_world_pose(camera::AbstractCamera)
     parent_world = compute_world_matrix(parent)::Mat4{Float64}
     world_position = _validated_camera_vector(
         mat4_transform_point(parent_world, position), kind, :position)
+    if hasfield(typeof(camera), :ignore_parent_scale) &&
+       getfield(camera, :ignore_parent_scale)
+        parent_rotation = Quaternion()
+        ancestor = parent
+        while ancestor !== nothing
+            _validate_object_transform(ancestor)
+            rotation = get_rotation(ancestor)::Euler{Float64}
+            local_rotation = quat_from_euler(
+                rotation.x, rotation.y, rotation.z; order=rotation.order)
+            parent_rotation = quat_multiply(local_rotation, parent_rotation)
+            ancestor = get_parent(ancestor)
+        end
+        rotation_matrix = quat_to_mat4(quat_normalize(parent_rotation))
+        world_direction = _validated_camera_vector(
+            mat4_transform_direction(rotation_matrix, target - position),
+            kind, :target)
+        world_target = _validated_camera_vector(
+            world_position + world_direction, kind, :target)
+        world_up = _validated_camera_vector(
+            normalize(mat4_transform_direction(rotation_matrix, up)), kind, :up)
+        max(abs(world_up.x), abs(world_up.y), abs(world_up.z)) > 0.0 ||
+            _throw_camera_zero_up(kind)
+        return world_position, world_target, world_up
+    end
     world_target = _validated_camera_vector(
         mat4_transform_point(parent_world, target), kind, :target)
     world_up = _validated_camera_vector(
@@ -148,7 +185,7 @@ function PerspectiveCamera(; fov=π/4, aspect=1.0, near=0.1, far=1000.0,
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
         f, a, n, fr, _validated_camera_zoom(zoom),
-        Vec3(), Vec3(0.0, 1.0, 0.0)
+        Vec3(), Vec3(0.0, 1.0, 0.0), false
     )
 end
 
@@ -211,6 +248,21 @@ mutable struct OrthographicCamera <: AbstractCamera
     zoom::Float64
     target::Vec3{Float64}
     up::Vec3{Float64}
+    ignore_parent_scale::Bool
+end
+
+function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
+                            scale::Vec3{Float64},
+                            parent::Union{Nothing, AbstractObject3D},
+                            children::Vector{AbstractObject3D}, visible::Bool,
+                            name::String, id::Int, left, right, bottom, top,
+                            near, far, zoom, target::Vec3{Float64},
+                            up::Vec3{Float64})
+    l, r, b, t, n, fr = _validated_orthographic_params(
+        left, right, bottom, top, near, far)
+    OrthographicCamera(position, rotation, scale, parent, children, visible,
+                       name, id, l, r, b, t, n, fr,
+                       _validated_camera_zoom(zoom), target, up, false)
 end
 
 function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
@@ -221,7 +273,7 @@ function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                             near, far, target::Vec3{Float64}, up::Vec3{Float64})
     l, r, b, t, n, fr = _validated_orthographic_params(left, right, bottom, top, near, far)
     OrthographicCamera(position, rotation, scale, parent, children, visible,
-                       name, id, l, r, b, t, n, fr, 1.0, target, up)
+                       name, id, l, r, b, t, n, fr, 1.0, target, up, false)
 end
 
 function OrthographicCamera(; left=-1.0, right=1.0, bottom=-1.0, top=1.0,
@@ -232,7 +284,7 @@ function OrthographicCamera(; left=-1.0, right=1.0, bottom=-1.0, top=1.0,
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
         l, r, b, t, n, fr, _validated_camera_zoom(zoom),
-        Vec3(), Vec3(0.0, 1.0, 0.0)
+        Vec3(), Vec3(0.0, 1.0, 0.0), false
     )
 end
 
