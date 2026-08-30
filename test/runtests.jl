@@ -27946,3 +27946,47 @@ end
     @test_opt_alloc 0 Diff3D._sample_equirectangular(
         inherited_wraps, 0.5, 1.0)
 end
+
+@testset "fresh audit round 235 fixes" begin
+    largest = floatmax(Float64)
+    extreme_points = [
+        Vec3(-largest, 0.0, 0.0),
+        Vec3(largest, 0.0, 0.0),
+    ]
+    for mode in (:catmullrom, :centripetal, :chordal)
+        curve = CatmullRomCurve(extreme_points; curve_type=mode)
+        @test catmull_rom_point(curve, 0.0) == extreme_points[1]
+        midpoint = catmull_rom_point(curve, 0.5)
+        @test abs(midpoint.x) <= eps(largest)
+        @test midpoint.y == 0.0
+        @test midpoint.z == 0.0
+        @test catmull_rom_point(curve, 1.0) == extreme_points[2]
+        @test all(point -> all(isfinite, (point.x, point.y, point.z)),
+                  catmull_rom_points(curve; segments=4))
+        @test all(isfinite,
+                  CatmullRomCurveGeometry(curve; segments=4).positions)
+    end
+
+    uniform = CatmullRomCurve(
+        extreme_points; curve_type=:catmullrom, tension=0.5)
+    expected_quarter = Float64(setprecision(BigFloat, 256) do
+        -BigFloat(largest) * BigFloat(19) / BigFloat(32)
+    end)
+    @test catmull_rom_point(uniform, 0.25).x == expected_quarter
+    @test catmull_rom_point(uniform, 0.75).x == -expected_quarter
+
+    ordinary_points = [
+        Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 0.0),
+        Vec3(2.0, 0.0, 0.0), Vec3(3.0, 1.0, 0.0),
+    ]
+    expected_y = (catmullrom=0.7182499999999998,
+                  centripetal=0.71825,
+                  chordal=0.7182499999999998)
+    for mode in (:catmullrom, :centripetal, :chordal)
+        point = catmull_rom_point(
+            CatmullRomCurve(ordinary_points; curve_type=mode), 0.45)
+        @test point.x == 1.35
+        @test point.y ≈ getproperty(expected_y, mode) atol=1.0e-15
+    end
+    @test_opt_alloc 0 catmull_rom_point(uniform, 0.5)
+end

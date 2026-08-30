@@ -580,21 +580,65 @@ function _catmull_rom_uniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
     t3 = t2 * t
     m1 = (p2 - p0) * tension
     m2 = (p3 - p1) * tension
-    return (p1 * (2t3 - 3t2 + 1.0) +
-            m1 * (t3 - 2t2 + t) +
-            p2 * (-2t3 + 3t2) +
-            m2 * (t3 - t2))
+    result = (p1 * (2t3 - 3t2 + 1.0) +
+              m1 * (t3 - 2t2 + t) +
+              p2 * (-2t3 + 3t2) +
+              m2 * (t3 - t2))
+    all(isfinite, (result.x, result.y, result.z)) && return result
+
+    tangent1_weight = tension * (t3 - 2t2 + t)
+    tangent2_weight = tension * (t3 - t2)
+    weights = (-tangent1_weight,
+               2t3 - 3t2 + 1.0 - tangent2_weight,
+               -2t3 + 3t2 + tangent1_weight,
+               tangent2_weight)
+    stable_coordinate(a, b, c, d) = _float_representation_value(
+        _float_representation_sum4(
+            _float_representation_multiply(
+                _float_value_representation(a),
+                _float_value_representation(weights[1])),
+            _float_representation_multiply(
+                _float_value_representation(b),
+                _float_value_representation(weights[2])),
+            _float_representation_multiply(
+                _float_value_representation(c),
+                _float_value_representation(weights[3])),
+            _float_representation_multiply(
+                _float_value_representation(d),
+                _float_value_representation(weights[4])),
+        ))
+    return Vec3(stable_coordinate(p0.x, p1.x, p2.x, p3.x),
+                stable_coordinate(p0.y, p1.y, p2.y, p3.y),
+                stable_coordinate(p0.z, p1.z, p2.z, p3.z))
 end
 
 function _catmull_rom_param_lerp(a::Vec3, b::Vec3, t0::Float64,
                                  t1::Float64, t::Float64)
     denom = t1 - t0
     denom > 0.0 || return a
-    return a * ((t1 - t) / denom) + b * ((t - t0) / denom)
+    return lerp(a, b, (t - t0) / denom)
 end
 
 function _catmull_rom_interval(a::Vec3, b::Vec3, alpha::Float64)
     return max(norm(b - a)^alpha, eps(Float64))
+end
+
+function _catmull_rom_normalized_intervals(
+        p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3, alpha::Float64)
+    pairs = ((p0, p1), (p1, p2), (p2, p3))
+    log_intervals = ntuple(3) do index
+        direction, logscale, nonzero =
+            _difference_direction_and_logscale(pairs[index]...)
+        nonzero || return (-Inf, false)
+        return (alpha * (log(norm(direction)) + logscale), true)
+    end
+    largest = maximum(first(interval) for interval in log_intervals)
+    isfinite(largest) || return (eps(Float64), eps(Float64), eps(Float64))
+    return ntuple(3) do index
+        log_interval, nonzero = log_intervals[index]
+        nonzero || return eps(Float64)
+        max(exp(log_interval - largest), eps(Float64))
+    end
 end
 
 function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
@@ -603,6 +647,13 @@ function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
     t1 = t0 + _catmull_rom_interval(p0, p1, alpha)
     t2 = t1 + _catmull_rom_interval(p1, p2, alpha)
     t3 = t2 + _catmull_rom_interval(p2, p3, alpha)
+    if !(isfinite(t3) && t1 > t0 && t2 > t1 && t3 > t2)
+        interval1, interval2, interval3 =
+            _catmull_rom_normalized_intervals(p0, p1, p2, p3, alpha)
+        t1 = interval1
+        t2 = t1 + interval2
+        t3 = t2 + interval3
+    end
     t = t1 + u * (t2 - t1)
 
     a1 = _catmull_rom_param_lerp(p0, p1, t0, t1, t)
