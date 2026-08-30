@@ -851,6 +851,44 @@ function _transform_parent_world_quaternion(
     return quat_normalize(world)
 end
 
+@inline function _transform_world_rotation_to_parent(
+        obj::AbstractObject3D,
+        world_delta::Quaternion{Float64})::Quaternion{Float64}
+    parent = get_parent(obj)
+    parent === nothing && return world_delta
+    world = compute_world_matrix(parent)::Mat4{Float64}
+    c1 = Vec3(mat4_get(world, 1, 1), mat4_get(world, 2, 1),
+              mat4_get(world, 3, 1))
+    c2 = Vec3(mat4_get(world, 1, 2), mat4_get(world, 2, 2),
+              mat4_get(world, 3, 2))
+    c3 = Vec3(mat4_get(world, 1, 3), mat4_get(world, 2, 3),
+              mat4_get(world, 3, 3))
+    l1, l2, l3 = norm(c1), norm(c2), norm(c3)
+    u1, u2, u3 = normalize(c1), normalize(c2), normalize(c3)
+    orientation = _mat4_linear_orientation_sign(world)
+    if iszero(l1) || iszero(l2) || iszero(l3) || iszero(orientation)
+        parent_rotation = _transform_parent_world_quaternion(obj)
+        parent_inverse = _transform_unit_quaternion_inverse(parent_rotation)
+        return quat_multiply(
+            quat_multiply(parent_inverse, world_delta), parent_rotation)
+    end
+
+    vector = Vec3(world_delta.x, world_delta.y, world_delta.z)
+    mapped = Vec3(
+        orientation * dot(u1, vector),
+        orientation * dot(u2, vector),
+        orientation * dot(u3, vector),
+    )
+    source_length = norm(vector)
+    mapped_length = norm(mapped)
+    if iszero(source_length) || iszero(mapped_length)
+        return Quaternion(0.0, 0.0, 0.0, world_delta.w)
+    end
+    mapped = mapped * (source_length / mapped_length)
+    return quat_normalize(Quaternion(
+        mapped.x, mapped.y, mapped.z, world_delta.w))
+end
+
 function _transform_quaternion_to_euler(q::Quaternion, order::Symbol)
     qn = quat_normalize(q)
     x, y, z, w = qn.x, qn.y, qn.z, qn.w
@@ -1031,10 +1069,8 @@ function transform_apply!(tc::TransformControls, delta::Vec3)
         rotated::Quaternion{Float64} = if tc.space === :local
             quat_multiply(current, delta_rotation)
         else
-            parent_world = _transform_parent_world_quaternion(obj)
-            parent_inverse = _transform_unit_quaternion_inverse(parent_world)
-            parent_delta = quat_multiply(
-                quat_multiply(parent_inverse, delta_rotation), parent_world)
+            parent_delta = _transform_world_rotation_to_parent(
+                obj, delta_rotation)
             quat_multiply(parent_delta, current)
         end
         euler = _transform_quaternion_to_euler(

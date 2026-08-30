@@ -28825,7 +28825,7 @@ end
     @test snap_object.rotation.z ≈ 0.35 atol=1.0e-12
     @test_opt_alloc 256 transform_apply!(
         snap_control, Vec3(0.0, 0.0, 0.25))
-    @test_opt_alloc 256 transform_apply!(
+    @test_opt_alloc 320 transform_apply!(
         world_control, Vec3(0.25, 0.0, 0.0))
 end
 
@@ -30274,4 +30274,86 @@ end
     @test transform_geometry(triangle, reflected).indices == [1, 3, 2]
     @test Diff3D._mat4_linear_orientation_sign(Mat4()) == 1
     @test_opt_alloc 0 Diff3D._mat4_linear_orientation_sign(Mat4())
+end
+
+@testset "fresh audit round 265 fixes" begin
+    camera = PerspectiveCamera()
+    basis_vectors = (
+        Vec3(1.0, 0.0, 0.0),
+        Vec3(0.0, 1.0, 0.0),
+        Vec3(0.0, 0.0, 1.0),
+    )
+    world_direction(object, direction) = mat4_transform_direction(
+        compute_world_matrix(object), direction)
+    angle = 0.4
+    axis_cases = (
+        (:X, Vec3(angle, 0.0, 0.0)),
+        (:Y, Vec3(0.0, angle, 0.0)),
+        (:Z, Vec3(0.0, 0.0, angle)),
+    )
+
+    for reflected_scale in (
+            Vec3(-1.0, 1.0, 1.0),
+            Vec3(1.0, -1.0, 1.0),
+            Vec3(1.0, 1.0, -1.0),
+            Vec3(-1.0, -1.0, 1.0))
+        for (axis, angles) in axis_cases
+            parent = Group()
+            parent.rotation = Euler(0.2, -0.3, 0.1)
+            parent.scale = reflected_scale
+            child = Group()
+            add!(parent, child)
+            before = map(
+                direction -> world_direction(child, direction),
+                basis_vectors)
+            delta_matrix = quat_to_mat4(quat_from_euler(
+                angles.x, angles.y, angles.z))
+            control = TransformControls(
+                camera; mode=:rotate, space=:world, axis=axis)
+            transform_attach!(control, child)
+            transform_apply!(control, angles)
+            for (direction, previous) in zip(basis_vectors, before)
+                expected = mat4_transform_direction(
+                    delta_matrix, previous)
+                actual = world_direction(child, direction)
+                @test norm(actual - expected) < 1.0e-11
+            end
+        end
+    end
+
+    for order in (:XYZ, :YXZ, :ZXY, :ZYX, :YZX, :XZY)
+        parent = Group()
+        parent.rotation = Euler(-0.1, 0.25, 0.3)
+        parent.scale = Vec3(-1.0, 1.0, 1.0)
+        child = Group()
+        child.rotation = Euler(0.15, -0.2, 0.35, order)
+        add!(parent, child)
+        before = map(
+            direction -> world_direction(child, direction),
+            basis_vectors)
+        angles = Vec3(0.0, 0.0, angle)
+        delta_matrix = quat_to_mat4(quat_from_euler(
+            angles.x, angles.y, angles.z; order=order))
+        control = TransformControls(
+            camera; mode=:rotate, space=:world, axis=:Z)
+        transform_attach!(control, child)
+        transform_apply!(control, angles)
+        @test child.rotation.order === order
+        for (direction, previous) in zip(basis_vectors, before)
+            expected = mat4_transform_direction(delta_matrix, previous)
+            actual = world_direction(child, direction)
+            @test norm(actual - expected) < 1.0e-11
+        end
+    end
+
+    allocation_parent = Group()
+    allocation_parent.scale = Vec3(-1.0, 1.0, 1.0)
+    allocation_child = Group()
+    add!(allocation_parent, allocation_child)
+    allocation_control = TransformControls(
+        camera; mode=:rotate, space=:world, axis=:Z)
+    transform_attach!(allocation_control, allocation_child)
+    transform_apply!(allocation_control, Vec3(0.0, 0.0, 0.1))
+    @test_opt_alloc 512 transform_apply!(
+        allocation_control, Vec3(0.0, 0.0, 0.1))
 end
