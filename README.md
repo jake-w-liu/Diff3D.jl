@@ -97,7 +97,7 @@ A Documenter.jl scaffold is provided in `docs/`. To build it locally:
 ```julia
 using Pkg
 Pkg.activate("docs")
-Pkg.develop(path = "..")
+Pkg.develop(PackageSpec(path = pwd()))
 Pkg.instantiate()
 include("docs/make.jl")
 ```
