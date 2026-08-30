@@ -998,13 +998,18 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
                          "NURBS curve parameter t")
     span = _nurbs_span(curve.degree, curve.knots, npoints, u)
     _nurbs_basis!(basis, span, u, curve.degree, curve.knots)
+    weight_scale = 0.0
+    for j in 0:curve.degree
+        cp = curve.control_points[span - curve.degree + j + 1]
+        weight_scale = max(weight_scale, cp.w)
+    end
     x = 0.0
     y = 0.0
     z = 0.0
     weight = 0.0
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
-        coeff = basis[j + 1] * cp.w
+        coeff = basis[j + 1] * (cp.w / weight_scale)
         x += cp.x * coeff
         y += cp.y * coeff
         z += cp.z * coeff
@@ -1019,7 +1024,7 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     total_weight = 0.0
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
-        coeff = basis[j + 1] * cp.w
+        coeff = basis[j + 1] * (cp.w / weight_scale)
         point, total_weight =
             _nurbs_weighted_point(
                 point, total_weight, cp, coeff)
@@ -1043,13 +1048,19 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
     span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
     _nurbs_basis!(basis_u, span_u, uu, surface.degree_u, surface.knots_u)
     _nurbs_basis!(basis_v, span_v, vv, surface.degree_v, surface.knots_v)
+    weight_scale = 0.0
+    for i in 0:surface.degree_u, j in 0:surface.degree_v
+        cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
+        weight_scale = max(weight_scale, cp.w)
+    end
     x = 0.0
     y = 0.0
     z = 0.0
     weight = 0.0
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] * cp.w
+        coeff = basis_u[i + 1] * basis_v[j + 1] *
+                (cp.w / weight_scale)
         x += cp.x * coeff
         y += cp.y * coeff
         z += cp.z * coeff
@@ -1064,7 +1075,8 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
     total_weight = 0.0
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] * cp.w
+        coeff = basis_u[i + 1] * basis_v[j + 1] *
+                (cp.w / weight_scale)
         point, total_weight =
             _nurbs_weighted_point(
                 point, total_weight, cp, coeff)
@@ -1095,13 +1107,20 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     _nurbs_basis!(basis_u, span_u, uu, volume.degree_u, volume.knots_u)
     _nurbs_basis!(basis_v, span_v, vv, volume.degree_v, volume.knots_v)
     _nurbs_basis!(basis_w, span_w, ww, volume.degree_w, volume.knots_w)
+    weight_scale = 0.0
+    for i in 0:volume.degree_u, j in 0:volume.degree_v,
+        k in 0:volume.degree_w
+        cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
+        weight_scale = max(weight_scale, cp.w)
+    end
     x = 0.0
     y = 0.0
     z = 0.0
     weight = 0.0
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] * cp.w
+        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] *
+                (cp.w / weight_scale)
         x += cp.x * coeff
         y += cp.y * coeff
         z += cp.z * coeff
@@ -1116,7 +1135,8 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     total_weight = 0.0
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] * cp.w
+        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] *
+                (cp.w / weight_scale)
         point, total_weight =
             _nurbs_weighted_point(
                 point, total_weight, cp, coeff)

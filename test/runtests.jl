@@ -27657,6 +27657,35 @@ end
         1, 1, 1, knots, knots, knots, volume_points)
     @test norm(nurbs_point(volume, 0.25, 0.75, 0.5) -
                Vec3(0.25, 0.75, 0.5)) < 1.0e-15
+
+    minimum_weight = nextfloat(0.0)
+    minimum_curve = NURBSCurve(
+        1, knots,
+        [Vec4(0.0, 0.0, 0.0, minimum_weight),
+         Vec4(2.0, 0.0, 0.0, minimum_weight)])
+    @test nurbs_point(minimum_curve, 0.5) == Vec3(1.0, 0.0, 0.0)
+    maximum_curve = NURBSCurve(
+        1, knots,
+        [Vec4(0.0, 0.0, 0.0, floatmax(Float64)),
+         Vec4(2.0, 0.0, 0.0, floatmax(Float64))])
+    @test nurbs_point(maximum_curve, 0.5) == Vec3(1.0, 0.0, 0.0)
+
+    minimum_surface_points = [
+        [Vec4(p.x, p.y, p.z, minimum_weight) for p in row]
+        for row in surface_points]
+    minimum_surface = NURBSSurface(
+        1, 1, knots, knots, minimum_surface_points)
+    @test nurbs_point(minimum_surface, 0.25, 0.75) ==
+          Vec3(0.25, 0.75, 0.0)
+
+    minimum_volume_points = [
+        [[Vec4(p.x, p.y, p.z, minimum_weight) for p in column]
+         for column in plane]
+        for plane in volume_points]
+    minimum_volume = NURBSVolume(
+        1, 1, 1, knots, knots, knots, minimum_volume_points)
+    @test nurbs_point(minimum_volume, 0.25, 0.75, 0.5) ==
+          Vec3(0.25, 0.75, 0.5)
 end
 
 @testset "fresh audit round 225 fixes" begin
