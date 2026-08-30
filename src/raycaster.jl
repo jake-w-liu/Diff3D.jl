@@ -16,19 +16,33 @@ hit, or `nothing` if the ray misses. `dir` need not be normalised; `t` is then
 in units of `dir`. `side` culls by winding like three.js `Ray.intersectTriangle`:
 `:front` rejects backfaces, `:back` rejects frontfaces, `:double` accepts both.
 """
+@inline function _ray_triangle_relative_determinant(
+        dir::Vec3, a::Vec3, b::Vec3, c::Vec3)
+    edge_b_direction = _direction_between(a, b)
+    edge_c_direction = _direction_between(a, c)
+    return dot(edge_b_direction,
+               cross(normalize(dir), edge_c_direction))
+end
+
+@inline function _ray_triangle_determinant_visible(
+        determinant, eps, side::Symbol)
+    if side === :front
+        return determinant > eps
+    elseif side === :back
+        return determinant < -eps
+    end
+    return abs(determinant) > eps
+end
+
 @inline function _ray_triangle_intersect_unchecked(origin::Vec3, dir::Vec3,
                                                    a::Vec3, b::Vec3, c::Vec3,
                                                    eps, side::Symbol)
     e1 = b - a; e2 = c - a
     p = cross(dir, e2)
     det = dot(e1, p)                             # det = -dot(dir, cross(e1, e2))
-    if side === :front
-        det <= eps && return nothing             # backfacing or parallel
-    elseif side === :back
-        det >= -eps && return nothing            # frontfacing or parallel
-    else
-        abs(det) < eps && return nothing         # ray parallel to triangle
-    end
+    relative_det = _ray_triangle_relative_determinant(dir, a, b, c)
+    _ray_triangle_determinant_visible(relative_det, eps, side) ||
+        return nothing
     inv_det = 1 / det
     tvec = origin - a
     u = dot(tvec, p) * inv_det
@@ -47,19 +61,6 @@ end
     _float_difference_representation(zero(T), v.z),
 )
 
-@inline function _ray_representation_abs_compare(
-        value::_FloatRepresentation, epsilon)
-    value.nonzero || return -1
-    iszero(epsilon) && return 1
-    epsilon_mantissa, epsilon_exponent = frexp(float(epsilon))
-    value.exponent < epsilon_exponent && return -1
-    value.exponent > epsilon_exponent && return 1
-    magnitude = abs(value.mantissa)
-    magnitude < epsilon_mantissa && return -1
-    magnitude > epsilon_mantissa && return 1
-    return 0
-end
-
 @inline function _ray_triangle_intersect_unchecked(
         origin::Vec3{T}, dir::Vec3{T}, a::Vec3{T}, b::Vec3{T}, c::Vec3{T},
         eps, side::Symbol) where {T<:AbstractFloat}
@@ -68,18 +69,10 @@ end
     direction = _ray_float_vector_representation(dir)
     p = _float_representation_cross(direction, edge_c)
     determinant = _float_representation_dot(edge_b, p)
-    determinant_vs_epsilon =
-        _ray_representation_abs_compare(determinant, eps)
-    if side === :front
-        (determinant.nonzero && determinant.mantissa > zero(T) &&
-         determinant_vs_epsilon > 0) || return nothing
-    elseif side === :back
-        (determinant.nonzero && determinant.mantissa < zero(T) &&
-         determinant_vs_epsilon > 0) || return nothing
-    else
-        (determinant.nonzero && determinant_vs_epsilon >= 0) ||
-            return nothing
-    end
+    determinant.nonzero || return nothing
+    relative_det = _ray_triangle_relative_determinant(dir, a, b, c)
+    _ray_triangle_determinant_visible(relative_det, eps, side) ||
+        return nothing
 
     origin_offset = _float_vector_difference(a, origin)
     u = _float_representation_ratio(

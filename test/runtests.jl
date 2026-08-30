@@ -28148,3 +28148,44 @@ end
     @test mat4_transform_point(
         explicit[branch], Vec3()) == Vec3(102.0, 199.0, 303.0)
 end
+
+@testset "fresh audit round 239 fixes" begin
+    function scaled_triangle_hit(scale; direction_scale=1.0, side=:double)
+        return ray_triangle_intersect(
+            Vec3(scale / 4, scale / 4, 1.0),
+            Vec3(0.0, 0.0, -direction_scale),
+            Vec3(), Vec3(scale, 0.0, 0.0),
+            Vec3(0.0, scale, 0.0); side=side)
+    end
+
+    for scale in (1.0e-150, 1.0e-12, 1.0e-6, 1.0, 1.0e150)
+        @test scaled_triangle_hit(scale) == 1.0
+        @test scaled_triangle_hit(scale; side=:front) == 1.0
+        @test scaled_triangle_hit(scale; side=:back) === nothing
+    end
+    @test scaled_triangle_hit(1.0; direction_scale=1.0e-12) == 1.0e12
+    @test scaled_triangle_hit(1.0; direction_scale=1.0e6) == 1.0e-6
+    @test ray_triangle_intersect(
+        Vec3(0.25, 0.25, 1.0), Vec3(0.0, 0.0, -1.0e12),
+        Vec3(), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0);
+        eps=0.0) == 1.0e-12
+
+    nearly_parallel = (
+        Vec3(0.25, 0.25, 1.0e-13),
+        Vec3(1.0, 0.0, -1.0e-12),
+        Vec3(), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0),
+    )
+    @test ray_triangle_intersect(nearly_parallel...) === nothing
+    @test ray_triangle_intersect(nearly_parallel...; eps=0.0) ≈ 0.1
+
+    derivative = ForwardDiff.derivative(1.0e-6) do scale
+        ray_triangle_intersect(
+            Vec3(scale / 4, scale / 4, 1.0),
+            Vec3(0.0, 0.0, -1.0),
+            Vec3(), Vec3(scale, 0.0, 0.0),
+            Vec3(0.0, scale, 0.0))
+    end
+    @test isfinite(derivative)
+    @test abs(derivative) <= 1.0e-12
+    @test_opt_alloc 0 scaled_triangle_hit(1.0e-12)
+end
