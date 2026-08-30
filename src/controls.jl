@@ -685,8 +685,9 @@ function drag_move!(dc::DragControls, delta::Vec3)
     obj === nothing && return dc
     _validate_object_transform(obj)
     checked_delta = _checked_control_vec3(delta, "DragControls delta")
+    parent_delta = _transform_world_delta_to_parent(obj, checked_delta)
     position = _checked_control_vec3(
-        obj.position + checked_delta, "DragControls object position")
+        obj.position + parent_delta, "DragControls object position")
     obj.position = position
     return dc
 end
@@ -807,6 +808,29 @@ function _transform_local_delta(obj::AbstractObject3D, delta::Vec3)
     rot = get_rotation(obj)
     q = quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)
     return mat4_transform_direction(quat_to_mat4(q), delta)
+end
+
+function _transform_world_delta_to_parent(obj::AbstractObject3D,
+                                          delta::Vec3)
+    parent = get_parent(obj)
+    parent === nothing && return delta
+    parent_inverse = mat4_inverse(compute_world_matrix(parent))
+    return mat4_transform_direction(parent_inverse, delta)
+end
+
+function _transform_world_position_to_parent(obj::AbstractObject3D,
+                                             position::Vec3)
+    parent = get_parent(obj)
+    parent === nothing && return position
+    return mat4_transform_point(
+        mat4_inverse(compute_world_matrix(parent)), position)
+end
+
+function _transform_parent_position_to_world(obj::AbstractObject3D,
+                                             position::Vec3)
+    parent = get_parent(obj)
+    parent === nothing && return position
+    return mat4_transform_point(compute_world_matrix(parent), position)
 end
 
 @inline _transform_unit_quaternion_inverse(q::Quaternion) =
@@ -955,10 +979,28 @@ function transform_apply!(tc::TransformControls, delta::Vec3)
     checked_delta = _checked_control_vec3(delta, "TransformControls delta")
     if tc.mode === :translate
         axis_delta = _transform_axis_vec(tc.axis, checked_delta)
-        move = tc.space === :local ? _transform_local_delta(obj, axis_delta) : axis_delta
+        move = tc.space === :local ? _transform_local_delta(obj, axis_delta) :
+               _transform_world_delta_to_parent(obj, axis_delta)
         position = obj.position + move
-        tc.translation_snap !== nothing &&
-            (position = _transform_snap_position(position, tc.translation_snap, tc.axis))
+        if tc.translation_snap !== nothing
+            if tc.space === :world
+                world_position = _transform_parent_position_to_world(
+                    obj, position)
+                world_position = _transform_snap_position(
+                    world_position, tc.translation_snap, tc.axis)
+                position = _transform_world_position_to_parent(
+                    obj, world_position)
+            else
+                rotation = quat_to_mat4(quat_from_euler(
+                    obj.rotation.x, obj.rotation.y, obj.rotation.z;
+                    order=obj.rotation.order))
+                local_position = mat4_transform_direction(
+                    mat4_transpose(rotation), position)
+                local_position = _transform_snap_position(
+                    local_position, tc.translation_snap, tc.axis)
+                position = mat4_transform_direction(rotation, local_position)
+            end
+        end
         obj.position = _checked_control_vec3(
             position, "TransformControls object position")
     elseif tc.mode === :scale

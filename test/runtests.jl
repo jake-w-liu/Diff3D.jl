@@ -30180,3 +30180,64 @@ end
     @test_throws "animation output accessor componentType/normalized combination is invalid" Diff3D._gltf_animation_clips(
         animation_format_fixture(output_normalized=true)..., nodes)
 end
+
+@testset "fresh audit round 263 fixes" begin
+    camera = PerspectiveCamera()
+    world_position(object) = mat4_transform_point(
+        compute_world_matrix(object), Vec3())
+
+    drag_parent = Group()
+    drag_parent.rotation = Euler(0.0, 0.0, pi / 2)
+    dragged = Group()
+    add!(drag_parent, dragged)
+    drag = DragControls(AbstractObject3D[dragged], camera)
+    drag_start!(drag, dragged)
+    drag_move!(drag, Vec3(1.0, 0.0, 0.0))
+    @test norm(world_position(dragged) - Vec3(1.0, 0.0, 0.0)) < 1.0e-12
+    @test norm(dragged.position - Vec3(0.0, -1.0, 0.0)) < 1.0e-12
+
+    scaled_parent = Group()
+    scaled_parent.scale = Vec3(2.0, 4.0, 1.0)
+    scaled_child = Group()
+    add!(scaled_parent, scaled_child)
+    scaled_drag = DragControls(AbstractObject3D[scaled_child], camera)
+    drag_start!(scaled_drag, scaled_child)
+    drag_move!(scaled_drag, Vec3(1.0, 2.0, 0.0))
+    @test scaled_child.position == Vec3(0.5, 0.5, 0.0)
+    @test world_position(scaled_child) == Vec3(1.0, 2.0, 0.0)
+
+    transform_parent = Group()
+    transform_parent.rotation = Euler(0.0, 0.0, pi / 2)
+    transformed = Group()
+    add!(transform_parent, transformed)
+    world_control = TransformControls(
+        camera; mode=:translate, space=:world, axis=:X)
+    transform_attach!(world_control, transformed)
+    transform_apply!(world_control, Vec3(1.0, 9.0, 9.0))
+    @test norm(world_position(transformed) - Vec3(1.0, 0.0, 0.0)) < 1.0e-12
+    @test norm(transformed.position - Vec3(0.0, -1.0, 0.0)) < 1.0e-12
+
+    local_snapped = Group()
+    local_snapped.rotation = Euler(0.0, 0.0, pi / 2)
+    local_control = TransformControls(
+        camera; mode=:translate, space=:local, axis=:X,
+        translation_snap=1.0)
+    transform_attach!(local_control, local_snapped)
+    transform_apply!(local_control, Vec3(0.6, 0.0, 0.0))
+    @test norm(local_snapped.position - Vec3(0.0, 1.0, 0.0)) < 1.0e-12
+
+    world_snapped = Group()
+    add!(transform_parent, world_snapped)
+    snap_control = TransformControls(
+        camera; mode=:translate, space=:world, axis=:X,
+        translation_snap=1.0)
+    transform_attach!(snap_control, world_snapped)
+    transform_apply!(snap_control, Vec3(0.6, 0.0, 0.0))
+    @test norm(world_position(world_snapped) - Vec3(1.0, 0.0, 0.0)) < 1.0e-12
+    @test norm(world_snapped.position - Vec3(0.0, -1.0, 0.0)) < 1.0e-12
+
+    @test_opt_alloc 640 transform_apply!(
+        world_control, Vec3(0.25, 0.0, 0.0))
+    @test_opt_alloc 640 drag_move!(
+        drag, Vec3(0.25, 0.0, 0.0))
+end
