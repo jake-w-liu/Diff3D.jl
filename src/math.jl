@@ -1436,6 +1436,16 @@ line3_at(l::Line3, t) = Vec3(
 )
 
 @inline function _axis_difference(value1, value2)
+    direct = value2 - value1
+    if isfinite(direct) && !iszero(direct)
+        return direct, one(direct), true
+    elseif iszero(direct) && value1 == value2
+        return direct, one(direct), false
+    end
+
+    # Only scale when direct subtraction overflowed (or an exotic numeric type
+    # rounded distinct values to zero). For nearby IEEE floats, subtraction is
+    # exact by Sterbenz's lemma; normalizing first would round away the true ulp.
     scale = max(abs(value1), abs(value2))
     iszero(scale) && return zero(value1), scale, false
     difference = value2 / scale - value1 / scale

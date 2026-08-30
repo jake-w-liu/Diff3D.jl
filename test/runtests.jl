@@ -32722,3 +32722,34 @@ end
     @test isfinite(derivative)
     @test_opt_alloc 0 loss_silhouette_iou(below_black, black)
 end
+
+@testset "CRC85 — exact finite axis differences" begin
+    scale = 1.0e100
+    adjacent = nextfloat(scale)
+    direct = adjacent - scale
+    normalized, factor, nonzero = Diff3D._axis_difference(scale, adjacent)
+    @test nonzero
+    @test normalized == direct
+    @test factor == 1.0
+
+    triangle = Triangle(
+        Vec3(scale, scale, 0.0),
+        Vec3(adjacent, scale, 0.0),
+        Vec3(scale, adjacent, 0.0))
+    area_oracle = setprecision(BigFloat, 512) do
+        delta = BigFloat(adjacent) - BigFloat(scale)
+        Float64(delta * delta / 2)
+    end
+    @test triangle_area(triangle) == area_oracle
+    @test triangle_normal(triangle) == Vec3(0.0, 0.0, 1.0)
+
+    overflow_difference, overflow_scale, overflow_nonzero =
+        Diff3D._axis_difference(-floatmax(Float64), floatmax(Float64))
+    @test overflow_nonzero
+    @test overflow_difference == 2.0
+    @test overflow_scale == floatmax(Float64)
+
+    @test Diff3D._axis_difference(2.0, 2.0) == (0.0, 1.0, false)
+    @test_opt_alloc 0 Diff3D._axis_difference(scale, adjacent)
+    @test_opt_alloc 0 triangle_area(triangle)
+end
