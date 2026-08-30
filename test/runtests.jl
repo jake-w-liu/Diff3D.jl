@@ -33287,3 +33287,183 @@ end
         @test all(isfinite, (value.x, value.y, value.z))
     end
 end
+
+@testset "CRC69 — stable reverse exponential and power derivatives" begin
+    smallest = nextfloat(0.0)
+
+    exp2_oracle(input) = Float64(setprecision(BigFloat, 1024) do
+        base_log = log(BigFloat(2))
+        exp(BigFloat(input) * base_log) * base_log
+    end)
+    exp10_oracle(input) = Float64(setprecision(BigFloat, 1024) do
+        base_log = log(BigFloat(10))
+        exp(BigFloat(input) * base_log) * base_log
+    end)
+    power_base_oracle(base, exponent) = Float64(setprecision(BigFloat, 1024) do
+        base_big = BigFloat(base)
+        exponent_big = BigFloat(exponent)
+        exponent_big * base_big^(exponent_big - 1)
+    end)
+    power_exponent_oracle(base, exponent) = Float64(setprecision(BigFloat, 1024) do
+        base_big = BigFloat(base)
+        exponent_big = BigFloat(exponent)
+        base_big^exponent_big * log(base_big)
+    end)
+
+    for input in (-1074.5, -1074.0, 1023.0, 1024.0)
+        actual = only(reverse_gradient(values -> exp2(values[1]), [input]))
+        @test isapprox(
+            actual, exp2_oracle(input); rtol=2eps(Float64), atol=0.0)
+    end
+    for input in (-324.0, -323.7, -323.65, -323.5, 300.0)
+        actual = only(reverse_gradient(values -> exp10(values[1]), [input]))
+        @test isapprox(
+            actual, exp10_oracle(input); rtol=2eps(Float64), atol=0.0)
+    end
+
+    for (base, exponent) in ((0.1, 324), (0.1, 325), (0.1, 325.5),
+                             (-0.1, 325), (smallest, smallest),
+                             (1.0e-200, 2), (1.0e200, 2),
+                             (-1.0e200, 2))
+        actual = only(reverse_gradient(
+            values -> values[1]^exponent, [base]))
+        @test isapprox(
+            actual, power_base_oracle(base, exponent);
+            rtol=2eps(Float64), atol=0.0)
+    end
+
+    for (base, exponent) in ((10.0, -323.65), (2.0, -1074.5),
+                             (0.1, 323.65), (2.0, 3.0),
+                             (2.0, 1024.0))
+        actual = only(reverse_gradient(
+            values -> base^values[1], [exponent]))
+        @test isapprox(
+            actual, power_exponent_oracle(base, exponent);
+            rtol=2eps(Float64), atol=0.0)
+    end
+
+    independent_value, independent_gradient = reverse_value_gradient(
+        values -> values[1]^values[2], [smallest, smallest])
+    @test independent_value == 1.0
+    @test independent_gradient == [
+        power_base_oracle(smallest, smallest),
+        power_exponent_oracle(smallest, smallest),
+    ]
+    alias_value, alias_gradient = reverse_value_gradient(
+        values -> values[1]^values[1], [smallest])
+    alias_oracle = Float64(setprecision(BigFloat, 1024) do
+        value = BigFloat(smallest)
+        value^value * (log(value) + 1)
+    end)
+    @test alias_value == 1.0
+    @test alias_gradient == [alias_oracle]
+
+    ordinary = [0.7, 1.3]
+    ordinary_function(values) =
+        values[1]^values[2] + exp2(values[1]) + exp10(values[2])
+    @test reverse_gradient(ordinary_function, ordinary) ≈
+          ForwardDiff.gradient(ordinary_function, ordinary)
+    @test_opt_alloc 0 Diff3D._power_base_derivative(2.0, 3.0, 8.0)
+    @test_opt_alloc 0 Diff3D._power_exponent_derivative(2.0, 3.0, 8.0)
+    @test_opt_alloc 0 Diff3D._stable_derivative(
+        1.0, Val(:exp2), 0.0)
+end
+
+@testset "CRC78 — reverse atan same-node cancellation" begin
+    smallest = nextfloat(0.0)
+    for input in (smallest, -smallest, 1.0e-320, -1.0e-320,
+                  1.0, -1.0)
+        value, gradient = reverse_value_gradient(
+            values -> atan(values[1], values[1]), [input])
+        @test value == atan(input, input)
+        @test gradient == [0.0]
+    end
+
+    for origin in (0.0, -0.0)
+        origin_value, origin_gradient = reverse_value_gradient(
+            values -> atan(values[1], values[1]), [origin])
+        @test origin_value == atan(origin, origin)
+        @test isnan(only(origin_gradient))
+    end
+
+    independent = reverse_gradient(
+        values -> atan(values[1], values[2]), [smallest, smallest])
+    @test independent == [Inf, -Inf]
+    @test reverse_gradient(
+        values -> atan(values[1], values[2]), [3.0, 4.0]) ≈
+          ForwardDiff.gradient(
+              values -> atan(values[1], values[2]), [3.0, 4.0])
+    @test_opt_alloc 0 Diff3D._atan2_partials(3.0, 4.0)
+end
+
+@testset "CRC79 — scaled reverse hypot partials" begin
+    smallest = nextfloat(0.0)
+    unit_component = inv(sqrt(2.0))
+    for magnitude in (smallest, 1.0e-300, 1.0, 1.0e300,
+                      floatmax(Float64))
+        value, gradient = reverse_value_gradient(
+            values -> hypot(values[1], values[2]),
+            [magnitude, magnitude])
+        @test value == hypot(magnitude, magnitude)
+        @test gradient ≈ [unit_component, unit_component]
+
+        _, alias_gradient = reverse_value_gradient(
+            values -> hypot(values[1], values[1]), [magnitude])
+        @test only(alias_gradient) ≈ sqrt(2.0)
+    end
+
+    @test only(reverse_gradient(
+        values -> hypot(values[1], smallest), [smallest])) ≈
+          unit_component
+    @test only(reverse_gradient(
+        values -> hypot(smallest, values[1]), [smallest])) ≈
+          unit_component
+    @test reverse_gradient(
+        values -> hypot(values[1], values[2]), [0.0, 0.0]) == [0.0, 0.0]
+    @test reverse_gradient(
+        values -> hypot(values[1], values[2]), [3.0, 4.0]) == [0.6, 0.8]
+    @test_opt_alloc 0 Diff3D._scaled_hypot_partials(
+        smallest, smallest)
+end
+
+@testset "CRC86 — analytic singular reverse derivatives" begin
+    positive_sqrt = reverse_gradient(values -> sqrt(values[1]), [0.0])
+    negative_sqrt = reverse_gradient(values -> sqrt(values[1]), [-0.0])
+    @test only(positive_sqrt) == Inf
+    @test only(negative_sqrt) == -Inf
+    @test only(reverse_gradient(values -> cbrt(values[1]), [0.0])) == Inf
+    @test only(reverse_gradient(values -> cbrt(values[1]), [-0.0])) == Inf
+
+    for exponent in (-4, -3, -2, -1)
+        positive_value, positive_gradient = reverse_value_gradient(
+            values -> values[1]^exponent, [0.0])
+        negative_value, negative_gradient = reverse_value_gradient(
+            values -> values[1]^exponent, [-0.0])
+        @test positive_value == 0.0^exponent
+        @test negative_value == (-0.0)^exponent
+        @test only(positive_gradient) ==
+              ForwardDiff.derivative(value -> value^exponent, 0.0)
+        @test only(negative_gradient) ==
+              ForwardDiff.derivative(value -> value^exponent, -0.0)
+    end
+
+    for exponent in (-3.0, -2.0, -1.0, -0.5)
+        @test only(reverse_gradient(
+            values -> values[1]^exponent, [0.0])) ==
+              ForwardDiff.derivative(value -> value^exponent, 0.0)
+        @test only(reverse_gradient(
+            values -> values[1]^exponent, [-0.0])) ==
+              ForwardDiff.derivative(value -> value^exponent, -0.0)
+    end
+
+    @test reverse_gradient(values -> values[1]^0, [0.0]) == [0.0]
+    @test reverse_gradient(values -> values[1]^1, [0.0]) == [1.0]
+    @test reverse_gradient(
+        values -> values[1]^typemin(Int), [0.0]) == [-Inf]
+    @test reverse_gradient(
+        values -> values[1]^typemin(Int), [-0.0]) == [Inf]
+    value, gradient = reverse_value_gradient(
+        values -> values[1]^values[2], [0.0, -1.0])
+    @test value == Inf
+    @test gradient == [-Inf, 0.0]
+end

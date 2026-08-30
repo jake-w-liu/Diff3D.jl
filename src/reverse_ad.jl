@@ -124,27 +124,113 @@ function Base.:/(a::Real, b::ADVar)
 end
 
 # ---- powers ----
+# Most derivative formulas below are a finite coefficient times an exponential.
+# Evaluating the rounded primal first can erase or double a representable tail,
+# while evaluating `base^(exponent - 1)` can overflow before multiplication by a
+# tiny exponent brings the derivative back into range. Keep the ordinary path
+# allocation-free, then use the original Float64 inputs in a rare high-precision
+# fallback whenever the formal partial lands on a range boundary.
+@inline _derivative_needs_precise(value::Float64) =
+    !isfinite(value) || iszero(value) || issubnormal(value)
+
+@inline function _stable_derivative(value::Float64, kind::K, input::Real) where {K}
+    (!_derivative_needs_precise(value) || !isfinite(input)) && return value
+    return _precise_derivative(kind, input)
+end
+
+@inline function _stable_derivative(value::Float64, kind::K,
+                                    first::Real, second::Real) where {K}
+    (!_derivative_needs_precise(value) ||
+     !isfinite(first) || !isfinite(second)) && return value
+    return _precise_derivative(kind, first, second)
+end
+
+@noinline function _precise_derivative(::Val{:exp2}, input::Real)
+    return setprecision(BigFloat, 1024) do
+        base_log = log(BigFloat(2))
+        Float64(exp(BigFloat(input) * base_log) * base_log)
+    end
+end
+
+@noinline function _precise_derivative(::Val{:exp10}, input::Real)
+    return setprecision(BigFloat, 1024) do
+        base_log = log(BigFloat(10))
+        Float64(exp(BigFloat(input) * base_log) * base_log)
+    end
+end
+
+@noinline function _precise_derivative(::Val{:power_base},
+                                       base::Real, exponent::Real)
+    return setprecision(BigFloat, 1024) do
+        base_big = BigFloat(base)
+        exponent_big = BigFloat(exponent)
+        Float64(exponent_big * base_big^(exponent_big - 1))
+    end
+end
+
+@noinline function _precise_derivative(::Val{:power_exponent},
+                                       base::Real, exponent::Real)
+    return setprecision(BigFloat, 1024) do
+        base_big = BigFloat(base)
+        exponent_big = BigFloat(exponent)
+        Float64(base_big^exponent_big * log(base_big))
+    end
+end
+
+@inline function _zero_power_base_derivative(base::Float64, exponent::Integer)
+    iszero(exponent) && return 0.0
+    if exponent < 0
+        # Avoid `exponent - 1` overflow at typemin. The derivative at +0 is
+        # always -Inf; at -0 its sign follows the integer parity.
+        return signbit(base) && iseven(exponent) ? Inf : -Inf
+    end
+    return Float64(exponent) * base^(exponent - 1)
+end
+
+@inline function _zero_power_base_derivative(base::Float64, exponent::Real)
+    iszero(exponent) && return 0.0
+    return Float64(exponent) * base^(exponent - one(exponent))
+end
+
+@inline function _power_base_derivative(base::Float64, exponent::Real,
+                                        value::Float64)
+    iszero(base) && return _zero_power_base_derivative(base, exponent)
+    iszero(exponent) && return 0.0
+    exponent == one(exponent) && return 1.0
+    exponent_float = Float64(exponent)
+    if !isfinite(base) && exponent_float > 0.0
+        return exponent_float * base^(exponent_float - 1.0)
+    end
+    # Divide the coefficient by the base before multiplying by the primal. This
+    # keeps tiny-exponent/tiny-base cases such as x^x representable.
+    ordinary = (exponent_float / base) * value
+    return _stable_derivative(
+        ordinary, Val(:power_base), base, exponent)
+end
+
+@inline function _power_exponent_derivative(base::Float64, exponent::Real,
+                                            value::Float64)
+    base > 0.0 || return 0.0
+    base == 1.0 && return 0.0
+    ordinary = value * log(base)
+    return _stable_derivative(
+        ordinary, Val(:power_exponent), base, exponent)
+end
+
 function Base.:^(a::ADVar, p::Integer)
-    # At a.val==0 the formula p·0^(p-1) is correct for p≥1 (gives 1 for p=1, 0
-    # for p≥2) but yields 0·0^(-1)=0·Inf=NaN for p=0 and ±Inf for p<0 (a pole).
-    # Guard those non-positive exponents to 0, matching the ^(::Real) sibling and
-    # ForwardDiff (d/dx of the constant x^0≡1 is 0); without this the NaN adjoint
-    # poisons the whole reverse-mode gradient.
-    d = (a.val == 0 && p <= 0) ? 0.0 : Float64(p) * a.val^(p - 1)
-    _ad_record(a.val^p, (a,), (d,))
+    value = a.val^p
+    derivative = _power_base_derivative(a.val, p, value)
+    _ad_record(value, (a,), (derivative,))
 end
 function Base.:^(a::ADVar, p::Real)
-    v = a.val^p
-    # Only the non-positive exponents are singular at base 0 (p=0 ⇒ 0·Inf=NaN,
-    # p<0 ⇒ pole). p=1 is the smooth identity (derivative 1) and p>1 gives 0, so
-    # the guard must NOT zero those — over-broad `a.val==0 ? 0.0` dropped d/dx x=1.
-    d = (a.val == 0 && p <= 0) ? 0.0 : p * a.val^(p - 1)
-    _ad_record(v, (a,), (d,))
+    value = a.val^p
+    derivative = _power_base_derivative(a.val, p, value)
+    _ad_record(value, (a,), (derivative,))
 end
 function Base.:^(a::Real, b::ADVar)
     af = Float64(a)
     v = af^b.val
-    db = af > 0 ? v * log(af) : 0.0
+    db = _power_exponent_derivative(af, b.val, v)
     _ad_record(v, (b,), (db,))
 end
 Base.:^(a::Irrational{:ℯ}, b::ADVar) = Float64(a)^b
@@ -153,8 +239,8 @@ Base.:^(a::Irrational{:ℯ}, b::ADVar) = Float64(a)^b
 Base.:^(a::ADVar, p::Rational) = a^float(p)
 function Base.:^(a::ADVar, b::ADVar)   # ADVar exponent (also reached by x::Real ^ ADVar via promotion)
     v = a.val^b.val
-    da = (a.val == 0 && b.val <= 0) ? 0.0 : b.val * a.val^(b.val - 1)
-    db = a.val > 0 ? v * log(a.val) : 0.0
+    da = _power_base_derivative(a.val, b.val, v)
+    db = _power_exponent_derivative(a.val, b.val, v)
     _ad_record(v, (a, b), (da, db))
 end
 Base.literal_pow(::typeof(^), a::ADVar, ::Val{p}) where {p} = a^p
@@ -162,7 +248,7 @@ Base.literal_pow(::typeof(^), a::ADVar, ::Val{p}) where {p} = a^p
 # ---- elementary functions ----
 Base.exp(a::ADVar)  = (e = exp(a.val); _ad_record(e, (a,), (e,)))
 Base.log(a::ADVar)  = _ad_record(log(a.val), (a,), (1.0 / a.val,))
-Base.sqrt(a::ADVar) = (s = sqrt(a.val); _ad_record(s, (a,), (s == 0 ? 0.0 : 0.5 / s,)))
+Base.sqrt(a::ADVar) = (s = sqrt(a.val); _ad_record(s, (a,), (0.5 / s,)))
 Base.abs(a::ADVar)  = _ad_record(abs(a.val), (a,), (a.val < 0 ? -1.0 : 1.0,))
 Base.sin(a::ADVar)  = _ad_record(sin(a.val), (a,), (cos(a.val),))
 Base.cos(a::ADVar)  = _ad_record(cos(a.val), (a,), (-sin(a.val),))
@@ -209,11 +295,26 @@ function _atan2_partials(y::Float64, x::Float64)
 end
 
 function Base.atan(y::ADVar, x::ADVar)
+    # atan(x, x) is constant on each finite, nonzero sign domain. Its formal
+    # partials overflow separately for subnormal x before cancelling.
+    if y === x && isfinite(y.val) && !iszero(y.val)
+        return _ad_record(atan(y.val, x.val), (y,), (0.0,))
+    end
     dy, dx = _atan2_partials(y.val, x.val)
     _ad_record(atan(y.val, x.val), (y, x), (dy, dx))
 end
-Base.exp2(a::ADVar)  = (e = exp2(a.val); _ad_record(e, (a,), (e * log(2.0),)))
-Base.exp10(a::ADVar) = (e = exp10(a.val); _ad_record(e, (a,), (e * log(10.0),)))
+Base.exp2(a::ADVar) = begin
+    value = exp2(a.val)
+    derivative = _stable_derivative(
+        value * log(2.0), Val(:exp2), a.val)
+    _ad_record(value, (a,), (derivative,))
+end
+Base.exp10(a::ADVar) = begin
+    value = exp10(a.val)
+    derivative = _stable_derivative(
+        value * log(10.0), Val(:exp10), a.val)
+    _ad_record(value, (a,), (derivative,))
+end
 Base.expm1(a::ADVar) = _ad_record(expm1(a.val), (a,), (exp(a.val),))
 @inline function _log_base_derivative(x::Float64, log_base::Float64)
     return abs(x) >= 1.0 ? inv(x) / log_base : inv(x * log_base)
@@ -223,20 +324,35 @@ Base.log2(a::ADVar)  = _ad_record(
 Base.log10(a::ADVar) = _ad_record(
     log10(a.val), (a,), (_log_base_derivative(a.val, log(10.0)),))
 Base.log1p(a::ADVar) = _ad_record(log1p(a.val), (a,), (1.0 / (1.0 + a.val),))
-Base.cbrt(a::ADVar)  = (c = cbrt(a.val); _ad_record(c, (a,), (c == 0 ? 0.0 : 1.0 / (3.0 * c * c),)))
+Base.cbrt(a::ADVar)  = (c = cbrt(a.val); _ad_record(c, (a,), (1.0 / (3.0 * c * c),)))
+@inline function _scaled_hypot_partials(first::Float64, second::Float64)
+    scale = max(abs(first), abs(second))
+    iszero(scale) && return (0.0, 0.0)
+    if isfinite(scale)
+        first_scaled = first / scale
+        second_scaled = second / scale
+        scaled_norm = hypot(first_scaled, second_scaled)
+        return (first_scaled / scaled_norm, second_scaled / scaled_norm)
+    end
+    value = hypot(first, second)
+    return (first / value, second / value)
+end
 function Base.hypot(a::ADVar, b::ADVar)
     h = hypot(a.val, b.val)
-    _ad_record(h, (a, b), (h == 0 ? 0.0 : a.val / h, h == 0 ? 0.0 : b.val / h))
+    da, db = _scaled_hypot_partials(a.val, b.val)
+    _ad_record(h, (a, b), (da, db))
 end
 function Base.hypot(a::ADVar, b::Real)
     bf = Float64(b)
     h = hypot(a.val, bf)
-    _ad_record(h, (a,), (h == 0 ? 0.0 : a.val / h,))
+    da, _ = _scaled_hypot_partials(a.val, bf)
+    _ad_record(h, (a,), (da,))
 end
 function Base.hypot(a::Real, b::ADVar)
     af = Float64(a)
     h = hypot(af, b.val)
-    _ad_record(h, (b,), (h == 0 ? 0.0 : b.val / h,))
+    _, db = _scaled_hypot_partials(af, b.val)
+    _ad_record(h, (b,), (db,))
 end
 
 # ---- min/max (gradient flows to the selected argument) ----
