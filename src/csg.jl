@@ -55,7 +55,8 @@ end
 function _csg_vertex_lerp(a::CSGVertex, b::CSGVertex, t::Float64)
     return CSGVertex(lerp(a.pos, b.pos, t),
                      normalize(lerp(a.normal, b.normal, t)),
-                     a.uv * (1.0 - t) + b.uv * t)
+                     Vec2(_stable_lerp(a.uv.x, b.uv.x, t),
+                          _stable_lerp(a.uv.y, b.uv.y, t)))
 end
 
 function _csg_plane_from_vertices(vertices::Vector{CSGVertex})

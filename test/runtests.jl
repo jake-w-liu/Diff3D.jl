@@ -32786,3 +32786,21 @@ end
     @test_opt_alloc 0 Diff3D._stable_midpoint(lower, upper)
     @test_opt_alloc 0 compute_bounding_sphere(geometry)
 end
+
+@testset "CRC82 — stable CSG UV interpolation" begin
+    lower = nextfloat(0.0)
+    upper = nextfloat(lower)
+    first_vertex = Diff3D.CSGVertex(
+        Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0),
+        Vec2(lower, -lower))
+    second_vertex = Diff3D.CSGVertex(
+        Vec3(2.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0),
+        Vec2(upper, -upper))
+    midpoint = Diff3D._csg_vertex_lerp(
+        first_vertex, second_vertex, 0.5)
+    @test midpoint.pos == Vec3(1.0, 0.0, 0.0)
+    @test midpoint.normal == Vec3(0.0, 0.0, 1.0)
+    @test midpoint.uv == Vec2(upper, -upper)
+    @test_opt_alloc 0 Diff3D._csg_vertex_lerp(
+        first_vertex, second_vertex, 0.5)
+end
