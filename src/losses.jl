@@ -42,22 +42,53 @@ function _checked_silhouette_threshold(threshold)
     return threshold
 end
 
+@inline _loss_accumulator_type(::Type{T}, ::Type{S}) where {T, S} =
+    promote_type(Float32, float(promote_type(T, S)))
+
+@inline _loss_computation_type(::Type{R}) where {R} =
+    R <: Union{Float16,Float32} ? Float64 : R
+
+@noinline function _loss_precise_average(
+        image::Array{T,3}, target::Array{S,3}, ::Type{R}, squared::Bool
+    ) where {T,S,R<:AbstractFloat}
+    return setprecision(BigFloat, 512) do
+        total = zero(BigFloat)
+        @inbounds for index in eachindex(image, target)
+            difference = BigFloat(image[index]) - BigFloat(target[index])
+            total += squared ? difference * difference : abs(difference)
+        end
+        return convert(R, total / BigFloat(length(image)))
+    end
+end
+
 function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_mse")
-    average = zero(promote_type(T, S))
-    count = 0
+    R = _loss_accumulator_type(T, S)
+    A = _loss_computation_type(R)
+    total = zero(A)
+    correction = zero(A)
     for c in 1:C
         for j in 1:W
             for i in 1:H
-                d = image[i, j, c] - target[i, j, c]
+                d = convert(A, image[i, j, c]) -
+                    convert(A, target[i, j, c])
                 term = d * d
-                count += 1
-                average = count == 1 ? term :
-                    _stable_lerp(average, term, one(term) / count)
+                if A <: AbstractFloat && !isfinite(term)
+                    return _loss_precise_average(
+                        image, target, R, true)
+                end
+                adjusted = term - correction
+                next_total = total + adjusted
+                if A <: AbstractFloat && !isfinite(next_total)
+                    return _loss_precise_average(
+                        image, target, R, true)
+                end
+                correction = (next_total - total) - adjusted
+                total = next_total
             end
         end
     end
-    return average
+    return convert(R, total / length(image))
 end
 
 """
@@ -65,19 +96,31 @@ L1 loss between two images.
 """
 function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_l1")
-    average = zero(promote_type(T, S))
-    count = 0
+    R = _loss_accumulator_type(T, S)
+    A = _loss_computation_type(R)
+    total = zero(A)
+    correction = zero(A)
     for c in 1:C
         for j in 1:W
             for i in 1:H
-                term = abs(image[i, j, c] - target[i, j, c])
-                count += 1
-                average = count == 1 ? term :
-                    _stable_lerp(average, term, one(term) / count)
+                term = abs(convert(A, image[i, j, c]) -
+                           convert(A, target[i, j, c]))
+                if A <: AbstractFloat && !isfinite(term)
+                    return _loss_precise_average(
+                        image, target, R, false)
+                end
+                adjusted = term - correction
+                next_total = total + adjusted
+                if A <: AbstractFloat && !isfinite(next_total)
+                    return _loss_precise_average(
+                        image, target, R, false)
+                end
+                correction = (next_total - total) - adjusted
+                total = next_total
             end
         end
     end
-    return average
+    return convert(R, total / length(image))
 end
 
 """

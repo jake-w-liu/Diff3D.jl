@@ -32639,3 +32639,63 @@ end
         scene, rolled, 10, 10; sigma=0.2, gamma=0.5,
         workspace=soft_workspace)
 end
+
+@testset "CRC68 — extreme and narrow loss accumulation" begin
+    largest = floatmax(Float64)
+    residual = 2sqrt(largest)
+    mse_image = reshape([residual, 0.0, 0.0, 0.0], 1, 4, 1)
+    mse_target = zeros(Float64, 1, 4, 1)
+    mse_oracle = setprecision(BigFloat, 512) do
+        Float64(BigFloat(residual)^2 / 4)
+    end
+    @test loss_mse(mse_image, mse_target) == mse_oracle
+
+    l1_image = reshape([largest, 0.0], 1, 2, 1)
+    l1_target = reshape([-largest, 0.0], 1, 2, 1)
+    l1_oracle = setprecision(BigFloat, 512) do
+        Float64(abs(BigFloat(largest) - BigFloat(-largest)) / 2)
+    end
+    @test l1_oracle == largest
+    @test loss_l1(l1_image, l1_target) == l1_oracle
+
+    integer_max = reshape([typemax(Int)], 1, 1, 1)
+    integer_min = reshape([typemin(Int)], 1, 1, 1)
+    integer_zero = zeros(Int, 1, 1, 1)
+    @test loss_mse(integer_max, integer_zero) ==
+          Float64(BigInt(typemax(Int))^2)
+    @test loss_mse(integer_min, integer_zero) ==
+          Float64(BigInt(typemin(Int))^2)
+    @test loss_mse(integer_max, integer_min) ==
+          Float64((BigInt(typemax(Int)) - BigInt(typemin(Int)))^2)
+    @test loss_l1(integer_min, integer_zero) ==
+          Float64(abs(BigInt(typemin(Int))))
+    @test loss_l1(integer_max, integer_min) ==
+          Float64(BigInt(typemax(Int)) - BigInt(typemin(Int)))
+
+    float16_image = zeros(Float16, 100, 100, 1)
+    float16_image[1:50, :, :] .= Float16(1)
+    float16_mse = loss_mse(
+        float16_image, zeros(Float16, 100, 100, 1))
+    float16_l1 = loss_l1(
+        float16_image, zeros(Float16, 100, 100, 1))
+    @test float16_mse isa Float32
+    @test float16_l1 isa Float32
+    @test float16_mse == 0.5f0
+    @test float16_l1 == 0.5f0
+
+    mse_derivative = Diff3D.ForwardDiff.derivative(0.3) do value
+        loss_mse(reshape([value, 0.2], 1, 2, 1), zeros(1, 2, 1))
+    end
+    l1_derivative = Diff3D.ForwardDiff.derivative(0.3) do value
+        loss_l1(reshape([value, 0.2], 1, 2, 1), zeros(1, 2, 1))
+    end
+    @test mse_derivative ≈ 0.3 atol=1.0e-12
+    @test l1_derivative ≈ 0.5 atol=1.0e-12
+
+    ordinary_image = reshape([0.1, 0.2, 0.3, 0.4], 2, 2, 1)
+    ordinary_target = zeros(2, 2, 1)
+    loss_mse(ordinary_image, ordinary_target)
+    loss_l1(ordinary_image, ordinary_target)
+    @test_opt_alloc 0 loss_mse(ordinary_image, ordinary_target)
+    @test_opt_alloc 0 loss_l1(ordinary_image, ordinary_target)
+end
