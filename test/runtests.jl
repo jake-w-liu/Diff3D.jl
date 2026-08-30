@@ -29563,6 +29563,10 @@ end
 
     @test !applicable(
         IESProfile, [0.0, 90.0], [1.0, 0.0], 1.0)
+    @test_throws "angles must be strictly increasing" IESProfile(
+        [90.0, 0.0], [1.0, 2.0])
+    @test_throws MethodError IESProfile(
+        [90.0, 0.0], [-1.0, 2.0], 2.0, Val(:validated))
 
     dense = IESProfile(
         collect(range(0.0, 180.0; length=4096)),

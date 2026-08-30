@@ -74,9 +74,25 @@ struct IESProfile
     candela::Vector{Float64}   # luminous intensity (cd) at each angle
     max_candela::Float64       # peak candela, for normalization to [0,1]
 
-    function IESProfile(a::Vector{Float64}, c::Vector{Float64},
-                        mx::Float64, ::Val{:validated})
-        return new(copy(a), copy(c), mx)
+    function IESProfile(a::Vector{Float64}, c::Vector{Float64})
+        length(a) == length(c) ||
+            throw(ArgumentError(
+                "IESProfile: angles and candela must have equal length"))
+        length(a) >= 1 ||
+            throw(ArgumentError("IESProfile: need at least one sample"))
+        all(isfinite, a) ||
+            throw(ArgumentError("IESProfile: angles must be finite"))
+        all(isfinite, c) ||
+            throw(ArgumentError("IESProfile: candela values must be finite"))
+        all(value -> value >= 0.0, c) ||
+            throw(ArgumentError(
+                "IESProfile: candela values must be non-negative"))
+        @inbounds for index in 2:length(a)
+            a[index] > a[index - 1] ||
+                throw(ArgumentError(
+                    "IESProfile: angles must be strictly increasing"))
+        end
+        return new(copy(a), copy(c), maximum(c))
     end
 end
 
@@ -115,16 +131,7 @@ function IESProfile(angles::AbstractVector{<:Real}, candela::AbstractVector{<:Re
 end
 
 function _ies_profile_checked(a::Vector{Float64}, c::Vector{Float64})
-    all(isfinite, a) || throw(ArgumentError("IESProfile: angles must be finite"))
-    all(isfinite, c) || throw(ArgumentError("IESProfile: candela values must be finite"))
-    all(x -> x >= 0.0, c) ||
-        throw(ArgumentError("IESProfile: candela values must be non-negative"))
-    @inbounds for i in 2:length(a)
-        a[i] > a[i - 1] ||
-            throw(ArgumentError("IESProfile: angles must be strictly increasing"))
-    end
-    mx = maximum(c)
-    IESProfile(a, c, mx, Val(:validated))
+    return IESProfile(a, c)
 end
 
 """
