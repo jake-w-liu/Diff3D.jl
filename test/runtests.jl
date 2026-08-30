@@ -30357,3 +30357,59 @@ end
     @test_opt_alloc 512 transform_apply!(
         allocation_control, Vec3(0.0, 0.0, 0.1))
 end
+
+@testset "fresh audit round 266 fixes" begin
+    config = SoftRasterizerConfig(
+        sigma=0.1, gamma=1.0, eps=1.0e-8)
+    faces = [(1, 2, 3)]
+    colors = [Color3(1.0, 0.0, 0.0)]
+    infinite_projection = mat4_perspective(
+        pi / 3, 1.0, 0.1, Inf)
+    function depth_triangle(depth)
+        extent = depth * 0.1
+        return [
+            Vec3(-extent, -extent, -depth),
+            Vec3(extent, -extent, -depth),
+            Vec3(0.0, extent, -depth),
+        ]
+    end
+    near_image = soft_render(
+        depth_triangle(1.0e6), faces, colors,
+        infinite_projection, 24, 24, config)
+    far_image = soft_render(
+        depth_triangle(1.0e8), faces, colors,
+        infinite_projection, 24, 24, config)
+    @test sum(near_image) > 1.0
+    @test count(!iszero, far_image) == count(!iszero, near_image)
+    @test sum(far_image) ≈ sum(near_image) rtol=1.0e-6
+
+    finite_projection = mat4_perspective(
+        pi / 3, 1.0, 0.1, 10.0)
+    at_far = soft_render(
+        depth_triangle(10.0), faces, colors,
+        finite_projection, 24, 24, config)
+    beyond_far = soft_render(
+        depth_triangle(20.0), faces, colors,
+        finite_projection, 24, 24, config)
+    @test sum(at_far) > 1.0
+    @test sum(beyond_far) == 0.0
+
+    clip_vertex = mat4_transform_vec4(
+        infinite_projection, Vec4(0.0, 0.0, -1.0e8, 1.0))
+    @test Diff3D._soft_far_value(clip_vertex, config.eps) > 0.0
+    for scale in (1.0e-12, 1.0, 1.0e12)
+        scaled = Vec4(
+            clip_vertex.x * scale, clip_vertex.y * scale,
+            clip_vertex.z * scale, clip_vertex.w * scale)
+        @test Diff3D._soft_far_value(scaled, config.eps) > 0.0
+    end
+    derivative = ForwardDiff.derivative(1.0) do scale
+        Diff3D._soft_far_value(
+            Vec4(0.0, 0.0, clip_vertex.z * scale,
+                 clip_vertex.w * scale), config.eps)
+    end
+    @test isfinite(derivative)
+    @test derivative > 0.0
+    @test_opt_alloc 0 Diff3D._soft_far_value(
+        clip_vertex, config.eps)
+end

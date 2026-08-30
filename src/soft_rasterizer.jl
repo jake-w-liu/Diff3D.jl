@@ -515,7 +515,7 @@ end
 @inline _soft_near_value(v::Vec4, eps) =
     v.z + v.w - eps * abs(v.w)
 @inline _soft_far_value(v::Vec4, eps) =
-    v.w - v.z - eps * abs(v.w)
+    v.w - v.z + eps * abs(v.w)
 
 @inline function _soft_lerp_clip(a::Vec4, b::Vec4, t)
     Vec4(a.x + t * (b.x - a.x),
