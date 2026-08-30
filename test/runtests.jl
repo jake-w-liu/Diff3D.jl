@@ -29040,3 +29040,143 @@ end
     @test_opt_alloc 0 Diff3D._albedo_map_before_lighting(
         MeshPhongMaterial())
 end
+
+@testset "fresh audit round 251 fixes" begin
+    perspective = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=1.0, far=3.0)
+    perspective.position = Vec3()
+    perspective.target = Vec3(0.0, 0.0, -1.0)
+    orthographic = OrthographicCamera(
+        left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+        near=1.0, far=3.0)
+    orthographic.position = Vec3()
+    orthographic.target = Vec3(0.0, 0.0, -1.0)
+
+    function far_plane_render(camera, shading, geometry, material)
+        scene = Scene()
+        add!(scene, Mesh(geometry, material))
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera; shading=shading,
+                frustum_cull=false)
+        return target
+    end
+
+    beyond = PlaneGeometry(width=2.0, height=2.0)
+    beyond.positions[3:3:end] .= -4.0
+    opaque_material = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double,
+        depth_test=false)
+    for camera in (perspective, orthographic), shading in (:flat, :smooth)
+        target = far_plane_render(
+            camera, shading, beyond, opaque_material)
+        @test sum(target.color) == 0.0
+        @test all(isinf, target.depth)
+    end
+
+    crossing = BufferGeometry(
+        [-0.8, -0.8, -2.0,
+          0.8, -0.8, -2.0,
+          0.0,  0.8, -5.0],
+        repeat([0.0, 0.0, 1.0], 3), Float64[],
+        [1, 2, 3], 3, 1)
+    wide_camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=1.0, far=10.0)
+    wide_camera.position = Vec3()
+    wide_camera.target = Vec3(0.0, 0.0, -1.0)
+    for shading in (:flat, :smooth)
+        clipped = far_plane_render(
+            perspective, shading, crossing, opaque_material)
+        unclipped = far_plane_render(
+            wide_camera, shading, crossing, opaque_material)
+        clipped_pixels = count(>(0.5), clipped.color[:, :, 1])
+        unclipped_pixels = count(>(0.5), unclipped.color[:, :, 1])
+        @test 0 < clipped_pixels < unclipped_pixels
+        @test all(depth -> isinf(depth) || depth <= 1.0, clipped.depth)
+    end
+
+    transparent = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0), transparent=true,
+        opacity=0.5, depth_test=false, side=:double)
+    @test sum(far_plane_render(
+        perspective, :flat, beyond, transparent).color) == 0.0
+
+    instanced_scene = Scene()
+    instance = InstancedMesh(
+        PlaneGeometry(width=2.0, height=2.0), opaque_material, 1)
+    set_instance_matrix!(instance, 1, mat4_translation(0.0, 0.0, -4.0))
+    add!(instanced_scene, instance)
+    instanced_target = RenderTarget(32, 32)
+    render!(instanced_target, instanced_scene, perspective;
+            frustum_cull=false)
+    @test sum(instanced_target.color) == 0.0
+
+    primitive_scene = Scene()
+    point_geometry = BufferGeometry(
+        [0.0, 0.0, -4.0], Float64[], Float64[], Int[], 1, 0)
+    add!(primitive_scene, PointsObject(
+        point_geometry, PointsMaterial(color=Color3(1.0, 1.0, 1.0), size=8.0)))
+    line_geometry = BufferGeometry(
+        [-0.5, 0.0, -4.0, 0.5, 0.0, -4.0],
+        Float64[], Float64[], Int[], 2, 0)
+    add!(primitive_scene, LineSegments(
+        line_geometry, LineBasicMaterial(color=Color3(1.0, 1.0, 1.0))))
+    sprite = Sprite(SpriteMaterial(color=Color3(1.0, 1.0, 1.0)))
+    sprite.position = Vec3(0.0, 0.0, -4.0)
+    add!(primitive_scene, sprite)
+    primitive_target = RenderTarget(32, 32)
+    render!(primitive_target, primitive_scene, perspective;
+            frustum_cull=false)
+    @test sum(primitive_target.color) == 0.0
+
+    infinite_camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=1.0, far=Inf)
+    infinite_camera.position = Vec3()
+    infinite_camera.target = Vec3(0.0, 0.0, -1.0)
+    distant = PlaneGeometry(width=20.0, height=20.0)
+    distant.positions[3:3:end] .= -100.0
+    @test sum(far_plane_render(
+        infinite_camera, :flat, distant, opaque_material).color) > 0.0
+
+    soft_vertices = [
+        Vec3(-0.8, -0.8, -2.0), Vec3(0.8, -0.8, -2.0),
+        Vec3(0.0, 0.8, -5.0)]
+    soft_faces = [(1, 2, 3)]
+    soft_colors = [Color3(1.0, 1.0, 1.0)]
+    config = SoftRasterizerConfig(sigma=0.1, gamma=0.1)
+    finite_vp = projection_matrix(perspective) * view_matrix(perspective)
+    wide_vp = projection_matrix(wide_camera) * view_matrix(wide_camera)
+    soft_clipped = soft_render(
+        soft_vertices, soft_faces, soft_colors, finite_vp,
+        24, 24, config)
+    soft_unclipped = soft_render(
+        soft_vertices, soft_faces, soft_colors, wide_vp,
+        24, 24, config)
+    @test 0.0 < sum(soft_clipped) < sum(soft_unclipped)
+
+    soft_beyond = [
+        Vec3(-0.5, -0.5, -4.0), Vec3(0.5, -0.5, -4.0),
+        Vec3(0.0, 0.5, -4.0)]
+    @test sum(soft_render(
+        soft_beyond, soft_faces, soft_colors, finite_vp,
+        24, 24, config)) == 0.0
+    for scale in (1.0e-6, 1.0e6)
+        scaled_vp = Mat4{Float64}(ntuple(
+            index -> scale * finite_vp.e[index], 16))
+        @test soft_render(
+            soft_vertices, soft_faces, soft_colors, scaled_vp,
+            24, 24, config) ≈ soft_clipped rtol=1.0e-11 atol=1.0e-11
+    end
+
+    gradient = ForwardDiff.derivative(-5.0) do far_z
+        T = typeof(far_z)
+        vertices = Vec3{T}[
+            Vec3(T(-0.8), T(-0.8), T(-2.0)),
+            Vec3(T(0.8), T(-0.8), T(-2.0)),
+            Vec3(T(0.0), T(0.8), far_z)]
+        sum(soft_render(
+            vertices, soft_faces, soft_colors, finite_vp,
+            8, 8, config))
+    end
+    @test isfinite(gradient)
+    @test_opt_alloc 0 Diff3D._inside_far_clip(0.5)
+end

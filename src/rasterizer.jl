@@ -188,6 +188,8 @@ const _NO_PLANES = Plane{Float64}[]
 const _ZERO_V3 = Vec3(0.0, 0.0, 0.0)
 const _ZERO_V2 = Vec2(0.0, 0.0)
 
+@inline _inside_far_clip(z) = isfinite(z) && z <= one(z)
+
 struct _CombinedClippingPlanes{G,M}
     global_planes::G
     material_planes::M
@@ -254,6 +256,7 @@ end
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
                 z = w0 * z1 + w1 * z2 + w2 * z3
+                _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
                     if has_clip || has_alpha
                         # Perspective-correct world position (weight by 1/w).
@@ -315,6 +318,7 @@ end
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
                 z = w0 * z1 + w1 * z2 + w2 * z3
+                _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
                     iw = w0*iw1 + w1*iw2 + w2*iw3
                     a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
@@ -544,6 +548,7 @@ end
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             z = b0 * z1 + b1 * z2 + b2 * z3
+            _inside_far_clip(z) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
             (blend && use_stamp && stamp[py, px] == stamp_id) && continue   # already blended by this mesh
             frag_alpha = alpha_base
@@ -775,6 +780,7 @@ end
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             z = b0 * z1 + b1 * z2 + b2 * z3
+            _inside_far_clip(z) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
             (blend && use_stamp && stamp[py, px] == stamp_id) && continue
             alpha_base < alpha_test && continue
@@ -1154,10 +1160,11 @@ end
 
 Render a scene with a camera into a RenderTarget using CPU rasterization.
 
-Triangles are transformed to view space, clipped against the camera near plane
-(so geometry straddling the camera renders its visible portion instead of
-vanishing), then projected and rasterized with a z-buffer. Scratch buffers are
-reused across faces to keep per-frame allocation bounded.
+Triangles are transformed to view space, clipped against the camera near plane,
+then projected and rasterized with a z-buffer; fragments beyond a finite far
+plane are discarded. Geometry straddling either depth boundary keeps its visible
+portion. Scratch buffers are reused across faces to keep per-frame allocation
+bounded.
 
 `shading=:flat` (default) evaluates one colour per face (fast). `shading=:smooth`
 interpolates per-vertex world position and normal perspective-correctly and
@@ -2267,6 +2274,7 @@ end
                 # Skip pixels already blended by this same mesh (shared edges).
                 use_stamp && stamp[py, px] == stamp_id && continue
                 z = w0 * z1 + w1 * z2 + w2 * z3
+                _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
                     ia_frag = 1.0 - frag_alpha
                     rt.color[py, px, 1] = fc.r * frag_alpha + rt.color[py, px, 1] * ia_frag

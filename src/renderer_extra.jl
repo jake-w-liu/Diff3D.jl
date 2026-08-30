@@ -1282,6 +1282,7 @@ end
                              depth_test::Bool=true, depth_write::Bool=true,
                              alpha::Float64=1.0)
     (1 <= x <= rt.width && 1 <= y <= rt.height && xlo <= x <= xhi && ylo <= y <= yhi) || return false
+    _inside_far_clip(z) || return false
     @inbounds if !depth_test || z < rt.depth[y, x]
         depth_write && (rt.depth[y, x] = z)
         if alpha >= 1.0
@@ -1939,6 +1940,7 @@ end
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             stamp !== nothing && stamp[py, px] == stamp_id && continue
             z = b0 * z1 + b1 * z2 + b2 * z3
+            _inside_far_clip(z) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
             a0 = b0; a1 = b1; a2 = b2
             if has_clip || needs_uv

@@ -199,13 +199,14 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             throw(ArgumentError("soft_render face indices must reference vertices"))
     end
 
-    # Precompute screen-space triangles. Allocate for the common no-near-clip
-    # case (one emitted triangle per face) and grow only for split triangles.
+    # Precompute screen-space triangles. Allocate for the common unclipped case
+    # and grow only when near/far clipping splits a triangle.
     screen_tris = workspace === nothing ?
         Vector{_SoftScreenTriangle{T}}(undef, n_faces) :
         _soft_screen_triangle_buffer!(workspace, n_faces)
     n_screen_tris = 0
-    max_screen_tris = 2n_faces
+    max_screen_tris = _render_checked_mul(
+        3, n_faces, "soft_render clipped triangle count")
 
     for fi in 1:n_faces
         i1, i2, i3 = faces[fi]
@@ -215,17 +216,26 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
         c3 = mat4_transform_vec4(vp, Vec4(v3.x, v3.y, v3.z, one(T)))
         n_clipped, c1, c2, c3, c4 = _soft_clip_near_triangle(c1, c2, c3, eps)
         n_clipped < 3 && continue
+        n_clipped, c1, c2, c3, c4, c5 = _soft_clip_far_polygon(
+            n_clipped, c1, c2, c3, c4, eps)
+        n_clipped < 3 && continue
         s1 = _soft_project_clip_to_screen(c1, T(W), T(H))
         s2 = _soft_project_clip_to_screen(c2, T(W), T(H))
         s3 = _soft_project_clip_to_screen(c3, T(W), T(H))
         n_screen_tris = _soft_store_screen_triangle!(
             screen_tris, n_screen_tris, max_screen_tris,
             s1, s2, s3, cols[fi], σ, eps, W, H)
-        if n_clipped == 4
+        if n_clipped >= 4
             s4 = _soft_project_clip_to_screen(c4, T(W), T(H))
             n_screen_tris = _soft_store_screen_triangle!(
                 screen_tris, n_screen_tris, max_screen_tris,
                 s1, s3, s4, cols[fi], σ, eps, W, H)
+        end
+        if n_clipped == 5
+            s5 = _soft_project_clip_to_screen(c5, T(W), T(H))
+            n_screen_tris = _soft_store_screen_triangle!(
+                screen_tris, n_screen_tris, max_screen_tris,
+                s1, s4, s5, cols[fi], σ, eps, W, H)
         end
     end
     n_screen_tris == 0 && return _soft_background_image(T, H, W, bg, workspace)
@@ -504,6 +514,8 @@ end
 
 @inline _soft_near_value(v::Vec4, eps) =
     v.z + v.w - eps * abs(v.w)
+@inline _soft_far_value(v::Vec4, eps) =
+    v.w - v.z - eps * abs(v.w)
 
 @inline function _soft_lerp_clip(a::Vec4, b::Vec4, t)
     Vec4(a.x + t * (b.x - a.x),
@@ -579,6 +591,64 @@ function _soft_clip_near_triangle(a::Vec4{T}, b::Vec4{T}, c::Vec4{T}, eps) where
         prev_in = curr_in
     end
     return out_n, c1, c2, c3, c4
+end
+
+@inline function _soft_clip_vertex(index::Int, c1, c2, c3, c4)
+    index == 1 && return c1
+    index == 2 && return c2
+    index == 3 && return c3
+    return c4
+end
+
+@inline function _soft_clip_push5(n::Int, v::Vec4{T},
+                                  c1::Vec4{T}, c2::Vec4{T},
+                                  c3::Vec4{T}, c4::Vec4{T},
+                                  c5::Vec4{T}) where {T}
+    n += 1
+    if n == 1
+        c1 = v
+    elseif n == 2
+        c2 = v
+    elseif n == 3
+        c3 = v
+    elseif n == 4
+        c4 = v
+    else
+        c5 = v
+    end
+    return n, c1, c2, c3, c4, c5
+end
+
+function _soft_clip_far_polygon(n::Int, a::Vec4{T}, b::Vec4{T},
+                                c::Vec4{T}, d::Vec4{T}, eps) where {T}
+    out_n = 0
+    c1 = a
+    c2 = a
+    c3 = a
+    c4 = a
+    c5 = a
+    prev = _soft_clip_vertex(n, a, b, c, d)
+    prev_distance = _soft_far_value(prev, eps)
+    prev_in = prev_distance >= zero(prev_distance)
+    @inbounds for index in 1:n
+        current = _soft_clip_vertex(index, a, b, c, d)
+        current_distance = _soft_far_value(current, eps)
+        current_in = current_distance >= zero(current_distance)
+        if current_in != prev_in
+            t = prev_distance / (prev_distance - current_distance)
+            out_n, c1, c2, c3, c4, c5 = _soft_clip_push5(
+                out_n, _soft_lerp_clip(prev, current, t),
+                c1, c2, c3, c4, c5)
+        end
+        if current_in
+            out_n, c1, c2, c3, c4, c5 = _soft_clip_push5(
+                out_n, current, c1, c2, c3, c4, c5)
+        end
+        prev = current
+        prev_distance = current_distance
+        prev_in = current_in
+    end
+    return out_n, c1, c2, c3, c4, c5
 end
 
 @inline function _soft_project_clip_to_screen(clip::Vec4{T}, W::T, H::T) where {T}
