@@ -1259,7 +1259,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     # Side
     for y_seg in 0:height_segments
         v = y_seg / height_segments
-        r = (1.0 - v) * radius_top + v * radius_bottom
+        r = _stable_lerp(radius_top, radius_bottom, v)
         y_pos = half_h - v * height
 
         for x_seg in 0:radial_segments

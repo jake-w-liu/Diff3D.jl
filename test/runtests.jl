@@ -32804,3 +32804,17 @@ end
     @test_opt_alloc 0 Diff3D._csg_vertex_lerp(
         first_vertex, second_vertex, 0.5)
 end
+
+@testset "CRC88 — stable cylinder radius interpolation" begin
+    lower = nextfloat(0.0)
+    upper = nextfloat(lower)
+    cylinder = CylinderGeometry(
+        radius_top=lower, radius_bottom=upper, height=1.0,
+        radial_segments=3, height_segments=2, open_ended=true)
+    middle_ring = [get_vertex(cylinder, index) for index in 5:8]
+    @test middle_ring[1].z == upper
+    @test maximum(vertex -> hypot(vertex.x, vertex.z), middle_ring) ==
+          upper
+    @test all(isfinite, cylinder.positions)
+    @test_opt_alloc 0 Diff3D._stable_lerp(lower, upper, 0.5)
+end
