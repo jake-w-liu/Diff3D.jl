@@ -145,7 +145,7 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 Run API documentation coverage:
 
 ```powershell
-julia --project=. -e 'using Diff3D; missing = [n for n in names(Diff3D) if isdefined(Diff3D, n) && !Docs.hasdoc(Diff3D, n)]; @show missing'
+julia --project=. -e 'using Diff3D; has_doc(m,n) = isdefined(Base.Docs,:hasdoc) ? getfield(Base.Docs,:hasdoc)(m,n) : haskey(Base.Docs.meta(m),Base.Docs.Binding(m,n)); missing = [n for n in names(Diff3D) if isdefined(Diff3D,n) && !has_doc(Diff3D,n)]; @show missing'
 ```
 
 Run the browser smoke test for a generated HTML export:
