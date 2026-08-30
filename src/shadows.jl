@@ -101,7 +101,8 @@ function _shadow_direction(from::Vec3, to::Vec3)
 end
 
 function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
-    dir = _shadow_direction(light.target, light.position) # toward the light
+    light_position = _light_world_position(light)
+    dir = _shadow_direction(light.target, light_position) # toward the light
     eye = center + dir * (radius * 2.0)
     lv = mat4_look_at(eye, center, _safe_up(dir))
     s = radius * 1.1
@@ -126,18 +127,20 @@ function _perspective_shadow_planes(light_pos::Vec3, center::Vec3, radius)
 end
 
 function _light_view_proj(light::SpotLight, center::Vec3, radius)
+    light_position = _light_world_position(light)
     lv = mat4_look_at(
-        light.position, light.target,
-        _safe_up(_shadow_direction(light.position, light.target)))
-    near, far = _perspective_shadow_planes(light.position, center, radius)
+        light_position, light.target,
+        _safe_up(_shadow_direction(light_position, light.target)))
+    near, far = _perspective_shadow_planes(light_position, center, radius)
     lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
     return lp * lv
 end
 
 function _light_view_proj(light::PointLight, center::Vec3, radius)
-    dir = _shadow_direction(light.position, center)
-    lv = mat4_look_at(light.position, center, _safe_up(dir))
-    near, far = _perspective_shadow_planes(light.position, center, radius)
+    light_position = _light_world_position(light)
+    dir = _shadow_direction(light_position, center)
+    lv = mat4_look_at(light_position, center, _safe_up(dir))
+    near, far = _perspective_shadow_planes(light_position, center, radius)
     lp = mat4_perspective(π/2, 1.0, near, far)
     return lp * lv
 end

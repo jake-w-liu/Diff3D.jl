@@ -29180,3 +29180,158 @@ end
     @test isfinite(gradient)
     @test_opt_alloc 0 Diff3D._inside_far_clip(0.5)
 end
+
+@testset "fresh audit round 252 fixes" begin
+    vec_close(a::Vec3, b::Vec3) =
+        isapprox(a.x, b.x; atol=1.0e-12, rtol=1.0e-12) &&
+        isapprox(a.y, b.y; atol=1.0e-12, rtol=1.0e-12) &&
+        isapprox(a.z, b.z; atol=1.0e-12, rtol=1.0e-12)
+    color_close(a::Color3, b::Color3) =
+        isapprox(a.r, b.r; atol=1.0e-12, rtol=1.0e-12) &&
+        isapprox(a.g, b.g; atol=1.0e-12, rtol=1.0e-12) &&
+        isapprox(a.b, b.b; atol=1.0e-12, rtol=1.0e-12)
+    parent = Group()
+    parent.position = Vec3(10.0, 0.0, 0.0)
+    parent.rotation = Euler(0.0, 0.0, pi / 2)
+    local_position = Vec3(1.0, 0.0, 0.0)
+    world_position = Vec3(10.0, 1.0, 0.0)
+    sample_position = Vec3(9.0, 1.0, 0.0)
+
+    parented_point = PointLight(
+        position=local_position, distance=10.0, decay=2.0)
+    world_point = PointLight(
+        position=world_position, distance=10.0, decay=2.0)
+    add!(parent, parented_point)
+    @test vec_close(Diff3D._light_world_position(parented_point),
+                    world_position)
+    @test light_contribution(parented_point, sample_position) ==
+          light_contribution(world_point, sample_position)
+
+    parented_directional = DirectionalLight(position=local_position)
+    parented_directional.target = Vec3()
+    world_directional = DirectionalLight(position=world_position)
+    world_directional.target = Vec3()
+    add!(parent, parented_directional)
+    @test light_contribution(parented_directional, Vec3()) ==
+          light_contribution(world_directional, Vec3())
+
+    parented_spot = SpotLight(
+        position=local_position, target=Vec3(), angle=pi / 2,
+        penumbra=0.2, distance=20.0, decay=2.0)
+    world_spot = SpotLight(
+        position=world_position, target=Vec3(), angle=pi / 2,
+        penumbra=0.2, distance=20.0, decay=2.0)
+    add!(parent, parented_spot)
+    spot_sample = Vec3(5.0, 0.5, 0.0)
+    parented_spot_contribution = light_contribution(
+        parented_spot, spot_sample)
+    world_spot_contribution = light_contribution(world_spot, spot_sample)
+    @test parented_spot_contribution[1] == world_spot_contribution[1]
+    @test parented_spot_contribution[2] ≈ world_spot_contribution[2]
+    @test vec_close(parented_spot_contribution[3],
+                    world_spot_contribution[3])
+
+    parented_rectangle = RectAreaLight(
+        position=local_position, width=2.0, height=1.0)
+    parented_rectangle.target = Vec3()
+    world_rectangle = RectAreaLight(
+        position=world_position, width=2.0, height=1.0)
+    world_rectangle.target = Vec3()
+    add!(parent, parented_rectangle)
+    rectangle_material = MeshLambertMaterial(
+        color=Color3(1.0, 1.0, 1.0))
+    rectangle_normal = normalize(world_position - sample_position)
+    @test color_close(Diff3D._rect_area_response(
+        rectangle_material, rectangle_normal,
+        Vec3(0.0, 0.0, 1.0), sample_position,
+        parented_rectangle),
+          Diff3D._rect_area_response(
+              rectangle_material, rectangle_normal,
+              Vec3(0.0, 0.0, 1.0), sample_position,
+              world_rectangle))
+
+    hemisphere_parent = Group()
+    hemisphere_parent.rotation = Euler(0.0, 0.0, pi / 2)
+    parented_hemisphere = HemisphereLight(
+        color=Color3(1.0, 0.0, 0.0),
+        ground_color=Color3(0.0, 0.0, 1.0))
+    world_hemisphere = HemisphereLight(
+        color=Color3(1.0, 0.0, 0.0),
+        ground_color=Color3(0.0, 0.0, 1.0))
+    world_hemisphere.rotation = Euler(0.0, 0.0, pi / 2)
+    add!(hemisphere_parent, parented_hemisphere)
+    for normal in (Vec3(-1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
+        @test color_close(
+            Diff3D._fill_color(normal, parented_hemisphere),
+            Diff3D._fill_color(normal, world_hemisphere))
+    end
+
+    ies = IESProfile([0.0, 10.0, 180.0], [1.0, 0.5, 0.0])
+    ies_parent = Group()
+    ies_parent.rotation = Euler(0.0, 0.0, pi / 2)
+    parented_ies = PointLight(
+        position=Vec3(), decay=0.0, ies_profile=ies)
+    world_ies = PointLight(
+        position=Vec3(), decay=0.0, ies_profile=ies)
+    world_ies.rotation = Euler(0.0, 0.0, pi / 2)
+    add!(ies_parent, parented_ies)
+    for point in (Vec3(1.0, 0.0, 0.0), Vec3(0.0, -1.0, 0.0))
+        @test light_contribution(parented_ies, point)[2] ≈
+              light_contribution(world_ies, point)[2] atol=1.0e-12
+    end
+
+    center = Vec3()
+    radius = 2.0
+    for (parented_light, world_light) in (
+            (parented_directional, world_directional),
+            (parented_spot, world_spot),
+            (parented_point, world_point))
+        parented_matrix = Diff3D._light_view_proj(
+            parented_light, center, radius).e
+        world_matrix = Diff3D._light_view_proj(
+            world_light, center, radius).e
+        @test all(isapprox(parented_matrix[index], world_matrix[index];
+                           atol=1.0e-12, rtol=1.0e-12)
+                  for index in 1:16)
+    end
+
+    function point_light_scene(parented)
+        scene = Scene()
+        plane = Mesh(
+            PlaneGeometry(width=4.0, height=4.0),
+            MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0)))
+        add!(scene, plane)
+        if parented
+            group = Group()
+            group.position = Vec3(0.0, 0.0, 2.0)
+            light = PointLight(position=Vec3(), decay=2.0)
+            add!(group, light)
+            add!(scene, group)
+        else
+            add!(scene, PointLight(position=Vec3(0.0, 0.0, 2.0), decay=2.0))
+        end
+        return scene
+    end
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    for shading in (:flat, :smooth)
+        parented_target = RenderTarget(24, 24)
+        world_target = RenderTarget(24, 24)
+        render!(parented_target, point_light_scene(true), camera;
+                shading=shading)
+        render!(world_target, point_light_scene(false), camera;
+                shading=shading)
+        @test parented_target.color ≈ world_target.color atol=1.0e-12
+    end
+
+
+    point_json = Diff3D._web_light_json(parented_point, Scene())
+    directional_json = Diff3D._web_light_json(
+        parented_directional, Scene())
+    @test occursin("\"position\":[10,1,0]", point_json)
+    @test occursin("\"position\":[10,1,0]", directional_json)
+
+    @test parented_point.position == local_position
+    @test_opt_alloc 0 Diff3D._light_world_position(world_point)
+    @test_opt_alloc 64 light_contribution(world_point, sample_position)
+end

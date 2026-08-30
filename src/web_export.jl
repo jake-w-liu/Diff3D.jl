@@ -1534,7 +1534,7 @@ function _web_write_light_json(io::IO, light::DirectionalLight, scene::Scene;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    pos = get_position(light)
+    pos = _light_world_position(light)
     target = light.target
     dir = _direction_between(target, pos)
     _web_write_light_common_json(io, "directional", light, num_buf)
@@ -1574,7 +1574,7 @@ function _web_write_light_json(io::IO, light::PointLight, scene::Scene;
     write(io, ",\"intensity\":")
     _js_write_num(io, light.intensity, num_buf)
     write(io, ",\"position\":")
-    _js_write_vec(io, get_position(light), num_buf)
+    _js_write_vec(io, _light_world_position(light), num_buf)
     write(io, ",\"distance\":")
     _js_write_num(io, light.distance, num_buf)
     write(io, ",\"decay\":")
@@ -1599,7 +1599,7 @@ function _web_write_light_json(io::IO, light::SpotLight, scene::Scene;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    pos = get_position(light)
+    pos = _light_world_position(light)
     target = light.target
     dir = _direction_between(pos, target)
     penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
@@ -1670,7 +1670,7 @@ function _web_write_light_json(io::IO, light::RectAreaLight;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    pos = get_position(light)
+    pos = _light_world_position(light)
     forward = _direction_between(pos, light.target)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, forward))
@@ -1711,7 +1711,7 @@ function _web_write_light_json(io::IO, light::LightProbe;
                                num_buf::Vector{UInt8}=_web_num_buffer())
     _web_write_light_common_json(io, "lightProbe", light, num_buf)
     write(io, ",\"position\":")
-    _js_write_vec(io, get_position(light), num_buf)
+    _js_write_vec(io, _light_world_position(light), num_buf)
     write(io, ",\"coeffs\":[")
     for (i, coeff) in enumerate(light.coeffs)
         i == 1 || write(io, ',')

@@ -1264,7 +1264,9 @@ function _fill_color(normal::Vec3, light::AmbientLight)
 end
 function _fill_color(normal::Vec3, light::HemisphereLight)
     _validate_light_parameters(light)
-    w = clamp(normal.y * 0.5 + 0.5, zero(normal.y), one(normal.y))
+    up = _light_world_direction(light, Vec3(0.0, 1.0, 0.0))
+    normal_up = dot(normal, up)
+    w = clamp(normal_up * 0.5 + 0.5, zero(normal_up), one(normal_up))
     blended = Color3(light.color.r * w + light.ground_color.r * (1 - w),
                      light.color.g * w + light.ground_color.g * (1 - w),
                      light.color.b * w + light.ground_color.b * (1 - w))
@@ -1707,13 +1709,19 @@ end
            (Ft.b - Fb.b) * lobe)
 end
 
-@inline function _rect_area_basis(light::RectAreaLight)
+@inline function _rect_area_frame(light::RectAreaLight)
     _validate_light_parameters(light)
-    f = _direction_between(light.position, light.target)
+    position = _light_world_position(light)
+    f = _direction_between(position, light.target)
     ref = abs(f.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, f))
     v = cross(f, u)
-    return f, u, v
+    return f, u, v, position
+end
+
+@inline function _rect_area_basis(light::RectAreaLight)
+    forward, right, up, _ = _rect_area_frame(light)
+    return forward, right, up
 end
 
 @inline function _rect_area_sample_direction(
@@ -1743,7 +1751,7 @@ end
 
 function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                              light::RectAreaLight)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -1752,7 +1760,7 @@ function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -1766,7 +1774,7 @@ end
 function _rect_area_response_vertex_color(m, normal::Vec3, view_dir::Vec3,
                                           position::Vec3, light::RectAreaLight,
                                           albedo::Color3)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -1775,7 +1783,7 @@ function _rect_area_response_vertex_color(m, normal::Vec3, view_dir::Vec3,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -1792,7 +1800,7 @@ function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
                                       view_dir::Vec3, position::Vec3,
                                       light::RectAreaLight,
                                       metalness::Float64, roughness::Float64)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -1801,7 +1809,7 @@ function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -1820,7 +1828,7 @@ function _rect_area_standard_response_color(m::MeshStandardMaterial,
                                             metalness::Float64,
                                             roughness::Float64,
                                             albedo::Color3)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -1829,7 +1837,7 @@ function _rect_area_standard_response_color(m::MeshStandardMaterial,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -1847,7 +1855,7 @@ function _rect_area_phong_response_color(normal::Vec3, view_dir::Vec3,
                                          albedo::Color3,
                                          specular::Color3,
                                          shininess::Float64)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -1856,7 +1864,7 @@ function _rect_area_phong_response_color(normal::Vec3, view_dir::Vec3,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -2000,7 +2008,7 @@ function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
                                             position::Vec3,
                                             light::RectAreaLight,
                                             albedo::Color3)
-    f, u, v = _rect_area_basis(light)
+    f, u, v, light_position = _rect_area_frame(light)
     hx = max(light.width, 0.0) * 0.5
     hy = max(light.height, 0.0) * 0.5
     (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
@@ -2009,7 +2017,7 @@ function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
     area_scale = hx * hy
     result = Color3(0.0, 0.0, 0.0)
     @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light.position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
+        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
         ldir, dist2 =
             _rect_area_sample_direction(position, sample_pos)
         emit = max(dot(-ldir, f), 0.0)
@@ -2424,14 +2432,14 @@ end
 
 function light_contribution(light::DirectionalLight, position::Vec3)
     _validate_light_parameters(light)
-    dir = _direction_between(light.target, light.position)
+    dir = _direction_between(light.target, _light_world_position(light))
     (light.color, light.intensity, dir)
 end
 
 function light_contribution(light::PointLight, position::Vec3)
     _validate_light_parameters(light)
     dir, dist =
-        _light_direction_and_distance(position, light.position)
+        _light_direction_and_distance(position, _light_world_position(light))
     attenuation = if light.distance > 0
         factor = max(1.0 - (dist / light.distance)^2, 0.0)
         factor / max(dist^light.decay, 1e-10)
@@ -2444,12 +2452,7 @@ function light_contribution(light::PointLight, position::Vec3)
     # axis per the LM-63 convention (0° = straight down; see IESProfile): -Y,
     # rotated by the light's `rotation` so an oriented luminaire works.
     if light.ies_profile !== nothing
-        rot = light.rotation
-        axis = Vec3(0.0, -1.0, 0.0)
-        if rot.x != 0.0 || rot.y != 0.0 || rot.z != 0.0
-            q = quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)
-            axis = mat4_transform_direction(quat_to_mat4(q), axis)
-        end
+        axis = _light_world_direction(light, Vec3(0.0, -1.0, 0.0))
         θ = acosd(clamp(dot(-dir, axis), -1.0, 1.0))
         attenuation *= ies_intensity(light.ies_profile, θ)
     end
@@ -2459,12 +2462,13 @@ end
 
 function light_contribution(light::SpotLight, position::Vec3)
     _validate_light_parameters(light)
+    light_position = _light_world_position(light)
     dir, dist =
-        _light_direction_and_distance(position, light.position)
+        _light_direction_and_distance(position, light_position)
 
     # Spot cone
     target_dir =
-        _direction_between(light.position, light.target)
+        _direction_between(light_position, light.target)
     # dir points from surface to light, so -dir points from light to surface.
     cos_angle = dot(-dir, target_dir)
     cos_outer = cos(light.angle)
@@ -2499,7 +2503,7 @@ end
 function light_contribution(light::RectAreaLight, position::Vec3)
     _validate_light_parameters(light)
     dir, _ =
-        _light_direction_and_distance(position, light.position)
+        _light_direction_and_distance(position, _light_world_position(light))
     (light.color, light.intensity, dir)
 end
 

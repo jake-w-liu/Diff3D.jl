@@ -760,6 +760,26 @@ end
     return nothing
 end
 
+@inline function _light_world_position(
+        light::AbstractLight)::Vec3{Float64}
+    position = get_position(light)::Vec3{Float64}
+    parent = get_parent(light)
+    parent === nothing && return position
+    return mat4_transform_point(compute_world_matrix(parent), position)
+end
+
+@inline function _light_world_direction(
+        light::AbstractLight, direction::Vec3)::Vec3{Float64}
+    parent = get_parent(light)
+    rotation = get_rotation(light)::Euler{Float64}
+    if parent === nothing && rotation.x == 0.0 && rotation.y == 0.0 &&
+       rotation.z == 0.0
+        return normalize(direction)
+    end
+    return normalize(mat4_transform_direction(
+        compute_world_matrix(light), direction))
+end
+
 @_compute_world_matrix_method(AmbientLight,
     Scene, Group, Object3D, Mesh, LineObject, PointsObject,
     PerspectiveCamera, OrthographicCamera,
