@@ -87,13 +87,19 @@ Simplified single-channel average SSIM.
 """
 function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
-    R = promote_type(T, S)
     H, W, C = _checked_loss_image_size(image, target, "loss_ssim")
     # A 1-pixel window (window_size ≤ 1 ⇒ hw=0 ⇒ n=1) has zero local variance and
     # divides the (n-1) Bessel correction by zero, silently returning NaN.
     window_size = _checked_ssim_window_size(window_size)
     C1 = _checked_ssim_constant(C1, "C1")
     C2 = _checked_ssim_constant(C2, "C2")
+    # A Float16 sum stops resolving unit-sized SSIM contributions after 2048
+    # windows.  Include the constants in numeric promotion and accumulate in
+    # at least Float32 so the result does not depend on image dimensions.
+    R = promote_type(
+        Float32, float(promote_type(T, S, typeof(C1), typeof(C2))))
+    C1 = convert(R, C1)
+    C2 = convert(R, C2)
     hw = window_size ÷ 2
     if min(H, W) < 2*hw + 1
         throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))

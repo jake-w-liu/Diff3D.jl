@@ -27649,6 +27649,13 @@ end
         large_float16_mask, ones(Float16, 100, 100, 1);
         threshold=Float16(0.05)) ≈ Float32(0.9) atol=5.0f-5
 
+    large_float16_image = ones(Float16, 64, 64, 1)
+    float16_ssim = loss_ssim(
+        large_float16_image, large_float16_image;
+        window_size=3, C1=Float16(0.0001), C2=Float16(0.0009))
+    @test float16_ssim isa Float32
+    @test float16_ssim == Float32(0)
+
     alpha = reshape([0.0, 0.0, 0.0, 1.0], 1, 1, 4)
     red = reshape([1.0, 0.0, 0.0, 0.0], 1, 1, 4)
     @test loss_silhouette_iou(alpha, red) < 1.0e-6
