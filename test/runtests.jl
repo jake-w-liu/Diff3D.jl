@@ -28783,3 +28783,54 @@ end
     @test_throws "shape must be a simple polygon" ShapeGeometry(
         self_intersecting)
 end
+
+@testset "fresh audit round 248 fixes" begin
+    tiny = 1.0e-20
+    tiny_shape_points = [
+        Vec2(0.0, 0.0), Vec2(tiny, 0.0), Vec2(0.0, tiny)]
+    tiny_shape = ShapeGeometry(tiny_shape_points)
+    tiny_extrusion = ExtrudeGeometry(tiny_shape_points; depth=tiny)
+    tiny_path_extrusion = ExtrudeGeometry(
+        tiny_shape_points; extrude_path=[
+            Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, tiny)])
+    @test tiny_shape.n_faces == 1
+    @test tiny_extrusion.n_faces == 8
+    @test tiny_path_extrusion.n_faces == 8
+    @test all(isfinite, tiny_shape.positions)
+    @test all(isfinite, tiny_extrusion.normals)
+    @test all(isfinite, tiny_path_extrusion.normals)
+
+    translated_shape_points = [
+        Vec2(1.0e12, 1.0e12), Vec2(1.0e12 + 1.0, 1.0e12),
+        Vec2(1.0e12, 1.0e12 + 1.0)]
+    translated_shape = ShapeGeometry(translated_shape_points)
+    @test translated_shape.n_faces == tiny_shape.n_faces
+    @test all(isfinite, translated_shape.positions)
+
+    tiny_tetrahedron = [
+        Vec3(0.0, 0.0, 0.0), Vec3(tiny, 0.0, 0.0),
+        Vec3(0.0, tiny, 0.0), Vec3(0.0, 0.0, tiny)]
+    translated_tetrahedron = [
+        Vec3(1.0e12, 1.0e12, 1.0e12),
+        Vec3(1.0e12 + 1.0, 1.0e12, 1.0e12),
+        Vec3(1.0e12, 1.0e12 + 1.0, 1.0e12),
+        Vec3(1.0e12, 1.0e12, 1.0e12 + 1.0)]
+    tiny_hull = ConvexGeometry(tiny_tetrahedron)
+    translated_hull = ConvexGeometry(translated_tetrahedron)
+    @test tiny_hull.n_faces == 4
+    @test translated_hull.n_faces == 4
+    @test all(isfinite, tiny_hull.normals)
+    @test all(isfinite, translated_hull.normals)
+
+    with_near_duplicate = [tiny_tetrahedron;
+                           Vec3(tiny * 1.0e-12, 0.0, 0.0)]
+    @test ConvexGeometry(with_near_duplicate).n_faces == 4
+    @test_throws "four non-coplanar points" ConvexGeometry([
+        Vec3(0.0, 0.0, 0.0), Vec3(tiny, 0.0, 0.0),
+        Vec3(0.0, tiny, 0.0), Vec3(tiny, tiny, 0.0)])
+
+    square_with_near_duplicate = [
+        Vec2(0.0, 0.0), Vec2(tiny * 1.0e-13, 0.0),
+        Vec2(tiny, 0.0), Vec2(tiny, tiny), Vec2(0.0, tiny)]
+    @test ShapeGeometry(square_with_near_duplicate).n_faces == 2
+end

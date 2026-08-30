@@ -148,20 +148,40 @@ function _convex_clean_points(points::AbstractVector{<:Vec3})
         raw[i] = q
     end
     isempty(raw) && throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    scale = max(1.0, maximum(max(abs(p.x), abs(p.y), abs(p.z)) for p in raw))
+    xmin = minimum(point -> point.x, raw)
+    xmax = maximum(point -> point.x, raw)
+    ymin = minimum(point -> point.y, raw)
+    ymax = maximum(point -> point.y, raw)
+    zmin = minimum(point -> point.z, raw)
+    zmax = maximum(point -> point.z, raw)
+    center = Vec3(_geometry_midpoint(xmin, xmax),
+                  _geometry_midpoint(ymin, ymax),
+                  _geometry_midpoint(zmin, zmax))
+    scale = maximum((abs(xmin - center.x), abs(xmax - center.x),
+                     abs(ymin - center.y), abs(ymax - center.y),
+                     abs(zmin - center.z), abs(zmax - center.z)))
+    scale > 0.0 ||
+        throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
     eps = 1e-9
 
-    # Compact the original points in place. Comparing after a uniform scale
-    # keeps distance calculations finite while preserving the previous
-    # scale-relative duplicate tolerance.
+    # Centering makes duplicate and hull predicates translation-invariant;
+    # scaling keeps their arithmetic finite for both tiny and huge inputs.
+    normalized = Vector{Vec3{Float64}}(undef, length(raw))
+    for i in eachindex(raw)
+        point = raw[i]
+        normalized[i] = Vec3((point.x - center.x) / scale,
+                             (point.y - center.y) / scale,
+                             (point.z - center.z) / scale)
+    end
+
+    # Compact the original and normalized points together.
     out = 0
     for read_index in eachindex(raw)
         p = raw[read_index]
-        p_scaled = p / scale
+        p_scaled = normalized[read_index]
         duplicate = false
         for existing_index in 1:out
-            q_scaled = raw[existing_index] / scale
-            if norm(p_scaled - q_scaled) <= eps
+            if norm(p_scaled - normalized[existing_index]) <= eps
                 duplicate = true
                 break
             end
@@ -169,9 +189,11 @@ function _convex_clean_points(points::AbstractVector{<:Vec3})
         if !duplicate
             out += 1
             raw[out] = p
+            normalized[out] = p_scaled
         end
     end
     resize!(raw, out)
+    resize!(normalized, out)
     length(raw) >= 4 ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
 
@@ -179,10 +201,6 @@ function _convex_clean_points(points::AbstractVector{<:Vec3})
     # incidence and winding are invariant under a positive uniform scale, and
     # values bounded by one cannot overflow cross products, volume tests, or
     # face-centroid sums. The original coordinates remain available for output.
-    normalized = Vector{Vec3{Float64}}(undef, length(raw))
-    for i in eachindex(raw)
-        normalized[i] = raw[i] / scale
-    end
     return raw, normalized, eps
 end
 
@@ -1422,28 +1440,49 @@ _shape_len(v::Vec2) = hypot(v.x, v.y)
 _shape_normalize(v::Vec2) = v * (1 / _shape_len(v))
 
 @inline function _extrude_component_close(a::Float64, b::Float64,
+                                          scale::Float64,
                                           relative_tolerance::Float64)
-    scale = max(max(abs(a), abs(b)), 1.0)
-    return abs(a - b) <= relative_tolerance * scale
+    iszero(scale) && return a == b
+    return abs((a - b) / scale) <= relative_tolerance
 end
 
 @inline function _extrude_shape_points_close(a::Vec2{Float64},
-                                             b::Vec2{Float64})
-    return _extrude_component_close(a.x, b.x, 1.0e-12) &&
-           _extrude_component_close(a.y, b.y, 1.0e-12)
+                                             b::Vec2{Float64},
+                                             xscale::Float64,
+                                             yscale::Float64)
+    return _extrude_component_close(a.x, b.x, xscale, 1.0e-12) &&
+           _extrude_component_close(a.y, b.y, yscale, 1.0e-12)
 end
 
 function _extrude_clean_shape(shape::AbstractVector{<:Vec2})
     length(shape) >= 3 || throw(ArgumentError("ExtrudeGeometry shape needs at least three points"))
+    raw = Vector{Vec2{Float64}}(undef, length(shape))
+    for (index, point) in pairs(shape)
+        raw[index] = Vec2(
+            _geometry_finite_float(
+                point.x, "ExtrudeGeometry shape points"),
+            _geometry_finite_float(
+                point.y, "ExtrudeGeometry shape points"))
+    end
+    xmin = minimum(point -> point.x, raw)
+    xmax = maximum(point -> point.x, raw)
+    ymin = minimum(point -> point.y, raw)
+    ymax = maximum(point -> point.y, raw)
+    cx = _geometry_midpoint(xmin, xmax)
+    cy = _geometry_midpoint(ymin, ymax)
+    xscale = max(abs(xmin - cx), abs(xmax - cx))
+    yscale = max(abs(ymin - cy), abs(ymax - cy))
     clean = Vec2{Float64}[]
-    for p in shape
-        q = Vec2(_geometry_finite_float(p.x, "ExtrudeGeometry shape points"),
-                 _geometry_finite_float(p.y, "ExtrudeGeometry shape points"))
-        if isempty(clean) || !_extrude_shape_points_close(q, clean[end])
-            push!(clean, q)
+    sizehint!(clean, length(raw))
+    for point in raw
+        if isempty(clean) ||
+           !_extrude_shape_points_close(
+               point, clean[end], xscale, yscale)
+            push!(clean, point)
         end
     end
-    if length(clean) > 1 && _extrude_shape_points_close(clean[end], clean[1])
+    if length(clean) > 1 && _extrude_shape_points_close(
+            clean[end], clean[1], xscale, yscale)
         pop!(clean)
     end
     length(clean) >= 3 || throw(ArgumentError("ExtrudeGeometry shape needs at least three points"))
@@ -1455,10 +1494,11 @@ function _extrude_clean_shape(shape::AbstractVector{<:Vec2})
 end
 
 @inline function _extrude_path_points_close(a::Vec3{Float64},
-                                            b::Vec3{Float64})
-    return _extrude_component_close(a.x, b.x, 1.0e-9) &&
-           _extrude_component_close(a.y, b.y, 1.0e-9) &&
-           _extrude_component_close(a.z, b.z, 1.0e-9)
+                                            b::Vec3{Float64},
+                                            scale::Vec3{Float64})
+    return _extrude_component_close(a.x, b.x, scale.x, 1.0e-9) &&
+           _extrude_component_close(a.y, b.y, scale.y, 1.0e-9) &&
+           _extrude_component_close(a.z, b.z, scale.z, 1.0e-9)
 end
 
 function _extrude_clean_path(path::AbstractVector{<:Vec3})
@@ -1470,12 +1510,25 @@ function _extrude_clean_path(path::AbstractVector{<:Vec3})
                  _geometry_finite_float(p.z, "ExtrudeGeometry extrude_path points"))
         push!(raw, q)
     end
-    closed = _extrude_path_points_close(raw[end], raw[1])
+    xmin = minimum(point -> point.x, raw)
+    xmax = maximum(point -> point.x, raw)
+    ymin = minimum(point -> point.y, raw)
+    ymax = maximum(point -> point.y, raw)
+    zmin = minimum(point -> point.z, raw)
+    zmax = maximum(point -> point.z, raw)
+    cx = _geometry_midpoint(xmin, xmax)
+    cy = _geometry_midpoint(ymin, ymax)
+    cz = _geometry_midpoint(zmin, zmax)
+    scale = Vec3(max(abs(xmin - cx), abs(xmax - cx)),
+                 max(abs(ymin - cy), abs(ymax - cy)),
+                 max(abs(zmin - cz), abs(zmax - cz)))
+    closed = _extrude_path_points_close(raw[end], raw[1], scale)
     clean_last = closed ? length(raw) - 1 : length(raw)
     filtered = Vec3{Float64}[]
     for i in 1:clean_last
         p = raw[i]
-        if isempty(filtered) || !_extrude_path_points_close(p, filtered[end])
+        if isempty(filtered) ||
+           !_extrude_path_points_close(p, filtered[end], scale)
             push!(filtered, p)
         end
     end
