@@ -13593,6 +13593,17 @@ end
                 @test ktx_ru[1,:,:] == ktx_rd[2,:,:]
                 @test ktx_ru[2,:,:] == ktx_rd[1,:,:]
 
+                # "l" stores the rightmost column first; combine it with both
+                # vertical orientations to cover the complete 2D contract.
+                ktx_ld = Diff3D._decode_ktx2(build_ktx2(
+                    2, 2, 4, 37, rgba_px; orientation="ld"))
+                @test ktx_ld[:,1,:] == ktx_rd[:,2,:]
+                @test ktx_ld[:,2,:] == ktx_rd[:,1,:]
+                ktx_lu = Diff3D._decode_ktx2(build_ktx2(
+                    2, 2, 4, 37, rgba_px; orientation="lu"))
+                @test ktx_lu[1,1,:] == ktx_rd[2,2,:]
+                @test ktx_lu[2,2,:] == ktx_rd[1,1,:]
+
                 # RGB8 round-trips too, and load_ktx2 reads from disk.
                 rgb_px = UInt8[10,20,30, 40,50,60]
                 path = joinpath(dir, "rgb.ktx2")

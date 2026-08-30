@@ -909,20 +909,21 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
      byteLength <= length(bytes) - byteOffset) ||
         error("KTX2 level 0 data range exceeds the file length $(length(bytes))")
 
-    # KTXorientation second axis: 'u' (up) stores the bottom row first, so flip
-    # to the top-first layout used by the PNG/JPEG decoders. 'd' or absent keeps
-    # rows as stored (glTF mandates "rd", which toktx also writes).
+    # Convert KTX's S/T orientation to the top-left, right/down array layout
+    # used by the PNG/JPEG decoders. Missing metadata defaults to "rd".
     orient = _ktx2_orientation(bytes, kvdOffset, kvdLength)
-    # Index by byte (codeunit), not codepoint: a multibyte first char would make
-    # `orient[2]` a StringIndexError. Orientation values are ASCII ("rd"/"ru").
-    flip = ncodeunits(orient) >= 2 && codeunit(orient, 2) == UInt8('u')
+    # Index by byte (codeunit), not codepoint: malformed multibyte values must
+    # not cause a StringIndexError. Valid orientation values are ASCII.
+    flip_x = ncodeunits(orient) >= 1 && codeunit(orient, 1) == UInt8('l')
+    flip_y = ncodeunits(orient) >= 2 && codeunit(orient, 2) == UInt8('u')
 
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
     @inbounds for y in 1:pixelHeight
-        srow = flip ? (pixelHeight - y + 1) : y
+        srow = flip_y ? (pixelHeight - y + 1) : y
         rowbase = byteOffset + (srow - 1) * pixelWidth * pixel_bytes   # 0-based
         for x in 1:pixelWidth
-            px = rowbase + (x - 1) * pixel_bytes                       # 0-based pixel start
+            scol = flip_x ? (pixelWidth - x + 1) : x
+            px = rowbase + (scol - 1) * pixel_bytes                    # 0-based pixel start
             for c in 1:channels
                 b1 = px + (c - 1) * cbytes + 1                         # 1-based component byte
                 img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
