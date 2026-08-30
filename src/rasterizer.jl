@@ -419,6 +419,37 @@ function _clip_near_attr!(out::Vector{ShadeVtx}, verts::Vector{ShadeVtx}, n::Int
     return length(out)
 end
 
+# Transparent triangles use a half-open top-left fill rule. Screen y increases
+# downward, so a canonically oriented edge owns its boundary when it points down,
+# or points left when horizontal. Reorienting by the triangle-area sign makes the
+# result independent of winding. Adjacent triangles (including a fan introduced
+# by near clipping) therefore divide a shared boundary between them, while
+# overlapping triangle interiors remain independent source-over layers.
+@inline function _raster_edge_owns_boundary(ax, ay, bx, by,
+                                             positive_area::Bool)
+    dx = bx - ax
+    dy = by - ay
+    if !positive_area
+        dx = -dx
+        dy = -dy
+    end
+    return dy > 0 || (iszero(dy) && dx < 0)
+end
+
+@inline function _half_open_triangle_contains(
+        b0, b1, b2,
+        s1x, s1y, s2x, s2y, s3x, s3y,
+        positive_area::Bool)
+    edge0 = b0 > 0 || (iszero(b0) &&
+        _raster_edge_owns_boundary(s2x, s2y, s3x, s3y, positive_area))
+    edge0 || return false
+    edge1 = b1 > 0 || (iszero(b1) &&
+        _raster_edge_owns_boundary(s3x, s3y, s1x, s1y, positive_area))
+    edge1 || return false
+    return b2 > 0 || (iszero(b2) &&
+        _raster_edge_owns_boundary(s1x, s1y, s2x, s2y, positive_area))
+end
+
 # Per-pixel (smooth) triangle. World position and normal are interpolated
 # perspective-correctly, then the shading model is evaluated per pixel. When the
 # material carries UV-indexed material maps, the texture coordinate is also
@@ -426,31 +457,6 @@ end
 # same helpers (`sample_texture_linear`, `_apply_normal_map`) as the flat path — so a
 # textured surface looks identical under flat and smooth shading. `clipping_planes`
 # discards fragments on the negative side of any plane (interpolated world pos).
-mutable struct _LazyTransparentStamp
-    stamp::Union{Nothing,Matrix{Int}}
-end
-
-@inline function _materialize_stamp!(lazy::_LazyTransparentStamp, H::Int, W::Int)
-    stamp = lazy.stamp
-    if stamp === nothing || size(stamp) != (H, W)
-        stamp = zeros(Int, H, W)
-        lazy.stamp = stamp
-    end
-    return stamp
-end
-
-@inline _active_stamp(stamp) = stamp isa _LazyTransparentStamp ? nothing : stamp
-
-@inline function _ensure_stamp_if_needed!(stamp, active_stamp, H::Int, W::Int,
-                                          needed::Bool)
-    needed && stamp isa _LazyTransparentStamp ? _materialize_stamp!(stamp, H, W) :
-        active_stamp
-end
-
-@inline function _transparent_mesh_needs_stamp(geo::BufferGeometry, clipped_vertices::Int)
-    return geo.n_faces > 1 || clipped_vertices > 3
-end
-
 @inline function _rasterize_tri_smooth!(rt::RenderTarget,
         s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
         s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
@@ -502,13 +508,13 @@ end
         stamp=nothing, stamp_id::Int=0,
         blend::Bool=false) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
-    use_stamp = stamp !== nothing   # transparent pass: optionally gate once per mesh per pixel
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
     (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
@@ -551,11 +557,16 @@ end
             b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
             b1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
-            (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
+            if blend
+                _half_open_triangle_contains(
+                    b0, b1, b2, s1x, s1y, s2x, s2y, s3x, s3y,
+                    positive_area) || continue
+            else
+                (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
+            end
             z = b0 * z1 + b1 * z2 + b2 * z3
             _inside_far_clip(z) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
-            (blend && use_stamp && stamp[py, px] == stamp_id) && continue   # already blended by this mesh
             frag_alpha = alpha_base
             # Perspective-correct interpolation: weight by 1/w.
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
@@ -829,13 +840,13 @@ end
             end
             col = clamp_color(col)
             if blend
-                # Transparent smooth pass: source-over blend, gated once per mesh.
+                # Transparent smooth pass: source-over after half-open fill
+                # ownership has assigned this sample to exactly one shared edge.
                 ia = 1.0 - frag_alpha
                 rt.color[py, px, 1] = col.r * frag_alpha + rt.color[py, px, 1] * ia
                 rt.color[py, px, 2] = col.g * frag_alpha + rt.color[py, px, 2] * ia
                 rt.color[py, px, 3] = col.b * frag_alpha + rt.color[py, px, 3] * ia
                 depth_write && (rt.depth[py, px] = z)
-                use_stamp && (stamp[py, px] = stamp_id)
             else
                 depth_write && (rt.depth[py, px] = z)
                 rt.color[py, px, 1] = col.r
@@ -888,13 +899,13 @@ end
         stamp=nothing, stamp_id::Int=0,
         blend::Bool=false) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
-    use_stamp = stamp !== nothing
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
     (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
@@ -909,11 +920,16 @@ end
             b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
             b1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
-            (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
+            if blend
+                _half_open_triangle_contains(
+                    b0, b1, b2, s1x, s1y, s2x, s2y, s3x, s3y,
+                    positive_area) || continue
+            else
+                (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
+            end
             z = b0 * z1 + b1 * z2 + b2 * z3
             _inside_far_clip(z) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
-            (blend && use_stamp && stamp[py, px] == stamp_id) && continue
             alpha_base < alpha_test && continue
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
@@ -949,7 +965,6 @@ end
                 rt.color[py, px, 2] = col.g * alpha_base + rt.color[py, px, 2] * ia
                 rt.color[py, px, 3] = col.b * alpha_base + rt.color[py, px, 3] * ia
                 depth_write && (rt.depth[py, px] = z)
-                use_stamp && (stamp[py, px] = stamp_id)
             else
                 depth_write && (rt.depth[py, px] = z)
                 rt.color[py, px, 1] = col.r
@@ -1137,10 +1152,6 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    uv2_attr, color_attr,
                                    use_vertex_colors::Bool) where {M<:AbstractMaterial}
     blend = material_transparent(mat)
-    active_stamp = _active_stamp(stamp)
-    if blend
-        active_stamp = _ensure_stamp_if_needed!(stamp, active_stamp, H, W, geo.n_faces > 1)
-    end
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         if side !== :double
@@ -1192,12 +1203,6 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             iw[k] = invw
         end
         @inbounds for k in 2:(m - 1)
-            tri_stamp = active_stamp
-            if blend
-                tri_stamp = _ensure_stamp_if_needed!(
-                    stamp, tri_stamp, H, W, _transparent_mesh_needs_stamp(geo, m))
-                active_stamp = tri_stamp
-            end
             if has_uv_maps
                 _rasterize_tri_smooth!(rt,
                     sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
@@ -1209,7 +1214,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
-                    stamp=tri_stamp, stamp_id=stamp_id,
+                    stamp=nothing, stamp_id=0,
                     use_vertex_colors=use_vertex_colors, blend=blend)
             else
                 _rasterize_tri_smooth_nomaps!(rt,
@@ -1219,7 +1224,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     mat, lights, cam_pos, mesh_shadow_fn, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
-                    stamp=tri_stamp, stamp_id=stamp_id,
+                    stamp=nothing, stamp_id=0,
                     use_vertex_colors=use_vertex_colors, blend=blend)
             end
         end
@@ -1845,9 +1850,9 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
     if !isempty(transparent_items)
         _sort_transparent_items!(transparent_items)
-        stamp = cache === nothing ? _LazyTransparentStamp(nothing) :
-                _render_cache_stamp!(cache, H, W)
-        # `stamp` ensures each pixel blends at most once per draw item.
+        # Half-open triangle fill owns shared boundaries, so mesh draw items do
+        # not need a whole-item stamp that would suppress deeper surfaces.
+        stamp = nothing
         sid = 0
         for item in transparent_items
             sid += 1
@@ -2418,10 +2423,6 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     view_inv = has_clip ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
-    active_stamp = _active_stamp(stamp)
-    if blend
-        active_stamp = _ensure_stamp_if_needed!(stamp, active_stamp, H, W, geo.n_faces > 1)
-    end
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
@@ -2497,16 +2498,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                          normal_mat, has_normals; shadow_fn=shadow_fn) :
                  face_colors[fi]
             @inbounds for k in 2:(m - 1)
-                tri_stamp = active_stamp
-                if blend
-                    tri_stamp = _ensure_stamp_if_needed!(
-                        stamp, tri_stamp, H, W, _transparent_mesh_needs_stamp(geo, m))
-                    active_stamp = tri_stamp
-                end
                 if blend
                     _rasterize_tri_blend!(rt, sx[1], sy[1], sz[1],
                                           sx[k], sy[k], sz[k],
-                                          sx[k+1], sy[k+1], sz[k+1], fc, alpha, tri_stamp, stamp_id;
+                                          sx[k+1], sy[k+1], sz[k+1], fc, alpha, nothing, 0;
                                           xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                           clipping_planes=clipping_planes,
                                           wp1=clipped_attr[1].wp,
@@ -2566,12 +2561,6 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                      normal_mat, has_normals; shadow_fn=shadow_fn) :
              face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
-            tri_stamp = active_stamp
-            if blend
-                tri_stamp = _ensure_stamp_if_needed!(
-                    stamp, tri_stamp, H, W, _transparent_mesh_needs_stamp(geo, m))
-                active_stamp = tri_stamp
-            end
             if has_clip
                 # World position and 1/w of each clip vertex for the per-fragment
                 # plane test (perspective-correct world interpolation). Needed by
@@ -2587,7 +2576,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             if blend
                 _rasterize_tri_blend!(rt, sx[1], sy[1], sz[1],
                                       sx[k], sy[k], sz[k],
-                                      sx[k+1], sy[k+1], sz[k+1], fc, alpha, tri_stamp, stamp_id;
+                                      sx[k+1], sy[k+1], sz[k+1], fc, alpha, nothing, 0;
                                       xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                       clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
                                       iw1=iw1, iw2=iw2, iw3=iw3,
@@ -2619,8 +2608,7 @@ end
 # optionally writing depth according to the material flags. `xlo`/`xhi`/`ylo`/
 # `yhi` clamp the covered pixel box so scissor testing restricts the blend.
 # When `clipping_planes` is non-empty, fragments on the negative side of any
-# plane are discarded (same `_clip_keep` test as `_rasterize_tri!`) before the
-# stamp is consulted or written, so clipped fragments neither blend nor stamp.
+# plane are discarded by the same `_clip_keep` test as `_rasterize_tri!`.
 @inline function _rasterize_tri_blend!(rt::RenderTarget, s1x, s1y, z1, s2x, s2y, z2,
                                        s3x, s3y, z3, fc::Color3, alpha, stamp, stamp_id::Int;
                                        xlo::Int=1, xhi::Int=typemax(Int),
@@ -2640,11 +2628,11 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
-    use_stamp = stamp !== nothing
     has_clip = !isempty(clipping_planes)
     has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), albedo_map, alpha_map)
     @inbounds for px in min_x:max_x
@@ -2653,7 +2641,9 @@ end
             w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
             w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
-            if w0 >= 0 && w1 >= 0 && w2 >= 0
+            if _half_open_triangle_contains(
+                    w0, w1, w2, s1x, s1y, s2x, s2y, s3x, s3y,
+                    positive_area)
                 frag_alpha = alpha
                 if has_clip || has_alpha
                     # Perspective-correct world position (weight by 1/w).
@@ -2674,8 +2664,6 @@ end
                         frag_alpha >= alpha_test || continue
                     end
                 end
-                # Skip pixels already blended by this same mesh (shared edges).
-                use_stamp && stamp[py, px] == stamp_id && continue
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
@@ -2684,7 +2672,6 @@ end
                     rt.color[py, px, 2] = fc.g * frag_alpha + rt.color[py, px, 2] * ia_frag
                     rt.color[py, px, 3] = fc.b * frag_alpha + rt.color[py, px, 3] * ia_frag
                     depth_write && (rt.depth[py, px] = z)
-                    use_stamp && (stamp[py, px] = stamp_id)
                 end
             end
         end

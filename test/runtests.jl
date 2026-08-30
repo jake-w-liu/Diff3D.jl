@@ -31638,6 +31638,119 @@ end
         cached_target, cached_scene, camera; cache=cached)
 end
 
+@testset "fresh audit round 277 fixes" begin
+    camera = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+    white_map = Texture(
+        ones(Float64, 1, 1, 3);
+        filter=:nearest, colorspace=:linear)
+
+    transparent_material(map=nothing) = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0), transparent=true,
+        opacity=0.5, depth_write=false, side=:double, map=map)
+
+    function layered_scene(kind, material)
+        scene = Scene()
+        if kind === :box
+            add!(scene, Mesh(
+                BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                material))
+        elseif kind === :instance
+            add!(scene, InstancedMesh(
+                BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                material, 1))
+        else
+            for z in (-0.5, 0.5)
+                plane = Mesh(
+                    PlaneGeometry(width=1.0, height=1.0), material)
+                plane.position = Vec3(0.0, 0.0, z)
+                add!(scene, plane)
+            end
+        end
+        return scene
+    end
+
+    function render_transparent(scene, camera, shading; cache=nothing)
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera;
+                shading=shading, frustum_cull=false, cache=cache)
+        return target
+    end
+
+    expected_layers = [0.75, 0.0, 0.0]
+    for (shading, map) in (
+            (:flat, nothing), (:smooth, nothing), (:smooth, white_map))
+        material = transparent_material(map)
+        planes = render_transparent(
+            layered_scene(:planes, material), camera, shading)
+        @test planes.color[16, 16, :] ≈ expected_layers atol=1.0e-12
+        for kind in (:box, :instance)
+            layered = render_transparent(
+                layered_scene(kind, material), camera, shading)
+            @test layered.color[16, 16, :] ≈
+                  planes.color[16, 16, :] atol=1.0e-12
+        end
+    end
+
+    # Half-open edge ownership must work across draw items and either winding,
+    # not just within one mesh-wide stamp ID.
+    quad_positions = [
+        -0.8, -0.8, 0.0,
+         0.8, -0.8, 0.0,
+         0.8,  0.8, 0.0,
+        -0.8,  0.8, 0.0,
+    ]
+    function split_quad(reverse_second, shading)
+        scene = Scene()
+        for indices in ([1, 2, 3],
+                        reverse_second ? [4, 3, 1] : [1, 3, 4])
+            geometry = BufferGeometry(
+                quad_positions, repeat([0.0, 0.0, 1.0], 4),
+                Float64[], indices, 4, 1)
+            add!(scene, Mesh(geometry, transparent_material()))
+        end
+        return render_transparent(scene, camera, shading)
+    end
+    for shading in (:flat, :smooth), reverse_second in (false, true)
+        target = split_quad(reverse_second, shading)
+        @test maximum(target.color[:, :, 1]) == 0.5
+        @test count(==(0.5), target.color[:, :, 1]) > 0
+    end
+
+    # Near clipping turns this one triangle into a quad whose fan diagonal
+    # passes through pixel centers. It remains one surface layer.
+    near_camera = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=1.0, far=10.0)
+    near_camera.position = Vec3()
+    near_camera.target = Vec3(0.0, 0.0, -1.0)
+    near_geometry = BufferGeometry(
+        [-0.2,  0.6,  0.0,
+          0.5, -0.5, -2.0,
+         -0.8,  0.4, -2.0],
+        repeat([0.0, 0.0, 1.0], 3), Float64[], [1, 2, 3], 3, 1)
+    for shading in (:flat, :smooth)
+        scene = Scene()
+        add!(scene, Mesh(near_geometry, transparent_material()))
+        target = render_transparent(scene, near_camera, shading)
+        @test maximum(target.color[:, :, 1]) == 0.5
+        @test count(>(0.0), target.color[:, :, 1]) > 0
+    end
+
+    cached_scene = layered_scene(
+        :instance, transparent_material(white_map))
+    cached_target = RenderTarget(32, 32)
+    cached = RenderCache()
+    render!(cached_target, cached_scene, camera;
+            shading=:smooth, frustum_cull=false, cache=cached)
+    @test_opt_alloc 4096 render!(
+        cached_target, cached_scene, camera;
+        shading=:smooth, frustum_cull=false, cache=cached)
+end
+
 @testset "CRC55 — stable reverse tanh tail derivative" begin
     for input in (-373.0, -372.0, -20.0, -5.0,
                   5.0, 20.0, 372.0, 373.0)
