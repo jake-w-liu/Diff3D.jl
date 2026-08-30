@@ -32639,6 +32639,86 @@ end
         workspace=soft_workspace)
 end
 
+@testset "CRC71 — glTF node hierarchies are strict trees" begin
+    crc71_le32(value) = UInt8[
+        value & 0xff, (value >> 8) & 0xff,
+        (value >> 16) & 0xff, (value >> 24) & 0xff]
+    function crc71_glb(json::String)
+        json_bytes = Vector{UInt8}(codeunits(json))
+        while length(json_bytes) % 4 != 0
+            push!(json_bytes, UInt8(' '))
+        end
+        body = vcat(
+            crc71_le32(length(json_bytes)), crc71_le32(0x4e4f534a),
+            json_bytes)
+        return vcat(
+            crc71_le32(0x46546c67), crc71_le32(2),
+            crc71_le32(12 + length(body)), body)
+    end
+    function crc71_public_error(json::String, message::String)
+        mktempdir() do directory
+            gltf_path = joinpath(directory, "invalid.gltf")
+            glb_path = joinpath(directory, "invalid.glb")
+            write(gltf_path, json)
+            write(glb_path, crc71_glb(json))
+            @test_throws message load_gltf(gltf_path)
+            @test_throws message load_glb(glb_path)
+        end
+    end
+
+    shared_child = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0,1]}],
+     "nodes":[{"children":[2]},{"children":[2]},{}]}
+    """
+    crc71_public_error(shared_child, "glTF node 2 has multiple parents 0 and 1")
+
+    duplicate_child = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0]}],
+     "nodes":[{"children":[1,1]},{}]}
+    """
+    crc71_public_error(
+        duplicate_child,
+        "glTF node 1 appears more than once in node 0 children")
+
+    cycle = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0]}],
+     "nodes":[{"children":[1]},{"children":[0]}]}
+    """
+    crc71_public_error(cycle, "glTF node hierarchy contains a cycle")
+
+    parented_root = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0,1]}],
+     "nodes":[{"children":[1]},{}]}
+    """
+    crc71_public_error(
+        parented_root, "glTF scene root node 1 has parent node 0")
+
+    duplicate_root = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0,0]}],"nodes":[{}]}
+    """
+    crc71_public_error(
+        duplicate_root, "glTF scene 0 lists root node 0 more than once")
+
+    # One root may be referenced by multiple distinct scenes.
+    valid_shared_scene_root = """
+    {"asset":{"version":"2.0"},"scene":0,
+     "scenes":[{"nodes":[0]},{"nodes":[0]}],"nodes":[{}]}
+    """
+    mktempdir() do directory
+        gltf_path = joinpath(directory, "valid.gltf")
+        glb_path = joinpath(directory, "valid.glb")
+        write(gltf_path, valid_shared_scene_root)
+        write(glb_path, crc71_glb(valid_shared_scene_root))
+        @test length(get_children(load_gltf(gltf_path))) == 1
+        @test length(get_children(load_glb(glb_path))) == 1
+    end
+end
+
 @testset "CRC68 — extreme and narrow loss accumulation" begin
     largest = floatmax(Float64)
     residual = 2sqrt(largest)

@@ -9214,6 +9214,75 @@ end
 @inline _gltf_version_le(left, right) =
     left[1] < right[1] || (left[1] == right[1] && left[2] <= right[2])
 
+function _gltf_validate_node_hierarchy(gltf)
+    nodes = get(gltf, "nodes", Any[])
+    nodes isa AbstractVector || error("glTF nodes must be an array")
+    node_count = length(nodes)
+    parents = fill(-1, node_count)
+
+    for (parent_slot, node) in enumerate(nodes)
+        node isa AbstractDict || error("glTF node $(parent_slot - 1) must be an object")
+        children = get(node, "children", Any[])
+        children isa AbstractVector ||
+            error("glTF node $(parent_slot - 1) children must be an array")
+        parent_index = parent_slot - 1
+        for raw_child in children
+            child_index = _gltf_checked_index(
+                raw_child, node_count, "child node")
+            previous_parent = parents[child_index + 1]
+            if previous_parent == parent_index
+                error("glTF node $child_index appears more than once in node $parent_index children")
+            elseif previous_parent >= 0
+                error("glTF node $child_index has multiple parents $previous_parent and $parent_index")
+            end
+            parents[child_index + 1] = parent_index
+        end
+    end
+
+    # With at most one parent per node, following parent links detects every
+    # cycle without recursive traversal (and therefore without stack growth for
+    # a deeply nested but valid hierarchy).
+    states = zeros(UInt8, node_count) # 0=unseen, 1=current chain, 2=complete
+    for start in 1:node_count
+        states[start] == 0 || continue
+        current = start
+        while current != 0 && states[current] == 0
+            states[current] = 1
+            parent_index = parents[current]
+            current = parent_index < 0 ? 0 : parent_index + 1
+        end
+        current != 0 && states[current] == 1 &&
+            error("glTF node hierarchy contains a cycle at node $(current - 1)")
+        current = start
+        while current != 0 && states[current] == 1
+            states[current] = 2
+            parent_index = parents[current]
+            current = parent_index < 0 ? 0 : parent_index + 1
+        end
+    end
+
+    scenes = get(gltf, "scenes", Any[])
+    scenes isa AbstractVector || error("glTF scenes must be an array")
+    for (scene_slot, scene) in enumerate(scenes)
+        scene isa AbstractDict || error("glTF scene $(scene_slot - 1) must be an object")
+        roots = get(scene, "nodes", Any[])
+        roots isa AbstractVector ||
+            error("glTF scene $(scene_slot - 1) nodes must be an array")
+        seen_roots = Set{Int}()
+        for raw_root in roots
+            root_index = _gltf_checked_index(
+                raw_root, node_count, "scene root node")
+            root_index in seen_roots &&
+                error("glTF scene $(scene_slot - 1) lists root node $root_index more than once")
+            push!(seen_roots, root_index)
+            parent_index = parents[root_index + 1]
+            parent_index < 0 ||
+                error("glTF scene root node $root_index has parent node $parent_index")
+        end
+    end
+    return parents
+end
+
 function _gltf_validate_document(gltf)
     gltf isa AbstractDict || error("glTF document root must be an object")
     asset = get(gltf, "asset", nothing)
@@ -9232,6 +9301,7 @@ function _gltf_validate_document(gltf)
             error("glTF asset requires unsupported minimum version $minimum_raw")
     end
     _gltf_check_required_extensions(gltf)
+    _gltf_validate_node_hierarchy(gltf)
     return nothing
 end
 
