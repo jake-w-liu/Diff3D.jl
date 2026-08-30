@@ -1266,6 +1266,9 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     end
     for (instanced_slot, im) in pairs(cache.instanced)
         _validate_instanced_mesh(im, "render_pooled!")
+        mat = _instanced_material(im)
+        (!is_transparent_material(mat) && !material_wireframe(mat)) ||
+            continue
         base = cache.instanced_worlds[instanced_slot]
         _rasterize_instanced_geo_flat_pooled_from_instanced!(
             rt, im, instanced_slot, base, cache, proj, view, near, camera.position,
@@ -3022,7 +3025,22 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     end
     for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
+        mat = _instanced_material(im)
+        is_transparent_material(mat) && continue
         base = instanced_worlds[instanced_slot]
+        if material_wireframe(mat)
+            @inbounds for instance_index in eachindex(im.instance_matrices)
+                instance_material = _cached_instanced_material_at(
+                    instanced_material_states, instanced_slot,
+                    instance_index, mat)
+                world = base * im.instance_matrices[instance_index]
+                _render_wireframe_mesh_cached!(
+                    rt, _instanced_geometry(im), instance_material,
+                    world, proj, view, near, 1, rt.width, ylo, yhi,
+                    thread_cache)
+            end
+            continue
+        end
         _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
             rt, im, instanced_slot, base, instanced_material_states, lights, proj,
             view, near, camera.position, tri, clipped, sx, sy, sz, colorbuf,
@@ -3086,8 +3104,10 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     for (instanced_slot, im) in pairs(instanced)
         _validate_instanced_mesh(im, "render_tiled!")
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
+        mat = _instanced_material(im)
+        is_transparent_material(mat) && continue
         _instanced_materials!(instanced_material_states, instanced_slot, im,
-                              _instanced_material(im), im.instance_colors)
+                              mat, im.instance_colors)
     end
     band = cld(H, active_tiles)
     if thread_count == 1

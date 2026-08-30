@@ -29642,3 +29642,82 @@ end
         1.0, luminance_alpha, nothing,
         0.5, 0.5, 0.5, 0.5)
 end
+
+@testset "fresh audit round 257 fixes" begin
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    geometry = PlaneGeometry(width=4.0, height=4.0)
+    transparent_material = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0), transparent=true,
+        opacity=0.5, side=:double)
+    wireframe_material = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0), wireframe=true,
+        side=:double)
+
+    function unsupported_scene(material, instanced)
+        scene = Scene()
+        object = instanced ? InstancedMesh(geometry, material, 1) :
+                 Mesh(geometry, material)
+        add!(scene, object)
+        return scene
+    end
+
+    transparent_mesh_scene = unsupported_scene(
+        transparent_material, false)
+    transparent_instance_scene = unsupported_scene(
+        transparent_material, true)
+    for scene in (transparent_mesh_scene, transparent_instance_scene)
+        pooled_target = RenderTarget(16, 16)
+        pooled_cache = RenderCache()
+        render_pooled!(pooled_target, scene, camera, pooled_cache)
+        @test sum(pooled_target.color) == 0.0
+        tiled_target = RenderTarget(16, 16)
+        tiled_cache = [RenderCache()]
+        render_tiled!(tiled_target, scene, camera;
+                      tiles=1, cache=tiled_cache)
+        @test sum(tiled_target.color) == 0.0
+    end
+
+    wire_mesh_scene = unsupported_scene(wireframe_material, false)
+    wire_instance_scene = unsupported_scene(wireframe_material, true)
+    for scene in (wire_mesh_scene, wire_instance_scene)
+        pooled_target = RenderTarget(16, 16)
+        render_pooled!(pooled_target, scene, camera, RenderCache())
+        @test sum(pooled_target.color) == 0.0
+    end
+    tiled_wire_mesh = RenderTarget(16, 16)
+    tiled_wire_instance = RenderTarget(16, 16)
+    render_tiled!(tiled_wire_mesh, wire_mesh_scene, camera;
+                  tiles=1, cache=[RenderCache()])
+    render_tiled!(tiled_wire_instance, wire_instance_scene, camera;
+                  tiles=1, cache=[RenderCache()])
+    @test tiled_wire_instance.color == tiled_wire_mesh.color
+    @test sum(tiled_wire_instance.color) > 0.0
+
+    transparent_cache = RenderCache()
+    transparent_target = RenderTarget(16, 16)
+    transparent_instances = unsupported_scene(
+        transparent_material, true)
+    render_pooled!(transparent_target, transparent_instances,
+                   camera, transparent_cache)
+    @test isempty(transparent_cache.instanced_materials)
+
+    opaque_scene = Scene()
+    opaque_instance = InstancedMesh(
+        geometry,
+        MeshBasicMaterial(
+            color=Color3(0.0, 1.0, 0.0), side=:double), 1)
+    add!(opaque_scene, opaque_instance)
+    serial = RenderTarget(16, 16)
+    pooled = RenderTarget(16, 16)
+    tiled = RenderTarget(16, 16)
+    render!(serial, opaque_scene, camera)
+    pooled_cache = RenderCache()
+    render_pooled!(pooled, opaque_scene, camera, pooled_cache)
+    render_tiled!(tiled, opaque_scene, camera;
+                  tiles=1, cache=[RenderCache()])
+    @test pooled.color == serial.color
+    @test tiled.color == serial.color
+    @test_opt_alloc 256 render_pooled!(
+        pooled, opaque_scene, camera, pooled_cache)
+end
