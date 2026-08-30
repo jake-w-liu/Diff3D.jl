@@ -27651,3 +27651,37 @@ end
     @test ordinary.uvs[2outer_first - 1] == 1.0
     @test ordinary.uvs[2outer_first] == 0.5
 end
+
+@testset "fresh audit round 228 fixes" begin
+    tiny_p = TorusKnotGeometry(
+        p_val=nextfloat(0.0), q_val=1.0,
+        tubular_segments=8, radial_segments=3)
+    @test all(isfinite, tiny_p.positions)
+    @test all(isfinite, tiny_p.normals)
+    @test tiny_p.n_faces == 48
+
+    extreme_radius = TorusKnotGeometry(
+        radius=1.0e308, tube=0.0,
+        tubular_segments=8, radial_segments=3)
+    @test all(isfinite, extreme_radius.positions)
+    @test all(isfinite, extreme_radius.normals)
+
+    extreme_frequency = TorusKnotGeometry(
+        p_val=floatmax(Float64), q_val=-floatmax(Float64),
+        tubular_segments=8, radial_segments=3)
+    @test all(isfinite, extreme_frequency.positions)
+    @test all(isfinite, extreme_frequency.normals)
+
+    ordinary = TorusKnotGeometry(
+        radius=1.0, tube=0.4, p_val=2.0, q_val=3.0,
+        tubular_segments=16, radial_segments=4)
+    @test ordinary.n_vertices == 85
+    @test ordinary.n_faces == 128
+    @test all(isfinite, ordinary.positions)
+    @test all(isfinite, ordinary.normals)
+    for base in 1:3:length(ordinary.normals)
+        @test isapprox(hypot(
+            ordinary.normals[base], ordinary.normals[base + 1],
+            ordinary.normals[base + 2]), 1.0; atol=1.0e-12)
+    end
+end

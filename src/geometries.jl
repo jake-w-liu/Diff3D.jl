@@ -1465,6 +1465,73 @@ end
 
 # ========================== TorusKnot Geometry ==========================
 
+@inline function _torus_knot_phase(frequency::Float64, parameter::Float64)
+    turns = frequency * parameter
+    phase = turns * (2pi)
+    return isfinite(phase) ? phase : rem(turns, 1.0) * (2pi)
+end
+
+function _torus_knot_point(radius::Float64, p_val::Float64,
+                           q_val::Float64, parameter::Float64)
+    p_phase = _torus_knot_phase(p_val, parameter)
+    q_phase = _torus_knot_phase(q_val, parameter)
+    half_radius = radius * 0.5
+    radial = half_radius * (2.0 + cos(q_phase))
+    point = Vec3(radial * cos(p_phase), radial * sin(p_phase),
+                 half_radius * sin(q_phase))
+    return point, p_phase, q_phase
+end
+
+function _torus_knot_tangent(radius::Float64, p_val::Float64,
+                             q_val::Float64, p_phase::Float64,
+                             q_phase::Float64)
+    half_radius = radius * 0.5
+    radial = half_radius * (2.0 + cos(q_phase))
+    radial_derivative = -half_radius * q_val * sin(q_phase)
+    tangent = Vec3(
+        radial_derivative * cos(p_phase) -
+            radial * p_val * sin(p_phase),
+        radial_derivative * sin(p_phase) +
+            radial * p_val * cos(p_phase),
+        half_radius * q_val * cos(q_phase),
+    )
+    tangent_length = norm(tangent)
+    if isfinite(tangent_length) && tangent_length > 0.0
+        return tangent / tangent_length
+    end
+    return setprecision(BigFloat, 256) do
+        half = BigFloat(radius) / 2
+        p = BigFloat(p_val)
+        q = BigFloat(q_val)
+        cp = BigFloat(cos(p_phase))
+        sp = BigFloat(sin(p_phase))
+        cq = BigFloat(cos(q_phase))
+        sq = BigFloat(sin(q_phase))
+        r = half * (2 + cq)
+        dr = -half * q * sq
+        dx = dr * cp - r * p * sp
+        dy = dr * sp + r * p * cp
+        dz = half * q * cq
+        length_big = sqrt(dx * dx + dy * dy + dz * dz)
+        iszero(length_big) && return Vec3(0.0, 0.0, 1.0)
+        Vec3(Float64(dx / length_big), Float64(dy / length_big),
+             Float64(dz / length_big))
+    end
+end
+
+function _torus_knot_frame(tangent::Vec3{Float64}, center::Vec3{Float64})
+    seed = normalize(center)
+    binormal = cross(tangent, seed)
+    if iszero(norm(binormal))
+        axis = abs(tangent.z) < 0.9 ? Vec3(0.0, 0.0, 1.0) :
+               Vec3(0.0, 1.0, 0.0)
+        binormal = cross(tangent, axis)
+    end
+    binormal = normalize(binormal)
+    normal = cross(binormal, tangent)
+    return normal, binormal
+end
+
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
     radius = _geometry_finite_float(radius, "TorusKnotGeometry radius")
@@ -1472,8 +1539,16 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     abs(radius) <= (floatmax(Float64) - abs(tube)) / 1.5 ||
         throw(ArgumentError(
             "TorusKnotGeometry generated positions exceed the Float64 range"))
-    p_val = _geometry_nonzero_finite_scalar(p_val, "TorusKnotGeometry p_val")
-    q_val = _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val")
+    p_val = _geometry_finite_float(
+        _geometry_nonzero_finite_scalar(
+            p_val, "TorusKnotGeometry p_val"),
+        "TorusKnotGeometry p_val")
+    !iszero(p_val) ||
+        throw(ArgumentError(
+            "TorusKnotGeometry p_val must be representable as non-zero Float64"))
+    q_val = _geometry_finite_float(
+        _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val"),
+        "TorusKnotGeometry q_val")
     # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
     # a 0/0 = NaN, matching every sibling generator in this file.
     tubular_segments = _clamp_seg(tubular_segments, 3, "TorusKnotGeometry tubular_segments")
@@ -1486,28 +1561,14 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     normals_arr = Vector{Float64}(undef, position_len)
     uvs_arr = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    q_over_p = q_val / p_val
-
-    function knot_point(t)
-        cu = cos(t)
-        su = sin(t)
-        qu_over_p = q_over_p * t
-        radial = radius * (2 + cos(qu_over_p)) * 0.5
-        cx = radial * cu
-        cy = radial * su
-        cz = radius * sin(qu_over_p) * 0.5
-        Vec3(cx, cy, cz)
-    end
 
     for i in 0:tubular_segments
         ui = i / tubular_segments
-        u = ui * p_val * 2π
-        p1 = knot_point(u)
-        p2 = knot_point(u + 0.01)
-        T_vec = normalize(p2 - p1)
-        N_vec = normalize(p2 + p1)
-        B_vec = normalize(cross(T_vec, N_vec))
-        N_vec = cross(B_vec, T_vec)
+        p1, p_phase, q_phase = _torus_knot_point(
+            radius, p_val, q_val, ui)
+        T_vec = _torus_knot_tangent(
+            radius, p_val, q_val, p_phase, q_phase)
+        N_vec, B_vec = _torus_knot_frame(T_vec, p1)
 
         for j in 0:radial_segments
             vj = j / radial_segments
@@ -1527,6 +1588,12 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
             end
+            isfinite(px) && isfinite(py) && isfinite(pz) ||
+                throw(ArgumentError(
+                    "TorusKnotGeometry generated non-finite positions"))
+            isfinite(nx) && isfinite(ny) && isfinite(nz) ||
+                throw(ArgumentError(
+                    "TorusKnotGeometry generated non-finite normals"))
 
             vi = i * (radial_segments + 1) + j + 1
             pbase = 3vi - 2
