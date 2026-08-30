@@ -10762,7 +10762,9 @@ function _parse_glb(path::String)
     have_json = false
     have_bin = false
     pos = 13                                                     # first chunk header
+    chunk_index = 0
     while pos <= total
+        chunk_index += 1
         pos + 7 <= total || error("GLB chunk header exceeds file bounds")
         clen = _rd_le32(bytes, pos)
         clen % 4 == 0 || error("GLB chunk length $clen is not 4-byte aligned")
@@ -10770,12 +10772,17 @@ function _parse_glb(path::String)
         dstart = pos + 8
         dend = dstart + clen - 1
         dend <= total || error("GLB chunk exceeds file bounds")
+        chunk_index == 1 && ctype != 0x4E4F534A &&
+            error("GLB first chunk must be JSON")
         if ctype == 0x4E4F534A          # 'JSON'
             !have_json || error("GLB has multiple JSON chunks")
+            chunk_index == 1 || error("GLB JSON chunk must be first")
             json_bytes = @view bytes[dstart:dend]
             have_json = true
         elseif ctype == 0x004E4942      # 'BIN\0'
             !have_bin || error("GLB has multiple BIN chunks")
+            chunk_index == 2 ||
+                error("GLB BIN chunk must immediately follow the JSON chunk")
             bin_bytes = @view bytes[dstart:dend]
             have_bin = true
         end

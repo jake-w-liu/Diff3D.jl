@@ -15516,6 +15516,29 @@ end
             @test asset isa Diff3D.GLTFAsset
             @test !isempty(Diff3D.collect_meshes(asset.scene))
 
+            bin_chunk = vcat(le32(length(bin)), le32(0x004E4942), bin)
+            json_chunk = vcat(le32(length(jb)), le32(0x4E4F534A), jb)
+            unknown_chunk = vcat(le32(4), le32(0x12345678), zeros(UInt8, 4))
+            function glb_with_body(parts...)
+                chunk_body = vcat(parts...)
+                return vcat(le32(0x46546C67), le32(2),
+                            le32(12 + length(chunk_body)), chunk_body)
+            end
+            bin_first_path = tempname() * ".glb"
+            write(bin_first_path, glb_with_body(bin_chunk, json_chunk))
+            @test_throws "first chunk must be JSON" Diff3D._parse_glb(bin_first_path)
+
+            delayed_bin_path = tempname() * ".glb"
+            write(delayed_bin_path,
+                  glb_with_body(json_chunk, unknown_chunk, bin_chunk))
+            @test_throws "BIN chunk must immediately follow the JSON chunk" Diff3D._parse_glb(
+                delayed_bin_path)
+
+            trailing_unknown_path = tempname() * ".glb"
+            write(trailing_unknown_path,
+                  glb_with_body(json_chunk, bin_chunk, unknown_chunk))
+            @test Diff3D.load_glb(trailing_unknown_path) isa Diff3D.Scene
+
             bad_total = copy(glb)
             bad_total[9:12] = le32(length(glb) + 4)
             bad_total_path = tempname() * ".glb"
@@ -15545,6 +15568,9 @@ end
             @test isempty(empty_asset.animations)
 
             rm(path; force=true)
+            rm(bin_first_path; force=true)
+            rm(delayed_bin_path; force=true)
+            rm(trailing_unknown_path; force=true)
             rm(bad_total_path; force=true)
             rm(bad_align_path; force=true)
             rm(empty_path; force=true)
