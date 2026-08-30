@@ -818,7 +818,7 @@ println("inverse  adam ", round(hist[1]; sigdigits=3), " -> ", round(hist[end]; 
 
 ### Image & Mesh I/O
 
-Diff3D ships pure-Julia readers and writers for the common image and mesh formats, so a rendered `H×W×3` buffer can be exported to PNG, PPM, or PDF, and meshes can round-trip through STL, OBJ, PLY, and XYZ without any external dependencies. Larger binary assets (HDR, EXR, JPEG, KTX2, glTF/GLB) load from a file path or byte buffer.
+Diff3D ships pure-Julia readers and writers for the common image and mesh formats, so a rendered `H×W×3` buffer can be exported to PNG, PPM, or PDF, and meshes can round-trip through STL, OBJ, PLY, and XYZ without any external dependencies. Larger binary assets (HDR, EXR, JPEG, KTX2, glTF/GLB) load from file paths.
 
 ```julia
 dir = mktempdir()  # all written files stay contained here
@@ -888,7 +888,7 @@ cloud = parse_xyz("0 0 0 255 0 0\n1 1 1 0 255 0\n2 0 1 0 0 255\n")
 write(joinpath(dir, "pts.xyz"), "0 0 0\n1 2 3\n4 5 6\n")
 disk_cloud = load_xyz(joinpath(dir, "pts.xyz"))
 
-# --- Binary asset loaders take a file path/bytes; not run in this doc harness ---
+# --- Binary asset loaders take a file path; not run in this doc harness ---
 # env  = load_hdr("studio.hdr")        # Radiance RGBE -> H×W×3 linear HDR
 # exr  = load_exr("render.exr")        # OpenEXR half/float
 # tex  = load_jpeg("albedo.jpg")       # baseline JPEG -> H×W×3 in [0,1]
