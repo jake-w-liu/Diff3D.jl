@@ -653,12 +653,9 @@ end
                 end
                 if has_ao
                     tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
-                    ao = sample_texture(ao_map, tu, tv)
                     aoi = _material_scalar(material, :ao_map_intensity)
-                    aor = 1.0 + (ao.r - 1.0) * aoi
-                    aog = 1.0 + (ao.g - 1.0) * aoi
-                    aob = 1.0 + (ao.b - 1.0) * aoi
-                    col = Color3(col.r * aor, col.g * aog, col.b * aob)
+                    ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
+                    col = col * ao
                 end
                 if has_lightmap
                     tu, tv = _map_uv(light_map, u, v, u2, v2; default_uv2=true)

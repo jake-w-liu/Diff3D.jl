@@ -28465,3 +28465,91 @@ end
     @test_throws "PLTE chunk must appear before tRNS" Diff3D._decode_png(
         wrong_order)
 end
+
+@testset "fresh audit round 244 fixes" begin
+    colored_ao = Texture(
+        reshape([0.25, 0.5, 1.0], 1, 1, 3);
+        filter=:nearest, colorspace=:linear)
+    scalar_ao = Texture(
+        fill(0.25, 1, 1, 3); filter=:nearest, colorspace=:linear)
+    single_channel_ao = Texture(
+        fill(0.25, 1, 1, 1); filter=:nearest, colorspace=:linear)
+
+    material_makers = (
+        ao -> MeshBasicMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+        ao -> MeshLambertMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+        ao -> MeshPhongMaterial(
+            color=Color3(1.0, 1.0, 1.0),
+            specular=Color3(0.0, 0.0, 0.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+        ao -> MeshStandardMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+        ao -> MeshPhysicalMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+        ao -> MeshToonMaterial(
+            color=Color3(1.0, 1.0, 1.0), ao_map=ao,
+            ao_map_intensity=1.0, side=:double),
+    )
+
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    function render_ao(material, shading; geometry=PlaneGeometry(
+                           width=4.0, height=4.0))
+        scene = Scene()
+        add!(scene, Mesh(geometry, material))
+        add!(scene, AmbientLight(intensity=1.0))
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; shading=shading)
+        return target.color
+    end
+
+    for make_material in material_makers, shading in (:flat, :smooth)
+        colored = render_ao(make_material(colored_ao), shading)
+        scalar = render_ao(make_material(scalar_ao), shading)
+        @test colored ≈ scalar atol=1.0e-12
+    end
+
+    half_intensity = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), ao_map=colored_ao,
+        ao_map_intensity=0.5, side=:double)
+    for shading in (:flat, :smooth)
+        image = render_ao(half_intensity, shading)
+        @test image[8, 8, 1] ≈ 0.625 atol=1.0e-12
+        @test image[8, 8, 2] ≈ 0.625 atol=1.0e-12
+        @test image[8, 8, 3] ≈ 0.625 atol=1.0e-12
+        @test render_ao(
+            material_makers[1](single_channel_ao), shading) ≈
+              render_ao(material_makers[1](scalar_ao), shading) atol=1.0e-12
+    end
+
+    light_map = Texture(
+        reshape([1.0, 0.5, 0.25], 1, 1, 3);
+        filter=:nearest, colorspace=:linear)
+    combined = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), ao_map=colored_ao,
+        ao_map_intensity=1.0, light_map=light_map,
+        light_map_intensity=1.0, side=:double)
+    combined_image = render_ao(combined, :smooth)
+    @test combined_image[8, 8, :] ≈ [0.25, 0.125, 0.0625]
+
+    uv2_data = zeros(Float64, 1, 2, 3)
+    uv2_data[1, 1, :] .= 0.25
+    uv2_data[1, 2, :] .= 0.75
+    uv2_ao = Texture(
+        uv2_data; filter=:nearest, wrap_s=:clamp,
+        wrap_t=:clamp, colorspace=:linear)
+    uv2_geometry = PlaneGeometry(width=4.0, height=4.0)
+    set_attribute!(uv2_geometry, :uv2,
+                   repeat([0.25, 0.5], uv2_geometry.n_vertices), 2)
+    uv2_image = render_ao(
+        material_makers[1](uv2_ao), :smooth; geometry=uv2_geometry)
+    @test uv2_image[8, 8, 1] ≈ 0.25 atol=1.0e-12
+    @test_opt_alloc 0 Diff3D._ambient_occlusion_factor(
+        colored_ao, 0.5, 0.5, 0.5)
+end

@@ -184,6 +184,11 @@ end
 @inline _map_uv(tex, u, v, u2, v2; default_uv2::Bool=false) =
     (_texture_uv_set(tex) == 1 || (default_uv2 && _texture_uv_set(tex) == 0)) ? (u2, v2) : (u, v)
 
+@inline function _ambient_occlusion_factor(tex::Texture, u, v, intensity)
+    occlusion = sample_texture_channel(tex, u, v, 1)
+    return 1.0 + (occlusion - 1.0) * intensity
+end
+
 @inline function _pack_depth_rgba(depth::Float64)
     v = clamp(depth, 0.0, 1.0)
     v <= 0.0 && return (0.0, 0.0, 0.0, 0.0)
@@ -1145,12 +1150,9 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             end
             if ao_map !== nothing
                 tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
-                ao = sample_texture(ao_map, tu, tv)
                 aoi = _material_scalar(material, :ao_map_intensity)
-                aor = 1.0 + (ao.r - 1.0) * aoi
-                aog = 1.0 + (ao.g - 1.0) * aoi
-                aob = 1.0 + (ao.b - 1.0) * aoi
-                color = Color3(color.r*aor, color.g*aog, color.b*aob)
+                ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
+                color = color * ao
             end
             # lightMap: baked indirect lighting, multiplied into the lit result
             # (like aoMap) so pre-baked GI tints the surface (three.js lightMap).
