@@ -28297,8 +28297,15 @@ end
 
             texture = TextureLoader(path)
             @test texture.colorspace === expected_colorspace
-            @test texture.data == load_ktx2(path)
-            @test texture.data == load_image(path)
+            decoded = load_ktx2(path)
+            @test decoded == load_image(path)
+            if channels < 3
+                @test size(texture.data) == (1, 1, 3)
+                @test texture.data[:, :, 1:channels] == decoded
+                @test all(iszero, texture.data[:, :, (channels + 1):3])
+            else
+                @test texture.data == decoded
+            end
             override = expected_colorspace === :linear ? :srgb : :linear
             @test TextureLoader(path; colorspace=override).colorspace ===
                   override
@@ -28309,7 +28316,25 @@ end
         @test TextureLoader(png_path).colorspace === :srgb
         @test TextureLoader(png_path; colorspace=:linear).colorspace ===
               :linear
+
+        r_path = joinpath(directory, "r.ktx2")
+        rg_path = joinpath(directory, "rg.ktx2")
+        write(r_path, metadata_ktx2(9, UInt8[64]))
+        write(rg_path, metadata_ktx2(16, UInt8[64, 192]))
+        @test sample_texture(TextureLoader(r_path), 0.5, 0.5) ==
+              Color3(64 / 255, 0.0, 0.0)
+        @test sample_texture(TextureLoader(rg_path), 0.5, 0.5) ==
+              Color3(64 / 255, 192 / 255, 0.0)
+        @test !Diff3D._has_texture_alpha(TextureLoader(rg_path))
     end
+
+
+    r = reshape([0.25], 1, 1, 1)
+    rg = reshape([0.25, 0.75], 1, 1, 2)
+    @test Diff3D._ktx2_texture_data(r) == reshape([0.25, 0.0, 0.0], 1, 1, 3)
+    @test Diff3D._ktx2_texture_data(rg) == reshape([0.25, 0.75, 0.0], 1, 1, 3)
+    rgb = reshape([0.25, 0.75, 1.0], 1, 1, 3)
+    @test Diff3D._ktx2_texture_data(rgb) === rgb
 end
 
 @testset "fresh audit round 242 fixes" begin

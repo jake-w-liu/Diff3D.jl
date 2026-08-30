@@ -969,17 +969,30 @@ function load_image(path::String)
     return _decode_image_bytes(read(path), path)
 end
 
+function _ktx2_texture_data(image::Array{Float64,3})
+    height, width, channels = size(image)
+    channels >= 3 && return image
+    expanded = zeros(Float64, height, width, 3)
+    @views expanded[:, :, 1:channels] .= image
+    return expanded
+end
+
 """Load a PNG, JPEG/JPG, or uncompressed KTX2 image into a [`Texture`].
 
 PNG and JPEG textures default to sRGB. KTX2 textures infer linear or sRGB from
-their Vulkan format. An explicit `colorspace` keyword overrides the default.
+their Vulkan format. Single-channel and two-channel KTX2 images are expanded
+to RGB using Vulkan's zero defaults for missing color components. An explicit
+`colorspace` keyword overrides the default.
 """
 function TextureLoader(path::String; kwargs...)
     bytes = read(path)
     image = _decode_image_bytes(bytes, path)
-    if _is_ktx2_bytes(bytes) && !haskey(kwargs, :colorspace)
-        _, _, colorspace = _KTX2_VKFORMATS[_rd_le32(bytes, 13)]
-        return Texture(image; colorspace=colorspace, kwargs...)
+    if _is_ktx2_bytes(bytes)
+        image = _ktx2_texture_data(image)
+        if !haskey(kwargs, :colorspace)
+            _, _, colorspace = _KTX2_VKFORMATS[_rd_le32(bytes, 13)]
+            return Texture(image; colorspace=colorspace, kwargs...)
+        end
     end
     return Texture(image; kwargs...)
 end
