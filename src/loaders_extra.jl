@@ -9933,13 +9933,39 @@ function _gltf_expand_nontriangle_geometry(geo::BufferGeometry, order::Vector{In
     return BufferGeometry(positions, normals, uvs, Int[], length(order), 0, attrs)
 end
 
+function _gltf_validate_node_matrix_trs(matrix::Mat4{Float64})
+    values = matrix.e
+    affine_tolerance = 1.0e-12
+    abs(values[4]) <= affine_tolerance &&
+        abs(values[8]) <= affine_tolerance &&
+        abs(values[12]) <= affine_tolerance &&
+        abs(values[16] - 1.0) <= affine_tolerance ||
+        error("glTF node matrix must be decomposable to translation, rotation, and scale")
+
+    columns = (
+        Vec3(values[1], values[2], values[3]),
+        Vec3(values[5], values[6], values[7]),
+        Vec3(values[9], values[10], values[11]),
+    )
+    directions = ntuple(index -> normalize(columns[index]), 3)
+    for (left, right) in ((1, 2), (1, 3), (2, 3))
+        iszero(norm(columns[left])) && continue
+        iszero(norm(columns[right])) && continue
+        abs(dot(directions[left], directions[right])) <= 1.0e-6 ||
+            error("glTF node matrix must be decomposable to translation, rotation, and scale")
+    end
+    return nothing
+end
+
 function _gltf_node_matrix(node)
     if haskey(node, "matrix")
         any(name -> haskey(node, name),
             ("translation", "rotation", "scale")) &&
             error("glTF node matrix must not be combined with translation, rotation, or scale")
         m = _gltf_checked_number_tuple(node["matrix"], 16, "node matrix")
-        return Mat4{Float64}(m)
+        matrix = Mat4{Float64}(m)
+        _gltf_validate_node_matrix_trs(matrix)
+        return matrix
     end
     t = _gltf_checked_number_tuple(get(node, "translation", [0.0,0.0,0.0]),
                                    3, "node translation")

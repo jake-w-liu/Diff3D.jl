@@ -30630,6 +30630,28 @@ end
     @test rotation == quat_to_mat4(Quaternion(
         0.0, 0.0, sin(half_angle), cos(half_angle)))
 
+    sheared_values = collect(Mat4().e)
+    sheared_values[5] = 0.5
+    @test_throws "node matrix must be decomposable to translation, rotation, and scale" Diff3D._gltf_node_matrix(
+        Dict{String,Any}("matrix" => sheared_values))
+    projective_values = collect(Mat4().e)
+    projective_values[4] = 0.1
+    @test_throws "node matrix must be decomposable to translation, rotation, and scale" Diff3D._gltf_node_matrix(
+        Dict{String,Any}("matrix" => projective_values))
+
+    for valid_matrix in (
+            mat4_translation(1.0, 2.0, 3.0) *
+                mat4_rotation_z(0.4) *
+                mat4_scaling(2.0, 3.0, 4.0),
+            mat4_rotation_y(-0.3) *
+                mat4_scaling(-2.0, 3.0, 4.0),
+            mat4_rotation_x(0.2) *
+                mat4_scaling(0.0, 2.0, 3.0),
+            mat4_scaling(1.0e-300, 1.0e100, 1.0e300))
+        @test Diff3D._gltf_node_matrix(Dict{String,Any}(
+            "matrix" => collect(valid_matrix.e))) == valid_matrix
+    end
+
     function node_scene(node)
         return Dict{String,Any}(
             "scene" => 0,
@@ -30643,6 +30665,9 @@ end
     @test_throws "node rotation must be a unit quaternion" Diff3D._gltf_build_scene(
         node_scene(Dict{String,Any}(
             "rotation" => Any[0.0, 0.0, 0.0, 0.5])), Any[])
+    @test_throws "node matrix must be decomposable to translation, rotation, and scale" Diff3D._gltf_build_scene(
+        node_scene(Dict{String,Any}(
+            "matrix" => sheared_values)), Any[])
 end
 
 @testset "fresh audit round 268 fixes" begin
