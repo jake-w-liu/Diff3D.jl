@@ -31249,6 +31249,27 @@ end
               expected atol=1.0e-12
     end
 
+    function near_primitive_center(make_primitive; reverse=false)
+        scene = Scene()
+        primitive = make_primitive()
+        primitive.position = primitive isa InstancedMesh ?
+            Vec3(0.0, 0.0, 1.0) : Vec3()
+        mesh = red_mesh()
+        mesh.position = Vec3(0.0, 0.0, -1.0)
+        reverse ? (add!(scene, mesh); add!(scene, primitive)) :
+                  (add!(scene, primitive); add!(scene, mesh))
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera)
+        return copy(target.color[8, 7, :])
+    end
+    near_expected = [0.25, 0.0, 0.5]
+    for make_primitive in primitive_builders
+        @test near_primitive_center(make_primitive) ≈
+              near_expected atol=1.0e-12
+        @test near_primitive_center(make_primitive; reverse=true) ≈
+              near_expected atol=1.0e-12
+    end
+
     opaque_far, _, _ = pair_center(
         () -> blue_sprite(opacity=1.0, z=-1.0))
     @test opaque_far ≈ [0.5, 0.0, 0.5] atol=1.0e-12
@@ -31269,4 +31290,8 @@ end
     @test cached_target.color[8, 7, :] ≈ expected atol=1.0e-12
     @test_opt_alloc 4096 render!(
         cached_target, cached_scene, camera; cache=cached)
+    @test Diff3D._primitive_blends(LineBasicMaterial(opacity=0.5))
+    @test !Diff3D._primitive_blends(LineBasicMaterial(opacity=1.0))
+    @test_opt_alloc 0 Diff3D._primitive_blends(
+        LineBasicMaterial(opacity=0.5))
 end

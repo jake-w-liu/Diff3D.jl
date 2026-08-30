@@ -1675,7 +1675,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
-        is_transparent_material(mat) && continue
+        (material_wireframe(mat) ? _primitive_blends(mat) :
+         is_transparent_material(mat)) && continue
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         instance_materials = cache === nothing ? nothing :
                              _instanced_materials!(cache.instanced_materials,
@@ -1731,7 +1732,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # before any transparent object is blended.
     for i in eachindex(wireframe_meshes)
         mesh = wireframe_meshes[i]
-        is_transparent_material(_mesh_material(mesh)) && continue
+        _primitive_blends(_mesh_material(mesh)) && continue
         _render_wireframe_mesh_from_mesh!(
             rt, mesh, wireframe_worlds[i], proj, view, near,
             xlo, xhi, ylo, yhi, cache)
@@ -1749,7 +1750,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
         material = _render_primitive_material(object)
-        is_transparent_material(material) && continue
+        _primitive_blends(material) && continue
         world = primitive_worlds[primitive_index]
         if object isa Sprite
             fill!(primitive_stamp, 0)
@@ -1799,7 +1800,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         mat = _instanced_material(im)
-        is_transparent_material(mat) || continue
+        (material_wireframe(mat) ? _primitive_blends(mat) :
+         is_transparent_material(mat)) || continue
         cache === nothing || _instanced_materials!(
             cache.instanced_materials, instanced_slot, im, mat,
             im.instance_colors)
@@ -1816,7 +1818,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         end
     end
     @inbounds for index in eachindex(wireframe_meshes)
-        is_transparent_material(
+        _primitive_blends(
             _mesh_material(wireframe_meshes[index])) || continue
         push!(transparent_items, _TransparentRenderItem(
             _mesh_view_depth_world(wireframe_worlds[index], view),
@@ -1824,7 +1826,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
     @inbounds for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
-        is_transparent_material(
+        _primitive_blends(
             _render_primitive_material(object)) || continue
         base = primitive_worlds[primitive_index]
         if object isa InstancedMesh
@@ -2275,6 +2277,10 @@ function is_transparent_material(m::AbstractMaterial)
     _validate_material_parameters(m)
     material_opacity(m)
     return material_transparent(m)
+end
+function _primitive_blends(m::AbstractMaterial)
+    _validate_material_parameters(m)
+    return material_transparent(m) || material_opacity(m) < 1.0
 end
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
