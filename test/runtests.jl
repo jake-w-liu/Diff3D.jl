@@ -27828,3 +27828,45 @@ end
     small_polygons = Diff3D._csg_geometry_polygons(small, frame)
     @test length(small_polygons) == small.n_faces
 end
+
+@testset "fresh audit round 232 fixes" begin
+    camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+
+    function sprite_center(texture; tint=Color3(1.0, 1.0, 1.0))
+        scene = Scene()
+        add!(scene, Sprite(SpriteMaterial(
+            color=tint, map=texture, transparent=true)))
+        target = RenderTarget(32, 32)
+        render_sprites!(target, scene, camera)
+        return Vec3(target.color[16, 16, 1],
+                    target.color[16, 16, 2],
+                    target.color[16, 16, 3])
+    end
+
+    srgb = Texture(fill(0.5, 1, 1, 3); filter=:nearest)
+    decoded = srgb_to_linear(0.5)
+    srgb_center = sprite_center(srgb)
+    @test srgb_center.x ≈ decoded atol=1.0e-12
+    @test srgb_center.y ≈ decoded atol=1.0e-12
+    @test srgb_center.z ≈ decoded atol=1.0e-12
+
+    linear = Texture(
+        fill(0.5, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    @test sprite_center(linear) == Vec3(0.5, 0.5, 0.5)
+    tinted = sprite_center(srgb; tint=Color3(0.5, 1.0, 0.25))
+    @test tinted.x ≈ 0.5 * decoded atol=1.0e-12
+    @test tinted.y ≈ decoded atol=1.0e-12
+    @test tinted.z ≈ 0.25 * decoded atol=1.0e-12
+
+    rgba_data = fill(0.5, 1, 1, 4)
+    rgba_data[1, 1, 4] = 0.25
+    rgba = Texture(rgba_data; filter=:nearest)
+    alpha_center = sprite_center(rgba)
+    @test alpha_center.x ≈ 0.25 * decoded atol=1.0e-12
+    @test alpha_center.y ≈ 0.25 * decoded atol=1.0e-12
+    @test alpha_center.z ≈ 0.25 * decoded atol=1.0e-12
+end

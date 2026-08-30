@@ -1947,7 +1947,7 @@ end
             frag_alpha = alpha
             col = tint
             if has_tex
-                col = col * sample_texture(tex, u, v)
+                col = col * sample_texture_linear(tex, u, v)
             end
             if has_alpha
                 frag_alpha = _fragment_alpha(Float64(alpha), tex, alpha_map, u, v, u, v)
