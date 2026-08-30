@@ -140,11 +140,32 @@ get_parent(c::PerspectiveCamera) = c.parent
 is_visible(c::PerspectiveCamera) = c.visible
 set_parent!(c::PerspectiveCamera, p) = (c.parent = p)
 
+@noinline function _throw_camera_zoom_projection(kind::Symbol)
+    throw(ArgumentError(
+        "$kind zoom produces unrepresentable projection coefficients"))
+end
+
+@inline function _camera_zoom_required(value::Float64, zoom::Float64,
+                                       kind::Symbol)
+    result = value * zoom
+    isfinite(result) && !iszero(result) ||
+        _throw_camera_zoom_projection(kind)
+    return result
+end
+
+function _perspective_zoom_projection(base::Mat4{Float64}, zoom::Float64)
+    sx = _camera_zoom_required(base.e[1], zoom, :PerspectiveCamera)
+    sy = _camera_zoom_required(base.e[6], zoom, :PerspectiveCamera)
+    elements = Base.setindex(base.e, sx, 1)
+    elements = Base.setindex(elements, sy, 6)
+    return Mat4{Float64}(elements)
+end
+
 function projection_matrix(c::PerspectiveCamera)
     zoom = _validated_camera_zoom(c.zoom)
     f, a, n, fr = _validated_perspective_params(c.fov, c.aspect, c.near, c.far)
-    fov = 2.0 * atan(tan(f / 2.0) / zoom)
-    mat4_perspective(fov, a, n, fr)
+    return _perspective_zoom_projection(
+        mat4_perspective(f, a, n, fr), zoom)
 end
 
 function view_matrix(c::PerspectiveCamera)
@@ -211,17 +232,26 @@ set_parent!(c::OrthographicCamera, p) = (c.parent = p)
     Scene, Group, Object3D, Mesh, LineObject, PointsObject,
     PerspectiveCamera, OrthographicCamera)
 
+function _orthographic_zoom_projection(base::Mat4{Float64}, zoom::Float64)
+    sx = _camera_zoom_required(base.e[1], zoom, :OrthographicCamera)
+    sy = _camera_zoom_required(base.e[6], zoom, :OrthographicCamera)
+    tx = base.e[13] * zoom
+    ty = base.e[14] * zoom
+    isfinite(tx) && isfinite(ty) ||
+        _throw_camera_zoom_projection(:OrthographicCamera)
+    elements = Base.setindex(base.e, sx, 1)
+    elements = Base.setindex(elements, sy, 6)
+    elements = Base.setindex(elements, tx, 13)
+    elements = Base.setindex(elements, ty, 14)
+    return Mat4{Float64}(elements)
+end
+
 function projection_matrix(c::OrthographicCamera)
     zoom = _validated_camera_zoom(c.zoom)
     l, r, b, t, n, fr = _validated_orthographic_params(
         c.left, c.right, c.bottom, c.top, c.near, c.far)
-    cx = _stable_midpoint(l, r)
-    cy = _stable_midpoint(b, t)
-    # midpoint(-lo, hi) is (hi-lo)/2 without overflowing for opposite-sign
-    # bounds. Divide only after the representable half-extent is formed.
-    hx = _stable_midpoint(-l, r) / zoom
-    hy = _stable_midpoint(-b, t) / zoom
-    mat4_orthographic(cx - hx, cx + hx, cy - hy, cy + hy, n, fr)
+    return _orthographic_zoom_projection(
+        mat4_orthographic(l, r, b, t, n, fr), zoom)
 end
 
 function view_matrix(c::OrthographicCamera)

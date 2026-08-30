@@ -27573,3 +27573,54 @@ end
     @test view_matrix(camera) == mat4_look_at(
         camera.position, camera.target, camera.up)
 end
+
+@testset "fresh audit round 226 fixes" begin
+    tiny_zoom = nextfloat(0.0)
+    perspective = PerspectiveCamera(
+        fov=pi / 4, aspect=1.0, near=0.1, far=100.0,
+        zoom=tiny_zoom)
+    perspective_projection = projection_matrix(perspective)
+    expected_perspective_scale =
+        tiny_zoom * (1.0 / tan(perspective.fov / 2.0))
+    @test perspective_projection.e[1] == expected_perspective_scale
+    @test perspective_projection.e[6] == expected_perspective_scale
+    @test perspective_projection.e[1] > 0.0
+    @test all(isfinite, perspective_projection.e)
+
+    orthographic = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=100.0, zoom=tiny_zoom)
+    orthographic_projection = projection_matrix(orthographic)
+    @test orthographic_projection.e[1] == tiny_zoom
+    @test orthographic_projection.e[6] == tiny_zoom
+    @test all(isfinite, orthographic_projection.e)
+
+    off_center = OrthographicCamera(
+        left=1.0, right=5.0, bottom=-2.0, top=4.0,
+        near=0.1, far=100.0, zoom=3.0)
+    base = mat4_orthographic(
+        off_center.left, off_center.right,
+        off_center.bottom, off_center.top,
+        off_center.near, off_center.far)
+    zoomed = projection_matrix(off_center)
+    @test zoomed.e[1] == 3.0 * base.e[1]
+    @test zoomed.e[6] == 3.0 * base.e[6]
+    @test zoomed.e[13] == 3.0 * base.e[13]
+    @test zoomed.e[14] == 3.0 * base.e[14]
+    @test zoomed.e[11] == base.e[11]
+    @test zoomed.e[15] == base.e[15]
+
+    @test_throws "PerspectiveCamera zoom produces unrepresentable projection coefficients" projection_matrix(
+        PerspectiveCamera(zoom=floatmax(Float64)))
+    @test_throws "OrthographicCamera zoom produces unrepresentable projection coefficients" projection_matrix(
+        OrthographicCamera(
+            left=-1.0e308, right=1.0e308,
+            bottom=-1.0, top=1.0, zoom=tiny_zoom))
+
+    maximal_ortho = projection_matrix(OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        zoom=floatmax(Float64)))
+    @test maximal_ortho.e[1] == floatmax(Float64)
+    @test maximal_ortho.e[6] == floatmax(Float64)
+    @test all(isfinite, maximal_ortho.e)
+end
