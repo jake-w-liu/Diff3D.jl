@@ -33053,6 +33053,156 @@ end
     @test_opt_alloc 0 compute_bounding_sphere(geometry)
 end
 
+@testset "CRC83 — minsub soft depth weights" begin
+    nearest_vertices = [
+        Vec3(-0.8, -0.8, -0.5),
+        Vec3( 0.8, -0.8, -0.5),
+        Vec3( 0.0,  0.8, -0.5),
+    ]
+    farther_vertices = [
+        Vec3(-0.8, -0.8, 0.5),
+        Vec3( 0.8, -0.8, 0.5),
+        Vec3( 0.0,  0.8, 0.5),
+    ]
+    vertices = vcat(nearest_vertices, farther_vertices)
+    nearest_face = (1, 2, 3)
+    farther_face = (4, 5, 6)
+    red = Color3(1.0, 0.0, 0.0)
+    blue = Color3(0.0, 0.0, 1.0)
+
+    function overlap_inputs(face_count; nearest_last=false)
+        faces = fill(farther_face, face_count)
+        colors = fill(blue, face_count)
+        slot = nearest_last ? face_count : 1
+        faces[slot] = nearest_face
+        colors[slot] = red
+        return faces, colors
+    end
+
+    smallest = nextfloat(0.0)
+    @test SoftRasterizerConfig(gamma=smallest).gamma == smallest
+    for gamma in (smallest, 1.0e-320, floatmin(Float64), 1.0e-4)
+        config = SoftRasterizerConfig(
+            sigma=0.1, gamma=gamma,
+            bg_color=Color3(0.0, 0.0, 0.0))
+        for face_count in (2, 9), nearest_last in (false, true)
+            faces, colors = overlap_inputs(
+                face_count; nearest_last=nearest_last)
+            image = soft_render(
+                vertices, faces, colors, Mat4(), 8, 8, config)
+            @test all(isfinite, image)
+            @test image[4, 4, 1] > 0.99
+            @test image[4, 4, 2] == 0.0
+            @test image[4, 4, 3] == 0.0
+        end
+    end
+
+    # Positive face depths make both the foreground and background absolute
+    # logits `-Inf` at minsub gamma; relative depths still select the face.
+    for face_count in (1, 9)
+        far_only = soft_render(
+            vertices, fill(farther_face, face_count), fill(blue, face_count),
+            Mat4(), 8, 8,
+            SoftRasterizerConfig(
+                sigma=0.1, gamma=smallest,
+                bg_color=Color3(0.0, 0.0, 0.0)))
+        @test all(isfinite, far_only)
+        @test far_only[4, 4, 3] > 0.99
+    end
+
+    float32_vertices = Vec3{Float32}[
+        Vec3(Float32(v.x), Float32(v.y), Float32(v.z)) for v in vertices]
+    float32_colors = Color3{Float32}[
+        Color3(1.0f0, 0.0f0, 0.0f0), Color3(0.0f0, 0.0f0, 1.0f0)]
+    float32_image = soft_render(
+        float32_vertices, [nearest_face, farther_face], float32_colors,
+        Mat4{Float32}(), 8, 8,
+        SoftRasterizerConfig(
+            sigma=0.1f0, gamma=nextfloat(0.0f0),
+            bg_color=Color3(0.0f0, 0.0f0, 0.0f0), eps=1.0f-6))
+    @test eltype(float32_image) == Float32
+    @test all(isfinite, float32_image)
+    @test float32_image[4, 4, 1] > 0.99f0
+
+    # The finite-reciprocal path deliberately retains the previous arithmetic.
+    ordinary_faces, ordinary_colors = overlap_inputs(2)
+    ordinary = soft_render(
+        vertices, ordinary_faces, ordinary_colors, Mat4(), 8, 8,
+        SoftRasterizerConfig(
+            sigma=0.1, gamma=0.25,
+            bg_color=Color3(0.0, 0.0, 0.0)))
+    @test vec(ordinary[4, 4, :]) ==
+          [0.9796280102250642, 0.0, 0.017942512880571467]
+    @test sum(ordinary) ≈ 35.77661178484367 rtol=8eps(Float64)
+
+    minsub_config = SoftRasterizerConfig(
+        sigma=0.1, gamma=smallest,
+        bg_color=Color3(0.0, 0.0, 0.0))
+    two_faces, two_colors = overlap_inputs(2)
+    color_derivative = ForwardDiff.derivative(1.0) do value
+        T = typeof(value)
+        dual_vertices = Vec3{T}[
+            Vec3(T(v.x), T(v.y), T(v.z)) for v in vertices]
+        dual_colors = Color3{T}[
+            Color3(value, zero(T), zero(T)),
+            Color3(zero(T), zero(T), one(T)),
+        ]
+        soft_render(
+            dual_vertices, two_faces, dual_colors, Mat4(), 8, 8,
+            minsub_config)[4, 4, 1]
+    end
+    depth_derivative = ForwardDiff.derivative(-0.5) do depth
+        T = typeof(depth)
+        dual_vertices = Vec3{T}[
+            Vec3(T(-0.8), T(-0.8), depth),
+            Vec3(T( 0.8), T(-0.8), depth),
+            Vec3(T( 0.0), T( 0.8), depth),
+            Vec3(T(-0.8), T(-0.8), T(0.5)),
+            Vec3(T( 0.8), T(-0.8), T(0.5)),
+            Vec3(T( 0.0), T( 0.8), T(0.5)),
+        ]
+        dual_colors = Color3{T}[
+            Color3(one(T), zero(T), zero(T)),
+            Color3(zero(T), zero(T), one(T)),
+        ]
+        soft_render(
+            dual_vertices, two_faces, dual_colors, Mat4(), 8, 8,
+            minsub_config)[4, 4, 1]
+    end
+    gamma_derivative = ForwardDiff.derivative(smallest) do gamma
+        config = SoftRasterizerConfig(
+            sigma=0.1, gamma=gamma,
+            bg_color=Color3(0.0, 0.0, 0.0))
+        soft_render(
+            vertices, two_faces, two_colors, Mat4(), 8, 8,
+            config)[4, 4, 1]
+    end
+    @test isfinite(color_derivative)
+    @test color_derivative > 0.99
+    @test isfinite(depth_derivative)
+    @test abs(depth_derivative) <= 1.0e-12
+    @test isfinite(gamma_derivative)
+    @test abs(gamma_derivative) <= 1.0e-12
+
+    tiled_faces, tiled_colors = overlap_inputs(9)
+    expected = soft_render(
+        vertices, tiled_faces, tiled_colors, Mat4(), 8, 8,
+        minsub_config)
+    workspace = SoftRenderWorkspace()
+    actual = copy(soft_render(
+        vertices, tiled_faces, tiled_colors, Mat4(), 8, 8,
+        minsub_config; workspace=workspace))
+    @test actual == expected
+    soft_render(
+        vertices, tiled_faces, tiled_colors, Mat4(), 8, 8,
+        minsub_config; workspace=workspace)
+    @test_opt_alloc 512 soft_render(
+        vertices, tiled_faces, tiled_colors, Mat4(), 8, 8,
+        minsub_config; workspace=workspace)
+    @test_opt_alloc 0 Diff3D._soft_relative_depth_weight(
+        -0.5, 0.5, smallest)
+end
+
 @testset "CRC82 — stable CSG UV interpolation" begin
     lower = nextfloat(0.0)
     upper = nextfloat(lower)

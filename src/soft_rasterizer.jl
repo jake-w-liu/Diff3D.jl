@@ -34,6 +34,17 @@ function _soft_finite_color(color, label::String)
     return color
 end
 
+# When `1/gamma` is not representable, absolute depth logits overflow before
+# max subtraction. A minimum-depth reference keeps every exponent non-positive.
+# Farther deltas that still overflow are beyond the representable softmax tail;
+# return a typed zero so ForwardDiff does not encounter `0 * Inf` partials.
+@inline function _soft_relative_depth_weight(nearest_depth, depth, gamma)
+    delta = depth - nearest_depth
+    iszero(delta) && return one(delta)
+    scaled_delta = delta / gamma
+    return isfinite(scaled_delta) ? exp(-scaled_delta) : zero(scaled_delta)
+end
+
 function SoftRasterizerConfig(; sigma=1.0, gamma=1.0,
                                bg_color=Color3(0.0, 0.0, 0.0),
                                eps=1e-8)
@@ -191,6 +202,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     _soft_positive_finite(γ, "SoftRasterizerConfig gamma")
     _soft_positive_finite(eps, "SoftRasterizerConfig eps")
     _soft_finite_color(bg, "SoftRasterizerConfig bg_color")
+    use_relative_depth = !isfinite(one(T) / γ)
     n_faces == 0 && return _soft_background_image(T, H, W, bg, workspace)
     n_vertices = length(verts)
     for face in faces
@@ -250,7 +262,9 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                 cx = T(px) - T(0.5)
                 cy = T(py) - T(0.5)
 
-                m = -one(T) / γ
+                # Preserve the legacy logit max when representable. Otherwise
+                # `m` is the minimum depth, seeded by the z=+1 background.
+                m = use_relative_depth ? one(T) : -one(T) / γ
                 any_face = false
                 for fi in 1:n_screen_tris
                     tri = screen_tris[fi]
@@ -258,9 +272,11 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
                     z_face = _mean3_scaled(
                         tri.s1.z, tri.s2.z, tri.s3.z)
-                    e_f = -z_face / γ
-                    if e_f > m
-                        m = e_f
+                    if use_relative_depth
+                        z_face < m && (m = z_face)
+                    else
+                        e_f = -z_face / γ
+                        e_f > m && (m = e_f)
                     end
                     any_face = true
                 end
@@ -279,7 +295,9 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                         coverage = sigmoid_approx(d / σ)
                         z_face = _mean3_scaled(
                             tri.s1.z, tri.s2.z, tri.s3.z)
-                        depth_weight = exp(-z_face / γ - m)
+                        depth_weight = use_relative_depth ?
+                            _soft_relative_depth_weight(m, z_face, γ) :
+                            exp(-z_face / γ - m)
 
                         w = coverage * depth_weight
                         next_weight = total_weight + w
@@ -290,7 +308,9 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     end
                 end
 
-                w_bg = exp(-one(T) / γ - m) + eps
+                w_bg = (use_relative_depth ?
+                    _soft_relative_depth_weight(m, one(T), γ) :
+                    exp(-one(T) / γ - m)) + eps
                 denom = total_weight + w_bg
                 color = iszero(total_weight) ? bg :
                     _stable_color_lerp(
@@ -382,28 +402,24 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             face_lo = tile_offsets[t]
             face_hi = tile_offsets[t + 1] - 1
 
-            # Soft aggregation over faces using a numerically stabilized
-            # softmax over face depth. The depth weight is exp(-z_face/γ);
-            # without max-subtraction the exponent overflows to Inf/NaN for
-            # large +arg or underflows so total_weight < eps for small γ.
-            #
-            # Pass 1: compute each covered face's coverage and exponent arg
-            #   e_f = -z_face/γ, tracking the per-pixel max arg m. The
-            #   max-subtraction cancels in the normalized blend, so this is
-            #   mathematically equivalent for moderate γ. (γ is in NDC-depth
-            #   units.) Only the faces binned to this pixel's tile are visited.
-            m = -one(T) / γ          # background exponent (virtual far-plane surface
-            any_face = false          # z=+1); folding it into the softmax max keeps the
-                                      # background weight stable and <= 1.
+            # Soft aggregation over faces uses the legacy max-subtracted logits
+            # whenever 1/γ is representable. For smaller γ, pass 1 tracks the
+            # minimum depth directly and pass 2 exponentiates only non-positive
+            # relative depth deltas. Both forms include the z=+1 background and
+            # are mathematically equivalent; the relative form avoids Inf-Inf.
+            m = use_relative_depth ? one(T) : -one(T) / γ
+            any_face = false
             for k in face_lo:face_hi
                 fi = tile_faces[k]
                 tri = screen_tris[fi]
                 !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
                 z_face = _mean3_scaled(
                     tri.s1.z, tri.s2.z, tri.s3.z)
-                e_f = -z_face / γ
-                if e_f > m
-                    m = e_f
+                if use_relative_depth
+                    z_face < m && (m = z_face)
+                else
+                    e_f = -z_face / γ
+                    e_f > m && (m = e_f)
                 end
                 any_face = true
             end
@@ -428,8 +444,12 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     # Stabilized depth-based weighting
                     z_face = _mean3_scaled(
                         tri.s1.z, tri.s2.z, tri.s3.z)
-                    e_f = -z_face / γ
-                    depth_weight = exp(e_f - m)
+                    depth_weight = if use_relative_depth
+                        _soft_relative_depth_weight(m, z_face, γ)
+                    else
+                        e_f = -z_face / γ
+                        exp(e_f - m)
+                    end
 
                     w = coverage * depth_weight
                     next_weight = total_weight + w
@@ -447,7 +467,9 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             # colour as σ,γ -> 0 (recovering the hard rasterizer); an uncovered
             # pixel (total_weight -> 0) reduces exactly to the background. The eps
             # floor keeps the denominator strictly positive without a discrete branch.
-            w_bg = exp(-one(T) / γ - m) + eps
+            w_bg = (use_relative_depth ?
+                _soft_relative_depth_weight(m, one(T), γ) :
+                exp(-one(T) / γ - m)) + eps
             denom = total_weight + w_bg
             color = iszero(total_weight) ? bg :
                 _stable_color_lerp(
