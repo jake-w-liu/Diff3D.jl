@@ -28292,3 +28292,56 @@ end
               :linear
     end
 end
+
+@testset "fresh audit round 242 fixes" begin
+    function rgb_png(; before_idat=Tuple{String,Vector{UInt8}}[],
+                     after_iend=Tuple{String,Vector{UInt8}}[],
+                     trailing=UInt8[])
+        io = IOBuffer()
+        write(io, Diff3D._PNG_SIGNATURE)
+        ihdr = UInt8[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]
+        Diff3D._png_chunk(io, "IHDR", ihdr)
+        for chunk in before_idat
+            Diff3D._png_chunk(io, chunk...)
+        end
+        Diff3D._png_chunk(
+            io, "IDAT", Diff3D._zlib_store(UInt8[0, 255, 0, 0]))
+        Diff3D._png_chunk(io, "IEND", UInt8[])
+        for chunk in after_iend
+            Diff3D._png_chunk(io, chunk...)
+        end
+        write(io, trailing)
+        return take!(io)
+    end
+
+    valid = rgb_png()
+    @test size(Diff3D._decode_png(valid)) == (1, 1, 3)
+    ancillary = rgb_png(before_idat=[("aaAA", UInt8[1, 2, 3])])
+    @test Diff3D._decode_png(ancillary) == Diff3D._decode_png(valid)
+
+    unknown_critical = rgb_png(before_idat=[("ABCD", UInt8[])])
+    @test_throws "unsupported PNG critical chunk 'ABCD'" Diff3D._decode_png(
+        unknown_critical)
+    duplicate_plte = rgb_png(before_idat=[
+        ("PLTE", UInt8[1, 2, 3]), ("PLTE", UInt8[4, 5, 6])])
+    @test_throws "multiple PLTE" Diff3D._decode_png(duplicate_plte)
+    duplicate_trns = rgb_png(before_idat=[
+        ("tRNS", UInt8[0, 1, 0, 2, 0, 3]),
+        ("tRNS", UInt8[0, 4, 0, 5, 0, 6])])
+    @test_throws "multiple tRNS" Diff3D._decode_png(duplicate_trns)
+    duplicate_iend = rgb_png(after_iend=[("IEND", UInt8[])])
+    @test_throws "IEND chunk must be the final chunk" Diff3D._decode_png(
+        duplicate_iend)
+    @test_throws "IEND chunk must be the final chunk" Diff3D._decode_png(
+        rgb_png(trailing=UInt8[0]))
+
+    malformed_type = rgb_png(before_idat=[("A1CD", UInt8[])])
+    @test_throws "non-letter" Diff3D._decode_png(malformed_type)
+    reserved_type = rgb_png(before_idat=[("ABcD", UInt8[])])
+    @test_throws "lowercase reserved letter" Diff3D._decode_png(reserved_type)
+
+    duplicate_ihdr = rgb_png(before_idat=[(
+        "IHDR", UInt8[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0])])
+    @test_throws "multiple IHDR" Diff3D._decode_png(duplicate_ihdr)
+    @test_opt_alloc 0 Diff3D._png_validate_chunk_type(valid, 13)
+end

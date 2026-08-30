@@ -311,6 +311,22 @@ end
 _png_chunk_type_string(bytes::AbstractVector{UInt8}, start::Int) =
     String(@view bytes[start:start + 3])
 
+@inline _png_chunk_type_letter(byte::UInt8) =
+    UInt8('A') <= byte <= UInt8('Z') || UInt8('a') <= byte <= UInt8('z')
+
+function _png_validate_chunk_type(bytes::AbstractVector{UInt8}, start::Int)
+    @inbounds for index in start:(start + 3)
+        _png_chunk_type_letter(bytes[index]) ||
+            error("PNG chunk type contains a non-letter byte")
+    end
+    @inbounds (bytes[start + 2] & 0x20) == 0 ||
+        error("PNG chunk type '$(_png_chunk_type_string(bytes, start))' has a lowercase reserved letter")
+    return nothing
+end
+
+@inline _png_chunk_is_critical(bytes::AbstractVector{UInt8}, start::Int) =
+    @inbounds (bytes[start] & 0x20) == 0
+
 function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
     c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
@@ -575,11 +591,14 @@ function _decode_png(bytes::AbstractVector{UInt8})
     seen_ihdr = false
     seen_idat = false
     seen_iend = false
+    seen_plte = false
+    seen_trns = false
     idat_closed = false
     while pos <= length(bytes)
         pos + 7 <= length(bytes) || error("PNG chunk header is truncated")
         len = _rd_be32(bytes, pos); pos += 4
         ctype_start = pos
+        _png_validate_chunk_type(bytes, ctype_start)
         is_ihdr = _png_chunk_type_eq(bytes, ctype_start, 0x49, 0x48, 0x44, 0x52)
         is_idat = _png_chunk_type_eq(bytes, ctype_start, 0x49, 0x44, 0x41, 0x54)
         is_plte = _png_chunk_type_eq(bytes, ctype_start, 0x50, 0x4c, 0x54, 0x45)
@@ -596,6 +615,9 @@ function _decode_png(bytes::AbstractVector{UInt8})
         _png_crc_matches(bytes, ctype_start, pos, data_stop, expected_crc) ||
             error("PNG chunk '$(_png_chunk_type_string(bytes, ctype_start))' CRC mismatch")
         seen_ihdr || is_ihdr || error("PNG first chunk must be IHDR")
+        known_chunk = is_ihdr || is_idat || is_plte || is_trns || is_iend
+        !known_chunk && _png_chunk_is_critical(bytes, ctype_start) &&
+            error("unsupported PNG critical chunk '$(_png_chunk_type_string(bytes, ctype_start))'")
         if is_ihdr
             !seen_ihdr || error("PNG contains multiple IHDR chunks")
             len == 13 || error("PNG IHDR chunk length must be 13")
@@ -624,13 +646,20 @@ function _decode_png(bytes::AbstractVector{UInt8})
                 end
             end
         elseif is_plte
+            !seen_plte || error("PNG contains multiple PLTE chunks")
             !seen_idat || error("PNG PLTE chunk must appear before IDAT")
             palette = collect(@view bytes[pos:pos+len-1])
+            seen_plte = true
         elseif is_trns
+            !seen_trns || error("PNG contains multiple tRNS chunks")
             !seen_idat || error("PNG tRNS chunk must appear before IDAT")
             trns = collect(@view bytes[pos:pos+len-1])
+            seen_trns = true
         elseif is_iend
             len == 0 || error("PNG IEND chunk must be empty")
+            seen_idat || error("PNG IEND chunk must appear after IDAT")
+            crc_pos + 3 == length(bytes) ||
+                error("PNG IEND chunk must be the final chunk")
             seen_iend = true
             break
         elseif seen_idat
