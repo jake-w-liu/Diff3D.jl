@@ -28917,3 +28917,126 @@ end
     @test_opt_alloc 4096 render!(
         cached_target, interleaved_scene, camera; cache=cached)
 end
+
+@testset "fresh audit round 250 fixes" begin
+    black_map = Texture(
+        zeros(Float64, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    white_map = Texture(
+        ones(Float64, 1, 1, 4); filter=:nearest,
+        colorspace=:linear)
+    packed_map_data = zeros(Float64, 1, 1, 3)
+    packed_map_data[1, 1, 2] = 0.5
+    packed_map = Texture(
+        packed_map_data; filter=:nearest, colorspace=:linear)
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+
+    function mapped_center(material, shading; geometry=PlaneGeometry(
+                               width=4.0, height=4.0), with_light=true)
+        scene = Scene()
+        add!(scene, Mesh(geometry, material))
+        with_light && add!(scene, DirectionalLight(
+            intensity=0.2, position=Vec3(0.0, 0.0, 5.0)))
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; shading=shading)
+        return vec(target.color[8, 8, :])
+    end
+
+    material_pairs = (
+        (
+            MeshPhongMaterial(
+                color=Color3(0.0, 0.0, 0.0), specular=Color3(1.0, 1.0, 1.0),
+                shininess=8.0, side=:double),
+            MeshPhongMaterial(
+                color=Color3(0.0, 0.0, 0.0), specular=Color3(1.0, 1.0, 1.0),
+                shininess=8.0, map=black_map, side=:double),
+        ),
+        (
+            MeshStandardMaterial(
+                color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.2,
+                side=:double),
+            MeshStandardMaterial(
+                color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.2,
+                map=black_map, side=:double),
+        ),
+        (
+            MeshPhysicalMaterial(
+                color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.2,
+                clearcoat=0.3, side=:double),
+            MeshPhysicalMaterial(
+                color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.2,
+                clearcoat=0.3, map=black_map, side=:double),
+        ),
+    )
+    for (unmapped, mapped) in material_pairs, shading in (:flat, :smooth)
+        expected = mapped_center(unmapped, shading)
+        actual = mapped_center(mapped, shading)
+        @test actual ≈ expected atol=1.0e-12
+        @test maximum(actual) > 0.0
+    end
+
+    mapped_phong = MeshPhongMaterial(
+        color=Color3(0.0, 0.0, 0.0), specular=Color3(1.0, 1.0, 1.0),
+        shininess=8.0, map=black_map, specular_map=white_map,
+        glossiness_map=white_map, side=:double)
+    mapped_standard = MeshStandardMaterial(
+        color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.4,
+        map=black_map, roughness_map=packed_map,
+        metalness_map=packed_map, side=:double)
+    mapped_physical = MeshPhysicalMaterial(
+        color=Color3(0.0, 0.0, 0.0), metalness=0.0, roughness=0.4,
+        clearcoat=0.5, map=black_map,
+        roughness_map=packed_map, metalness_map=packed_map,
+        clearcoat_map=white_map, side=:double)
+    for material in (mapped_phong, mapped_standard, mapped_physical),
+        shading in (:flat, :smooth)
+        @test maximum(mapped_center(material, shading)) > 0.0
+    end
+
+    dielectric = MeshStandardMaterial(
+        color=Color3(1.0, 1.0, 1.0), metalness=0.0,
+        roughness=0.3, side=:double)
+    metal_black_mapped = MeshStandardMaterial(
+        color=Color3(1.0, 1.0, 1.0), metalness=1.0,
+        roughness=0.3, map=black_map, side=:double)
+    metal_unmapped = MeshStandardMaterial(
+        color=Color3(1.0, 1.0, 1.0), metalness=1.0,
+        roughness=0.3, side=:double)
+    for shading in (:flat, :smooth)
+        @test maximum(mapped_center(
+            metal_black_mapped, shading)) < maximum(mapped_center(
+                metal_unmapped, shading))
+        @test maximum(mapped_center(
+            MeshStandardMaterial(
+                color=Color3(0.0, 0.0, 0.0), metalness=dielectric.metalness,
+                roughness=dielectric.roughness, map=black_map,
+                side=:double), shading)) > 0.0
+    end
+
+    emissive = MeshPhongMaterial(
+        color=Color3(1.0, 1.0, 1.0), specular=Color3(0.0, 0.0, 0.0),
+        emissive=Color3(0.2, 0.1, 0.05), emissive_intensity=1.0,
+        map=black_map, side=:double)
+    for shading in (:flat, :smooth)
+        @test mapped_center(
+            emissive, shading; with_light=false) ≈ [0.2, 0.1, 0.05]
+    end
+
+    colored_geometry = PlaneGeometry(width=4.0, height=4.0)
+    set_attribute!(colored_geometry, :color,
+                   repeat([0.2, 0.8, 0.4], colored_geometry.n_vertices), 3)
+    colored_phong = MeshPhongMaterial(
+        color=Color3(1.0, 1.0, 1.0),
+        specular=Color3(1.0, 1.0, 1.0), shininess=8.0,
+        map=black_map, vertex_colors=true, side=:double)
+    for shading in (:flat, :smooth)
+        color = mapped_center(
+            colored_phong, shading; geometry=colored_geometry)
+        @test color[1] ≈ color[2] atol=1.0e-12
+        @test color[2] ≈ color[3] atol=1.0e-12
+        @test maximum(color) > 0.0
+    end
+    @test_opt_alloc 0 Diff3D._albedo_map_before_lighting(
+        MeshPhongMaterial())
+end

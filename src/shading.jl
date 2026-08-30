@@ -246,6 +246,10 @@ end
 
 @inline _modulate(c::Color3, v::Color3) = Color3(c.r * v.r, c.g * v.g, c.b * v.b)
 @inline _is_identity_vertex_color(vc::Color3) = vc.r == 1.0 && vc.g == 1.0 && vc.b == 1.0
+@inline _albedo_map_before_lighting(::AbstractMaterial) = false
+@inline _albedo_map_before_lighting(::MeshPhongMaterial) = true
+@inline _albedo_map_before_lighting(::MeshStandardMaterial) = true
+@inline _albedo_map_before_lighting(::MeshPhysicalMaterial) = true
 @inline _with_vertex_color(m::AbstractMaterial, vc::Color3) = m
 function _with_vertex_color(m::LineBasicMaterial, vc::Color3)
     _is_identity_vertex_color(vc) && return m
@@ -1057,13 +1061,26 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
         standard_roughness = 0.0
         physical_terms = _PHYSICAL_MAPPED_TERMS_ZERO
         vertex_color = Color3(1.0, 1.0, 1.0)
+        use_vertex_colors &&
+            (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
+        surface_color = vertex_color
+        base_albedo_map = false
 
         # normalMap perturbs the shading normal and roughnessMap overrides the
-        # material roughness — both must apply BEFORE shading. Albedo/AO/emissive
-        # modulate the result AFTER (they commute with diffuse lighting).
+        # material roughness before shading. Phong/PBR albedo also belongs in
+        # the base-color input so it does not erase independently-owned
+        # specular response.
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
             u2, v2uv = uv2_attr === nothing ? (u, v) : _face_centroid_uv_attr(uv2_attr, i1, i2, i3)
+            base_albedo_map = albedo_map !== nothing &&
+                              _albedo_map_before_lighting(material)
+            if base_albedo_map
+                au, av = _map_uv(albedo_map, u, v, u2, v2uv)
+                surface_color = _modulate(
+                    surface_color,
+                    sample_texture_linear(albedo_map, au, av))
+            end
             if normal_map !== nothing
                 nu, nv = _map_uv(normal_map, u, v, u2, v2uv)
                 normal_uvs = _texture_uv_set(normal_map) == 1 && uv2_attr !== nothing ?
@@ -1096,36 +1113,36 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             end
         end
 
-        use_vertex_colors && (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
+        use_surface_color = use_vertex_colors || base_albedo_map
         color = if mapped_kind == 1
-            use_vertex_colors ?
+            use_surface_color ?
                 _shade_phong_mapped_vertex_color(face_n, view_dir, center,
                                                  material, lights, shadow_fn,
                                                  phong_specular, phong_shininess,
-                                                 vertex_color) :
+                                                 surface_color) :
                 _shade_phong_mapped(face_n, view_dir, center, material, lights,
                                     shadow_fn, phong_specular, phong_shininess)
         elseif mapped_kind == 2
-            use_vertex_colors ?
+            use_surface_color ?
                 _shade_standard_mapped_vertex_color(face_n, view_dir, center,
                                                     material, lights, shadow_fn,
                                                     standard_metalness,
                                                     standard_roughness,
-                                                    vertex_color) :
+                                                    surface_color) :
                 _shade_standard_mapped(face_n, view_dir, center, material,
                                        lights, shadow_fn, standard_metalness,
                                        standard_roughness)
         elseif mapped_kind == 3
-            use_vertex_colors ?
+            use_surface_color ?
                 _shade_physical_mapped_vertex_color(face_n, view_dir, center,
                                                     material, lights, shadow_fn,
-                                                    physical_terms, vertex_color) :
+                                                    physical_terms, surface_color) :
                 _shade_physical_mapped(face_n, view_dir, center, material,
                                        lights, shadow_fn, physical_terms)
         else
-            if use_vertex_colors
+            if use_surface_color
                 _shade_face_vertex_color(face_n, view_dir, center, eff_mat, lights,
-                                         vertex_color; shadow_fn=shadow_fn)
+                                         surface_color; shadow_fn=shadow_fn)
             else
                 shade_face(face_n, view_dir, center, eff_mat, lights; shadow_fn=shadow_fn)
             end
@@ -1144,7 +1161,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 color = Color3(color.r - em.r * emi, color.g - em.g * emi,
                                color.b - em.b * emi)
             end
-            if albedo_map !== nothing
+            if albedo_map !== nothing && !base_albedo_map
                 tu, tv = _map_uv(albedo_map, u, v, u2, v2)
                 color = color * sample_texture_linear(albedo_map, tu, tv)
             end

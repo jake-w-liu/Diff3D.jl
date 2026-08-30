@@ -570,6 +570,16 @@ end
                 v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
                 frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2)
                 frag_alpha >= alpha_test || continue
+                base_albedo_map = has_albedo &&
+                                  _albedo_map_before_lighting(material)
+                surface_color = vc
+                if base_albedo_map
+                    au, av = _map_uv(albedo_map, u, v, u2, v2)
+                    surface_color = _modulate(
+                        surface_color,
+                        sample_texture_linear(albedo_map, au, av))
+                end
+                use_surface_color = UseVertexColors || base_albedo_map
                 # normalMap perturbs the shading normal before lighting (same
                 # helper as the flat path); the tangent frame uses the UV set
                 # selected by the texture metadata.
@@ -584,10 +594,10 @@ end
                     specular, shininess = _phong_mapped_terms(
                         material, specular_map, glossiness_map, u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
-                    col = UseVertexColors ?
+                    col = use_surface_color ?
                           _shade_phong_mapped_vertex_color(
                               wn, vd, wp, material, lights, shadow_fn, specular,
-                              Float64(shininess), vc) :
+                              Float64(shininess), surface_color) :
                           _shade_phong_mapped(wn, vd, wp, material, lights,
                                               shadow_fn, specular,
                                               Float64(shininess))
@@ -602,11 +612,12 @@ end
                     metalness = metalness_map === nothing ? material.metalness :
                                material.metalness * sample_texture(metalness_map, mu, mv).b
                     vd = _direction_between(wp, cam_pos)
-                    col = UseVertexColors ?
+                    col = use_surface_color ?
                           _shade_standard_mapped_vertex_color(wn, vd, wp, material,
                                                               lights, shadow_fn,
                                                               Float64(metalness),
-                                                              Float64(roughness), vc) :
+                                                              Float64(roughness),
+                                                              surface_color) :
                           _shade_standard_mapped(wn, vd, wp, material, lights, shadow_fn,
                                                  Float64(metalness), Float64(roughness))
                 elseif material isa MeshPhysicalMaterial &&
@@ -614,25 +625,28 @@ end
                     terms = _physical_mapped_terms(material, roughness_map,
                                                    metalness_map, u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
-                    col = UseVertexColors ?
+                    col = use_surface_color ?
                           _shade_physical_mapped_vertex_color(
-                              wn, vd, wp, material, lights, shadow_fn, terms, vc) :
+                              wn, vd, wp, material, lights, shadow_fn, terms,
+                              surface_color) :
                           _shade_physical_mapped(wn, vd, wp, material, lights,
                                                  shadow_fn, terms)
                 elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
                                               u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
-                    col = UseVertexColors ?
-                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
+                    col = use_surface_color ?
+                          _shade_face_vertex_color(
+                              wn, vd, wp, eff_mat, lights, surface_color;
                                                    shadow_fn=shadow_fn) :
                           shade_face(wn, vd, wp, eff_mat, lights;
                                      shadow_fn=shadow_fn)
                 else
                     eff_mat = material
                     vd = _direction_between(wp, cam_pos)
-                    col = UseVertexColors ?
-                          _shade_face_vertex_color(wn, vd, wp, eff_mat, lights, vc;
+                    col = use_surface_color ?
+                          _shade_face_vertex_color(
+                              wn, vd, wp, eff_mat, lights, surface_color;
                                                    shadow_fn=shadow_fn) :
                           shade_face(wn, vd, wp, eff_mat, lights;
                                      shadow_fn=shadow_fn)
@@ -647,7 +661,7 @@ end
                     col = Color3(col.r - em.r * emi, col.g - em.g * emi,
                                  col.b - em.b * emi)
                 end
-                if has_albedo
+                if has_albedo && !base_albedo_map
                     tu, tv = _map_uv(albedo_map, u, v, u2, v2)
                     col = col * sample_texture_linear(albedo_map, tu, tv)
                 end
