@@ -28645,3 +28645,64 @@ end
     @test_opt_alloc 256 transform_apply!(
         world_control, Vec3(0.25, 0.0, 0.0))
 end
+
+@testset "fresh audit round 246 fixes" begin
+    largest = floatmax(Float64)
+    extreme = BufferGeometry(
+        [0.0, -largest, 0.0,
+         0.0,  largest, 0.0,
+         0.0, -largest, largest,
+         largest, -largest, 0.0],
+        Float64[], Float64[], [1, 2, 3, 1, 4, 2], 4, 2)
+    extreme_edges = edges_geometry(extreme)
+    @test extreme_edges.n_vertices ÷ 2 == 5
+    @test all(isfinite, extreme_edges.positions)
+
+    nearby_positions = [
+        0.49e-6, 0.0, 0.0,
+        1.00000049, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.51e-6, 0.0, 0.0,
+        1.00000051, 0.0, 0.0,
+        0.0, -1.0, 0.0,
+    ]
+    nearby = BufferGeometry(
+        nearby_positions, Float64[], Float64[],
+        [1, 2, 3, 4, 6, 5], 6, 2)
+    translated = transform_geometry(
+        nearby, mat4_translation(0.5e-6, -1.25, 3.5))
+    @test edges_geometry(nearby).n_vertices ÷ 2 == 4
+    @test edges_geometry(translated).n_vertices ÷ 2 == 4
+
+    nonmanifold_positions = [
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 2.0, 0.0,
+        0.0, 0.0, 1.0,
+    ]
+    faces = ((1, 2, 3), (1, 2, 4), (1, 2, 5))
+    face_orders = (
+        (1, 2, 3), (1, 3, 2), (2, 1, 3),
+        (2, 3, 1), (3, 1, 2), (3, 2, 1),
+    )
+    for order in face_orders
+        indices = Int[]
+        for face_index in order
+            append!(indices, faces[face_index])
+        end
+        geometry = BufferGeometry(
+            nonmanifold_positions, Float64[], Float64[], indices, 5, 3)
+        @test edges_geometry(geometry).n_vertices ÷ 2 == 7
+    end
+
+    coplanar = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         1.0, 1.0, 0.0],
+        Float64[], Float64[], [1, 2, 3, 2, 4, 3], 4, 2)
+    @test edges_geometry(coplanar).n_vertices ÷ 2 == 4
+    @test_opt_alloc 0 Diff3D._pkey(
+        Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5))
+end

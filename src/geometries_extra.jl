@@ -1806,7 +1806,11 @@ end
                 edge_features[record_id] = dot(edge_normals[record_id], n) < cosT
                 edge_counts[record_id] = UInt8(2)
             else
-                edge_counts[record_id] = min(count + UInt8(1), typemax(UInt8))
+                # More than two incident faces make this a non-manifold edge.
+                # Expose it regardless of face order or normal similarity.
+                edge_features[record_id] = true
+                edge_counts[record_id] = count == typemax(UInt8) ? count :
+                                         count + UInt8(1)
             end
             return nothing
         end
@@ -1885,8 +1889,21 @@ function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Uni
     BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
 
-# Round a position to merge coincident (duplicated) vertices for adjacency.
-@inline _pkey(v::Vec3; nd=6) = (round(v.x, digits=nd), round(v.y, digits=nd), round(v.z, digits=nd))
+# Round relative positions to merge coincident (duplicated) vertices for
+# adjacency without making the result depend on a uniform translation.
+@inline function _edge_relative_key_component(value::Float64,
+                                              anchor::Float64; nd::Int=6)
+    relative = value - anchor
+    isfinite(relative) || (relative = value)
+    rounded = round(relative, digits=nd)
+    return iszero(rounded) ? 0.0 : rounded
+end
+
+@inline _pkey(v::Vec3, anchor::Vec3; nd=6) = (
+    _edge_relative_key_component(v.x, anchor.x; nd=nd),
+    _edge_relative_key_component(v.y, anchor.y; nd=nd),
+    _edge_relative_key_component(v.z, anchor.z; nd=nd),
+)
 
 @inline function _canonical_edge_vertex!(
     canonical_ids::Vector{Int},
@@ -1894,12 +1911,13 @@ end
     csrc::Vector{Int},
     cpos_len::Int,
     geo::BufferGeometry,
+    anchor::Vec3,
     vi::Int,
 )
     cached = canonical_ids[vi]
     cached != 0 && return cached, cpos_len
     v = get_vertex(geo, vi)
-    key = _pkey(v)
+    key = _pkey(v, anchor)
     c = get(canon, key, 0)
     if c == 0
         cpos_len += 1
@@ -1945,16 +1963,17 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
     sizehint!(edge_normals, edge_hint)
     sizehint!(edge_counts, edge_hint)
     sizehint!(edge_features, edge_hint)
+    anchor = geo.n_vertices == 0 ? Vec3() : get_vertex(geo, 1)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
-        n = cross(v2 - v1, v3 - v1); nl = norm(n); nl > 0 && (n = n / nl)
+        n = triangle_normal(Triangle(v1, v2, v3))
         c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, i1)
+                                               cpos_len, geo, anchor, i1)
         c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, i2)
+                                               cpos_len, geo, anchor, i2)
         c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, i3)
+                                               cpos_len, geo, anchor, i3)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
                            edge_counts, edge_features, c1, c2, n, cosT)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
