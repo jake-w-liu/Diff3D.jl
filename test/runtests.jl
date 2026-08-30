@@ -32841,3 +32841,32 @@ end
         constant_point, constant_point, constant_point, constant_point,
         0.5, 0.5)
 end
+
+@testset "CRC81 — Catmull-Rom interval scale invariance" begin
+    points = [
+        Vec3(0.0, 0.0, 0.0),
+        Vec3(1.0, 1.0, 0.0),
+        Vec3(3.0, 0.0, 0.0),
+        Vec3(4.0, 2.0, 0.0),
+    ]
+    parameter = 0.45
+    for curve_type in (:centripetal, :chordal)
+        reference = catmull_rom_point(
+            CatmullRomCurve(points; curve_type=curve_type), parameter)
+        for scale in (1.0e-100, 1.0e-10, 1.0e100)
+            scaled_points = [point * scale for point in points]
+            actual = catmull_rom_point(
+                CatmullRomCurve(
+                    scaled_points; curve_type=curve_type),
+                parameter) / scale
+            @test norm(actual - reference) < 1.0e-12
+        end
+    end
+
+    repeated = [points[1], points[1], points[3], points[4]]
+    for curve_type in (:centripetal, :chordal)
+        value = catmull_rom_point(
+            CatmullRomCurve(repeated; curve_type=curve_type), 0.5)
+        @test all(isfinite, (value.x, value.y, value.z))
+    end
+end

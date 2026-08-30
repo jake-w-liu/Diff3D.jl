@@ -653,7 +653,7 @@ function _catmull_rom_param_lerp(a::Vec3, b::Vec3, t0::Float64,
 end
 
 function _catmull_rom_interval(a::Vec3, b::Vec3, alpha::Float64)
-    return max(norm(b - a)^alpha, eps(Float64))
+    return norm(b - a)^alpha
 end
 
 function _catmull_rom_normalized_intervals(
@@ -677,16 +677,28 @@ end
 function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
                                  u::Float64, alpha::Float64)
     t0 = 0.0
-    t1 = t0 + _catmull_rom_interval(p0, p1, alpha)
-    t2 = t1 + _catmull_rom_interval(p1, p2, alpha)
-    t3 = t2 + _catmull_rom_interval(p2, p3, alpha)
-    if !(isfinite(t3) && t1 > t0 && t2 > t1 && t3 > t2)
+    interval1 = _catmull_rom_interval(p0, p1, alpha)
+    interval2 = _catmull_rom_interval(p1, p2, alpha)
+    interval3 = _catmull_rom_interval(p2, p3, alpha)
+    resolution_limited =
+        !(isfinite(interval1) && interval1 > eps(Float64)) ||
+        !(isfinite(interval2) && interval2 > eps(Float64)) ||
+        !(isfinite(interval3) && interval3 > eps(Float64))
+    if !resolution_limited
+        direct_t1 = interval1
+        direct_t2 = direct_t1 + interval2
+        direct_t3 = direct_t2 + interval3
+        resolution_limited =
+            !(isfinite(direct_t3) && direct_t1 > t0 &&
+              direct_t2 > direct_t1 && direct_t3 > direct_t2)
+    end
+    if resolution_limited
         interval1, interval2, interval3 =
             _catmull_rom_normalized_intervals(p0, p1, p2, p3, alpha)
-        t1 = interval1
-        t2 = t1 + interval2
-        t3 = t2 + interval3
     end
+    t1 = interval1
+    t2 = t1 + interval2
+    t3 = t2 + interval3
     t = t1 + u * (t2 - t1)
 
     a1 = _catmull_rom_param_lerp(p0, p1, t0, t1, t)
