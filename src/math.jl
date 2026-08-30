@@ -358,7 +358,7 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     # Guard the degenerate eye==target case before normalising (three.js lookAt):
     # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
     z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
-        dot(d, d) < 1e-12 ?
+        iszero(d.x) && iszero(d.y) && iszero(d.z) ?
             Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
     else
         # Finite endpoints with opposite extreme signs can overflow during the

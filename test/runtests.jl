@@ -27542,3 +27542,34 @@ end
     @test norm(nurbs_point(volume, 0.25, 0.75, 0.5) -
                Vec3(0.25, 0.75, 0.5)) < 1.0e-15
 end
+
+@testset "fresh audit round 225 fixes" begin
+    up = Vec3(0.0, 1.0, 0.0)
+    for separation in (nextfloat(0.0), 1.0e-7, 1.0e-3)
+        matrix = mat4_look_at(
+            Vec3(), Vec3(separation, 0.0, 0.0), up)
+        @test mat4_get(matrix, 3, 1) == -1.0
+        @test mat4_get(matrix, 3, 2) == 0.0
+        @test mat4_get(matrix, 3, 3) == 0.0
+        @test all(isfinite, matrix.e)
+    end
+
+    translated_eye = Vec3(1.0, 2.0, 3.0)
+    translated_target = Vec3(nextfloat(1.0), 2.0, 3.0)
+    translated = mat4_look_at(
+        translated_eye, translated_target, up)
+    @test mat4_get(translated, 3, 1) == -1.0
+    @test mat4_transform_point(translated, translated_eye) == Vec3()
+
+    coincident = mat4_look_at(translated_eye, translated_eye, up)
+    @test mat4_get(coincident, 3, 1) == 0.0
+    @test mat4_get(coincident, 3, 2) == 0.0
+    @test mat4_get(coincident, 3, 3) == 1.0
+
+    camera = PerspectiveCamera()
+    camera.position = Vec3()
+    camera.target = Vec3(1.0e-7, 0.0, 0.0)
+    camera.up = up
+    @test view_matrix(camera) == mat4_look_at(
+        camera.position, camera.target, camera.up)
+end
