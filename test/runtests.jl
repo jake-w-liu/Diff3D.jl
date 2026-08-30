@@ -30241,3 +30241,37 @@ end
     @test_opt_alloc 640 drag_move!(
         drag, Vec3(0.25, 0.0, 0.0))
 end
+
+@testset "fresh audit round 264 fixes" begin
+    scale = 1.0e100
+    perturbed = nextfloat(scale)
+    cancellation_matrix = Mat4((
+        scale, scale, scale, 0.0,
+        scale, perturbed, scale, 0.0,
+        scale, scale, perturbed, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ))
+    exact_determinant = setprecision(BigFloat, 256) do
+        sb = BigFloat(scale)
+        delta = BigFloat(perturbed) - sb
+        sb * delta * delta
+    end
+    @test exact_determinant > 0
+    @test Diff3D._mat4_linear_orientation_sign(
+        cancellation_matrix) == 1
+
+    triangle = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    preserved = transform_geometry(triangle, cancellation_matrix)
+    @test preserved.indices == [1, 2, 3]
+    @test all(isfinite, preserved.positions)
+
+    reflected = mat4_scaling(-1.0, 1.0, 1.0)
+    @test Diff3D._mat4_linear_orientation_sign(reflected) == -1
+    @test transform_geometry(triangle, reflected).indices == [1, 3, 2]
+    @test Diff3D._mat4_linear_orientation_sign(Mat4()) == 1
+    @test_opt_alloc 0 Diff3D._mat4_linear_orientation_sign(Mat4())
+end

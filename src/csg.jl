@@ -475,10 +475,20 @@ function _mat4_linear_orientation_sign(matrix::Mat4)
     a, b, c = values[1], values[5], values[9]
     d, e, f = values[2], values[6], values[10]
     g, h, i = values[3], values[7], values[11]
-    determinant = a * (e * i - f * h) -
-                  b * (d * i - f * g) +
-                  c * (d * h - e * g)
-    isfinite(determinant) && !iszero(determinant) &&
+    scale = maximum(abs, (a, b, c, d, e, f, g, h, i))
+    iszero(scale) && return 0
+    an, bn, cn = a / scale, b / scale, c / scale
+    dn, en, fn = d / scale, e / scale, f / scale
+    gn, hn, inn = g / scale, h / scale, i / scale
+    terms = (
+        an * en * inn, -an * fn * hn,
+        -bn * dn * inn, bn * fn * gn,
+        cn * dn * hn, -cn * en * gn,
+    )
+    determinant = sum(terms)
+    permanent = sum(abs, terms)
+    error_bound = 64 * eps(Float64) * permanent
+    isfinite(determinant) && abs(determinant) > error_bound &&
         return determinant < 0.0 ? -1 : 1
     return setprecision(BigFloat, 256) do
         ab, bb, cb = BigFloat(a), BigFloat(b), BigFloat(c)
