@@ -28834,3 +28834,86 @@ end
         Vec2(tiny, 0.0), Vec2(tiny, tiny), Vec2(0.0, tiny)]
     @test ShapeGeometry(square_with_near_duplicate).n_faces == 2
 end
+
+@testset "fresh audit round 249 fixes" begin
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    geometry = PlaneGeometry(width=4.0, height=4.0)
+
+    translucent_red = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0), transparent=true,
+        opacity=0.5, side=:double)
+    instanced_scene = Scene(background=Color3(0.0, 0.0, 1.0))
+    instance = InstancedMesh(geometry, translucent_red, 1)
+    add!(instanced_scene, instance)
+    plain_scene = Scene(background=Color3(0.0, 0.0, 1.0))
+    add!(plain_scene, Mesh(geometry, translucent_red))
+    instanced_target = RenderTarget(24, 24)
+    plain_target = RenderTarget(24, 24)
+    render!(instanced_target, instanced_scene, camera)
+    render!(plain_target, plain_scene, camera)
+    @test instanced_target.color ≈ plain_target.color atol=1.0e-12
+    @test instanced_target.color[12, 12, :] ≈ [0.5, 0.0, 0.5]
+
+    ordered_scene = Scene()
+    ordered_material = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), transparent=true,
+        opacity=0.5, depth_write=false, side=:double)
+    ordered = InstancedMesh(geometry, ordered_material, 2)
+    set_instance_color!(ordered, 1, Color3(1.0, 0.0, 0.0))
+    set_instance_color!(ordered, 2, Color3(0.0, 0.0, 1.0))
+    set_instance_matrix!(ordered, 1, mat4_translation(0.0, 0.0, 0.0))
+    set_instance_matrix!(ordered, 2, mat4_translation(0.0, 0.0, -1.0))
+    add!(ordered_scene, ordered)
+    ordered_target = RenderTarget(24, 24)
+    ordered_cache = RenderCache()
+    render!(ordered_target, ordered_scene, camera; cache=ordered_cache)
+    @test ordered_target.color[12, 12, :] ≈ [0.5, 0.0, 0.25]
+    @test issorted([item.depth for item in ordered_cache.transparent_items])
+
+    interleaved_scene = Scene()
+    add!(interleaved_scene, ordered)
+    middle = Mesh(
+        geometry,
+        MeshBasicMaterial(
+            color=Color3(0.0, 1.0, 0.0), transparent=true,
+            opacity=0.5, depth_write=false, side=:double))
+    middle.position = Vec3(0.0, 0.0, -0.5)
+    add!(interleaved_scene, middle)
+    interleaved_target = RenderTarget(24, 24)
+    render!(interleaved_target, interleaved_scene, camera;
+            sort_objects=false)
+    @test interleaved_target.color[12, 12, :] ≈
+          [0.5, 0.25, 0.125]
+
+    opaque_scene = Scene()
+    opaque = Mesh(
+        geometry,
+        MeshBasicMaterial(color=Color3(0.0, 1.0, 0.0), side=:double);
+        flat_shading=false)
+    opaque.position = Vec3(0.0, 0.0, -0.5)
+    add!(opaque_scene, instance)
+    add!(opaque_scene, opaque)
+    opaque_target = RenderTarget(24, 24)
+    render!(opaque_target, opaque_scene, camera; shading=:smooth)
+    @test opaque_target.color[12, 12, :] ≈ [0.5, 0.5, 0.0]
+
+    rgba_data = ones(Float64, 1, 1, 4)
+    rgba_data[1, 1, 4] = 0.5
+    textured_material = MeshBasicMaterial(
+        color=Color3(1.0, 0.0, 0.0),
+        map=Texture(rgba_data; filter=:nearest, colorspace=:linear),
+        transparent=true, opacity=0.5, depth_write=false, side=:double)
+    textured_scene = Scene()
+    add!(textured_scene, InstancedMesh(geometry, textured_material, 1))
+    textured_target = RenderTarget(24, 24)
+    render!(textured_target, textured_scene, camera)
+    @test textured_target.color[12, 12, :] ≈ [0.25, 0.0, 0.0]
+
+    cached_target = RenderTarget(24, 24)
+    cached = RenderCache()
+    render!(cached_target, interleaved_scene, camera; cache=cached)
+    @test cached_target.color == interleaved_target.color
+    @test_opt_alloc 4096 render!(
+        cached_target, interleaved_scene, camera; cache=cached)
+end

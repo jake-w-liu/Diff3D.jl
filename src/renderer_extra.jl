@@ -257,6 +257,7 @@ mutable struct RenderCache
     shadow_depths::Vector{Matrix{Float64}}
     shadow_maps::IdDict{AbstractLight,ShadowMap}
     mesh_depths::Vector{Float64}
+    transparent_items::Vector{_TransparentRenderItem}
     skinned_matrices::Vector{Mat4{Float64}}
     morph_positions::Vector{Vec3{Float64}}
 end
@@ -275,7 +276,8 @@ function RenderCache()
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
                 BufferGeometry[], BoundingSphere{Float64}[],
                 Matrix{Float64}[], IdDict{AbstractLight,ShadowMap}(),
-                Float64[], Mat4{Float64}[], Vec3{Float64}[])
+                Float64[], _TransparentRenderItem[], Mat4{Float64}[],
+                Vec3{Float64}[])
 end
 
 function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)
@@ -337,6 +339,13 @@ function _instanced_materials!(states::Vector{_InstancedMaterialState}, slot::In
         end
     end
     return materials
+end
+
+@inline function _cached_instanced_material_at(
+        states::Vector{_InstancedMaterialState}, slot::Int,
+        instance_index::Int, ::M) where {M<:AbstractMaterial}
+    materials = states[slot].materials::Vector{M}
+    return materials[instance_index]
 end
 
 function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,

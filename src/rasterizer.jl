@@ -1458,6 +1458,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
+        (!material_wireframe(mat) && is_transparent_material(mat)) && continue
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         instance_materials = cache === nothing ? nothing :
                              _instanced_materials!(cache.instanced_materials,
@@ -1488,46 +1489,109 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
                         worlds=smooth_worlds)
 
-    # Transparent pass: back-to-front, z-tested against the current depth buffer
-    # and alpha-blended over the existing colour. Depth writes follow the
-    # material's `depth_write` field. The back-to-front order is required for
-    # correct blending and is kept regardless of `sort_objects`.
-    if !isempty(transparent)
-        _sort_meshes_by_depth!(transparent, transparent_worlds, view, false,
-                               cache === nothing ? nothing : cache.mesh_depths)
+    # Transparent pass: merge ordinary meshes and individual instance
+    # transforms into one back-to-front draw list. Depth writes follow each
+    # material's `depth_write` field. The order is required for blending and is
+    # kept regardless of `sort_objects`.
+    transparent_items = cache === nothing ? _TransparentRenderItem[] :
+                        cache.transparent_items
+    empty!(transparent_items)
+    sizehint!(transparent_items, length(transparent))
+    @inbounds for index in eachindex(transparent)
+        push!(transparent_items, _TransparentRenderItem(
+            _mesh_view_depth_world(transparent_worlds[index], view),
+            _TRANSPARENT_MESH_ITEM, index, 0))
+    end
+    @inbounds for (instanced_slot, im) in pairs(instanced)
+        _instanced_triangle_drawable(im) || continue
+        mat = _instanced_material(im)
+        material_wireframe(mat) && continue
+        is_transparent_material(mat) || continue
+        cache === nothing || _instanced_materials!(
+            cache.instanced_materials, instanced_slot, im, mat,
+            im.instance_colors)
+        base = instanced_worlds[instanced_slot]
+        for instance_index in eachindex(im.instance_matrices)
+            world = base * im.instance_matrices[instance_index]
+            push!(transparent_items, _TransparentRenderItem(
+                _mesh_view_depth_world(world, view),
+                _TRANSPARENT_INSTANCE_ITEM, instanced_slot,
+                instance_index))
+        end
+    end
+    if !isempty(transparent_items)
+        _sort_transparent_items!(transparent_items)
         stamp = cache === nothing ? _LazyTransparentStamp(nothing) :
                 _render_cache_stamp!(cache, H, W)
-        # `stamp` ensures each pixel blends at most once per mesh.
+        # `stamp` ensures each pixel blends at most once per draw item.
         sid = 0
-        for i in eachindex(transparent)
-            mesh = transparent[i]
-            world = transparent_worlds[i]
+        for item in transparent_items
             sid += 1
-            if _mesh_is_flat(mesh, shading)
-                _rasterize_flat_mesh_material_opacity_from_mesh!(
-                    rt, mesh, world, lights, proj, view, near,
-                    camera.position, tri, clipped, sx, sy, sz, colorbuf, stamp, sid,
-                    shadow_fn, xlo, xhi, ylo, yhi, clipping_planes, log_depth,
-                    inv_log_far, ortho_dir,
-                    cache === nothing ? nothing : cache.smooth_tri,
-                    cache === nothing ? nothing : cache.smooth_clipped,
-                    cache === nothing ? nothing : cache.smooth_iw)
+            if item.kind == _TRANSPARENT_MESH_ITEM
+                mesh = transparent[item.object_index]
+                world = transparent_worlds[item.object_index]
+                if _mesh_is_flat(mesh, shading)
+                    _rasterize_flat_mesh_material_opacity_from_mesh!(
+                        rt, mesh, world, lights, proj, view, near,
+                        camera.position, tri, clipped, sx, sy, sz, colorbuf,
+                        stamp, sid, shadow_fn, xlo, xhi, ylo, yhi,
+                        clipping_planes, log_depth, inv_log_far, ortho_dir,
+                        cache === nothing ? nothing : cache.smooth_tri,
+                        cache === nothing ? nothing : cache.smooth_clipped,
+                        cache === nothing ? nothing : cache.smooth_iw)
+                else
+                    # Smooth-shaded transparent mesh: per-pixel interpolated
+                    # normals with source-over blending.
+                    _render_smooth!(
+                        rt, (mesh,), lights, proj, view, near,
+                        camera.position, shadow_fn;
+                        clipping_planes=clipping_planes,
+                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                        log_depth=log_depth, inv_log_far=inv_log_far,
+                        ortho_dir=ortho_dir, stamp=stamp, stamp_id=sid,
+                        smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
+                        smooth_clipped=cache === nothing ? nothing :
+                                        cache.smooth_clipped,
+                        smooth_sx=cache === nothing ? nothing : sx,
+                        smooth_sy=cache === nothing ? nothing : sy,
+                        smooth_sz=cache === nothing ? nothing : sz,
+                        smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
+                        worlds=(world,))
+                end
             else
-                # Smooth-shaded transparent mesh: per-pixel interpolated normals with
-                # source-over blending (the same stamp guards against double-blend),
-                # instead of being silently flattened.
-                _render_smooth!(rt, (mesh,), lights, proj, view, near, camera.position, shadow_fn;
-                                clipping_planes=clipping_planes,
-                                xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
-                                stamp=stamp, stamp_id=sid,
-                                smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
-                                smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
-                                smooth_sx=cache === nothing ? nothing : sx,
-                                smooth_sy=cache === nothing ? nothing : sy,
-                                smooth_sz=cache === nothing ? nothing : sz,
-                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
-                                worlds=(world,))
+                instanced_slot = item.object_index
+                instance_index = item.instance_index
+                im = instanced[instanced_slot]
+                geo = _instanced_geometry(im)
+                base_material = _instanced_material(im)
+                instance_material = cache === nothing ?
+                    _with_vertex_color(
+                        base_material, im.instance_colors[instance_index]) :
+                    _cached_instanced_material_at(
+                        cache.instanced_materials, instanced_slot,
+                        instance_index, base_material)
+                world = instanced_worlds[instanced_slot] *
+                        im.instance_matrices[instance_index]
+                mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
+                mesh_clipping_planes = _combined_clipping_planes(
+                    clipping_planes,
+                    material_clipping_planes(instance_material))
+                _rasterize_geo_flat!(
+                    rt, geo, world, instance_material, lights, proj, view,
+                    near, camera.position, tri, clipped, sx, sy, sz;
+                    alpha=Float64(material_opacity(instance_material)),
+                    stamp=stamp, stamp_id=sid,
+                    shadow_fn=mesh_shadow_fn,
+                    clipping_planes=mesh_clipping_planes,
+                    colorbuf=colorbuf,
+                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                    log_depth=log_depth, inv_log_far=inv_log_far,
+                    ortho_dir=ortho_dir,
+                    flat_attr_tri=cache === nothing ? nothing :
+                                  cache.smooth_tri,
+                    flat_attr_clipped=cache === nothing ? nothing :
+                                     cache.smooth_clipped,
+                    flat_iw=cache === nothing ? nothing : cache.smooth_iw)
             end
         end
     end
@@ -1655,6 +1719,33 @@ function _mesh_view_depth_world(world::Mat4, view::Mat4)
     o = mat4_transform_point(world, Vec3(0.0, 0.0, 0.0))
     v = mat4_transform_vec4(view, Vec4(o.x, o.y, o.z, 1.0))
     return v.z
+end
+
+const _TRANSPARENT_MESH_ITEM = UInt8(0)
+const _TRANSPARENT_INSTANCE_ITEM = UInt8(1)
+
+struct _TransparentRenderItem
+    depth::Float64
+    kind::UInt8
+    object_index::Int
+    instance_index::Int
+end
+
+function _sort_transparent_items!(items::Vector{_TransparentRenderItem})
+    gap = length(items) >>> 1
+    @inbounds while gap > 0
+        for index in (gap + 1):length(items)
+            item = items[index]
+            position = index
+            while position > gap && items[position - gap].depth > item.depth
+                items[position] = items[position - gap]
+                position -= gap
+            end
+            items[position] = item
+        end
+        gap >>>= 1
+    end
+    return items
 end
 
 function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Float64},
