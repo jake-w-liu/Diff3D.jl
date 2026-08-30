@@ -2236,7 +2236,9 @@ function _decode_exr(bytes::Vector{UInt8})
     maxpix = (length(bytes) * 100000) ÷ max(1, pixel_bytes)
     (width <= maxpix && height <= maxpix && width <= maxpix ÷ height) ||
         error("EXR data window $(width)x$(height) is implausibly large for a $(length(bytes))-byte file")
-    lineorder in (0, 1) || error("EXR random-order scanlines are not supported")
+    lineorder in (0, 1, 2) || error("EXR lineOrder $lineorder is invalid")
+    !tiled && lineorder == 2 &&
+        error("EXR random-order scanlines are not supported")
 
     lines_per_block = compression == 0 ? 1 :        # NONE
                       compression == 1 ? 1 :        # RLE

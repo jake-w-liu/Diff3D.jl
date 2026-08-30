@@ -10174,13 +10174,13 @@ end
             push!(v, 0x00); v
         end
         # Build a NONE-compressed scanline EXR (channels must be sorted by name).
-        function build_exr_none(W, H, chs, px; version=2)
+        function build_exr_none(W, H, chs, px; version=2, lineorder=0)
             hdr = vcat(le32i(20000630), le32i(version),
                        attr("channels", "chlist", chlist(chs)),
                        attr("compression", "compression", UInt8[0]),
                        attr("dataWindow", "box2i",
                             vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
-                       attr("lineOrder", "lineOrder", UInt8[0]),
+                       attr("lineOrder", "lineOrder", UInt8[lineorder]),
                        UInt8[0x00])
             chunks = Vector{UInt8}[]
             for y in 0:(H - 1)
@@ -10553,13 +10553,14 @@ end
 
         # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile
         # placement exactly — each tile's value must land in its own quadrant.
-        function build_exr_tiled(W, H, tx, ty, tilevals)  # tilevals[(tileX,tileY)] => half
+        function build_exr_tiled(W, H, tx, ty, tilevals;
+                                 lineorder=0)  # tilevals[(tileX,tileY)] => half
             tiledesc = vcat(le32i(tx), le32i(ty), UInt8[0])   # ONE_LEVEL, ROUND_DOWN
             hdr = vcat(le32i(20000630), le32i(2 | 0x200),     # tiled flag
                        attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
                        attr("compression", "compression", UInt8[0]),
                        attr("dataWindow", "box2i", vcat(le32i(0), le32i(0), le32i(W - 1), le32i(H - 1))),
-                       attr("lineOrder", "lineOrder", UInt8[0]),
+                       attr("lineOrder", "lineOrder", UInt8[lineorder]),
                        attr("tiles", "tiledesc", tiledesc), UInt8[0x00])
             u16(h) = UInt8[h & 0xff, (h >> 8) & 0xff]
             chunks = Vector{UInt8}[]
@@ -10581,6 +10582,17 @@ end
         @test all(timg[1:2, 1:2, 1] .== 1.0) && all(timg[1:2, 3:4, 1] .== 2.0)   # tile (0,0),(1,0)
         @test all(timg[3:4, 1:2, 1] .== 3.0) && all(timg[3:4, 3:4, 1] .== 4.0)   # tile (0,1),(1,1)
         @test all(timg[:, :, 2] .== 0.5) && all(timg[:, :, 3] .== 0.25)
+        random_tiled = Diff3D._decode_exr(build_exr_tiled(
+            4, 4, 2, 2,
+            Dict((0, 0) => 0x3C00, (1, 0) => 0x4000,
+                 (0, 1) => 0x4200, (1, 1) => 0x4400);
+            lineorder=2))
+        @test random_tiled == timg
+        @test_throws "random-order scanlines are not supported" Diff3D._decode_exr(
+            build_exr_none(
+                2, 2, chs,
+                Dict("R" => R, "G" => G, "B" => B);
+                lineorder=2))
 
         # MIPMAP tiles: decode the full-resolution level 0 (the offset table is
         # level-0-first). Build 4×4 (tile 2×2) with extra mip levels whose tiles
