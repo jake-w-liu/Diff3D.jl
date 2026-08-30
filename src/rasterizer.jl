@@ -1972,16 +1972,23 @@ function _combined_clipping_planes(global_planes, material_planes)
     return _CombinedClippingPlanes(global_planes, material_planes)
 end
 
-@inline _has_texture_alpha(tex) = tex isa Texture && size(tex.data, 3) >= 4
+@inline function _texture_alpha_channel(tex)
+    tex isa Texture || return 0
+    channels = size(tex.data, 3)
+    return channels == 2 ? 2 : channels >= 4 ? 4 : 0
+end
+@inline _has_texture_alpha(tex) = _texture_alpha_channel(tex) != 0
 @inline _has_alpha_map(tex) = tex isa Texture
 @inline _needs_fragment_alpha(alpha_test::Float64, alpha_base::Float64, albedo_map, alpha_map) =
     alpha_test > 0.0 || alpha_base < 1.0 || _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
 
 @inline function _fragment_alpha(alpha_base::Float64, albedo_map, alpha_map, u, v, u2, v2)
     a = alpha_base
-    if _has_texture_alpha(albedo_map)
+    alpha_channel = _texture_alpha_channel(albedo_map)
+    if alpha_channel != 0
         tu, tv = _map_uv(albedo_map, u, v, u2, v2)
-        a *= sample_texture_channel(albedo_map, tu, tv, 4; default=1.0)
+        a *= sample_texture_channel(
+            albedo_map, tu, tv, alpha_channel; default=1.0)
     end
     if _has_alpha_map(alpha_map)
         tu, tv = _map_uv(alpha_map, u, v, u2, v2)

@@ -1006,9 +1006,15 @@ end
                                            y::Int, x::Int, channels::Int,
                                            first::Bool)
     r = data[y, x, 1]
-    g = channels >= 2 ? data[y, x, 2] : r
-    b = channels >= 3 ? data[y, x, 3] : r
-    a = channels >= 4 ? data[y, x, 4] : 1.0
+    if channels == 2
+        g = r
+        b = r
+        a = data[y, x, 2]
+    else
+        g = channels >= 3 ? data[y, x, 2] : r
+        b = channels >= 3 ? data[y, x, 3] : r
+        a = channels >= 4 ? data[y, x, 4] : 1.0
+    end
     first || write(io, ',')
     _web_write_byte(io, _web_texture_unit_byte(r))
     write(io, ',')

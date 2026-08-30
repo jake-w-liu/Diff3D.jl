@@ -29581,3 +29581,64 @@ end
     @test isfinite(light_contribution(
         spot, Vec3(0.0, 0.0, 0.0))[2])
 end
+
+@testset "fresh audit round 256 fixes" begin
+    luminance_alpha_data = fill(0.8, 1, 1, 2)
+    luminance_alpha_data[1, 1, 2] = 0.25
+    luminance_alpha = Texture(
+        luminance_alpha_data; filter=:nearest,
+        colorspace=:linear)
+    @test Diff3D._texture_alpha_channel(luminance_alpha) == 2
+    @test Diff3D._has_texture_alpha(luminance_alpha)
+    @test Diff3D._fragment_alpha(
+        1.0, luminance_alpha, nothing,
+        0.5, 0.5, 0.5, 0.5) == 0.25
+
+    rgb = Texture(
+        ones(Float64, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    scalar = Texture(
+        ones(Float64, 1, 1, 1); filter=:nearest,
+        colorspace=:linear)
+    @test Diff3D._texture_alpha_channel(rgb) == 0
+    @test Diff3D._texture_alpha_channel(scalar) == 0
+
+    function luminance_alpha_render(shading; alpha_test=0.0)
+        scene = Scene()
+        material = MeshBasicMaterial(
+            color=Color3(1.0, 1.0, 1.0), map=luminance_alpha,
+            transparent=true, alpha_test=alpha_test,
+            depth_write=false, side=:double)
+        add!(scene, Mesh(
+            PlaneGeometry(width=4.0, height=4.0), material))
+        camera = PerspectiveCamera(aspect=1.0)
+        camera.position = Vec3(0.0, 0.0, 5.0)
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; shading=shading)
+        return target
+    end
+    for shading in (:flat, :smooth)
+        target = luminance_alpha_render(shading)
+        @test target.color[8, 8, :] ≈ fill(0.2, 3) atol=1.0e-12
+        discarded = luminance_alpha_render(shading; alpha_test=0.5)
+        @test sum(discarded.color) == 0.0
+    end
+
+    sprite_scene = Scene()
+    sprite = Sprite(SpriteMaterial(
+        color=Color3(1.0, 1.0, 1.0), map=luminance_alpha,
+        transparent=true, depth_write=false))
+    add!(sprite_scene, sprite)
+    sprite_camera = PerspectiveCamera(aspect=1.0)
+    sprite_camera.position = Vec3(0.0, 0.0, 3.0)
+    sprite_target = RenderTarget(16, 16)
+    render_sprites!(sprite_target, sprite_scene, sprite_camera)
+    @test sprite_target.color[8, 8, :] ≈ fill(0.2, 3) atol=1.0e-12
+
+    texture_json = Diff3D._web_texture_json(luminance_alpha)
+    @test occursin("\"data\":[204,204,204,64]", texture_json)
+    @test_opt_alloc 0 Diff3D._texture_alpha_channel(luminance_alpha)
+    @test_opt_alloc 0 Diff3D._fragment_alpha(
+        1.0, luminance_alpha, nothing,
+        0.5, 0.5, 0.5, 0.5)
+end
