@@ -27929,6 +27929,107 @@ end
           Vec3(0.25, 0.75, 0.5)
 end
 
+@testset "CRC52 — precise NURBS underflow contributions" begin
+    knots = [0.0, 0.0, 1.0, 1.0]
+    minimum = nextfloat(0.0)
+    maximum = floatmax(Float64)
+    weak_coordinate = Vec4(maximum, 0.0, 0.0, minimum)
+    weak_zero = Vec4(0.0, 0.0, 0.0, minimum)
+    dominant_zero = Vec4(0.0, 0.0, 0.0, maximum)
+
+    function center_x_oracle(points)
+        return Float64(setprecision(BigFloat, 512) do
+            numerator = zero(BigFloat)
+            denominator = zero(BigFloat)
+            for point in points
+                weight = BigFloat(point.w)
+                numerator += BigFloat(point.x) * weight
+                denominator += weight
+            end
+            numerator / denominator
+        end)
+    end
+
+    curve_points = [weak_coordinate, dominant_zero]
+    curve_oracle = center_x_oracle(curve_points)
+    @test curve_oracle == minimum
+    @test nurbs_point(
+        NURBSCurve(1, knots, curve_points), 0.5) ==
+          Vec3(curve_oracle, 0.0, 0.0)
+
+    surface_points = [
+        [weak_coordinate, weak_zero],
+        [weak_zero, dominant_zero],
+    ]
+    surface_oracle = center_x_oracle(
+        [point for row in surface_points for point in row])
+    @test surface_oracle == minimum
+    @test nurbs_point(
+        NURBSSurface(1, 1, knots, knots, surface_points), 0.5, 0.5) ==
+          Vec3(surface_oracle, 0.0, 0.0)
+
+    volume_points = [
+        [[weak_zero for _ in 1:2] for _ in 1:2]
+        for _ in 1:2
+    ]
+    volume_points[1][1][1] = weak_coordinate
+    volume_points[2][2][2] = dominant_zero
+    volume_oracle = center_x_oracle(
+        [point for plane in volume_points for row in plane for point in row])
+    @test volume_oracle == minimum
+    @test nurbs_point(
+        NURBSVolume(1, 1, 1, knots, knots, knots, volume_points),
+        0.5, 0.5, 0.5) == Vec3(volume_oracle, 0.0, 0.0)
+
+    coordinate_curve = NURBSCurve(
+        1, knots,
+        [Vec4(minimum, 0.0, 0.0, 1.0),
+         Vec4(minimum, 0.0, 0.0, 1.0)])
+    @test nurbs_point(coordinate_curve, 0.5) ==
+          Vec3(minimum, 0.0, 0.0)
+
+    ordinary_curve = NURBSCurve(
+        1, knots,
+        [Vec4(0.0, 0.0, 0.0, 1.0),
+         Vec4(2.0, 0.0, 0.0, 1.0)])
+    ordinary_surface_points = [
+        [Vec4(0.0, 0.0, 0.0, 1.0), Vec4(0.0, 1.0, 0.0, 1.0)],
+        [Vec4(1.0, 0.0, 0.0, 1.0), Vec4(1.0, 1.0, 0.0, 1.0)],
+    ]
+    ordinary_surface = NURBSSurface(
+        1, 1, knots, knots, ordinary_surface_points)
+    ordinary_volume_points = [
+        [[Vec4(Float64(i), Float64(j), Float64(k), 1.0)
+          for k in 0:1] for j in 0:1] for i in 0:1
+    ]
+    ordinary_volume = NURBSVolume(
+        1, 1, 1, knots, knots, knots, ordinary_volume_points)
+    curve_basis = Diff3D._nurbs_basis_scratch(1)
+    surface_basis_u = Diff3D._nurbs_basis_scratch(1)
+    surface_basis_v = Diff3D._nurbs_basis_scratch(1)
+    volume_basis_u = Diff3D._nurbs_basis_scratch(1)
+    volume_basis_v = Diff3D._nurbs_basis_scratch(1)
+    volume_basis_w = Diff3D._nurbs_basis_scratch(1)
+    Diff3D._nurbs_point(ordinary_curve, 0.5, curve_basis)
+    Diff3D._nurbs_point(
+        ordinary_surface, 0.5, 0.5, surface_basis_u, surface_basis_v)
+    Diff3D._nurbs_point(
+        ordinary_volume, 0.5, 0.5, 0.5,
+        volume_basis_u, volume_basis_v, volume_basis_w)
+    @test_opt_alloc 0 Diff3D._nurbs_point(
+        ordinary_curve, 0.5, curve_basis)
+    @test_opt_alloc 0 Diff3D._nurbs_point(
+        ordinary_surface, 0.5, 0.5,
+        surface_basis_u, surface_basis_v)
+    @test_opt_alloc 0 Diff3D._nurbs_point(
+        ordinary_volume, 0.5, 0.5, 0.5,
+        volume_basis_u, volume_basis_v, volume_basis_w)
+    @test_opt_alloc 128 nurbs_point(ordinary_curve, 0.5)
+    @test_opt_alloc 256 nurbs_point(ordinary_surface, 0.5, 0.5)
+    @test_opt_alloc 384 nurbs_point(
+        ordinary_volume, 0.5, 0.5, 0.5)
+end
+
 @testset "fresh audit round 225 fixes" begin
     up = Vec3(0.0, 1.0, 0.0)
     for separation in (nextfloat(0.0), 1.0e-7, 1.0e-3)

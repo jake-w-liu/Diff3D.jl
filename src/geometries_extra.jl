@@ -992,6 +992,83 @@ end
     return point
 end
 
+@inline _nurbs_product_underflow(a::Float64, b::Float64,
+                                 product::Float64) =
+    !iszero(a) && !iszero(b) && iszero(product)
+
+@inline function _nurbs_finish_precise_point(x::BigFloat, y::BigFloat,
+                                             z::BigFloat, weight::BigFloat)
+    !iszero(weight) ||
+        throw(ArgumentError(
+            "NURBS evaluation produced zero homogeneous weight"))
+    return Vec3(Float64(x / weight), Float64(y / weight),
+                Float64(z / weight))
+end
+
+@noinline function _nurbs_precise_point(
+        curve::NURBSCurve, span::Int, basis::Vector{Float64})
+    return setprecision(BigFloat, 512) do
+        x = zero(BigFloat)
+        y = zero(BigFloat)
+        z = zero(BigFloat)
+        weight = zero(BigFloat)
+        for j in 0:curve.degree
+            cp = curve.control_points[span - curve.degree + j + 1]
+            coefficient = BigFloat(basis[j + 1]) * BigFloat(cp.w)
+            x += BigFloat(cp.x) * coefficient
+            y += BigFloat(cp.y) * coefficient
+            z += BigFloat(cp.z) * coefficient
+            weight += coefficient
+        end
+        _nurbs_finish_precise_point(x, y, z, weight)
+    end
+end
+
+@noinline function _nurbs_precise_point(
+        surface::NURBSSurface, span_u::Int, span_v::Int,
+        basis_u::Vector{Float64}, basis_v::Vector{Float64})
+    return setprecision(BigFloat, 512) do
+        x = zero(BigFloat)
+        y = zero(BigFloat)
+        z = zero(BigFloat)
+        weight = zero(BigFloat)
+        for i in 0:surface.degree_u, j in 0:surface.degree_v
+            cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
+            coefficient = BigFloat(basis_u[i + 1]) *
+                          BigFloat(basis_v[j + 1]) * BigFloat(cp.w)
+            x += BigFloat(cp.x) * coefficient
+            y += BigFloat(cp.y) * coefficient
+            z += BigFloat(cp.z) * coefficient
+            weight += coefficient
+        end
+        _nurbs_finish_precise_point(x, y, z, weight)
+    end
+end
+
+@noinline function _nurbs_precise_point(
+        volume::NURBSVolume, span_u::Int, span_v::Int, span_w::Int,
+        basis_u::Vector{Float64}, basis_v::Vector{Float64},
+        basis_w::Vector{Float64})
+    return setprecision(BigFloat, 512) do
+        x = zero(BigFloat)
+        y = zero(BigFloat)
+        z = zero(BigFloat)
+        weight = zero(BigFloat)
+        for i in 0:volume.degree_u, j in 0:volume.degree_v,
+            k in 0:volume.degree_w
+            cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
+            coefficient = BigFloat(basis_u[i + 1]) *
+                          BigFloat(basis_v[j + 1]) *
+                          BigFloat(basis_w[k + 1]) * BigFloat(cp.w)
+            x += BigFloat(cp.x) * coefficient
+            y += BigFloat(cp.y) * coefficient
+            z += BigFloat(cp.z) * coefficient
+            weight += coefficient
+        end
+        _nurbs_finish_precise_point(x, y, z, weight)
+    end
+end
+
 function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     npoints = length(curve.control_points)
     u = _nurbs_parameter(t, curve.knots, curve.degree, npoints,
@@ -1007,14 +1084,28 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     y = 0.0
     z = 0.0
     weight = 0.0
+    needs_precise = false
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
-        coeff = basis[j + 1] * (cp.w / weight_scale)
-        x += cp.x * coeff
-        y += cp.y * coeff
-        z += cp.z * coeff
+        basis_factor = basis[j + 1]
+        scaled_weight = cp.w / weight_scale
+        coeff = basis_factor * scaled_weight
+        x_term = cp.x * coeff
+        y_term = cp.y * coeff
+        z_term = cp.z * coeff
+        needs_precise |= !iszero(basis_factor) && iszero(scaled_weight)
+        needs_precise |= _nurbs_product_underflow(
+            basis_factor, scaled_weight, coeff)
+        needs_precise |= _nurbs_product_underflow(cp.x, coeff, x_term) ||
+                         _nurbs_product_underflow(cp.y, coeff, y_term) ||
+                         _nurbs_product_underflow(cp.z, coeff, z_term)
+        x += x_term
+        y += y_term
+        z += z_term
         weight += coeff
     end
+    needs_precise && return _nurbs_precise_point(
+        curve, span, basis)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)
@@ -1057,15 +1148,32 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
     y = 0.0
     z = 0.0
     weight = 0.0
+    needs_precise = false
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] *
-                (cp.w / weight_scale)
-        x += cp.x * coeff
-        y += cp.y * coeff
-        z += cp.z * coeff
+        basis_u_value = basis_u[i + 1]
+        basis_v_value = basis_v[j + 1]
+        basis_factor = basis_u_value * basis_v_value
+        basis_active = !iszero(basis_u_value) && !iszero(basis_v_value)
+        scaled_weight = cp.w / weight_scale
+        coeff = basis_factor * scaled_weight
+        x_term = cp.x * coeff
+        y_term = cp.y * coeff
+        z_term = cp.z * coeff
+        needs_precise |= basis_active &&
+                         (iszero(basis_factor) || iszero(scaled_weight))
+        needs_precise |= _nurbs_product_underflow(
+            basis_factor, scaled_weight, coeff)
+        needs_precise |= _nurbs_product_underflow(cp.x, coeff, x_term) ||
+                         _nurbs_product_underflow(cp.y, coeff, y_term) ||
+                         _nurbs_product_underflow(cp.z, coeff, z_term)
+        x += x_term
+        y += y_term
+        z += z_term
         weight += coeff
     end
+    needs_precise && return _nurbs_precise_point(
+        surface, span_u, span_v, basis_u, basis_v)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)
@@ -1117,15 +1225,37 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     y = 0.0
     z = 0.0
     weight = 0.0
+    needs_precise = false
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
-        coeff = basis_u[i + 1] * basis_v[j + 1] * basis_w[k + 1] *
-                (cp.w / weight_scale)
-        x += cp.x * coeff
-        y += cp.y * coeff
-        z += cp.z * coeff
+        basis_u_value = basis_u[i + 1]
+        basis_v_value = basis_v[j + 1]
+        basis_w_value = basis_w[k + 1]
+        basis_uv = basis_u_value * basis_v_value
+        basis_factor = basis_uv * basis_w_value
+        basis_active = !iszero(basis_u_value) &&
+                       !iszero(basis_v_value) &&
+                       !iszero(basis_w_value)
+        scaled_weight = cp.w / weight_scale
+        coeff = basis_factor * scaled_weight
+        x_term = cp.x * coeff
+        y_term = cp.y * coeff
+        z_term = cp.z * coeff
+        needs_precise |= basis_active &&
+                         (iszero(basis_uv) || iszero(basis_factor) ||
+                          iszero(scaled_weight))
+        needs_precise |= _nurbs_product_underflow(
+            basis_factor, scaled_weight, coeff)
+        needs_precise |= _nurbs_product_underflow(cp.x, coeff, x_term) ||
+                         _nurbs_product_underflow(cp.y, coeff, y_term) ||
+                         _nurbs_product_underflow(cp.z, coeff, z_term)
+        x += x_term
+        y += y_term
+        z += z_term
         weight += coeff
     end
+    needs_precise && return _nurbs_precise_point(
+        volume, span_u, span_v, span_w, basis_u, basis_v, basis_w)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)
