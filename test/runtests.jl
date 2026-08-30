@@ -19724,7 +19724,7 @@ end
             @test_throws "glTF baseColorFactor[1] must be a finite number" load_gltf(
                 mesh_material_path("bool_base_color.gltf",
                                    "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[true,1,1,1]}}"))
-            @test_throws "glTF accessor normalized must be a boolean" load_gltf(
+            @test_throws "glTF POSITION accessor normalized must be a boolean" load_gltf(
                 mesh_material_path("numeric_normalized.gltf", "{}";
                                    accessor_extra=",\"normalized\":1"))
             @test_throws "glTF texture transform rotation must be a finite number" load_gltf(
@@ -30412,4 +30412,48 @@ end
     @test derivative > 0.0
     @test_opt_alloc 0 Diff3D._soft_far_value(
         clip_vertex, config.eps)
+end
+
+@testset "fresh audit round 267 fixes" begin
+    identity_values = collect(Mat4().e)
+    for (field, value) in (
+            ("translation", Any[0.0, 0.0, 0.0]),
+            ("rotation", Any[0.0, 0.0, 0.0, 1.0]),
+            ("scale", Any[1.0, 1.0, 1.0]))
+        node = Dict{String,Any}("matrix" => identity_values,
+                                field => value)
+        @test_throws "node matrix must not be combined with translation, rotation, or scale" Diff3D._gltf_node_matrix(
+            node)
+    end
+
+    @test_throws "node rotation must be a unit quaternion" Diff3D._gltf_node_matrix(
+        Dict{String,Any}("rotation" => Any[0.0, 0.0, 0.0, 0.0]))
+    @test_throws "node rotation must be a unit quaternion" Diff3D._gltf_node_matrix(
+        Dict{String,Any}("rotation" => Any[0.0, 0.0, 0.0, 2.0]))
+    @test_throws "node rotation must be a unit quaternion" Diff3D._gltf_node_matrix(
+        Dict{String,Any}("rotation" => Any[floatmax(Float64),
+                                               0.0, 0.0, 1.0]))
+
+    drifted = Diff3D._gltf_node_matrix(Dict{String,Any}(
+        "rotation" => Any[0.0, 0.0, 0.0, 1.0 + 1.0e-7]))
+    @test drifted == Mat4()
+    half_angle = pi / 8
+    rotation = Diff3D._gltf_node_matrix(Dict{String,Any}(
+        "rotation" => Any[0.0, 0.0, sin(half_angle), cos(half_angle)]))
+    @test rotation == quat_to_mat4(Quaternion(
+        0.0, 0.0, sin(half_angle), cos(half_angle)))
+
+    function node_scene(node)
+        return Dict{String,Any}(
+            "scene" => 0,
+            "scenes" => Any[Dict{String,Any}("nodes" => Any[0])],
+            "nodes" => Any[node])
+    end
+    scene = Diff3D._gltf_build_scene(node_scene(Dict{String,Any}(
+        "rotation" => Any[0.0, 0.0, 0.0, 1.0 + 1.0e-7])), Any[])
+    @test length(get_children(scene)) == 1
+    @test compute_world_matrix(only(get_children(scene))) == Mat4()
+    @test_throws "node rotation must be a unit quaternion" Diff3D._gltf_build_scene(
+        node_scene(Dict{String,Any}(
+            "rotation" => Any[0.0, 0.0, 0.0, 0.5])), Any[])
 end

@@ -9881,6 +9881,9 @@ end
 
 function _gltf_node_matrix(node)
     if haskey(node, "matrix")
+        any(name -> haskey(node, name),
+            ("translation", "rotation", "scale")) &&
+            error("glTF node matrix must not be combined with translation, rotation, or scale")
         m = _gltf_checked_number_tuple(node["matrix"], 16, "node matrix")
         return Mat4{Float64}(m)
     end
@@ -9890,8 +9893,14 @@ function _gltf_node_matrix(node)
                                    4, "node rotation")
     s = _gltf_checked_number_tuple(get(node, "scale", [1.0,1.0,1.0]),
                                    3, "node scale")
+    rotation_length = hypot(r[1], r[2], r[3], r[4])
+    isfinite(rotation_length) && rotation_length > 0.0 &&
+        abs(rotation_length - 1.0) <= 2.0e-6 ||
+        error("glTF node rotation must be a unit quaternion")
+    q = Quaternion(r[1] / rotation_length, r[2] / rotation_length,
+                   r[3] / rotation_length, r[4] / rotation_length)
     T = mat4_translation(t[1], t[2], t[3])
-    R = quat_to_mat4(Quaternion(r[1], r[2], r[3], r[4]))
+    R = quat_to_mat4(q)
     S = mat4_scaling(s[1], s[2], s[3])
     return T * R * S
 end
