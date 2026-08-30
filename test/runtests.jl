@@ -27870,3 +27870,42 @@ end
     @test alpha_center.y ≈ 0.25 * decoded atol=1.0e-12
     @test alpha_center.z ≈ 0.25 * decoded atol=1.0e-12
 end
+
+@testset "fresh audit round 233 fixes" begin
+    data = reshape(collect(0.1:0.1:0.4), 1, 4, 1)
+    manual_matrix = Mat3{Float64}((
+        2.0, 0.0, 0.25,
+        0.0, 3.0, -0.5,
+        0.0, 0.0, 1.0,
+    ))
+
+    texture = Texture(data; filter=:nearest)
+    @test texture_transform_uv(texture, 0.25, 0.5) == (0.25, 0.5)
+    texture.matrix_auto_update = false
+    texture.matrix = manual_matrix
+    texture.matrix_auto_update = true
+    @test texture_transform_uv(texture, 0.25, 0.5) == (0.25, 0.5)
+    @test texture.matrix.e == Mat3().e
+
+    texture.matrix = manual_matrix
+    @test texture_transform_uv(texture, 0.25, 0.5) == (0.25, 0.5)
+    @test texture.matrix.e == Mat3().e
+
+    texture.matrix_auto_update = false
+    texture.matrix = manual_matrix
+    @test texture_transform_uv(texture, 0.25, 0.5) == (0.75, 1.0)
+    @test texture.matrix == manual_matrix
+
+    texture.offset = Vec2(0.5, 0.0)
+    texture.matrix_auto_update = true
+    @test texture_transform_uv(texture, 0.25, 0.5) == (0.75, 0.5)
+
+    matrix32 = Mat3{Float32}(ntuple(
+        index -> index in (1, 5, 9) ? 1.0f0 : 0.0f0, 9))
+    texture.matrix_auto_update = false
+    texture.matrix = matrix32
+    @test texture.matrix isa Mat3{Float64}
+    texture.rotation = 1
+    @test texture.rotation == 1.0
+    @test texture.rotation isa Float64
+end

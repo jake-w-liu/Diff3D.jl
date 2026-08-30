@@ -29,6 +29,19 @@ end
 const _TEXTURE_MATRIX_INVALID_KEY =
     (NaN, NaN, NaN, NaN, NaN, NaN, NaN)
 
+function Base.setproperty!(tex::Texture, name::Symbol, value)
+    index = Base.fieldindex(typeof(tex), name)
+    converted = convert(Base.fieldtype(typeof(tex), index), value)
+    if name === :matrix
+        setfield!(tex, :matrix_cache_key, _TEXTURE_MATRIX_INVALID_KEY)
+    elseif name === :matrix_auto_update &&
+           converted != getfield(tex, :matrix_auto_update)
+        setfield!(tex, :matrix_cache_key, _TEXTURE_MATRIX_INVALID_KEY)
+    end
+    setfield!(tex, index, converted)
+    return converted
+end
+
 function _texture_wrap_symbol(v)::Symbol
     (v === :repeat || (v isa AbstractString && v == "repeat")) && return :repeat
     (v === :clamp || (v isa AbstractString && v == "clamp")) && return :clamp
