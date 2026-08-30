@@ -809,6 +809,100 @@ function _transform_local_delta(obj::AbstractObject3D, delta::Vec3)
     return mat4_transform_direction(quat_to_mat4(q), delta)
 end
 
+@inline _transform_unit_quaternion_inverse(q::Quaternion) =
+    Quaternion(-q.x, -q.y, -q.z, q.w)
+
+function _transform_parent_world_quaternion(
+        obj::AbstractObject3D)::Quaternion{Float64}
+    world = Quaternion()
+    parent = get_parent(obj)
+    while parent !== nothing
+        _validate_object_transform(parent)
+        rotation = get_rotation(parent)::Euler{Float64}
+        local_rotation = quat_from_euler(
+            rotation.x, rotation.y, rotation.z; order=rotation.order)
+        world = quat_multiply(local_rotation, world)
+        parent = get_parent(parent)
+    end
+    return quat_normalize(world)
+end
+
+function _transform_quaternion_to_euler(q::Quaternion, order::Symbol)
+    qn = quat_normalize(q)
+    x, y, z, w = qn.x, qn.y, qn.z, qn.w
+    norm2 = x*x + y*y + z*z + w*w
+    scale = (one(norm2) + one(norm2)) / norm2
+    m11 = one(scale) - scale * (y*y + z*z)
+    m12 = scale * (x*y - w*z)
+    m13 = scale * (x*z + w*y)
+    m21 = scale * (x*y + w*z)
+    m22 = one(scale) - scale * (x*x + z*z)
+    m23 = scale * (y*z - w*x)
+    m31 = scale * (x*z - w*y)
+    m32 = scale * (y*z + w*x)
+    m33 = one(scale) - scale * (x*x + y*y)
+    threshold = 0.9999999
+
+    if order === :XYZ
+        ey = asin(clamp(m13, -one(m13), one(m13)))
+        if abs(m13) < threshold
+            ex = atan(-m23, m33)
+            ez = atan(-m12, m11)
+        else
+            ex = atan(m32, m22)
+            ez = zero(ey)
+        end
+    elseif order === :YXZ
+        ex = asin(-clamp(m23, -one(m23), one(m23)))
+        if abs(m23) < threshold
+            ey = atan(m13, m33)
+            ez = atan(m21, m22)
+        else
+            ey = atan(-m31, m11)
+            ez = zero(ex)
+        end
+    elseif order === :ZXY
+        ex = asin(clamp(m32, -one(m32), one(m32)))
+        if abs(m32) < threshold
+            ey = atan(-m31, m33)
+            ez = atan(-m12, m22)
+        else
+            ey = zero(ex)
+            ez = atan(m21, m11)
+        end
+    elseif order === :ZYX
+        ey = asin(-clamp(m31, -one(m31), one(m31)))
+        if abs(m31) < threshold
+            ex = atan(m32, m33)
+            ez = atan(m21, m11)
+        else
+            ex = zero(ey)
+            ez = atan(-m12, m22)
+        end
+    elseif order === :YZX
+        ez = asin(clamp(m21, -one(m21), one(m21)))
+        if abs(m21) < threshold
+            ex = atan(-m23, m22)
+            ey = atan(-m31, m11)
+        else
+            ex = zero(ez)
+            ey = atan(m13, m33)
+        end
+    elseif order === :XZY
+        ez = asin(-clamp(m12, -one(m12), one(m12)))
+        if abs(m12) < threshold
+            ex = atan(m32, m22)
+            ey = atan(m13, m11)
+        else
+            ex = atan(-m23, m33)
+            ey = zero(ez)
+        end
+    else
+        throw(ArgumentError("unknown Euler order :$order"))
+    end
+    return Euler(ex, ey, ez, order)
+end
+
 @inline _transform_axis_has(::Nothing, ::Char) = false
 @inline function _transform_axis_has(axis::Symbol, label::Char)
     if label == 'X'
@@ -885,12 +979,28 @@ function transform_apply!(tc::TransformControls, delta::Vec3)
                           _transform_axis_has(tc.axis, 'Z') ?
                           _transform_snap_value(angles.z, tc.rotation_snap) : angles.z)
         end
+        object_rotation = get_rotation(obj)::Euler{Float64}
+        order = object_rotation.order
+        current = quat_from_euler(
+            object_rotation.x, object_rotation.y, object_rotation.z;
+            order=order)::Quaternion{Float64}
+        delta_rotation = quat_from_euler(
+            angles.x, angles.y, angles.z; order=order)::Quaternion{Float64}
+        rotated::Quaternion{Float64} = if tc.space === :local
+            quat_multiply(current, delta_rotation)
+        else
+            parent_world = _transform_parent_world_quaternion(obj)
+            parent_inverse = _transform_unit_quaternion_inverse(parent_world)
+            parent_delta = quat_multiply(
+                quat_multiply(parent_inverse, delta_rotation), parent_world)
+            quat_multiply(parent_delta, current)
+        end
+        euler = _transform_quaternion_to_euler(
+            quat_normalize(rotated), order)::Euler{Float64}
         rotation = _checked_control_vec3(
-            Vec3(obj.rotation.x + angles.x, obj.rotation.y + angles.y,
-                 obj.rotation.z + angles.z),
+            Vec3(euler.x, euler.y, euler.z),
             "TransformControls object rotation")
-        obj.rotation = Euler(rotation.x, rotation.y, rotation.z,
-                             obj.rotation.order)
+        obj.rotation = Euler(rotation.x, rotation.y, rotation.z, order)
     end
     return tc
 end
@@ -1758,30 +1868,7 @@ end
 # Quaternion → Euler (intrinsic XYZ order, matching the default `Euler`).
 # Mirrors three.js `Euler.setFromQuaternion` for order XYZ.
 function _quat_to_euler_xyz(q::Quaternion)
-    qn = quat_normalize(q)
-    x, y, z, w = qn.x, qn.y, qn.z, qn.w
-    # Correct the small residual norm error left by floating-point
-    # normalization. The scale-invariant matrix terms also make exact gimbal
-    # rotations stable when their glTF components originated as Float32.
-    norm2 = x*x + y*y + z*z + w*w
-    scale = (one(norm2) + one(norm2)) / norm2
-    m13 = scale * (x*z + w*y)
-    m13c = clamp(m13, -one(m13), one(m13))
-    ey = asin(m13c)
-    if abs(m13) < 0.9999999
-        m23 = scale * (y*z - w*x)
-        m33 = one(scale) - scale * (x*x + y*y)
-        m12 = scale * (x*y - w*z)
-        m11 = one(scale) - scale * (y*y + z*z)
-        ex = atan(-m23, m33)
-        ez = atan(-m12, m11)
-    else                                   # gimbal lock
-        m32 = scale * (y*z + w*x)
-        m22 = one(scale) - scale * (x*x + z*z)
-        ex = atan(m32, m22)
-        ez = zero(ey)
-    end
-    return Euler(ex, ey, ez, :XYZ)
+    return _transform_quaternion_to_euler(q, :XYZ)
 end
 
 struct AnimationClip

@@ -28553,3 +28553,95 @@ end
     @test_opt_alloc 0 Diff3D._ambient_occlusion_factor(
         colored_ao, 0.5, 0.5, 0.5)
 end
+
+@testset "fresh audit round 245 fixes" begin
+    camera = PerspectiveCamera()
+    object_quaternion(object) = quat_normalize(quat_from_euler(
+        object.rotation.x, object.rotation.y, object.rotation.z;
+        order=object.rotation.order))
+    same_rotation(a, b) = isapprox(abs(Diff3D.quat_dot(
+        quat_normalize(a), quat_normalize(b))), 1.0;
+        atol=1.0e-12, rtol=0.0)
+
+    initial = quat_from_euler(0.0, 0.0, pi / 2)
+    delta_x = quat_from_euler(pi / 2, 0.0, 0.0)
+    world_object = Group()
+    world_object.rotation = Euler(0.0, 0.0, pi / 2)
+    world_control = TransformControls(
+        camera; mode=:rotate, space=:world, axis=:X)
+    transform_attach!(world_control, world_object)
+    transform_apply!(world_control, Vec3(pi / 2, 7.0, 9.0))
+    @test same_rotation(
+        object_quaternion(world_object), quat_multiply(delta_x, initial))
+
+    local_object = Group()
+    local_object.rotation = Euler(0.0, 0.0, pi / 2)
+    local_control = TransformControls(
+        camera; mode=:rotate, space=:local, axis=:X)
+    transform_attach!(local_control, local_object)
+    transform_apply!(local_control, Vec3(pi / 2, 7.0, 9.0))
+    @test same_rotation(
+        object_quaternion(local_object), quat_multiply(initial, delta_x))
+    @test !same_rotation(
+        object_quaternion(world_object), object_quaternion(local_object))
+
+    parent = Group()
+    parent.rotation = Euler(0.0, pi / 2, 0.0)
+    child = Group()
+    child.rotation = Euler(0.2, -0.1, 0.3)
+    add!(parent, child)
+    parent_q = object_quaternion(parent)
+    child_initial = object_quaternion(child)
+    world_delta = quat_from_euler(0.0, 0.0, pi / 3)
+    child_control = TransformControls(
+        camera; mode=:rotate, space=:world, axis=:Z)
+    transform_attach!(child_control, child)
+    transform_apply!(child_control, Vec3(4.0, 5.0, pi / 3))
+    expected_world = quat_multiply(
+        world_delta, quat_multiply(parent_q, child_initial))
+    actual_world = quat_multiply(parent_q, object_quaternion(child))
+    @test same_rotation(actual_world, expected_world)
+
+    for order in (:XYZ, :YXZ, :ZXY, :ZYX, :YZX, :XZY)
+        ordered = Group()
+        ordered.rotation = Euler(0.2, -0.3, 0.4, order)
+        ordered_initial = object_quaternion(ordered)
+        angles = Vec3(0.15, -0.25, 0.35)
+        expected = quat_multiply(
+            ordered_initial,
+            quat_from_euler(angles.x, angles.y, angles.z; order=order))
+        control = TransformControls(
+            camera; mode=:rotate, space=:local, axis=:XYZ)
+        transform_attach!(control, ordered)
+        transform_apply!(control, angles)
+        @test ordered.rotation.order === order
+        @test same_rotation(object_quaternion(ordered), expected)
+
+        roundtrip = Diff3D._transform_quaternion_to_euler(
+            ordered_initial, order)
+        @test same_rotation(
+            quat_from_euler(
+                roundtrip.x, roundtrip.y, roundtrip.z; order=order),
+            ordered_initial)
+    end
+
+    gimbal = quat_from_euler(0.3, pi / 2, -0.2; order=:XYZ)
+    gimbal_euler = Diff3D._transform_quaternion_to_euler(gimbal, :XYZ)
+    @test same_rotation(
+        quat_from_euler(
+            gimbal_euler.x, gimbal_euler.y, gimbal_euler.z; order=:XYZ),
+        gimbal)
+
+    snap_object = Group()
+    snap_object.rotation = Euler(0.0, 0.0, 0.1)
+    snap_control = TransformControls(
+        camera; mode=:rotate, space=:local, axis=:Z,
+        rotation_snap=0.25)
+    transform_attach!(snap_control, snap_object)
+    transform_apply!(snap_control, Vec3(1.0, 1.0, 0.14))
+    @test snap_object.rotation.z ≈ 0.35 atol=1.0e-12
+    @test_opt_alloc 256 transform_apply!(
+        snap_control, Vec3(0.0, 0.0, 0.25))
+    @test_opt_alloc 256 transform_apply!(
+        world_control, Vec3(0.25, 0.0, 0.0))
+end
