@@ -461,7 +461,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
         s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
         s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
-        material::M, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, camera_view::Mat4, shadow_fn,
         albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
@@ -474,7 +474,7 @@ end
             s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
             s2x, s2y, z2, iw2, view_depth2, wp2, wn2, uv2, uv2_2, vc2,
             s3x, s3y, z3, iw3, view_depth3, wp3, wn3, uv3, uv2_3, vc3,
-            material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
+            material, lights, cam_pos, camera_view, shadow_fn, albedo_map, alpha_map,
             normal_map, roughness_map, metalness_map, specular_map,
             glossiness_map, physical_pbr_map, ao_map, emissive_map,
             light_map, normal_scale, clipping_planes;
@@ -487,7 +487,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
         s2x, s2y, z2, iw2, view_depth2, wp2, wn2, uv2, uv2_2, vc2,
         s3x, s3y, z3, iw3, view_depth3, wp3, wn3, uv3, uv2_3, vc3,
-        material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
+        material, lights, cam_pos, camera_view, shadow_fn, albedo_map, alpha_map,
         normal_map, roughness_map, metalness_map, specular_map,
         glossiness_map, physical_pbr_map, ao_map, emissive_map,
         light_map, normal_scale, clipping_planes;
@@ -501,7 +501,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
         s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
         s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
-        material::M, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, camera_view::Mat4, shadow_fn,
         albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
         normal_scale, clipping_planes;
@@ -670,20 +670,22 @@ end
                                               u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
                     col = use_surface_color ?
-                          _shade_face_vertex_color(
-                              wn, vd, wp, eff_mat, lights, surface_color;
-                                                   shadow_fn=shadow_fn) :
-                          shade_face(wn, vd, wp, eff_mat, lights;
-                                     shadow_fn=shadow_fn)
+                          _shade_face_vertex_color_with_camera_view(
+                              wn, vd, wp, eff_mat, lights, surface_color,
+                              camera_view, shadow_fn) :
+                          _shade_face_with_camera_view(
+                              wn, vd, wp, eff_mat, lights,
+                              camera_view, shadow_fn)
                 else
                     eff_mat = material
                     vd = _direction_between(wp, cam_pos)
                     col = use_surface_color ?
-                          _shade_face_vertex_color(
-                              wn, vd, wp, eff_mat, lights, surface_color;
-                                                   shadow_fn=shadow_fn) :
-                          shade_face(wn, vd, wp, eff_mat, lights;
-                                     shadow_fn=shadow_fn)
+                          _shade_face_vertex_color_with_camera_view(
+                              wn, vd, wp, eff_mat, lights, surface_color,
+                              camera_view, shadow_fn) :
+                          _shade_face_with_camera_view(
+                              wn, vd, wp, eff_mat, lights,
+                              camera_view, shadow_fn)
                 end
                 # three.js keeps emission OUT of the diffuse map chain: remove the
                 # base `emissive · intensity` added by `shade_face` before the
@@ -839,8 +841,11 @@ end
                 end
             else
                 vd = _direction_between(wp, cam_pos)
-                shade_mat = UseVertexColors ? _with_vertex_color(material, vc) : material
-                col = shade_face(wn, vd, wp, shade_mat, lights; shadow_fn=shadow_fn)
+                shade_mat = UseVertexColors ?
+                    _with_vertex_color(material, vc) : material
+                col = _shade_face_with_camera_view(
+                    wn, vd, wp, shade_mat, lights,
+                    camera_view, shadow_fn)
             end
             col = clamp_color(col)
             if blend
@@ -866,7 +871,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, vc1::Color3,
         s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, vc2::Color3,
         s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, vc3::Color3,
-        material::M, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, camera_view::Mat4, shadow_fn,
         clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
@@ -877,7 +882,7 @@ end
             s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
             s2x, s2y, z2, iw2, view_depth2, wp2, wn2, vc2,
             s3x, s3y, z3, iw3, view_depth3, wp3, wn3, vc3,
-            material, lights, cam_pos, shadow_fn, clipping_planes;
+            material, lights, cam_pos, camera_view, shadow_fn, clipping_planes;
             xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
             depth_test=depth_test, depth_write=depth_write,
             stamp=stamp, stamp_id=stamp_id, blend=blend,
@@ -887,7 +892,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
         s2x, s2y, z2, iw2, view_depth2, wp2, wn2, vc2,
         s3x, s3y, z3, iw3, view_depth3, wp3, wn3, vc3,
-        material, lights, cam_pos, shadow_fn, clipping_planes;
+        material, lights, cam_pos, camera_view, shadow_fn, clipping_planes;
         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
         depth_test=depth_test, depth_write=depth_write,
         stamp=stamp, stamp_id=stamp_id, blend=blend,
@@ -898,7 +903,7 @@ end
         s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, vc1::Color3,
         s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, vc2::Color3,
         s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, vc3::Color3,
-        material::M, lights, cam_pos::Vec3, shadow_fn,
+        material::M, lights, cam_pos::Vec3, camera_view::Mat4, shadow_fn,
         clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
@@ -961,10 +966,13 @@ end
                 vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                             a0*vc1.g + a1*vc2.g + a2*vc3.g,
                             a0*vc1.b + a1*vc2.b + a2*vc3.b)
-                col = _shade_face_vertex_color(wn, vd, wp, material, lights, vc;
-                                               shadow_fn=shadow_fn)
+                col = _shade_face_vertex_color_with_camera_view(
+                    wn, vd, wp, material, lights, vc,
+                    camera_view, shadow_fn)
             else
-                col = shade_face(wn, vd, wp, material, lights; shadow_fn=shadow_fn)
+                col = _shade_face_with_camera_view(
+                    wn, vd, wp, material, lights,
+                    camera_view, shadow_fn)
             end
             col = clamp_color(col)
             if blend
@@ -1040,7 +1048,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
     use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
                         length(color_attr.data) >= geo.n_vertices * color_attr.item_size
     if !has_mapped_inputs && !use_vertex_colors
-        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos, view,
                                          mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
@@ -1057,7 +1065,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
        glossiness_map === nothing && physical_pbr_map === nothing &&
        ao_map === nothing && emissive_map === nothing && light_map === nothing &&
        !use_vertex_colors
-        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos, view,
                                          mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
@@ -1074,7 +1082,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
        glossiness_map === nothing && physical_pbr_map === nothing &&
        ao_map === nothing && emissive_map === nothing && light_map === nothing &&
        !use_vertex_colors
-        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos, view,
                                          mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
@@ -1091,7 +1099,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
        specular_map === nothing && glossiness_map === nothing &&
        physical_pbr_map === nothing && ao_map isa Texture &&
        emissive_map === nothing && light_map === nothing && !use_vertex_colors
-        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+        return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos, view,
                                          mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
@@ -1102,7 +1110,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          nothing, nothing, ao_map, nothing, nothing,
                                          normal_scale, true, uv2_attr, nothing, false)
     end
-    return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
+    return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos, view,
                                      mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                      xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                      ortho_dir, stamp, stamp_id, W, H, world_mat,
@@ -1140,7 +1148,8 @@ end
 
 function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    mat::M, lights, proj::Mat4, near,
-                                   cam_pos::Vec3, mesh_shadow_fn,
+                                   cam_pos::Vec3, camera_view::Mat4,
+                                   mesh_shadow_fn,
                                    tri::Vector{ShadeVtx},
                                    clipped::Vector{ShadeVtx},
                                    sx::Vector{Float64}, sy::Vector{Float64},
@@ -1220,7 +1229,8 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
                     sx[k], sy[k], sz[k], iw[k], -clipped[k].vp.z, clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
                     sx[k+1], sy[k+1], sz[k+1], iw[k+1], -clipped[k+1].vp.z, clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
-                    mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map,
+                    mat, lights, cam_pos, camera_view, mesh_shadow_fn,
+                    albedo_map, alpha_map,
                     normal_map, roughness_map, metalness_map, specular_map,
                     glossiness_map, physical_pbr_map,
                     ao_map, emissive_map, light_map, normal_scale, mesh_clipping_planes;
@@ -1234,7 +1244,8 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].vc,
                     sx[k], sy[k], sz[k], iw[k], -clipped[k].vp.z, clipped[k].wp, clipped[k].wn, clipped[k].vc,
                     sx[k+1], sy[k+1], sz[k+1], iw[k+1], -clipped[k+1].vp.z, clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].vc,
-                    mat, lights, cam_pos, mesh_shadow_fn, mesh_clipping_planes;
+                    mat, lights, cam_pos, camera_view, mesh_shadow_fn,
+                    mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
                     stamp=nothing, stamp_id=0,
@@ -2424,10 +2435,12 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
         colorbuf === nothing ?
             shade_mesh_faces(
                 geo, world_mat, mat, lights, cam_pos;
-                shadow_fn=shadow_fn, ortho_dir=ortho_dir) :
+                shadow_fn=shadow_fn, camera_view=view,
+                ortho_dir=ortho_dir) :
             shade_mesh_faces!(
                 colorbuf, geo, world_mat, mat, lights, cam_pos;
-                shadow_fn=shadow_fn, ortho_dir=ortho_dir)
+                shadow_fn=shadow_fn, camera_view=view,
+                ortho_dir=ortho_dir)
     end
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing

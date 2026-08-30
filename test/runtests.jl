@@ -32345,3 +32345,297 @@ end
         frustum_cull=true, cache=cached)
     @test calls[] == 1
 end
+
+function crc65_inplace_shade_allocated()
+    texture = Texture(
+        ones(Float64, 3, 3, 3); filter=:nearest,
+        wrap_s=:clamp, wrap_t=:clamp, colorspace=:linear)
+    material = MeshMatcapMaterial(matcap=texture, side=:double)
+    normal = normalize(Vec3(0.65, 0.0, 1.0))
+    geometry = BufferGeometry(
+        [-0.75, -0.75, 0.0,
+          0.75, -0.75, 0.0,
+          0.0,   1.5,  0.0],
+        repeat([normal.x, normal.y, normal.z], 3),
+        Float64[], [1, 2, 3], 3, 1)
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    camera.target = Vec3()
+    camera.up = Vec3(1.0, 0.0, 0.0)
+    camera_view = view_matrix(camera)
+    lights = AbstractLight[]
+    colors = Color3{Float64}[]
+    Diff3D.shade_mesh_faces!(
+        colors, geometry, Mat4(), material, lights, camera.position;
+        camera_view=camera_view)
+    return @allocated Diff3D.shade_mesh_faces!(
+        colors, geometry, Mat4(), material, lights, camera.position;
+        camera_view=camera_view)
+end
+
+@testset "CRC65 — CPU matcap follows camera roll" begin
+    function crc65_matcap_texture()
+        data = zeros(Float64, 9, 9, 3)
+        for row in 1:9, column in 1:9
+            data[row, column, 1] = (column - 1) / 8
+            data[row, column, 2] = (row - 1) / 8
+            data[row, column, 3] = 0.25
+        end
+        return Texture(
+            data; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp,
+            colorspace=:linear)
+    end
+
+    function crc65_cameras()
+        unrolled = PerspectiveCamera(aspect=1.0)
+        unrolled.position = Vec3(0.0, 0.0, 5.0)
+        unrolled.target = Vec3()
+        unrolled.up = Vec3(0.0, 1.0, 0.0)
+        rolled = PerspectiveCamera(aspect=1.0)
+        rolled.position = unrolled.position
+        rolled.target = unrolled.target
+        rolled.up = Vec3(1.0, 0.0, 0.0)
+        return unrolled, rolled
+    end
+
+    function crc65_scene(drawable)
+        scene = Scene(background=Color3())
+        add!(scene, drawable)
+        return scene
+    end
+
+    texture = crc65_matcap_texture()
+    material = MeshMatcapMaterial(matcap=texture, side=:double)
+    tilted_normal = normalize(Vec3(0.65, 0.0, 1.0))
+    geometry = BufferGeometry(
+        [-0.75, -0.75, 0.0,
+          0.75, -0.75, 0.0,
+          0.0,   1.5,  0.0],
+        repeat([tilted_normal.x, tilted_normal.y, tilted_normal.z], 3),
+        Float64[], [1, 2, 3], 3, 1)
+    unrolled, rolled = crc65_cameras()
+    unrolled_view = view_matrix(unrolled)
+    rolled_view = view_matrix(rolled)
+    no_lights = AbstractLight[]
+    direct_view = Vec3(0.0, 0.0, 1.0)
+
+    # The default remains the historical unrolled lookup. Supplying a rolled
+    # view rotates the asymmetric X/Y matcap in screen space.
+    default_color = shade_face(
+        tilted_normal, direct_view, Vec3(), material, no_lights)
+    unrolled_color = shade_face(
+        tilted_normal, direct_view, Vec3(), material, no_lights;
+        camera_view=unrolled_view)
+    rolled_color = shade_face(
+        tilted_normal, direct_view, Vec3(), material, no_lights;
+        camera_view=rolled_view)
+    @test default_color == unrolled_color == Color3(0.75, 0.5, 0.25)
+    @test rolled_color == Color3(0.5, 0.25, 0.25)
+    procedural = MeshMatcapMaterial(side=:double)
+    @test shade_face(
+        tilted_normal, direct_view, Vec3(), procedural, no_lights) ==
+          shade_face(
+              tilted_normal, direct_view, Vec3(), procedural, no_lights;
+              camera_view=rolled_view)
+
+    default_faces = shade_mesh_faces(
+        geometry, Mat4(), material, no_lights, unrolled.position)
+    unrolled_faces = shade_mesh_faces(
+        geometry, Mat4(), material, no_lights, unrolled.position;
+        camera_view=unrolled_view)
+    rolled_faces = shade_mesh_faces(
+        geometry, Mat4(), material, no_lights, rolled.position;
+        camera_view=rolled_view)
+    @test default_faces == unrolled_faces == [unrolled_color]
+    @test rolled_faces == [rolled_color]
+    face_buffer = Color3{Float64}[]
+    Diff3D.shade_mesh_faces!(
+        face_buffer, geometry, Mat4(), material, no_lights,
+        rolled.position; camera_view=rolled_view)
+    @test face_buffer == rolled_faces
+    @test !DIFF3D_ALLOC_ASSERTIONS_ENABLED ||
+          crc65_inplace_shade_allocated() == 0
+
+    # A camera view passed through the public mesh API must not be forwarded as
+    # a new keyword to unrelated/custom shade_face methods.
+    shader_calls = Ref(0)
+    shader_material = ShaderMaterial(
+        program=(normal, view_dir, position, uniforms) -> begin
+            shader_calls[] += 1
+            Color3(0.2, 0.3, 0.4)
+        end)
+    @test shade_mesh_faces(
+        geometry, Mat4(), shader_material, no_lights, rolled.position;
+        camera_view=rolled_view) == [Color3(0.2, 0.3, 0.4)]
+    @test shader_calls[] == 1
+
+    # The tangent-space normal map is applied in world space first; the already
+    # perturbed normal and view direction are then transformed into view space.
+    plane = PlaneGeometry(width=2.0, height=2.0)
+    normal_map = DataTexture(
+        cat(fill(0.95, 4, 4), fill(0.5, 4, 4), fill(0.7, 4, 4); dims=3);
+        filter=:nearest, colorspace=:linear)
+    normal_material = MeshMatcapMaterial(
+        matcap=texture, normal_map=normal_map, side=:double)
+    i1, i2, i3 = get_face(plane, 1)
+    p1 = get_vertex(plane, i1)
+    p2 = get_vertex(plane, i2)
+    p3 = get_vertex(plane, i3)
+    uv1 = Diff3D._vertex_uv(plane, i1)
+    uv2 = Diff3D._vertex_uv(plane, i2)
+    uv3 = Diff3D._vertex_uv(plane, i3)
+    centroid_u = (uv1[1] + uv2[1] + uv3[1]) / 3
+    centroid_v = (uv1[2] + uv2[2] + uv3[2]) / 3
+    base_normal = normalize(
+        get_normal(plane, i1) + get_normal(plane, i2) +
+        get_normal(plane, i3))
+    mapped_normal = Diff3D._apply_normal_map(
+        base_normal, normal_map, centroid_u, centroid_v,
+        p1, p2, p3, uv1, uv2, uv3, normal_material.normal_scale)
+    center = (p1 + p2 + p3) / 3
+    expected_mapped = shade_face(
+        mapped_normal, normalize(rolled.position - center), center,
+        material, no_lights; camera_view=rolled_view)
+    actual_mapped = shade_mesh_faces(
+        plane, Mat4(), normal_material, no_lights, rolled.position;
+        camera_view=rolled_view)
+    @test actual_mapped[1] == expected_mapped
+    @test actual_mapped != shade_mesh_faces(
+        plane, Mat4(), normal_material, no_lights, unrolled.position;
+        camera_view=unrolled_view)
+
+    # Both flat and smooth paths, with and without a normal map, must consume
+    # the per-frame view. The material's baked axes are intentionally asymmetric.
+    for (render_geometry, render_material) in
+        ((geometry, material), (plane, normal_material))
+        for shading in (:flat, :smooth)
+            unrolled_target = RenderTarget(32, 32)
+            rolled_target = RenderTarget(32, 32)
+            render!(
+                unrolled_target,
+                crc65_scene(Mesh(render_geometry, render_material)),
+                unrolled; shading=shading, frustum_cull=false,
+                sort_objects=false)
+            render!(
+                rolled_target,
+                crc65_scene(Mesh(render_geometry, render_material)),
+                rolled; shading=shading, frustum_cull=false,
+                sort_objects=false)
+            @test unrolled_target.color != rolled_target.color
+        end
+    end
+
+    # Instanced flat and smooth rendering share the same roll-aware canonical
+    # shading paths as an ordinary mesh.
+    for shading in (:flat, :smooth)
+        ordinary_scene = crc65_scene(Mesh(geometry, material))
+        instances = InstancedMesh(geometry, material, 1)
+        set_instance_matrix!(instances, 1, Mat4())
+        instanced_scene = crc65_scene(instances)
+        ordinary_target = RenderTarget(28, 28)
+        instanced_target = RenderTarget(28, 28)
+        render!(
+            ordinary_target, ordinary_scene, rolled; shading=shading,
+            frustum_cull=false, sort_objects=false)
+        render!(
+            instanced_target, instanced_scene, rolled; shading=shading,
+            frustum_cull=false, sort_objects=false)
+        @test instanced_target.color == ordinary_target.color
+    end
+
+    # A parent rotation supplies camera roll through _camera_world_pose. The
+    # parented camera must match the equivalent explicit world-space camera.
+    camera_parent = Group()
+    camera_parent.rotation = Euler(0.0, 0.0, pi / 2)
+    parented = PerspectiveCamera(aspect=1.0)
+    parented.position = Vec3(0.0, 0.0, 5.0)
+    parented.target = Vec3()
+    add!(camera_parent, parented)
+    world_position, world_target, world_up =
+        Diff3D._camera_world_pose(parented)
+    world_camera = PerspectiveCamera(aspect=1.0)
+    world_camera.position = world_position
+    world_camera.target = world_target
+    world_camera.up = world_up
+    scene = crc65_scene(Mesh(geometry, material))
+    for shading in (:flat, :smooth)
+        parented_target = RenderTarget(28, 28)
+        world_target_buffer = RenderTarget(28, 28)
+        render!(
+            parented_target, scene, parented; shading=shading,
+            frustum_cull=false, sort_objects=false)
+        render!(
+            world_target_buffer, scene, world_camera; shading=shading,
+            frustum_cull=false, sort_objects=false)
+        @test parented_target.color == world_target_buffer.color
+    end
+
+    # Reusing caches across camera orientations must consume the current view,
+    # never a cached basis from the preceding frame.
+    render_cache = RenderCache()
+    cached_unrolled = RenderTarget(28, 28)
+    cached_rolled = RenderTarget(28, 28)
+    fresh_rolled = RenderTarget(28, 28)
+    render!(
+        cached_unrolled, scene, unrolled; shading=:smooth,
+        frustum_cull=false, sort_objects=false, cache=render_cache)
+    render!(
+        cached_rolled, scene, rolled; shading=:smooth,
+        frustum_cull=false, sort_objects=false, cache=render_cache)
+    render!(
+        fresh_rolled, scene, rolled; shading=:smooth,
+        frustum_cull=false, sort_objects=false)
+    @test cached_rolled.color == fresh_rolled.color
+    @test cached_unrolled.color != cached_rolled.color
+    @test_opt_alloc 4096 render!(
+        cached_rolled, scene, rolled; shading=:smooth,
+        frustum_cull=false, sort_objects=false, cache=render_cache)
+
+    flat_rolled = RenderTarget(28, 28)
+    render!(
+        flat_rolled, scene, rolled; shading=:flat,
+        frustum_cull=false, sort_objects=false)
+    pooled_cache = RenderCache()
+    pooled_unrolled = RenderTarget(28, 28)
+    pooled_rolled = RenderTarget(28, 28)
+    pooled_fresh = RenderTarget(28, 28)
+    render_pooled!(pooled_unrolled, scene, unrolled, pooled_cache)
+    render_pooled!(pooled_rolled, scene, rolled, pooled_cache)
+    render_pooled!(pooled_fresh, scene, rolled, RenderCache())
+    @test pooled_rolled.color == pooled_fresh.color == flat_rolled.color
+    @test pooled_unrolled.color != pooled_rolled.color
+    @test_opt_alloc 256 render_pooled!(
+        pooled_rolled, scene, rolled, pooled_cache)
+
+    tiled_caches = [RenderCache()]
+    tiled_unrolled = RenderTarget(28, 28)
+    tiled_rolled = RenderTarget(28, 28)
+    tiled_fresh = RenderTarget(28, 28)
+    render_tiled!(
+        tiled_unrolled, scene, unrolled; tiles=1, cache=tiled_caches)
+    render_tiled!(
+        tiled_rolled, scene, rolled; tiles=1, cache=tiled_caches)
+    render_tiled!(
+        tiled_fresh, scene, rolled; tiles=1, cache=[RenderCache()])
+    @test tiled_rolled.color == tiled_fresh.color == flat_rolled.color
+    @test tiled_unrolled.color != tiled_rolled.color
+
+    soft_workspace = SoftRenderSceneWorkspace()
+    soft_unrolled = copy(soft_render_scene(
+        scene, unrolled, 10, 10; sigma=0.2, gamma=0.5,
+        workspace=soft_workspace))
+    soft_rolled = copy(soft_render_scene(
+        scene, rolled, 10, 10; sigma=0.2, gamma=0.5,
+        workspace=soft_workspace))
+    soft_fresh = soft_render_scene(
+        scene, rolled, 10, 10; sigma=0.2, gamma=0.5)
+    @test soft_rolled == soft_fresh
+    @test soft_unrolled != soft_rolled
+    @test soft_render_scene(
+        scene, parented, 10, 10; sigma=0.2, gamma=0.5) ≈
+          soft_render_scene(
+              scene, world_camera, 10, 10; sigma=0.2, gamma=0.5) atol=1e-12
+    @test_opt_alloc 256 soft_render_scene(
+        scene, rolled, 10, 10; sigma=0.2, gamma=0.5,
+        workspace=soft_workspace)
+end

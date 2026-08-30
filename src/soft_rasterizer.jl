@@ -481,6 +481,7 @@ end
                                          ortho_dir)
     return shade_mesh_faces!(
         colors, geo, world_mat, material, lights, cam_pos;
+        camera_view=camera_view,
         ortho_dir=ortho_dir)
 end
 

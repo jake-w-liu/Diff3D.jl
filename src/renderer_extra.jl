@@ -1037,6 +1037,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     face_colors = lazy_shader_faces ? nothing :
                   shade_mesh_faces!(
                       colorbuf, geo, world_mat, mat, lights, cam_pos;
+                      camera_view=view,
                       ortho_dir=ortho_dir)
 
     @inbounds for fi in _draw_face_range(geo)

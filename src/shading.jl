@@ -874,11 +874,43 @@ end
     )
 end
 
+@inline function _shade_face_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material, lights, camera_view, shadow_fn)
+    return shade_face(
+        normal, view_dir, position, material, lights;
+        shadow_fn=shadow_fn)
+end
+
+@inline function _shade_face_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshMatcapMaterial, lights, camera_view, shadow_fn)
+    return _shade_matcap_face(
+        normal, view_dir, material, camera_view)
+end
+
+@inline function _shade_face_vertex_color_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material, lights, vertex_color::Color3, camera_view, shadow_fn)
+    return _shade_face_vertex_color(
+        normal, view_dir, position, material, lights, vertex_color;
+        shadow_fn=shadow_fn)
+end
+
+@inline function _shade_face_vertex_color_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshMatcapMaterial, lights, vertex_color::Color3,
+        camera_view, shadow_fn)
+    return _shade_matcap_face(
+        normal, view_dir, material, camera_view)
+end
+
 function _shade_mapped_lighting(
         face_n, view_dir, center, material, lights, shadow_fn,
         mapped_kind::Int, use_surface_color::Bool, surface_color,
         eff_mat, phong_specular, phong_shininess,
-        standard_metalness, standard_roughness, physical_terms)
+        standard_metalness, standard_roughness, physical_terms,
+        camera_view)
     if mapped_kind == 1
         return use_surface_color ?
             _shade_phong_mapped_vertex_color(
@@ -904,13 +936,13 @@ function _shade_mapped_lighting(
                 face_n, view_dir, center, material, lights, shadow_fn,
                 physical_terms)
     elseif use_surface_color
-        return _shade_face_vertex_color(
-            face_n, view_dir, center, eff_mat, lights, surface_color;
-            shadow_fn=shadow_fn)
+        return _shade_face_vertex_color_with_camera_view(
+            face_n, view_dir, center, eff_mat, lights, surface_color,
+            camera_view, shadow_fn)
     end
-    return shade_face(
-        face_n, view_dir, center, eff_mat, lights;
-        shadow_fn=shadow_fn)
+    return _shade_face_with_camera_view(
+        face_n, view_dir, center, eff_mat, lights,
+        camera_view, shadow_fn)
 end
 
 function _mapped_environment_contribution(
@@ -984,7 +1016,9 @@ end
 function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
                           material::AbstractMaterial,
                           lights::Vector{<:AbstractLight}, cam_pos::Vec3;
-                          shadow_fn=nothing, ortho_dir=nothing)
+                          shadow_fn=nothing,
+                          camera_view::Union{Nothing,Mat4}=nothing,
+                          ortho_dir=nothing)
     # Validate before allocating; malformed counts or backing buffers must not
     # drive an oversized result allocation.
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
@@ -994,6 +1028,7 @@ function shade_mesh_faces(geo::BufferGeometry, world_mat::Mat4,
         Vector{Color3{Float64}}(undef, geo.n_faces), geo, world_mat,
                                        material, lights, cam_pos;
                                        shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
 end
 
@@ -1016,6 +1051,7 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
                                  lights::Vector{<:AbstractLight}, cam_pos::Vec3,
                                  normal_mat::Mat4, has_normals::Bool,
                                  side::Symbol; shadow_fn=nothing,
+                                 camera_view=nothing,
                                  ortho_dir=nothing)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
@@ -1039,7 +1075,9 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
             face_n = _side_oriented_normal(face_n, side, front_facing)
         end
         view_dir = _direction_between(center, cam_pos)
-        color = shade_face(face_n, view_dir, center, material, lights; shadow_fn=shadow_fn)
+        color = _shade_face_with_camera_view(
+            face_n, view_dir, center, material, lights,
+            camera_view, shadow_fn)
         colors[fi] = clamp_color(color)
     end
     return colors
@@ -1066,50 +1104,63 @@ function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
                                      geo::BufferGeometry, world_mat::Mat4,
                                      material::AbstractMaterial,
                                      lights::Vector{AbstractLight}, cam_pos::Vec3;
-                                     shadow_fn=nothing, ortho_dir=nothing)
+                                     shadow_fn=nothing, camera_view=nothing,
+                                     ortho_dir=nothing)
     if !(material isa LitMaterial)
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights,
                                        cam_pos; shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
     end
     length(lights) == 0 &&
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, _EMPTY_SCENE_LIGHTS,
                                        cam_pos; shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
     length(lights) == 1 && !(lights[1] isa SceneLight) &&
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material,
                                        _single_light_vector(lights[1]),
                                        cam_pos; shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
     scene_lights = _builtin_scene_lights_or_nothing(lights)
     scene_lights === nothing ||
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, scene_lights,
                                        cam_pos; shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
     return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
-                                   shadow_fn=shadow_fn, ortho_dir=ortho_dir)
+                                   shadow_fn=shadow_fn,
+                                   camera_view=camera_view,
+                                   ortho_dir=ortho_dir)
 end
 
 function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
                                      geo::BufferGeometry, world_mat::Mat4,
                                      material::AbstractMaterial,
                                      lights::Vector{<:AbstractLight}, cam_pos::Vec3;
-                                     shadow_fn=nothing, ortho_dir=nothing)
+                                     shadow_fn=nothing, camera_view=nothing,
+                                     ortho_dir=nothing)
     return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
-                                   shadow_fn=shadow_fn, ortho_dir=ortho_dir)
+                                   shadow_fn=shadow_fn,
+                                   camera_view=camera_view,
+                                   ortho_dir=ortho_dir)
 end
 
 function shade_mesh_faces!(colors::Vector{Color3{Float64}},
                            geo::BufferGeometry, world_mat::Mat4,
                            material::AbstractMaterial,
                            lights::Vector{<:AbstractLight}, cam_pos::Vec3;
-                           shadow_fn=nothing, ortho_dir=nothing)
+                           shadow_fn=nothing,
+                           camera_view::Union{Nothing,Mat4}=nothing,
+                           ortho_dir=nothing)
     _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
     _validate_depth_material(material)
     _validate_material_parameters(material)
     return _shade_mesh_faces_dispatch!(colors, geo, world_mat,
                                        material, lights, cam_pos;
                                        shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
 end
 
@@ -1133,7 +1184,8 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
                                  geo::BufferGeometry, world_mat::Mat4,
                                  material::AbstractMaterial,
                                  lights::Vector{<:AbstractLight}, cam_pos::Vec3;
-                                 shadow_fn=nothing, ortho_dir=nothing)
+                                 shadow_fn=nothing, camera_view=nothing,
+                                 ortho_dir=nothing)
     n_faces = geo.n_faces
     length(colors) == n_faces || resize!(colors, n_faces)
 
@@ -1173,6 +1225,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
         return _shade_mesh_faces_fast!(colors, geo, world_mat, material, lights, cam_pos,
                                        normal_mat, has_normals, side;
                                        shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
                                        ortho_dir=ortho_dir)
     end
 
@@ -1189,6 +1242,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
                                          nothing, nothing, nothing, uv2_attr,
                                          nothing, false, nothing;
                                          shadow_fn=shadow_fn,
+                                         camera_view=camera_view,
                                          ortho_dir=ortho_dir)
     end
 
@@ -1200,6 +1254,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
                                      light_map, uv2_attr, color_attr,
                                      use_vertex_colors, env_map;
                                      shadow_fn=shadow_fn,
+                                     camera_view=camera_view,
                                      ortho_dir=ortho_dir)
 end
 
@@ -1216,6 +1271,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                                    physical_pbr_map, light_map, uv2_attr,
                                    color_attr, use_vertex_colors::Bool,
                                    env_map; shadow_fn=nothing,
+                                   camera_view=nothing,
                                    ortho_dir=nothing)
     n_faces = geo.n_faces
     for fi in 1:n_faces
@@ -1305,14 +1361,14 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             face_n, view_dir, center, material, lights, shadow_fn,
             mapped_kind, use_surface_color, surface_color, eff_mat,
             phong_specular, phong_shininess, standard_metalness,
-            standard_roughness, physical_terms)
+            standard_roughness, physical_terms, camera_view)
         direct_color = ao_map !== nothing && material isa LitMaterial ?
             _shade_mapped_lighting(
                 face_n, view_dir, center, material,
                 _DirectLightView(lights), shadow_fn,
                 mapped_kind, use_surface_color, surface_color, eff_mat,
                 phong_specular, phong_shininess, standard_metalness,
-                standard_roughness, physical_terms) :
+                standard_roughness, physical_terms, camera_view) :
             Color3(0.0, 0.0, 0.0)
         ao_factor = 1.0
 
@@ -2505,24 +2561,43 @@ function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
     Color3((normal.x + 1) / 2, (normal.y + 1) / 2, (normal.z + 1) / 2)
 end
 
-function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
-                    material::MeshMatcapMaterial, lights; shadow_fn=nothing)
+@inline _matcap_view_vectors(normal::Vec3, view_dir::Vec3, ::Nothing) =
+    (normal, view_dir)
+
+@inline function _matcap_view_vectors(normal::Vec3, view_dir::Vec3,
+                                      camera_view::Mat4)
+    return normalize(mat4_transform_direction(camera_view, normal)),
+           normalize(mat4_transform_direction(camera_view, view_dir))
+end
+
+@inline function _shade_matcap_face(normal::Vec3, view_dir::Vec3,
+                                    material::MeshMatcapMaterial,
+                                    camera_view)
     _validate_material_parameters(material)
     if material.matcap isa Texture
+        view_normal, matcap_view_dir =
+            _matcap_view_vectors(normal, view_dir, camera_view)
         # View-dependent matcap basis (matches the web-export shader / three.js):
-        # for an un-rolled camera, mx/my are the camera's right/up axes, so the
-        # sphere image follows the view instead of being glued to world axes.
-        s = Vec3(view_dir.z, 0.0, -view_dir.x)
+        # with a camera view, both inputs are already in view space, so mx/my
+        # follow camera roll instead of being glued to world axes.
+        s = Vec3(matcap_view_dir.z, 0.0, -matcap_view_dir.x)
         sl = norm(s)
         mx = sl > 1e-6 ? s / sl : Vec3(1.0, 0.0, 0.0)   # fallback when view_dir ≈ ±Y
-        my = cross(view_dir, mx)
-        u = clamp(dot(mx, normal) * 0.495 + 0.5, 0.0, 1.0)
-        v = clamp(dot(my, normal) * 0.495 + 0.5, 0.0, 1.0)
+        my = cross(matcap_view_dir, mx)
+        u = clamp(dot(mx, view_normal) * 0.495 + 0.5, 0.0, 1.0)
+        v = clamp(dot(my, view_normal) * 0.495 + 0.5, 0.0, 1.0)
         return material.color * sample_texture_linear(material.matcap, u, v)
     end
     # Procedural fallback: brighter where the surface faces the viewer.
     f = max(dot(normal, view_dir), 0.0)
     material.color * (0.35 + 0.65 * f)
+end
+
+function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
+                    material::MeshMatcapMaterial, lights;
+                    shadow_fn=nothing,
+                    camera_view::Union{Nothing,Mat4}=nothing)
+    return _shade_matcap_face(normal, view_dir, material, camera_view)
 end
 
 # MeshDepthMaterial is resolved in `shade_mesh_faces` (it needs the camera
