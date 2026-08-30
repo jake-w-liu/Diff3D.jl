@@ -1791,8 +1791,10 @@ end
 Merge multiple `BufferGeometry` objects into one (for batching). The merged
 positions, normals, UVs, indices, and carried-over named attributes contain each
 input's logical `n_vertices`/`n_faces` payload; surplus backing-array elements
-are ignored. When `with_groups=true` (default), a draw group is appended per
-input geometry recording which faces came from which sub-mesh:
+are ignored. Normals are retained only when every nonempty input supplies a
+complete logical normal buffer; otherwise the merged normals are left empty for
+downstream recomputation. When `with_groups=true` (default), a draw group is
+appended per input geometry recording which faces came from which sub-mesh:
 `(start, count, material_index)` with 1-based `start`, `count` equal to that
 input's face count, and `material_index` equal to its 0-based position in `geos`.
 Inputs that contribute no faces are skipped so empty groups are not emitted.
@@ -1804,11 +1806,13 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
     n_indices = 0
     total_verts = 0
     total_faces = 0
+    merge_normals = true
     for g in geos
         _validate_triangle_geometry_indices(g, "merge_geometries")
         position_length = _geometry_checked_mul(
             g.n_vertices, 3, "merge_geometries positions length")
-        normal_length = min(length(g.normals), position_length)
+        merge_normals &= g.n_vertices == 0 ||
+                         length(g.normals) >= position_length
         uv_length = min(
             length(g.uvs),
             _geometry_checked_mul(
@@ -1817,8 +1821,6 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
             g.n_faces, 3, "merge_geometries indices length")
         n_positions = _geometry_checked_add(
             n_positions, position_length, "merge_geometries positions length")
-        n_normals = _geometry_checked_add(
-            n_normals, normal_length, "merge_geometries normals length")
         n_uvs = _geometry_checked_add(
             n_uvs, uv_length, "merge_geometries UV length")
         n_indices = _geometry_checked_add(
@@ -1828,6 +1830,7 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
         total_faces = _geometry_checked_add(
             total_faces, g.n_faces, "merge_geometries face count")
     end
+    n_normals = merge_normals ? n_positions : 0
     positions = Vector{Float64}(undef, n_positions)
     normals_arr = Vector{Float64}(undef, n_normals)
     uvs_arr = Vector{Float64}(undef, n_uvs)
@@ -1843,11 +1846,13 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
 
     for (mat_idx, g) in enumerate(geos)
         position_length = 3 * g.n_vertices
-        normal_length = min(length(g.normals), position_length)
+        normal_length = merge_normals ? position_length : 0
         uv_length = min(length(g.uvs), 2 * g.n_vertices)
         index_length = 3 * g.n_faces
         copyto!(positions, pout, g.positions, 1, position_length)
-        copyto!(normals_arr, nout, g.normals, 1, normal_length)
+        if merge_normals
+            copyto!(normals_arr, nout, g.normals, 1, normal_length)
+        end
         copyto!(uvs_arr, uout, g.uvs, 1, uv_length)
         @inbounds for slot in 1:index_length
             indices[iout] = g.indices[slot] + offset

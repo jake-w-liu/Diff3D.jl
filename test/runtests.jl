@@ -27288,6 +27288,21 @@ end
     @test length(exact.positions) == 3 * exact.n_vertices
     @test length(exact.indices) == 3 * exact.n_faces
     @test merge_geometries(BufferGeometry[]).n_vertices == 0
+
+    without_normals = deepcopy(first)
+    empty!(without_normals.normals)
+    for inputs in ([without_normals, second], [second, without_normals])
+        mixed = merge_geometries(inputs)
+        @test isempty(mixed.normals)
+        @test length(mixed.positions) == 3 * mixed.n_vertices
+        @test transform_geometry(mixed, Mat4()).n_vertices == mixed.n_vertices
+    end
+    incomplete_normals = deepcopy(first)
+    resize!(incomplete_normals.normals, 3)
+    @test isempty(merge_geometries(
+        [incomplete_normals, second]).normals)
+    with_empty = merge_geometries([second, BufferGeometry()])
+    @test length(with_empty.normals) == 3 * with_empty.n_vertices
 end
 
 @testset "fresh audit round 218 fixes" begin
