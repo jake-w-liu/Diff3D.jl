@@ -59,19 +59,18 @@ _valid_shadow_box(box::Box3) =
     isfinite(box.max.x) && isfinite(box.max.y) && isfinite(box.max.z) &&
     box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z
 
-# World-space bounding sphere of all shadow-casting drawables under the scene.
+# World-space bounding sphere of visible drawables. The public visibility query
+# may be evaluated at any visible surface, regardless of its receive flag.
 function _scene_bounds(meshes, instanced)
     box = Box3()
     for mesh in meshes
         is_visible(mesh) || continue
-        (object_casts_shadow(mesh) || object_receives_shadow(mesh)) || continue
         box = _expand_shadow_bounds!(box, mesh.geometry, compute_world_matrix(mesh))
     end
     for im in instanced
         # collect_instanced traverses without pruning invisible subtrees.
         _visible_in_tree(im) || continue
         _instanced_triangle_drawable(im) || continue
-        (object_casts_shadow(im) || object_receives_shadow(im)) || continue
         base = compute_world_matrix(im)
         for M in im.instance_matrices
             box = _expand_shadow_bounds!(box, im.geometry, base * M)
@@ -147,6 +146,9 @@ end
 
 # Depth-only triangle rasterization into the shadow buffer. The optional material
 # inputs mirror the color rasterizer's alpha-test and clipping discard paths.
+@inline _shadow_depth_in_range(z) =
+    isfinite(z) && -one(z) <= z <= one(z)
+
 @inline function _raster_depth!(depth::Matrix{Float64}, W, H,
                                 s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3;
                                 clipping_planes=_NO_PLANES,
@@ -198,6 +200,7 @@ end
                 end
             end
             z = w0 * z1 + w1 * z2 + w2 * z3
+            _shadow_depth_in_range(z) || continue
             z < depth[py, px] && (depth[py, px] = z)
         end
     end
@@ -224,6 +227,7 @@ end
         w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
         if w0 >= 0 && w1 >= 0 && w2 >= 0
             z = w0 * z1 + w1 * z2 + w2 * z3
+            _shadow_depth_in_range(z) || continue
             z < depth[py, px] && (depth[py, px] = z)
         end
     end
@@ -241,7 +245,7 @@ function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
     use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
     has_clip = !isempty(clipping_planes)
-    for fi in 1:geo.n_faces
+    for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         c1 = mat4_transform_vec4(mvp, _vh(v1))
@@ -382,7 +386,8 @@ function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius
     c.w <= 1e-6 && return 1.0
     ndcx = c.x / c.w; ndcy = c.y / c.w; ndcz = c.z / c.w
     isfinite(ndcx) && isfinite(ndcy) && isfinite(ndcz) || return 1.0
-    (abs(ndcx) > 1 || abs(ndcy) > 1) && return 1.0          # outside the light frustum
+    (abs(ndcx) > 1 || abs(ndcy) > 1 || ndcz < -1 || ndcz > 1) &&
+        return 1.0                                          # outside the light frustum
     H, W = size(sm.depth)
     px = clamp(floor(Int, (ndcx + 1) * 0.5 * W) + 1, 1, W)
     py = clamp(floor(Int, (1 - ndcy) * 0.5 * H) + 1, 1, H)

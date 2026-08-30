@@ -29444,3 +29444,96 @@ end
         centered_colors, geometry,
         mat4_translation(0.0, 0.0, -5.0), material)
 end
+
+@testset "fresh audit round 254 fixes" begin
+    geometry = BufferGeometry(
+        [-0.9, -0.5, 0.0, -0.1, -0.5, 0.0, -0.5, 0.5, 0.0,
+          0.1, -0.5, 0.0,  0.9, -0.5, 0.0,  0.5, 0.5, 0.0],
+        repeat([0.0, 0.0, 1.0], 6), Float64[],
+        [1, 2, 3, 4, 5, 6], 6, 2)
+    material = MeshBasicMaterial(side=:double)
+
+    set_draw_range!(geometry, 1, 3)
+    partial_depth = fill(Inf, 32, 32)
+    Diff3D._raster_shadow_geometry!(
+        partial_depth, 32, 32, geometry, Mat4(), Mat4(), material)
+    @test count(isfinite, partial_depth[:, 1:16]) > 0
+    @test count(isfinite, partial_depth[:, 17:32]) == 0
+
+    set_draw_range!(geometry, 7, 0)
+    empty_depth = fill(Inf, 32, 32)
+    Diff3D._raster_shadow_geometry!(
+        empty_depth, 32, 32, geometry, Mat4(), Mat4(), material)
+    @test all(isinf, empty_depth)
+
+    outside_depth = fill(Inf, 16, 16)
+    Diff3D._raster_depth_plain!(
+        outside_depth, 16, 16,
+        2.0, 2.0, 2.0, 14.0, 2.0, 2.0,
+        8.0, 14.0, 2.0)
+    @test all(isinf, outside_depth)
+    Diff3D._raster_depth!(
+        outside_depth, 16, 16,
+        2.0, 2.0, -2.0, 14.0, 2.0, -2.0,
+        8.0, 14.0, -2.0;
+        alpha_test=0.0)
+    @test all(isinf, outside_depth)
+
+    crossing_depth = fill(Inf, 16, 16)
+    full_depth = fill(Inf, 16, 16)
+    Diff3D._raster_depth_plain!(
+        crossing_depth, 16, 16,
+        2.0, 2.0, 0.5, 14.0, 2.0, 0.5,
+        8.0, 14.0, 2.0)
+    Diff3D._raster_depth_plain!(
+        full_depth, 16, 16,
+        2.0, 2.0, 0.5, 14.0, 2.0, 0.5,
+        8.0, 14.0, 0.5)
+    @test 0 < count(isfinite, crossing_depth) < count(isfinite, full_depth)
+
+    synthetic = ShadowMap(fill(0.0, 4, 4), Mat4(), 0.0, 0)
+    for radius in (0, 1)
+        @test shadow_visibility(
+            synthetic, Vec3(0.0, 0.0, 2.0);
+            pcf_radius=radius) == 1.0
+        @test shadow_visibility(
+            synthetic, Vec3(0.0, 0.0, -2.0);
+            pcf_radius=radius) == 1.0
+        @test shadow_visibility(
+            synthetic, Vec3(0.0, 0.0, 0.5);
+            pcf_radius=radius) == 0.0
+    end
+
+    empty_geometry = PlaneGeometry(width=2.0, height=2.0)
+    set_draw_range!(empty_geometry, 7, 0)
+    instanced_scene = Scene()
+    instanced = InstancedMesh(
+        empty_geometry, material, 1; cast_shadow=true)
+    add!(instanced_scene, instanced)
+    light = DirectionalLight(
+        position=Vec3(0.0, 2.0, 2.0), cast_shadow=true)
+    light.target = Vec3()
+    add!(instanced_scene, light)
+    instanced_shadow = compute_shadow_map(
+        instanced_scene, light; resolution=32)
+    @test all(isinf, instanced_shadow.depth)
+
+    bone = Bone()
+    skin_geometry = PlaneGeometry(width=2.0, height=2.0)
+    set_draw_range!(skin_geometry, 7, 0)
+    skinned = SkinnedMesh(
+        skin_geometry, material, Skeleton([bone]),
+        fill((1, 1, 1, 1), skin_geometry.n_vertices),
+        fill((1.0, 0.0, 0.0, 0.0), skin_geometry.n_vertices);
+        cast_shadow=true)
+    skinned_scene = Scene()
+    add!(skinned_scene, skinned)
+    add!(skinned_scene, light)
+    skinned_shadow = compute_shadow_map(
+        skinned_scene, light; resolution=32)
+    @test all(isinf, skinned_shadow.depth)
+
+    @test_opt_alloc 0 Diff3D._shadow_depth_in_range(0.5)
+    @test_opt_alloc 0 shadow_visibility(
+        synthetic, Vec3(0.0, 0.0, 0.5))
+end
