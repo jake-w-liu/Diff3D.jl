@@ -913,6 +913,31 @@ function _shade_mapped_lighting(
         shadow_fn=shadow_fn)
 end
 
+function _mapped_environment_contribution(
+        env_map, normal, view_dir, material, eff_mat,
+        mapped_kind::Int, use_surface_color::Bool, surface_color,
+        standard_metalness, standard_roughness, physical_terms)
+    env_map === nothing && return Color3(0.0, 0.0, 0.0)
+    env_albedo = use_surface_color ?
+        _modulate(material.color, surface_color) : eff_mat.color
+    if mapped_kind == 2
+        return _envmap_reflection(
+            env_map, normal, view_dir, env_albedo,
+            standard_metalness, standard_roughness) *
+            material.env_map_intensity
+    elseif mapped_kind == 3
+        return _envmap_reflection(
+            env_map, normal, view_dir, env_albedo,
+            physical_terms.metalness,
+            _physical_mapped_roughness(physical_terms)) *
+            material.env_map_intensity
+    end
+    return _envmap_reflection(
+        env_map, normal, view_dir, env_albedo,
+        eff_mat.metalness, eff_mat.roughness) *
+        _material_scalar(eff_mat, :env_map_intensity)
+end
+
 function _shade_depth_faces!(colors::Vector{Color3{Float64}},
                              geo::BufferGeometry, modelview::Mat4,
                              material::MeshDepthMaterial)
@@ -1244,6 +1269,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 phong_specular, phong_shininess, standard_metalness,
                 standard_roughness, physical_terms) :
             Color3(0.0, 0.0, 0.0)
+        ao_factor = 1.0
 
         if use_maps
             u, v = _face_centroid_uv(geo, i1, i2, i3)
@@ -1272,6 +1298,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
                 aoi = _material_scalar(material, :ao_map_intensity)
                 ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
+                ao_factor = ao
                 color = _apply_indirect_ao(color, direct_color, ao)
             end
             # lightMap: baked indirect lighting, multiplied into the lit result
@@ -1293,33 +1320,13 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             end
         end
 
-        # Environment reflection (basic IBL specular) added on top of the lit/
-        # textured result. Metals reflect albedo-tinted env; dielectrics a small
-        # Fresnel reflection. Uses `eff_mat` so a roughness-map override applies.
-        if env_map !== nothing
-            if mapped_kind == 2
-                env_color = use_vertex_colors ? _modulate(material.color, vertex_color) :
-                            material.color
-                color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                                   env_color, standard_metalness,
-                                                   standard_roughness) *
-                                material.env_map_intensity
-            elseif mapped_kind == 3
-                env_color = use_vertex_colors ? _modulate(material.color, vertex_color) :
-                            material.color
-                color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                                   env_color, physical_terms.metalness,
-                                                   _physical_mapped_roughness(physical_terms)) *
-                                material.env_map_intensity
-            else
-                env_color = use_vertex_colors ? _modulate(eff_mat.color, vertex_color) :
-                            eff_mat.color
-                color = color + _envmap_reflection(env_map, face_n, view_dir,
-                                                   env_color, eff_mat.metalness,
-                                                   eff_mat.roughness) *
-                                _material_scalar(eff_mat, :env_map_intensity)
-            end
-        end
+        # Environment reflection is indirect, so AO attenuates it while direct
+        # lighting and emission remain untouched.
+        color = color + _mapped_environment_contribution(
+            env_map, face_n, view_dir, material, eff_mat,
+            mapped_kind, use_surface_color, surface_color,
+            standard_metalness, standard_roughness, physical_terms) *
+            ao_factor
 
         colors[fi] = clamp_color(color)
     end

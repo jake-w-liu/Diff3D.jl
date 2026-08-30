@@ -30966,3 +30966,70 @@ end
     @test_opt_alloc 0 Diff3D._apply_indirect_ao(
         Color3(0.8, 0.6, 0.4), Color3(0.3, 0.2, 0.1), 0.5)
 end
+
+@testset "fresh audit round 273 fixes" begin
+    white_env = CubeTexture(ntuple(
+        _ -> Texture(
+            ones(Float64, 2, 2, 3); filter=:nearest,
+            colorspace=:linear),
+        6))
+    black_map = Texture(
+        zeros(Float64, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    red_map_data = zeros(Float64, 1, 1, 3)
+    red_map_data[1, 1, 1] = 1.0
+    red_map = Texture(
+        red_map_data; filter=:nearest, colorspace=:linear)
+    black_ao = Texture(
+        zeros(Float64, 1, 1, 1); filter=:nearest,
+        colorspace=:linear)
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    function env_center(material, shading)
+        scene = Scene()
+        add!(scene, Mesh(
+            PlaneGeometry(width=4.0, height=4.0), material))
+        target = RenderTarget(20, 20)
+        render!(target, scene, camera; shading=shading)
+        return copy(target.color[10, 10, :])
+    end
+    material_makers = (
+        (; map=nothing, ao_map=nothing) -> MeshStandardMaterial(
+            color=Color3(1.0, 1.0, 1.0), metalness=1.0,
+            roughness=0.0, envmap=white_env,
+            map=map, ao_map=ao_map, side=:double),
+        (; map=nothing, ao_map=nothing) -> MeshPhysicalMaterial(
+            color=Color3(1.0, 1.0, 1.0), metalness=1.0,
+            roughness=0.0, envmap=white_env,
+            map=map, ao_map=ao_map, side=:double),
+    )
+    for make_material in material_makers
+        flat = env_center(make_material(), :flat)
+        smooth = env_center(make_material(), :smooth)
+        @test minimum(flat) > 0.9
+        @test smooth ≈ flat atol=1.0e-12
+
+        for shading in (:flat, :smooth)
+            black = env_center(
+                make_material(map=black_map), shading)
+            @test maximum(abs, black) < 1.0e-6
+            red = env_center(
+                make_material(map=red_map), shading)
+            @test red[1] > 0.9
+            @test abs(red[2]) < 1.0e-6
+            @test abs(red[3]) < 1.0e-6
+            occluded = env_center(
+                make_material(ao_map=black_ao), shading)
+            @test maximum(abs, occluded) < 1.0e-12
+        end
+    end
+
+    geometry = PlaneGeometry()
+    mapped_faces = shade_mesh_faces(
+        geometry, Mat4(), material_makers[1](map=red_map),
+        AbstractLight[], camera.position)
+    @test all(color -> color.r > 0.9 &&
+                       abs(color.g) < 1.0e-12 &&
+                       abs(color.b) < 1.0e-12,
+              mapped_faces)
+end

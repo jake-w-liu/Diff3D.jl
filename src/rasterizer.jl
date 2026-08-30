@@ -523,9 +523,12 @@ end
     has_ao = ao_map !== nothing
     has_emissive = emissive_map !== nothing
     has_lightmap = light_map !== nothing
+    env_map = _envmap_field(material)
+    has_env = env_map !== nothing
     has_uv_maps = has_albedo || has_alpha_map || has_normalmap || has_roughness ||
                   has_metalness || has_specular || has_glossiness ||
-                  has_physical_pbr || has_ao || has_emissive || has_lightmap
+                  has_physical_pbr || has_ao || has_emissive || has_lightmap ||
+                  has_env
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
@@ -570,6 +573,7 @@ end
             vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                         a0*vc1.g + a1*vc2.g + a2*vc3.g,
                         a0*vc1.b + a1*vc2.b + a2*vc3.b)
+            ao_factor = 1.0
             # Perspective-correct UV, computed only when a map is active so the
             # no-map path keeps its original per-pixel cost.
             if has_uv_maps
@@ -684,6 +688,7 @@ end
                     tu, tv = _map_uv(ao_map, u, v, u2, v2; default_uv2=true)
                     aoi = _material_scalar(material, :ao_map_intensity)
                     ao = _ambient_occlusion_factor(ao_map, tu, tv, aoi)
+                    ao_factor = ao
                     direct_col = Color3(0.0, 0.0, 0.0)
                     if material isa LitMaterial
                         direct_lights = _DirectLightView(lights)
@@ -782,6 +787,39 @@ end
                     end
                     col = col + Color3(em.r * t.r * emi, em.g * t.g * emi,
                                        em.b * t.b * emi)
+                end
+                if has_env
+                    mapped_kind = 0
+                    env_material = material
+                    standard_metalness = 0.0
+                    standard_roughness = 0.0
+                    physical_terms = _PHYSICAL_MAPPED_TERMS_ZERO
+                    if material isa MeshStandardMaterial &&
+                       (has_roughness || has_metalness)
+                        standard_metalness, standard_roughness =
+                            _standard_mapped_terms(
+                                material, roughness_map, metalness_map,
+                                u, v, u2, v2)
+                        mapped_kind = 2
+                    elseif material isa MeshPhysicalMaterial &&
+                           (has_roughness || has_metalness ||
+                            has_physical_pbr)
+                        physical_terms = _physical_mapped_terms(
+                            material, roughness_map, metalness_map,
+                            u, v, u2, v2)
+                        mapped_kind = 3
+                    elseif has_roughness || has_metalness ||
+                           has_physical_pbr
+                        env_material = _apply_pbr_maps(
+                            material, roughness_map, metalness_map,
+                            u, v, u2, v2)
+                    end
+                    col = col + _mapped_environment_contribution(
+                        env_map, wn, _direction_between(wp, cam_pos),
+                        material, env_material, mapped_kind,
+                        use_surface_color, surface_color,
+                        standard_metalness, standard_roughness,
+                        physical_terms) * ao_factor
                 end
             else
                 vd = _direction_between(wp, cam_pos)
@@ -968,12 +1006,14 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                   glossiness_map !== nothing || physical_pbr_map !== nothing ||
                   ao_map !== nothing || emissive_map !== nothing ||
                   light_map !== nothing
+    has_env = _envmap_field(mat) !== nothing
+    has_mapped_inputs = has_uv_maps || has_env
     uv2_attr = _uv2_attribute(geo)
     color_attr = (_wants_vertex_colors(mat) && has_attribute(geo, :color)) ?
                  get_attribute(geo, :color) : nothing
     use_vertex_colors = color_attr !== nothing && color_attr.item_size >= 3 &&
                         length(color_attr.data) >= geo.n_vertices * color_attr.item_size
-    if !has_uv_maps && !use_vertex_colors
+    if !has_mapped_inputs && !use_vertex_colors
         return _render_smooth_mesh_loop!(rt, geo, mat, lights, proj, near, cam_pos,
                                          mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
@@ -1046,7 +1086,7 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                                      roughness_map, metalness_map, specular_map,
                                      glossiness_map, physical_pbr_map, ao_map,
                                      emissive_map, light_map, normal_scale,
-                                     has_uv_maps, uv2_attr, color_attr,
+                                     has_mapped_inputs, uv2_attr, color_attr,
                                      use_vertex_colors)
 end
 
