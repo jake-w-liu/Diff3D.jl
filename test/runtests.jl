@@ -32011,3 +32011,244 @@ end
         double, double_scene, camera;
         shading=:flat, frustum_cull=false, cache=cached)
 end
+
+@testset "CRC63 — two-sided shading normals follow winding" begin
+    perspective = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    perspective.position = Vec3(0.0, 0.0, 3.0)
+    perspective.target = Vec3()
+    orthographic = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    orthographic.position = Vec3(0.0, 0.0, 3.0)
+    orthographic.target = Vec3()
+
+    key = DirectionalLight(
+        position=Vec3(0.0, 0.0, 3.0), intensity=1.0)
+    key.target = Vec3()
+
+    function oriented_material(kind, side; transparent=false)
+        alpha = transparent ?
+            (; opacity=0.5, transparent=true, depth_write=false) : (;)
+        if kind === :lambert
+            return MeshLambertMaterial(
+                color=Color3(1.0, 1.0, 1.0), side=side; alpha...)
+        elseif kind === :normal
+            return MeshNormalMaterial(side=side; alpha...)
+        elseif kind === :matcap
+            return MeshMatcapMaterial(
+                color=Color3(1.0, 1.0, 1.0), side=side; alpha...)
+        end
+        normal_program = (normal, view_dir, position, uniforms) ->
+            Color3((normal.x + 1) / 2,
+                   (normal.y + 1) / 2,
+                   (normal.z + 1) / 2)
+        return ShaderMaterial(program=normal_program, side=side)
+    end
+
+    function oriented_scene(material; back=false, missing_normals=false,
+                            instanced=false, add_light=true)
+        geometry = PlaneGeometry(width=2.0, height=2.0)
+        missing_normals && (geometry.normals = Float64[])
+        scene = Scene()
+        if instanced
+            object = InstancedMesh(geometry, material, 1)
+            back && set_instance_matrix!(
+                object, 1, mat4_rotation_y(pi))
+        else
+            object = Mesh(geometry, material)
+            back && (object.rotation = Euler(0.0, pi, 0.0))
+        end
+        add!(scene, object)
+        add_light && add!(scene, key)
+        return scene
+    end
+
+    function oriented_render(scene, camera, shading;
+                             mode=:render, cache=nothing)
+        target = RenderTarget(32, 32)
+        if mode === :pooled
+            render_pooled!(
+                target, scene, camera,
+                cache === nothing ? RenderCache() : cache)
+        elseif mode === :tiled
+            render_tiled!(
+                target, scene, camera; tiles=1,
+                cache=cache === nothing ? [RenderCache()] : cache)
+        else
+            render!(target, scene, camera;
+                    shading=shading, frustum_cull=false, cache=cache)
+        end
+        return target
+    end
+
+    # Authored normals feed every normal-consuming material, but transformed
+    # winding decides whether the back-facing value is negated.
+    for camera in (perspective, orthographic), shading in (:flat, :smooth)
+        for kind in (:lambert, :normal, :matcap)
+            front = oriented_render(
+                oriented_scene(oriented_material(kind, :front)),
+                camera, shading)
+            for side in (:double, :back)
+                back = oriented_render(
+                    oriented_scene(
+                        oriented_material(kind, side); back=true),
+                    camera, shading)
+                @test back.color[16, 16, :] ≈
+                      front.color[16, 16, :] atol=1.0e-12
+            end
+        end
+    end
+
+    # Missing authored normals use the winding fallback before the same sign.
+    for camera in (perspective, orthographic), shading in (:flat, :smooth)
+        front = oriented_render(
+            oriented_scene(
+                oriented_material(:lambert, :front);
+                missing_normals=true), camera, shading)
+        back = oriented_render(
+            oriented_scene(
+                oriented_material(:lambert, :double);
+                back=true, missing_normals=true), camera, shading)
+        @test back.color[16, 16, :] ≈
+              front.color[16, 16, :] atol=1.0e-12
+    end
+
+    # The sign is applied before tangent-space perturbation. For a rotated back
+    # face this map produces normalize((-0.6,-0.3,1)), not the flip-after-map
+    # mutant normalize((0.6,-0.3,1)).
+    normal_data = zeros(Float64, 1, 1, 3)
+    normal_data[1, 1, :] .= (0.8, 0.65, 1.0)
+    normal_map = Texture(
+        normal_data; filter=:nearest, colorspace=:linear)
+    mapped_direction = normalize(Vec3(-0.6, -0.3, 1.0))
+    mapped_light = DirectionalLight(
+        position=mapped_direction * 3, intensity=1.0)
+    mapped_light.target = Vec3()
+    for shading in (:flat, :smooth)
+        scene = Scene()
+        mesh = Mesh(
+            PlaneGeometry(width=2.0, height=2.0),
+            MeshLambertMaterial(
+                color=Color3(1.0, 1.0, 1.0), side=:double,
+                normal_map=normal_map))
+        mesh.rotation = Euler(0.0, pi, 0.0)
+        add!(scene, mesh)
+        add!(scene, mapped_light)
+        target = oriented_render(scene, perspective, shading)
+        @test target.color[16, 16, :] ≈
+              [1.0, 1.0, 1.0] atol=1.0e-12
+    end
+
+    # Environment Fresnel also consumes the oriented normal. A dielectric at
+    # normal incidence reflects F0=0.04 rather than the back-facing value 1.
+    white_env = CubeTexture(ntuple(
+        _ -> Texture(
+            ones(Float64, 1, 1, 3);
+            filter=:nearest, colorspace=:linear), 6))
+    for shading in (:flat, :smooth)
+        material = MeshStandardMaterial(
+            color=Color3(0.5, 0.5, 0.5), metalness=0.0,
+            roughness=0.0, envmap=white_env, side=:double)
+        target = oriented_render(
+            oriented_scene(material; back=true, add_light=false),
+            perspective, shading)
+        @test target.color[16, 16, :] ≈
+              [0.04, 0.04, 0.04] atol=1.0e-9
+    end
+
+    # Instancing and transparent smooth/flat paths share the same orientation.
+    for shading in (:flat, :smooth)
+        front = oriented_render(
+            oriented_scene(oriented_material(:lambert, :front)),
+            perspective, shading)
+        instance = oriented_render(
+            oriented_scene(
+                oriented_material(:lambert, :double);
+                back=true, instanced=true), perspective, shading)
+        @test instance.color[16, 16, :] ≈
+              front.color[16, 16, :] atol=1.0e-12
+
+        transparent_front = oriented_render(
+            oriented_scene(
+                oriented_material(:normal, :front; transparent=true)),
+            perspective, shading)
+        transparent_back = oriented_render(
+            oriented_scene(
+                oriented_material(:normal, :double; transparent=true);
+                back=true), perspective, shading)
+        @test transparent_back.color[16, 16, :] ≈
+              transparent_front.color[16, 16, :] atol=1.0e-12
+    end
+
+    # Flat ShaderMaterial, pooled, tiled, and soft adapters must not bypass the
+    # canonical face orientation.
+    shader_front_scene = oriented_scene(
+        oriented_material(:shader, :front))
+    shader_back_scene = oriented_scene(
+        oriented_material(:shader, :double); back=true)
+    shader_front = oriented_render(
+        shader_front_scene, orthographic, :flat)
+    shader_back = oriented_render(
+        shader_back_scene, orthographic, :flat)
+    @test shader_back.color ≈ shader_front.color atol=1.0e-12
+
+    pooled_front = oriented_render(
+        oriented_scene(oriented_material(:lambert, :front)),
+        orthographic, :flat; mode=:pooled)
+    pooled_scene = oriented_scene(
+        oriented_material(:lambert, :double); back=true)
+    pooled_cache = RenderCache()
+    pooled_back = oriented_render(
+        pooled_scene, orthographic, :flat;
+        mode=:pooled, cache=pooled_cache)
+    @test pooled_back.color ≈ pooled_front.color atol=1.0e-12
+    @test_opt_alloc 128 render_pooled!(
+        pooled_back, pooled_scene, orthographic, pooled_cache)
+
+    tiled_cache = [RenderCache()]
+    tiled_back = oriented_render(
+        pooled_scene, orthographic, :flat;
+        mode=:tiled, cache=tiled_cache)
+    @test tiled_back.color ≈ pooled_front.color atol=1.0e-12
+    @test_opt_alloc 256 render_tiled!(
+        tiled_back, pooled_scene, orthographic;
+        tiles=1, cache=tiled_cache)
+
+    soft_front = soft_render_scene(
+        oriented_scene(oriented_material(:lambert, :front)),
+        orthographic, 16, 16; sigma=0.2, gamma=0.5)
+    soft_back = soft_render_scene(
+        oriented_scene(oriented_material(:lambert, :double); back=true),
+        orthographic, 16, 16; sigma=0.2, gamma=0.5)
+    @test soft_back ≈ reverse(soft_front; dims=2) atol=1.0e-12
+
+    # Public/in-place face shading and the cached smooth instance path retain
+    # their allocation contracts.
+    face_geometry = PlaneGeometry(width=2.0, height=2.0)
+    face_world = mat4_rotation_y(pi)
+    face_material = MeshLambertMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double)
+    face_colors = Color3{Float64}[]
+    concrete_lights = DirectionalLight[key]
+    Diff3D.shade_mesh_faces!(
+        face_colors, face_geometry, face_world, face_material,
+        concrete_lights, perspective.position)
+    @test all(==(Color3(1.0, 1.0, 1.0)), face_colors)
+    @test_opt_alloc 0 Diff3D.shade_mesh_faces!(
+        face_colors, face_geometry, face_world, face_material,
+        concrete_lights, perspective.position)
+    @test_opt_alloc 0 Diff3D._side_oriented_normal(
+        Vec3(0.0, 0.0, -1.0), :double, false)
+
+    cached_scene = oriented_scene(
+        oriented_material(:normal, :double);
+        back=true, instanced=true)
+    cached_target = RenderTarget(32, 32)
+    cached = RenderCache()
+    render!(cached_target, cached_scene, perspective;
+            shading=:smooth, frustum_cull=false, cache=cached)
+    @test_opt_alloc 4096 render!(
+        cached_target, cached_scene, perspective;
+        shading=:smooth, frustum_cull=false, cache=cached)
+end

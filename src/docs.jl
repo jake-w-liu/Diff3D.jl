@@ -313,7 +313,7 @@ const _API_FUNCTION_DOCS = Dict{Symbol,String}(
     :shade_lambert => "Evaluate Lambert diffuse shading.",
     :shade_phong => "Evaluate Phong diffuse/specular shading.",
     :shade_pbr => "Evaluate the package's PBR-style shading approximation.",
-    :shade_mesh_faces => "Shade all mesh faces with a chosen material/lights configuration. Pass `camera_view=view_matrix(camera)` for camera-oriented `MeshDepthMaterial` output; without it, the default view looks down world -Z from `cam_pos`.",
+    :shade_mesh_faces => "Shade all mesh faces with a chosen material/lights configuration. Pass `camera_view=view_matrix(camera)` for camera-oriented `MeshDepthMaterial` output; without it, the default view looks down world -Z from `cam_pos`. For orthographic two-sided shading, pass the camera's constant world-space backward direction as `ortho_dir`.",
     :shade_face => "Shade one geometry face.",
     :light_contribution => "Compute a light's contribution at a point.",
     :ray_triangle_intersect => "Intersect a ray with a triangle.",

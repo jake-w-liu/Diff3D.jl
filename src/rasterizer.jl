@@ -468,7 +468,7 @@ end
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
         stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true,
-        blend::Bool=false) where {M<:AbstractMaterial}
+        blend::Bool=false, normal_sign::Float64=1.0) where {M<:AbstractMaterial}
     if use_vertex_colors
         return _rasterize_tri_smooth_impl!(Val(true), rt,
             s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
@@ -480,7 +480,8 @@ end
             light_map, normal_scale, clipping_planes;
             xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
             depth_test=depth_test, depth_write=depth_write,
-            stamp=stamp, stamp_id=stamp_id, blend=blend)
+            stamp=stamp, stamp_id=stamp_id, blend=blend,
+            normal_sign=normal_sign)
     end
     return _rasterize_tri_smooth_impl!(Val(false), rt,
         s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
@@ -492,7 +493,8 @@ end
         light_map, normal_scale, clipping_planes;
         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
         depth_test=depth_test, depth_write=depth_write,
-        stamp=stamp, stamp_id=stamp_id, blend=blend)
+        stamp=stamp, stamp_id=stamp_id, blend=blend,
+        normal_sign=normal_sign)
 end
 
 @inline function _rasterize_tri_smooth_impl!(::Val{UseVertexColors}, rt::RenderTarget,
@@ -506,7 +508,8 @@ end
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
         stamp=nothing, stamp_id::Int=0,
-        blend::Bool=false) where {M<:AbstractMaterial, UseVertexColors}
+        blend::Bool=false,
+        normal_sign::Float64=1.0) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -581,7 +584,8 @@ end
             (!has_uv_maps && alpha_base < alpha_test) && continue
             wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
-                                a0*wn1.z + a1*wn2.z + a2*wn3.z))
+                                a0*wn1.z + a1*wn2.z + a2*wn3.z)) *
+                 normal_sign
             vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                         a0*vc1.g + a1*vc2.g + a2*vc3.g,
                         a0*vc1.b + a1*vc2.b + a2*vc3.b)
@@ -867,7 +871,7 @@ end
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
         stamp=nothing, stamp_id::Int=0, use_vertex_colors::Bool=true,
-        blend::Bool=false) where {M<:AbstractMaterial}
+        blend::Bool=false, normal_sign::Float64=1.0) where {M<:AbstractMaterial}
     if use_vertex_colors
         return _rasterize_tri_smooth_nomaps_impl!(Val(true), rt,
             s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
@@ -876,7 +880,8 @@ end
             material, lights, cam_pos, shadow_fn, clipping_planes;
             xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
             depth_test=depth_test, depth_write=depth_write,
-            stamp=stamp, stamp_id=stamp_id, blend=blend)
+            stamp=stamp, stamp_id=stamp_id, blend=blend,
+            normal_sign=normal_sign)
     end
     return _rasterize_tri_smooth_nomaps_impl!(Val(false), rt,
         s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
@@ -885,7 +890,8 @@ end
         material, lights, cam_pos, shadow_fn, clipping_planes;
         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
         depth_test=depth_test, depth_write=depth_write,
-        stamp=stamp, stamp_id=stamp_id, blend=blend)
+        stamp=stamp, stamp_id=stamp_id, blend=blend,
+        normal_sign=normal_sign)
 end
 
 @inline function _rasterize_tri_smooth_nomaps_impl!(::Val{UseVertexColors}, rt::RenderTarget,
@@ -897,7 +903,8 @@ end
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
         depth_test::Bool=true, depth_write::Bool=true,
         stamp=nothing, stamp_id::Int=0,
-        blend::Bool=false) where {M<:AbstractMaterial, UseVertexColors}
+        blend::Bool=false,
+        normal_sign::Float64=1.0) where {M<:AbstractMaterial, UseVertexColors}
     W, H = rt.width, rt.height
     area = edge_function(s1x, s1y, s2x, s2y, s3x, s3y)
     abs(area) < 1e-10 && return nothing
@@ -942,7 +949,8 @@ end
             has_clip && (_clip_keep(clipping_planes, wp) || continue)
             wn = normalize(Vec3(a0*wn1.x + a1*wn2.x + a2*wn3.x,
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
-                                a0*wn1.z + a1*wn2.z + a2*wn3.z))
+                                a0*wn1.z + a1*wn2.z + a2*wn3.z)) *
+                 normal_sign
             vd = _direction_between(wp, cam_pos)
             if material isa MeshDepthMaterial
                 depth = clamp(
@@ -1154,18 +1162,15 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
     blend = material_transparent(mat)
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
+        front_facing = true
         if side !== :double
             w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
             w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
             w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
             wc = _mean3_vec3(w1, w2, w3)
-            fn = triangle_normal(Triangle(w1, w2, w3))
-            # Orthographic rays are parallel, so facing is judged against the
-            # constant view direction; the eye-point vector is perspective-only.
-            facing = ortho_dir === nothing ?
-                dot(fn, _direction_between(wc, cam_pos)) :
-                dot(fn, ortho_dir)
-            (side === :front ? facing <= 0 : facing > 0) && continue
+            front_facing = _face_front_facing(
+                w1, w2, w3, wc, cam_pos, ortho_dir)
+            (side === :front ? !front_facing : front_facing) && continue
         end
         # Geometry without authored normals: fall back to the local-space
         # winding normal once per face (matching `_flat_face_normal`'s
@@ -1188,6 +1193,13 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    has_normals, fallback_n, has_uvs, uv2_attr,
                                    use_vertex_colors, color_attr)
         end
+        if side === :double
+            wc = _mean3_vec3(tri[1].wp, tri[2].wp, tri[3].wp)
+            front_facing = _face_front_facing(
+                tri[1].wp, tri[2].wp, tri[3].wp,
+                wc, cam_pos, ortho_dir)
+        end
+        normal_sign = front_facing ? 1.0 : -1.0
         m = _clip_near_attr!(clipped, tri, 3, near)
         m < 3 && continue
         @inbounds for k in 1:m
@@ -1215,7 +1227,8 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
                     stamp=nothing, stamp_id=0,
-                    use_vertex_colors=use_vertex_colors, blend=blend)
+                    use_vertex_colors=use_vertex_colors, blend=blend,
+                    normal_sign=normal_sign)
             else
                 _rasterize_tri_smooth_nomaps!(rt,
                     sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].vc,
@@ -1225,7 +1238,8 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
                     stamp=nothing, stamp_id=0,
-                    use_vertex_colors=use_vertex_colors, blend=blend)
+                    use_vertex_colors=use_vertex_colors, blend=blend,
+                    normal_sign=normal_sign)
             end
         end
     end
@@ -2310,13 +2324,21 @@ end
 @inline function _shade_flat_shader_face(geo, fi::Int, world_mat::Mat4,
                                          mat::ShaderMaterial, lights,
                                          cam_pos::Vec3, normal_mat::Mat4,
-                                         has_normals::Bool; shadow_fn=nothing)
+                                         has_normals::Bool; shadow_fn=nothing,
+                                         ortho_dir=nothing)
     i1, i2, i3 = get_face(geo, fi)
     v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
     v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
     v3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
     center = _mean3_vec3(v1, v2, v3)
-    face_n = _flat_face_normal(geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
+    side = material_side(mat)
+    face_n = _flat_face_normal(
+        geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
+    if side !== :front
+        front_facing = _face_front_facing(
+            v1, v2, v3, center, cam_pos, ortho_dir)
+        face_n = _side_oriented_normal(face_n, side, front_facing)
+    end
     return clamp_color(shade_face(
         face_n, _direction_between(center, cam_pos), center,
         mat, lights; shadow_fn=shadow_fn))
@@ -2384,10 +2406,11 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     else
         colorbuf === nothing ?
             shade_mesh_faces(
-                geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
+                geo, world_mat, mat, lights, cam_pos;
+                shadow_fn=shadow_fn, ortho_dir=ortho_dir) :
             shade_mesh_faces!(
                 colorbuf, geo, world_mat, mat, lights, cam_pos;
-                shadow_fn=shadow_fn)
+                shadow_fn=shadow_fn, ortho_dir=ortho_dir)
     end
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing
@@ -2432,13 +2455,9 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             w2 = mat4_transform_point(world_mat, v2)
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
-            fn = triangle_normal(Triangle(w1, w2, w3))
-            # Orthographic rays are parallel, so facing is judged against the
-            # constant view direction; the eye-point vector is perspective-only.
-            facing = ortho_dir === nothing ?
-                dot(fn, _direction_between(wc, cam_pos)) :
-                dot(fn, ortho_dir)
-            (side === :front ? facing <= 0 : facing > 0) && continue
+            front_facing = _face_front_facing(
+                w1, w2, w3, wc, cam_pos, ortho_dir)
+            (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
         tri[2] = mat4_transform_vec4(modelview, Vec4(v2.x, v2.y, v2.z, 1.0))
@@ -2494,7 +2513,9 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
 
             fc = lazy_shader_faces ?
                  _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
-                                         normal_mat, has_normals; shadow_fn=shadow_fn) :
+                                         normal_mat, has_normals;
+                                         shadow_fn=shadow_fn,
+                                         ortho_dir=ortho_dir) :
                  face_colors[fi]
             @inbounds for k in 2:(m - 1)
                 if blend
@@ -2557,7 +2578,9 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
 
         fc = lazy_shader_faces ?
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
-                                     normal_mat, has_normals; shadow_fn=shadow_fn) :
+                                     normal_mat, has_normals;
+                                     shadow_fn=shadow_fn,
+                                     ortho_dir=ortho_dir) :
              face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
             if has_clip

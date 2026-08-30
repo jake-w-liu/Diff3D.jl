@@ -1035,7 +1035,9 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     modelview = view * world_mat
     lazy_shader_faces = mat isa ShaderMaterial
     face_colors = lazy_shader_faces ? nothing :
-                  shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos)
+                  shade_mesh_faces!(
+                      colorbuf, geo, world_mat, mat, lights, cam_pos;
+                      ortho_dir=ortho_dir)
 
     @inbounds for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
@@ -1045,11 +1047,9 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             w2 = mat4_transform_point(world_mat, v2)
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
-            fn = triangle_normal(Triangle(w1, w2, w3))
-            facing = ortho_dir === nothing ?
-                dot(fn, _direction_between(wc, cam_pos)) :
-                dot(fn, ortho_dir)
-            (side === :front ? facing <= 0 : facing > 0) && continue
+            front_facing = _face_front_facing(
+                w1, w2, w3, wc, cam_pos, ortho_dir)
+            (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
         tri[2] = mat4_transform_vec4(modelview, Vec4(v2.x, v2.y, v2.z, 1.0))
@@ -1066,7 +1066,8 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
         end
         fc = lazy_shader_faces ?
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
-                                     normal_mat, has_normals) :
+                                     normal_mat, has_normals;
+                                     ortho_dir=ortho_dir) :
              face_colors[fi]
         for k in 2:(m - 1)
             if depth_test && depth_write

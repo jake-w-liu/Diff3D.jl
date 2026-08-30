@@ -477,17 +477,22 @@ end
                                          geo::BufferGeometry, world_mat::Mat4,
                                          material::AbstractMaterial,
                                          lights::Vector{<:AbstractLight},
-                                         cam_pos::Vec3, camera_view::Mat4)
-    return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos)
+                                         cam_pos::Vec3, camera_view::Mat4,
+                                         ortho_dir)
+    return shade_mesh_faces!(
+        colors, geo, world_mat, material, lights, cam_pos;
+        ortho_dir=ortho_dir)
 end
 
 @inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                          geo::BufferGeometry, world_mat::Mat4,
                                          material::MeshDepthMaterial,
                                          lights::Vector{<:AbstractLight},
-                                         cam_pos::Vec3, camera_view::Mat4)
+                                         cam_pos::Vec3, camera_view::Mat4,
+                                         ortho_dir)
     return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos;
-                             camera_view=camera_view)
+                             camera_view=camera_view,
+                             ortho_dir=ortho_dir)
 end
 
 function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
@@ -495,28 +500,29 @@ function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
                                           mesh::Mesh,
                                           lights::Vector{<:AbstractLight},
                                           cam_pos::Vec3,
-                                          camera_view::Mat4)
+                                          camera_view::Mat4,
+                                          ortho_dir)
     mat = mesh.material
     if mat isa MeshBasicMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshLambertMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshPhongMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshStandardMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshPhysicalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshToonMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshNormalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshMatcapMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshDepthMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa AbstractMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     else
         throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
     end
@@ -972,6 +978,8 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     camera_position, camera_target, camera_up = _camera_world_pose(camera)
     view = mat4_look_at(camera_position, camera_target, camera_up)
     vp = proj * view
+    ortho_dir = camera isa OrthographicCamera ?
+        _direction_between(camera_target, camera_position) : nothing
 
     scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
     meshes = scene_workspace === nothing ? collect_meshes(scene) :
@@ -1017,7 +1025,8 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
 
         # Compute face colors
         _soft_shade_mesh_faces_for_mesh!(face_colors, geo, world_mat, mesh,
-                                         lights, camera_position, view)
+                                         lights, camera_position, view,
+                                         ortho_dir)
 
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)
