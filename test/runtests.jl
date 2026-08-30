@@ -30609,3 +30609,40 @@ end
         node_scene(Dict{String,Any}(
             "rotation" => Any[0.0, 0.0, 0.0, 0.5])), Any[])
 end
+
+@testset "fresh audit round 268 fixes" begin
+    function sprite_pixels(camera, z)
+        scene = Scene()
+        sprite = Sprite(SpriteMaterial(
+            color=Color3(1.0, 0.0, 0.0)))
+        sprite.position = Vec3(0.0, 0.0, z)
+        add!(scene, sprite)
+        target = RenderTarget(16, 16)
+        render_sprites!(target, scene, camera)
+        return count(isfinite, target.depth)
+    end
+
+    perspective = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=1.0, far=10.0)
+    perspective.position = Vec3()
+    perspective.target = Vec3(0.0, 0.0, -1.0)
+    @test sprite_pixels(perspective, -0.5) == 0
+    @test sprite_pixels(perspective, -1.0) > 0
+    @test sprite_pixels(perspective, -2.0) > 0
+    @test sprite_pixels(perspective, -20.0) == 0
+
+    orthographic = OrthographicCamera(
+        left=-2.0, right=2.0, bottom=-2.0, top=2.0,
+        near=1.0, far=10.0)
+    orthographic.position = Vec3()
+    orthographic.target = Vec3(0.0, 0.0, -1.0)
+    @test sprite_pixels(orthographic, -0.5) == 0
+    @test sprite_pixels(orthographic, -2.0) > 0
+
+    target = RenderTarget(1, 1)
+    @test !Diff3D._put_pixel!(
+        target, 1, 1, -1.01, Color3(1.0, 1.0, 1.0))
+    @test Diff3D._put_pixel!(
+        target, 1, 1, -1.0, Color3(1.0, 1.0, 1.0))
+    @test_opt_alloc 0 Diff3D._inside_near_clip(0.5)
+end

@@ -1285,7 +1285,7 @@ end
                              depth_test::Bool=true, depth_write::Bool=true,
                              alpha::Float64=1.0)
     (1 <= x <= rt.width && 1 <= y <= rt.height && xlo <= x <= xhi && ylo <= y <= yhi) || return false
-    _inside_far_clip(z) || return false
+    (_inside_near_clip(z) && _inside_far_clip(z)) || return false
     @inbounds if !depth_test || z < rt.depth[y, x]
         depth_write && (rt.depth[y, x] = z)
         if alpha >= 1.0
@@ -1898,7 +1898,9 @@ end
     c = mat4_transform_vec4(vp, Vec4(wp.x, wp.y, wp.z, 1.0))
     c.w <= 1e-6 && return (0.0, 0.0, 0.0, 0.0, wp, false)
     iw = 1.0 / c.w
-    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, c.z*iw, iw, wp, true)
+    z = c.z * iw
+    _inside_near_clip(z) || return (0.0, 0.0, 0.0, 0.0, wp, false)
+    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, z, iw, wp, true)
 end
 
 # Rasterize one sprite quad triangle with z-test, optional albedo/alpha textures
@@ -1943,7 +1945,7 @@ end
             (b0 >= 0 && b1 >= 0 && b2 >= 0) || continue
             stamp !== nothing && stamp[py, px] == stamp_id && continue
             z = b0 * z1 + b1 * z2 + b2 * z3
-            _inside_far_clip(z) || continue
+            (_inside_near_clip(z) && _inside_far_clip(z)) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
             a0 = b0; a1 = b1; a2 = b2
             if has_clip || needs_uv

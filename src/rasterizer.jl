@@ -189,6 +189,7 @@ const _ZERO_V3 = Vec3(0.0, 0.0, 0.0)
 const _ZERO_V2 = Vec2(0.0, 0.0)
 
 @inline _inside_far_clip(z) = isfinite(z) && z <= one(z)
+@inline _inside_near_clip(z) = isfinite(z) && z >= -one(z)
 
 struct _CombinedClippingPlanes{G,M}
     global_planes::G
