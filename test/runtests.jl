@@ -28875,7 +28875,18 @@ end
         Float64[], Float64[], [1, 2, 3, 2, 4, 3], 4, 2)
     @test edges_geometry(coplanar).n_vertices ÷ 2 == 4
     @test_opt_alloc 0 Diff3D._pkey(
-        Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5))
+        Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5), 1.0)
+    @test Diff3D._edge_relative_key_component(
+        1.0, 0.0, nextfloat(0.0)) == 1.0
+
+    for scale in (1.0e-300, 1.0e-100, 1.0e-7, 1.0,
+                  1.0e100, 1.0e300)
+        scaled_box = transform_geometry(
+            BoxGeometry(), mat4_scaling(scale, scale, scale))
+        scaled_edges = edges_geometry(scaled_box)
+        @test scaled_edges.n_vertices ÷ 2 == 12
+        @test all(isfinite, scaled_edges.positions)
+    end
 end
 
 @testset "fresh audit round 247 fixes" begin

@@ -2082,21 +2082,43 @@ function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Uni
     BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
 end
 
-# Round relative positions to merge coincident (duplicated) vertices for
-# adjacency without making the result depend on a uniform translation.
+# Quantize relative positions by a characteristic mesh edge length so welding
+# is invariant under uniform translation and scale.
 @inline function _edge_relative_key_component(value::Float64,
-                                              anchor::Float64; nd::Int=6)
+                                              anchor::Float64,
+                                              scale::Float64; nd::Int=6)
     relative = value - anchor
-    isfinite(relative) || (relative = value)
-    rounded = round(relative, digits=nd)
+    normalized = isfinite(relative) ? relative / scale :
+                 value / scale - anchor / scale
+    if !isfinite(normalized)
+        normalized = isfinite(relative) ? relative : value
+    end
+    rounded = round(normalized, digits=nd)
     return iszero(rounded) ? 0.0 : rounded
 end
 
-@inline _pkey(v::Vec3, anchor::Vec3; nd=6) = (
-    _edge_relative_key_component(v.x, anchor.x; nd=nd),
-    _edge_relative_key_component(v.y, anchor.y; nd=nd),
-    _edge_relative_key_component(v.z, anchor.z; nd=nd),
+@inline _pkey(v::Vec3, anchor::Vec3, scale::Float64; nd=6) = (
+    _edge_relative_key_component(v.x, anchor.x, scale; nd=nd),
+    _edge_relative_key_component(v.y, anchor.y, scale; nd=nd),
+    _edge_relative_key_component(v.z, anchor.z, scale; nd=nd),
 )
+
+function _edge_weld_scale(geo::BufferGeometry)
+    scale = Inf
+    @inbounds for fi in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, fi)
+        v1 = get_vertex(geo, i1)
+        v2 = get_vertex(geo, i2)
+        v3 = get_vertex(geo, i3)
+        for (a, b) in ((v1, v2), (v2, v3), (v3, v1))
+            edge_length = hypot(
+                b.x - a.x, b.y - a.y, b.z - a.z)
+            isfinite(edge_length) && edge_length > 0.0 &&
+                (scale = min(scale, edge_length))
+        end
+    end
+    return isfinite(scale) ? scale : 1.0
+end
 
 @inline function _canonical_edge_vertex!(
     canonical_ids::Vector{Int},
@@ -2105,12 +2127,13 @@ end
     cpos_len::Int,
     geo::BufferGeometry,
     anchor::Vec3,
+    scale::Float64,
     vi::Int,
 )
     cached = canonical_ids[vi]
     cached != 0 && return cached, cpos_len
     v = get_vertex(geo, vi)
-    key = _pkey(v, anchor)
+    key = _pkey(v, anchor, scale)
     c = get(canon, key, 0)
     if c == 0
         cpos_len += 1
@@ -2157,16 +2180,20 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
     sizehint!(edge_counts, edge_hint)
     sizehint!(edge_features, edge_hint)
     anchor = geo.n_vertices == 0 ? Vec3() : get_vertex(geo, 1)
+    weld_scale = _edge_weld_scale(geo)
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         n = triangle_normal(Triangle(v1, v2, v3))
         c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor, i1)
+                                               cpos_len, geo, anchor,
+                                               weld_scale, i1)
         c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor, i2)
+                                               cpos_len, geo, anchor,
+                                               weld_scale, i2)
         c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor, i3)
+                                               cpos_len, geo, anchor,
+                                               weld_scale, i3)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
                            edge_counts, edge_features, c1, c2, n, cosT)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
