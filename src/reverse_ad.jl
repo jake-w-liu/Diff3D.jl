@@ -102,10 +102,16 @@ Base.:*(a::ADVar, b::Real)  = (bf = Float64(b); _ad_record(a.val * bf, (a,), (bf
 Base.:*(a::Real, b::ADVar)  = (af = Float64(a); _ad_record(af * b.val, (b,), (af,)))
 function Base.:/(a::ADVar, b::ADVar)
     quotient = a.val / b.val
+    # The same tape node divided by itself is the constant one throughout the
+    # finite, nonzero domain. Recording its two formal partials separately can
+    # overflow at subnormal values before those alias contributions cancel.
+    if a === b && isfinite(a.val) && !iszero(a.val)
+        return _ad_record(quotient, (a,), (0.0,))
+    end
     inv_b = 1.0 / b.val
     # Form ∂(a/b)/∂b as -(a/b)/b.  Computing -a/(b*b) first can
     # overflow or underflow `b*b` even when the derivative is representable.
-    _ad_record(quotient, (a, b), (inv_b, -quotient * inv_b))
+    _ad_record(quotient, (a, b), (inv_b, -quotient / b.val))
 end
 function Base.:/(a::ADVar, b::Real)
     bf = Float64(b)
@@ -114,8 +120,7 @@ end
 function Base.:/(a::Real, b::ADVar)
     af = Float64(a)
     quotient = af / b.val
-    inv_b = 1.0 / b.val
-    _ad_record(quotient, (b,), (-quotient * inv_b,))
+    _ad_record(quotient, (b,), (-quotient / b.val,))
 end
 
 # ---- powers ----

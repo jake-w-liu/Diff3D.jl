@@ -31479,3 +31479,35 @@ end
         @test isapprox(actual, expected; rtol=2eps(Float64), atol=0.0)
     end
 end
+
+@testset "CRC56 — reverse quotient alias cancellation" begin
+    smallest = nextfloat(0.0)
+    for input in (smallest, -smallest, 1.0e-300, -1.0e-300)
+        value, gradient = reverse_value_gradient(
+            values -> values[1] / values[1], [input])
+        @test value == 1.0
+        @test gradient == [0.0]
+    end
+
+    zero_value, zero_gradient = reverse_value_gradient(
+        values -> values[1] / values[1], [0.0])
+    @test isnan(zero_value)
+    @test isnan(only(zero_gradient))
+
+    constant_zero_gradient = reverse_gradient(
+        values -> 0.0 / values[1], [smallest])
+    @test iszero(only(constant_zero_gradient))
+
+    independent_gradient = reverse_gradient(
+        values -> values[1] / values[2], [smallest, smallest])
+    @test independent_gradient[1] == Inf
+    @test independent_gradient[2] == -Inf
+
+    zero_numerator_gradient = reverse_gradient(
+        values -> values[1] / values[2], [0.0, smallest])
+    @test zero_numerator_gradient[1] == Inf
+    @test iszero(zero_numerator_gradient[2])
+
+    @test reverse_gradient(
+        values -> 2.0 / values[1], [4.0]) == [-0.125]
+end
