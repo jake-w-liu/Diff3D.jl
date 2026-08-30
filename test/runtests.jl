@@ -30787,3 +30787,101 @@ end
     @test_opt_alloc 0 Diff3D._shadow_clip_near_triangle(
         zero_vertex, zero_vertex, zero_vertex)
 end
+
+@testset "fresh audit round 271 fixes" begin
+    parent = Group()
+    parent.position = Vec3(3.0, -2.0, 1.0)
+    parent.rotation = Euler(0.15, -0.25, 0.35)
+    parent.scale = Vec3(2.0, 2.0, 2.0)
+
+    parented = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=100.0)
+    parented.position = Vec3(0.0, 0.0, 5.0)
+    parented.target = Vec3()
+    add!(parent, parented)
+    world_position, world_target, world_up =
+        Diff3D._camera_world_pose(parented)
+    @test norm(world_position - parented.position) > 1.0
+
+    world_camera = PerspectiveCamera(
+        fov=parented.fov, aspect=parented.aspect,
+        near=parented.near, far=parented.far,
+        zoom=parented.zoom, name=parented.name)
+    world_camera.position = world_position
+    world_camera.target = world_target
+    world_camera.up = world_up
+    @test maximum(abs.(collect(view_matrix(parented).e) .-
+                       collect(view_matrix(world_camera).e))) < 1.0e-12
+
+    scene = Scene(background=Color3(0.02, 0.03, 0.04))
+    mesh = Mesh(
+        SphereGeometry(width_segments=8, height_segments=4),
+        MeshPhongMaterial(
+            color=Color3(0.7, 0.3, 0.2), side=:double,
+            specular=Color3(1.0, 1.0, 1.0), shininess=24.0))
+    mesh.position = world_target
+    add!(scene, mesh)
+    add!(scene, AmbientLight(intensity=0.2))
+    add!(scene, DirectionalLight(
+        intensity=0.8, position=world_target + Vec3(3.0, 4.0, 5.0)))
+    for shading in (:flat, :smooth)
+        parented_target = RenderTarget(24, 24)
+        world_target_rt = RenderTarget(24, 24)
+        render!(parented_target, scene, parented; shading=shading)
+        render!(world_target_rt, scene, world_camera; shading=shading)
+        @test parented_target.color ≈ world_target_rt.color atol=1.0e-12
+        @test parented_target.depth ≈ world_target_rt.depth
+    end
+
+    pooled_parented = RenderTarget(24, 24)
+    pooled_world = RenderTarget(24, 24)
+    render_pooled!(pooled_parented, scene, parented, RenderCache())
+    render_pooled!(pooled_world, scene, world_camera, RenderCache())
+    @test pooled_parented.color ≈ pooled_world.color atol=1.0e-12
+    tiled_parented = RenderTarget(24, 24)
+    tiled_world = RenderTarget(24, 24)
+    render_tiled!(tiled_parented, scene, parented;
+                  tiles=1, cache=[RenderCache()])
+    render_tiled!(tiled_world, scene, world_camera;
+                  tiles=1, cache=[RenderCache()])
+    @test tiled_parented.color ≈ tiled_world.color atol=1.0e-12
+
+    soft_parented = soft_render_scene(
+        scene, parented, 12, 12; sigma=0.2, gamma=0.5)
+    soft_world = soft_render_scene(
+        scene, world_camera, 12, 12; sigma=0.2, gamma=0.5)
+    @test soft_parented ≈ soft_world atol=1.0e-12
+
+    parented_ray = Raycaster(Vec3(), Vec3(0.0, 0.0, -1.0))
+    world_ray = Raycaster(Vec3(), Vec3(0.0, 0.0, -1.0))
+    set_from_camera!(parented_ray, parented, 0.2, -0.3)
+    set_from_camera!(world_ray, world_camera, 0.2, -0.3)
+    @test norm(parented_ray.ray.origin - world_ray.ray.origin) < 1.0e-12
+    @test norm(parented_ray.ray.direction - world_ray.ray.direction) < 1.0e-12
+
+    parented_ortho = OrthographicCamera(
+        left=-3.0, right=3.0, bottom=-3.0, top=3.0,
+        near=0.1, far=100.0)
+    parented_ortho.position = parented.position
+    parented_ortho.target = parented.target
+    add!(parent, parented_ortho)
+    ortho_position, ortho_target, ortho_up =
+        Diff3D._camera_world_pose(parented_ortho)
+    world_ortho = OrthographicCamera(
+        left=parented_ortho.left, right=parented_ortho.right,
+        bottom=parented_ortho.bottom, top=parented_ortho.top,
+        near=parented_ortho.near, far=parented_ortho.far)
+    world_ortho.position = ortho_position
+    world_ortho.target = ortho_target
+    world_ortho.up = ortho_up
+    parented_ortho_target = RenderTarget(24, 24)
+    world_ortho_target = RenderTarget(24, 24)
+    render!(parented_ortho_target, scene, parented_ortho)
+    render!(world_ortho_target, scene, world_ortho)
+    @test parented_ortho_target.color ≈ world_ortho_target.color atol=1.0e-12
+
+    world_camera.id = parented.id
+    @test Diff3D._web_camera_json(parented) ==
+          Diff3D._web_camera_json(world_camera)
+    @test_opt_alloc 256 view_matrix(parented)
+end

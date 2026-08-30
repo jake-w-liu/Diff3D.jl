@@ -66,6 +66,26 @@ end
     return position, target, up
 end
 
+function _camera_world_pose(camera::AbstractCamera)
+    kind = nameof(typeof(camera))
+    position, target, up = _validated_camera_view_vectors(camera, kind)
+    parent = get_parent(camera)
+    parent === nothing && return position, target, up
+    parent_world = compute_world_matrix(parent)::Mat4{Float64}
+    world_position = _validated_camera_vector(
+        mat4_transform_point(parent_world, position), kind, :position)
+    world_target = _validated_camera_vector(
+        mat4_transform_point(parent_world, target), kind, :target)
+    world_up = _validated_camera_vector(
+        normalize(mat4_transform_direction(parent_world, up)), kind, :up)
+    max(abs(world_up.x), abs(world_up.y), abs(world_up.z)) > 0.0 ||
+        _throw_camera_zero_up(kind)
+    return world_position, world_target, world_up
+end
+
+@inline _camera_world_position(camera::AbstractCamera) =
+    first(_camera_world_pose(camera))
+
 function _validated_perspective_params(fov, aspect, near, far)
     fov isa Real && !(fov isa Bool) ||
         throw(ArgumentError("PerspectiveCamera fov must be finite and between 0 and pi radians"))
@@ -169,8 +189,7 @@ function projection_matrix(c::PerspectiveCamera)
 end
 
 function view_matrix(c::PerspectiveCamera)
-    position, target, up =
-        _validated_camera_view_vectors(c, :PerspectiveCamera)
+    position, target, up = _camera_world_pose(c)
     mat4_look_at(position, target, up)
 end
 
@@ -255,8 +274,7 @@ function projection_matrix(c::OrthographicCamera)
 end
 
 function view_matrix(c::OrthographicCamera)
-    position, target, up =
-        _validated_camera_view_vectors(c, :OrthographicCamera)
+    position, target, up = _camera_world_pose(c)
     mat4_look_at(position, target, up)
 end
 
@@ -292,6 +310,7 @@ camera shifted by ∓`eye_sep`/2 along the camera's world right axis.
 """
 function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
     view = view_matrix(cam)
+    camera_position, camera_target, camera_up = _camera_world_pose(cam)
     # The first view-matrix row is the camera's normalized world-right axis.
     # Reuse the overflow-safe look-at construction instead of subtracting
     # opposite extreme eye/target coordinates here.
@@ -304,9 +323,9 @@ function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
     for (sub, sign) in ((s.cameraL, -1.0), (s.cameraR, 1.0))
         off = right * (sign * half)
         sub.fov = cam.fov; sub.aspect = cam.aspect
-        sub.near = cam.near; sub.far = cam.far; sub.zoom = cam.zoom; sub.up = cam.up
-        sub.position = cam.position + off
-        sub.target = cam.target + off
+        sub.near = cam.near; sub.far = cam.far; sub.zoom = cam.zoom; sub.up = camera_up
+        sub.position = camera_position + off
+        sub.target = camera_target + off
     end
     return s
 end

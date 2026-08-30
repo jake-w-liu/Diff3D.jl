@@ -415,7 +415,8 @@ function _camera_ray(camera::PerspectiveCamera, ndc_x, ndc_y)
     # infinite. Any finite interior depth lies on the same camera ray; 0.5
     # stays inside the clip interval and remains finite for both far modes.
     point = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, 0.5))
-    origin = _raycaster_vec3(camera.position, "origin")
+    origin = _raycaster_vec3(
+        _camera_world_position(camera), "origin")
     return Ray(origin, _raycaster_direction(point - origin))
 end
 

@@ -969,7 +969,8 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     config = SoftRasterizerConfig(sigma=sigma, gamma=gamma, bg_color=scene.background)
 
     proj = projection_matrix(camera)
-    view = view_matrix(camera)
+    camera_position, camera_target, camera_up = _camera_world_pose(camera)
+    view = mat4_look_at(camera_position, camera_target, camera_up)
     vp = proj * view
 
     scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
@@ -1016,7 +1017,7 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
 
         # Compute face colors
         _soft_shade_mesh_faces_for_mesh!(face_colors, geo, world_mat, mesh,
-                                         lights, camera.position, view)
+                                         lights, camera_position, view)
 
         for fi in 1:geo.n_faces
             i1, i2, i3 = get_face(geo, fi)

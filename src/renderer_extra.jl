@@ -1241,10 +1241,13 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                         cache::RenderCache; shading::Symbol=:flat)
     shading === :flat || throw(ArgumentError("render_pooled! supports only :flat shading"))
     clear!(rt, scene.background)
-    proj = projection_matrix(camera); view = view_matrix(camera); near = _camera_near(camera)
+    proj = projection_matrix(camera)
+    camera_position, camera_target, camera_up = _camera_world_pose(camera)
+    view = mat4_look_at(camera_position, camera_target, camera_up)
+    near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera.target, camera.position) : nothing
+        _direction_between(camera_target, camera_position) : nothing
     _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                            cache.instanced, cache.instanced_worlds,
                                            scene)
@@ -1258,7 +1261,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
                                                cache.lights, proj, view, near,
-                                               camera.position, cache.tri, cache.clipped,
+                                               camera_position, cache.tri, cache.clipped,
                                                cache.sx, cache.sy, cache.sz, cache.colors,
                                                1, rt.width, 1, rt.height, ortho_dir,
                                                cache.smooth_tri, cache.smooth_clipped,
@@ -1271,7 +1274,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             continue
         base = cache.instanced_worlds[instanced_slot]
         _rasterize_instanced_geo_flat_pooled_from_instanced!(
-            rt, im, instanced_slot, base, cache, proj, view, near, camera.position,
+            rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
             ortho_dir)
     end
     return rt
@@ -2271,8 +2274,12 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
         _point_material_size(getfield(material, :size)) : 1.0
     size_attenuation = _material_field(material, :size_attenuation)
     size_attenuation === nothing && (size_attenuation = true)
-    reference_depth = camera isa PerspectiveCamera ?
-        max(norm(camera.position - camera.target), near) : 1.0
+    reference_depth = if camera isa PerspectiveCamera
+        camera_position, camera_target, _ = _camera_world_pose(camera)
+        max(norm(camera_position - camera_target), near)
+    else
+        1.0
+    end
     for entry in _draw_entry_range(geo)
         vi = _draw_vertex_index(geo, entry)
         pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
@@ -2995,7 +3002,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                              instanced_worlds::Vector{Mat4{Float64}},
                              instanced_material_states,
                              lights,
-                             camera::AbstractCamera, proj::Mat4, view::Mat4,
+                             camera_position::Vec3, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
                              cache_idx::Int, ylo::Int, yhi::Int)
     ylo > yhi && return nothing
@@ -3018,7 +3025,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         end
         is_transparent_material(mat) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
-                                               lights, proj, view, near, camera.position,
+                                               lights, proj, view, near, camera_position,
                                                tri, clipped, sx, sy, sz, colorbuf,
                                                1, rt.width, ylo, yhi, ortho_dir,
                                                thread_cache.smooth_tri,
@@ -3045,7 +3052,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         end
         _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
             rt, im, instanced_slot, base, instanced_material_states, lights, proj,
-            view, near, camera.position, tri, clipped, sx, sy, sz, colorbuf,
+            view, near, camera_position, tri, clipped, sx, sy, sz, colorbuf,
             ortho_dir, ylo, yhi, thread_cache.smooth_tri,
             thread_cache.smooth_clipped, thread_cache.smooth_iw)
     end
@@ -3071,11 +3078,12 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     tiles > 0 || throw(ArgumentError("render_tiled! tiles must be positive"))
     clear!(rt, scene.background)
     proj = projection_matrix(camera)
-    view = view_matrix(camera)
+    camera_position, camera_target, camera_up = _camera_world_pose(camera)
+    view = mat4_look_at(camera_position, camera_target, camera_up)
     near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera.target, camera.position) : nothing
+        _direction_between(camera_target, camera_position) : nothing
     H = rt.height
     active_tiles = min(tiles, H)
     thread_count = min(active_tiles, max(Threads.nthreads(), 1))
@@ -3119,7 +3127,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             cache_idx = thread_count == active_tiles ? t : 1
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
-                                lights, camera, proj, view,
+                                lights, camera_position, proj, view,
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end
     else
@@ -3130,7 +3138,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                         mod1(Threads.threadid() - 1, thread_count)
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
-                                lights, camera, proj, view,
+                                lights, camera_position, proj, view,
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end
     end

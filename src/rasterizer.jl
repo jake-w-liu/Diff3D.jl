@@ -1296,7 +1296,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                  sort_objects::Bool=true, logarithmic_depth::Bool=false,
                  cache=nothing)
     proj = projection_matrix(camera)
-    view = view_matrix(camera)
+    camera_position, camera_target, camera_up = _camera_world_pose(camera)
+    view = mat4_look_at(camera_position, camera_target, camera_up)
     near = _camera_near(camera)
     far = _camera_far(camera)
     W, H = rt.width, rt.height
@@ -1332,7 +1333,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # rather than the eye-point vector `cam_pos - wc`, which is exact only for
     # perspective projection. `nothing` selects the perspective test.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera.target, camera.position) : nothing
+        _direction_between(camera_target, camera_position) : nothing
 
     if cache === nothing
         meshes = Mesh[]
@@ -1481,7 +1482,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     for i in eachindex(opaque_flat)
         mesh = opaque_flat[i]
         _rasterize_flat_mesh_from_mesh!(rt, mesh, opaque_flat_worlds[i], lights,
-                                        proj, view, near, camera.position, tri, clipped,
+                                        proj, view, near, camera_position, tri, clipped,
                                         sx, sy, sz, colorbuf, 1.0, nothing, 0,
                                         shadow_fn, xlo, xhi, ylo, yhi,
                                         clipping_planes, log_depth, inv_log_far,
@@ -1505,7 +1506,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                                    im.instance_colors)
         _render_instanced_mesh_flat!(rt, geo, mat, im.instance_colors,
                                      im.instance_matrices, base, lights, proj, view, near,
-                                     camera.position, tri, clipped, sx, sy, sz;
+                                     camera_position, tri, clipped, sx, sy, sz;
                                      shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
                                      colorbuf=colorbuf,
                                      xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
@@ -1516,7 +1517,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
 
     # Smooth (per-pixel) opaque meshes share the same depth buffer.
     isempty(smooth_meshes) ||
-        _render_smooth!(rt, smooth_meshes, lights, proj, view, near, camera.position, shadow_fn;
+        _render_smooth!(rt, smooth_meshes, lights, proj, view, near, camera_position, shadow_fn;
                         clipping_planes=clipping_planes,
                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                         log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
@@ -1572,7 +1573,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 if _mesh_is_flat(mesh, shading)
                     _rasterize_flat_mesh_material_opacity_from_mesh!(
                         rt, mesh, world, lights, proj, view, near,
-                        camera.position, tri, clipped, sx, sy, sz, colorbuf,
+                        camera_position, tri, clipped, sx, sy, sz, colorbuf,
                         stamp, sid, shadow_fn, xlo, xhi, ylo, yhi,
                         clipping_planes, log_depth, inv_log_far, ortho_dir,
                         cache === nothing ? nothing : cache.smooth_tri,
@@ -1583,7 +1584,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                     # normals with source-over blending.
                     _render_smooth!(
                         rt, (mesh,), lights, proj, view, near,
-                        camera.position, shadow_fn;
+                        camera_position, shadow_fn;
                         clipping_planes=clipping_planes,
                         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                         log_depth=log_depth, inv_log_far=inv_log_far,
@@ -1617,7 +1618,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                     material_clipping_planes(instance_material))
                 _rasterize_geo_flat!(
                     rt, geo, world, instance_material, lights, proj, view,
-                    near, camera.position, tri, clipped, sx, sy, sz;
+                    near, camera_position, tri, clipped, sx, sy, sz;
                     alpha=Float64(material_opacity(instance_material)),
                     stamp=stamp, stamp_id=sid,
                     shadow_fn=mesh_shadow_fn,

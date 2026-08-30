@@ -98,7 +98,15 @@ function _web_validate_camera_vectors(camera, kind::String)
         isfinite(value.x) && isfinite(value.y) && isfinite(value.z) ||
             _throw_web_camera_vector(kind, label)
     end
-    up = camera.up
+    local_up = camera.up
+    max(abs(local_up.x), abs(local_up.y), abs(local_up.z)) > 0.0 ||
+        throw(ArgumentError("WebGL export $kind up must be non-zero"))
+    position, target, up = _camera_world_pose(camera)
+    for (label, value) in (("position", position),
+                           ("target", target), ("up", up))
+        isfinite(value.x) && isfinite(value.y) && isfinite(value.z) ||
+            _throw_web_camera_vector(kind, label)
+    end
     max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 ||
         throw(ArgumentError("WebGL export $kind up must be non-zero"))
     return nothing
@@ -848,16 +856,17 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
         return nothing
     end
     if camera isa PerspectiveCamera
+        position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"perspective\",\"id\":")
         print(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
-        _js_write_vec(io, camera.position, num_buf)
+        _js_write_vec(io, position, num_buf)
         write(io, ",\"target\":")
-        _js_write_vec(io, camera.target, num_buf)
+        _js_write_vec(io, target, num_buf)
         write(io, ",\"up\":")
-        _js_write_vec(io, camera.up, num_buf)
+        _js_write_vec(io, up, num_buf)
         write(io, ",\"fov\":")
         _js_write_num(io, camera.fov, num_buf)
         write(io, ",\"aspect\":")
@@ -878,16 +887,17 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
         write(io, '}')
         return nothing
     elseif camera isa OrthographicCamera
+        position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"orthographic\",\"id\":")
         print(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
-        _js_write_vec(io, camera.position, num_buf)
+        _js_write_vec(io, position, num_buf)
         write(io, ",\"target\":")
-        _js_write_vec(io, camera.target, num_buf)
+        _js_write_vec(io, target, num_buf)
         write(io, ",\"up\":")
-        _js_write_vec(io, camera.up, num_buf)
+        _js_write_vec(io, up, num_buf)
         write(io, ",\"left\":")
         _js_write_num(io, camera.left, num_buf)
         write(io, ",\"right\":")
