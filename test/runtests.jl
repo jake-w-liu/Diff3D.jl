@@ -27408,3 +27408,38 @@ end
             ones(1, 1, 1), ones(1, 1, 1); threshold=invalid)
     end
 end
+
+@testset "fresh audit round 222 fixes" begin
+    function atan2_oracle(y, x)
+        setprecision(BigFloat, 256) do
+            yb = BigFloat(y)
+            xb = BigFloat(x)
+            denominator = xb * xb + yb * yb
+            return (Float64(xb / denominator),
+                    Float64(-yb / denominator))
+        end
+    end
+
+    for values in ([1.0e308, 1.0e308],
+                   [1.0e-300, 1.0e-300],
+                   [1.0e-300, 1.0e300],
+                   [1.0e300, 1.0e-300])
+        gradient = reverse_gradient(x -> atan(x[1], x[2]), values)
+        expected = atan2_oracle(values[1], values[2])
+        @test isapprox(gradient[1], expected[1]; rtol=1.0e-12, atol=0.0)
+        @test isapprox(gradient[2], expected[2]; rtol=1.0e-12, atol=0.0)
+        @test all(isfinite, gradient)
+    end
+
+    ordinary = [3.0, 4.0]
+    @test reverse_gradient(x -> atan(x[1], x[2]), ordinary) ≈
+          ForwardDiff.gradient(x -> atan(x[1], x[2]), ordinary)
+
+    axis_gradient = reverse_gradient(
+        x -> atan(x[1], x[2]), [0.0, 1.0e-320])
+    @test isinf(axis_gradient[1])
+    @test axis_gradient[2] == 0.0
+
+    origin = reverse_gradient(x -> atan(x[1], x[2]), [0.0, 0.0])
+    @test all(isnan, origin)
+end

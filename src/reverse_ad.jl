@@ -168,9 +168,20 @@ Base.tanh(a::ADVar) = (t = tanh(a.val); _ad_record(t, (a,), (1.0 - t * t,)))
 Base.asin(a::ADVar) = _ad_record(asin(a.val), (a,), (1.0 / sqrt(1.0 - a.val * a.val),))
 Base.acos(a::ADVar) = _ad_record(acos(a.val), (a,), (-1.0 / sqrt(1.0 - a.val * a.val),))
 Base.atan(a::ADVar) = _ad_record(atan(a.val), (a,), (1.0 / (1.0 + a.val * a.val),))
+
+function _atan2_partials(y::Float64, x::Float64)
+    scale = max(abs(x), abs(y))
+    iszero(scale) && return (NaN, NaN)
+    scaled_x = x / scale
+    scaled_y = y / scale
+    denominator = scaled_x * scaled_x + scaled_y * scaled_y
+    return (scaled_x / denominator / scale,
+            -scaled_y / denominator / scale)
+end
+
 function Base.atan(y::ADVar, x::ADVar)
-    d = x.val * x.val + y.val * y.val
-    _ad_record(atan(y.val, x.val), (y, x), (x.val / d, -y.val / d))
+    dy, dx = _atan2_partials(y.val, x.val)
+    _ad_record(atan(y.val, x.val), (y, x), (dy, dx))
 end
 Base.exp2(a::ADVar)  = (e = exp2(a.val); _ad_record(e, (a,), (e * log(2.0),)))
 Base.exp10(a::ADVar) = (e = exp10(a.val); _ad_record(e, (a,), (e * log(10.0),)))
