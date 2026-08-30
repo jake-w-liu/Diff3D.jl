@@ -31394,6 +31394,67 @@ end
               near_expected atol=1.0e-12
     end
 
+    rgba_half = ones(Float64, 1, 1, 4)
+    rgba_half[1, 1, 4] = 0.5
+    rgba_half_texture = Texture(
+        rgba_half; filter=:nearest, colorspace=:linear)
+    rgb_texture = Texture(
+        ones(Float64, 1, 1, 3);
+        filter=:nearest, colorspace=:linear)
+    alpha_half = ones(Float64, 1, 1, 2)
+    alpha_half[1, 1, 2] = 0.5
+    alpha_half_texture = Texture(
+        alpha_half; filter=:nearest, colorspace=:linear)
+    function texture_alpha_sprite()
+        return Sprite(SpriteMaterial(
+            color=Color3(0.0, 0.0, 1.0), map=rgba_half_texture,
+            depth_write=false))
+    end
+    function texture_alpha_point()
+        geometry = BufferGeometry(
+            [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+        return PointsObject(
+            geometry, PointsMaterial(
+                color=Color3(0.0, 0.0, 1.0), size=7.0,
+                map=rgb_texture, alpha_map=alpha_half_texture,
+                depth_write=false))
+    end
+    function texture_alpha_instanced_point()
+        geometry = BufferGeometry(
+            [0.0, 0.0, 0.0], Float64[], Float64[], Int[], 1, 0)
+        return InstancedMesh(
+            geometry,
+            PointsMaterial(
+                color=Color3(0.0, 0.0, 1.0), size=7.0,
+                map=rgba_half_texture, depth_write=false),
+            1; draw_mode=:points)
+    end
+    function texture_alpha_center(make_primitive; reverse=false)
+        scene = Scene()
+        primitive = make_primitive()
+        mesh = red_mesh()
+        mesh.position = Vec3(0.0, 0.0, -1.0)
+        reverse ? (add!(scene, mesh); add!(scene, primitive)) :
+                  (add!(scene, primitive); add!(scene, mesh))
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera)
+        return copy(target.color[8, 7, :])
+    end
+    for make_primitive in (
+            texture_alpha_sprite, texture_alpha_point,
+            texture_alpha_instanced_point)
+        @test texture_alpha_center(make_primitive) ≈
+              near_expected atol=1.0e-12
+        @test texture_alpha_center(make_primitive; reverse=true) ≈
+              near_expected atol=1.0e-12
+    end
+    classified_alpha_sprite = texture_alpha_sprite()
+    @test Diff3D._render_primitive_blends(classified_alpha_sprite)
+    @test !Diff3D._render_primitive_blends(Sprite(SpriteMaterial(
+        map=rgb_texture)))
+    @test_opt_alloc 0 Diff3D._render_primitive_blends(
+        classified_alpha_sprite)
+
     opaque_far, _, _ = pair_center(
         () -> blue_sprite(opacity=1.0, z=-1.0))
     @test opaque_far ≈ [0.5, 0.0, 0.5] atol=1.0e-12

@@ -1749,8 +1749,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     vp = proj * view
     for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
-        material = _render_primitive_material(object)
-        _primitive_blends(material) && continue
+        _render_primitive_blends(object) && continue
         world = primitive_worlds[primitive_index]
         if object isa Sprite
             fill!(primitive_stamp, 0)
@@ -1826,8 +1825,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
     @inbounds for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
-        _primitive_blends(
-            _render_primitive_material(object)) || continue
+        _render_primitive_blends(object) || continue
         base = primitive_worlds[primitive_index]
         if object isa InstancedMesh
             for instance_index in eachindex(object.instance_matrices)
@@ -2281,6 +2279,16 @@ end
 function _primitive_blends(m::AbstractMaterial)
     _validate_material_parameters(m)
     return material_transparent(m) || material_opacity(m) < 1.0
+end
+@inline function _render_primitive_blends(object::AbstractObject3D)
+    material = _render_primitive_material(object)
+    _primitive_blends(material) && return true
+    point_or_sprite = object isa Sprite || object isa PointsObject ||
+                      (object isa InstancedMesh &&
+                       _instanced_point_drawable(object))
+    point_or_sprite || return false
+    return _has_texture_alpha(_material_field(material, :map)) ||
+           _has_alpha_map(_material_field(material, :alpha_map))
 end
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
