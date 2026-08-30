@@ -5,6 +5,7 @@
 # --------------------------------------------------------------------------
 
 const _CSG_EPS = 1e-5
+const _CSG_AREA_EPS = _CSG_EPS * _CSG_EPS
 
 # Evaluate both operands in one canonical frame so BSP tolerances are invariant
 # under a shared finite translation and uniform scale.
@@ -62,7 +63,7 @@ function _csg_plane_from_vertices(vertices::Vector{CSGVertex})
     origin = vertices[1].pos
     for i in 2:(length(vertices) - 1)
         n = cross(vertices[i].pos - origin, vertices[i + 1].pos - origin)
-        if norm(n) > _CSG_EPS
+        if norm(n) > _CSG_AREA_EPS
             normal = normalize(n)
             return CSGPlane(normal, dot(normal, origin))
         end
@@ -312,7 +313,8 @@ function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon},
         length(poly.vertices) >= 3 || continue
         for i in 2:(length(poly.vertices) - 1)
             tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
-            norm(cross(tri[2].pos - tri[1].pos, tri[3].pos - tri[1].pos)) > _CSG_EPS ||
+            norm(cross(tri[2].pos - tri[1].pos,
+                       tri[3].pos - tri[1].pos)) > _CSG_AREA_EPS ||
                 continue
             n_faces += 1
         end
@@ -329,7 +331,8 @@ function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon},
         length(poly.vertices) >= 3 || continue
         for i in 2:(length(poly.vertices) - 1)
             tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
-            norm(cross(tri[2].pos - tri[1].pos, tri[3].pos - tri[1].pos)) > _CSG_EPS ||
+            norm(cross(tri[2].pos - tri[1].pos,
+                       tri[3].pos - tri[1].pos)) > _CSG_AREA_EPS ||
                 continue
             for v in tri
                 vi += 1

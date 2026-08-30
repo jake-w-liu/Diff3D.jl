@@ -27776,3 +27776,55 @@ end
         surplus, mat4_scaling(-1.0, 1.0, 1.0))
     @test reflected_surplus.indices[end-2:end] == [1, 1, 1]
 end
+
+@testset "fresh audit round 231 fixes" begin
+    large = BoxGeometry(width=1_000.0, height=1_000.0, depth=1_000.0)
+    small = BoxGeometry(width=1.0, height=1.0, depth=1.0)
+    union = csg_union(large, small)
+    subtraction = csg_subtract(large, small)
+    intersection = csg_intersect(large, small)
+
+    @test union.n_faces >= large.n_faces
+    @test subtraction.n_faces > large.n_faces
+    @test intersection.n_faces == small.n_faces
+    large_bounds = compute_bounding_box(large)
+    small_bounds = compute_bounding_box(small)
+    @test compute_bounding_box(union) == large_bounds
+    @test compute_bounding_box(intersection) == small_bounds
+
+    function absolute_volume(geometry)
+        volume = 0.0
+        for face in 1:geometry.n_faces
+            i1, i2, i3 = get_face(geometry, face)
+            a = get_vertex(geometry, i1)
+            b = get_vertex(geometry, i2)
+            c = get_vertex(geometry, i3)
+            volume += dot(a, cross(b, c)) / 6.0
+        end
+        abs(volume)
+    end
+    @test absolute_volume(intersection) ≈ 1.0 rtol=1.0e-12
+    @test absolute_volume(union) ≈ 1.0e9 rtol=1.0e-12
+    @test absolute_volume(subtraction) ≈ 1.0e9 - 1.0 rtol=1.0e-12
+
+    translated_large = transform_geometry(
+        large, mat4_translation(1.0e9, 0.0, 0.0))
+    translated_small = transform_geometry(
+        small, mat4_translation(1.0e9, 0.0, 0.0))
+    translated_intersection = csg_intersect(
+        translated_large, translated_small)
+    @test translated_intersection.n_faces == small.n_faces
+    @test compute_bounding_box(translated_intersection) ==
+          compute_bounding_box(translated_small)
+
+    degenerate = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         2.0, 0.0, 0.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    @test isempty(Diff3D._csg_geometry_polygons(degenerate))
+
+    frame = Diff3D._csg_operation_frame(large, small)
+    small_polygons = Diff3D._csg_geometry_polygons(small, frame)
+    @test length(small_polygons) == small.n_faces
+end
