@@ -572,6 +572,24 @@ end
 
 const _CATMULL_ROM_CURVE_TYPES = (:catmullrom, :centripetal, :chordal)
 
+@inline function _catmull_rom_stable_coordinate(a, b, c, d, weights)
+    return _float_representation_value(
+        _float_representation_sum4(
+            _float_representation_multiply(
+                _float_value_representation(a),
+                _float_value_representation(weights[1])),
+            _float_representation_multiply(
+                _float_value_representation(b),
+                _float_value_representation(weights[2])),
+            _float_representation_multiply(
+                _float_value_representation(c),
+                _float_value_representation(weights[3])),
+            _float_representation_multiply(
+                _float_value_representation(d),
+                _float_value_representation(weights[4])),
+        ))
+end
+
 function _catmull_rom_control_point(point::Vec3)
     p = Vec3(_geometry_finite_float(point.x, "CatmullRomCurve control points"),
              _geometry_finite_float(point.y, "CatmullRomCurve control points"),
@@ -602,7 +620,18 @@ function _catmull_rom_uniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
               m1 * (t3 - 2t2 + t) +
               p2 * (-2t3 + 3t2) +
               m2 * (t3 - t2))
-    all(isfinite, (result.x, result.y, result.z)) && return result
+    has_subnormal_input =
+        issubnormal(p0.x) || issubnormal(p0.y) || issubnormal(p0.z) ||
+        issubnormal(p1.x) || issubnormal(p1.y) || issubnormal(p1.z) ||
+        issubnormal(p2.x) || issubnormal(p2.y) || issubnormal(p2.z) ||
+        issubnormal(p3.x) || issubnormal(p3.y) || issubnormal(p3.z)
+    lost_finite_coordinate =
+        (iszero(result.x) && !all(iszero, (p0.x, p1.x, p2.x, p3.x))) ||
+        (iszero(result.y) && !all(iszero, (p0.y, p1.y, p2.y, p3.y))) ||
+        (iszero(result.z) && !all(iszero, (p0.z, p1.z, p2.z, p3.z))) ||
+        has_subnormal_input
+    all(isfinite, (result.x, result.y, result.z)) &&
+        !lost_finite_coordinate && return result
 
     tangent1_weight = tension * (t3 - 2t2 + t)
     tangent2_weight = tension * (t3 - t2)
@@ -610,24 +639,10 @@ function _catmull_rom_uniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
                2t3 - 3t2 + 1.0 - tangent2_weight,
                -2t3 + 3t2 + tangent1_weight,
                tangent2_weight)
-    stable_coordinate(a, b, c, d) = _float_representation_value(
-        _float_representation_sum4(
-            _float_representation_multiply(
-                _float_value_representation(a),
-                _float_value_representation(weights[1])),
-            _float_representation_multiply(
-                _float_value_representation(b),
-                _float_value_representation(weights[2])),
-            _float_representation_multiply(
-                _float_value_representation(c),
-                _float_value_representation(weights[3])),
-            _float_representation_multiply(
-                _float_value_representation(d),
-                _float_value_representation(weights[4])),
-        ))
-    return Vec3(stable_coordinate(p0.x, p1.x, p2.x, p3.x),
-                stable_coordinate(p0.y, p1.y, p2.y, p3.y),
-                stable_coordinate(p0.z, p1.z, p2.z, p3.z))
+    return Vec3(
+        _catmull_rom_stable_coordinate(p0.x, p1.x, p2.x, p3.x, weights),
+        _catmull_rom_stable_coordinate(p0.y, p1.y, p2.y, p3.y, weights),
+        _catmull_rom_stable_coordinate(p0.z, p1.z, p2.z, p3.z, weights))
 end
 
 function _catmull_rom_param_lerp(a::Vec3, b::Vec3, t0::Float64,

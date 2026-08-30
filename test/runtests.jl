@@ -32817,3 +32817,27 @@ end
     @test all(isfinite, cylinder.positions)
     @test_opt_alloc 0 Diff3D._stable_lerp(lower, upper, 0.5)
 end
+
+@testset "CRC70 — uniform Catmull-Rom subnormal coordinates" begin
+    smallest = nextfloat(0.0)
+    constant_points = fill(Vec3(smallest, -smallest, 0.0), 4)
+    curve = CatmullRomCurve(
+        constant_points; curve_type=:catmullrom)
+    for parameter in (0.0, 0.25, 0.5, 0.75, 1.0)
+        @test catmull_rom_point(curve, parameter) ==
+              Vec3(smallest, -smallest, 0.0)
+    end
+
+    direct = Diff3D._catmull_rom_uniform(
+        constant_points..., 0.5, 0.5)
+    @test direct == Vec3(smallest, -smallest, 0.0)
+    cancelling = Diff3D._catmull_rom_uniform(
+        Vec3(-1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0),
+        Vec3(1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0),
+        0.5, 0.5)
+    @test cancelling.x == 0.0
+    constant_point = first(constant_points)
+    @test_opt_alloc 64 Diff3D._catmull_rom_uniform(
+        constant_point, constant_point, constant_point, constant_point,
+        0.5, 0.5)
+end
