@@ -10130,6 +10130,8 @@ function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
     haskey(skin, "inverseBindMatrices") || return nothing
     accessor_index = _gltf_checked_zero_based_index(
         skin["inverseBindMatrices"], length(gltf["accessors"]), "inverseBindMatrices accessor")
+    _gltf_validate_attribute_format(
+        gltf, accessor_index, "inverseBindMatrices", (5126,), ())
     data, ncomp, count = _gltf_accessor(gltf, buffers, accessor_index)
     ncomp == 16 || error("glTF inverseBindMatrices accessor must be MAT4")
     count == joint_count || error("glTF inverseBindMatrices count must match joints")
@@ -10638,10 +10640,14 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
                 get(sampler, "interpolation", "LINEAR"))
             input_accessor = _gltf_checked_accessor_index(gltf, sampler["input"],
                                                           "animation input")
+            _gltf_validate_attribute_format(
+                gltf, input_accessor, "animation input", (5126,), ())
             times, tncomp, tcount = _gltf_accessor(gltf, buffers, input_accessor)
             tncomp == 1 || error("glTF animation input accessor must be SCALAR")
             output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
                                                            "animation output")
+            _gltf_validate_attribute_format(
+                gltf, output_accessor, "animation output", (5126,), ())
             out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"

@@ -29969,3 +29969,80 @@ end
         48_000, 2, zeros(Float64, 1, 1))
     @test_opt_alloc 0 audio_duration(stereo)
 end
+
+@testset "fresh audit round 262 fixes" begin
+    identity_bytes = collect(reinterpret(UInt8, Float32[
+        1, 0, 0, 0, 0, 1, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 1]))
+    inverse_accessor = Dict{String,Any}(
+        "bufferView" => 0, "componentType" => 5126,
+        "count" => 1, "type" => "MAT4")
+    inverse_gltf = Dict{String,Any}(
+        "bufferViews" => Any[Dict{String,Any}(
+            "buffer" => 0, "byteOffset" => 0,
+            "byteLength" => length(identity_bytes))],
+        "accessors" => Any[inverse_accessor])
+    inverse_skin = Dict{String,Any}("inverseBindMatrices" => 0)
+    matrices = Diff3D._gltf_inverse_bind_matrices(
+        inverse_gltf, Any[identity_bytes], inverse_skin, 1)
+    @test length(matrices) == 1
+    @test matrices[1] == Mat4()
+
+    bad_inverse = deepcopy(inverse_gltf)
+    bad_inverse["accessors"][1]["componentType"] = 5123
+    @test_throws "inverseBindMatrices accessor componentType/normalized combination is invalid" Diff3D._gltf_inverse_bind_matrices(
+        bad_inverse, Any[identity_bytes], inverse_skin, 1)
+    normalized_inverse = deepcopy(inverse_gltf)
+    normalized_inverse["accessors"][1]["normalized"] = true
+    @test_throws "inverseBindMatrices accessor componentType/normalized combination is invalid" Diff3D._gltf_inverse_bind_matrices(
+        normalized_inverse, Any[identity_bytes], inverse_skin, 1)
+
+    function animation_format_fixture(; input_type=5126,
+                                      output_type=5126,
+                                      input_normalized=false,
+                                      output_normalized=false)
+        times = collect(reinterpret(UInt8, Float32[0, 1]))
+        translations = collect(reinterpret(
+            UInt8, Float32[0, 0, 0, 1, 0, 0]))
+        buffer = vcat(times, translations)
+        input = Dict{String,Any}(
+            "bufferView" => 0, "componentType" => input_type,
+            "count" => 2, "type" => "SCALAR")
+        output = Dict{String,Any}(
+            "bufferView" => 1, "componentType" => output_type,
+            "count" => 2, "type" => "VEC3")
+        input_normalized && (input["normalized"] = true)
+        output_normalized && (output["normalized"] = true)
+        gltf = Dict{String,Any}(
+            "nodes" => Any[Dict{String,Any}()],
+            "bufferViews" => Any[
+                Dict{String,Any}(
+                    "buffer" => 0, "byteOffset" => 0,
+                    "byteLength" => length(times)),
+                Dict{String,Any}(
+                    "buffer" => 0, "byteOffset" => length(times),
+                    "byteLength" => length(translations))],
+            "accessors" => Any[input, output],
+            "animations" => Any[Dict{String,Any}(
+                "samplers" => Any[Dict{String,Any}(
+                    "input" => 0, "output" => 1)],
+                "channels" => Any[Dict{String,Any}(
+                    "sampler" => 0,
+                    "target" => Dict{String,Any}(
+                        "node" => 0, "path" => "translation"))])])
+        return gltf, Any[buffer]
+    end
+    nodes = Dict{Int,AbstractObject3D}(0 => Group())
+    valid_clips = Diff3D._gltf_animation_clips(
+        animation_format_fixture()..., nodes)
+    @test length(valid_clips) == 1
+    @test length(valid_clips[1].tracks) == 1
+    @test_throws "animation input accessor componentType/normalized combination is invalid" Diff3D._gltf_animation_clips(
+        animation_format_fixture(input_type=5121)..., nodes)
+    @test_throws "animation input accessor componentType/normalized combination is invalid" Diff3D._gltf_animation_clips(
+        animation_format_fixture(input_normalized=true)..., nodes)
+    @test_throws "animation output accessor componentType/normalized combination is invalid" Diff3D._gltf_animation_clips(
+        animation_format_fixture(output_type=5123)..., nodes)
+    @test_throws "animation output accessor componentType/normalized combination is invalid" Diff3D._gltf_animation_clips(
+        animation_format_fixture(output_normalized=true)..., nodes)
+end
