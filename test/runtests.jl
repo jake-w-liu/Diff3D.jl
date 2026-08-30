@@ -27491,3 +27491,54 @@ end
     @test_throws "NURBS control point weights must be positive" NURBSSurface(
         1, 1, knots, knots, bad_weight)
 end
+
+@testset "fresh audit round 224 fixes" begin
+    points = [Vec4(0.0, 0.0, 0.0, 1.0),
+              Vec4(2.0, 0.0, 0.0, 1.0)]
+    tiny_knots = [0.0, 0.0, 1.0e-20, 1.0e-20]
+    tiny_curve = NURBSCurve(1, tiny_knots, points)
+    @test nurbs_point(tiny_curve, 0.0) == Vec3(0.0, 0.0, 0.0)
+    @test nurbs_point(tiny_curve, 0.25) == Vec3(0.5, 0.0, 0.0)
+    @test nurbs_point(tiny_curve, 0.5) == Vec3(1.0, 0.0, 0.0)
+    @test nurbs_point(tiny_curve, 1.0) == Vec3(2.0, 0.0, 0.0)
+
+    scaled_points = [Vec4(0.0, 0.0, 0.0, 1.0e-20),
+                     Vec4(2.0, 0.0, 0.0, 1.0e-20)]
+    scaled_curve = NURBSCurve(
+        1, [0.0, 0.0, 1.0, 1.0], scaled_points)
+    @test nurbs_point(scaled_curve, 0.5) == Vec3(1.0, 0.0, 0.0)
+
+    extreme_curve = NURBSCurve(
+        1, [-1.0e308, -1.0e308, 1.0e308, 1.0e308], points)
+    @test nurbs_point(extreme_curve, 0.0) == Vec3(0.0, 0.0, 0.0)
+    @test nurbs_point(extreme_curve, 0.25) == Vec3(0.5, 0.0, 0.0)
+    @test nurbs_point(extreme_curve, 0.5) == Vec3(1.0, 0.0, 0.0)
+    @test nurbs_point(extreme_curve, 1.0) == Vec3(2.0, 0.0, 0.0)
+
+    knots = [0.0, 0.0, 1.0, 1.0]
+    surface_points = [
+        [Vec4(0.0, 0.0, 0.0, 1.0e-20),
+         Vec4(0.0, 1.0, 0.0, 1.0e-20)],
+        [Vec4(1.0, 0.0, 0.0, 1.0e-20),
+         Vec4(1.0, 1.0, 0.0, 1.0e-20)],
+    ]
+    surface = NURBSSurface(
+        1, 1, knots, knots, surface_points)
+    @test norm(nurbs_point(surface, 0.25, 0.75) -
+               Vec3(0.25, 0.75, 0.0)) < 1.0e-15
+
+    volume_points = [
+        [[Vec4(0.0, 0.0, 0.0, 1.0e-20),
+          Vec4(0.0, 0.0, 1.0, 1.0e-20)],
+         [Vec4(0.0, 1.0, 0.0, 1.0e-20),
+          Vec4(0.0, 1.0, 1.0, 1.0e-20)]],
+        [[Vec4(1.0, 0.0, 0.0, 1.0e-20),
+          Vec4(1.0, 0.0, 1.0, 1.0e-20)],
+         [Vec4(1.0, 1.0, 0.0, 1.0e-20),
+          Vec4(1.0, 1.0, 1.0, 1.0e-20)]],
+    ]
+    volume = NURBSVolume(
+        1, 1, 1, knots, knots, knots, volume_points)
+    @test norm(nurbs_point(volume, 0.25, 0.75, 0.5) -
+               Vec3(0.25, 0.75, 0.5)) < 1.0e-15
+end

@@ -835,6 +835,25 @@ function _nurbs_basis_scratch(degree::Int)
     return Vector{Float64}(undef, len)
 end
 
+function _nurbs_basis_fractions(left::Float64, right::Float64,
+                                u::Float64, low::Float64,
+                                high::Float64)
+    denominator = left + right
+    if isfinite(left) && isfinite(right) && isfinite(denominator) &&
+       !iszero(denominator)
+        return right / denominator, left / denominator
+    end
+    low == high && return (0.0, 0.0)
+    return setprecision(BigFloat, 256) do
+        ub = BigFloat(u)
+        lowb = BigFloat(low)
+        highb = BigFloat(high)
+        denominator_b = highb - lowb
+        (Float64((highb - ub) / denominator_b),
+         Float64((ub - lowb) / denominator_b))
+    end
+end
+
 function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
                        degree::Int, knots::Vector{Float64})
     n = degree + 1
@@ -847,10 +866,14 @@ function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
         scratch[right0 + j + 1] = knots[span + j + 1] - u
         saved = 0.0
         for r in 0:(j - 1)
-            denom = scratch[right0 + r + 2] + scratch[left0 + j - r + 1]
-            temp = abs(denom) > eps(Float64) ? scratch[r + 1] / denom : 0.0
-            scratch[r + 1] = saved + scratch[right0 + r + 2] * temp
-            saved = scratch[left0 + j - r + 1] * temp
+            left = scratch[left0 + j - r + 1]
+            right = scratch[right0 + r + 2]
+            right_fraction, left_fraction = _nurbs_basis_fractions(
+                left, right, u,
+                knots[span - j + r + 2], knots[span + r + 2])
+            basis = scratch[r + 1]
+            scratch[r + 1] = saved + basis * right_fraction
+            saved = basis * left_fraction
         end
         scratch[j + 1] = saved
     end
@@ -869,11 +892,11 @@ function _nurbs_parameter(t, knots::Vector{Float64}, degree::Int, npoints::Int,
     tf = clamp(Float64(tf), 0.0, 1.0)
     u0 = knots[degree + 1]
     u1 = knots[npoints + 1]
-    return u0 + tf * (u1 - u0)
+    return _stable_lerp(u0, u1, tf)
 end
 
 function _nurbs_finish_point(x::Float64, y::Float64, z::Float64, w::Float64)
-    abs(w) > eps(Float64) ||
+    !iszero(w) ||
         throw(ArgumentError("NURBS evaluation produced zero homogeneous weight"))
     return Vec3(x / w, y / w, z / w)
 end
@@ -894,7 +917,7 @@ end
 
 @inline function _nurbs_finish_weighted_point(
         point::Vec3{Float64}, total_weight::Float64)
-    abs(total_weight) > eps(Float64) ||
+    !iszero(total_weight) ||
         throw(ArgumentError(
             "NURBS evaluation produced zero homogeneous weight"))
     return point
