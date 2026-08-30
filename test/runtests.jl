@@ -28189,3 +28189,58 @@ end
     @test abs(derivative) <= 1.0e-12
     @test_opt_alloc 0 scaled_triangle_hit(1.0e-12)
 end
+
+@testset "fresh audit round 240 fixes" begin
+    positions = [
+        -0.9, -0.5, 0.0, -0.1, -0.5, 0.0, -0.5, 0.5, 0.0,
+         0.1, -0.5, 0.0,  0.9, -0.5, 0.0,  0.5, 0.5, 0.0,
+    ]
+    normals = repeat([0.0, 0.0, 1.0], 6)
+    uvs = [0.0, 0.0, 1.0, 0.0, 0.5, 1.0,
+           0.0, 0.0, 1.0, 0.0, 0.5, 1.0]
+    geometry = BufferGeometry(
+        positions, normals, uvs, [1, 2, 3, 4, 5, 6], 6, 2)
+
+    function rendered_halves(material; shading=:smooth, threshold=0.5)
+        scene = Scene()
+        add!(scene, Mesh(geometry, material))
+        camera = OrthographicCamera(
+            left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+            near=0.1, far=10.0)
+        camera.position = Vec3(0.0, 0.0, 2.0)
+        camera.target = Vec3()
+        target = RenderTarget(40, 40)
+        render!(target, scene, camera; shading=shading)
+        return (count(>(threshold), target.color[:, 1:20, 1]),
+                count(>(threshold), target.color[:, 21:40, 1]))
+    end
+
+    basic = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double)
+    set_draw_range!(geometry, 1, 3)
+    @test rendered_halves(basic; shading=:smooth) == (160, 0)
+    @test rendered_halves(basic; shading=:smooth) ==
+          rendered_halves(basic; shading=:flat)
+
+    set_draw_range!(geometry, 4, 3)
+    @test rendered_halves(basic; shading=:smooth) == (0, 160)
+    set_draw_range!(geometry, 2, 4)
+    @test rendered_halves(basic; shading=:smooth) == (0, 0)
+    set_draw_range!(geometry, 7, 0)
+    @test rendered_halves(basic; shading=:smooth) == (0, 0)
+
+    set_draw_range!(geometry, 1, 3)
+    mapped = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double,
+        map=Texture(ones(Float64, 1, 1, 3); colorspace=:linear))
+    @test rendered_halves(mapped; shading=:smooth) == (160, 0)
+    transparent = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double,
+        transparent=true, opacity=0.5)
+    @test rendered_halves(
+        transparent; shading=:smooth, threshold=0.1) == (160, 0)
+
+    clear_draw_range!(geometry)
+    @test rendered_halves(basic; shading=:smooth) == (160, 160)
+    @test_opt_alloc 0 Diff3D._draw_face_range(geometry)
+end

@@ -959,7 +959,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
     if blend
         active_stamp = _ensure_stamp_if_needed!(stamp, active_stamp, H, W, geo.n_faces > 1)
     end
-    for fi in 1:geo.n_faces
+    for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         if side !== :double
             w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
