@@ -13551,7 +13551,7 @@ end
                                     (x >> 16) & 0xff, (x >> 24) & 0xff]
                     le64(x) = vcat(le32(x & 0xffffffff), le32((x >> 32) & 0xffffffff))
                     buf = UInt8[0xAB,0x4B,0x54,0x58,0x20,0x32,0x30,0xBB,0x0D,0x0A,0x1A,0x0A]
-                    append!(buf, le32(vkFormat)); append!(buf, le32(1))      # vkFormat, typeSize
+                    append!(buf, le32(vkFormat)); append!(buf, le32(comp_bytes)) # vkFormat, typeSize
                     append!(buf, le32(width)); append!(buf, le32(height))    # pixelWidth/Height
                     append!(buf, le32(0)); append!(buf, le32(0))            # pixelDepth, layerCount
                     append!(buf, le32(1)); append!(buf, le32(1))            # faceCount, levelCount
@@ -28273,7 +28273,9 @@ end
         le32(value & 0xffffffff), le32((value >> 32) & 0xffffffff))
     function metadata_ktx2(format, payload)
         bytes = copy(Diff3D._KTX2_IDENTIFIER)
-        for value in (format, 1, 1, 1, 0, 0, 1, 1, 0)
+        _, kind, _ = Diff3D._KTX2_VKFORMATS[format]
+        for value in (format, Diff3D._ktx2_comp_bytes(kind),
+                      1, 1, 0, 0, 1, 1, 0)
             append!(bytes, le32(value))
         end
         for value in (0, 0, 0, 0)
@@ -29875,13 +29877,15 @@ end
                          (x >> 16) & 0xff, (x >> 24) & 0xff]
     le64_260(x) = vcat(le32_260(x & 0xffffffff),
                        le32_260((x >> 32) & 0xffffffff))
-    function ktx2_contract_fixture(; depth=0, layers=0, levels=1)
+    function ktx2_contract_fixture(; depth=0, layers=0, levels=1,
+                                   type_size=1,
+                                   uncompressed_length=nothing)
         width = levels > 1 ? 2 : 1
         height = levels > 1 ? 2 : 1
         effective_levels = max(levels, 1)
         index_end = 80 + 24 * effective_levels
         bytes = copy(Diff3D._KTX2_IDENTIFIER)
-        for value in (9, 1, width, height, depth, layers, 1, levels, 0,
+        for value in (9, type_size, width, height, depth, layers, 1, levels, 0,
                       0, 0, 0, 0)
             append!(bytes, le32_260(value))
         end
@@ -29889,7 +29893,9 @@ end
         if effective_levels == 1
             append!(bytes, le64_260(index_end))
             append!(bytes, le64_260(width * height))
-            append!(bytes, le64_260(width * height))
+            declared_uncompressed = uncompressed_length === nothing ?
+                width * height : uncompressed_length
+            append!(bytes, le64_260(declared_uncompressed))
             append!(bytes, zeros(UInt8, width * height))
         else
             # Level 1 is stored first, padded to four bytes, followed by level 0.
@@ -29911,4 +29917,8 @@ end
         ktx2_contract_fixture(layers=1))
     @test_throws "mipmapped textures (levelCount=2) are not supported" Diff3D._decode_ktx2(
         ktx2_contract_fixture(levels=2))
+    @test_throws "typeSize 2 does not match vkFormat 9 component size 1" Diff3D._decode_ktx2(
+        ktx2_contract_fixture(type_size=2))
+    @test_throws "uncompressedByteLength 2 does not match byteLength 1" Diff3D._decode_ktx2(
+        ktx2_contract_fixture(uncompressed_length=2))
 end

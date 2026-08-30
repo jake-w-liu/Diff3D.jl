@@ -859,6 +859,7 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     _is_ktx2_bytes(bytes) ||
         error("KTX2 identifier mismatch; data is not a KTX2 file")
     vkFormat    = _rd_le32(bytes, 13)
+    typeSize    = _rd_le32(bytes, 17)
     pixelWidth  = _rd_le32(bytes, 21)
     pixelHeight = _rd_le32(bytes, 25)
     pixelDepth  = _rd_le32(bytes, 29)
@@ -875,6 +876,10 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
         error("KTX2 vkFormat 0 (Basis Universal) is not supported; Basis transcoding is not implemented")
     haskey(_KTX2_VKFORMATS, vkFormat) ||
         error("KTX2 vkFormat $vkFormat is not supported; only uncompressed 8-bit UNORM/SRGB and 16/32-bit SFLOAT R/RG/RGB/RGBA formats are implemented")
+    channels, kind, _ = _KTX2_VKFORMATS[vkFormat]
+    cbytes = _ktx2_comp_bytes(kind)
+    typeSize == cbytes ||
+        error("KTX2 typeSize $typeSize does not match vkFormat $vkFormat component size $cbytes")
     (pixelWidth > 0 && pixelHeight > 0) ||
         error("KTX2 image has non-positive dimensions $(pixelWidth)x$(pixelHeight)")
     pixelDepth == 0 ||
@@ -886,8 +891,6 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     levelCount <= 1 ||
         error("KTX2 mipmapped textures (levelCount=$levelCount) are not supported")
 
-    channels, kind, _ = _KTX2_VKFORMATS[vkFormat]
-    cbytes = _ktx2_comp_bytes(kind)
     pixel_bytes = channels * cbytes
     length(bytes) >= 104 ||                         # 80-byte header + one level entry
         error("KTX2 level index is truncated")
@@ -899,6 +902,9 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
         error("KTX2 dimensions $(pixelWidth)x$(pixelHeight) exceed the $(length(bytes))-byte file")
     byteOffset = _rd_le64(bytes, 81)                # level 0 = full resolution
     byteLength = _rd_le64(bytes, 89)
+    uncompressedByteLength = _rd_le64(bytes, 97)
+    uncompressedByteLength == byteLength ||
+        error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match byteLength $byteLength without supercompression")
 
     expected = pixelWidth * pixelHeight * pixel_bytes
     byteLength == expected ||
