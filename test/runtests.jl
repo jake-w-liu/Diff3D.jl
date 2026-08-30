@@ -28345,3 +28345,123 @@ end
     @test_throws "multiple IHDR" Diff3D._decode_png(duplicate_ihdr)
     @test_opt_alloc 0 Diff3D._png_validate_chunk_type(valid, 13)
 end
+
+@testset "fresh audit round 243 fixes" begin
+    function insert_png_chunks_before_idat(bytes, chunks)
+        out = IOBuffer()
+        write(out, @view bytes[1:8])
+        pos = 9
+        inserted = false
+        while pos <= length(bytes)
+            chunk_start = pos
+            len = test_rd_be32(bytes, pos)
+            type_start = pos + 4
+            chunk_type = String(@view bytes[type_start:type_start + 3])
+            if chunk_type == "IDAT" && !inserted
+                for chunk in chunks
+                    Diff3D._png_chunk(out, chunk...)
+                end
+                inserted = true
+            end
+            chunk_stop = chunk_start + len + 11
+            write(out, @view bytes[chunk_start:chunk_stop])
+            pos = chunk_stop + 1
+        end
+        inserted || error("test PNG has no IDAT chunk")
+        return take!(out)
+    end
+
+    function noninterlaced_png(img::Array{T,3}, chunks) where {T<:Unsigned}
+        H, W, channels = size(img)
+        bitdepth = T === UInt8 ? 8 : 16
+        color_type = channels == 1 ? 0 : channels == 2 ? 4 :
+                     channels == 3 ? 2 : 6
+        raw = UInt8[]
+        for row in 1:H
+            push!(raw, 0x00)
+            for col in 1:W, channel in 1:channels
+                sample = UInt16(img[row, col, channel])
+                bitdepth == 16 && push!(raw, UInt8(sample >> 8))
+                push!(raw, UInt8(sample & 0xff))
+            end
+        end
+        io = IOBuffer()
+        write(io, Diff3D._PNG_SIGNATURE)
+        ihdr = vcat(test_be32(W), test_be32(H),
+                    UInt8[bitdepth, color_type, 0, 0, 0])
+        Diff3D._png_chunk(io, "IHDR", ihdr)
+        for chunk in chunks
+            Diff3D._png_chunk(io, chunk...)
+        end
+        Diff3D._png_chunk(io, "IDAT", Diff3D._zlib_store(raw))
+        Diff3D._png_chunk(io, "IEND", UInt8[])
+        return take!(io)
+    end
+
+    gray8 = reshape(UInt8[0x12, 0x34, 0x12, 0x56], 2, 2, 1)
+    gray8_png = noninterlaced_png(
+        gray8, [("tRNS", UInt8[0xff, 0x12])])
+    gray8_decoded = Diff3D._decode_png(gray8_png)
+    @test size(gray8_decoded) == (2, 2, 2)
+    @test gray8_decoded[:, :, 1] == Float64.(gray8[:, :, 1]) ./ 255
+    @test gray8_decoded[:, :, 2] ==
+          Float64.(gray8[:, :, 1] .!= 0x12)
+
+    rgb8 = zeros(UInt8, 1, 2, 3)
+    rgb8[1, 1, :] .= (10, 20, 30)
+    rgb8[1, 2, :] .= (10, 20, 31)
+    rgb8_decoded = Diff3D._decode_png(noninterlaced_png(
+        rgb8, [("tRNS", UInt8[0, 10, 0, 20, 0, 30])]))
+    @test size(rgb8_decoded) == (1, 2, 4)
+    @test vec(rgb8_decoded[1, :, 4]) == [0.0, 1.0]
+
+    gray16 = reshape(UInt16[0x0001, 0x0002], 1, 2, 1)
+    gray16_decoded = Diff3D._decode_png(noninterlaced_png(
+        gray16, [("tRNS", UInt8[0x00, 0x01])]))
+    @test size(gray16_decoded) == (1, 2, 2)
+    @test vec(gray16_decoded[1, :, 2]) == [0.0, 1.0]
+
+    interlaced_gray = reshape(
+        UInt8[mod(17row + 29col, 256) for row in 1:8, col in 1:8],
+        8, 8, 1)
+    gray_key = interlaced_gray[3, 5, 1]
+    interlaced_gray_png = insert_png_chunks_before_idat(
+        test_adam7_png_bytes(interlaced_gray),
+        [("tRNS", UInt8[0, gray_key])])
+    interlaced_gray_decoded = Diff3D._decode_png(interlaced_gray_png)
+    @test size(interlaced_gray_decoded) == (8, 8, 2)
+    @test interlaced_gray_decoded[:, :, 2] ==
+          Float64.(interlaced_gray[:, :, 1] .!= gray_key)
+
+    interlaced_rgb16 = zeros(UInt16, 7, 5, 3)
+    for row in 1:7, col in 1:5
+        interlaced_rgb16[row, col, 1] = UInt16(1000 + row)
+        interlaced_rgb16[row, col, 2] = UInt16(2000 + col)
+        interlaced_rgb16[row, col, 3] = UInt16(3000 + row + col)
+    end
+    rgb_key = Tuple(interlaced_rgb16[4, 3, :])
+    rgb_key_bytes = reduce(vcat, (UInt8[value >> 8, value & 0xff]
+                                  for value in rgb_key))
+    interlaced_rgb16_png = insert_png_chunks_before_idat(
+        test_adam7_png_bytes(interlaced_rgb16),
+        [("tRNS", rgb_key_bytes)])
+    interlaced_rgb16_decoded = Diff3D._decode_png(interlaced_rgb16_png)
+    @test size(interlaced_rgb16_decoded) == (7, 5, 4)
+    expected_alpha = [Tuple(interlaced_rgb16[row, col, :]) == rgb_key ?
+                      0.0 : 1.0 for row in 1:7, col in 1:5]
+    @test interlaced_rgb16_decoded[:, :, 4] == expected_alpha
+
+    @test_throws "grayscale tRNS chunk length must be 2" Diff3D._decode_png(
+        noninterlaced_png(gray8, [("tRNS", UInt8[0])]))
+    @test_throws "truecolor tRNS chunk length must be 6" Diff3D._decode_png(
+        noninterlaced_png(rgb8, [("tRNS", UInt8[0, 1])]))
+    rgba = zeros(UInt8, 1, 1, 4)
+    @test_throws "tRNS chunk is not permitted for color type 6" Diff3D._decode_png(
+        noninterlaced_png(rgba, [("tRNS", UInt8[])]))
+
+    wrong_order = noninterlaced_png(rgb8, [
+        ("tRNS", UInt8[0, 10, 0, 20, 0, 30]),
+        ("PLTE", UInt8[10, 20, 30])])
+    @test_throws "PLTE chunk must appear before tRNS" Diff3D._decode_png(
+        wrong_order)
+end

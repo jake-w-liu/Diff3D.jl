@@ -373,19 +373,51 @@ end
                       cur[base] / norm
 end
 
+@inline function _png_sample_integer(cur::Vector{UInt8}, base::Int, bps::Int)
+    return bps == 2 ? (Int(cur[base]) << 8) | Int(cur[base + 1]) :
+                      Int(cur[base])
+end
+
+@inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
+                                   cur::Vector{UInt8}, pixel_base::Int,
+                                   channels::Int, bps::Int, norm::Float64,
+                                   ::Nothing)
+    @inbounds for channel in 1:channels
+        base = pixel_base + (channel - 1) * bps + 1
+        img[row, col, channel] = _png_channel_value(cur, base, bps, norm)
+    end
+    return nothing
+end
+
+@inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
+                                   cur::Vector{UInt8}, pixel_base::Int,
+                                   channels::Int, bps::Int, norm::Float64,
+                                   transparent_samples::Tuple)
+    transparent = true
+    @inbounds for channel in 1:channels
+        base = pixel_base + (channel - 1) * bps + 1
+        sample = _png_sample_integer(cur, base, bps)
+        img[row, col, channel] = sample / norm
+        transparent &= sample == transparent_samples[channel]
+    end
+    @inbounds img[row, col, channels + 1] = transparent ? 0.0 : 1.0
+    return nothing
+end
+
 function _png_store_scanline!(img::Array{Float64,3}, row::Int, cur::Vector{UInt8},
                               W::Int, channels::Int, bps::Int, bpp::Int,
-                              norm::Float64)
-    @inbounds for j in 1:W, c in 1:channels
-        base = (j - 1) * bpp + (c - 1) * bps + 1
-        img[row, j, c] = _png_channel_value(cur, base, bps, norm)
+                              norm::Float64, transparent_samples=nothing)
+    @inbounds for col in 1:W
+        _png_store_pixel!(img, row, col, cur, (col - 1) * bpp,
+                          channels, bps, norm, transparent_samples)
     end
     return img
 end
 
 function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
                                     W::Int, H::Int, channels::Int, bps::Int,
-                                    bpp::Int, norm::Float64)
+                                    bpp::Int, norm::Float64,
+                                    transparent_samples=nothing)
     stride = W * bpp
     prev = zeros(UInt8, stride)
     cur = Vector{UInt8}(undef, stride)
@@ -396,7 +428,8 @@ function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
         p + stride - 1 <= length(raw) || error("PNG image data is truncated")
         copyto!(cur, 1, raw, p, stride); p += stride
         _png_unfilter_scanline!(cur, prev, bpp, ftype)
-        _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm)
+        _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm,
+                             transparent_samples)
         cur, prev = prev, cur
     end
     return img
@@ -404,7 +437,8 @@ end
 
 function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
                             W::Int, H::Int, channels::Int, bps::Int,
-                            bpp::Int, norm::Float64)
+                            bpp::Int, norm::Float64,
+                            transparent_samples=nothing)
     p = 1
     @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
         pass_w = _png_pass_size(W, x0, xstep)
@@ -420,10 +454,10 @@ function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
             copyto!(cur, 1, raw, p, stride); p += stride
             _png_unfilter_scanline!(cur, prev, bpp, ftype)
             row = y0 + prow * ystep + 1
-            for pcol in 0:(pass_w - 1), c in 1:channels
+            for pcol in 0:(pass_w - 1)
                 col = x0 + pcol * xstep + 1
-                base = pcol * bpp + (c - 1) * bps + 1
-                img[row, col, c] = _png_channel_value(cur, base, bps, norm)
+                _png_store_pixel!(img, row, col, cur, pcol * bpp,
+                                  channels, bps, norm, transparent_samples)
             end
             cur, prev = prev, cur
         end
@@ -573,6 +607,29 @@ end
     return idat_start == 0 ? idat : @view bytes[idat_start:idat_start + idat_len - 1]
 end
 
+@inline _png_trns_sample(trns::Vector{UInt8}, start::Int, mask::UInt16) =
+    ((UInt16(trns[start]) << 8) | UInt16(trns[start + 1])) & mask
+
+function _png_transparent_samples(trns::Vector{UInt8}, seen_trns::Bool,
+                                  colortype::Integer, bitdepth::Int)
+    seen_trns || return nothing
+    mask = bitdepth == 16 ? typemax(UInt16) :
+           UInt16((UInt32(1) << bitdepth) - 1)
+    if colortype == 0
+        length(trns) == 2 ||
+            error("PNG grayscale tRNS chunk length must be 2")
+        return (_png_trns_sample(trns, 1, mask),)
+    elseif colortype == 2
+        length(trns) == 6 ||
+            error("PNG truecolor tRNS chunk length must be 6")
+        return ntuple(index -> _png_trns_sample(
+            trns, 2index - 1, mask), 3)
+    elseif colortype == 4 || colortype == 6
+        error("PNG tRNS chunk is not permitted for color type $colortype")
+    end
+    return nothing
+end
+
 """
     load_png(path) -> Array{Float64,3}
 
@@ -648,11 +705,16 @@ function _decode_png(bytes::AbstractVector{UInt8})
         elseif is_plte
             !seen_plte || error("PNG contains multiple PLTE chunks")
             !seen_idat || error("PNG PLTE chunk must appear before IDAT")
+            !seen_trns || error("PNG PLTE chunk must appear before tRNS")
             palette = collect(@view bytes[pos:pos+len-1])
             seen_plte = true
         elseif is_trns
             !seen_trns || error("PNG contains multiple tRNS chunks")
             !seen_idat || error("PNG tRNS chunk must appear before IDAT")
+            colortype in (0, 2, 3) ||
+                error("PNG tRNS chunk is not permitted for color type $colortype")
+            colortype != 3 || seen_plte ||
+                error("PNG palette tRNS chunk must appear after PLTE")
             trns = collect(@view bytes[pos:pos+len-1])
             seen_trns = true
         elseif is_iend
@@ -695,14 +757,19 @@ function _decode_png(bytes::AbstractVector{UInt8})
                error("unsupported PNG color type $colortype")
     bps = Int(bitdepth) ÷ 8                     # bytes per sample
     bpp = channels * bps                        # bytes per pixel (filter window)
+    transparent_samples = _png_transparent_samples(
+        trns, seen_trns, colortype, Int(bitdepth))
     expected = _png_expected_raw_size(W, H, Int(bitdepth) * channels, interlace)
     idat_payload = _png_idat_payload(bytes, idat, idat_start, idat_len)
     raw = _png_inflate_exact_scanlines(idat_payload, expected)
-    img = Array{Float64}(undef, H, W, channels)
+    output_channels = channels + (transparent_samples === nothing ? 0 : 1)
+    img = Array{Float64}(undef, H, W, output_channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
     return interlace == 0 ?
-           _png_decode_noninterlaced!(img, raw, W, H, channels, bps, bpp, norm) :
-           _png_decode_adam7!(img, raw, W, H, channels, bps, bpp, norm)
+           _png_decode_noninterlaced!(img, raw, W, H, channels, bps, bpp, norm,
+                                      transparent_samples) :
+           _png_decode_adam7!(img, raw, W, H, channels, bps, bpp, norm,
+                              transparent_samples)
 end
 
 function load_png(path::String)
