@@ -10693,7 +10693,7 @@ end
                    reinterpret(UInt8, UInt16[0,1,2]) |> collect)
         write(joinpath(dir, "t.bin"), buf)
         gltf = """
-        {"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
         "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
         "buffers":[{"byteLength":$(length(buf)),"uri":"t.bin"}],
         "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],
@@ -29758,4 +29758,70 @@ end
     suggested_rgba = Diff3D._decode_png(plte_png(
         6, 8, UInt8[1, 2, 3], UInt8[0, 10, 20, 30, 40]))
     @test size(suggested_rgba) == (1, 1, 4)
+end
+
+@testset "fresh audit round 259 fixes" begin
+    function primitive_contract_fixture(; component_type=5126,
+                                        normalized=false, mode=4,
+                                        vertex_count=3)
+        position_bytes = if component_type == 5126
+            collect(reinterpret(UInt8, zeros(Float32, 3 * vertex_count)))
+        elseif component_type == 5123
+            collect(reinterpret(UInt8, zeros(UInt16, 3 * vertex_count)))
+        else
+            zeros(UInt8, 3 * vertex_count)
+        end
+        accessor = Dict{String,Any}(
+            "bufferView" => 0, "componentType" => component_type,
+            "count" => vertex_count, "type" => "VEC3")
+        normalized && (accessor["normalized"] = true)
+        gltf = Dict{String,Any}(
+            "scene" => 0,
+            "scenes" => Any[Dict{String,Any}("nodes" => Any[0])],
+            "nodes" => Any[Dict{String,Any}("mesh" => 0)],
+            "meshes" => Any[Dict{String,Any}(
+                "primitives" => Any[Dict{String,Any}(
+                    "mode" => mode,
+                    "attributes" => Dict{String,Any}("POSITION" => 0))])],
+            "bufferViews" => Any[Dict{String,Any}(
+                "buffer" => 0, "byteOffset" => 0,
+                "byteLength" => length(position_bytes))],
+            "accessors" => Any[accessor])
+        return gltf, Any[position_bytes]
+    end
+
+    valid_scene = Diff3D._gltf_build_scene(primitive_contract_fixture()...)
+    @test length(get_children(valid_scene)) == 1
+    @test_throws "POSITION accessor componentType/normalized combination is invalid" Diff3D._gltf_build_scene(
+        primitive_contract_fixture(component_type=5121)...)
+    @test_throws "POSITION accessor componentType/normalized combination is invalid" Diff3D._gltf_build_scene(
+        primitive_contract_fixture(component_type=5123, normalized=true)...)
+    @test_throws "POSITION accessor componentType/normalized combination is invalid" Diff3D._gltf_build_scene(
+        primitive_contract_fixture(normalized=true)...)
+
+    format_gltf = Dict{String,Any}("accessors" => Any[
+        Dict{String,Any}("componentType" => 5121, "normalized" => true)])
+    @test Diff3D._gltf_validate_attribute_format(
+        format_gltf, 0, "TEXCOORD_0", (5126,), (5121, 5123)) === nothing
+    @test_throws "TEXCOORD_0 accessor componentType/normalized combination is invalid" Diff3D._gltf_validate_attribute_format(
+        format_gltf, 0, "TEXCOORD_0", (5126,), ())
+
+    for (mode, count, message) in (
+            (0, 0, "POINTS vertex count must be non-zero"),
+            (1, 3, "LINES vertex count must be divisible by 2"),
+            (2, 1, "LINE_LOOP vertex count must be at least 2"),
+            (3, 1, "LINE_STRIP vertex count must be at least 2"),
+            (4, 4, "TRIANGLES vertex count must be divisible by 3"),
+            (5, 2, "TRIANGLE_STRIP vertex count must be at least 3"),
+            (6, 2, "TRIANGLE_FAN vertex count must be at least 3"))
+        @test_throws message Diff3D._gltf_validate_primitive_cardinality(
+            mode, count, "vertex")
+    end
+    @test_throws "LINES vertex count must be divisible by 2" Diff3D._gltf_build_scene(
+        primitive_contract_fixture(mode=1, vertex_count=3)...)
+    for (mode, count) in ((0, 1), (1, 2), (2, 2), (3, 2),
+                          (4, 3), (5, 3), (6, 3))
+        @test Diff3D._gltf_validate_primitive_cardinality(
+            mode, count, "vertex") === nothing
+    end
 end

@@ -10107,6 +10107,46 @@ function _gltf_validate_attribute_shape(name::String, item_size::Int,
     return nothing
 end
 
+function _gltf_validate_attribute_format(gltf, accessor_index::Int,
+                                         name::String,
+                                         unnormalized_types::Tuple,
+                                         normalized_types::Tuple)
+    accessor = gltf["accessors"][accessor_index + 1]
+    component_type = _gltf_checked_component_type(
+        accessor["componentType"], "$name accessor")
+    normalized = _gltf_checked_bool(
+        get(accessor, "normalized", false), "$name accessor normalized")
+    valid = normalized ? component_type in normalized_types :
+                         component_type in unnormalized_types
+    valid || error("glTF $name accessor componentType/normalized combination is invalid")
+    return nothing
+end
+
+function _gltf_validate_primitive_cardinality(mode::Int, count::Int,
+                                              source::String)
+    valid = if mode == 0
+        count > 0
+    elseif mode == 1
+        count > 0 && iseven(count)
+    elseif mode in (2, 3)
+        count >= 2
+    elseif mode == 4
+        count > 0 && count % 3 == 0
+    else
+        count >= 3
+    end
+    valid && return nothing
+
+    topology = ("POINTS", "LINES", "LINE_LOOP", "LINE_STRIP",
+                "TRIANGLES", "TRIANGLE_STRIP", "TRIANGLE_FAN")[mode + 1]
+    requirement = count == 0 && mode in (0, 1, 4) ? "be non-zero" :
+                  mode == 1 ? "be divisible by 2" :
+                  mode in (2, 3) ? "be at least 2" :
+                  mode == 4 ? "be divisible by 3" :
+                  "be at least 3"
+    error("glTF $topology $source count must $requirement")
+end
+
 # Build a `Scene` from a parsed glTF document and its decoded buffers. Shared by
 # `load_gltf` (text/embedded buffers) and `load_glb` (binary container, where
 # the BIN chunk is supplied as buffer 0). `buffers` must already contain the raw
@@ -10193,6 +10233,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         attrs = prim["attributes"]
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
+        _gltf_validate_attribute_format(
+            gltf, position_accessor, "POSITION", (5126,), ())
         pos, position_size, nverts = _gltf_accessor(
             gltf, buffers, position_accessor)
         position_size == 3 || error("glTF POSITION accessor must be VEC3")
@@ -10200,6 +10242,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         if haskey(attrs, "NORMAL")
             normal_accessor = _gltf_checked_accessor_index(gltf, attrs["NORMAL"],
                                                            "NORMAL")
+            _gltf_validate_attribute_format(
+                gltf, normal_accessor, "NORMAL", (5126,), ())
             normals, normal_size, normal_count = _gltf_accessor(
                 gltf, buffers, normal_accessor)
             _gltf_validate_attribute_shape(
@@ -10210,6 +10254,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         if haskey(attrs, "TEXCOORD_0")
             uv_accessor = _gltf_checked_accessor_index(gltf, attrs["TEXCOORD_0"],
                                                        "TEXCOORD_0")
+            _gltf_validate_attribute_format(
+                gltf, uv_accessor, "TEXCOORD_0", (5126,), (5121, 5123))
             uvs, uv_size, uv_count = _gltf_accessor(
                 gltf, buffers, uv_accessor)
             _gltf_validate_attribute_shape(
@@ -10223,10 +10269,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         else
             indices = collect(1:nverts)
         end
-        if mode == 4 && length(indices) % 3 != 0
-            source = haskey(prim, "indices") ? "index" : "vertex"
-            error("glTF TRIANGLES $source count must be divisible by 3")
-        end
+        source = haskey(prim, "indices") ? "index" : "vertex"
+        _gltf_validate_primitive_cardinality(mode, length(indices), source)
         tri_indices = mode == 5 || mode == 6 ? _gltf_triangulate_indices(indices, mode) : indices
         geo_indices = mode in (0, 1, 2, 3) ? Int[] : tri_indices
         geo = BufferGeometry(pos, normals, uvs, geo_indices, nverts,
@@ -10241,12 +10285,14 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             haskey(attrs, gltf_name) || continue
             attr_accessor = _gltf_checked_zero_based_index(
                 attrs[gltf_name], length(gltf["accessors"]), "$gltf_name accessor")
-            if gltf_name == "JOINTS_0"
-                ctype = _gltf_checked_component_type(
-                    gltf["accessors"][attr_accessor + 1]["componentType"], "JOINTS_0 accessor")
-                ctype in (5121, 5123) ||
-                    error("glTF JOINTS_0 componentType must be UNSIGNED_BYTE or UNSIGNED_SHORT")
-            end
+            unnormalized_types, normalized_types =
+                gltf_name in ("TEXCOORD_1", "COLOR_0", "WEIGHTS_0") ?
+                    ((5126,), (5121, 5123)) :
+                gltf_name == "JOINTS_0" ? ((5121, 5123), ()) :
+                ((5126,), ())
+            _gltf_validate_attribute_format(
+                gltf, attr_accessor, gltf_name,
+                unnormalized_types, normalized_types)
             data, item_size, attr_count = _gltf_accessor(gltf, buffers, attr_accessor)
             _gltf_validate_attribute_shape(
                 gltf_name, item_size, attr_count, nverts,
@@ -10262,6 +10308,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 haskey(target, gltf_name) || continue
                 target_accessor = _gltf_checked_accessor_index(
                     gltf, target[gltf_name], "morph target $gltf_name")
+                _gltf_validate_attribute_format(
+                    gltf, target_accessor, "morph target $gltf_name",
+                    (5126,), ())
                 data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
                 _gltf_validate_attribute_shape(
                     "morph target $gltf_name", item_size, attr_count,
