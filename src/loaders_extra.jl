@@ -821,12 +821,12 @@ _ktx2_comp_bytes(kind::Symbol) = kind === :unorm8 ? 1 : kind === :sfloat16 ? 2 :
     length(bytes) >= 12 && (@views bytes[1:12]) == _KTX2_IDENTIFIER
 end
 
-# Read the KTXorientation value string from the key/value data section.
+# Read a string value from the key/value data section.
 # KVD entries are: keyAndValueByteLength (u32), NUL-terminated key, value bytes,
 # then 0-3 bytes of padding to a 4-byte boundary.
-function _ktx2_orientation(bytes::AbstractVector{UInt8}, kvd_off::Int, kvd_len::Int)
+function _ktx2_key_value(bytes::AbstractVector{UInt8}, kvd_off::Int,
+                         kvd_len::Int, key::AbstractVector{UInt8})
     (kvd_len > 0 && kvd_off >= 0 && kvd_off + kvd_len <= length(bytes)) || return nothing
-    key = b"KTXorientation"
     pos = kvd_off + 1                              # 1-based start of KVD
     stop = kvd_off + kvd_len                       # 1-based last KVD byte
     while pos + 3 <= stop
@@ -852,6 +852,11 @@ function _ktx2_orientation(bytes::AbstractVector{UInt8}, kvd_off::Int, kvd_len::
     end
     return nothing
 end
+
+_ktx2_orientation(bytes, kvd_off, kvd_len) =
+    _ktx2_key_value(bytes, kvd_off, kvd_len, b"KTXorientation")
+_ktx2_swizzle(bytes, kvd_off, kvd_len) =
+    _ktx2_key_value(bytes, kvd_off, kvd_len, b"KTXswizzle")
 
 function _decode_ktx2(bytes::AbstractVector{UInt8})
     length(bytes) >= 80 ||
@@ -975,11 +980,37 @@ function load_image(path::String)
     return _decode_image_bytes(read(path), path)
 end
 
-function _ktx2_texture_data(image::Array{Float64,3})
+function _ktx2_texture_data(image::Array{Float64,3},
+                            swizzle::Union{Nothing,String}=nothing)
     height, width, channels = size(image)
-    channels >= 3 && return image
-    expanded = zeros(Float64, height, width, 3)
-    @views expanded[:, :, 1:channels] .= image
+    if swizzle === nothing
+        channels >= 3 && return image
+        expanded = zeros(Float64, height, width, 3)
+        @views expanded[:, :, 1:channels] .= image
+        return expanded
+    end
+    valid = ncodeunits(swizzle) == 4 && all(
+        index -> codeunit(swizzle, index) in
+                 (UInt8('r'), UInt8('g'), UInt8('b'), UInt8('a'),
+                  UInt8('0'), UInt8('1')),
+        1:4)
+    valid || error("KTX2 KTXswizzle must contain exactly four rgba01 components")
+    output_channels = codeunit(swizzle, 4) == UInt8('1') ? 3 : 4
+    expanded = Array{Float64}(undef, height, width, output_channels)
+    @inbounds for output_channel in 1:output_channels
+        symbol = codeunit(swizzle, output_channel)
+        source_channel = symbol == UInt8('r') ? 1 :
+                         symbol == UInt8('g') ? 2 :
+                         symbol == UInt8('b') ? 3 :
+                         symbol == UInt8('a') ? 4 : 0
+        fallback = symbol == UInt8('1') ||
+                   (symbol == UInt8('a') && channels < 4) ? 1.0 : 0.0
+        for x in 1:width, y in 1:height
+            expanded[y, x, output_channel] =
+                1 <= source_channel <= channels ?
+                    image[y, x, source_channel] : fallback
+        end
+    end
     return expanded
 end
 
@@ -987,14 +1018,17 @@ end
 
 PNG and JPEG textures default to sRGB. KTX2 textures infer linear or sRGB from
 their Vulkan format. Single-channel and two-channel KTX2 images are expanded
-to RGB using Vulkan's zero defaults for missing color components. An explicit
-`colorspace` keyword overrides the default.
+to RGB using Vulkan's zero defaults for missing color components, and
+`KTXswizzle` component mappings are honored. An explicit `colorspace` keyword
+overrides the default.
 """
 function TextureLoader(path::String; kwargs...)
     bytes = read(path)
     image = _decode_image_bytes(bytes, path)
     if _is_ktx2_bytes(bytes)
-        image = _ktx2_texture_data(image)
+        swizzle = _ktx2_swizzle(
+            bytes, _rd_le32(bytes, 57), _rd_le32(bytes, 61))
+        image = _ktx2_texture_data(image, swizzle)
         if !haskey(kwargs, :colorspace)
             _, _, colorspace = _KTX2_VKFORMATS[_rd_le32(bytes, 13)]
             return Texture(image; colorspace=colorspace, kwargs...)

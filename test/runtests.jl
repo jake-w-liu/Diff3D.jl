@@ -13598,7 +13598,8 @@ end
             let dir = mktempdir()
                 # Build a minimal valid uncompressed KTX2 file for round-trip tests.
                 function build_ktx2(width, height, channels, vkFormat, pixels;
-                                    orientation="rd", super=0, comp_bytes=1)
+                                    orientation="rd", swizzle=nothing,
+                                    super=0, comp_bytes=1)
                     le32(x) = UInt8[x & 0xff, (x >> 8) & 0xff,
                                     (x >> 16) & 0xff, (x >> 24) & 0xff]
                     le64(x) = vcat(le32(x & 0xffffffff), le32((x >> 32) & 0xffffffff))
@@ -13609,12 +13610,15 @@ end
                     append!(buf, le32(1)); append!(buf, le32(1))            # faceCount, levelCount
                     append!(buf, le32(super))                              # supercompressionScheme
                     kvd = UInt8[]
-                    if orientation !== nothing
-                        kv = vcat(Vector{UInt8}(codeunits("KTXorientation")), UInt8(0),
-                                  Vector{UInt8}(codeunits(orientation)), UInt8(0))
+                    function append_kv!(key, value)
+                        kv = vcat(Vector{UInt8}(codeunits(key)), UInt8(0),
+                                  Vector{UInt8}(codeunits(value)), UInt8(0))
                         append!(kvd, le32(length(kv))); append!(kvd, kv)
                         while length(kvd) % 4 != 0; push!(kvd, 0x00); end
                     end
+                    orientation !== nothing &&
+                        append_kv!("KTXorientation", orientation)
+                    swizzle !== nothing && append_kv!("KTXswizzle", swizzle)
                     header_end = 12 + 36 + 32 + 24                          # = 104
                     kvd_off = isempty(kvd) ? 0 : header_end
                     data_off = header_end + length(kvd)
@@ -13736,6 +13740,46 @@ end
                 basisu_msg = sprint(showerror, basisu_err)
                 @test occursin("KHR_texture_basisu", basisu_msg)
                 @test occursin("KTX2/Basis", basisu_msg)
+
+                r_swizzle_path = joinpath(dir, "r-swizzle.ktx2")
+                write(r_swizzle_path, build_ktx2(
+                    1, 1, 1, 9, UInt8[64]; swizzle="rrr1"))
+                @test size(load_ktx2(r_swizzle_path)) == (1, 1, 1)
+                r_swizzle = TextureLoader(r_swizzle_path)
+                @test sample_texture(r_swizzle, 0.5, 0.5) ==
+                      Color3(64 / 255, 64 / 255, 64 / 255)
+                @test !Diff3D._has_texture_alpha(r_swizzle)
+
+                alpha_swizzle_path = joinpath(dir, "alpha-swizzle.ktx2")
+                write(alpha_swizzle_path, build_ktx2(
+                    1, 1, 1, 9, UInt8[64]; swizzle="000r"))
+                alpha_swizzle = TextureLoader(alpha_swizzle_path)
+                @test size(alpha_swizzle.data) == (1, 1, 4)
+                @test vec(alpha_swizzle.data[1, 1, :]) ==
+                      [0.0, 0.0, 0.0, 64 / 255]
+                @test Diff3D._has_texture_alpha(alpha_swizzle)
+
+                la_swizzle_path = joinpath(dir, "la-swizzle.ktx2")
+                write(la_swizzle_path, build_ktx2(
+                    1, 1, 2, 16, UInt8[64, 192]; swizzle="rrrg"))
+                la_swizzle = TextureLoader(la_swizzle_path)
+                @test vec(la_swizzle.data[1, 1, :]) ==
+                      [64 / 255, 64 / 255, 64 / 255, 192 / 255]
+
+                missing_swizzle_path = joinpath(dir, "missing-swizzle.ktx2")
+                write(missing_swizzle_path, build_ktx2(
+                    1, 1, 1, 9, UInt8[64]; swizzle="gba1"))
+                @test vec(TextureLoader(
+                    missing_swizzle_path).data[1, 1, :]) == [0.0, 0.0, 1.0]
+
+                for malformed in ("rrr", "rrrx", "rrrrr", "éé")
+                    malformed_path = joinpath(
+                        dir, "malformed-swizzle-$(ncodeunits(malformed)).ktx2")
+                    write(malformed_path, build_ktx2(
+                        1, 1, 1, 9, UInt8[64]; swizzle=malformed))
+                    @test_throws "KTXswizzle must contain exactly four rgba01 components" TextureLoader(
+                        malformed_path)
+                end
             end
         end
 
