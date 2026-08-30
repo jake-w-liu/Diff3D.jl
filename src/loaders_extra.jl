@@ -695,18 +695,19 @@ load_jpeg(path::String) = _decode_jpeg(read(path); label="JPEG image")
 const _KTX2_IDENTIFIER = UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB,
                                0x0D, 0x0A, 0x1A, 0x0A]
 
-# Supported uncompressed Vulkan formats -> (channel count, component kind).
+# Supported uncompressed Vulkan formats ->
+# (channel count, component kind, color space).
 # 8-bit UNORM/SRGB decode to [0,1]; 16/32-bit SFLOAT decode to linear unclamped
 # HDR values (used by KTX2 environment maps), reusing the EXR float helpers.
-const _KTX2_VKFORMATS = Dict{Int,Tuple{Int,Symbol}}(
-    9 => (1, :unorm8), 15 => (1, :unorm8),    # VK_FORMAT_R8_UNORM / _SRGB
-    16 => (2, :unorm8), 22 => (2, :unorm8),   # R8G8
-    23 => (3, :unorm8), 29 => (3, :unorm8),   # R8G8B8
-    37 => (4, :unorm8), 43 => (4, :unorm8),   # R8G8B8A8
-    76 => (1, :sfloat16), 83 => (2, :sfloat16),   # R16 / R16G16 SFLOAT
-    90 => (3, :sfloat16), 97 => (4, :sfloat16),   # R16G16B16(A16) SFLOAT
-    100 => (1, :sfloat32), 103 => (2, :sfloat32), # R32 / R32G32 SFLOAT
-    106 => (3, :sfloat32), 109 => (4, :sfloat32), # R32G32B32(A32) SFLOAT
+const _KTX2_VKFORMATS = Dict{Int,Tuple{Int,Symbol,Symbol}}(
+    9 => (1, :unorm8, :linear), 15 => (1, :unorm8, :srgb),
+    16 => (2, :unorm8, :linear), 22 => (2, :unorm8, :srgb),
+    23 => (3, :unorm8, :linear), 29 => (3, :unorm8, :srgb),
+    37 => (4, :unorm8, :linear), 43 => (4, :unorm8, :srgb),
+    76 => (1, :sfloat16, :linear), 83 => (2, :sfloat16, :linear),
+    90 => (3, :sfloat16, :linear), 97 => (4, :sfloat16, :linear),
+    100 => (1, :sfloat32, :linear), 103 => (2, :sfloat32, :linear),
+    106 => (3, :sfloat32, :linear), 109 => (4, :sfloat32, :linear),
 )
 
 _ktx2_comp_bytes(kind::Symbol) = kind === :unorm8 ? 1 : kind === :sfloat16 ? 2 : 4
@@ -780,7 +781,7 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     layerCount <= 1 ||
         error("KTX2 texture arrays (layerCount=$layerCount) are not supported")
 
-    channels, kind = _KTX2_VKFORMATS[vkFormat]
+    channels, kind, _ = _KTX2_VKFORMATS[vkFormat]
     cbytes = _ktx2_comp_bytes(kind)
     pixel_bytes = channels * cbytes
     length(bytes) >= 104 ||                         # 80-byte header + one level entry
@@ -840,6 +841,13 @@ payloads require a transcoder and raise a clear error instead of guessing.
 """
 load_ktx2(path::String) = _decode_ktx2(read(path))
 
+function _decode_image_bytes(bytes::AbstractVector{UInt8}, path::String)
+    _is_png_bytes(bytes) && return _decode_png(bytes)
+    _is_jpeg_bytes(bytes) && return _decode_jpeg(bytes; label="JPEG image")
+    _is_ktx2_bytes(bytes) && return _decode_ktx2(bytes)
+    error("unsupported image format for $path; TextureLoader supports PNG, JPEG/JPG, and uncompressed KTX2")
+end
+
 """
     load_image(path) -> Array{Float64,3}
 
@@ -847,15 +855,23 @@ Decode a PNG, JPEG/JPG, or uncompressed KTX2 image by inspecting the file bytes.
 Use [`load_rgbe`](@ref) / [`RGBELoader`](@ref) for Radiance HDR files.
 """
 function load_image(path::String)
-    bytes = read(path)
-    _is_png_bytes(bytes) && return _decode_png(bytes)
-    _is_jpeg_bytes(bytes) && return _decode_jpeg(bytes; label="JPEG image")
-    _is_ktx2_bytes(bytes) && return _decode_ktx2(bytes)
-    error("unsupported image format for $path; TextureLoader supports PNG, JPEG/JPG, and uncompressed KTX2")
+    return _decode_image_bytes(read(path), path)
 end
 
-"""Load a PNG or JPEG/JPG image into a [`Texture`]."""
-TextureLoader(path::String; kwargs...) = Texture(load_image(path); kwargs...)
+"""Load a PNG, JPEG/JPG, or uncompressed KTX2 image into a [`Texture`].
+
+PNG and JPEG textures default to sRGB. KTX2 textures infer linear or sRGB from
+their Vulkan format. An explicit `colorspace` keyword overrides the default.
+"""
+function TextureLoader(path::String; kwargs...)
+    bytes = read(path)
+    image = _decode_image_bytes(bytes, path)
+    if _is_ktx2_bytes(bytes) && !haskey(kwargs, :colorspace)
+        _, _, colorspace = _KTX2_VKFORMATS[_rd_le32(bytes, 13)]
+        return Texture(image; colorspace=colorspace, kwargs...)
+    end
+    return Texture(image; kwargs...)
+end
 
 # ========================== Audio decode ==========================
 

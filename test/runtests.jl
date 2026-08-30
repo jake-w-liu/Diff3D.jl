@@ -13646,6 +13646,7 @@ end
                 mat = Diff3D._gltf_material(gltf, [UInt8[]], dir, 0.0)
                 @test mat.map isa Texture
                 @test size(mat.map.data) == (2, 2, 4)
+                @test mat.map.colorspace === :srgb
 
                 basisu = Dict{String,Any}(
                     "images"=>Any[Dict{String,Any}("uri"=>"texture.ktx2")],
@@ -28243,4 +28244,51 @@ end
     clear_draw_range!(geometry)
     @test rendered_halves(basic; shading=:smooth) == (160, 160)
     @test_opt_alloc 0 Diff3D._draw_face_range(geometry)
+end
+
+@testset "fresh audit round 241 fixes" begin
+    le32(value) = UInt8[
+        value & 0xff, (value >> 8) & 0xff,
+        (value >> 16) & 0xff, (value >> 24) & 0xff]
+    le64(value) = vcat(
+        le32(value & 0xffffffff), le32((value >> 32) & 0xffffffff))
+    function metadata_ktx2(format, payload)
+        bytes = copy(Diff3D._KTX2_IDENTIFIER)
+        for value in (format, 1, 1, 1, 0, 0, 1, 1, 0)
+            append!(bytes, le32(value))
+        end
+        for value in (0, 0, 0, 0)
+            append!(bytes, le32(value))
+        end
+        append!(bytes, le64(0), le64(0))
+        append!(bytes, le64(104), le64(length(payload)),
+                le64(length(payload)))
+        @test length(bytes) == 104
+        append!(bytes, payload)
+        return bytes
+    end
+
+    mktempdir() do directory
+        for (format, metadata) in Diff3D._KTX2_VKFORMATS
+            channels, kind, expected_colorspace = metadata
+            component_bytes = Diff3D._ktx2_comp_bytes(kind)
+            path = joinpath(directory, "format-$format.ktx2")
+            write(path, metadata_ktx2(
+                format, zeros(UInt8, channels * component_bytes)))
+
+            texture = TextureLoader(path)
+            @test texture.colorspace === expected_colorspace
+            @test texture.data == load_ktx2(path)
+            @test texture.data == load_image(path)
+            override = expected_colorspace === :linear ? :srgb : :linear
+            @test TextureLoader(path; colorspace=override).colorspace ===
+                  override
+        end
+
+        png_path = joinpath(directory, "default.png")
+        save_png(png_path, fill(0.5, 1, 1, 3))
+        @test TextureLoader(png_path).colorspace === :srgb
+        @test TextureLoader(png_path; colorspace=:linear).colorspace ===
+              :linear
+    end
 end
