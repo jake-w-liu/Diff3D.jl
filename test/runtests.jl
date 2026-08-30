@@ -13557,7 +13557,7 @@ end
                     append!(buf, le32(1)); append!(buf, le32(1))            # faceCount, levelCount
                     append!(buf, le32(super))                              # supercompressionScheme
                     kvd = UInt8[]
-                    if !isempty(orientation)
+                    if orientation !== nothing
                         kv = vcat(Vector{UInt8}(codeunits("KTXorientation")), UInt8(0),
                                   Vector{UInt8}(codeunits(orientation)), UInt8(0))
                         append!(kvd, le32(length(kv))); append!(kvd, kv)
@@ -13603,6 +13603,14 @@ end
                     2, 2, 4, 37, rgba_px; orientation="lu"))
                 @test ktx_lu[1,1,:] == ktx_rd[2,2,:]
                 @test ktx_lu[2,2,:] == ktx_rd[1,1,:]
+                ktx_absent = Diff3D._decode_ktx2(build_ktx2(
+                    2, 2, 4, 37, rgba_px; orientation=nothing))
+                @test ktx_absent == ktx_rd
+                for malformed in ("", "l", "xx", "rubbish", "é")
+                    @test_throws "KTXorientation must be one of rd, ru, ld, or lu" Diff3D._decode_ktx2(
+                        build_ktx2(2, 2, 4, 37, rgba_px;
+                                   orientation=malformed))
+                end
 
                 # RGB8 round-trips too, and load_ktx2 reads from disk.
                 rgb_px = UInt8[10,20,30, 40,50,60]

@@ -825,7 +825,7 @@ end
 # KVD entries are: keyAndValueByteLength (u32), NUL-terminated key, value bytes,
 # then 0-3 bytes of padding to a 4-byte boundary.
 function _ktx2_orientation(bytes::AbstractVector{UInt8}, kvd_off::Int, kvd_len::Int)
-    (kvd_len > 0 && kvd_off >= 0 && kvd_off + kvd_len <= length(bytes)) || return ""
+    (kvd_len > 0 && kvd_off >= 0 && kvd_off + kvd_len <= length(bytes)) || return nothing
     key = b"KTXorientation"
     pos = kvd_off + 1                              # 1-based start of KVD
     stop = kvd_off + kvd_len                       # 1-based last KVD byte
@@ -850,7 +850,7 @@ function _ktx2_orientation(bytes::AbstractVector{UInt8}, kvd_off::Int, kvd_len::
         pos = kstart + n
         pos += (4 - (n % 4)) % 4                    # 4-byte value padding
     end
-    return ""
+    return nothing
 end
 
 function _decode_ktx2(bytes::AbstractVector{UInt8})
@@ -912,10 +912,15 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     # Convert KTX's S/T orientation to the top-left, right/down array layout
     # used by the PNG/JPEG decoders. Missing metadata defaults to "rd".
     orient = _ktx2_orientation(bytes, kvdOffset, kvdLength)
-    # Index by byte (codeunit), not codepoint: malformed multibyte values must
-    # not cause a StringIndexError. Valid orientation values are ASCII.
-    flip_x = ncodeunits(orient) >= 1 && codeunit(orient, 1) == UInt8('l')
-    flip_y = ncodeunits(orient) >= 2 && codeunit(orient, 2) == UInt8('u')
+    if orient !== nothing
+        valid_orientation = ncodeunits(orient) == 2 &&
+            codeunit(orient, 1) in (UInt8('r'), UInt8('l')) &&
+            codeunit(orient, 2) in (UInt8('d'), UInt8('u'))
+        valid_orientation ||
+            error("KTX2 KTXorientation must be one of rd, ru, ld, or lu")
+    end
+    flip_x = orient !== nothing && codeunit(orient, 1) == UInt8('l')
+    flip_y = orient !== nothing && codeunit(orient, 2) == UInt8('u')
 
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
     @inbounds for y in 1:pixelHeight
