@@ -238,6 +238,95 @@ end
     return nothing
 end
 
+struct _ShadowClipVertex
+    clip::Vec4{Float64}
+    world::Vec3{Float64}
+    uv::Vec2{Float64}
+    uv2::Vec2{Float64}
+end
+
+@inline _shadow_near_distance(vertex::_ShadowClipVertex) =
+    vertex.clip.z + vertex.clip.w
+
+@inline function _shadow_lerp_clip(a::Vec4, b::Vec4, t)
+    return Vec4(a.x + (b.x - a.x) * t,
+                a.y + (b.y - a.y) * t,
+                a.z + (b.z - a.z) * t,
+                a.w + (b.w - a.w) * t)
+end
+
+@inline function _shadow_lerp_vertex(a::_ShadowClipVertex,
+                                     b::_ShadowClipVertex, t)
+    return _ShadowClipVertex(
+        _shadow_lerp_clip(a.clip, b.clip, t),
+        a.world + (b.world - a.world) * t,
+        Vec2(a.uv.x + (b.uv.x - a.uv.x) * t,
+             a.uv.y + (b.uv.y - a.uv.y) * t),
+        Vec2(a.uv2.x + (b.uv2.x - a.uv2.x) * t,
+             a.uv2.y + (b.uv2.y - a.uv2.y) * t),
+    )
+end
+
+@inline function _shadow_clip_push(n::Int, vertex::_ShadowClipVertex,
+                                   c1, c2, c3, c4)
+    n += 1
+    if n == 1
+        c1 = vertex
+    elseif n == 2
+        c2 = vertex
+    elseif n == 3
+        c3 = vertex
+    else
+        c4 = vertex
+    end
+    return n, c1, c2, c3, c4
+end
+
+function _shadow_clip_near_triangle(a::_ShadowClipVertex,
+                                    b::_ShadowClipVertex,
+                                    c::_ShadowClipVertex)
+    out_n = 0
+    c1 = c2 = c3 = c4 = a
+    previous = c
+    previous_distance = _shadow_near_distance(previous)
+    previous_inside = previous_distance >= 0.0
+    @inbounds for current in (a, b, c)
+        current_distance = _shadow_near_distance(current)
+        current_inside = current_distance >= 0.0
+        if current_inside != previous_inside
+            t = previous_distance /
+                (previous_distance - current_distance)
+            out_n, c1, c2, c3, c4 = _shadow_clip_push(
+                out_n, _shadow_lerp_vertex(previous, current, t),
+                c1, c2, c3, c4)
+        end
+        if current_inside
+            out_n, c1, c2, c3, c4 = _shadow_clip_push(
+                out_n, current, c1, c2, c3, c4)
+        end
+        previous = current
+        previous_distance = current_distance
+        previous_inside = current_inside
+    end
+    return out_n, c1, c2, c3, c4
+end
+
+@inline function _shadow_clip_vertex(index::Int, c1, c2, c3, c4)
+    index == 1 && return c1
+    index == 2 && return c2
+    index == 3 && return c3
+    return c4
+end
+
+@inline function _shadow_project(vertex::_ShadowClipVertex, W::Int, H::Int)
+    clip = vertex.clip
+    clip.w > 0.0 || return (0.0, 0.0, 0.0, 0.0, false)
+    inverse_w = 1.0 / clip.w
+    return ((clip.x * inverse_w + 1.0) * 0.5 * W,
+            (1.0 - clip.y * inverse_w) * 0.5 * H,
+            clip.z * inverse_w, inverse_w, true)
+end
+
 function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
                                   geo, world_mat::Mat4, mvp::Mat4, mat;
                                   clipping_planes=_NO_PLANES)
@@ -255,7 +344,6 @@ function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
         c1 = mat4_transform_vec4(mvp, _vh(v1))
         c2 = mat4_transform_vec4(mvp, _vh(v2))
         c3 = mat4_transform_vec4(mvp, _vh(v3))
-        (c1.w <= 1e-6 || c2.w <= 1e-6 || c3.w <= 1e-6) && continue
         uv1 = _ZERO_V2; uv2v = _ZERO_V2; uv3 = _ZERO_V2
         uv2_1 = _ZERO_V2; uv2_2 = _ZERO_V2; uv2_3 = _ZERO_V2
         if use_fragment_alpha
@@ -269,21 +357,34 @@ function _raster_shadow_geometry!(depth::Matrix{Float64}, W::Int, H::Int,
         wp1 = has_clip ? mat4_transform_point(world_mat, v1) : _ZERO_V3
         wp2 = has_clip ? mat4_transform_point(world_mat, v2) : _ZERO_V3
         wp3 = has_clip ? mat4_transform_point(world_mat, v3) : _ZERO_V3
-        s1x = (c1.x/c1.w+1)*0.5*W; s1y = (1-c1.y/c1.w)*0.5*H; z1 = c1.z/c1.w
-        s2x = (c2.x/c2.w+1)*0.5*W; s2y = (1-c2.y/c2.w)*0.5*H; z2 = c2.z/c2.w
-        s3x = (c3.x/c3.w+1)*0.5*W; s3y = (1-c3.y/c3.w)*0.5*H; z3 = c3.z/c3.w
-        if has_clip || use_fragment_alpha
-            _raster_depth!(depth, W, H, s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3;
-                clipping_planes=clipping_planes,
-                wp1=wp1, wp2=wp2, wp3=wp3,
-                iw1=1.0/c1.w, iw2=1.0/c2.w, iw3=1.0/c3.w,
-                alpha_test=alpha_test, alpha_base=alpha_base,
-                albedo_map=albedo_map, alpha_map=alpha_map,
-                uv1=uv1, uv2=uv2v, uv3=uv3,
-                uv2_1=uv2_1, uv2_2=uv2_2, uv2_3=uv2_3)
-        else
-            _raster_depth_plain!(depth, W, H, s1x, s1y, z1, s2x, s2y, z2,
-                                 s3x, s3y, z3)
+        vertex1 = _ShadowClipVertex(c1, wp1, uv1, uv2_1)
+        vertex2 = _ShadowClipVertex(c2, wp2, uv2v, uv2_2)
+        vertex3 = _ShadowClipVertex(c3, wp3, uv3, uv2_3)
+        clipped_count, clip1, clip2, clip3, clip4 =
+            _shadow_clip_near_triangle(vertex1, vertex2, vertex3)
+        clipped_count >= 3 || continue
+        for index in 2:(clipped_count - 1)
+            a = clip1
+            b = _shadow_clip_vertex(index, clip1, clip2, clip3, clip4)
+            c = _shadow_clip_vertex(index + 1, clip1, clip2, clip3, clip4)
+            s1x, s1y, z1, iw1, ok1 = _shadow_project(a, W, H)
+            s2x, s2y, z2, iw2, ok2 = _shadow_project(b, W, H)
+            s3x, s3y, z3, iw3, ok3 = _shadow_project(c, W, H)
+            (ok1 && ok2 && ok3) || continue
+            if has_clip || use_fragment_alpha
+                _raster_depth!(depth, W, H,
+                    s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3;
+                    clipping_planes=clipping_planes,
+                    wp1=a.world, wp2=b.world, wp3=c.world,
+                    iw1=iw1, iw2=iw2, iw3=iw3,
+                    alpha_test=alpha_test, alpha_base=alpha_base,
+                    albedo_map=albedo_map, alpha_map=alpha_map,
+                    uv1=a.uv, uv2=b.uv, uv3=c.uv,
+                    uv2_1=a.uv2, uv2_2=b.uv2, uv2_3=c.uv2)
+            else
+                _raster_depth_plain!(depth, W, H,
+                    s1x, s1y, z1, s2x, s2y, z2, s3x, s3y, z3)
+            end
         end
     end
     return depth

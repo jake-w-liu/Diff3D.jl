@@ -30700,3 +30700,55 @@ end
     @test_opt_alloc 0 Diff3D._expand_shadow_bounds!(
         box, geometry, Mat4())
 end
+
+@testset "fresh audit round 270 fixes" begin
+    projection = mat4_perspective(
+        pi / 2, 1.0, 1.0, 10.0)
+    crossing = BufferGeometry(
+        [-0.2,  0.4,  0.5,
+         -0.8, -0.8, -2.0,
+          0.8, -0.8, -2.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    depth = fill(Inf, 64, 64)
+    Diff3D._raster_shadow_geometry!(
+        depth, 64, 64, crossing, Mat4(), projection,
+        MeshBasicMaterial())
+    @test count(isfinite, depth) > 0
+    @test all(value -> isinf(value) || -1.0 <= value <= 1.0,
+              depth)
+
+    behind = BufferGeometry(
+        [-0.2,  0.4, 0.5,
+         -0.8, -0.8, 0.5,
+          0.8, -0.8, 0.5],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    behind_depth = fill(Inf, 64, 64)
+    Diff3D._raster_shadow_geometry!(
+        behind_depth, 64, 64, behind, Mat4(), projection,
+        MeshBasicMaterial())
+    @test all(isinf, behind_depth)
+
+    zero_vertex = Diff3D._ShadowClipVertex(
+        Vec4(0.0, 0.0, 0.0, 1.0), Vec3(), Vec2(), Vec2())
+    a = Diff3D._ShadowClipVertex(
+        mat4_transform_vec4(
+            projection, Vec4(-0.2, 0.4, 0.5, 1.0)),
+        Vec3(), Vec2(), Vec2())
+    b = Diff3D._ShadowClipVertex(
+        mat4_transform_vec4(
+            projection, Vec4(-0.8, -0.8, -2.0, 1.0)),
+        Vec3(), Vec2(), Vec2())
+    c = Diff3D._ShadowClipVertex(
+        mat4_transform_vec4(
+            projection, Vec4(0.8, -0.8, -2.0, 1.0)),
+        Vec3(), Vec2(), Vec2())
+    clipped_count, c1, c2, c3, c4 =
+        Diff3D._shadow_clip_near_triangle(a, b, c)
+    @test clipped_count == 4
+    @test all(index -> Diff3D._shadow_near_distance(
+                  Diff3D._shadow_clip_vertex(
+                      index, c1, c2, c3, c4)) >= 0.0,
+              1:clipped_count)
+    @test_opt_alloc 0 Diff3D._shadow_clip_near_triangle(
+        zero_vertex, zero_vertex, zero_vertex)
+end
