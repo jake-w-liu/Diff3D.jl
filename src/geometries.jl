@@ -1567,6 +1567,11 @@ end
 function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
     inner_radius = _geometry_finite_float(inner_radius, "RingGeometry inner_radius")
     outer_radius = _geometry_finite_float(outer_radius, "RingGeometry outer_radius")
+    if !iszero(outer_radius)
+        isfinite(inner_radius / outer_radius) ||
+            throw(ArgumentError(
+                "RingGeometry radii produce unrepresentable UV coordinates"))
+    end
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     theta_segments = _clamp_seg(theta_segments, 3, "RingGeometry theta_segments")
     phi_segments = _clamp_seg(phi_segments, 1, "RingGeometry phi_segments")

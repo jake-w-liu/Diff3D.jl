@@ -27624,3 +27624,30 @@ end
     @test maximal_ortho.e[6] == floatmax(Float64)
     @test all(isfinite, maximal_ortho.e)
 end
+
+@testset "fresh audit round 227 fixes" begin
+    for outer in (nextfloat(0.0), -nextfloat(0.0))
+        @test_throws "RingGeometry radii produce unrepresentable UV coordinates" RingGeometry(
+            inner_radius=1.0, outer_radius=outer,
+            theta_segments=3, phi_segments=1)
+    end
+
+    largest_ratio = RingGeometry(
+        inner_radius=floatmax(Float64), outer_radius=1.0,
+        theta_segments=3, phi_segments=1)
+    @test all(isfinite, largest_ratio.positions)
+    @test all(isfinite, largest_ratio.uvs)
+
+    zero_outer = RingGeometry(
+        inner_radius=0.5, outer_radius=0.0,
+        theta_segments=3, phi_segments=1)
+    @test all(isfinite, zero_outer.positions)
+    @test all(isfinite, zero_outer.uvs)
+
+    ordinary = RingGeometry(
+        inner_radius=0.5, outer_radius=1.0,
+        theta_segments=4, phi_segments=1)
+    outer_first = 4 + 2
+    @test ordinary.uvs[2outer_first - 1] == 1.0
+    @test ordinary.uvs[2outer_first] == 0.5
+end
