@@ -180,8 +180,25 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
     max_patch = bottom ? 32 : 28
     row = segs + 1
     patch_count = 0
+    max_planar_control = 0.0
     for surf0 in min_patch:(max_patch - 1)
-        (lid || (surf0 < 20 || surf0 >= 28)) && (patch_count += 1)
+        if lid || (surf0 < 20 || surf0 >= 28)
+            patch_count += 1
+            for slot in 1:16
+                point = _teapot_vertex(
+                    _TEAPOT_PATCHES[surf0 * 16 + slot])
+                fit_scale = fit_lid && 20 <= surf0 < 28 ? 1.077 : 1.0
+                max_planar_control = max(
+                    max_planar_control,
+                    abs(point.x * fit_scale), abs(point.y * fit_scale))
+            end
+        end
+    end
+    if max_planar_control > 0.0
+        planar_scale = max_planar_control / max_height2
+        sizef <= floatmax(Float64) / planar_scale ||
+            throw(ArgumentError(
+                "TeapotGeometry generated positions exceed the Float64 range"))
     end
     vertices_per_patch = _geometry_checked_mul(
         row, row, "TeapotGeometry vertices per patch")
@@ -232,7 +249,7 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
                 end
             end
 
-            eps_pos = max(1e-12, abs(sizef) * 1e-12)
+            eps_pos = abs(sizef) * 1e-12
             for sstep in 0:(segs - 1), tstep in 0:(segs - 1)
                 v1 = first_vertex + sstep * row + tstep
                 v2 = v1 + 1
@@ -242,13 +259,36 @@ function TeapotGeometry(size::Real=50.0, segments::Real=10;
                 p2 = _teapot_output_vertex(positions, v2)
                 p3 = _teapot_output_vertex(positions, v3)
                 p4 = _teapot_output_vertex(positions, v4)
-                if !_teapot_degenerate(p1, p2, p3, eps_pos)
+                degenerate123 = _teapot_degenerate(p1, p2, p3, eps_pos)
+                degenerate134 = _teapot_degenerate(p1, p3, p4, eps_pos)
+                if !iszero(sizef) && (degenerate123 || degenerate134)
+                    s0 = sstep / segs
+                    s1 = (sstep + 1) / segs
+                    t0 = tstep / segs
+                    t1 = (tstep + 1) / segs
+                    model1 = _teapot_eval(
+                        control, _teapot_basis(s0), _teapot_basis(t0))
+                    model2 = _teapot_eval(
+                        control, _teapot_basis(s0), _teapot_basis(t1))
+                    model3 = _teapot_eval(
+                        control, _teapot_basis(s1), _teapot_basis(t1))
+                    model4 = _teapot_eval(
+                        control, _teapot_basis(s1), _teapot_basis(t0))
+                    model_eps = max_height2 * 1e-12
+                    degenerate123 &&
+                        (degenerate123 = _teapot_degenerate(
+                            model1, model2, model3, model_eps))
+                    degenerate134 &&
+                        (degenerate134 = _teapot_degenerate(
+                            model1, model3, model4, model_eps))
+                end
+                if !degenerate123
                     indices[iout] = v1
                     indices[iout + 1] = v2
                     indices[iout + 2] = v3
                     iout += 3
                 end
-                if !_teapot_degenerate(p1, p3, p4, eps_pos)
+                if !degenerate134
                     indices[iout] = v1
                     indices[iout + 1] = v3
                     indices[iout + 2] = v4

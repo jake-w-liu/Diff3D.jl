@@ -27685,3 +27685,35 @@ end
             ordinary.normals[base + 2]), 1.0; atol=1.0e-12)
     end
 end
+
+@testset "fresh audit round 229 fixes" begin
+    @test_throws "TeapotGeometry generated positions exceed the Float64 range" TeapotGeometry(
+        floatmax(Float64), 2)
+
+    max_height2 = 3.15 / 2
+    max_planar = 3.525
+    safe_size = 0.99 * (floatmax(Float64) /
+                        (max_planar / max_height2))
+    extreme = TeapotGeometry(safe_size, 2)
+    @test all(isfinite, extreme.positions)
+    @test all(isfinite, extreme.normals)
+
+    reference = TeapotGeometry(1.0, 2)
+    tiny = TeapotGeometry(1.0e-13, 2)
+    subnormal = TeapotGeometry(nextfloat(0.0), 2)
+    @test reference.n_faces == 240
+    @test tiny.n_faces == reference.n_faces
+    @test subnormal.n_faces == reference.n_faces
+    @test all(isfinite, tiny.positions)
+    @test all(isfinite, subnormal.positions)
+
+    zero = TeapotGeometry(0.0, 2)
+    @test zero.n_faces == 0
+    @test all(iszero, zero.positions)
+
+    lid_only_reference = TeapotGeometry(
+        1.0, 2; bottom=false, body=false, lid=true)
+    lid_only_tiny = TeapotGeometry(
+        1.0e-13, 2; bottom=false, body=false, lid=true)
+    @test lid_only_tiny.n_faces == lid_only_reference.n_faces
+end
