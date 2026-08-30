@@ -32699,3 +32699,26 @@ end
     @test_opt_alloc 0 loss_mse(ordinary_image, ordinary_target)
     @test_opt_alloc 0 loss_l1(ordinary_image, ordinary_target)
 end
+
+@testset "CRC92 — silhouette occupancy stays probabilistic" begin
+    below_black = fill(-1.0, 4, 4, 1)
+    black = zeros(4, 4, 1)
+    foreground = ones(4, 4, 1)
+    @test loss_silhouette_iou(below_black, black) == 0.0
+    @test loss_silhouette_iou(below_black, foreground) > 0.99
+    for (image, target) in (
+            (fill(-1.0e6, 2, 2, 1), fill(1.0e6, 2, 2, 1)),
+            (fill(-Inf, 2, 2, 1), fill(Inf, 2, 2, 1)))
+        loss = loss_silhouette_iou(image, target)
+        @test isfinite(loss)
+        @test 0.0 <= loss <= 1.0
+    end
+
+    derivative = Diff3D.ForwardDiff.derivative(0.5) do value
+        loss_silhouette_iou(
+            reshape([value], 1, 1, 1), fill(0.75, 1, 1, 1);
+            threshold=0.5)
+    end
+    @test isfinite(derivative)
+    @test_opt_alloc 0 loss_silhouette_iou(below_black, black)
+end

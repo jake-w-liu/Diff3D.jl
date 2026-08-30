@@ -295,10 +295,12 @@ function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
             # background (brightness 0) reads ~0 occupancy: at slope 200 and
             # threshold 0.05, background -> sigmoid(-10) ~ 5e-5, while any lit
             # object pixel (>~0.08) -> ~1, so disjoint silhouettes give IoU ~ 0.
-            img_occ = (sigmoid_approx((img_val - threshold_r) * slope) - occ0) /
-                      (one(R) - occ0)
-            tgt_occ = (sigmoid_approx((tgt_val - threshold_r) * slope) - occ0) /
-                      (one(R) - occ0)
+            img_occ = clamp(
+                (sigmoid_approx((img_val - threshold_r) * slope) - occ0) /
+                (one(R) - occ0), zero(R), one(R))
+            tgt_occ = clamp(
+                (sigmoid_approx((tgt_val - threshold_r) * slope) - occ0) /
+                (one(R) - occ0), zero(R), one(R))
 
             intersection += min(img_occ, tgt_occ)
             union_val += max(img_occ, tgt_occ)
