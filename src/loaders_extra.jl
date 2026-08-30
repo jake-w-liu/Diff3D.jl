@@ -10120,8 +10120,16 @@ function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int;
     sizehint!(tuples, nverts)
     for i in 1:nverts
         w = ntuple(k -> Float64(attr.data[4i - 4 + k]), 4)
-        s = sum(w)
-        push!(tuples, s > 0 ? ntuple(k -> w[k] / s, 4) : w)
+        all(value -> isfinite(value) && value >= 0.0, w) ||
+            error("glTF skin weights must be finite and non-negative")
+        scale = maximum(w)
+        if scale > 0.0
+            scaled = ntuple(k -> w[k] / scale, 4)
+            scaled_sum = sum(scaled)
+            push!(tuples, ntuple(k -> scaled[k] / scaled_sum, 4))
+        else
+            push!(tuples, w)
+        end
     end
     return tuples
 end

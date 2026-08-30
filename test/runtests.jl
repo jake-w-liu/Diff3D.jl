@@ -19141,12 +19141,14 @@ end
 
     @testset "fresh audit round 20 fixes" begin
         let dir = mktempdir()
-            function skin_joint_path(filename, joint_component_type, append_joints!)
+            function skin_joint_path(filename, joint_component_type, append_joints!;
+                                     weights=Float32[
+                                         1,0,0,0, 1,0,0,0, 1,0,0,0])
                 bin = UInt8[]
                 append_f32!(xs) = append!(bin, reinterpret(UInt8, Float32.(xs)))
                 off_pos = length(bin); append_f32!([0,0,0, 1,0,0, 0,1,0])
                 off_joints = length(bin); append_joints!(bin)
-                off_weights = length(bin); append_f32!([1,0,0,0, 1,0,0,0, 1,0,0,0])
+                off_weights = length(bin); append_f32!(weights)
                 write(joinpath(dir, filename * ".bin"), bin)
                 path = joinpath(dir, filename * ".gltf")
                 write(path, """
@@ -19169,17 +19171,34 @@ end
 
             float_joint_path = skin_joint_path("float_joint", 5126,
                                                bin -> append!(bin, reinterpret(UInt8, Float32.([0,0,0,0, 0,0,0,0, 0,0,0,0]))))
-            @test_throws "glTF JOINTS_0 componentType" load_gltf_asset(float_joint_path)
+            @test_throws "JOINTS_0 accessor componentType/normalized combination is invalid" load_gltf_asset(
+                float_joint_path)
 
             out_of_range_path = skin_joint_path("out_of_range_joint", 5123,
                                                 bin -> append!(bin, reinterpret(UInt8, UInt16.([1,0,0,0, 0,0,0,0, 0,0,0,0]))))
             @test_throws "glTF skin joint index 1 out of bounds for 1 joints" load_gltf_asset(out_of_range_path)
+
+            negative_weight_path = skin_joint_path(
+                "negative_weight", 5123,
+                bin -> append!(bin, reinterpret(
+                    UInt8, UInt16.([0,0,0,0, 0,0,0,0, 0,0,0,0])));
+                weights=Float32[-1,2,0,0, 1,0,0,0, 1,0,0,0])
+            @test_throws "glTF skin weights must be finite and non-negative" load_gltf_asset(
+                negative_weight_path)
         end
 
         let geo = BufferGeometry([0.0,0,0], Float64[], Float64[], Int[], 1, 0)
             set_attribute!(geo, :skinIndex, [0.49, 0.0, 0.0, 0.0], 4)
             @test_throws "glTF skin joint index must be an integer" Diff3D._gltf_skin_tuples(
                 geo, :skinIndex, 1; indices=true, joint_count=1)
+
+            set_attribute!(geo, :skinWeight, [NaN, 0.0, 0.0, 0.0], 4)
+            @test_throws "glTF skin weights must be finite and non-negative" Diff3D._gltf_skin_tuples(
+                geo, :skinWeight, 1)
+            set_attribute!(geo, :skinWeight, [floatmax(Float64),
+                                               floatmax(Float64), 0.0, 0.0], 4)
+            @test Diff3D._gltf_skin_tuples(geo, :skinWeight, 1) ==
+                  [(0.5, 0.5, 0.0, 0.0)]
         end
     end
 
