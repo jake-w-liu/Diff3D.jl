@@ -31295,3 +31295,59 @@ end
     @test_opt_alloc 0 Diff3D._primitive_blends(
         LineBasicMaterial(opacity=0.5))
 end
+
+@testset "fresh audit round 276 fixes" begin
+    positions = [
+        -0.9, -0.7, 0.0,
+        -0.1, -0.7, 0.0,
+        -0.5,  0.7, 0.0,
+         0.1, -0.7, 0.0,
+         0.9, -0.7, 0.0,
+         0.5,  0.7, 0.0,
+    ]
+    camera = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 2.0)
+    camera.target = Vec3()
+    material = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), wireframe=true,
+        side=:double)
+    function wireframe_halves(geometry; instanced=false, cache=nothing)
+        scene = Scene()
+        object = instanced ? InstancedMesh(geometry, material, 1) :
+                 Mesh(geometry, material)
+        add!(scene, object)
+        target = RenderTarget(40, 40)
+        render!(target, scene, camera; cache=cache)
+        return (sum(target.color[:, 1:20, :]),
+                sum(target.color[:, 21:40, :])), target, scene
+    end
+
+    indexed = BufferGeometry(
+        positions, Float64[], Float64[],
+        [1, 2, 3, 4, 5, 6], 6, 2)
+    set_draw_range!(indexed, 1, 3)
+    indexed_halves, _, _ = wireframe_halves(indexed)
+    @test indexed_halves[1] > 0.0
+    @test indexed_halves[2] == 0.0
+
+    set_draw_range!(indexed, 4, 3)
+    right_halves, _, _ = wireframe_halves(indexed)
+    @test right_halves[1] == 0.0
+    @test right_halves[2] > 0.0
+
+    set_draw_range!(indexed, 2, 2)
+    @test wireframe_halves(indexed)[1] == (0.0, 0.0)
+
+    set_draw_range!(indexed, 1, 3)
+    @test wireframe_halves(indexed; instanced=true)[1] ==
+          indexed_halves
+
+    set_draw_range!(indexed, 1, 3)
+    cached = RenderCache()
+    _, cached_target, cached_scene = wireframe_halves(
+        indexed; cache=cached)
+    @test_opt_alloc 4096 render!(
+        cached_target, cached_scene, camera; cache=cached)
+end

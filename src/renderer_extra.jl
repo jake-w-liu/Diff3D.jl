@@ -1894,8 +1894,11 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
     seen = cache === nothing ? Set{Tuple{Int,Int}}() : cache.wire_edges
     empty!(seen)
     stamp_id = 0
-    for fi in 1:geo.n_faces
-        i1, i2, i3 = get_face(geo, fi)
+    for fi in _draw_face_range(geo)
+        first_entry = 3fi - 2
+        i1 = _draw_vertex_index(geo, first_entry)
+        i2 = _draw_vertex_index(geo, first_entry + 1)
+        i3 = _draw_vertex_index(geo, first_entry + 2)
         for (ia, ib) in ((i1, i2), (i2, i3), (i3, i1))
             key = ia < ib ? (ia, ib) : (ib, ia)
             key in seen && continue
