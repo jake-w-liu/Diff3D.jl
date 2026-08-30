@@ -27303,6 +27303,18 @@ end
         [incomplete_normals, second]).normals)
     with_empty = merge_geometries([second, BufferGeometry()])
     @test length(with_empty.normals) == 3 * with_empty.n_vertices
+
+    without_uvs = deepcopy(first)
+    empty!(without_uvs.uvs)
+    for inputs in ([without_uvs, second], [second, without_uvs])
+        mixed = merge_geometries(inputs)
+        @test isempty(mixed.uvs)
+        @test isempty(transform_geometry(mixed, Mat4()).uvs)
+    end
+    incomplete_uvs = deepcopy(first)
+    resize!(incomplete_uvs.uvs, 2)
+    @test isempty(merge_geometries([incomplete_uvs, second]).uvs)
+    @test length(with_empty.uvs) == 2 * with_empty.n_vertices
 end
 
 @testset "fresh audit round 218 fixes" begin
