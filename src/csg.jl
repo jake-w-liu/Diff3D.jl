@@ -504,20 +504,25 @@ end
 function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     _validate_transform_geometry(geo)
     reverse_orientation = _mat4_linear_orientation_sign(matrix) < 0
-    normal_matrix = mat4_transpose(mat4_inverse(matrix))
+    has_normals = !isempty(geo.normals)
+    normal_matrix = has_normals ?
+                    mat4_transpose(mat4_inverse(matrix)) : Mat4()
     positions = Vector{Float64}(undef, 3 * geo.n_vertices)
-    normals = Vector{Float64}(undef, 3 * geo.n_vertices)
+    normals = has_normals ?
+              Vector{Float64}(undef, 3 * geo.n_vertices) : Float64[]
     @inbounds for vi in 1:geo.n_vertices
         p = mat4_transform_point(matrix, get_vertex(geo, vi))
         pbase = 3vi - 2
         positions[pbase] = p.x
         positions[pbase + 1] = p.y
         positions[pbase + 2] = p.z
-        n = length(geo.normals) >= 3vi ? get_normal(geo, vi) : Vec3(0.0, 1.0, 0.0)
-        tn = normalize(mat4_transform_direction(normal_matrix, n))
-        normals[pbase] = tn.x
-        normals[pbase + 1] = tn.y
-        normals[pbase + 2] = tn.z
+        if has_normals
+            n = get_normal(geo, vi)
+            tn = normalize(mat4_transform_direction(normal_matrix, n))
+            normals[pbase] = tn.x
+            normals[pbase + 1] = tn.y
+            normals[pbase + 2] = tn.z
+        end
     end
     uvs = copy(geo.uvs)
     indices = copy(geo.indices)

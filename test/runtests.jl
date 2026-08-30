@@ -28156,6 +28156,22 @@ end
     singular = transform_geometry(box, mat4_scaling(0.0, 1.0, 1.0))
     @test singular.indices == box.indices
 
+    without_normals = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    transformed_without_normals = transform_geometry(
+        without_normals, mat4_translation(1.0, 2.0, 3.0))
+    @test isempty(transformed_without_normals.normals)
+    reflected_without_normals = transform_geometry(
+        without_normals, mat4_scaling(-1.0, 1.0, 1.0))
+    @test isempty(reflected_without_normals.normals)
+    compute_vertex_normals!(reflected_without_normals)
+    @test all(vi -> get_normal(reflected_without_normals, vi) ==
+                    Vec3(0.0, 0.0, 1.0),
+              1:reflected_without_normals.n_vertices)
+
     surplus = deepcopy(box)
     append!(surplus.indices, [1, 1, 1])
     reflected_surplus = transform_geometry(
