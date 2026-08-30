@@ -953,6 +953,18 @@ Pkg.test("Diff3D")
 
 The repository also includes a browser smoke test for generated WebGL output:
 
+This requires Python 3.11 or newer plus Playwright and Chromium. Install the
+browser tooling once with the commands below, substituting `python3` when that
+is the name of your Python 3.11+ executable:
+
+```powershell
+python -m pip install playwright
+python -m playwright install chromium
+```
+
+Linux hosts missing Chromium system libraries can instead run
+`python -m playwright install --with-deps chromium`.
+
 ```powershell
 python examples/browser_webgl_smoke.py examples/output/live_webgl_showcase.html
 ```

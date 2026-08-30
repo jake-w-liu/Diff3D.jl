@@ -110,6 +110,19 @@ docs/build/index.html
 
 ## Examples
 
+Browser verification requires Python 3.11 or newer, Playwright, and its
+Chromium browser. The commands below use `python`; substitute `python3` when
+that is the name of your Python 3.11+ executable. Install the browser tooling
+once from the repository root:
+
+```powershell
+python -m pip install playwright
+python -m playwright install chromium
+```
+
+On a Linux host that also needs Chromium's system libraries, use
+`python -m playwright install --with-deps chromium`, as CI does.
+
 Generate an interactive WebGL showcase:
 
 ```powershell

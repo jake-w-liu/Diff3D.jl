@@ -5,6 +5,12 @@ release.
 
 ## Correctness Checks
 
+The Python checks require Python 3.11 or newer; substitute `python3` in the
+commands below when that is the executable name. Before running browser checks,
+install Playwright and Chromium with `python -m pip install playwright` and
+`python -m playwright install chromium`. On Linux hosts missing browser system
+libraries, use `python -m playwright install --with-deps chromium`.
+
 - Run `julia --project=. -e 'using Pkg; Pkg.test()'`.
 - Confirm exported API documentation coverage:
 
