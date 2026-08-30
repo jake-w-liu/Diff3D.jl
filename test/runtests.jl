@@ -23007,10 +23007,9 @@ end
                 fill((1, 2, 3), face_count),
                 fill(Color3(1.0, 0.0, 0.0), face_count),
                 Mat4(), 1, 1, config)
-            @test isfinite(image[1])
-            @test image[1] > 0.0
-            @test image[2] == 0.0
-            @test image[3] == 0.0
+            # Identity projection has finite clip bounds z∈[-w,w]. These
+            # vertices lie far beyond z=w=1 and must be fully clipped.
+            @test image == zeros(1, 1, 3)
         end
         @test Diff3D._mean3_scaled(depth, depth, depth) == depth
         @test_opt_alloc 0 Diff3D._mean3_scaled(depth, depth, depth)
