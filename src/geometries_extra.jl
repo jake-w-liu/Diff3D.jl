@@ -1270,7 +1270,7 @@ end
 # ========================== Shape / Extrude ==========================
 # A Shape is a simple polygon in the xy-plane (Vector{Vec2}). ShapeGeometry
 # fills it; ExtrudeGeometry sweeps it to depth along +z, or along a sampled 3D
-# path. Caps are fan-triangulated (correct for convex shapes).
+# path.
 
 function _shape_area2(shape::AbstractVector{<:Vec2})
     xmin = Inf
@@ -1300,6 +1300,122 @@ function _shape_area2(shape::AbstractVector{<:Vec2})
         area2 += x1 * y2 - x2 * y1
     end
     return area2
+end
+
+@inline function _shape_turn(a::Vec2, b::Vec2, c::Vec2)
+    return _stable_float_product_difference(
+        b.x - a.x, c.y - a.y, b.y - a.y, c.x - a.x)
+end
+
+function _shape_normalized_points(shape::Vector{Vec2{Float64}})
+    xmin = minimum(point -> point.x, shape)
+    xmax = maximum(point -> point.x, shape)
+    ymin = minimum(point -> point.y, shape)
+    ymax = maximum(point -> point.y, shape)
+    cx = _geometry_midpoint(xmin, xmax)
+    cy = _geometry_midpoint(ymin, ymax)
+    xscale = max(abs(xmin - cx), abs(xmax - cx))
+    yscale = max(abs(ymin - cy), abs(ymax - cy))
+    (xscale > 0.0 && yscale > 0.0) ||
+        throw(ArgumentError("ExtrudeGeometry shape area must be non-zero"))
+    return [Vec2((point.x - cx) / xscale,
+                 (point.y - cy) / yscale) for point in shape]
+end
+
+@inline function _shape_point_on_segment(point::Vec2, a::Vec2, b::Vec2,
+                                         tolerance::Float64)
+    abs(_shape_turn(a, b, point)) <= tolerance || return false
+    return min(a.x, b.x) - tolerance <= point.x <= max(a.x, b.x) + tolerance &&
+           min(a.y, b.y) - tolerance <= point.y <= max(a.y, b.y) + tolerance
+end
+
+@inline function _shape_segments_intersect(a::Vec2, b::Vec2,
+                                           c::Vec2, d::Vec2,
+                                           tolerance::Float64)
+    ab_c = _shape_turn(a, b, c)
+    ab_d = _shape_turn(a, b, d)
+    cd_a = _shape_turn(c, d, a)
+    cd_b = _shape_turn(c, d, b)
+    ((ab_c > tolerance && ab_d < -tolerance) ||
+     (ab_c < -tolerance && ab_d > tolerance)) &&
+    ((cd_a > tolerance && cd_b < -tolerance) ||
+     (cd_a < -tolerance && cd_b > tolerance)) && return true
+    abs(ab_c) <= tolerance &&
+        _shape_point_on_segment(c, a, b, tolerance) && return true
+    abs(ab_d) <= tolerance &&
+        _shape_point_on_segment(d, a, b, tolerance) && return true
+    abs(cd_a) <= tolerance &&
+        _shape_point_on_segment(a, c, d, tolerance) && return true
+    return abs(cd_b) <= tolerance &&
+           _shape_point_on_segment(b, c, d, tolerance)
+end
+
+function _shape_validate_simple(points::Vector{Vec2{Float64}},
+                                tolerance::Float64)
+    n = length(points)
+    @inbounds for first_edge in 1:n
+        first_next = mod1(first_edge + 1, n)
+        for second_edge in (first_edge + 1):n
+            second_next = mod1(second_edge + 1, n)
+            (first_next == second_edge || second_next == first_edge) && continue
+            _shape_segments_intersect(
+                points[first_edge], points[first_next],
+                points[second_edge], points[second_next], tolerance) &&
+                throw(ArgumentError(
+                    "ExtrudeGeometry shape must be a simple polygon"))
+        end
+    end
+    return nothing
+end
+
+@inline function _shape_point_in_triangle(point::Vec2, a::Vec2,
+                                          b::Vec2, c::Vec2,
+                                          tolerance::Float64)
+    return _shape_turn(a, b, point) >= -tolerance &&
+           _shape_turn(b, c, point) >= -tolerance &&
+           _shape_turn(c, a, point) >= -tolerance
+end
+
+function _shape_triangulate(shape::Vector{Vec2{Float64}})
+    points = _shape_normalized_points(shape)
+    tolerance = 64 * eps(Float64)
+    _shape_validate_simple(points, tolerance)
+    remaining = collect(eachindex(points))
+    triangles = Vector{NTuple{3,Int}}()
+    sizehint!(triangles, length(points) - 2)
+    while length(remaining) > 3
+        found_ear = false
+        @inbounds for slot in eachindex(remaining)
+            previous = remaining[mod1(slot - 1, length(remaining))]
+            current = remaining[slot]
+            following = remaining[mod1(slot + 1, length(remaining))]
+            a, b, c = points[previous], points[current], points[following]
+            _shape_turn(a, b, c) > tolerance || continue
+            contains_vertex = false
+            for other in remaining
+                (other == previous || other == current || other == following) &&
+                    continue
+                if _shape_point_in_triangle(
+                        points[other], a, b, c, tolerance)
+                    contains_vertex = true
+                    break
+                end
+            end
+            contains_vertex && continue
+            push!(triangles, (previous, current, following))
+            deleteat!(remaining, slot)
+            found_ear = true
+            break
+        end
+        found_ear || throw(ArgumentError(
+            "ExtrudeGeometry shape could not be triangulated"))
+    end
+    final_triangle = (remaining[1], remaining[2], remaining[3])
+    _shape_turn(points[final_triangle[1]], points[final_triangle[2]],
+                points[final_triangle[3]]) > tolerance ||
+        throw(ArgumentError("ExtrudeGeometry shape could not be triangulated"))
+    push!(triangles, final_triangle)
+    return triangles
 end
 
 _shape_len(v::Vec2) = hypot(v.x, v.y)
@@ -1419,6 +1535,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     path, closed, eps = _extrude_clean_path(path_in)
     tangents = _extrude_path_tangents(path, closed, eps)
     shape_normals = _extrude_shape_vertex_normals(shape)
+    cap_triangles = closed ? NTuple{3,Int}[] : _shape_triangulate(shape)
     np = length(shape)
     nr = length(path)
     segments = closed ? nr : nr - 1
@@ -1433,7 +1550,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         np, "ExtrudeGeometry side face count")
     cap_faces = closed ? 0 :
                 _geometry_checked_mul(
-                    2, np - 2, "ExtrudeGeometry cap face count")
+                    2, length(cap_triangles), "ExtrudeGeometry cap face count")
     n_faces = _geometry_checked_add(
         side_faces, cap_faces, "ExtrudeGeometry face count")
     position_len, uv_len, index_len =
@@ -1518,10 +1635,10 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
             uvs[ubase] = pt.x
             uvs[ubase + 1] = pt.y
         end
-        @inbounds for k in 2:(np - 1)
-            indices[out] = start + 1
-            indices[out + 1] = start + k + 1
-            indices[out + 2] = start + k
+        @inbounds for (a, b, c) in cap_triangles
+            indices[out] = start + a
+            indices[out + 1] = start + c
+            indices[out + 2] = start + b
             out += 3
         end
 
@@ -1543,10 +1660,10 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
             uvs[ubase] = pt.x
             uvs[ubase + 1] = pt.y
         end
-        @inbounds for k in 2:(np - 1)
-            indices[out] = start + 1
-            indices[out + 1] = start + k
-            indices[out + 2] = start + k + 1
+        @inbounds for (a, b, c) in cap_triangles
+            indices[out] = start + a
+            indices[out + 1] = start + b
+            indices[out + 2] = start + c
             out += 3
         end
     end
@@ -1558,7 +1675,8 @@ end
 function ShapeGeometry(shape::Vector{<:Vec2})
     shape = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     np = length(shape)
-    n_faces = np - 2
+    triangles = _shape_triangulate(shape)
+    n_faces = length(triangles)
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(np, n_faces, "ShapeGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -1578,11 +1696,12 @@ function ShapeGeometry(shape::Vector{<:Vec2})
         uvs[ubase] = pt.x
         uvs[ubase + 1] = pt.y
     end
-    @inbounds for k in 2:np-1
-        out = 3k - 5
-        indices[out] = 1
-        indices[out + 1] = k
-        indices[out + 2] = k + 1
+    out = 1
+    @inbounds for (a, b, c) in triangles
+        indices[out] = a
+        indices[out + 1] = b
+        indices[out + 2] = c
+        out += 3
     end
     BufferGeometry(positions, normals, uvs, indices, np, n_faces)
 end
@@ -1595,6 +1714,7 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     # side-wall normals stay consistent with the winding for any input orientation.
     shape = _extrude_clean_shape(shape)
     np = length(shape)
+    cap_triangles = _shape_triangulate(shape)
     n_verts = _geometry_checked_mul(6, np, "ExtrudeGeometry vertex count")
     n_faces = _geometry_checked_add(
         _geometry_checked_mul(4, np, "ExtrudeGeometry face count"),
@@ -1631,13 +1751,13 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
     end
 
     out = 1
-    @inbounds for k in 2:np-1
-        indices[out] = 1
-        indices[out + 1] = k + 1
-        indices[out + 2] = k
-        indices[out + 3] = np + 1
-        indices[out + 4] = np + k
-        indices[out + 5] = np + k + 1
+    @inbounds for (a, b, c) in cap_triangles
+        indices[out] = a
+        indices[out + 1] = c
+        indices[out + 2] = b
+        indices[out + 3] = np + a
+        indices[out + 4] = np + b
+        indices[out + 5] = np + c
         out += 6
     end
     vi = 2 * np

@@ -28706,3 +28706,80 @@ end
     @test_opt_alloc 0 Diff3D._pkey(
         Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5))
 end
+
+@testset "fresh audit round 247 fixes" begin
+    concave = [
+        Vec2(0.0, 0.0), Vec2(3.0, 0.0),
+        Vec2(3.0, 3.0), Vec2(2.0, 3.0),
+        Vec2(2.0, 1.0), Vec2(1.0, 1.0),
+        Vec2(1.0, 3.0), Vec2(0.0, 3.0),
+    ]
+    function triangle_area_xy(geometry, faces=1:geometry.n_faces)
+        area = 0.0
+        for face in faces
+            i1, i2, i3 = get_face(geometry, face)
+            a = get_vertex(geometry, i1)
+            b = get_vertex(geometry, i2)
+            c = get_vertex(geometry, i3)
+            area += abs((b.x - a.x) * (c.y - a.y) -
+                        (b.y - a.y) * (c.x - a.x)) / 2
+        end
+        return area
+    end
+
+    shape = ShapeGeometry(concave)
+    clockwise_shape = ShapeGeometry(reverse(concave))
+    @test shape.n_faces == length(concave) - 2
+    @test triangle_area_xy(shape) ≈ 7.0 atol=1.0e-12
+    @test triangle_area_xy(clockwise_shape) ≈ 7.0 atol=1.0e-12
+    @test all(face -> begin
+        i1, i2, i3 = get_face(shape, face)
+        a, b, c = get_vertex(shape, i1), get_vertex(shape, i2),
+                  get_vertex(shape, i3)
+        cross(b - a, c - a).z > 0.0
+    end, 1:shape.n_faces)
+
+    mesh = Mesh(shape, MeshBasicMaterial(side=:double))
+    notch_ray = Raycaster(
+        Vec3(1.5, 2.0, 1.0), Vec3(0.0, 0.0, -1.0))
+    interior_ray = Raycaster(
+        Vec3(0.5, 2.0, 1.0), Vec3(0.0, 0.0, -1.0))
+    @test isempty(raycast(notch_ray, mesh; recursive=false))
+    @test !isempty(raycast(interior_ray, mesh; recursive=false))
+
+    extruded = ExtrudeGeometry(concave; depth=1.0)
+    cap_faces = 2 * (length(concave) - 2)
+    @test triangle_area_xy(extruded, 1:2:cap_faces) ≈ 7.0 atol=1.0e-12
+    @test triangle_area_xy(extruded, 2:2:cap_faces) ≈ 7.0 atol=1.0e-12
+    total_area = 0.0
+    for face in 1:extruded.n_faces
+        i1, i2, i3 = get_face(extruded, face)
+        a, b, c = get_vertex(extruded, i1), get_vertex(extruded, i2),
+                  get_vertex(extruded, i3)
+        total_area += norm(cross(b - a, c - a)) / 2
+    end
+    @test total_area ≈ 30.0 atol=1.0e-12
+
+    path_extruded = ExtrudeGeometry(concave; extrude_path=[
+        Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0)])
+    side_faces = 2 * length(concave)
+    cap_count = length(concave) - 2
+    @test triangle_area_xy(
+        path_extruded, (side_faces + 1):(side_faces + cap_count)) ≈
+          7.0 atol=1.0e-12
+    @test triangle_area_xy(
+        path_extruded,
+        (side_faces + cap_count + 1):path_extruded.n_faces) ≈
+          7.0 atol=1.0e-12
+
+    square = [
+        Vec2(0.0, 0.0), Vec2(1.0, 0.0),
+        Vec2(1.0, 1.0), Vec2(0.0, 1.0)]
+    @test ShapeGeometry(square).n_faces == 2
+    @test ExtrudeGeometry(square).n_faces == 12
+    self_intersecting = [
+        Vec2(0.0, 0.0), Vec2(3.0, 3.0), Vec2(0.0, 3.0),
+        Vec2(3.0, 0.0), Vec2(1.5, 4.0)]
+    @test_throws "shape must be a simple polygon" ShapeGeometry(
+        self_intersecting)
+end
