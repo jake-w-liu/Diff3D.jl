@@ -30646,3 +30646,57 @@ end
         target, 1, 1, -1.0, Color3(1.0, 1.0, 1.0))
     @test_opt_alloc 0 Diff3D._inside_near_clip(0.5)
 end
+
+@testset "fresh audit round 269 fixes" begin
+    positions = [
+        -1.0, -1.0, 0.0,
+         1.0, -1.0, 0.0,
+         0.0,  1.0, 0.0,
+         1.0e6, 0.0, 0.0,
+         1.0e6 + 1.0, 0.0, 0.0,
+         1.0e6, 1.0, 0.0,
+    ]
+    geometry = BufferGeometry(
+        positions, Float64[], Float64[],
+        [1, 2, 3, 4, 5, 6], 6, 2)
+    mesh = Mesh(geometry, MeshBasicMaterial())
+    set_draw_range!(geometry, 1, 3)
+    center, radius = Diff3D._scene_bounds([mesh], InstancedMesh[])
+    @test abs(center.x) < 1.0
+    @test radius < 2.0
+
+    set_draw_range!(geometry, 4, 3)
+    excluded_center, excluded_radius = Diff3D._scene_bounds(
+        [mesh], InstancedMesh[])
+    @test excluded_center.x > 9.0e5
+    @test excluded_radius < 2.0
+
+    set_draw_range!(geometry, 2, 2)
+    empty_center, empty_radius = Diff3D._scene_bounds(
+        [mesh], InstancedMesh[])
+    @test empty_center == Vec3()
+    @test empty_radius == 1.0e-3
+
+    nonindexed = BufferGeometry(
+        positions, Float64[], Float64[], Int[], 6, 2)
+    set_draw_range!(nonindexed, 1, 3)
+    nonindexed_mesh = Mesh(nonindexed, MeshBasicMaterial())
+    ni_center, ni_radius = Diff3D._scene_bounds(
+        [nonindexed_mesh], InstancedMesh[])
+    @test abs(ni_center.x) < 1.0
+    @test ni_radius < 2.0
+
+    set_draw_range!(geometry, 1, 3)
+    instanced = InstancedMesh(geometry, MeshBasicMaterial(), 1)
+    set_instance_matrix!(instanced, 1,
+                         mat4_translation(10.0, 0.0, 0.0))
+    instance_center, instance_radius = Diff3D._scene_bounds(
+        Mesh[], [instanced])
+    @test abs(instance_center.x - 10.0) < 1.0
+    @test instance_radius < 2.0
+
+    box = Box3()
+    Diff3D._expand_shadow_bounds!(box, geometry, Mat4())
+    @test_opt_alloc 0 Diff3D._expand_shadow_bounds!(
+        box, geometry, Mat4())
+end

@@ -46,10 +46,14 @@ function _validated_shadow_resolution(resolution::Int)
 end
 
 function _expand_shadow_bounds!(box::Box3, geo, world::Mat4)
-    for vi in 1:geo.n_vertices
-        p = mat4_transform_point(world, get_vertex(geo, vi))
-        isfinite(p.x) && isfinite(p.y) && isfinite(p.z) || continue
-        box = box3_expand_by_point(box, p)
+    for face_index in _draw_face_range(geo)
+        first_entry = 3face_index - 2
+        for entry in first_entry:(first_entry + 2)
+            vi = _draw_vertex_index(geo, entry)
+            p = mat4_transform_point(world, get_vertex(geo, vi))
+            isfinite(p.x) && isfinite(p.y) && isfinite(p.z) || continue
+            box = box3_expand_by_point(box, p)
+        end
     end
     return box
 end
