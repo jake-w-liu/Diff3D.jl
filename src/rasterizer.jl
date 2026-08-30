@@ -960,20 +960,22 @@ end
     return nothing
 end
 
-function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
-                              mat::M, world_mat::Mat4, lights,
-                              proj::Mat4, view::Mat4, near,
-                              cam_pos::Vec3, shadow_fn, tri::Vector{ShadeVtx},
-                              clipped::Vector{ShadeVtx}, sx::Vector{Float64},
-                              sy::Vector{Float64}, sz::Vector{Float64},
-                              iw::Vector{Float64}, clipping_planes,
-                              xlo::Int, xhi::Int, ylo::Int, yhi::Int,
-                              log_depth::Bool, inv_log_far::Float64, ortho_dir,
-                              stamp, stamp_id::Int) where {M<:AbstractMaterial}
+function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
+                                  mat::M, world_mat::Mat4, lights,
+                                  proj::Mat4, view::Mat4, near,
+                                  cam_pos::Vec3, mesh_shadow_fn,
+                                  tri::Vector{ShadeVtx},
+                                  clipped::Vector{ShadeVtx},
+                                  sx::Vector{Float64}, sy::Vector{Float64},
+                                  sz::Vector{Float64}, iw::Vector{Float64},
+                                  clipping_planes,
+                                  xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                  log_depth::Bool, inv_log_far::Float64,
+                                  ortho_dir, stamp,
+                                  stamp_id::Int) where {M<:AbstractMaterial}
     _validate_material_parameters(mat)
     _validate_depth_material(mat)
     W, H = rt.width, rt.height
-    mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
     modelview = view * world_mat
     normal_mat = mat4_transpose(mat4_inverse(world_mat))
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
@@ -1088,6 +1090,28 @@ function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh, geo::BufferGeometry,
                                      emissive_map, light_map, normal_scale,
                                      has_mapped_inputs, uv2_attr, color_attr,
                                      use_vertex_colors)
+end
+
+function _render_smooth_mesh!(rt::RenderTarget, mesh::Mesh,
+                              geo::BufferGeometry, mat::M,
+                              world_mat::Mat4, lights,
+                              proj::Mat4, view::Mat4, near,
+                              cam_pos::Vec3, shadow_fn,
+                              tri::Vector{ShadeVtx},
+                              clipped::Vector{ShadeVtx},
+                              sx::Vector{Float64}, sy::Vector{Float64},
+                              sz::Vector{Float64}, iw::Vector{Float64},
+                              clipping_planes,
+                              xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                              log_depth::Bool, inv_log_far::Float64,
+                              ortho_dir, stamp,
+                              stamp_id::Int) where {M<:AbstractMaterial}
+    mesh_shadow_fn = object_receives_shadow(mesh) ? shadow_fn : nothing
+    return _render_smooth_geometry!(
+        rt, geo, mat, world_mat, lights, proj, view, near, cam_pos,
+        mesh_shadow_fn, tri, clipped, sx, sy, sz, iw,
+        clipping_planes, xlo, xhi, ylo, yhi, log_depth,
+        inv_log_far, ortho_dir, stamp, stamp_id)
 end
 
 function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
@@ -1614,7 +1638,29 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                         cache === nothing ? nothing : cache.smooth_iw)
     end
 
-    # InstancedMesh: same geometry/material drawn at each instance transform (flat).
+    smooth_instance_tri = if shading === :smooth
+        cache === nothing ? Vector{ShadeVtx}(undef, 3) : cache.smooth_tri
+    else
+        nothing
+    end
+    smooth_instance_clipped = if shading === :smooth
+        if cache === nothing
+            buffer = ShadeVtx[]
+            sizehint!(buffer, 6)
+            buffer
+        else
+            cache.smooth_clipped
+        end
+    else
+        nothing
+    end
+    smooth_instance_iw = if shading === :smooth
+        cache === nothing ? Vector{Float64}(undef, 8) : cache.smooth_iw
+    else
+        nothing
+    end
+
+    # InstancedMesh: same geometry/material drawn at each instance transform.
     for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         base = instanced_worlds[instanced_slot]
@@ -1626,6 +1672,27 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                              _instanced_materials!(cache.instanced_materials,
                                                    instanced_slot, im, mat,
                                                    im.instance_colors)
+        if shading === :smooth && !material_wireframe(mat)
+            @inbounds for instance_index in eachindex(im.instance_matrices)
+                instance_material = cache === nothing ?
+                    _with_vertex_color(
+                        mat, im.instance_colors[instance_index]) :
+                    _cached_instanced_material_at(
+                        cache.instanced_materials, instanced_slot,
+                        instance_index, mat)
+                world = base * im.instance_matrices[instance_index]
+                _render_smooth_geometry!(
+                    rt, geo, instance_material, world, lights,
+                    proj, view, near, camera_position, mesh_shadow_fn,
+                    smooth_instance_tri::Vector{ShadeVtx},
+                    smooth_instance_clipped::Vector{ShadeVtx},
+                    sx, sy, sz,
+                    smooth_instance_iw::Vector{Float64},
+                    clipping_planes, xlo, xhi, ylo, yhi,
+                    log_depth, inv_log_far, ortho_dir, nothing, 0)
+            end
+            continue
+        end
         _render_instanced_mesh_flat!(rt, geo, mat, im.instance_colors,
                                      im.instance_matrices, base, lights, proj, view, near,
                                      camera_position, tri, clipped, sx, sy, sz;
@@ -1738,22 +1805,34 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 mesh_clipping_planes = _combined_clipping_planes(
                     clipping_planes,
                     material_clipping_planes(instance_material))
-                _rasterize_geo_flat!(
-                    rt, geo, world, instance_material, lights, proj, view,
-                    near, camera_position, tri, clipped, sx, sy, sz;
-                    alpha=Float64(material_opacity(instance_material)),
-                    stamp=stamp, stamp_id=sid,
-                    shadow_fn=mesh_shadow_fn,
-                    clipping_planes=mesh_clipping_planes,
-                    colorbuf=colorbuf,
-                    xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                    log_depth=log_depth, inv_log_far=inv_log_far,
-                    ortho_dir=ortho_dir,
-                    flat_attr_tri=cache === nothing ? nothing :
-                                  cache.smooth_tri,
-                    flat_attr_clipped=cache === nothing ? nothing :
-                                     cache.smooth_clipped,
-                    flat_iw=cache === nothing ? nothing : cache.smooth_iw)
+                if shading === :smooth
+                    _render_smooth_geometry!(
+                        rt, geo, instance_material, world, lights,
+                        proj, view, near, camera_position, mesh_shadow_fn,
+                        smooth_instance_tri::Vector{ShadeVtx},
+                        smooth_instance_clipped::Vector{ShadeVtx},
+                        sx, sy, sz,
+                        smooth_instance_iw::Vector{Float64},
+                        clipping_planes, xlo, xhi, ylo, yhi,
+                        log_depth, inv_log_far, ortho_dir, stamp, sid)
+                else
+                    _rasterize_geo_flat!(
+                        rt, geo, world, instance_material, lights, proj, view,
+                        near, camera_position, tri, clipped, sx, sy, sz;
+                        alpha=Float64(material_opacity(instance_material)),
+                        stamp=stamp, stamp_id=sid,
+                        shadow_fn=mesh_shadow_fn,
+                        clipping_planes=mesh_clipping_planes,
+                        colorbuf=colorbuf,
+                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                        log_depth=log_depth, inv_log_far=inv_log_far,
+                        ortho_dir=ortho_dir,
+                        flat_attr_tri=cache === nothing ? nothing :
+                                      cache.smooth_tri,
+                        flat_attr_clipped=cache === nothing ? nothing :
+                                         cache.smooth_clipped,
+                        flat_iw=cache === nothing ? nothing : cache.smooth_iw)
+                end
             end
         end
     end

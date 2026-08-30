@@ -31033,3 +31033,94 @@ end
                        abs(color.b) < 1.0e-12,
               mapped_faces)
 end
+
+@testset "fresh audit round 274 fixes" begin
+    camera = PerspectiveCamera(aspect=1.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    geometry = SphereGeometry(
+        radius=1.0, width_segments=12, height_segments=6)
+    transform = mat4_translation(0.25, -0.1, 0.0) *
+                quat_to_mat4(quat_from_euler(0.2, -0.3, 0.15)) *
+                mat4_scaling(1.1, 0.8, 1.2)
+
+    function render_plain(material, shading; lights=AbstractLight[])
+        scene = Scene()
+        mesh = Mesh(geometry, material)
+        mesh.position = Vec3(0.25, -0.1, 0.0)
+        mesh.rotation = Euler(0.2, -0.3, 0.15)
+        mesh.scale = Vec3(1.1, 0.8, 1.2)
+        add!(scene, mesh)
+        for light in lights
+            add!(scene, light)
+        end
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera; shading=shading)
+        return target
+    end
+    function render_instance(material, shading;
+                             lights=AbstractLight[], color=nothing,
+                             cache=nothing)
+        scene = Scene()
+        instance = InstancedMesh(geometry, material, 1)
+        set_instance_matrix!(instance, 1, transform)
+        color === nothing || set_instance_color!(instance, 1, color)
+        add!(scene, instance)
+        for light in lights
+            add!(scene, light)
+        end
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera; shading=shading, cache=cache)
+        return target
+    end
+
+    normal_material = MeshNormalMaterial(side=:double)
+    plain_smooth = render_plain(normal_material, :smooth)
+    instance_smooth = render_instance(normal_material, :smooth)
+    @test instance_smooth.color ≈ plain_smooth.color atol=1.0e-12
+    @test instance_smooth.depth ≈ plain_smooth.depth
+    instance_flat = render_instance(normal_material, :flat)
+    @test maximum(abs.(instance_flat.color .- instance_smooth.color)) > 0.1
+
+    ambient = AmbientLight(intensity=1.0)
+    colored_instance = render_instance(
+        MeshLambertMaterial(
+            color=Color3(1.0, 1.0, 1.0), side=:double),
+        :smooth; lights=AbstractLight[ambient],
+        color=Color3(1.0, 0.0, 0.0))
+    colored_plain = render_plain(
+        MeshLambertMaterial(
+            color=Color3(1.0, 0.0, 0.0), side=:double),
+        :smooth; lights=AbstractLight[AmbientLight(intensity=1.0)])
+    @test colored_instance.color ≈ colored_plain.color atol=1.0e-12
+
+    transparent_material = MeshNormalMaterial(
+        side=:double, transparent=true, opacity=0.5,
+        depth_write=false)
+    transparent_instance = render_instance(
+        transparent_material, :smooth)
+    transparent_plain = render_plain(
+        transparent_material, :smooth)
+    @test transparent_instance.color ≈ transparent_plain.color atol=1.0e-12
+
+    white_env = CubeTexture(ntuple(
+        _ -> Texture(
+            ones(Float64, 1, 1, 3); filter=:nearest,
+            colorspace=:linear), 6))
+    env_material = MeshStandardMaterial(
+        color=Color3(0.8, 0.4, 0.2), metalness=1.0,
+        roughness=0.2, envmap=white_env, side=:double)
+    @test render_instance(env_material, :smooth).color ≈
+          render_plain(env_material, :smooth).color atol=1.0e-12
+
+    cached_scene = Scene()
+    cached_instance = InstancedMesh(geometry, normal_material, 1)
+    set_instance_matrix!(cached_instance, 1, transform)
+    add!(cached_scene, cached_instance)
+    cached_target = RenderTarget(32, 32)
+    cached = RenderCache()
+    render!(cached_target, cached_scene, camera;
+            shading=:smooth, cache=cached)
+    @test_opt_alloc 4096 render!(
+        cached_target, cached_scene, camera;
+        shading=:smooth, cache=cached)
+end
