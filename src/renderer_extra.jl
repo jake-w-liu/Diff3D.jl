@@ -1031,7 +1031,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     has_normals = length(geo.normals) >= geo.n_vertices * 3
-    normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
+    normal_mat = mat4_transpose(mat4_inverse(world_mat))
     modelview = view * world_mat
     lazy_shader_faces = mat isa ShaderMaterial
     face_colors = lazy_shader_faces ? nothing :

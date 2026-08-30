@@ -31944,3 +31944,70 @@ end
         Vec3(0.0, 0.8, 0.0))
     @test_opt_alloc 0 triangle_normal(winding_triangle)
 end
+
+@testset "CRC67 — flat double-sided inverse-transpose normals" begin
+    positions = [
+        0.0,  0.0, 0.0,
+        0.0,  0.0, 1.0,
+        1.0, -1.0, 0.0,
+    ]
+    local_normal = normalize(Vec3(1.0, 1.0, 0.0))
+    normals = repeat(
+        [local_normal.x, local_normal.y, local_normal.z], 3)
+    geometry = BufferGeometry(
+        positions, normals, Float64[], [1, 2, 3], 3, 1)
+    world_center = Vec3(2 / 3, -1 / 3, 1 / 3)
+    world_normal = normalize(Vec3(0.5, 1.0, 0.0))
+    camera = OrthographicCamera(
+        left=-1.5, right=1.5, bottom=-1.5, top=1.5,
+        near=0.1, far=10.0)
+    camera.position = world_center + world_normal * 3
+    camera.target = world_center
+    camera.up = Vec3(0.0, 0.0, 1.0)
+    normal_program = (normal, view_dir, position, uniforms) ->
+        Color3((normal.x + 1) / 2,
+               (normal.y + 1) / 2,
+               (normal.z + 1) / 2)
+
+    function render_shader_normal(side; pooled=false, cache=nothing)
+        scene = Scene()
+        mesh = Mesh(
+            geometry, ShaderMaterial(program=normal_program, side=side))
+        mesh.scale = Vec3(2.0, 1.0, 1.0)
+        add!(scene, mesh)
+        target = RenderTarget(32, 32)
+        if pooled
+            render_pooled!(
+                target, scene, camera,
+                cache === nothing ? RenderCache() : cache)
+        else
+            render!(target, scene, camera;
+                    shading=:flat, frustum_cull=false, cache=cache)
+        end
+        return target, scene
+    end
+
+    front, _ = render_shader_normal(:front)
+    double, double_scene = render_shader_normal(:double)
+    @test sum(front.color) > 0.0
+    @test double.color == front.color
+    visible_pixel = findfirst(front.depth .< Inf)
+    @test visible_pixel !== nothing
+    row, column = Tuple(visible_pixel)
+    @test vec(front.color[row, column, :]) ≈
+          [(world_normal.x + 1) / 2,
+           (world_normal.y + 1) / 2,
+           (world_normal.z + 1) / 2] atol=1.0e-12
+
+    pooled_front, _ = render_shader_normal(:front; pooled=true)
+    pooled_double, _ = render_shader_normal(:double; pooled=true)
+    @test pooled_double.color == pooled_front.color
+    @test pooled_double.color == double.color
+
+    cached = RenderCache()
+    render!(double, double_scene, camera;
+            shading=:flat, frustum_cull=false, cache=cached)
+    @test_opt_alloc 4096 render!(
+        double, double_scene, camera;
+        shading=:flat, frustum_cull=false, cache=cached)
+end
