@@ -1141,6 +1141,9 @@ end
 
 function compute_world_matrices(root::AbstractObject3D)
     cache = IdDict{AbstractObject3D, Mat4}()
-    compute_world_matrices(root, Mat4{Float64}(), cache)
+    parent = get_parent(root)
+    parent_world = parent === nothing ? Mat4{Float64}() :
+                   compute_world_matrix(parent)
+    compute_world_matrices(root, parent_world, cache)
     return cache
 end

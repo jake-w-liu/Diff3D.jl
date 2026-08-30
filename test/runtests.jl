@@ -28105,3 +28105,46 @@ end
     @test scene_triangle_count(scene) == ranged_box.n_faces + 1
     @test_opt_alloc 256 scene_triangle_count(scene)
 end
+
+@testset "fresh audit round 238 fixes" begin
+    root = Group()
+    root.position = Vec3(10.0, 1.0, -2.0)
+    branch = Group()
+    branch.position = Vec3(2.0, -1.0, 3.0)
+    leaf = Mesh(BoxGeometry(), MeshBasicMaterial())
+    leaf.position = Vec3(3.0, 4.0, 5.0)
+    add!(root, branch)
+    add!(branch, leaf)
+
+    subtree_cache = compute_world_matrices(branch)
+    @test length(subtree_cache) == 2
+    for object in (branch, leaf)
+        @test subtree_cache[object].e == compute_world_matrix(object).e
+    end
+    @test mat4_transform_point(
+        subtree_cache[leaf], Vec3()) == Vec3(15.0, 4.0, 6.0)
+
+    detached = Group()
+    detached.position = Vec3(-2.0, 3.0, 4.0)
+    detached_leaf = Mesh(PlaneGeometry(), MeshBasicMaterial())
+    detached_leaf.position = Vec3(1.0, 2.0, 3.0)
+    add!(detached, detached_leaf)
+    detached_cache = compute_world_matrices(detached)
+    @test detached_cache[detached].e == compute_world_matrix(detached).e
+    @test detached_cache[detached_leaf].e ==
+          compute_world_matrix(detached_leaf).e
+
+    new_parent = Group()
+    new_parent.position = Vec3(-20.0, 0.0, 0.0)
+    add!(new_parent, branch)
+    reparented_cache = compute_world_matrices(branch)
+    @test reparented_cache[branch].e == compute_world_matrix(branch).e
+    @test reparented_cache[leaf].e == compute_world_matrix(leaf).e
+
+    explicit = IdDict{AbstractObject3D, Mat4}()
+    explicit_parent = mat4_translation(100.0, 200.0, 300.0)
+    @test compute_world_matrices(branch, explicit_parent, explicit) ===
+          explicit
+    @test mat4_transform_point(
+        explicit[branch], Vec3()) == Vec3(102.0, 199.0, 303.0)
+end
