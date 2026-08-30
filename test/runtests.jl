@@ -27443,3 +27443,51 @@ end
     origin = reverse_gradient(x -> atan(x[1], x[2]), [0.0, 0.0])
     @test all(isnan, origin)
 end
+
+@testset "fresh audit round 223 fixes" begin
+    empty_surface_points = Vector{Vector{Vec4{Float64}}}()
+    @test_throws "NURBSSurface needs control points" NURBSSurface(
+        1, 1, Float64[], Float64[], empty_surface_points)
+    empty_volume_points =
+        Vector{Vector{Vector{Vec4{Float64}}}}()
+    @test_throws "NURBSVolume needs control points" NURBSVolume(
+        1, 1, 1, Float64[], Float64[], Float64[],
+        empty_volume_points)
+
+    knots = [0.0, 0.0, 1.0, 1.0]
+    surface_points = Vector{Vec4{Float64}}[
+        [Vec4(0.0, 0.0, 0.0, 1.0),
+         Vec4(0.0, 1.0, 0.0, 1.0)],
+        [Vec4(1.0, 0.0, 0.0, 1.0),
+         Vec4(1.0, 1.0, 0.0, 1.0)],
+    ]
+    surface = NURBSSurface(1, 1, knots, knots, surface_points)
+    @test nurbs_point(surface, 0.25, 0.75) ==
+          Vec3(0.25, 0.75, 0.0)
+    @test NURBSSurfaceGeometry(
+        surface; slices=2, stacks=2).n_faces == 8
+
+    volume_points = Vector{Vector{Vec4{Float64}}}[
+        [[Vec4(0.0, 0.0, 0.0, 1.0),
+          Vec4(0.0, 0.0, 1.0, 1.0)],
+         [Vec4(0.0, 1.0, 0.0, 1.0),
+          Vec4(0.0, 1.0, 1.0, 1.0)]],
+        [[Vec4(1.0, 0.0, 0.0, 1.0),
+          Vec4(1.0, 0.0, 1.0, 1.0)],
+         [Vec4(1.0, 1.0, 0.0, 1.0),
+          Vec4(1.0, 1.0, 1.0, 1.0)]],
+    ]
+    volume = NURBSVolume(
+        1, 1, 1, knots, knots, knots, volume_points)
+    @test nurbs_point(volume, 0.25, 0.75, 0.5) ==
+          Vec3(0.25, 0.75, 0.5)
+
+    ragged_surface = Vector{Vec4{Float64}}[
+        surface_points[1], [surface_points[2][1]]]
+    @test_throws "NURBSSurface control point rows must be rectangular" NURBSSurface(
+        1, 1, knots, knots, ragged_surface)
+    bad_weight = deepcopy(surface_points)
+    bad_weight[1][1] = Vec4(0.0, 0.0, 0.0, 0.0)
+    @test_throws "NURBS control point weights must be positive" NURBSSurface(
+        1, 1, knots, knots, bad_weight)
+end

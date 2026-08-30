@@ -698,6 +698,18 @@ struct NURBSSurface
     knots_u::Vector{Float64}
     knots_v::Vector{Float64}
     control_points::Vector{Vector{Vec4{Float64}}}
+
+    function NURBSSurface(degree_u::Integer, degree_v::Integer,
+                          knots_u, knots_v, control_points)
+        p = _nurbs_degree(degree_u)
+        q = _nurbs_degree(degree_v)
+        cps = _nurbs_surface_points(control_points)
+        ku = _nurbs_knots(
+            knots_u, p, length(cps), "NURBSSurface u")
+        kv = _nurbs_knots(
+            knots_v, q, length(cps[1]), "NURBSSurface v")
+        return new(p, q, ku, kv, cps)
+    end
 end
 
 struct NURBSVolume
@@ -708,6 +720,22 @@ struct NURBSVolume
     knots_v::Vector{Float64}
     knots_w::Vector{Float64}
     control_points::Vector{Vector{Vector{Vec4{Float64}}}}
+
+    function NURBSVolume(degree_u::Integer, degree_v::Integer,
+                         degree_w::Integer, knots_u, knots_v, knots_w,
+                         control_points)
+        p = _nurbs_degree(degree_u)
+        q = _nurbs_degree(degree_v)
+        r = _nurbs_degree(degree_w)
+        cps = _nurbs_volume_points(control_points)
+        ku = _nurbs_knots(
+            knots_u, p, length(cps), "NURBSVolume u")
+        kv = _nurbs_knots(
+            knots_v, q, length(cps[1]), "NURBSVolume v")
+        kw = _nurbs_knots(
+            knots_w, r, length(cps[1][1]), "NURBSVolume w")
+        return new(p, q, r, ku, kv, kw, cps)
+    end
 end
 
 function _nurbs_degree(degree::Integer)
@@ -754,16 +782,6 @@ function _nurbs_surface_points(control_points)
     return out
 end
 
-function NURBSSurface(degree_u::Integer, degree_v::Integer,
-                      knots_u, knots_v, control_points)
-    p = _nurbs_degree(degree_u)
-    q = _nurbs_degree(degree_v)
-    cps = _nurbs_surface_points(control_points)
-    ku = _nurbs_knots(knots_u, p, length(cps), "NURBSSurface u")
-    kv = _nurbs_knots(knots_v, q, length(cps[1]), "NURBSSurface v")
-    return NURBSSurface(p, q, ku, kv, cps)
-end
-
 function _nurbs_volume_points(control_points)
     nu = length(control_points)
     nu > 0 || throw(ArgumentError("NURBSVolume needs control points"))
@@ -784,18 +802,6 @@ function _nurbs_volume_points(control_points)
         push!(out, out_slab)
     end
     return out
-end
-
-function NURBSVolume(degree_u::Integer, degree_v::Integer, degree_w::Integer,
-                     knots_u, knots_v, knots_w, control_points)
-    p = _nurbs_degree(degree_u)
-    q = _nurbs_degree(degree_v)
-    r = _nurbs_degree(degree_w)
-    cps = _nurbs_volume_points(control_points)
-    ku = _nurbs_knots(knots_u, p, length(cps), "NURBSVolume u")
-    kv = _nurbs_knots(knots_v, q, length(cps[1]), "NURBSVolume v")
-    kw = _nurbs_knots(knots_w, r, length(cps[1][1]), "NURBSVolume w")
-    return NURBSVolume(p, q, r, ku, kv, kw, cps)
 end
 
 function _nurbs_span(degree::Int, knots::Vector{Float64}, npoints::Int, u::Float64)
