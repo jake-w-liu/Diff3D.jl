@@ -10,7 +10,11 @@ release.
 
   ```julia
   using Diff3D
-  missing = [n for n in names(Diff3D) if isdefined(Diff3D, n) && !Docs.hasdoc(Diff3D, n)]
+  has_doc(mod, name) = isdefined(Base.Docs, :hasdoc) ?
+      getfield(Base.Docs, :hasdoc)(mod, name) :
+      haskey(Base.Docs.meta(mod), Base.Docs.Binding(mod, name))
+  missing = [n for n in names(Diff3D) if
+             isdefined(Diff3D, n) && !has_doc(Diff3D, n)]
   isempty(missing)
   ```
 
