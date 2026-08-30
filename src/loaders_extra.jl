@@ -2270,27 +2270,37 @@ function _decode_exr(bytes::Vector{UInt8})
         numYTiles = cld(height, tile_y)
         ntiles = numXTiles * numYTiles
         pos + ntiles * 8 - 1 <= n || error("EXR tile offset table is truncated")
+        seen_tiles = falses(ntiles)
         for i in 1:ntiles
             off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
             (0 <= off && off <= n - 20) ||   # 20-byte tile header; overflow-safe
                 error("EXR tile block offset is out of range")
             bp = off + 1
             tileX = _rd_i32(bytes, bp); tileY = _rd_i32(bytes, bp + 4)
+            levelX = _rd_i32(bytes, bp + 8); levelY = _rd_i32(bytes, bp + 12)
+            (levelX == 0 && levelY == 0) ||
+                error("EXR level-0 tile offset references level ($levelX,$levelY)")
             bp += 16                                   # tileX, tileY, levelX, levelY
             dsize = _rd_i32(bytes, bp); bp += 4
             (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR tile data is truncated")
             startX = tileX * tile_x; startY = tileY * tile_y
             (0 <= startX < width && 0 <= startY < height) ||
                 error("EXR tile coordinate ($tileX,$tileY) is out of range")
+            tile_index = tileY * numXTiles + tileX + 1
+            !seen_tiles[tile_index] ||
+                error("EXR tile coordinate ($tileX,$tileY) appears more than once")
+            seen_tiles[tile_index] = true
             cols = min(tile_x, width - startX)
             lines = min(tile_y, height - startY)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols,
                                     compression, channels, plinear, piz_workspace)
             _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
+        all(seen_tiles) || error("EXR level-0 tile coverage is incomplete")
     else
         nblocks = cld(height, lines_per_block)
         pos + nblocks * 8 - 1 <= n || error("EXR scanline offset table is truncated")
+        seen_blocks = falses(nblocks)
         for i in 1:nblocks
             off = Int(_rd_le64(bytes, pos + 8 * (i - 1)))
             (0 <= off && off <= n - 8) ||    # 8-byte scanline header; overflow-safe
@@ -2300,11 +2310,19 @@ function _decode_exr(bytes::Vector{UInt8})
             dsize = _rd_i32(bytes, bp); bp += 4
             (dsize >= 0 && bp + dsize - 1 <= n) || error("EXR scanline block data is truncated")
             (ymin <= y0 <= ymax) || error("EXR scanline block has out-of-range y=$y0")
-            nlines = min(lines_per_block, ymax - y0 + 1)
+            row_offset = y0 - ymin
+            row_offset % lines_per_block == 0 ||
+                error("EXR scanline block starts at misaligned y=$y0")
+            block_index = row_offset ÷ lines_per_block + 1
+            !seen_blocks[block_index] ||
+                error("EXR scanline block starting at y=$y0 appears more than once")
+            seen_blocks[block_index] = true
+            nlines = min(lines_per_block, height - row_offset)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width,
                                     compression, channels, plinear, piz_workspace)
             _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
+        all(seen_blocks) || error("EXR scanline block coverage is incomplete")
     end
     return img
 end

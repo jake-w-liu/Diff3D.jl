@@ -10174,7 +10174,8 @@ end
             push!(v, 0x00); v
         end
         # Build a NONE-compressed scanline EXR (channels must be sorted by name).
-        function build_exr_none(W, H, chs, px; version=2, lineorder=0)
+        function build_exr_none(W, H, chs, px; version=2, lineorder=0,
+                                offset_order=nothing)
             hdr = vcat(le32i(20000630), le32i(version),
                        attr("channels", "chlist", chlist(chs)),
                        attr("compression", "compression", UInt8[0]),
@@ -10193,8 +10194,19 @@ end
                 push!(chunks, vcat(le32i(y), le32i(length(data)), data))
             end
             body = length(hdr) + H * 8
-            offs = UInt8[]; cur = body
-            for c in chunks; append!(offs, le64(cur)); cur += length(c); end
+            chunk_offsets = Int[]
+            cur = body
+            for c in chunks
+                push!(chunk_offsets, cur)
+                cur += length(c)
+            end
+            order = offset_order === nothing ? collect(eachindex(chunks)) :
+                    offset_order
+            @assert length(order) == H
+            offs = UInt8[]
+            for index in order
+                append!(offs, le64(chunk_offsets[index]))
+            end
             vcat(hdr, offs, chunks...)
         end
 
@@ -10234,6 +10246,14 @@ end
         @test img[:, :, 1] ≈ R atol=1e-6     # FLOAT channels carry Float32 precision
         @test img[:, :, 2] ≈ G atol=1e-6
         @test img[:, :, 3] ≈ B atol=1e-6
+        decreasing = Diff3D._decode_exr(build_exr_none(
+            2, 2, chs, Dict("R" => R, "G" => G, "B" => B);
+            lineorder=1, offset_order=[2, 1]))
+        @test decreasing == img
+        @test_throws "scanline block starting at y=0 appears more than once" Diff3D._decode_exr(
+            build_exr_none(
+                2, 2, chs, Dict("R" => R, "G" => G, "B" => B);
+                offset_order=[1, 1]))
 
         # HALF NONE round-trip using known half bit patterns.
         hpx = Dict("R" => [Float64(0x3C00) Float64(0x4000)],
@@ -10554,7 +10574,8 @@ end
         # Single-level tiled images: a 4×4 image of 2×2 tiles (NONE) verifies tile
         # placement exactly — each tile's value must land in its own quadrant.
         function build_exr_tiled(W, H, tx, ty, tilevals;
-                                 lineorder=0)  # tilevals[(tileX,tileY)] => half
+                                 lineorder=0,
+                                 offset_order=nothing)  # tilevals[(tileX,tileY)] => half
             tiledesc = vcat(le32i(tx), le32i(ty), UInt8[0])   # ONE_LEVEL, ROUND_DOWN
             hdr = vcat(le32i(20000630), le32i(2 | 0x200),     # tiled flag
                        attr("channels", "chlist", chlist([("B", 1), ("G", 1), ("R", 1)])),
@@ -10572,8 +10593,19 @@ end
                 push!(chunks, vcat(le32i(tix), le32i(tiy), le32i(0), le32i(0), le32i(length(d)), d))
             end
             body = length(hdr) + length(chunks) * 8
-            offs = UInt8[]; cur = body
-            for c in chunks; offs = vcat(offs, le64(cur)); cur += length(c); end
+            chunk_offsets = Int[]
+            cur = body
+            for c in chunks
+                push!(chunk_offsets, cur)
+                cur += length(c)
+            end
+            order = offset_order === nothing ? collect(eachindex(chunks)) :
+                    offset_order
+            @assert length(order) == length(chunks)
+            offs = UInt8[]
+            for index in order
+                append!(offs, le64(chunk_offsets[index]))
+            end
             vcat(hdr, offs, chunks...)
         end
         timg = Diff3D._decode_exr(build_exr_tiled(4, 4, 2, 2,
@@ -10588,6 +10620,18 @@ end
                  (0, 1) => 0x4200, (1, 1) => 0x4400);
             lineorder=2))
         @test random_tiled == timg
+        shuffled_tiled = Diff3D._decode_exr(build_exr_tiled(
+            4, 4, 2, 2,
+            Dict((0, 0) => 0x3C00, (1, 0) => 0x4000,
+                 (0, 1) => 0x4200, (1, 1) => 0x4400);
+            lineorder=2, offset_order=[4, 1, 3, 2]))
+        @test shuffled_tiled == timg
+        @test_throws "tile coordinate (0,0) appears more than once" Diff3D._decode_exr(
+            build_exr_tiled(
+                4, 4, 2, 2,
+                Dict((0, 0) => 0x3C00, (1, 0) => 0x4000,
+                     (0, 1) => 0x4200, (1, 1) => 0x4400);
+                offset_order=[1, 1, 3, 4]))
         @test_throws "random-order scanlines are not supported" Diff3D._decode_exr(
             build_exr_none(
                 2, 2, chs,
