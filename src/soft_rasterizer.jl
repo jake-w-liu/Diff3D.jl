@@ -502,7 +502,8 @@ function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
     end
 end
 
-@inline _soft_near_value(v::Vec4, eps) = v.z + v.w - eps
+@inline _soft_near_value(v::Vec4, eps) =
+    v.z + v.w - eps * abs(v.w)
 
 @inline function _soft_lerp_clip(a::Vec4, b::Vec4, t)
     Vec4(a.x + t * (b.x - a.x),

@@ -27990,3 +27990,55 @@ end
     end
     @test_opt_alloc 0 catmull_rom_point(uniform, 0.5)
 end
+
+@testset "fresh audit round 236 fixes" begin
+    config = SoftRasterizerConfig(sigma=0.1, gamma=1.0, eps=1.0e-8)
+    faces = [(1, 2, 3)]
+    colors = [Color3(1.0, 0.0, 0.0)]
+    identity_vp = Mat4{Float64}()
+    scaled_vp(scale) = Mat4{Float64}(
+        ntuple(index -> scale * identity_vp.e[index], 16))
+
+    inside_z = -1.0 + 2 * config.eps
+    inside = [
+        Vec3(-0.5, -0.5, inside_z),
+        Vec3(0.5, -0.5, inside_z),
+        Vec3(0.0, 0.5, inside_z),
+    ]
+    reference = soft_render(
+        inside, faces, colors, identity_vp, 16, 16, config)
+    @test sum(reference) > 1.0
+    for scale in (1.0e-12, 1.0e12)
+        scaled = soft_render(
+            inside, faces, colors, scaled_vp(scale), 16, 16, config)
+        @test scaled ≈ reference rtol=1.0e-12 atol=1.0e-12
+    end
+
+    crossing = [
+        Vec3(-0.5, -0.5, -1.2),
+        Vec3(0.5, -0.5, -0.5),
+        Vec3(0.0, 0.5, -0.5),
+    ]
+    crossing_reference = soft_render(
+        crossing, faces, colors, identity_vp, 16, 16, config)
+    for scale in (1.0e-12, 1.0e12)
+        scaled = soft_render(
+            crossing, faces, colors, scaled_vp(scale), 16, 16, config)
+        @test scaled ≈ crossing_reference rtol=1.0e-12 atol=1.0e-12
+    end
+
+    clip_vertex = Vec4(0.0, 0.0, inside_z, 1.0)
+    for scale in (1.0e-12, 1.0, 1.0e12)
+        scaled_vertex = Vec4(
+            0.0, 0.0, scale * clip_vertex.z, scale * clip_vertex.w)
+        @test Diff3D._soft_clip_near_triangle(
+            scaled_vertex, scaled_vertex, scaled_vertex, config.eps)[1] == 3
+    end
+    derivative = ForwardDiff.derivative(1.0) do scale
+        Diff3D._soft_near_value(
+            Vec4(0.0, 0.0, scale * inside_z, scale), config.eps)
+    end
+    @test isfinite(derivative)
+    @test derivative > 0.0
+    @test_opt_alloc 0 Diff3D._soft_near_value(clip_vertex, config.eps)
+end
