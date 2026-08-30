@@ -30007,6 +30007,18 @@ end
     @test length(matrices) == 1
     @test matrices[1] == Mat4()
 
+    two_matrix_bytes = vcat(identity_bytes, identity_bytes)
+    extra_inverse = deepcopy(inverse_gltf)
+    extra_inverse["bufferViews"][1]["byteLength"] = length(two_matrix_bytes)
+    extra_inverse["accessors"][1]["count"] = 2
+    prefix = Diff3D._gltf_inverse_bind_matrices(
+        extra_inverse, Any[two_matrix_bytes], inverse_skin, 1)
+    @test prefix == [Mat4()]
+    @test length(Diff3D._gltf_inverse_bind_matrices(
+        extra_inverse, Any[two_matrix_bytes], inverse_skin, 2)) == 2
+    @test_throws "inverseBindMatrices count must be at least the joint count" Diff3D._gltf_inverse_bind_matrices(
+        inverse_gltf, Any[identity_bytes], inverse_skin, 2)
+
     bad_inverse = deepcopy(inverse_gltf)
     bad_inverse["accessors"][1]["componentType"] = 5123
     @test_throws "inverseBindMatrices accessor componentType/normalized combination is invalid" Diff3D._gltf_inverse_bind_matrices(

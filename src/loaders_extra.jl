@@ -10142,8 +10142,10 @@ function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
         gltf, accessor_index, "inverseBindMatrices", (5126,), ())
     data, ncomp, count = _gltf_accessor(gltf, buffers, accessor_index)
     ncomp == 16 || error("glTF inverseBindMatrices accessor must be MAT4")
-    count == joint_count || error("glTF inverseBindMatrices count must match joints")
-    return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16)) for i in 1:count]
+    count >= joint_count ||
+        error("glTF inverseBindMatrices count must be at least the joint count")
+    return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16))
+            for i in 1:joint_count]
 end
 
 function _gltf_validate_attribute_shape(name::String, item_size::Int,
