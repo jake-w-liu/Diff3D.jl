@@ -1410,7 +1410,9 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
                                       inv_log_far=1.0,
                                       ortho_dir=nothing,
                                       stamp_cache=nothing,
-                                      instance_materials=nothing)
+                                      instance_materials=nothing,
+                                      frustum=nothing,
+                                      bounds_cache=nothing)
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
@@ -1424,6 +1426,10 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
     flat_iw = stamp_cache === nothing ? nothing : stamp_cache.smooth_iw
     @inbounds for instance_index in eachindex(instance_matrices)
         world = base * instance_matrices[instance_index]
+        if frustum !== nothing
+            _mesh_in_frustum(
+                frustum, geo, world, bounds_cache) || continue
+        end
         instance_material = instance_materials === nothing ?
                             _with_vertex_color(mat, instance_colors[instance_index]) :
                             instance_materials[instance_index]
@@ -1703,13 +1709,17 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                                    im.instance_colors)
         if shading === :smooth && !material_wireframe(mat)
             @inbounds for instance_index in eachindex(im.instance_matrices)
+                world = base * im.instance_matrices[instance_index]
+                if frustum !== nothing
+                    _mesh_in_frustum(
+                        frustum, geo, world, bounds_cache) || continue
+                end
                 instance_material = cache === nothing ?
                     _with_vertex_color(
                         mat, im.instance_colors[instance_index]) :
                     _cached_instanced_material_at(
                         cache.instanced_materials, instanced_slot,
                         instance_index, mat)
-                world = base * im.instance_matrices[instance_index]
                 _render_smooth_geometry!(
                     rt, geo, instance_material, world, lights,
                     proj, view, near, camera_position, mesh_shadow_fn,
@@ -1730,7 +1740,9 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                      xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                      log_depth=log_depth, inv_log_far=inv_log_far,
                                      ortho_dir=ortho_dir, stamp_cache=cache,
-                                     instance_materials=instance_materials)
+                                     instance_materials=instance_materials,
+                                     frustum=frustum,
+                                     bounds_cache=bounds_cache)
     end
 
     # Smooth (per-pixel) opaque meshes share the same depth buffer.
@@ -1826,6 +1838,11 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         base = instanced_worlds[instanced_slot]
         for instance_index in eachindex(im.instance_matrices)
             world = base * im.instance_matrices[instance_index]
+            if frustum !== nothing
+                _mesh_in_frustum(
+                    frustum, _instanced_geometry(im), world,
+                    bounds_cache) || continue
+            end
             kind = material_wireframe(mat) ?
                    _TRANSPARENT_INSTANCED_WIREFRAME_ITEM :
                    _TRANSPARENT_INSTANCE_ITEM

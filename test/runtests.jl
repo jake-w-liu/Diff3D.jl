@@ -32252,3 +32252,96 @@ end
         cached_target, cached_scene, perspective;
         shading=:smooth, frustum_cull=false, cache=cached)
 end
+
+@testset "CRC66 — per-instance frustum culling" begin
+    geometry = BufferGeometry(
+        [-0.2, -0.2, 0.0,
+          0.2, -0.2, 0.0,
+          0.0,  0.2, 0.0],
+        repeat([0.0, 0.0, 1.0], 3),
+        Float64[], [1, 2, 3], 3, 1)
+    camera = PerspectiveCamera(
+        fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+    calls = Ref(0)
+    program = (normal, view_dir, position, uniforms) -> begin
+        calls[] += 1
+        Color3(1.0, 1.0, 1.0)
+    end
+    material = ShaderMaterial(program=program, side=:double)
+
+    function counted_instances(; visible=0)
+        scene = Scene()
+        instances = InstancedMesh(geometry, material, 10)
+        for index in 1:10
+            matrix = index <= visible ? Mat4() :
+                     mat4_translation(1_000.0 + index, 0.0, 0.0)
+            set_instance_matrix!(instances, index, matrix)
+        end
+        add!(scene, instances)
+        return scene
+    end
+
+    target = RenderTarget(24, 24)
+    offscreen = counted_instances()
+    calls[] = 0
+    render!(target, offscreen, camera; frustum_cull=true)
+    @test calls[] == 0
+    @test all(iszero, target.color)
+
+    calls[] = 0
+    render!(target, offscreen, camera; frustum_cull=false)
+    @test calls[] == 10
+    @test all(iszero, target.color)
+
+    partially_visible = counted_instances(visible=1)
+    calls[] = 0
+    render!(target, partially_visible, camera; frustum_cull=true)
+    @test calls[] == 1
+    @test sum(target.color) > 0.0
+
+    # Ordinary mesh culling and disabled-culling behavior remain unchanged.
+    ordinary_scene = Scene()
+    ordinary = Mesh(geometry, material)
+    ordinary.position = Vec3(1_000.0, 0.0, 0.0)
+    add!(ordinary_scene, ordinary)
+    calls[] = 0
+    render!(target, ordinary_scene, camera; frustum_cull=true)
+    @test calls[] == 0
+    calls[] = 0
+    render!(target, ordinary_scene, camera; frustum_cull=false)
+    @test calls[] == 1
+
+    # Transparent instances are filtered before the global blend list is
+    # sorted, not merely skipped after doing per-instance render setup.
+    transparent_scene = Scene()
+    transparent_instances = InstancedMesh(
+        geometry,
+        MeshBasicMaterial(
+            color=Color3(1.0, 0.0, 0.0), transparent=true,
+            opacity=0.5, depth_write=false, side=:double),
+        3)
+    for index in 1:3
+        set_instance_matrix!(
+            transparent_instances, index,
+            mat4_translation(1_000.0 + index, 0.0, 0.0))
+    end
+    add!(transparent_scene, transparent_instances)
+    transparent_cache = RenderCache()
+    render!(target, transparent_scene, camera;
+            frustum_cull=true, cache=transparent_cache)
+    @test isempty(transparent_cache.transparent_items)
+    render!(target, transparent_scene, camera;
+            frustum_cull=false, cache=transparent_cache)
+    @test length(transparent_cache.transparent_items) == 3
+
+    cached = RenderCache()
+    render!(target, partially_visible, camera;
+            frustum_cull=true, cache=cached)
+    calls[] = 0
+    @test_opt_alloc 4096 render!(
+        target, partially_visible, camera;
+        frustum_cull=true, cache=cached)
+    @test calls[] == 1
+end
