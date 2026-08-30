@@ -164,7 +164,23 @@ Base.cos(a::ADVar)  = _ad_record(cos(a.val), (a,), (-sin(a.val),))
 Base.tan(a::ADVar)  = (t = tan(a.val); _ad_record(t, (a,), (1.0 + t * t,)))
 Base.sinh(a::ADVar) = _ad_record(sinh(a.val), (a,), (cosh(a.val),))
 Base.cosh(a::ADVar) = _ad_record(cosh(a.val), (a,), (sinh(a.val),))
-Base.tanh(a::ADVar) = (t = tanh(a.val); _ad_record(t, (a,), (1.0 - t * t,)))
+@inline function _tanh_derivative(x::Float64, value::Float64)
+    # `1 - tanh(x)^2` has better absolute accuracy near zero, but loses the
+    # entire representable derivative once tanh rounds to ±1. The exponential
+    # sech² form has no subtractive cancellation in the tails.
+    abs(x) < 1.0 && return 1.0 - value * value
+    exponent = -2.0 * abs(x)
+    tail = exp(exponent)
+    numerator = (iszero(tail) || issubnormal(tail)) ?
+                exp(log(4.0) + exponent) : 4.0 * tail
+    denominator = 1.0 + tail
+    return numerator / (denominator * denominator)
+end
+function Base.tanh(a::ADVar)
+    value = tanh(a.val)
+    return _ad_record(
+        value, (a,), (_tanh_derivative(a.val, value),))
+end
 Base.asin(a::ADVar) = _ad_record(asin(a.val), (a,), (1.0 / sqrt(1.0 - a.val * a.val),))
 Base.acos(a::ADVar) = _ad_record(acos(a.val), (a,), (-1.0 / sqrt(1.0 - a.val * a.val),))
 @inline function _atan_derivative(x::Float64)

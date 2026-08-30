@@ -31459,3 +31459,23 @@ end
     @test_opt_alloc 4096 render!(
         cached_target, cached_scene, camera; cache=cached)
 end
+
+@testset "CRC55 — stable reverse tanh tail derivative" begin
+    for input in (-373.0, -372.0, -20.0, -5.0,
+                  5.0, 20.0, 372.0, 373.0)
+        oracle = Float64(setprecision(BigFloat, 512) do
+            inv(cosh(BigFloat(input))^2)
+        end)
+        actual = only(reverse_gradient(
+            values -> tanh(values[1]), [input]))
+        @test actual > 0.0
+        @test isapprox(actual, oracle; rtol=2eps(Float64), atol=0.0)
+    end
+
+    for input in (-0.5, 0.0, 0.5)
+        actual = only(reverse_gradient(
+            values -> tanh(values[1]), [input]))
+        expected = ForwardDiff.derivative(tanh, input)
+        @test isapprox(actual, expected; rtol=2eps(Float64), atol=0.0)
+    end
+end
