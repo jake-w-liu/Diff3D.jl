@@ -29335,3 +29335,112 @@ end
     @test_opt_alloc 0 Diff3D._light_world_position(world_point)
     @test_opt_alloc 64 light_contribution(world_point, sample_position)
 end
+
+@testset "fresh audit round 253 fixes" begin
+    geometry = PlaneGeometry(width=2.0, height=2.0)
+    material = MeshDepthMaterial(
+        near=1.0, far=9.0, side=:double)
+    expected_mid = Diff3D._depth_material_color(material, 0.5)
+    centered_colors = Color3{Float64}[]
+    off_axis_colors = Color3{Float64}[]
+    Diff3D._shade_depth_faces!(
+        centered_colors, geometry,
+        mat4_translation(0.0, 0.0, -5.0), material)
+    Diff3D._shade_depth_faces!(
+        off_axis_colors, geometry,
+        mat4_translation(3.0, 0.0, -5.0), material)
+    @test centered_colors == fill(expected_mid, geometry.n_faces)
+    @test off_axis_colors == centered_colors
+
+    camera = PerspectiveCamera(
+        fov=pi / 2, aspect=1.0, near=0.5, far=20.0)
+    camera.position = Vec3()
+    camera.target = Vec3(0.0, 0.0, -1.0)
+    function depth_render(depth_material, shading;
+                          rotation=Euler(), camera=camera)
+        scene = Scene()
+        plane = Mesh(
+            PlaneGeometry(width=4.0, height=4.0), depth_material)
+        plane.position = Vec3(0.0, 0.0, -5.0)
+        plane.rotation = rotation
+        add!(scene, plane)
+        target = RenderTarget(48, 48)
+        render!(target, scene, camera; shading=shading,
+                frustum_cull=false)
+        return target
+    end
+
+    for shading in (:flat, :smooth)
+        target = depth_render(material, shading)
+        @test target.color[24, 24, 1] ≈ 0.5 atol=2.0e-2
+    end
+
+    flat_slanted = depth_render(
+        material, :flat; rotation=Euler(0.6, 0.0, 0.0))
+    smooth_slanted = depth_render(
+        material, :smooth; rotation=Euler(0.6, 0.0, 0.0))
+    flat_values = unique(round.(flat_slanted.color[:, :, 1]; digits=6))
+    smooth_values = unique(round.(smooth_slanted.color[:, :, 1]; digits=6))
+    @test length(smooth_values) > length(flat_values)
+    @test maximum(smooth_values) - minimum(filter(>(0.0), smooth_values)) > 0.1
+
+    orthographic = OrthographicCamera(
+        left=-3.0, right=3.0, top=3.0, bottom=-3.0,
+        near=0.5, far=20.0)
+    orthographic.position = Vec3()
+    orthographic.target = Vec3(0.0, 0.0, -1.0)
+    orthographic_depth = depth_render(
+        material, :smooth; rotation=Euler(0.6, 0.0, 0.0),
+        camera=orthographic)
+    orthographic_values = unique(round.(
+        orthographic_depth.color[:, :, 1]; digits=6))
+    @test length(orthographic_values) > 3
+
+    for packing in (:basic, :rgba, :rgb, :rg)
+        packed = MeshDepthMaterial(
+            near=1.0, far=9.0, depth_packing=packing,
+            side=:double)
+        packed_target = depth_render(packed, :smooth)
+        expected = Diff3D._depth_material_color(packed, 0.5)
+        actual = packed_target.color[24, 24, :]
+        @test actual[1] ≈ expected.r atol=2.0e-2
+        @test actual[2] ≈ expected.g atol=2.0e-2
+        @test actual[3] ≈ expected.b atol=2.0e-2
+    end
+
+    black_map = Texture(
+        zeros(Float64, 1, 1, 3); filter=:nearest,
+        colorspace=:linear)
+    mapped_material = MeshDepthMaterial(
+        near=1.0, far=9.0, map=black_map, side=:double)
+    @test depth_render(mapped_material, :smooth).color ==
+          depth_render(material, :smooth).color
+
+    transparent_map_data = ones(Float64, 1, 1, 4)
+    transparent_map_data[1, 1, 4] = 0.0
+    alpha_material = MeshDepthMaterial(
+        near=1.0, far=9.0,
+        map=Texture(
+            transparent_map_data; filter=:nearest,
+            colorspace=:linear),
+        alpha_test=0.5, side=:double)
+    @test sum(depth_render(alpha_material, :smooth).color) == 0.0
+
+    instanced_scene = Scene()
+    instanced = InstancedMesh(
+        PlaneGeometry(width=1.5, height=1.5), material, 2)
+    set_instance_matrix!(
+        instanced, 1, mat4_translation(-1.0, 0.0, -3.0))
+    set_instance_matrix!(
+        instanced, 2, mat4_translation(1.0, 0.0, -7.0))
+    add!(instanced_scene, instanced)
+    instanced_target = RenderTarget(64, 32)
+    render!(instanced_target, instanced_scene, camera;
+            frustum_cull=false)
+    @test maximum(instanced_target.color[:, 1:32, 1]) >
+          maximum(instanced_target.color[:, 33:64, 1])
+
+    @test_opt_alloc 256 Diff3D._shade_depth_faces!(
+        centered_colors, geometry,
+        mat4_translation(0.0, 0.0, -5.0), material)
+end

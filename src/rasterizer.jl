@@ -450,9 +450,9 @@ end
 end
 
 @inline function _rasterize_tri_smooth!(rt::RenderTarget,
-        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
-        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
-        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
+        s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
+        s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
+        s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
         material::M, lights, cam_pos::Vec3, shadow_fn,
         albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
@@ -463,9 +463,9 @@ end
         blend::Bool=false) where {M<:AbstractMaterial}
     if use_vertex_colors
         return _rasterize_tri_smooth_impl!(Val(true), rt,
-            s1x, s1y, z1, iw1, wp1, wn1, uv1, uv2_1, vc1,
-            s2x, s2y, z2, iw2, wp2, wn2, uv2, uv2_2, vc2,
-            s3x, s3y, z3, iw3, wp3, wn3, uv3, uv2_3, vc3,
+            s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
+            s2x, s2y, z2, iw2, view_depth2, wp2, wn2, uv2, uv2_2, vc2,
+            s3x, s3y, z3, iw3, view_depth3, wp3, wn3, uv3, uv2_3, vc3,
             material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
             normal_map, roughness_map, metalness_map, specular_map,
             glossiness_map, physical_pbr_map, ao_map, emissive_map,
@@ -475,9 +475,9 @@ end
             stamp=stamp, stamp_id=stamp_id, blend=blend)
     end
     return _rasterize_tri_smooth_impl!(Val(false), rt,
-        s1x, s1y, z1, iw1, wp1, wn1, uv1, uv2_1, vc1,
-        s2x, s2y, z2, iw2, wp2, wn2, uv2, uv2_2, vc2,
-        s3x, s3y, z3, iw3, wp3, wn3, uv3, uv2_3, vc3,
+        s1x, s1y, z1, iw1, view_depth1, wp1, wn1, uv1, uv2_1, vc1,
+        s2x, s2y, z2, iw2, view_depth2, wp2, wn2, uv2, uv2_2, vc2,
+        s3x, s3y, z3, iw3, view_depth3, wp3, wn3, uv3, uv2_3, vc3,
         material, lights, cam_pos, shadow_fn, albedo_map, alpha_map,
         normal_map, roughness_map, metalness_map, specular_map,
         glossiness_map, physical_pbr_map, ao_map, emissive_map,
@@ -488,9 +488,9 @@ end
 end
 
 @inline function _rasterize_tri_smooth_impl!(::Val{UseVertexColors}, rt::RenderTarget,
-        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
-        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
-        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
+        s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, uv1::Vec2, uv2_1::Vec2, vc1::Color3,
+        s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, uv2::Vec2, uv2_2::Vec2, vc2::Color3,
+        s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, uv3::Vec2, uv2_3::Vec2, vc3::Color3,
         material::M, lights, cam_pos::Vec3, shadow_fn,
         albedo_map, alpha_map, normal_map, roughness_map, metalness_map,
         specular_map, glossiness_map, physical_pbr_map, ao_map, emissive_map, light_map,
@@ -555,6 +555,9 @@ end
             # Perspective-correct interpolation: weight by 1/w.
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
+            fragment_view_depth = a0 * view_depth1 +
+                                  a1 * view_depth2 +
+                                  a2 * view_depth3
             wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                         a0*wp1.y + a1*wp2.y + a2*wp3.y,
                         a0*wp1.z + a1*wp2.z + a2*wp3.z)
@@ -595,7 +598,12 @@ end
                                                         normal_handedness,
                                                         normal_scale)
                 end
-                if has_specular || has_glossiness
+                if material isa MeshDepthMaterial
+                    depth = clamp(
+                        (fragment_view_depth - material.near) /
+                        (material.far - material.near), 0.0, 1.0)
+                    col = _depth_material_color(material, depth)
+                elseif has_specular || has_glossiness
                     specular, shininess = _phong_mapped_terms(
                         material, specular_map, glossiness_map, u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
@@ -666,7 +674,8 @@ end
                     col = Color3(col.r - em.r * emi, col.g - em.g * emi,
                                  col.b - em.b * emi)
                 end
-                if has_albedo && !base_albedo_map
+                if has_albedo && !base_albedo_map &&
+                   !(material isa MeshDepthMaterial)
                     tu, tv = _map_uv(albedo_map, u, v, u2, v2)
                     col = col * sample_texture_linear(albedo_map, tu, tv)
                 end
@@ -717,9 +726,9 @@ end
 end
 
 @inline function _rasterize_tri_smooth_nomaps!(rt::RenderTarget,
-        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, vc1::Color3,
-        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, vc2::Color3,
-        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, vc3::Color3,
+        s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, vc1::Color3,
+        s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, vc2::Color3,
+        s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, vc3::Color3,
         material::M, lights, cam_pos::Vec3, shadow_fn,
         clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
@@ -728,18 +737,18 @@ end
         blend::Bool=false) where {M<:AbstractMaterial}
     if use_vertex_colors
         return _rasterize_tri_smooth_nomaps_impl!(Val(true), rt,
-            s1x, s1y, z1, iw1, wp1, wn1, vc1,
-            s2x, s2y, z2, iw2, wp2, wn2, vc2,
-            s3x, s3y, z3, iw3, wp3, wn3, vc3,
+            s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
+            s2x, s2y, z2, iw2, view_depth2, wp2, wn2, vc2,
+            s3x, s3y, z3, iw3, view_depth3, wp3, wn3, vc3,
             material, lights, cam_pos, shadow_fn, clipping_planes;
             xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
             depth_test=depth_test, depth_write=depth_write,
             stamp=stamp, stamp_id=stamp_id, blend=blend)
     end
     return _rasterize_tri_smooth_nomaps_impl!(Val(false), rt,
-        s1x, s1y, z1, iw1, wp1, wn1, vc1,
-        s2x, s2y, z2, iw2, wp2, wn2, vc2,
-        s3x, s3y, z3, iw3, wp3, wn3, vc3,
+        s1x, s1y, z1, iw1, view_depth1, wp1, wn1, vc1,
+        s2x, s2y, z2, iw2, view_depth2, wp2, wn2, vc2,
+        s3x, s3y, z3, iw3, view_depth3, wp3, wn3, vc3,
         material, lights, cam_pos, shadow_fn, clipping_planes;
         xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
         depth_test=depth_test, depth_write=depth_write,
@@ -747,9 +756,9 @@ end
 end
 
 @inline function _rasterize_tri_smooth_nomaps_impl!(::Val{UseVertexColors}, rt::RenderTarget,
-        s1x, s1y, z1, iw1, wp1::Vec3, wn1::Vec3, vc1::Color3,
-        s2x, s2y, z2, iw2, wp2::Vec3, wn2::Vec3, vc2::Color3,
-        s3x, s3y, z3, iw3, wp3::Vec3, wn3::Vec3, vc3::Color3,
+        s1x, s1y, z1, iw1, view_depth1, wp1::Vec3, wn1::Vec3, vc1::Color3,
+        s2x, s2y, z2, iw2, view_depth2, wp2::Vec3, wn2::Vec3, vc2::Color3,
+        s3x, s3y, z3, iw3, view_depth3, wp3::Vec3, wn3::Vec3, vc3::Color3,
         material::M, lights, cam_pos::Vec3, shadow_fn,
         clipping_planes;
         xlo::Int=1, xhi::Int=typemax(Int), ylo::Int=1, yhi::Int=typemax(Int),
@@ -786,6 +795,9 @@ end
             alpha_base < alpha_test && continue
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
+            fragment_view_depth = a0 * view_depth1 +
+                                  a1 * view_depth2 +
+                                  a2 * view_depth3
             wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                       a0*wp1.y + a1*wp2.y + a2*wp3.y,
                       a0*wp1.z + a1*wp2.z + a2*wp3.z)
@@ -794,7 +806,12 @@ end
                                 a0*wn1.y + a1*wn2.y + a2*wn3.y,
                                 a0*wn1.z + a1*wn2.z + a2*wn3.z))
             vd = _direction_between(wp, cam_pos)
-            if UseVertexColors
+            if material isa MeshDepthMaterial
+                depth = clamp(
+                    (fragment_view_depth - material.near) /
+                    (material.far - material.near), 0.0, 1.0)
+                col = _depth_material_color(material, depth)
+            elseif UseVertexColors
                 vc = Color3(a0*vc1.r + a1*vc2.r + a2*vc3.r,
                             a0*vc1.g + a1*vc2.g + a2*vc3.g,
                             a0*vc1.b + a1*vc2.b + a2*vc3.b)
@@ -1035,9 +1052,9 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             end
             if has_uv_maps
                 _rasterize_tri_smooth!(rt,
-                    sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
-                    sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
-                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
+                    sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].uv, clipped[1].uv2, clipped[1].vc,
+                    sx[k], sy[k], sz[k], iw[k], -clipped[k].vp.z, clipped[k].wp, clipped[k].wn, clipped[k].uv, clipped[k].uv2, clipped[k].vc,
+                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], -clipped[k+1].vp.z, clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].uv, clipped[k+1].uv2, clipped[k+1].vc,
                     mat, lights, cam_pos, mesh_shadow_fn, albedo_map, alpha_map,
                     normal_map, roughness_map, metalness_map, specular_map,
                     glossiness_map, physical_pbr_map,
@@ -1048,9 +1065,9 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                     use_vertex_colors=use_vertex_colors, blend=blend)
             else
                 _rasterize_tri_smooth_nomaps!(rt,
-                    sx[1], sy[1], sz[1], iw[1], clipped[1].wp, clipped[1].wn, clipped[1].vc,
-                    sx[k], sy[k], sz[k], iw[k], clipped[k].wp, clipped[k].wn, clipped[k].vc,
-                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].vc,
+                    sx[1], sy[1], sz[1], iw[1], -clipped[1].vp.z, clipped[1].wp, clipped[1].wn, clipped[1].vc,
+                    sx[k], sy[k], sz[k], iw[k], -clipped[k].vp.z, clipped[k].wp, clipped[k].wn, clipped[k].vc,
+                    sx[k+1], sy[k+1], sz[k+1], iw[k+1], -clipped[k+1].vp.z, clipped[k+1].wp, clipped[k+1].wn, clipped[k+1].vc,
                     mat, lights, cam_pos, mesh_shadow_fn, mesh_clipping_planes;
                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                     depth_test=depth_test, depth_write=depth_write,
@@ -1930,6 +1947,25 @@ end
         mat, lights; shadow_fn=shadow_fn))
 end
 
+function _shade_depth_faces!(colors::Vector{Color3{Float64}},
+                             geo::BufferGeometry, modelview::Mat4,
+                             material::MeshDepthMaterial)
+    _validate_depth_material(material)
+    length(colors) == geo.n_faces || resize!(colors, geo.n_faces)
+    inverse_range = 1.0 / (material.far - material.near)
+    @inbounds for face in 1:geo.n_faces
+        i1, i2, i3 = get_face(geo, face)
+        v1 = mat4_transform_point(modelview, get_vertex(geo, i1))
+        v2 = mat4_transform_point(modelview, get_vertex(geo, i2))
+        v3 = mat4_transform_point(modelview, get_vertex(geo, i3))
+        view_depth = -_mean3_scaled(v1.z, v2.z, v3.z)
+        depth = clamp(
+            (view_depth - material.near) * inverse_range, 0.0, 1.0)
+        colors[face] = _depth_material_color(material, depth)
+    end
+    return colors
+end
+
 function _combined_clipping_planes(global_planes, material_planes)
     isempty(material_planes) && return global_planes
     isempty(global_planes) && return material_planes
@@ -1977,10 +2013,19 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     normal_mat = side === :double ? world_mat : mat4_transpose(mat4_inverse(world_mat))
     has_normals = length(geo.normals) >= geo.n_vertices * 3
     lazy_shader_faces = mat isa ShaderMaterial
-    face_colors = lazy_shader_faces ? nothing :
-        (colorbuf === nothing ?
-         shade_mesh_faces(geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
-         shade_mesh_faces!(colorbuf, geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn))
+    face_colors = if lazy_shader_faces
+        nothing
+    elseif mat isa MeshDepthMaterial
+        depth_colors = colorbuf === nothing ? Color3{Float64}[] : colorbuf
+        _shade_depth_faces!(depth_colors, geo, modelview, mat)
+    else
+        colorbuf === nothing ?
+            shade_mesh_faces(
+                geo, world_mat, mat, lights, cam_pos; shadow_fn=shadow_fn) :
+            shade_mesh_faces!(
+                colorbuf, geo, world_mat, mat, lights, cam_pos;
+                shadow_fn=shadow_fn)
+    end
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing
     alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
