@@ -500,6 +500,55 @@ end
     return _mat4_divide_product(value, column_scale, row_scale)
 end
 
+@noinline function _mat4_inverse_precise(m::Mat4{T}) where {T<:AbstractFloat}
+    return setprecision(BigFloat, 512) do
+        augmented = Matrix{BigFloat}(undef, 4, 8)
+        @inbounds for row in 1:4, column in 1:4
+            augmented[row, column] = BigFloat(mat4_get(m, row, column))
+            augmented[row, column + 4] = row == column ?
+                                         one(BigFloat) : zero(BigFloat)
+        end
+        @inbounds for column in 1:4
+            pivot_row = column
+            pivot_abs = abs(augmented[column, column])
+            for row in (column + 1):4
+                candidate = abs(augmented[row, column])
+                if candidate > pivot_abs
+                    pivot_abs = candidate
+                    pivot_row = row
+                end
+            end
+            if iszero(pivot_abs)
+                return _mat4_zero_like(zero(T))
+            end
+            if pivot_row != column
+                for slot in 1:8
+                    augmented[column, slot], augmented[pivot_row, slot] =
+                        augmented[pivot_row, slot], augmented[column, slot]
+                end
+            end
+            pivot = augmented[column, column]
+            for slot in 1:8
+                augmented[column, slot] /= pivot
+            end
+            for row in 1:4
+                row == column && continue
+                factor = augmented[row, column]
+                iszero(factor) && continue
+                for slot in 1:8
+                    augmented[row, slot] -= factor * augmented[column, slot]
+                end
+            end
+        end
+        values = ntuple(Val(16)) do index
+            row = (index - 1) % 4 + 1
+            column = (index - 1) ÷ 4 + 1
+            convert(T, augmented[row, column + 4])
+        end
+        return Mat4{T}(values)
+    end
+end
+
 @inline _mat4_inverse_scale_value(value) = value
 @inline _mat4_inverse_scale_value(value::ForwardDiff.Dual) =
     _mat4_inverse_scale_value(ForwardDiff.value(value))
@@ -595,6 +644,13 @@ function mat4_inverse(m::Mat4)
     b11 = a22*a33 - a23*a32
 
     det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06
+    permanent = abs(b00*b11) + abs(b01*b10) + abs(b02*b09) +
+                abs(b03*b08) + abs(b04*b07) + abs(b05*b06)
+    if balanced && typeof(det) <: Base.IEEEFloat &&
+       (iszero(permanent) ||
+        abs(det) <= 256 * eps(typeof(det)) * permanent)
+        return _mat4_inverse_precise(m)
+    end
     if iszero(det)                  # singular matrix: return zero matrix (three.js Matrix4.invert)
         return _mat4_zero_like(a00)
     end

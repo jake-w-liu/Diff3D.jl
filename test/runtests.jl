@@ -33804,3 +33804,39 @@ end
     @test sum(instance_culled.color) > 0.0
     @test_opt_alloc 64 Diff3D._mat4_linear_max_scale(world)
 end
+
+@testset "CRC84 — precise near-singular matrix inverse" begin
+    scale = 1.0e100
+    perturbed = nextfloat(scale)
+    matrix = Mat4((
+        scale, scale, scale, 0.0,
+        scale, perturbed, scale, 0.0,
+        scale, scale, perturbed, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ))
+    oracle = setprecision(BigFloat, 512) do
+        source = Matrix{BigFloat}(undef, 4, 4)
+        for row in 1:4, column in 1:4
+            source[row, column] = BigFloat(mat4_get(matrix, row, column))
+        end
+        inv(source)
+    end
+    actual = mat4_inverse(matrix)
+    for row in 1:4, column in 1:4
+        expected = Float64(oracle[row, column])
+        @test isapprox(
+            mat4_get(actual, row, column), expected;
+            rtol=4eps(Float64), atol=0.0)
+    end
+    @test mat4_get(actual, 1, 1) == 1.0295115178936058e-84
+
+    singular = Mat4((
+        1.0, 1.0, 0.0, 0.0,
+        1.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ))
+    @test all(iszero, mat4_inverse(singular).e)
+    @test mat4_inverse(Mat4()) == Mat4()
+    @test_opt_alloc 0 mat4_inverse(Mat4())
+end
