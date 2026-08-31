@@ -33565,6 +33565,49 @@ end
         ordinary_curve, 0.5, ordinary_basis)
 end
 
+@testset "CRC73 — stable TransformControls snapping" begin
+    smallest = nextfloat(0.0)
+    for value in (1.0, -1.0, 0.5, -0.5)
+        oracle = setprecision(BigFloat, 2048) do
+            snap = BigFloat(smallest)
+            Float64(round(BigFloat(value) / snap) * snap)
+        end
+        @test Diff3D._transform_snap_value(value, smallest) == oracle
+    end
+    @test isequal(Diff3D._transform_snap_value(0.5, 1.0), 0.0)
+    @test Diff3D._transform_snap_value(1.5, 1.0) == 2.0
+    @test isequal(Diff3D._transform_snap_value(-0.5, 1.0), -0.0)
+
+    camera = PerspectiveCamera()
+    translated = Group()
+    translated.position = Vec3(1.0, 0.0, 0.0)
+    translation_control = TransformControls(
+        camera; mode=:translate, space=:world, axis=:X,
+        translation_snap=smallest)
+    transform_attach!(translation_control, translated)
+    transform_apply!(translation_control, Vec3())
+    @test translated.position == Vec3(1.0, 0.0, 0.0)
+
+    scaled = Group()
+    scale_control = TransformControls(
+        camera; mode=:scale, axis=:XYZ, scale_snap=smallest)
+    transform_attach!(scale_control, scaled)
+    transform_apply!(scale_control, Vec3(1.0, 1.0, 1.0))
+    @test scaled.scale == Vec3(1.0, 1.0, 1.0)
+
+    rotated = Group()
+    rotation_control = TransformControls(
+        camera; mode=:rotate, axis=:X, rotation_snap=smallest)
+    transform_attach!(rotation_control, rotated)
+    transform_apply!(rotation_control, Vec3(1.0, 0.0, 0.0))
+    @test all(isfinite, (rotated.rotation.x,
+                         rotated.rotation.y, rotated.rotation.z))
+    @test rotated.rotation.x ≈ 1.0 atol=1.0e-12
+
+    @test_opt_alloc 0 Diff3D._transform_snap_value(1.0, 0.25)
+    @test_opt_alloc 0 Diff3D._transform_snap_value(1.0, smallest)
+end
+
 @testset "CRC91 — merged attribute type promotion" begin
     function attributed_triangle(data)
         geometry = BufferGeometry(

@@ -1039,8 +1039,16 @@ function _transform_axis_vec(axis::Union{Nothing,Symbol}, delta::Vec3;
                 _transform_axis_has(axis, 'Z') ? delta.z : default)
 end
 
-_transform_snap_value(value::Real, snap::Float64) =
-    round(Float64(value) / snap) * snap
+@inline function _transform_snap_value(value::Real, snap::Float64)
+    finite_value = Float64(value)
+    quotient = finite_value / snap
+    isfinite(quotient) && return round(quotient) * snap
+
+    # The quotient may overflow even though the nearest snapped value is finite.
+    # IEEE remainder with RoundNearest performs the same ties-to-even quotient
+    # selection without materializing that quotient.
+    return finite_value - rem(finite_value, snap, RoundNearest)
+end
 
 function _transform_snap_position(pos::Vec3, snap::Float64,
                                   axis::Union{Nothing,Symbol})
