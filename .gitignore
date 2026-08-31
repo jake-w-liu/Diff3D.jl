@@ -10,3 +10,5 @@ Manifest.toml
 # Python bytecode from the examples verifier / browser smoke scripts.
 __pycache__/
 *.pyc
+
+.DS_Store

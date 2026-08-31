@@ -1,0 +1,3468 @@
+% Beamer slide deck for K. A. Novak,
+% "Special Functions of Mathematical Physics: A Tourist's Guidebook"
+% Chapter 7: Orthogonal Polynomials
+% Self-contained slide text; local figures live in sfmp_slides/figs.
+
+\documentclass[11pt]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+
+\usetheme{Madrid}
+
+\author[]{\texorpdfstring{after K. A. Novak\\Compiled by Jake W. Liu}{after K. A. Novak, Compiled by Jake W. Liu}}
+\title[Orthogonal Polynomials]{Chapter 7: Orthogonal Polynomials}
+\subtitle{Special Functions of Mathematical Physics: A Tourist's Guidebook}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{frametitle continuation}[from second]
+
+\AtBeginSection[]
+{
+ \begin{frame}<beamer>
+ \frametitle{Table of contents}
+ \tableofcontents[currentsection]
+ \end{frame}
+}
+
+\usepackage{Kyushu}
+
+% Neutralize \index so source markup (if any) is harmless.
+\makeatletter
+\@ifundefined{index}{\newcommand{\index}[1]{}}{\renewcommand{\index}[1]{}}
+\makeatother
+
+\begin{document}
+
+\newcounter{sfchapter}
+\setcounter{sfchapter}{7}
+\renewcommand{\thesection}{\arabic{sfchapter}.\arabic{section}}
+\numberwithin{equation}{section}
+
+\begin{frame}[c]\titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+\tableofcontents
+\end{frame}
+
+\begin{frame}{Where we are going}
+\footnotesize
+This chapter studies four families of \textbf{orthogonal polynomials}---Legendre,
+Hermite, Laguerre, and Chebyshev---each the polynomial solution of a second-order
+differential equation that arises by separating variables in a physical problem.
+They appear in Laplace, Poisson, Helmholtz, and Schr\"odinger equations and their
+time-dependent variants.
+\begin{itemize}
+  \item \textbf{Legendre} $P_n$: Laplace's equation $\nabla^2\psi=0$ in spherical
+        coordinates (spherical harmonics).
+  \item \textbf{Hermite} $H_n$: Schr\"odinger's equation for the quantum harmonic
+        oscillator.
+  \item \textbf{Laguerre}: generalized Laguerre polynomials arise in the radial
+        hydrogenic equation; the standard family $L_n=L_n^{(0)}$ is developed here.
+  \item \textbf{Chebyshev} $T_n$: defined through $\cos n\theta$; a natural interval
+        basis, and tied to separated problems in elliptic coordinates.
+\end{itemize}
+Across the chapter we use the same toolkit: a defining ODE, a series solution when useful,
+a \emph{generating function}, a \emph{recurrence}, and an \emph{orthogonality} relation.
+For Legendre, Hermite, and Laguerre we also record Rodrigues' formulas and
+Schl\"afli (contour) integrals.
+\end{frame}
+
+% ======================================================================
+\section{Spherical Harmonics}
+% ======================================================================
+
+\begin{frame}[allowframebreaks]{Warm-up: 2D Laplace in polar coordinates}
+\footnotesize
+
+A function satisfying Laplace's equation $\nabla^2\psi=0$ is called a \emph{harmonic
+function}. In two dimensions,
+\begin{equation}
+  \nabla^2\psi
+   = \frac{1}{r}\,\frac{\partial}{\partial r}\!\left(r\,\frac{\partial\psi}{\partial r}\right)
+   + \frac{1}{r^2}\,\frac{\partial^2\psi}{\partial\theta^2} = 0.
+  \label{eq:laplace2d}
+\end{equation}
+Take a separated solution $\psi(r,\theta)=u(r)v(\theta)$. Then
+\[
+  \frac{\partial\psi}{\partial r}=u'(r)v(\theta),
+  \qquad
+  \frac{\partial^2\psi}{\partial\theta^2}=u(r)v''(\theta),
+\]
+so substitution into \eqref{eq:laplace2d} gives
+\[
+  \frac{v}{r}\frac{d}{dr}\!\left(ru'\right)+\frac{u}{r^2}v''=0.
+\]
+Multiplying by $r^2/(uv)$ yields
+\[
+  \frac{r(ru')'}{u}+\frac{v''}{v}=0,
+\]
+and therefore
+\begin{equation}
+  -\frac{v''}{v}=\frac{r(ru')'}{u}=\lambda,
+  \label{eq:laplace2d-separation}
+\end{equation}
+because the left member depends only on $\theta$ and the right member only on $r$.
+
+The angular equation is
+\[
+  v''+\lambda v=0.
+\]
+For $\lambda>0$, write $\lambda=\mu^2$; then
+\[
+  v(\theta)=A\cos(\mu\theta)+B\sin(\mu\theta).
+\]
+The periodicity condition $v(\theta+2\pi)=v(\theta)$ requires $\mu=n$ with
+$n\in\mathbb Z$. Since the modes $n$ and $-n$ span the same real sine--cosine pair, we
+may take $n\ge0$ and $\lambda=n^2$. If $\lambda=0$, then $v=A+B\theta$, and periodicity
+forces $B=0$; this is the $n=0$ mode. If $\lambda<0$, the angular solutions are
+exponentials rather than periodic functions, so no nonzero $2\pi$-periodic mode occurs.
+
+The radial equation is
+\[
+  r(ru')'-n^2u=0.
+\]
+Expanding the derivative gives the Euler equation
+\begin{equation}
+  r^2u''+ru'-n^2u=0.
+  \label{eq:laplace2d-radial}
+\end{equation}
+For $n\ge1$, try $u=r^p$. Since
+\[
+  u'=pr^{p-1},
+  \qquad
+  u''=p(p-1)r^{p-2},
+\]
+we obtain
+\[
+  r^2u''+ru'-n^2u
+   =\bigl[p(p-1)+p-n^2\bigr]r^p
+   =(p^2-n^2)r^p.
+\]
+Thus $p=\pm n$, and
+\[
+  u_n(r)=C_nr^n+D_nr^{-n}
+  \qquad(n\ge1).
+\]
+For $n=0$, \eqref{eq:laplace2d-radial} becomes $(ru')'=0$. Integrating twice,
+\[
+  ru'=C_0,
+  \qquad
+  u'=\frac{C_0}{r},
+  \qquad
+  u(r)=D_0+C_0\log r.
+\]
+
+Consequently, on an annulus the general real separated expansion has the form
+\begin{align*}
+  \psi(r,\theta)
+  &=A_0+B_0\log r \\
+  &\quad+\sum_{n=1}^{\infty}
+     \Big[(A_nr^n+B_nr^{-n})\cos(n\theta)
+          +(C_nr^n+D_nr^{-n})\sin(n\theta)\Big].
+\end{align*}
+Inside a disk containing $r=0$, boundedness removes $\log r$ and all $r^{-n}$ terms:
+\begin{equation}
+  \psi(r,\theta)
+   =A_0+\sum_{n=1}^{\infty}r^n
+       \bigl[A_n\cos(n\theta)+C_n\sin(n\theta)\bigr].
+  \label{eq:laplace2d-sol}
+\end{equation}
+Equivalently, with $z=re^{i\theta}$ and complex coefficients $c_n=A_n-iC_n$,
+\[
+  \psi(r,\theta)=\operatorname{Re}\!\left(\sum_{n=0}^{\infty}c_nz^n\right),
+  \qquad z^n=r^ne^{in\theta}.
+\]
+Thus the regular real harmonic functions are real parts of analytic power series; exterior
+or annular domains additionally allow negative powers and, for the angularly independent
+$n=0$ mode, a logarithm.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{3D Laplace in spherical coordinates}
+\footnotesize
+
+In spherical coordinates, Laplace's equation is
+\begin{equation}
+  \nabla^2\psi
+  =
+  \frac{1}{r^2}
+    \frac{\partial}{\partial r}
+      \left(r^2\frac{\partial\psi}{\partial r}\right)
+  +\frac{1}{r^2\sin\theta}
+    \frac{\partial}{\partial\theta}
+      \left(\sin\theta\frac{\partial\psi}{\partial\theta}\right)
+  +\frac{1}{r^2\sin^2\theta}
+    \frac{\partial^2\psi}{\partial\phi^2}
+  =0.
+  \label{eq:laplace3d}
+\end{equation}
+First separate the radial variable:
+\[
+  \psi(r,\theta,\phi)=u(r)y(\theta,\phi).
+\]
+Then
+\[
+  \psi_r=u'y,
+  \qquad
+  \psi_\theta=uy_\theta,
+  \qquad
+  \psi_{\phi\phi}=uy_{\phi\phi}.
+\]
+Because $y$ is independent of $r$ and $u$ is independent of the angles,
+\begin{align*}
+  \frac{\partial}{\partial r}(r^2\psi_r)
+    &=\frac{\partial}{\partial r}(r^2u'y)
+      =y(r^2u')',\\
+  \frac{\partial}{\partial\theta}(\sin\theta\,\psi_\theta)
+    &=\frac{\partial}{\partial\theta}
+      (\sin\theta\,u y_\theta)
+      =u(\sin\theta\,y_\theta)_\theta.
+\end{align*}
+Substitution into \eqref{eq:laplace3d} gives
+\[
+  \frac{y}{r^2}(r^2u')'
+  +\frac{u}{r^2\sin\theta}(\sin\theta\,y_\theta)_\theta
+  +\frac{u}{r^2\sin^2\theta}y_{\phi\phi}=0.
+\]
+Multiplying by $r^2/(uy)$ gives
+\begin{equation}
+  \frac{(r^2u')'}{u}
+  =
+  -\frac{
+      \dfrac{1}{\sin\theta}(\sin\theta\,y_\theta)_\theta
+      +\dfrac{1}{\sin^2\theta}y_{\phi\phi}
+    }{y}
+  =\lambda.
+  \label{eq:sep-radial3d}
+\end{equation}
+The first expression depends only on $r$ and the second only on
+$(\theta,\phi)$, so each must equal a constant.
+
+The radial equation is
+\[
+  (r^2u')'-\lambda u=0.
+\]
+Expanding the derivative,
+\[
+  (r^2u')'=r^2u''+2ru',
+\]
+so
+\[
+  r^2u''+2ru'-\lambda u=0.
+\]
+Try an Euler power $u=r^\sigma$.  Then
+\[
+  u'=\sigma r^{\sigma-1},
+  \qquad
+  u''=\sigma(\sigma-1)r^{\sigma-2},
+\]
+and therefore
+\begin{align*}
+  r^2u''+2ru'-\lambda u
+   &=
+    \left[
+      \sigma(\sigma-1)+2\sigma-\lambda
+    \right]r^\sigma\\
+   &=
+    \left[
+      \sigma(\sigma+1)-\lambda
+    \right]r^\sigma.
+\end{align*}
+The angular regularity calculation in the next frame gives
+\[
+  \lambda=n(n+1),
+  \qquad n=0,1,2,\ldots.
+\]
+Hence
+\begin{align*}
+  \sigma(\sigma+1)-n(n+1)
+   &=\sigma^2+\sigma-n^2-n\\
+   &=(\sigma-n)(\sigma+n+1)=0.
+\end{align*}
+The two exponents are
+\[
+  \sigma=n,
+  \qquad
+  \sigma=-n-1,
+\]
+so
+\begin{equation}
+  u_n(r)=A_nr^n+B_nr^{-n-1}.
+  \label{eq:spherical-radial-powers}
+\end{equation}
+The $r^n$ branch is regular at the origin, whereas the $r^{-n-1}$ branch
+decays at infinity.
+
+The remaining angular eigenproblem, before quantizing $\lambda$, is
+\[
+  \frac{1}{\sin\theta}
+    \frac{\partial}{\partial\theta}
+      \left(\sin\theta\,\frac{\partial y}{\partial\theta}\right)
+  +\frac{1}{\sin^2\theta}\frac{\partial^2y}{\partial\phi^2}
+  +\lambda y=0.
+\]
+The next frame separates $\theta$ and $\phi$, imposes single-valuedness, and
+derives $\lambda=n(n+1)$.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{The associated Legendre equation}
+\footnotesize
+
+Before imposing the angular eigenvalue, the angular equation obtained from
+\eqref{eq:sep-radial3d} is
+\[
+  \frac{1}{\sin\theta}
+    \frac{\partial}{\partial\theta}
+      \left(\sin\theta\,\frac{\partial y}{\partial\theta}\right)
+  +\frac{1}{\sin^2\theta}\frac{\partial^2y}{\partial\phi^2}
+  +\lambda y=0.
+\]
+Set $y(\theta,\phi)=v(\theta)w(\phi)$.  Substitution gives
+\[
+  \frac{w}{\sin\theta}(\sin\theta\,v')'
+  +\frac{v}{\sin^2\theta}w''
+  +\lambda vw=0.
+\]
+Multiplication by $\sin^2\theta/(vw)$ yields
+\[
+  \frac{\sin\theta(\sin\theta\,v')'}{v}
+  +\lambda\sin^2\theta
+  +\frac{w''}{w}=0.
+\]
+The first two terms depend only on $\theta$, while the last depends only on
+$\phi$.  Set
+\[
+  -\frac{w''}{w}=m^2.
+\]
+Then
+\[
+  w''+m^2w=0,
+  \qquad
+  w(\phi)=A\cos(m\phi)+B\sin(m\phi).
+\]
+Single-valuedness under $\phi\mapsto\phi+2\pi$ requires $m\in\mathbb Z$.
+When $m=0$, the general solution $w=A+B\phi$ is periodic only if $B=0$.
+Equivalently, all periodic modes may be written as $w=e^{im\phi}$.
+
+The polar equation is therefore
+\begin{equation}
+  \sin\theta\,(\sin\theta\,v_\theta)_\theta
+  +\lambda\sin^2\theta\,v-m^2v=0.
+  \label{eq:theta-associated-legendre}
+\end{equation}
+Set $x=\cos\theta$ and regard $v$ as a function of $x$.  Since
+\begin{equation}
+  \frac{dx}{d\theta}=-\sin\theta,
+  \qquad
+  \frac{d}{d\theta}
+    =-\sin\theta\frac{d}{dx},
+  \label{eq:dthetadx}
+\end{equation}
+we have
+\begin{align*}
+  \frac{dv}{d\theta}
+    &=\frac{dv}{dx}\frac{dx}{d\theta}
+      =-\sin\theta\,v_x,\\
+  \sin\theta\frac{dv}{d\theta}
+    &=-\sin^2\theta\,v_x
+      =-(1-x^2)v_x,\\
+  \frac{d}{d\theta}
+    \left(\sin\theta\frac{dv}{d\theta}\right)
+    &=
+      -\sin\theta\frac{d}{dx}
+      \left[-(1-x^2)v_x\right]\\
+    &=
+      \sin\theta\frac{d}{dx}
+      \left[(1-x^2)v_x\right].
+\end{align*}
+Multiplying the last expression by the outer $\sin\theta$ in
+\eqref{eq:theta-associated-legendre} gives
+\[
+  \sin\theta(\sin\theta\,v_\theta)_\theta
+    =(1-x^2)\frac{d}{dx}\left[(1-x^2)v_x\right].
+\]
+Hence
+\[
+  (1-x^2)\frac{d}{dx}\left[(1-x^2)v_x\right]
+  +\lambda(1-x^2)v-m^2v=0.
+\]
+For $-1<x<1$, divide by $1-x^2$:
+\begin{equation}
+  \frac{d}{dx}\left[(1-x^2)v'(x)\right]
+  +\left[
+      \lambda-\frac{m^2}{1-x^2}
+   \right]v(x)=0.
+  \label{eq:assoc-legendre-general}
+\end{equation}
+After expanding the derivative,
+\[
+  (1-x^2)v''-2xv'
+  +\left[
+      \lambda-\frac{m^2}{1-x^2}
+   \right]v=0.
+\]
+
+We now derive the allowed values of $\lambda$.  Put $p:=|m|$.  Near
+$x=1$, let $z=1-x$, so
+\[
+  1-x^2=(1-x)(1+x)=z(2-z)\sim2z.
+\]
+If $v\sim z^\alpha$, then
+\[
+  v'=-\alpha z^{\alpha-1},
+  \qquad
+  v''=\alpha(\alpha-1)z^{\alpha-2}.
+\]
+The most singular terms in the expanded associated Legendre equation are
+\begin{align*}
+  (1-x^2)v''-2xv'-\frac{p^2}{1-x^2}v
+   &\sim
+    2z\,\alpha(\alpha-1)z^{\alpha-2}
+    +2\alpha z^{\alpha-1}
+    -\frac{p^2}{2z}z^\alpha\\
+   &=
+    \left(2\alpha^2-\frac{p^2}{2}\right)z^{\alpha-1}.
+\end{align*}
+The indicial equation is therefore
+\[
+  2\alpha^2-\frac{p^2}{2}=0,
+  \qquad
+  \alpha=\pm\frac p2.
+\]
+The regular branch uses $\alpha=p/2$; the same endpoint behavior occurs at
+$x=-1$.  This motivates
+\[
+  s:=1-x^2,
+  \qquad
+  v(x)=s^{p/2}q(x).
+\]
+Let $f(x)=s^{p/2}$.  Since $s'=-2x$,
+\begin{align*}
+  f'
+    &=\frac p2s^{p/2-1}s'
+      =-pxs^{p/2-1},\\
+  f''
+    &=-p s^{p/2-1}
+      +p(p-2)x^2s^{p/2-2}.
+\end{align*}
+Also,
+\[
+  v'=f'q+fq',
+  \qquad
+  v''=f''q+2f'q'+fq''.
+\]
+Substitute these expressions into the expanded form of
+\eqref{eq:assoc-legendre-general}:
+\begin{align*}
+  0
+   &=
+    s(f''q+2f'q'+fq'')
+    -2x(f'q+fq')
+    +\left(\lambda-\frac{p^2}{s}\right)fq\\
+   &=
+    f\Bigg\{
+      s q''
+      +\left(2s\frac{f'}{f}-2x\right)q'
+      +\left[
+        s\frac{f''}{f}
+        -2x\frac{f'}{f}
+        +\lambda-\frac{p^2}{s}
+       \right]q
+    \Bigg\}.
+\end{align*}
+The coefficient of $q'$ is
+\[
+  2s\frac{f'}{f}-2x
+    =2s\left(-\frac{px}{s}\right)-2x
+    =-2(p+1)x.
+\]
+For the coefficient of $q$,
+\begin{align*}
+  s\frac{f''}{f}
+  -2x\frac{f'}{f}
+  +\lambda-\frac{p^2}{s}
+   &=
+    \left[-p+\frac{p(p-2)x^2}{s}\right]
+    +\frac{2px^2}{s}
+    +\lambda-\frac{p^2}{s}\\
+   &=
+    \lambda-p
+    +\frac{p^2x^2-p^2}{s}\\
+   &=
+    \lambda-p
+    +p^2\frac{x^2-1}{1-x^2}\\
+   &=
+    \lambda-p-p^2\\
+   &=
+    \lambda-p(p+1).
+\end{align*}
+Thus $q$ satisfies
+\begin{equation}
+  (1-x^2)q''-2(p+1)xq'
+  +\bigl[\lambda-p(p+1)\bigr]q=0.
+  \label{eq:assoc-reduced}
+\end{equation}
+
+Let
+\[
+  q(x)=\sum_{j=0}^{\infty}a_jx^j.
+\]
+Substitution into \eqref{eq:assoc-reduced}, followed by the same coefficient
+shifts used for the ordinary Legendre equation, gives
+\[
+  0
+   =
+  \sum_{j=0}^{\infty}
+  \left[
+    (j+2)(j+1)a_{j+2}+C_j a_j
+  \right]x^j,
+\]
+where
+\begin{align*}
+  C_j
+   &=
+    \lambda-j(j-1)-2(p+1)j-p(p+1)\\
+   &=
+    \lambda-\left[j^2+(2p+1)j+p(p+1)\right]\\
+   &=
+    \lambda-(j+p)(j+p+1).
+\end{align*}
+Therefore
+\begin{equation}
+  a_{j+2}
+   =
+  -\frac{\lambda-(j+p)(j+p+1)}
+         {(j+2)(j+1)}a_j.
+  \label{eq:assoc-coeff-recurrence}
+\end{equation}
+The even and odd coefficient chains are independent.  A polynomial of degree
+$\ell\ge0$ is obtained by retaining the parity chain containing $x^\ell$,
+setting the other initial coefficient to zero, and requiring the numerator to
+vanish at $j=\ell$:
+\[
+  \lambda=(\ell+p)(\ell+p+1).
+\]
+Define
+\[
+  n:=\ell+p.
+\]
+Then
+\[
+  \lambda=n(n+1),
+  \qquad
+  \ell=n-p,
+  \qquad
+  0\le p=|m|\le n.
+\]
+This derives both the angular eigenvalue and the index restriction.
+
+With $\lambda=n(n+1)$, \eqref{eq:assoc-legendre-general} becomes
+\begin{equation}
+  \frac{d}{dx}\left[(1-x^2)v'(x)\right]
+  +\left[
+      n(n+1)-\frac{m^2}{1-x^2}
+   \right]v(x)=0.
+  \label{eq:assoc-legendre}
+\end{equation}
+
+To connect the solution with the ordinary Legendre polynomial, differentiate
+\eqref{eq:legendre-eq-expanded} $p$ times.  Since derivatives of
+$1-x^2$ above order $2$ vanish, Leibniz' rule gives
+\begin{align*}
+  \frac{d^p}{dx^p}\left[(1-x^2)P_n''\right]
+   &=
+    (1-x^2)P_n^{(p+2)}
+    +p(-2x)P_n^{(p+1)}
+    +\binom{p}{2}(-2)P_n^{(p)}\\
+   &=
+    (1-x^2)P_n^{(p+2)}
+    -2pxP_n^{(p+1)}
+    -p(p-1)P_n^{(p)},\\
+  \frac{d^p}{dx^p}\left[-2xP_n'\right]
+   &=
+    -2xP_n^{(p+1)}-2pP_n^{(p)}.
+\end{align*}
+Therefore $q=P_n^{(p)}$ satisfies
+\[
+  (1-x^2)q''-2(p+1)xq'
+  +\left[n(n+1)-p(p+1)\right]q=0,
+\]
+which is exactly \eqref{eq:assoc-reduced} with $\lambda=n(n+1)$.  Multiplying
+by the regular endpoint factor $(1-x^2)^{p/2}$ therefore gives an associated
+Legendre solution.  A standard phase convention defines
+\begin{equation}
+  P_n^p(x)
+    :=(-1)^p(1-x^2)^{p/2}
+      \frac{d^pP_n(x)}{dx^p},
+  \qquad p=0,1,\ldots,n.
+  \label{eq:associated-legendre-definition}
+\end{equation}
+Because the differential equation depends on $m^2$, an unnormalized angular
+basis for both signs of $m$ is
+\[
+  \mathcal Y_n^m(\theta,\phi)
+    =P_n^{|m|}(\cos\theta)e^{im\phi},
+  \qquad -n\le m\le n.
+\]
+Normalized spherical harmonics multiply this expression by a normalization
+constant and adopt a fixed phase convention.
+
+Combining radial and angular factors gives the regular interior expansion
+\begin{equation}
+  \psi_{\mathrm{int}}(r,\theta,\phi)
+    =\sum_{n=0}^{\infty}\sum_{m=-n}^{n}
+      a_{nm}r^n\mathcal Y_n^m(\theta,\phi),
+  \label{eq:laplace3d-sol}
+\end{equation}
+and the decaying exterior expansion
+\[
+  \psi_{\mathrm{ext}}(r,\theta,\phi)
+    =\sum_{n=0}^{\infty}\sum_{m=-n}^{n}
+      b_{nm}r^{-n-1}\mathcal Y_n^m(\theta,\phi).
+\]
+On a spherical shell, both radial branches may be present.
+\end{frame}
+
+\begin{frame}{Low spherical-harmonic nodal patterns}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.88\linewidth]{figs/ch7_spherical_harmonics.pdf}
+\end{center}
+\scriptsize
+Rows show degree $n$ and columns show order $m$.  Let $p=|m|$.  Sturm
+oscillation for the associated Legendre equation gives $n-p$ zeros of
+$P_n^p(\cos\theta)$ for $0<\theta<\pi$, hence $n-p$ nodal latitude circles.
+For a real mode, the azimuthal factor is $\cos(p\phi)$ or $\sin(p\phi)$.
+It has $2p$ zero rays in $0\le\phi<2\pi$; opposite rays form one plane through
+the polar axis, so there are $p$ nodal meridian planes.
+\end{frame}
+
+\begin{frame}{Real-part spherical-harmonic surfaces}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.96\linewidth]{figs/ch7_spherical_harmonics_surfaces.pdf}
+\end{center}
+The book's surface picture emphasizes amplitude and sign, not only nodal counts. Blue and
+red indicate opposite signs of \(\operatorname{Re}Y_n^m\); the lobes shrink to zero on the
+nodal latitude and meridian curves.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Axisymmetry: the ordinary Legendre equation}
+\footnotesize
+
+If the problem is axisymmetric about the polar axis, then nothing depends on $\phi$, so
+$m=0$.  This is weaker than full radial symmetry: full radial symmetry leaves only the
+$n=0$ mode, whereas axisymmetry permits every degree $n$ with $m=0$.
+
+Setting $m=0$ in \eqref{eq:assoc-legendre} gives
+\begin{equation}
+  \frac{d}{dx}\!\left[(1-x^2)v'(x)\right]+n(n+1)v(x)=0.
+  \label{eq:legendre-eq}
+\end{equation}
+Using the product rule,
+\[
+  \frac{d}{dx}\!\left[(1-x^2)v'\right]
+   =(1-x^2)v''+\frac{d}{dx}(1-x^2)v'
+   =(1-x^2)v''-2xv',
+\]
+so the equivalent expanded equation is
+\begin{equation}
+  (1-x^2)v''-2xv'+n(n+1)v=0.
+  \label{eq:legendre-eq-expanded}
+\end{equation}
+
+To see why integer $n$ produces a polynomial, set
+\[
+  v(x)=\sum_{j=0}^{\infty}a_jx^j.
+\]
+Then
+\begin{align*}
+  v'
+   &=\sum_{j=0}^{\infty}(j+1)a_{j+1}x^j,\\
+  v''
+   &=\sum_{j=0}^{\infty}(j+2)(j+1)a_{j+2}x^j,\\
+  -x^2v''
+   &=-\sum_{j=2}^{\infty}j(j-1)a_jx^j
+    =-\sum_{j=0}^{\infty}j(j-1)a_jx^j,\\
+  -2xv'
+   &=-2\sum_{j=1}^{\infty}j\,a_jx^j
+    =-2\sum_{j=0}^{\infty}j\,a_jx^j.
+\end{align*}
+Substitution into \eqref{eq:legendre-eq-expanded} gives
+\begin{align*}
+  0
+   &=
+    \sum_{j=0}^{\infty}
+    \left[
+      (j+2)(j+1)a_{j+2}
+      -j(j-1)a_j-2ja_j+n(n+1)a_j
+    \right]x^j\\
+   &=
+    \sum_{j=0}^{\infty}
+    \left[
+      (j+2)(j+1)a_{j+2}
+      +\bigl(n(n+1)-j(j+1)\bigr)a_j
+    \right]x^j.
+\end{align*}
+Since
+\[
+  n(n+1)-j(j+1)
+   =n^2+n-j^2-j
+   =(n-j)(n+j+1),
+\]
+the coefficient recurrence is
+\begin{equation}
+  a_{j+2}
+   =-\frac{(n-j)(n+j+1)}{(j+2)(j+1)}\,a_j.
+  \label{eq:legendre-coeff-recurrence}
+\end{equation}
+This recurrence separates the even and odd coefficients.  For integer $n\ge0$, the
+chain having the same parity as $n$ reaches $j=n$, where
+\[
+  a_{n+2}
+   =-\frac{(n-n)(n+n+1)}{(n+2)(n+1)}a_n
+   =0.
+\]
+Every later coefficient in that chain is consequently zero.  Setting the
+opposite-parity initial coefficient to zero leaves a polynomial of degree $n$.
+The remaining multiplicative constant is fixed by the standard normalization
+\[
+  P_n(1)=1.
+\]
+Thus $P_n$ contains only the powers $x^n,x^{n-2},\ldots$ and obeys
+\[
+  P_n(-x)=(-1)^nP_n(x).
+\]
+The generating function below determines all normalized coefficients explicitly.
+\end{frame}
+
+% ======================================================================
+\section{Legendre Polynomial}
+% ======================================================================
+
+\begin{frame}[allowframebreaks]{Generating function from the Coulomb potential}
+\footnotesize
+
+Place a point charge one unit from the origin on the positive polar axis. For a field point
+with spherical coordinates $(r,\theta,\phi)$, the law of cosines gives
+\[
+  R^2=r^2+1^2-2r(1)\cos\theta
+      =1-2r\cos\theta+r^2,
+\]
+so the Coulomb potential is
+\begin{equation}
+  \varphi(r,\theta)=\frac{C}{R}
+  =\frac{C}{\sqrt{1-2r\cos\theta+r^2}}.
+  \label{eq:coulomb}
+\end{equation}
+\begin{center}
+  \includegraphics[width=0.42\linewidth]{figs/legendre_coulomb_geometry.pdf}
+\end{center}
+For $0\le r<1$, the charge lies outside the ball containing the field point; hence
+$\varphi$ is harmonic there. The source and geometry are axisymmetric, so the regular
+interior expansion has the form
+\[
+  \varphi(r,\theta)
+  =\sum_{n=0}^{\infty}c_n r^nP_n(\cos\theta).
+\]
+Dividing by the nonzero scale factor $C$ gives
+\begin{equation}
+  \frac{1}{\sqrt{1-2r\cos\theta+r^2}}
+  =\sum_{n=0}^{\infty}a_n r^nP_n(\cos\theta),
+  \qquad a_n=\frac{c_n}{C}.
+  \label{eq:coulomb-expand}
+\end{equation}
+
+Set $\theta=0$. Then $\cos\theta=1$, $P_n(1)=1$, and
+\[
+  1-2r\cos0+r^2=1-2r+r^2=(1-r)^2.
+\]
+Because $0\le r<1$, $|1-r|=1-r$, so \eqref{eq:coulomb-expand} becomes
+\[
+  \frac{1}{1-r}=\sum_{n=0}^{\infty}a_nr^n.
+\]
+The geometric series is
+\[
+  \frac{1}{1-r}=1+r+r^2+r^3+\cdots
+  =\sum_{n=0}^{\infty}r^n,
+  \qquad |r|<1.
+\]
+Uniqueness of power-series coefficients therefore gives
+\[
+  a_n=1\qquad(n=0,1,2,\ldots).
+\]
+Substitution into \eqref{eq:coulomb-expand} yields
+\[
+  \frac{1}{\sqrt{1-2r\cos\theta+r^2}}
+  =\sum_{n=0}^{\infty}P_n(\cos\theta)r^n.
+\]
+Writing $t=r$ and $x=\cos\theta$ gives the Legendre generating function
+\begin{equation}
+  g(x,t)=\frac{1}{\sqrt{1-2xt+t^2}}
+  =\sum_{n=0}^{\infty}P_n(x)t^n,
+  \qquad |t|<1,\quad -1\le x\le1.
+  \label{eq:legendre-gen}
+\end{equation}
+At $t=0$, this formula gives $P_0(x)=1$. Differentiating once and setting $t=0$ gives
+$P_1(x)=x$.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Three-term recurrence}
+\footnotesize
+
+Let
+\[
+  D(x,t)=1-2xt+t^2,
+  \qquad
+  g(x,t)=D(x,t)^{-1/2}.
+\]
+Differentiating with respect to $t$ gives
+\begin{align*}
+  \frac{\partial g}{\partial t}
+  &=-\frac12D^{-3/2}\frac{\partial D}{\partial t} \\
+  &=-\frac12D^{-3/2}(-2x+2t) \\
+  &=\frac{x-t}{D^{3/2}}.
+\end{align*}
+Termwise differentiation of the power series gives
+\begin{equation}
+  \frac{\partial g}{\partial t}
+  =\sum_{n=1}^{\infty}nP_n(x)t^{n-1}.
+  \label{eq:dgdt}
+\end{equation}
+Multiplying $g_t=(x-t)D^{-3/2}$ by $D$ gives
+\[
+  (x-t)g=Dg_t.
+\]
+Substituting both power series,
+\[
+  (x-t)\sum_{n=0}^{\infty}P_nt^n
+  =(1-2xt+t^2)\sum_{n=1}^{\infty}nP_nt^{n-1},
+\]
+where $P_n=P_n(x)$. Expanding both sides,
+\begin{align}
+  \sum_{n=0}^{\infty}xP_nt^n
+  -\sum_{n=0}^{\infty}P_nt^{n+1}
+  &=\sum_{n=1}^{\infty}nP_nt^{n-1}
+    -2\sum_{n=1}^{\infty}nxP_nt^n
+    +\sum_{n=1}^{\infty}nP_nt^{n+1}.
+  \label{eq:distribute}
+\end{align}
+
+We now compute the coefficient of a fixed power $t^n$.
+On the left,
+\[
+  [t^n]\left(\sum_{j=0}^{\infty}xP_jt^j\right)=xP_n,
+\]
+and
+\[
+  [t^n]\left(\sum_{j=0}^{\infty}P_jt^{j+1}\right)
+  =\begin{cases}
+      0,&n=0,\\
+      P_{n-1},&n\ge1.
+    \end{cases}
+\]
+It is convenient to set $P_{-1}=0$, so the left coefficient is $xP_n-P_{n-1}$ for all
+$n\ge0$.
+
+On the right,
+\[
+  [t^n]\left(\sum_{j=1}^{\infty}jP_jt^{j-1}\right)
+  =(n+1)P_{n+1},
+\]
+\[
+  [t^n]\left(-2\sum_{j=1}^{\infty}jxP_jt^j\right)
+  =-2nxP_n,
+\]
+and
+\[
+  [t^n]\left(\sum_{j=1}^{\infty}jP_jt^{j+1}\right)
+  =\begin{cases}
+     0,&n=0,1,\\
+     (n-1)P_{n-1},&n\ge2.
+   \end{cases}
+\]
+The last expression is also $(n-1)P_{n-1}$ for all $n\ge0$ under $P_{-1}=0$.
+Equating coefficients therefore gives
+\[
+  xP_n-P_{n-1}
+  =(n+1)P_{n+1}-2nxP_n+(n-1)P_{n-1}.
+\]
+Move the terms containing $P_n$ and $P_{n-1}$ to the same side:
+\[
+  (2n+1)xP_n-nP_{n-1}=(n+1)P_{n+1}.
+\]
+Thus
+\begin{equation}
+  (n+1)P_{n+1}(x)
+  =(2n+1)xP_n(x)-nP_{n-1}(x),
+  \qquad n\ge0,
+  \label{eq:legendre-recur}
+\end{equation}
+with $P_{-1}=0$ and $P_0=1$. For $n=0$, the recurrence gives
+$P_1=xP_0=x$, consistent with the generating function.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{First few Legendre polynomials}
+\footnotesize
+
+The initial values are
+\[
+  P_0(x)=1,
+  \qquad
+  P_1(x)=x.
+\]
+For $n=1$, the recurrence \eqref{eq:legendre-recur} gives
+\begin{align*}
+  (1+1)P_2
+   &=(2\cdot1+1)xP_1-1\cdot P_0,\\
+  2P_2
+   &=3x(x)-1,\\
+  2P_2
+   &=3x^2-1,
+\end{align*}
+so
+\[
+  P_2(x)=\frac12(3x^2-1).
+\]
+For $n=2$,
+\begin{align*}
+  (2+1)P_3
+   &=(2\cdot2+1)xP_2-2P_1,\\
+  3P_3
+   &=5x\left[\frac12(3x^2-1)\right]-2x,\\
+  3P_3
+   &=\frac12(15x^3-5x)-\frac{4x}{2},\\
+  3P_3
+   &=\frac12(15x^3-9x),\\
+  P_3
+   &=\frac16(15x^3-9x)
+    =\frac12(5x^3-3x).
+\end{align*}
+Thus
+\begin{align*}
+  P_0(x)&=1,&
+  P_1(x)&=x,\\[2pt]
+  P_2(x)&=\frac12(3x^2-1),&
+  P_3(x)&=\frac12(5x^3-3x).
+\end{align*}
+As checks, $P_n(1)=1$ in all four cases, and $P_n(-x)=(-1)^nP_n(x)$.
+\end{frame}
+
+\begin{frame}{Shapes of the first Legendre polynomials}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.86\linewidth]{figs/legendre-P.pdf}
+\end{center}
+Each $P_n$ is bounded on $[-1,1]$ and normalized by $P_n(1)=1$. Increasing $n$ adds
+interior zeros while preserving the Sturm--Liouville orthogonality on the same interval.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Contour integral from the generating function}
+\footnotesize
+
+For fixed $x\in[-1,1]$, choose the branch of
+\[
+  g(x,t)=(1-2xt+t^2)^{-1/2}
+\]
+that satisfies $g(x,0)=1$. It is analytic in a neighborhood of $t=0$, and
+\[
+  g(x,t)=\sum_{n=0}^{\infty}P_n(x)t^n.
+\]
+Cauchy's coefficient formula states that, for any positively oriented simple contour
+$\gamma$ around $t=0$ lying inside the domain of analyticity,
+\[
+  [t^m]g(x,t)=\frac{1}{2\pi i}\oint_\gamma\frac{g(x,t)}{t^{m+1}}\,dt.
+\]
+Here $[t^m]g=P_m(x)$, so
+\begin{align*}
+  \oint_\gamma\frac{dt}{t^{m+1}\sqrt{1-2xt+t^2}}
+   &=\oint_\gamma\sum_{n=0}^{\infty}P_n(x)t^{n-m-1}\,dt\\
+   &=\sum_{n=0}^{\infty}P_n(x)
+       \oint_\gamma t^{n-m-1}\,dt\\
+   &=P_m(x)(2\pi i),
+\end{align*}
+because
+\[
+  \oint_\gamma t^k\,dt
+  =\begin{cases}
+      2\pi i,&k=-1,\\
+      0,&k\ne-1.
+    \end{cases}
+\]
+Therefore
+\begin{equation}
+  P_m(x)=\frac{1}{2\pi i}
+  \oint_\gamma\frac{dt}{t^{m+1}\sqrt{1-2xt+t^2}}.
+  \label{eq:legendre-contour}
+\end{equation}
+
+For $-1<x<1$, the zeros of the radicand are
+\begin{align*}
+  t_{\pm}
+   &=\frac{2x\pm\sqrt{4x^2-4}}{2}\\
+   &=x\pm i\sqrt{1-x^2}.
+\end{align*}
+Writing $x=\cos\theta$ gives
+\[
+  t_\pm=\cos\theta\pm i\sin\theta=e^{\pm i\theta},
+\]
+so both branch points lie on $|t|=1$. A sufficiently small circle $|t|=\rho<1$ is
+therefore an admissible contour. At $x=\pm1$ the two roots coalesce and the formula is
+understood by the corresponding analytic limiting branch.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Explicit Legendre series from the generating function}
+\footnotesize
+
+Starting from \eqref{eq:legendre-gen}, use the generalized binomial expansion
+\[
+  (1+u)^{-1/2}
+    =\sum_{q=0}^{\infty}\binom{-1/2}{q}u^q.
+\]
+For $q\ge0$,
+\begin{align*}
+  \binom{-1/2}{q}
+   &=
+    \frac{(-1/2)(-3/2)\cdots(-(2q-1)/2)}{q!}\\
+   &=
+    (-1)^q\frac{1\cdot3\cdot5\cdots(2q-1)}{2^q q!}\\
+   &=
+    (-1)^q\frac{(2q)!}{4^q(q!)^2},
+\end{align*}
+where the last equality uses
+\[
+  (2q)!
+    =(2\cdot4\cdots2q)(1\cdot3\cdots(2q-1))
+    =2^q q!(1\cdot3\cdots(2q-1)).
+\]
+With $u=-2xt+t^2$,
+\begin{align*}
+  g(x,t)
+   &=(1-2xt+t^2)^{-1/2}\\
+   &=\sum_{q=0}^{\infty}
+      \binom{-1/2}{q}(-2xt+t^2)^q.
+\end{align*}
+Expand the $q$th power:
+\begin{align*}
+  (-2xt+t^2)^q
+   &=
+    \sum_{k=0}^{q}
+      \binom{q}{k}(-2xt)^{q-k}(t^2)^k\\
+   &=
+    \sum_{k=0}^{q}
+      \binom{q}{k}(-2x)^{q-k}t^{q+k}.
+\end{align*}
+A term contributes to the coefficient of $t^n$ precisely when
+\[
+  q+k=n,
+  \qquad\text{so}\qquad
+  q=n-k.
+\]
+The condition $0\le k\le q$ becomes
+\[
+  0\le k\le n-k,
+  \qquad\text{or}\qquad
+  0\le k\le\left\lfloor\frac n2\right\rfloor.
+\]
+Consequently,
+\begin{align*}
+  P_n(x)
+   &=[t^n]\,g(x,t)\\
+   &=
+    \sum_{k=0}^{\lfloor n/2\rfloor}
+      \binom{-1/2}{n-k}
+      \binom{n-k}{k}
+      (-2x)^{n-2k}\\
+   &=
+    \sum_{k=0}^{\lfloor n/2\rfloor}
+      \left[
+        (-1)^{n-k}
+        \frac{(2n-2k)!}
+             {4^{n-k}((n-k)!)^2}
+      \right]
+      \left[
+        \frac{(n-k)!}{k!(n-2k)!}
+      \right]
+      (-1)^{n-2k}2^{n-2k}x^{n-2k}.
+\end{align*}
+The signs and powers of $2$ simplify as
+\[
+  (-1)^{n-k+n-2k}=(-1)^{2n-3k}=(-1)^k,
+  \qquad
+  \frac{2^{n-2k}}{4^{n-k}}
+    =\frac{2^{n-2k}}{2^{2n-2k}}
+    =2^{-n}.
+\]
+Therefore
+\begin{equation}
+  P_n(x)
+   =\sum_{k=0}^{\lfloor n/2\rfloor}
+      (-1)^k
+      \frac{(2n-2k)!}
+           {2^n k!(n-k)!(n-2k)!}
+      x^{n-2k}.
+  \label{eq:legendre-series}
+\end{equation}
+This coefficient formula has the parity predicted by
+\eqref{eq:legendre-coeff-recurrence}.  Its normalization follows directly from
+the generating function: at $x=1$,
+\[
+  \sum_{n=0}^{\infty}P_n(1)t^n
+   =\frac{1}{\sqrt{1-2t+t^2}}
+   =\frac{1}{1-t}
+   =\sum_{n=0}^{\infty}t^n
+   \qquad (|t|<1),
+\]
+so $P_n(1)=1$ for every $n$.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Rodrigues' formula and Schl\"afli integral}
+\footnotesize
+
+Expand $(x^2-1)^n$ by the binomial theorem:
+\begin{equation}
+  (x^2-1)^n
+   =\sum_{j=0}^{n}
+      \binom{n}{j}(x^2)^j(-1)^{n-j}
+   =\sum_{j=0}^{n}
+      (-1)^{n-j}\frac{n!}{j!(n-j)!}x^{2j}.
+  \label{eq:binom}
+\end{equation}
+For each monomial,
+\[
+  \frac{d^n}{dx^n}x^{2j}
+  =
+  \begin{cases}
+    \dfrac{(2j)!}{(2j-n)!}x^{2j-n}, & 2j\ge n,\\[0.7em]
+    0, & 2j<n.
+  \end{cases}
+\]
+Thus only $j\ge\lceil n/2\rceil$ survives:
+\[
+  \frac{d^n}{dx^n}(x^2-1)^n
+   =
+    \sum_{j=\lceil n/2\rceil}^{n}
+      (-1)^{n-j}
+      \frac{n!}{j!(n-j)!}
+      \frac{(2j)!}{(2j-n)!}x^{2j-n}.
+\]
+Set $k=n-j$.  Then
+\[
+  j=n-k,
+  \qquad
+  0\le k\le\left\lfloor\frac n2\right\rfloor,
+  \qquad
+  2j-n=n-2k,
+  \qquad
+  (-1)^{n-j}=(-1)^k.
+\]
+The factorials transform as
+\[
+  j!=(n-k)!,
+  \quad
+  (n-j)!=k!,
+  \quad
+  (2j)!=(2n-2k)!,
+  \quad
+  (2j-n)!=(n-2k)!.
+\]
+Therefore
+\begin{align*}
+  \frac{d^n}{dx^n}(x^2-1)^n
+   &=
+    n!\sum_{k=0}^{\lfloor n/2\rfloor}
+      (-1)^k
+      \frac{(2n-2k)!}
+           {k!(n-k)!(n-2k)!}
+      x^{n-2k}.
+\end{align*}
+Comparison with \eqref{eq:legendre-series} shows that
+\[
+  \frac{d^n}{dx^n}(x^2-1)^n=2^n n!P_n(x).
+\]
+Hence Rodrigues' formula is
+\begin{equation}
+  P_n(x)
+   =\frac{1}{2^n n!}
+      \frac{d^n}{dx^n}(x^2-1)^n.
+  \label{eq:rodrigues-legendre}
+\end{equation}
+
+Cauchy's differentiation formula states that
+\[
+  f^{(n)}(x)
+    =\frac{n!}{2\pi i}
+      \oint_\Gamma\frac{f(t)}{(t-x)^{n+1}}\,dt,
+\]
+where $\Gamma$ is a positively oriented contour enclosing $t=x$.  Apply it to
+$f(t)=(t^2-1)^n$:
+\begin{align*}
+  P_n(x)
+   &=
+    \frac{1}{2^n n!}f^{(n)}(x)\\
+   &=
+    \frac{1}{2^n n!}
+    \frac{n!}{2\pi i}
+    \oint_\Gamma
+      \frac{(t^2-1)^n}{(t-x)^{n+1}}\,dt\\
+   &=
+    \frac{1}{2^{n+1}\pi i}
+    \oint_\Gamma
+      \frac{(t^2-1)^n}{(t-x)^{n+1}}\,dt.
+\end{align*}
+Thus the Schl\"afli representation is
+\begin{equation}
+  P_n(x)
+    =\frac{1}{2^{n+1}\pi i}
+      \oint_\Gamma
+      \frac{(t^2-1)^n}{(t-x)^{n+1}}\,dt.
+  \label{eq:schlafli-legendre}
+\end{equation}
+For integer $n$, the numerator is a polynomial, so the only singularity of the
+integrand enclosed by a sufficiently small $\Gamma$ is the pole at $t=x$.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Orthogonality and norm of Legendre polynomials}
+\footnotesize
+
+The Legendre equation is
+\begin{equation}
+  \frac{d}{dx}\!\left[(1-x^2)P_n'(x)\right]
+  +n(n+1)P_n(x)=0.
+  \label{eq:legendre-sl}
+\end{equation}
+Write the equations for $P_n$ and $P_m$:
+\begin{align*}
+  \bigl[(1-x^2)P_n'\bigr]'+n(n+1)P_n&=0,\\
+  \bigl[(1-x^2)P_m'\bigr]'+m(m+1)P_m&=0.
+\end{align*}
+Multiply the first by $P_m$, the second by $P_n$, and subtract:
+\[
+  P_m\bigl[(1-x^2)P_n'\bigr]'
+  -P_n\bigl[(1-x^2)P_m'\bigr]'
+  +\bigl[n(n+1)-m(m+1)\bigr]P_nP_m=0.
+\]
+The first two terms are a total derivative because
+\[
+  \frac{d}{dx}\!\left[(1-x^2)(P_mP_n'-P_nP_m')\right]
+  =P_m\bigl[(1-x^2)P_n'\bigr]'
+   -P_n\bigl[(1-x^2)P_m'\bigr]'.
+\]
+Integrating from $-1$ to $1$ gives
+\begin{align*}
+  &\left[(1-x^2)(P_mP_n'-P_nP_m')\right]_{-1}^{1}\\
+  &\qquad+\bigl[n(n+1)-m(m+1)\bigr]
+    \int_{-1}^{1}P_n(x)P_m(x)\,dx=0.
+\end{align*}
+The boundary term vanishes because $1-x^2=0$ at $x=\pm1$ and the polynomials and their
+derivatives are finite there. If $n\ne m$, then
+\[
+  n(n+1)-m(m+1)=(n-m)(n+m+1)\ne0,
+\]
+so
+\begin{equation}
+  \int_{-1}^{1}P_n(x)P_m(x)\,dx=0
+  \qquad(n\ne m).
+  \label{eq:legendre-orthogonal-zero}
+\end{equation}
+
+It remains to compute the norm. Rodrigues' formula gives
+\[
+  I_n:=\int_{-1}^{1}P_n(x)^2\,dx
+  =\frac{1}{2^n n!}\int_{-1}^{1}
+    P_n(x)\frac{d^n}{dx^n}(x^2-1)^n\,dx.
+\]
+Integrate by parts once:
+\begin{align*}
+  I_n
+  &=\frac{1}{2^n n!}
+    \left[P_n\frac{d^{n-1}}{dx^{n-1}}(x^2-1)^n\right]_{-1}^{1}\\
+  &\quad-\frac{1}{2^n n!}\int_{-1}^{1}
+    P_n'\frac{d^{n-1}}{dx^{n-1}}(x^2-1)^n\,dx.
+\end{align*}
+Because $(x^2-1)^n=(x-1)^n(x+1)^n$ has a zero of order $n$ at each endpoint,
+\[
+  \left.\frac{d^j}{dx^j}(x^2-1)^n\right|_{x=\pm1}=0,
+  \qquad 0\le j\le n-1.
+\]
+Thus every boundary term in $n$ successive integrations by parts vanishes, and
+\begin{equation}
+  I_n=\frac{(-1)^n}{2^n n!}\int_{-1}^{1}
+  P_n^{(n)}(x)(x^2-1)^n\,dx.
+  \label{eq:legendre-norm-ibp}
+\end{equation}
+
+The leading term of $P_n$ comes from $k=0$ in \eqref{eq:legendre-series}:
+\[
+  P_n(x)=\frac{(2n)!}{2^n(n!)^2}x^n+\text{terms of degree at most }n-2.
+\]
+After $n$ derivatives, all lower-degree terms vanish and
+\[
+  P_n^{(n)}(x)
+  =n!\frac{(2n)!}{2^n(n!)^2}
+  =\frac{(2n)!}{2^n n!}.
+\]
+Also $(x^2-1)^n=(-1)^n(1-x^2)^n$. Substitution into
+\eqref{eq:legendre-norm-ibp} gives
+\[
+  I_n=\frac{(2n)!}{2^{2n}(n!)^2}
+  \int_{-1}^{1}(1-x^2)^n\,dx.
+\]
+To evaluate the remaining integral, set $x=2u-1$. Then
+\[
+  dx=2\,du,
+  \qquad
+  1-x^2=1-(2u-1)^2=4u(1-u),
+\]
+with $x=-1\leftrightarrow u=0$ and $x=1\leftrightarrow u=1$. Hence
+\begin{align*}
+  \int_{-1}^{1}(1-x^2)^n\,dx
+  &=2\cdot4^n\int_0^1u^n(1-u)^n\,du\\
+  &=2^{2n+1}B(n+1,n+1)\\
+  &=2^{2n+1}\frac{\Gamma(n+1)^2}{\Gamma(2n+2)}\\
+  &=2^{2n+1}\frac{(n!)^2}{(2n+1)!}.
+\end{align*}
+Therefore
+\begin{align*}
+  I_n
+  &=\frac{(2n)!}{2^{2n}(n!)^2}
+    \frac{2^{2n+1}(n!)^2}{(2n+1)!}\\
+  &=2\frac{(2n)!}{(2n+1)(2n)!}\\
+  &=\frac{2}{2n+1}.
+\end{align*}
+Combining the orthogonality and norm,
+\begin{equation}
+  \int_{-1}^{1}P_n(x)P_m(x)\,dx
+  =\frac{2}{2n+1}\,\delta_{nm}.
+  \label{eq:legendre-orthogonality-full}
+\end{equation}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Fourier--Legendre series}
+\footnotesize
+
+The Legendre polynomials are orthogonal and complete in $L^2[-1,1]$. Thus, for
+$f\in L^2[-1,1]$,
+\[
+  f(x)=\sum_{n=0}^{\infty}a_nP_n(x)
+\]
+in the $L^2$ sense. Multiply by $P_m(x)$ and integrate:
+\begin{align*}
+  \int_{-1}^{1}f(x)P_m(x)\,dx
+  &=\int_{-1}^{1}
+    \left(\sum_{n=0}^{\infty}a_nP_n(x)\right)P_m(x)\,dx\\
+  &=\sum_{n=0}^{\infty}a_n
+    \int_{-1}^{1}P_n(x)P_m(x)\,dx\\
+  &=\sum_{n=0}^{\infty}a_n
+    \frac{2}{2n+1}\delta_{nm}\\
+  &=a_m\frac{2}{2m+1}.
+\end{align*}
+Solving for $a_m$ gives
+\begin{equation}
+  a_m=\frac{2m+1}{2}\int_{-1}^{1}f(x)P_m(x)\,dx.
+  \label{eq:fourier-legendre-coeff}
+\end{equation}
+Therefore the Fourier--Legendre expansion is
+\begin{equation}
+  f(x)=\sum_{n=0}^{\infty}
+  \left[\frac{2n+1}{2}\int_{-1}^{1}f(s)P_n(s)\,ds\right]P_n(x).
+  \label{eq:fourier-legendre}
+\end{equation}
+The dummy integration variable $s$ distinguishes the coefficient integral from the point
+$x$ at which the series is evaluated. Additional regularity assumptions on $f$ provide
+stronger pointwise or uniform convergence statements; completeness alone guarantees the
+$L^2$ expansion.
+\end{frame}
+
+\begin{frame}{Useful formulas for the Legendre polynomial}
+\footnotesize
+\begin{center}
+\renewcommand{\arraystretch}{1.7}
+\begin{tabular}{ll}
+differential equation
+  & $(1-x^2)P_n'' - 2x\,P_n' + n(n+1)P_n = 0$ \\
+series solution
+  & $P_n(x)=\displaystyle\sum_{k=0}^{\lfloor n/2\rfloor}
+       \frac{(-1)^k(2n-2k)!}{2^n k!\,(n-2k)!\,(n-k)!}\,x^{n-2k}$ \\
+generating function
+  & $\dfrac{1}{\sqrt{1-2xt+t^2}} = \displaystyle\sum_{n=0}^{\infty}P_n(x)\,t^n$ \\
+recurrence
+  & $(n+1)P_{n+1} = (2n+1)x\,P_n - n\,P_{n-1}$ \\
+orthogonality
+  & $\displaystyle\int_{-1}^{1}P_m(x)P_n(x)\,dx
+       = \frac{2}{2n+1}\,\delta_{nm}$ \\
+Rodrigues
+  & $P_n(x)=\dfrac{1}{2^n n!}\dfrac{d^n}{dx^n}(x^2-1)^n$ \\
+Schl\"afli
+  & $P_n(x)=\dfrac{1}{2^{n+1}\pi i}
+       \displaystyle\oint\frac{(t^2-1)^n}{(t-x)^{n+1}}\,dt$
+\end{tabular}
+\end{center}
+\vspace{0.2em}
+{\scriptsize The generating series converges for $|t|<1$ on
+$x\in[-1,1]$.  In the Schl\"afli formula, the positively oriented contour
+encloses $t=x$.}
+\end{frame}
+
+% ======================================================================
+\section{Hermite Polynomial}
+% ======================================================================
+
+\begin{frame}[allowframebreaks]{The Hermite equation and series solution}
+\footnotesize
+
+The physicists' Hermite polynomials solve
+\begin{equation}
+  y''-2xy'+2ny=0,
+  \qquad n=0,1,2,\ldots.
+  \label{eq:hermite-eq}
+\end{equation}
+Let
+\[
+  y(x)=\sum_{j=0}^{\infty}a_jx^j.
+\]
+Termwise differentiation gives
+\begin{align*}
+  y'(x)
+   &=\sum_{j=1}^{\infty}ja_jx^{j-1}
+    =\sum_{j=0}^{\infty}(j+1)a_{j+1}x^j,\\
+  y''(x)
+   &=\sum_{j=2}^{\infty}j(j-1)a_jx^{j-2}
+    =\sum_{j=0}^{\infty}(j+2)(j+1)a_{j+2}x^j.
+\end{align*}
+Also,
+\[
+  -2xy'=-2\sum_{j=1}^{\infty}ja_jx^j
+         =-2\sum_{j=0}^{\infty}ja_jx^j,
+\]
+where the added $j=0$ term is zero, and
+\[
+  2ny=2n\sum_{j=0}^{\infty}a_jx^j.
+\]
+Substitution into \eqref{eq:hermite-eq} gives
+\[
+  \sum_{j=0}^{\infty}
+  \left[(j+2)(j+1)a_{j+2}+2(n-j)a_j\right]x^j=0.
+\]
+Every coefficient must vanish, so
+\begin{equation}
+  (j+2)(j+1)a_{j+2}+2(n-j)a_j=0,
+  \qquad
+  a_{j+2}=\frac{2(j-n)}{(j+2)(j+1)}a_j.
+  \label{eq:hermite-coefficient-recurrence}
+\end{equation}
+The recurrence links even coefficients only to even coefficients and odd coefficients only
+to odd coefficients. For an integer $n\ge0$, the parity chain with the same parity as $n$
+reaches $a_n$ and terminates because setting $j=n$ gives $a_{n+2}=0$. To obtain a
+polynomial of degree exactly $n$, the initial coefficient of the opposite-parity chain is
+set to zero.
+
+We now derive every coefficient of the degree-$n$ polynomial. Set the conventional leading
+coefficient to
+\[
+  a_n=2^n.
+\]
+In \eqref{eq:hermite-coefficient-recurrence}, put $j=n-2k-2$. Then
+\begin{align*}
+  a_{n-2k}
+  &=\frac{2[(n-2k-2)-n]}{(n-2k)(n-2k-1)}a_{n-2k-2}\\
+  &=-\frac{4(k+1)}{(n-2k)(n-2k-1)}a_{n-2k-2}.
+\end{align*}
+Solving for the lower-degree coefficient,
+\begin{equation}
+  a_{n-2k-2}
+  =-\frac{(n-2k)(n-2k-1)}{4(k+1)}a_{n-2k}.
+  \label{eq:hermite-downward}
+\end{equation}
+Applying \eqref{eq:hermite-downward} repeatedly gives
+\begin{align*}
+  a_{n-2k}
+  &=(-1)^k
+    \frac{n(n-1)(n-2)\cdots(n-2k+1)}{4^k k!}\,a_n\\
+  &=(-1)^k\frac{n!}{(n-2k)!}\frac{2^n}{4^k k!}\\
+  &=(-1)^k\frac{2^{n-2k}n!}{k!(n-2k)!}.
+\end{align*}
+Therefore
+\begin{equation}
+  H_n(x)=\sum_{k=0}^{\lfloor n/2\rfloor}
+  (-1)^k(2x)^{n-2k}\frac{n!}{k!(n-2k)!}.
+  \label{eq:hermite-series}
+\end{equation}
+
+For example, when $n=2$ the terms $k=0,1$ give
+\begin{align*}
+  H_2(x)
+  &=\frac{(2x)^2\,2!}{0!\,2!}
+    -\frac{(2x)^0\,2!}{1!\,0!}\\
+  &=4x^2-2.
+\end{align*}
+When $n=3$ the terms $k=0,1$ give
+\begin{align*}
+  H_3(x)
+  &=\frac{(2x)^3\,3!}{0!\,3!}
+    -\frac{(2x)^1\,3!}{1!\,1!}\\
+  &=8x^3-12x.
+\end{align*}
+Together with $H_0=1$ and $H_1=2x$, these agree with the stated normalization.
+
+Multiplying \eqref{eq:hermite-eq} by $e^{-x^2}$ gives
+\[
+  e^{-x^2}y''-2xe^{-x^2}y'+2ne^{-x^2}y=0.
+\]
+Since
+\[
+  \frac{d}{dx}\!\left(e^{-x^2}y'\right)
+  =e^{-x^2}y''-2xe^{-x^2}y',
+\]
+the Sturm--Liouville form is
+\begin{equation}
+  \frac{d}{dx}\!\left(e^{-x^2}y'\right)
+  +2n e^{-x^2}y=0.
+  \label{eq:hermite-sl}
+\end{equation}
+
+To prove orthogonality, write \eqref{eq:hermite-sl} for $H_n$ and $H_m$, multiply the
+first by $H_m$, the second by $H_n$, and subtract:
+\[
+  H_m(e^{-x^2}H_n')'-H_n(e^{-x^2}H_m')'
+  +2(n-m)e^{-x^2}H_nH_m=0.
+\]
+The first two terms form the derivative
+\[
+  \frac{d}{dx}\!\left[e^{-x^2}(H_mH_n'-H_nH_m')\right].
+\]
+Integrating over the real line gives
+\begin{align*}
+  &\left[e^{-x^2}(H_mH_n'-H_nH_m')\right]_{-\infty}^{\infty}\\
+  &\qquad+2(n-m)\int_{-\infty}^{\infty}H_n(x)H_m(x)e^{-x^2}\,dx=0.
+\end{align*}
+The boundary term is zero because a polynomial times $e^{-x^2}$ tends to zero at both
+infinities. Hence, for $n\ne m$,
+\begin{equation}
+  \int_{-\infty}^{\infty}H_n(x)H_m(x)e^{-x^2}\,dx=0.
+  \label{eq:hermite-ortho}
+\end{equation}
+The generating-function calculation below supplies the diagonal norm.
+\end{frame}
+
+\begin{frame}{Shapes of the first Hermite polynomials}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.86\linewidth]{figs/hermite-H.pdf}
+\end{center}
+The Hermite polynomials grow rapidly away from the origin. In the harmonic oscillator the
+physical functions are $e^{-x^2/2}H_n(x)$, where the Gaussian factor restores decay.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Which equation does $\psi_n=e^{-x^2/2}H_n$ solve?}
+\footnotesize
+
+Let $y=H_n$ satisfy
+\[
+  y''-2xy'+2ny=0,
+\]
+and define
+\[
+  \psi_n(x)=e^{-x^2/2}y(x).
+\]
+Equivalently,
+\[
+  y(x)=e^{x^2/2}\psi_n(x).
+\]
+Using
+\[
+  \frac{d}{dx}e^{x^2/2}=xe^{x^2/2},
+\]
+the first derivative is
+\begin{align*}
+  y'
+  &=xe^{x^2/2}\psi_n+e^{x^2/2}\psi_n'\\
+  &=e^{x^2/2}(\psi_n'+x\psi_n).
+\end{align*}
+Differentiate again:
+\begin{align*}
+  y''
+  &=xe^{x^2/2}(\psi_n'+x\psi_n)
+    +e^{x^2/2}\frac{d}{dx}(\psi_n'+x\psi_n)\\
+  &=e^{x^2/2}\left[x\psi_n'+x^2\psi_n
+    +\psi_n''+\psi_n+x\psi_n'\right]\\
+  &=e^{x^2/2}\left[\psi_n''+2x\psi_n'+(x^2+1)\psi_n\right].
+\end{align*}
+Substitute $y$, $y'$, and $y''$ into the Hermite equation and divide by the nonzero factor
+$e^{x^2/2}$:
+\begin{align*}
+  0
+  &=\psi_n''+2x\psi_n'+(x^2+1)\psi_n
+    -2x(\psi_n'+x\psi_n)+2n\psi_n\\
+  &=\psi_n''+2x\psi_n'+(x^2+1)\psi_n
+    -2x\psi_n'-2x^2\psi_n+2n\psi_n\\
+  &=\psi_n''+(2n+1-x^2)\psi_n.
+\end{align*}
+Therefore
+\begin{equation}
+  \psi_n''(x)+(2n+1-x^2)\psi_n(x)=0,
+  \qquad
+  \psi_n(x)=e^{-x^2/2}H_n(x).
+  \label{eq:hermite-osc}
+\end{equation}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Example: the quantum harmonic oscillator}
+\footnotesize
+
+For a particle of mass $M$ in a one-dimensional potential $V(x)$, the
+time-dependent Schr\"odinger equation is
+\begin{equation}
+  i\hbar\frac{\partial\Psi}{\partial t}
+   =
+  \left[
+    -\frac{\hbar^2}{2M}\frac{\partial^2}{\partial x^2}
+    +V(x)
+  \right]\Psi.
+  \label{eq:schrod}
+\end{equation}
+Set
+\[
+  \Psi(x,t)=u(t)\psi(x).
+\]
+Then
+\[
+  \frac{\partial\Psi}{\partial t}=u'(t)\psi(x),
+  \qquad
+  \frac{\partial^2\Psi}{\partial x^2}=u(t)\psi''(x),
+\]
+so \eqref{eq:schrod} becomes
+\[
+  i\hbar u'(t)\psi(x)
+   =
+  u(t)\left[
+    -\frac{\hbar^2}{2M}\psi''(x)+V(x)\psi(x)
+  \right].
+\]
+For a nonzero separated solution, divide by $u(t)\psi(x)$:
+\[
+  i\hbar\frac{u'(t)}{u(t)}
+   =
+  \frac{-\dfrac{\hbar^2}{2M}\psi''(x)+V(x)\psi(x)}
+       {\psi(x)}.
+\]
+The left side depends only on $t$ and the right side only on $x$, so both equal
+a separation constant $E$.  The time equation is
+\[
+  i\hbar u'=Eu.
+\]
+Solving it step by step,
+\begin{align*}
+  \frac{u'}{u}
+   &=-\frac{iE}{\hbar},\\
+  \int\frac{u'}{u}\,dt
+   &=-\frac{iE}{\hbar}\int dt,\\
+  \log u
+   &=-\frac{iE}{\hbar}t+C,\\
+  u(t)
+   &=Ae^{-iEt/\hbar},
+  \qquad A=e^C.
+\end{align*}
+The spatial equation is
+\begin{equation}
+  -\frac{\hbar^2}{2M}\psi''(x)+V(x)\psi(x)=E\psi(x).
+  \label{eq:time-independent-schrodinger}
+\end{equation}
+
+For the harmonic oscillator,
+\[
+  V(x)=\frac12Kx^2,
+  \qquad
+  \omega=\sqrt{\frac{K}{M}},
+  \qquad
+  K=M\omega^2,
+\]
+and therefore
+\[
+  V(x)=\frac12M\omega^2x^2.
+\]
+Substitution into \eqref{eq:time-independent-schrodinger} gives
+\[
+  -\frac{\hbar^2}{2M}\psi''
+  +\frac12M\omega^2x^2\psi=E\psi.
+\]
+Multiply every term by $-2M/\hbar^2$:
+\begin{align*}
+  \left(-\frac{2M}{\hbar^2}\right)
+  \left(-\frac{\hbar^2}{2M}\psi''\right)
+   &+
+  \left(-\frac{2M}{\hbar^2}\right)
+  \left(\frac12M\omega^2x^2\psi\right)\\
+   &=
+  \left(-\frac{2M}{\hbar^2}\right)E\psi,
+\end{align*}
+so
+\[
+  \psi''
+  -\frac{M^2\omega^2}{\hbar^2}x^2\psi
+  =-\frac{2ME}{\hbar^2}\psi,
+\]
+or
+\[
+  \psi''
+  +\left(
+    \frac{2ME}{\hbar^2}
+    -\frac{M^2\omega^2}{\hbar^2}x^2
+  \right)\psi=0.
+\]
+
+Define the dimensionless coordinate
+\[
+  \xi=\sqrt{\frac{M\omega}{\hbar}}\,x.
+\]
+Because $\xi$ is linear in $x$,
+\begin{align*}
+  \frac{d\xi}{dx}
+    &=\sqrt{\frac{M\omega}{\hbar}},\\
+  \frac{d}{dx}
+    &=\frac{d\xi}{dx}\frac{d}{d\xi}
+      =\sqrt{\frac{M\omega}{\hbar}}\frac{d}{d\xi},\\
+  \frac{d^2}{dx^2}
+    &=\frac{M\omega}{\hbar}\frac{d^2}{d\xi^2}.
+\end{align*}
+Also,
+\[
+  x=\sqrt{\frac{\hbar}{M\omega}}\,\xi,
+  \qquad
+  x^2=\frac{\hbar}{M\omega}\xi^2,
+\]
+so
+\[
+  \frac{M^2\omega^2}{\hbar^2}x^2
+   =
+  \frac{M^2\omega^2}{\hbar^2}
+  \frac{\hbar}{M\omega}\xi^2
+   =
+  \frac{M\omega}{\hbar}\xi^2.
+\]
+After substitution,
+\[
+  \frac{M\omega}{\hbar}\frac{d^2\psi}{d\xi^2}
+  +\left(
+    \frac{2ME}{\hbar^2}
+    -\frac{M\omega}{\hbar}\xi^2
+  \right)\psi=0.
+\]
+Divide by $M\omega/\hbar$:
+\begin{align*}
+  \frac{d^2\psi}{d\xi^2}
+  +\left[
+    \frac{2ME}{\hbar^2}\frac{\hbar}{M\omega}
+    -\xi^2
+  \right]\psi
+  &=0,\\
+  \frac{d^2\psi}{d\xi^2}
+  +\left(
+    \frac{2E}{\hbar\omega}-\xi^2
+  \right)\psi
+  &=0.
+\end{align*}
+Thus
+\begin{equation}
+  \frac{d^2\psi}{d\xi^2}
+  +\left(\frac{2E}{\hbar\omega}-\xi^2\right)\psi=0.
+  \label{eq:qho-dimensionless}
+\end{equation}
+
+For large $|\xi|$, the dominant equation is approximately
+$\psi''-\xi^2\psi=0$, whose decaying behavior is Gaussian.  Factor it out by
+setting
+\[
+  \psi(\xi)=e^{-\xi^2/2}y(\xi).
+\]
+The first derivative is
+\begin{align*}
+  \psi'
+   &=
+    \left(e^{-\xi^2/2}\right)'y
+    +e^{-\xi^2/2}y'\\
+   &=
+    -\xi e^{-\xi^2/2}y
+    +e^{-\xi^2/2}y'\\
+   &=
+    e^{-\xi^2/2}(y'-\xi y).
+\end{align*}
+Differentiate again:
+\begin{align*}
+  \psi''
+   &=
+    -\xi e^{-\xi^2/2}(y'-\xi y)
+    +e^{-\xi^2/2}\frac{d}{d\xi}(y'-\xi y)\\
+   &=
+    e^{-\xi^2/2}
+    \left[
+      -\xi y'+\xi^2y+y''-y-\xi y'
+    \right]\\
+   &=
+    e^{-\xi^2/2}
+    \left[
+      y''-2\xi y'+(\xi^2-1)y
+    \right].
+\end{align*}
+Substitute these expressions into \eqref{eq:qho-dimensionless} and divide by
+the nonzero factor $e^{-\xi^2/2}$:
+\begin{align*}
+  0
+   &=
+    y''-2\xi y'+(\xi^2-1)y
+    +\left(\frac{2E}{\hbar\omega}-\xi^2\right)y\\
+   &=
+    y''-2\xi y'
+    +\left(\frac{2E}{\hbar\omega}-1\right)y.
+\end{align*}
+Define
+\[
+  \varepsilon:=\frac{2E}{\hbar\omega}.
+\]
+Then
+\begin{equation}
+  y''-2\xi y'+(\varepsilon-1)y=0.
+  \label{eq:qho-hermite-reduction}
+\end{equation}
+
+To determine when this equation has a polynomial solution, let
+\[
+  y(\xi)=\sum_{j=0}^{\infty}a_j\xi^j.
+\]
+Then
+\begin{align*}
+  y'
+    &=\sum_{j=0}^{\infty}(j+1)a_{j+1}\xi^j,\\
+  y''
+    &=\sum_{j=0}^{\infty}(j+2)(j+1)a_{j+2}\xi^j,\\
+  -2\xi y'
+    &=-2\sum_{j=1}^{\infty}j\,a_j\xi^j
+      =-2\sum_{j=0}^{\infty}j\,a_j\xi^j,\\
+  (\varepsilon-1)y
+    &=\sum_{j=0}^{\infty}(\varepsilon-1)a_j\xi^j.
+\end{align*}
+Hence
+\[
+  \sum_{j=0}^{\infty}
+  \left[
+    (j+2)(j+1)a_{j+2}
+    +(\varepsilon-1-2j)a_j
+  \right]\xi^j=0,
+\]
+so every coefficient satisfies
+\begin{equation}
+  a_{j+2}
+    =\frac{2j+1-\varepsilon}{(j+2)(j+1)}a_j.
+  \label{eq:qho-series-recurrence}
+\end{equation}
+
+The even and odd coefficient chains are independent.  If a chain does not
+terminate, then for large $j$ of the appropriate parity,
+\begin{align*}
+  \frac{a_{j+2}}{a_j}
+   &=
+    \frac{2j+1-\varepsilon}{(j+2)(j+1)}
+    \sim\frac{2j}{j^2}
+    =\frac{2}{j}.
+\end{align*}
+For comparison,
+\[
+  e^{\xi^2}
+    =\sum_{k=0}^{\infty}\frac{\xi^{2k}}{k!}
+\]
+has successive even-power coefficient ratio
+\[
+  \frac{1/(k+1)!}{1/k!}
+   =\frac{1}{k+1}
+   =\frac{2}{2k+2}
+   \sim\frac{2}{j}
+   \qquad (j=2k),
+\]
+and $\xi e^{\xi^2}$ has the analogous odd-power ratio.  Thus a
+nonterminating parity solution has the growing asymptotic component
+$y(\xi)\sim e^{\xi^2}$ (up to an algebraic factor).  Consequently
+\[
+  \psi(\xi)=e^{-\xi^2/2}y(\xi)
+\]
+contains an $e^{+\xi^2/2}$ component and is not square-integrable on the real
+line.  A bound-state parity solution must therefore terminate.
+
+Termination at degree $n$ occurs when the numerator of
+\eqref{eq:qho-series-recurrence} vanishes at $j=n$:
+\begin{align*}
+  2n+1-\varepsilon&=0,\\
+  \varepsilon&=2n+1.
+\end{align*}
+For this value,
+\[
+  y''-2\xi y'+2ny=0,
+\]
+which is the physicists' Hermite equation.  Selecting the parity chain that
+contains $\xi^n$ and setting the other initial coefficient to zero gives
+$y(\xi)=H_n(\xi)$ up to normalization.  Since
+$\varepsilon=2E/(\hbar\omega)$,
+\begin{align*}
+  \frac{2E_n}{\hbar\omega}
+    &=2n+1,\\
+  E_n
+    &=\frac{\hbar\omega}{2}(2n+1)
+      =\left(n+\frac12\right)\hbar\omega.
+\end{align*}
+Therefore
+\begin{equation}
+  E_n=\left(n+\frac12\right)\hbar\omega,
+  \qquad n=0,1,2,\ldots .
+  \label{eq:energy-levels}
+\end{equation}
+
+Write
+\[
+  \psi_n(x)=N_n e^{-\xi^2/2}H_n(\xi),
+  \qquad
+  \xi=\sqrt{\frac{M\omega}{\hbar}}\,x.
+\]
+Because
+\[
+  dx=\sqrt{\frac{\hbar}{M\omega}}\,d\xi
+\]
+and
+\[
+  \int_{-\infty}^{\infty}
+    e^{-\xi^2}H_n(\xi)^2\,d\xi
+    =2^n n!\sqrt{\pi},
+\]
+normalization requires
+\begin{align*}
+  1
+   &=\int_{-\infty}^{\infty}|\psi_n(x)|^2\,dx\\
+   &=|N_n|^2
+     \sqrt{\frac{\hbar}{M\omega}}
+     \int_{-\infty}^{\infty}
+       e^{-\xi^2}H_n(\xi)^2\,d\xi\\
+   &=|N_n|^2
+     \sqrt{\frac{\hbar}{M\omega}}
+     2^n n!\sqrt{\pi}.
+\end{align*}
+Choosing $N_n$ real and positive,
+\begin{align*}
+  N_n^2
+   &=
+    \sqrt{\frac{M\omega}{\hbar}}
+    \frac{1}{2^n n!\sqrt{\pi}},\\
+  N_n
+   &=
+    \left(\frac{M\omega}{\pi\hbar}\right)^{1/4}
+    \frac{1}{\sqrt{2^n n!}}.
+\end{align*}
+Thus the normalized spatial eigenfunction is
+\begin{equation}
+  \psi_n(x)
+    =
+  \left(\frac{M\omega}{\pi\hbar}\right)^{1/4}
+  \frac{e^{-\xi^2/2}H_n(\xi)}{\sqrt{2^n n!}},
+  \qquad
+  \xi=\sqrt{\frac{M\omega}{\hbar}}\,x.
+  \label{eq:qho-normalized-eigenfunction}
+\end{equation}
+A normalized state expanded in this orthonormal basis is
+\begin{equation}
+  \Psi(x,t)
+    =\sum_{n=0}^{\infty}
+      c_n\psi_n(x)e^{-iE_nt/\hbar},
+  \qquad
+  \sum_{n=0}^{\infty}|c_n|^2=1.
+  \label{eq:qho-solution}
+\end{equation}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Generating function, norm, Rodrigues, and Schl\"afli}
+\footnotesize
+
+Starting from the explicit Hermite series,
+\[
+  H_n(x)=\sum_{k=0}^{\lfloor n/2\rfloor}
+  (-1)^k(2x)^{n-2k}\frac{n!}{k!(n-2k)!},
+\]
+form the exponential generating function:
+\[
+  \sum_{n=0}^{\infty}H_n(x)\frac{t^n}{n!}
+  =\sum_{n=0}^{\infty}\sum_{k=0}^{\lfloor n/2\rfloor}
+    (-1)^k\frac{(2x)^{n-2k}t^n}{k!(n-2k)!}.
+\]
+Set $j=n-2k$, so $n=j+2k$ and $j,k\ge0$. Then
+\begin{align*}
+  \sum_{n=0}^{\infty}H_n(x)\frac{t^n}{n!}
+  &=\sum_{k=0}^{\infty}\sum_{j=0}^{\infty}
+    (-1)^k\frac{(2x)^j t^{j+2k}}{k!j!}\\
+  &=\left(\sum_{k=0}^{\infty}\frac{(-1)^k t^{2k}}{k!}\right)
+    \left(\sum_{j=0}^{\infty}\frac{(2xt)^j}{j!}\right)\\
+  &=e^{-t^2}e^{2xt}.
+\end{align*}
+Thus
+\begin{equation}
+  g(x,t)=e^{-t^2+2xt}
+  =\sum_{n=0}^{\infty}H_n(x)\frac{t^n}{n!}.
+  \label{eq:hermite-gen}
+\end{equation}
+
+We now compute the norm.  Take real $s$ and $t$ near the origin, multiply two
+generating functions, and integrate with the weight:
+\begin{align*}
+  I(s,t)
+  &:=\int_{-\infty}^{\infty}e^{-x^2}g(x,s)g(x,t)\,dx\\
+  &=\int_{-\infty}^{\infty}
+    e^{-x^2-s^2+2sx-t^2+2tx}\,dx.
+\end{align*}
+Complete the square:
+\begin{align*}
+  -x^2+2(s+t)x-s^2-t^2
+  &=-\bigl[x-(s+t)\bigr]^2+(s+t)^2-s^2-t^2\\
+  &=-\bigl[x-(s+t)\bigr]^2+2st.
+\end{align*}
+Therefore
+\begin{align*}
+  I(s,t)
+  &=e^{2st}\int_{-\infty}^{\infty}e^{-[x-(s+t)]^2}\,dx\\
+  &=\sqrt\pi\,e^{2st}\\
+  &=\sqrt\pi\sum_{k=0}^{\infty}\frac{2^k s^k t^k}{k!}.
+\end{align*}
+On the other hand, expanding the two generating functions first gives
+\[
+  I(s,t)
+  =\sum_{m=0}^{\infty}\sum_{n=0}^{\infty}
+    \frac{s^m t^n}{m!n!}
+    \int_{-\infty}^{\infty}H_m(x)H_n(x)e^{-x^2}\,dx.
+\]
+For $m\ne n$, the coefficient of $s^mt^n$ on $\sqrt\pi e^{2st}$ is zero. For $m=n$,
+coefficient comparison gives
+\[
+  \frac{1}{(n!)^2}
+  \int_{-\infty}^{\infty}H_n(x)^2e^{-x^2}\,dx
+  =\sqrt\pi\frac{2^n}{n!}.
+\]
+Hence
+\begin{equation}
+  \int_{-\infty}^{\infty}H_m(x)H_n(x)e^{-x^2}\,dx
+  =2^n n!\sqrt\pi\,\delta_{mn}.
+  \label{eq:hermite-norm}
+\end{equation}
+Equivalently, the dimensionless oscillator functions
+\[
+  \widehat\psi_n(x)
+  =\frac{e^{-x^2/2}H_n(x)}{\pi^{1/4}\sqrt{2^n n!}}
+\]
+satisfy $\int_{-\infty}^{\infty}\widehat\psi_m\widehat\psi_n\,dx=\delta_{mn}$.
+
+To derive Rodrigues' formula, rewrite the generating function as
+\[
+  g(x,t)=e^{x^2}e^{-(t-x)^2}.
+\]
+Differentiate $m$ times with respect to $t$:
+\begin{align*}
+  \frac{\partial^m g}{\partial t^m}
+  &=e^{x^2}\frac{d^m}{dt^m}e^{-(t-x)^2},\\
+  \frac{\partial^m}{\partial t^m}
+  \left(\sum_{n=0}^{\infty}H_n(x)\frac{t^n}{n!}\right)
+  &=\sum_{n=m}^{\infty}H_n(x)\frac{t^{n-m}}{(n-m)!}\\
+  &=H_m(x)+H_{m+1}(x)t+\frac{H_{m+2}(x)}{2!}t^2+\cdots.
+\end{align*}
+Setting $t=0$ leaves
+\[
+  H_m(x)=e^{x^2}\left.\frac{d^m}{dt^m}e^{-(t-x)^2}\right|_{t=0}.
+\]
+Let $s=x-t$. Then $ds/dt=-1$, so
+\[
+  \frac{d^m}{dt^m}=(-1)^m\frac{d^m}{ds^m},
+  \qquad t=0\Longrightarrow s=x.
+\]
+Thus
+\begin{equation}
+  H_m(x)=(-1)^m e^{x^2}\frac{d^m}{dx^m}e^{-x^2}.
+  \label{eq:hermite-rodrigues}
+\end{equation}
+
+Finally, divide \eqref{eq:hermite-gen} by $t^{m+1}$ and integrate around a positively
+oriented contour $\gamma$ enclosing the origin:
+\begin{align*}
+  \oint_\gamma\frac{e^{-t^2+2xt}}{t^{m+1}}\,dt
+  &=\sum_{n=0}^{\infty}\frac{H_n(x)}{n!}
+    \oint_\gamma t^{n-m-1}\,dt\\
+  &=\frac{H_m(x)}{m!}(2\pi i).
+\end{align*}
+Therefore
+\begin{equation}
+  H_m(x)=\frac{m!}{2\pi i}
+  \oint_\gamma\frac{e^{-t^2+2xt}}{t^{m+1}}\,dt.
+  \label{eq:hermite-schlafli}
+\end{equation}
+Because the exponential is entire, any sufficiently small positively oriented contour
+around $t=0$ is admissible.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Example: special values $H_n(0)$}
+\footnotesize
+
+Set $x=0$ in the generating function:
+\[
+  e^{-t^2}
+  =\sum_{n=0}^{\infty}H_n(0)\frac{t^n}{n!}.
+\]
+The ordinary exponential series gives
+\[
+  e^{-t^2}
+  =\sum_{k=0}^{\infty}\frac{(-t^2)^k}{k!}
+  =\sum_{k=0}^{\infty}(-1)^k\frac{t^{2k}}{k!}.
+\]
+There are no odd powers on the right, so the coefficient of $t^{2k+1}$ satisfies
+\[
+  \frac{H_{2k+1}(0)}{(2k+1)!}=0,
+  \qquad
+  H_{2k+1}(0)=0.
+\]
+For the even powers,
+\[
+  \frac{H_{2k}(0)}{(2k)!}=\frac{(-1)^k}{k!},
+\]
+and hence
+\begin{equation}
+  H_{2k+1}(0)=0,
+  \qquad
+  H_{2k}(0)=(-1)^k\frac{(2k)!}{k!}.
+  \label{eq:hermite-zero}
+\end{equation}
+Checks from the explicit polynomials are
+\[
+  H_0(0)=1,
+  \qquad H_1(0)=0,
+  \qquad H_2(0)=-2,
+  \qquad H_4(0)=12,
+\]
+which agree with \eqref{eq:hermite-zero}.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Recurrence relations}
+\footnotesize
+
+Start from
+\[
+  g(x,t)=e^{-t^2+2xt}
+  =\sum_{n=0}^{\infty}H_n(x)\frac{t^n}{n!}.
+\]
+Differentiate with respect to $x$. Direct differentiation gives
+\[
+  \frac{\partial g}{\partial x}=2t\,g.
+\]
+Termwise differentiation gives
+\[
+  \frac{\partial g}{\partial x}
+  =\sum_{n=0}^{\infty}H_n'(x)\frac{t^n}{n!}.
+\]
+Also,
+\begin{align*}
+  2t\,g
+  &=2\sum_{j=0}^{\infty}H_j(x)\frac{t^{j+1}}{j!}\\
+  &=2\sum_{n=1}^{\infty}H_{n-1}(x)\frac{t^n}{(n-1)!}\\
+  &=2\sum_{n=1}^{\infty}nH_{n-1}(x)\frac{t^n}{n!}.
+\end{align*}
+Matching coefficients of $t^n/n!$ gives $H_0'=0$ and, for $n\ge1$,
+\begin{equation}
+  H_n'(x)=2nH_{n-1}(x).
+  \label{eq:hermite-deriv}
+\end{equation}
+
+Now differentiate the generating function with respect to $t$. From the exponential,
+\[
+  \frac{\partial g}{\partial t}=(2x-2t)g.
+\]
+From the series,
+\begin{align*}
+  \frac{\partial g}{\partial t}
+  &=\sum_{j=1}^{\infty}H_j(x)\frac{j t^{j-1}}{j!}\\
+  &=\sum_{n=0}^{\infty}H_{n+1}(x)\frac{t^n}{n!}.
+\end{align*}
+Expand the right side of $(2x-2t)g$:
+\begin{align*}
+  (2x-2t)g
+  &=2x\sum_{n=0}^{\infty}H_n\frac{t^n}{n!}
+    -2\sum_{j=0}^{\infty}H_j\frac{t^{j+1}}{j!}\\
+  &=2x\sum_{n=0}^{\infty}H_n\frac{t^n}{n!}
+    -2\sum_{n=1}^{\infty}nH_{n-1}\frac{t^n}{n!}.
+\end{align*}
+Matching coefficients of $t^n/n!$ yields
+\begin{equation}
+  H_{n+1}(x)=2xH_n(x)-2nH_{n-1}(x),
+  \qquad n\ge0,
+  \label{eq:hermite-recur}
+\end{equation}
+where the $n=0$ case is $H_1=2xH_0=2x$ and does not require $H_{-1}$.
+\end{frame}
+
+\begin{frame}{Useful formulas for the Hermite polynomial}
+\footnotesize
+\begin{center}
+\renewcommand{\arraystretch}{1.7}
+\begin{tabular}{ll}
+differential equation
+  & $H_n'' - 2x\,H_n' + 2n\,H_n = 0$ \\
+series solution
+  & $H_n(x)=\displaystyle\sum_{k=0}^{\lfloor n/2\rfloor}
+       (-1)^k(2x)^{n-2k}\,\frac{n!}{k!\,(n-2k)!}$ \\
+generating function
+  & $e^{-t^2+2tx} = \displaystyle\sum_{n=0}^{\infty}H_n(x)\,\frac{t^n}{n!}$ \\
+recurrence
+  & $H_n' = 2n\,H_{n-1}$ \\
+  & $H_{n+1}(x) = 2x\,H_n(x) - 2n\,H_{n-1}(x)$ \\
+orthogonality
+  & $\displaystyle\int_{-\infty}^{\infty}H_mH_n\,e^{-x^2}dx
+       = n!\,2^n\sqrt{\pi}\,\delta_{mn}$ \\
+Rodrigues
+  & $H_n(x)=(-1)^ne^{x^2}\dfrac{d^n}{dx^n}e^{-x^2}$ \\
+Schl\"afli
+  & $H_n(x)=\dfrac{n!}{2\pi i}
+       \displaystyle\oint\frac{e^{-t^2+2tx}}{t^{n+1}}\,dt$
+\end{tabular}
+\end{center}
+\vspace{0.2em}
+{\scriptsize The Hermite generating function is entire in $t$.  In the
+contour formula, the positively oriented contour encloses $t=0$.}
+\end{frame}
+
+% ======================================================================
+\section{Laguerre Polynomial}
+% ======================================================================
+
+\begin{frame}[allowframebreaks]{The Laguerre equation and series solution}
+\footnotesize
+
+The standard Laguerre equation is
+\begin{equation}
+  x\,y''(x)+(1-x)y'(x)+n\,y(x)=0,
+  \qquad n=0,1,2,\ldots .
+  \label{eq:laguerre-eq}
+\end{equation}
+Seek a solution analytic at $x=0$ in the form
+\[
+  y(x)=\sum_{j=0}^{\infty}a_jx^j .
+\]
+Termwise differentiation gives
+\begin{align*}
+  y'(x)
+    &=\sum_{j=1}^{\infty}j\,a_jx^{j-1}
+      =\sum_{k=0}^{\infty}(k+1)a_{k+1}x^k,\\
+  y''(x)
+    &=\sum_{j=2}^{\infty}j(j-1)a_jx^{j-2}.
+\end{align*}
+Multiplication by $x$ and the index shift $k=j-1$ give
+\begin{align*}
+  x\,y''(x)
+    &=\sum_{j=2}^{\infty}j(j-1)a_jx^{j-1}\\
+    &=\sum_{k=1}^{\infty}(k+1)k\,a_{k+1}x^k\\
+    &=\sum_{k=0}^{\infty}(k+1)k\,a_{k+1}x^k,
+\end{align*}
+where the inserted $k=0$ term is zero.  Similarly,
+\[
+  -x\,y'(x)
+   =-\sum_{j=1}^{\infty}j\,a_jx^j
+   =-\sum_{k=0}^{\infty}k\,a_kx^k,
+  \qquad
+  n\,y(x)=\sum_{k=0}^{\infty}n\,a_kx^k .
+\]
+Substitution into \eqref{eq:laguerre-eq} therefore yields
+\begin{align*}
+  0
+   &=\sum_{k=0}^{\infty}
+      \left[
+        (k+1)k\,a_{k+1}
+        +(k+1)a_{k+1}
+        -k\,a_k+n\,a_k
+      \right]x^k\\
+   &=\sum_{k=0}^{\infty}
+      \left[
+        (k+1)^2a_{k+1}+(n-k)a_k
+      \right]x^k .
+\end{align*}
+A power series is identically zero only when every coefficient is zero, so
+\begin{equation}
+  (k+1)^2a_{k+1}+(n-k)a_k=0,
+  \qquad
+  a_{k+1}=-\frac{n-k}{(k+1)^2}\,a_k .
+  \label{eq:laguerre-coeff-recurrence}
+\end{equation}
+
+Choose the standard normalization $a_0=1$.  Iterating the recurrence gives, for
+$1\le k\le n$,
+\begin{align*}
+  a_k
+   &=(-1)^k
+     \frac{n(n-1)\cdots(n-k+1)}
+          {1^2\,2^2\cdots k^2}\,a_0\\
+   &=(-1)^k
+     \frac{n!/(n-k)!}{(k!)^2}\\
+   &=\frac{(-1)^k n!}{(n-k)!(k!)^2}.
+\end{align*}
+At $k=n$, \eqref{eq:laguerre-coeff-recurrence} gives
+\[
+  a_{n+1}=-\frac{n-n}{(n+1)^2}a_n=0.
+\]
+All later coefficients are then zero, because the recurrence successively gives
+$a_{n+2}=a_{n+3}=\cdots=0$.  Thus the analytic solution terminates:
+\begin{equation}
+  L_n(x)
+   =\sum_{k=0}^{n}
+      \frac{(-1)^k n!}{(n-k)!(k!)^2}\,x^k
+   =\sum_{k=0}^{n}
+      (-1)^k\binom{n}{k}\frac{x^k}{k!}.
+  \label{eq:laguerre-series}
+\end{equation}
+For example,
+\begin{align*}
+  L_0(x)
+    &=1,\\
+  L_1(x)
+    &=1-x,\\
+  L_2(x)
+    &=1-2x+\frac{x^2}{2},\\
+  L_3(x)
+    &=1-3x+\frac{3}{2}x^2-\frac{1}{6}x^3.
+\end{align*}
+As a direct check for $L_2$,
+\begin{align*}
+  L_2'(x)&=-2+x,
+  &
+  L_2''(x)&=1,\\
+  xL_2''+(1-x)L_2'+2L_2
+    &=x+(1-x)(-2+x)+2\left(1-2x+\frac{x^2}{2}\right)\\
+    &=x+\left(-2+3x-x^2\right)
+      +\left(2-4x+x^2\right)\\
+    &=0.
+\end{align*}
+
+The generalized Laguerre equation is
+\[
+  x\,y''+(\alpha+1-x)y'+n\,y=0.
+\]
+Its polynomial solution is denoted by $L_n^{(\alpha)}(x)$.  The standard
+orthogonality theory on $[0,\infty)$ requires $\alpha>-1$; the present chapter uses
+the case $\alpha=0$, for which $L_n^{(0)}=L_n$.
+
+\medskip
+To expose the Sturm--Liouville structure of the standard equation, multiply
+\eqref{eq:laguerre-eq} by $e^{-x}$.  Since
+\[
+  \frac{d}{dx}\!\left(xe^{-x}\right)
+    =e^{-x}-xe^{-x}
+    =(1-x)e^{-x},
+\]
+the product rule gives
+\[
+  \frac{d}{dx}\!\left(xe^{-x}y'\right)
+    =xe^{-x}y''+(1-x)e^{-x}y'.
+\]
+Hence
+\begin{equation}
+  \frac{d}{dx}\!\left(xe^{-x}y'\right)
+   +n e^{-x}y=0 .
+  \label{eq:laguerre-sl}
+\end{equation}
+
+Let $L_n$ and $L_m$ satisfy \eqref{eq:laguerre-sl} with eigenvalues $n$ and
+$m$.  Their two equations are
+\begin{align*}
+  \left(xe^{-x}L_n'\right)'+n e^{-x}L_n&=0,\\
+  \left(xe^{-x}L_m'\right)'+m e^{-x}L_m&=0.
+\end{align*}
+Multiply the first by $L_m$, the second by $L_n$, and subtract:
+\[
+  L_m\left(xe^{-x}L_n'\right)'
+  -L_n\left(xe^{-x}L_m'\right)'
+  +(n-m)e^{-x}L_nL_m=0.
+\]
+The first two terms are one total derivative, because
+\begin{align*}
+  \frac{d}{dx}\!
+    \left[xe^{-x}\left(L_mL_n'-L_nL_m'\right)\right]
+  &=
+    L_m\left(xe^{-x}L_n'\right)'
+    +xe^{-x}L_m'L_n'\\
+  &\quad
+    -L_n\left(xe^{-x}L_m'\right)'
+    -xe^{-x}L_n'L_m'\\
+  &=
+    L_m\left(xe^{-x}L_n'\right)'
+    -L_n\left(xe^{-x}L_m'\right)'.
+\end{align*}
+Integrating from $0$ to $R$ gives
+\[
+  \left[
+    xe^{-x}\left(L_mL_n'-L_nL_m'\right)
+  \right]_{0}^{R}
+  +(n-m)\int_0^R e^{-x}L_n(x)L_m(x)\,dx=0.
+\]
+At $x=0$, the boundary expression vanishes because of the factor $x$.  As
+$R\to\infty$, each $L_j$ and $L_j'$ is a polynomial, while $e^{-R}$ decays faster
+than any power of $R$; consequently
+\[
+  \lim_{R\to\infty}
+  R\,e^{-R}\left(L_m(R)L_n'(R)-L_n(R)L_m'(R)\right)=0.
+\]
+Taking $R\to\infty$ therefore gives
+\[
+  (n-m)\int_0^\infty e^{-x}L_n(x)L_m(x)\,dx=0.
+\]
+Thus, when $n\ne m$,
+\begin{equation}
+  \int_0^\infty L_n(x)L_m(x)e^{-x}\,dx=0.
+  \label{eq:laguerre-ortho}
+\end{equation}
+The diagonal norm is derived from the generating function below.
+\end{frame}
+
+\begin{frame}{Shapes of the first Laguerre polynomials}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.86\linewidth]{figs/laguerre-L.pdf}
+\end{center}
+All standard Laguerre polynomials satisfy $L_n(0)=1$. Their positive zeros and the weight
+$e^{-x}$ are what make them natural on the half-line $[0,\infty)$.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Generating function, norm, Schl\"afli, and Rodrigues}
+\footnotesize
+
+Start from the finite series \eqref{eq:laguerre-series}:
+\[
+  L_n(x)=\sum_{k=0}^{n}(-1)^k\binom{n}{k}\frac{x^k}{k!}.
+\]
+For $|t|<1$, sum over $n$ and interchange the sums:
+\begin{align*}
+  \sum_{n=0}^{\infty}L_n(x)t^n
+   &=
+     \sum_{n=0}^{\infty}
+     \sum_{k=0}^{n}
+       (-1)^k\binom{n}{k}\frac{x^k}{k!}t^n\\
+   &=
+     \sum_{k=0}^{\infty}\frac{(-x)^k}{k!}
+     \sum_{n=k}^{\infty}\binom{n}{k}t^n.
+\end{align*}
+The inner sum follows by differentiating the geometric series $k$ times:
+\begin{align*}
+  \frac{1}{1-t}
+    &=\sum_{n=0}^{\infty}t^n,\\
+  \frac{d^k}{dt^k}\frac{1}{1-t}
+    &=\frac{k!}{(1-t)^{k+1}}
+      =\sum_{n=k}^{\infty}\frac{n!}{(n-k)!}t^{n-k}.
+\end{align*}
+Multiplying the last equality by $t^k/k!$ gives
+\[
+  \sum_{n=k}^{\infty}\binom{n}{k}t^n
+    =\frac{t^k}{(1-t)^{k+1}}.
+\]
+Substitution into the double sum now yields
+\begin{align*}
+  \sum_{n=0}^{\infty}L_n(x)t^n
+    &=
+      \sum_{k=0}^{\infty}
+      \frac{(-x)^k}{k!}
+      \frac{t^k}{(1-t)^{k+1}}\\
+    &=
+      \frac{1}{1-t}
+      \sum_{k=0}^{\infty}
+      \frac{1}{k!}
+      \left(-\frac{xt}{1-t}\right)^k\\
+    &=
+      \frac{1}{1-t}
+      \exp\!\left(-\frac{xt}{1-t}\right).
+\end{align*}
+Therefore
+\begin{equation}
+  g(x,t)
+    :=\frac{1}{1-t}\exp\!\left(-\frac{xt}{1-t}\right)
+    =\sum_{n=0}^{\infty}L_n(x)t^n,
+  \qquad |t|<1.
+  \label{eq:laguerre-gen}
+\end{equation}
+Setting $x=0$ gives
+\[
+  \sum_{n=0}^{\infty}L_n(0)t^n
+    =g(0,t)
+    =\frac{1}{1-t}
+    =\sum_{n=0}^{\infty}t^n,
+\]
+so coefficient comparison confirms $L_n(0)=1$.
+
+\medskip
+Cauchy's coefficient formula applied to
+$g(x,z)=\sum_{n=0}^{\infty}L_n(x)z^n$ gives
+\begin{align*}
+  L_m(x)
+    &=[z^m]\,g(x,z)\\
+    &=\frac{1}{2\pi i}
+      \oint_{|z|=\rho}\frac{g(x,z)}{z^{m+1}}\,dz,
+      \qquad 0<\rho<1.
+\end{align*}
+After inserting $g$, this becomes the Schl\"afli contour representation
+\begin{equation}
+  L_m(x)
+    =\frac{1}{2\pi i}
+      \oint_{|z|=\rho}
+      \frac{\exp\!\left(-xz/(1-z)\right)}
+           {(1-z)z^{m+1}}\,dz,
+  \qquad 0<\rho<1.
+  \label{eq:laguerre-schlafli}
+\end{equation}
+Indeed, expanding the integrand verifies the coefficient extraction directly:
+\[
+  \frac{g(x,z)}{z^{m+1}}
+    =\sum_{n=0}^{\infty}L_n(x)z^{n-m-1},
+\]
+and only the term with $n=m$ has residue $L_m(x)$ at the origin.
+
+\medskip
+The generating function also determines the diagonal norm.  Take real $s$ and
+$t$ in a sufficiently small neighborhood of the origin, so all integrals below
+converge absolutely, and define
+\[
+  I(s,t)
+    :=\int_0^\infty e^{-x}g(x,s)g(x,t)\,dx.
+\]
+Substituting \eqref{eq:laguerre-gen} gives
+\begin{align*}
+  I(s,t)
+   &=
+    \frac{1}{(1-s)(1-t)}
+    \int_0^\infty
+      \exp\!\left[
+        -x-\frac{xs}{1-s}-\frac{xt}{1-t}
+      \right]dx\\
+   &=
+    \frac{1}{(1-s)(1-t)}
+    \int_0^\infty
+      \exp\!\left[
+        -x\left(
+          1+\frac{s}{1-s}+\frac{t}{1-t}
+        \right)
+      \right]dx.
+\end{align*}
+The coefficient in the exponential simplifies as
+\begin{align*}
+  1+\frac{s}{1-s}+\frac{t}{1-t}
+   &=
+    \frac{(1-s)(1-t)+s(1-t)+t(1-s)}
+         {(1-s)(1-t)}\\
+   &=
+    \frac{1-s-t+st+s-st+t-st}
+         {(1-s)(1-t)}\\
+   &=
+    \frac{1-st}{(1-s)(1-t)}.
+\end{align*}
+Using $\int_0^\infty e^{-Ax}\,dx=1/A$ when $\operatorname{Re}A>0$,
+\begin{align*}
+  I(s,t)
+   &=
+    \frac{1}{(1-s)(1-t)}
+    \frac{(1-s)(1-t)}{1-st}\\
+   &=\frac{1}{1-st}
+    =\sum_{r=0}^{\infty}(st)^r.
+\end{align*}
+On the other hand, expanding both generating functions before integration gives
+\begin{align*}
+  I(s,t)
+   &=
+    \int_0^\infty e^{-x}
+      \left(\sum_{m=0}^{\infty}L_m(x)s^m\right)
+      \left(\sum_{n=0}^{\infty}L_n(x)t^n\right)dx\\
+   &=
+    \sum_{m=0}^{\infty}\sum_{n=0}^{\infty}
+      \left[
+        \int_0^\infty e^{-x}L_m(x)L_n(x)\,dx
+      \right]s^m t^n.
+\end{align*}
+Since
+\[
+  \frac{1}{1-st}
+   =\sum_{r=0}^{\infty}s^rt^r
+   =\sum_{m=0}^{\infty}\sum_{n=0}^{\infty}
+      \delta_{mn}s^mt^n,
+\]
+comparison of the coefficient of $s^mt^n$ yields the complete orthonormality
+formula
+\begin{equation}
+  \int_0^\infty e^{-x}L_m(x)L_n(x)\,dx=\delta_{mn}.
+  \label{eq:laguerre-norm}
+\end{equation}
+
+\medskip
+Finally, derive Rodrigues' formula from
+\eqref{eq:laguerre-schlafli}.  Set
+\[
+  z=\frac{s-x}{s}=1-\frac{x}{s}.
+\]
+Then
+\[
+  1-z=\frac{x}{s},
+  \qquad
+  z^{m+1}=\frac{(s-x)^{m+1}}{s^{m+1}},
+  \qquad
+  dz=\frac{x}{s^2}\,ds,
+\]
+and
+\[
+  -\frac{xz}{1-z}
+   =-x
+     \frac{(s-x)/s}{x/s}
+   =-(s-x)
+   =x-s.
+\]
+Consequently,
+\begin{align*}
+  \frac{\exp\!\left(-xz/(1-z)\right)}
+       {(1-z)z^{m+1}}\,dz
+   &=
+    \frac{e^{x-s}}
+         {(x/s)\bigl((s-x)/s\bigr)^{m+1}}
+    \frac{x}{s^2}\,ds\\
+   &=
+    e^x\,
+    \frac{s^m e^{-s}}{(s-x)^{m+1}}\,ds.
+\end{align*}
+A small positively oriented circle around $z=0$ maps to a small positively
+oriented contour around $s=x$.  Thus
+\begin{align*}
+  L_m(x)
+   &=
+    \frac{e^x}{2\pi i}
+    \oint
+      \frac{s^m e^{-s}}{(s-x)^{m+1}}\,ds\\
+   &=
+    \frac{e^x}{m!}
+    \left.
+      \frac{d^m}{ds^m}\left(s^m e^{-s}\right)
+    \right|_{s=x},
+\end{align*}
+where the last step is Cauchy's differentiation formula.  Therefore
+\begin{equation}
+  L_m(x)
+    =\frac{e^x}{m!}
+      \frac{d^m}{dx^m}\left(x^m e^{-x}\right).
+  \label{eq:laguerre-rodrigues}
+\end{equation}
+The change of variables used $x\ne0$; both sides are polynomials, so the identity
+also holds at $x=0$ by continuity.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Recurrence relations for Laguerre polynomials}
+\footnotesize
+
+Differentiate the generating function \eqref{eq:laguerre-gen} with respect to $x$:
+\begin{align*}
+  \frac{\partial g}{\partial x}
+   &=
+    \frac{1}{1-t}
+    \exp\!\left(-\frac{xt}{1-t}\right)
+    \left(-\frac{t}{1-t}\right)\\
+   &=
+    -\frac{t}{1-t}\,g(x,t).
+\end{align*}
+Using
+\[
+  g(x,t)=\sum_{n=0}^{\infty}L_n(x)t^n,
+  \qquad
+  \frac{\partial g}{\partial x}
+    =\sum_{n=0}^{\infty}L_n'(x)t^n,
+\]
+we obtain
+\[
+  (1-t)\sum_{n=0}^{\infty}L_n'(x)t^n
+    =-t\sum_{n=0}^{\infty}L_n(x)t^n.
+\]
+Expand the left-hand side and shift indices:
+\begin{align*}
+  \sum_{n=0}^{\infty}L_n't^n
+   -\sum_{n=0}^{\infty}L_n't^{n+1}
+   &=
+   -\sum_{n=0}^{\infty}L_nt^{n+1},\\
+  L_0'
+   +\sum_{n=1}^{\infty}L_n't^n
+   -\sum_{n=1}^{\infty}L_{n-1}'t^n
+   &=
+   -\sum_{n=1}^{\infty}L_{n-1}t^n.
+\end{align*}
+The coefficient of $t^0$ gives $L_0'=0$.  For every $n\ge1$, the coefficient
+of $t^n$ gives
+\[
+  L_n'-L_{n-1}'=-L_{n-1},
+\]
+or
+\begin{equation}
+  L_n'(x)=L_{n-1}'(x)-L_{n-1}(x),
+  \qquad n\ge1.
+  \label{eq:laguerre-derivative-shift}
+\end{equation}
+
+A second derivative identity follows directly from the finite series.  From
+\eqref{eq:laguerre-series},
+\begin{equation}
+\begin{aligned}
+  xL_n'(x)
+   &=
+    x\sum_{k=1}^{n}
+      \frac{(-1)^k n!}{(n-k)!(k!)^2}
+      kx^{k-1}\\
+   &=
+    \sum_{k=1}^{n}
+      \frac{(-1)^k n!k}{(n-k)!(k!)^2}x^k.
+\end{aligned}
+\label{eq:laguerre-x-derivative-expansion}
+\end{equation}
+Now compare this with $n(L_n-L_{n-1})$.  For $k=0$, the coefficient is
+$n(1-1)=0$.  For $1\le k\le n-1$, the coefficient of $x^k$ is
+\begin{align*}
+  &n(-1)^k
+  \left[
+    \frac{n!}{(n-k)!(k!)^2}
+    -\frac{(n-1)!}{(n-1-k)!(k!)^2}
+  \right]\\
+  &\quad=
+  \frac{n(-1)^k(n-1)!}{(n-k)!(k!)^2}
+  \left[n-(n-k)\right]\\
+  &\quad=
+  \frac{(-1)^k n!k}{(n-k)!(k!)^2}.
+\end{align*}
+For $k=n$, $L_{n-1}$ has no $x^n$ term, and the coefficient is
+\begin{align*}
+  n\left[
+    \frac{(-1)^n n!}{0!(n!)^2}
+  \right]
+   &=
+    \frac{(-1)^n n!n}{0!(n!)^2},
+\end{align*}
+which is again the $k=n$ coefficient in
+\eqref{eq:laguerre-x-derivative-expansion}.  Thus all coefficients agree, and
+\begin{equation}
+  xL_n'(x)=n\bigl[L_n(x)-L_{n-1}(x)\bigr],
+  \qquad n\ge1.
+  \label{eq:laguerre-deriv}
+\end{equation}
+
+To eliminate derivatives and obtain the three-term recurrence, first apply
+\eqref{eq:laguerre-deriv} with index $n+1$:
+\begin{equation}
+  xL_{n+1}'=(n+1)(L_{n+1}-L_n).
+  \label{eq:laguerre-deriv-nplus1}
+\end{equation}
+Next use \eqref{eq:laguerre-derivative-shift} with index $n+1$:
+\[
+  L_{n+1}'=L_n'-L_n.
+\]
+Multiplying by $x$ and then using \eqref{eq:laguerre-deriv} gives
+\begin{align*}
+  xL_{n+1}'
+   &=xL_n'-xL_n\\
+   &=n(L_n-L_{n-1})-xL_n.
+\end{align*}
+Equating this expression with \eqref{eq:laguerre-deriv-nplus1},
+\[
+  (n+1)(L_{n+1}-L_n)
+    =nL_n-nL_{n-1}-xL_n.
+\]
+Expand the left-hand side and isolate $L_{n+1}$:
+\begin{align*}
+  (n+1)L_{n+1}-(n+1)L_n
+    &=nL_n-nL_{n-1}-xL_n,\\
+  (n+1)L_{n+1}
+    &=(n+1)L_n+nL_n-xL_n-nL_{n-1},\\
+  (n+1)L_{n+1}
+    &=(2n+1-x)L_n-nL_{n-1}.
+\end{align*}
+Therefore
+\begin{equation}
+  (n+1)L_{n+1}(x)
+    =(2n+1-x)L_n(x)-nL_{n-1}(x),
+  \qquad n\ge1.
+  \label{eq:laguerre-three-term}
+\end{equation}
+For $n=0$, the same formula reads
+$L_1=(1-x)L_0$, which is also correct.  As a check at $n=1$,
+\begin{align*}
+  2L_2
+   &=(3-x)L_1-L_0\\
+   &=(3-x)(1-x)-1\\
+   &=3-4x+x^2-1\\
+   &=2-4x+x^2,
+\end{align*}
+so $L_2=1-2x+x^2/2$, in agreement with the direct series calculation.
+\end{frame}
+
+\begin{frame}{Useful formulas for the Laguerre polynomial}
+\footnotesize
+\begin{center}
+\renewcommand{\arraystretch}{1.7}
+\begin{tabular}{ll}
+differential equation
+  & $xL_n''+(1-x)L_n'+nL_n=0$ \\
+series solution
+  & $L_n(x)=\displaystyle\sum_{k=0}^{n}
+       \frac{(-1)^k n!}{(n-k)!(k!)^2}x^k$ \\
+generating function
+  & $\dfrac{1}{1-t}\exp\!\left(-\dfrac{xt}{1-t}\right)
+       =\displaystyle\sum_{n=0}^{\infty}L_n(x)t^n$ \\
+derivative identities
+  & $L_n'=L_{n-1}'-L_{n-1}$ \\
+  & $xL_n'=n(L_n-L_{n-1})$ \\
+three-term recurrence
+  & $(n+1)L_{n+1}=(2n+1-x)L_n-nL_{n-1}$ \\
+orthonormality
+  & $\displaystyle\int_0^{\infty}L_m(x)L_n(x)e^{-x}\,dx=\delta_{mn}$ \\
+Rodrigues
+  & $L_n(x)=\dfrac{e^x}{n!}\dfrac{d^n}{dx^n}
+       \left(x^ne^{-x}\right)$ \\
+Schl\"afli
+  & $L_n(x)=\dfrac{1}{2\pi i}
+       \displaystyle\oint_{|z|=\rho}
+       \frac{\exp\!\left(-xz/(1-z)\right)}
+            {(1-z)z^{n+1}}\,dz,\quad 0<\rho<1$
+\end{tabular}
+\end{center}
+\vspace{0.2em}
+{\scriptsize The generating series requires $|t|<1$.
+The derivative identities hold for $n\ge1$; the three-term recurrence extends
+to $n=0$ using $L_0=1$.}
+\end{frame}
+
+% ======================================================================
+\section{Chebyshev Polynomial}
+% ======================================================================
+
+\begin{frame}[allowframebreaks]{Definition through $\cos n\theta$}
+\footnotesize
+
+The Chebyshev polynomial of the first kind is defined by
+\begin{equation}
+  T_n(\cos\theta)=\cos(n\theta).
+  \label{eq:cheby-def}
+\end{equation}
+That is, set $x=\cos\theta$ and read off a polynomial in $x$. The first cases:
+\[
+  T_0(x) = \cos 0 = 1,
+  \qquad T_1(x) = \cos\theta = x .
+\]
+For $\cos 2\theta$,
+\[
+  \cos 2\theta = \cos^2\theta - \sin^2\theta = 2\cos^2\theta - 1 = 2x^2 - 1,
+\]
+so $T_2(x)=2x^2-1$.
+
+
+For $\cos 3\theta$, use $\cos 3\theta+i\sin 3\theta
+=e^{i3\theta}=(\cos\theta+i\sin\theta)^3$. Taking the real part,
+\begin{align*}
+  T_3(\cos\theta)
+   &= \operatorname{Re}(\cos\theta+i\sin\theta)^3 \\
+   &= \operatorname{Re}\bigl(\cos^3\theta + 3i\sin\theta\cos^2\theta
+        - 3\sin^2\theta\cos\theta - i\sin^3\theta\bigr) \\
+   &= \cos^3\theta - 3(1-\cos^2\theta)\cos\theta \\
+   &= 4\cos^3\theta - 3\cos\theta .
+\end{align*}
+Therefore
+\begin{equation}
+  T_3(x) = 4x^3 - 3x .
+  \label{eq:T3}
+\end{equation}
+\medskip
+The name has many transliterations: Chebyshev, Tchebychev, Tschebyscheff, and more. The
+mathematician's first name is less ambiguous: Pafnuty.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Recurrence and first few Chebyshev polynomials}
+\footnotesize
+
+The angle-addition identities are
+\begin{align*}
+  \cos\bigl((n+1)\theta\bigr)
+    &=\cos(n\theta)\cos\theta-\sin(n\theta)\sin\theta,\\
+  \cos\bigl((n-1)\theta\bigr)
+    &=\cos(n\theta)\cos\theta+\sin(n\theta)\sin\theta.
+\end{align*}
+Adding them cancels the sine terms:
+\begin{align*}
+  \cos\bigl((n+1)\theta\bigr)
+   +\cos\bigl((n-1)\theta\bigr)
+    &=2\cos(n\theta)\cos\theta.
+\end{align*}
+Now set $x=\cos\theta$ and use
+$T_j(\cos\theta)=\cos(j\theta)$:
+\[
+  T_{n+1}(x)+T_{n-1}(x)=2xT_n(x).
+\]
+Thus
+\begin{equation}
+  T_{n+1}(x)=2xT_n(x)-T_{n-1}(x),
+  \qquad n\ge1,
+  \label{eq:cheby-recur}
+\end{equation}
+with initial values $T_0(x)=1$ and $T_1(x)=x$.
+
+For example, the recurrence gives
+\begin{align*}
+  T_2(x)
+   &=2xT_1(x)-T_0(x)\\
+   &=2x(x)-1\\
+   &=2x^2-1,\\[0.4em]
+  T_3(x)
+   &=2xT_2(x)-T_1(x)\\
+   &=2x(2x^2-1)-x\\
+   &=4x^3-2x-x\\
+   &=4x^3-3x,\\[0.4em]
+  T_4(x)
+   &=2xT_3(x)-T_2(x)\\
+   &=2x(4x^3-3x)-(2x^2-1)\\
+   &=8x^4-6x^2-2x^2+1\\
+   &=8x^4-8x^2+1.
+\end{align*}
+
+For $n\ge1$, the leading coefficient of $T_n$ is $2^{n-1}$.  This follows by
+induction.  The base case is $T_1=x$, whose leading coefficient is
+$1=2^0$.  Suppose the leading term of $T_n$ is $2^{n-1}x^n$.  In
+\eqref{eq:cheby-recur}, $T_{n-1}$ has degree $n-1$, so it cannot affect the
+coefficient of $x^{n+1}$.  Therefore
+\[
+  T_{n+1}(x)
+    =2x\left(2^{n-1}x^n+\text{lower powers}\right)
+      -T_{n-1}(x)
+    =2^n x^{n+1}+\text{lower powers}.
+\]
+This completes the induction.
+
+The endpoint values follow directly from the trigonometric definition:
+\begin{align*}
+  T_n(1)
+    &=T_n(\cos0)
+      =\cos(n\cdot0)
+      =1,\\
+  T_n(-1)
+    &=T_n(\cos\pi)
+      =\cos(n\pi)
+      =(-1)^n.
+\end{align*}
+The same definition also gives the parity relation
+\begin{align*}
+  T_n(-x)
+    &=T_n\!\left(\cos(\pi-\theta)\right)\\
+    &=\cos\!\left(n(\pi-\theta)\right)\\
+    &=\cos(n\pi)\cos(n\theta)+\sin(n\pi)\sin(n\theta)\\
+    &=(-1)^nT_n(x).
+\end{align*}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Generating functions for $T_n$}
+\footnotesize
+
+Let
+\[
+  G(x,t):=\sum_{n=0}^{\infty}T_n(x)t^n.
+\]
+Multiply \eqref{eq:cheby-recur} by $t^{n+1}$ and sum over $n\ge1$:
+\[
+  \sum_{n=1}^{\infty}T_{n+1}t^{n+1}
+    =2x\sum_{n=1}^{\infty}T_nt^{n+1}
+     -\sum_{n=1}^{\infty}T_{n-1}t^{n+1}.
+\]
+Each sum can be expressed in terms of $G$:
+\begin{align*}
+  \sum_{n=1}^{\infty}T_{n+1}t^{n+1}
+    &=\sum_{j=2}^{\infty}T_jt^j
+      =G-T_0-T_1t
+      =G-1-xt,\\
+  2x\sum_{n=1}^{\infty}T_nt^{n+1}
+    &=2xt\sum_{n=1}^{\infty}T_nt^n
+      =2xt(G-T_0)
+      =2xt(G-1),\\
+  \sum_{n=1}^{\infty}T_{n-1}t^{n+1}
+    &=t^2\sum_{j=0}^{\infty}T_jt^j
+      =t^2G.
+\end{align*}
+Hence
+\[
+  G-1-xt=2xt(G-1)-t^2G.
+\]
+Collect the terms containing $G$:
+\begin{align*}
+  G-2xtG+t^2G
+    &=1+xt-2xt\\
+    &=1-xt.
+\end{align*}
+Therefore
+\begin{equation}
+  G(x,t)
+    =\sum_{n=0}^{\infty}T_n(x)t^n
+    =\frac{1-xt}{1-2xt+t^2}.
+  \label{eq:cheby-gen-standard}
+\end{equation}
+For $x\in[-1,1]$, this analytic series converges for $|t|<1$; the identity
+also holds as an identity of formal power series for arbitrary $x$.
+
+A commonly used symmetric form weights all positive indices by $2$.  Since
+\[
+  T_0(x)+2\sum_{n=1}^{\infty}T_n(x)t^n
+    =2G(x,t)-T_0(x)
+    =2G(x,t)-1,
+\]
+we find
+\begin{align*}
+  2G-1
+   &=
+    \frac{2(1-xt)}{1-2xt+t^2}
+    -\frac{1-2xt+t^2}{1-2xt+t^2}\\
+   &=
+    \frac{2-2xt-1+2xt-t^2}{1-2xt+t^2}\\
+   &=
+    \frac{1-t^2}{1-2xt+t^2}.
+\end{align*}
+Thus
+\begin{equation}
+  \frac{1-t^2}{1-2xt+t^2}
+    =T_0(x)+2\sum_{n=1}^{\infty}T_n(x)t^n,
+  \qquad x\in[-1,1],\quad |t|<1.
+  \label{eq:cheby-gen-symmetric}
+\end{equation}
+
+As a coefficient check, expand the denominator equation
+\[
+  (1-2xt+t^2)G=1-xt.
+\]
+The coefficients of $t^0$ and $t^1$ give $T_0=1$ and $T_1=x$,
+respectively.  For $t^{n+1}$ with $n\ge1$, the coefficient is
+\[
+  T_{n+1}-2xT_n+T_{n-1}=0,
+\]
+which recovers \eqref{eq:cheby-recur}.
+\end{frame}
+
+\begin{frame}{Shapes of the first Chebyshev polynomials}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.86\linewidth]{figs/chebyshev-T.pdf}
+\end{center}
+The identity $T_n(\cos\theta)=\cos(n\theta)$ keeps every $T_n$ between $-1$ and $1$ on
+the interval $[-1,1]$, with alternating extrema inherited from the cosine.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Chebyshev nodes}
+\footnotesize
+\begin{center}
+  \includegraphics[width=0.86\linewidth]{figs/chebyshev-nodes.pdf}
+\end{center}
+
+The zeros of $T_n$ are obtained directly from
+$T_n(\cos\theta)=\cos(n\theta)$.  On $x\in[-1,1]$, write
+$x=\cos\theta$ with $0\le\theta\le\pi$.  Then
+\begin{align*}
+  T_n(x)=0
+  &\iff \cos(n\theta)=0\\
+  &\iff n\theta=\frac{(2k-1)\pi}{2},
+       \qquad k=1,2,\ldots,n\\
+  &\iff \theta_k=\frac{(2k-1)\pi}{2n}.
+\end{align*}
+Therefore the $n$ distinct zeros are
+\begin{equation}
+  x_k=\cos\!\left(\frac{(2k-1)\pi}{2n}\right),
+  \qquad k=1,2,\ldots,n.
+  \label{eq:cheby-nodes}
+\end{equation}
+They are distinct because
+\[
+  0<\theta_1<\theta_2<\cdots<\theta_n<\pi
+\]
+and $\cos\theta$ is strictly decreasing on $[0,\pi]$.
+
+For example, when $n=4$,
+\begin{align*}
+  x_1&=\cos\frac{\pi}{8},&
+  x_2&=\cos\frac{3\pi}{8},&
+  x_3&=\cos\frac{5\pi}{8},&
+  x_4&=\cos\frac{7\pi}{8}.
+\end{align*}
+Using $\cos(\pi-\alpha)=-\cos\alpha$, these occur in symmetric pairs:
+\[
+  x_4=-x_1,\qquad x_3=-x_2.
+\]
+The endpoint clustering can be quantified from the largest zero:
+\begin{align*}
+  1-x_1
+   &=1-\cos\!\left(\frac{\pi}{2n}\right)\\
+   &=2\sin^2\!\left(\frac{\pi}{4n}\right)
+     \sim \frac{\pi^2}{8n^2}
+     \qquad (n\to\infty).
+\end{align*}
+Thus the nearest node lies at distance $O(n^{-2})$ from each endpoint, rather
+than at the $O(n^{-1})$ spacing characteristic of equally spaced nodes.  This
+endpoint concentration is central to the stability of Chebyshev interpolation.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Differential equation and explicit series}
+\footnotesize
+
+Let
+\[
+  u(\theta):=T_n(\cos\theta)=\cos(n\theta).
+\]
+Since
+\[
+  \frac{d^2u}{d\theta^2}+n^2u=0,
+\]
+we convert the derivatives from $\theta$ to $x=\cos\theta$.  The chain rule gives
+\[
+  \frac{dx}{d\theta}=-\sin\theta,
+  \qquad
+  \frac{d}{d\theta}
+    =\frac{dx}{d\theta}\frac{d}{dx}
+    =-\sin\theta\,\frac{d}{dx}.
+\]
+Apply this operator a second time to a function $y(x)$:
+\begin{align*}
+  \frac{d^2y}{d\theta^2}
+   &=
+    \frac{d}{d\theta}
+      \left(-\sin\theta\,\frac{dy}{dx}\right)\\
+   &=
+    -\cos\theta\,\frac{dy}{dx}
+    -\sin\theta\,
+      \frac{d}{d\theta}\left(\frac{dy}{dx}\right)\\
+   &=
+    -\cos\theta\,y'
+    -\sin\theta
+      \left(
+        \frac{dx}{d\theta}\frac{d}{dx}y'
+      \right)\\
+   &=
+    -\cos\theta\,y'
+    -\sin\theta(-\sin\theta)y''\\
+   &=
+    -\cos\theta\,y'
+    +\sin^2\theta\,y''.
+\end{align*}
+Using $\cos\theta=x$ and $\sin^2\theta=1-x^2$,
+\[
+  \frac{d^2y}{d\theta^2}
+    =(1-x^2)y''-xy'.
+\]
+Therefore $y(x)=T_n(x)$ satisfies
+\begin{equation}
+  (1-x^2)T_n''(x)-xT_n'(x)+n^2T_n(x)=0.
+  \label{eq:cheby-eq}
+\end{equation}
+
+We now derive the explicit finite series.  Let
+\[
+  y(x)=\sum_{j=0}^{\infty}a_jx^j.
+\]
+Then
+\begin{align*}
+  y'
+    &=\sum_{j=0}^{\infty}(j+1)a_{j+1}x^j,\\
+  y''
+    &=\sum_{j=0}^{\infty}(j+2)(j+1)a_{j+2}x^j,\\
+  -x^2y''
+    &=-\sum_{j=2}^{\infty}j(j-1)a_jx^j
+      =-\sum_{j=0}^{\infty}j(j-1)a_jx^j,\\
+  -xy'
+    &=-\sum_{j=1}^{\infty}j\,a_jx^j
+      =-\sum_{j=0}^{\infty}j\,a_jx^j.
+\end{align*}
+Substitution into \eqref{eq:cheby-eq} gives
+\begin{align*}
+  0
+   &=
+    \sum_{j=0}^{\infty}
+    \left[
+      (j+2)(j+1)a_{j+2}
+      -j(j-1)a_j-ja_j+n^2a_j
+    \right]x^j\\
+   &=
+    \sum_{j=0}^{\infty}
+    \left[
+      (j+2)(j+1)a_{j+2}
+      +(n^2-j^2)a_j
+    \right]x^j.
+\end{align*}
+Hence
+\begin{equation}
+  a_{j+2}
+    =-\frac{n^2-j^2}{(j+2)(j+1)}a_j.
+  \label{eq:cheby-coeff-up}
+\end{equation}
+The even and odd coefficients are independent.  For the degree-$n$ polynomial,
+only powers with the same parity as $n$ occur.  It is convenient to solve the
+recurrence downward.  Rearranging \eqref{eq:cheby-coeff-up} and setting
+$j=n-2k$ gives, for $k\ge1$,
+\begin{align*}
+  a_{n-2k}
+   &=
+    -\frac{(n-2k+2)(n-2k+1)}
+            {n^2-(n-2k)^2}
+      a_{n-2k+2}\\
+   &=
+    -\frac{(n-2k+2)(n-2k+1)}
+            {n^2-\left(n^2-4nk+4k^2\right)}
+      a_{n-2k+2}\\
+   &=
+    -\frac{(n-2k+2)(n-2k+1)}
+            {4k(n-k)}
+      a_{n-2k+2}.
+\end{align*}
+Iterating this relation $k$ times yields
+\begin{align*}
+  a_{n-2k}
+   &=
+    (-1)^k a_n
+    \prod_{r=1}^{k}
+      \frac{(n-2r+2)(n-2r+1)}
+           {4r(n-r)}\\
+   &=
+    (-1)^k a_n
+    \frac{n!/(n-2k)!}
+         {4^k k!\,(n-1)!/(n-k-1)!}.
+\end{align*}
+For $n\ge1$, the leading coefficient derived from the three-term recurrence is
+$a_n=2^{n-1}$.  Therefore
+\begin{align*}
+  a_{n-2k}
+   &=
+    (-1)^k 2^{n-1}
+    \frac{n!}{(n-2k)!}
+    \frac{(n-k-1)!}{4^k k!(n-1)!}\\
+   &=
+    (-1)^k
+    \frac{n\,2^{n-2k-1}(n-k-1)!}
+         {k!(n-2k)!}.
+\end{align*}
+Multiplying this coefficient by $x^{n-2k}$ and summing over all allowable $k$
+gives
+\begin{equation}
+  T_n(x)
+   =\frac{n}{2}
+    \sum_{k=0}^{\lfloor n/2\rfloor}
+      \frac{(-1)^k(n-k-1)!}
+           {k!(n-2k)!}
+      (2x)^{n-2k},
+  \qquad n\ge1.
+  \label{eq:cheby-explicit}
+\end{equation}
+The exceptional case is $T_0(x)=1$.
+
+For $n=4$, formula \eqref{eq:cheby-explicit} gives
+\begin{align*}
+  T_4(x)
+   &=
+    2\left[
+      \frac{3!}{0!\,4!}(2x)^4
+      -\frac{2!}{1!\,2!}(2x)^2
+      +\frac{1!}{2!\,0!}(2x)^0
+    \right]\\
+   &=
+    2\left[
+      \frac{6}{24}(16x^4)
+      -\frac{2}{2}(4x^2)
+      +\frac{1}{2}
+    \right]\\
+   &=
+    2\left(4x^4-4x^2+\frac12\right)\\
+   &=8x^4-8x^2+1,
+\end{align*}
+which agrees with the recurrence calculation.
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Chebyshev orthogonality and norm}
+\footnotesize
+
+Multiply \eqref{eq:cheby-eq} by $(1-x^2)^{-1/2}$.  The first two terms become
+\begin{align*}
+  &(1-x^2)^{-1/2}
+    \left[(1-x^2)T_n''-xT_n'\right]\\
+  &\qquad=
+    \sqrt{1-x^2}\,T_n''
+    -\frac{x}{\sqrt{1-x^2}}T_n'.
+\end{align*}
+Since
+\[
+  \frac{d}{dx}\sqrt{1-x^2}
+    =-\frac{x}{\sqrt{1-x^2}},
+\]
+the product rule gives
+\[
+  \frac{d}{dx}
+    \left(\sqrt{1-x^2}\,T_n'\right)
+   =
+    \sqrt{1-x^2}\,T_n''
+    -\frac{x}{\sqrt{1-x^2}}T_n'.
+\]
+Thus the differential equation has Sturm--Liouville form
+\begin{equation}
+  \frac{d}{dx}
+    \left(\sqrt{1-x^2}\,T_n'\right)
+  +\frac{n^2}{\sqrt{1-x^2}}T_n=0.
+  \label{eq:cheby-sl}
+\end{equation}
+
+To verify orthogonality from this form, write the equations for $T_n$ and $T_m$:
+\begin{align*}
+  \left(\sqrt{1-x^2}\,T_n'\right)'
+    +\frac{n^2}{\sqrt{1-x^2}}T_n&=0,\\
+  \left(\sqrt{1-x^2}\,T_m'\right)'
+    +\frac{m^2}{\sqrt{1-x^2}}T_m&=0.
+\end{align*}
+Multiply the first by $T_m$, the second by $T_n$, subtract, and integrate:
+\begin{align*}
+  &(n^2-m^2)
+    \int_{-1}^{1}
+      \frac{T_n(x)T_m(x)}{\sqrt{1-x^2}}\,dx\\
+  &\qquad=
+  -\left[
+    \sqrt{1-x^2}
+    \left(T_mT_n'-T_nT_m'\right)
+  \right]_{-1}^{1}.
+\end{align*}
+The polynomials and their derivatives remain finite at $x=\pm1$, whereas
+$\sqrt{1-x^2}\to0$.  Hence the boundary term is zero.  For nonnegative
+indices $n\ne m$, one has $n^2\ne m^2$, so the integral is zero.
+
+The norm and the same orthogonality relation can be evaluated explicitly.
+Set $x=\cos\theta$.  As $x$ increases from $-1$ to $1$, $\theta$ decreases
+from $\pi$ to $0$, and
+\[
+  dx=-\sin\theta\,d\theta,
+  \qquad
+  \sqrt{1-x^2}=\sin\theta
+  \quad (0\le\theta\le\pi).
+\]
+Therefore
+\begin{align*}
+  \int_{-1}^{1}
+    \frac{T_n(x)T_m(x)}{\sqrt{1-x^2}}\,dx
+   &=
+    \int_{\pi}^{0}
+      \frac{\cos(n\theta)\cos(m\theta)}
+           {\sin\theta}
+      \left(-\sin\theta\,d\theta\right)\\
+   &=
+    \int_{0}^{\pi}
+      \cos(n\theta)\cos(m\theta)\,d\theta.
+\end{align*}
+
+When $n\ne m$, use
+$2\cos A\cos B=\cos(A-B)+\cos(A+B)$:
+\begin{align*}
+  \int_0^\pi\cos(n\theta)\cos(m\theta)\,d\theta
+   &=
+    \frac12
+    \int_0^\pi
+      \left[
+        \cos((n-m)\theta)+\cos((n+m)\theta)
+      \right]d\theta\\
+   &=
+    \frac12
+    \left[
+      \frac{\sin((n-m)\theta)}{n-m}
+      +\frac{\sin((n+m)\theta)}{n+m}
+    \right]_{\theta=0}^{\theta=\pi}\\
+   &=0.
+\end{align*}
+If one index is zero, the same conclusion follows directly from
+$\int_0^\pi\cos(k\theta)\,d\theta=0$ for every positive integer $k$.
+
+When $n=m\ge1$,
+\begin{align*}
+  \int_0^\pi\cos^2(n\theta)\,d\theta
+   &=
+    \frac12\int_0^\pi
+      \left[1+\cos(2n\theta)\right]d\theta\\
+   &=
+    \frac12
+    \left[
+      \theta+\frac{\sin(2n\theta)}{2n}
+    \right]_{0}^{\pi}\\
+   &=\frac{\pi}{2}.
+\end{align*}
+For $n=m=0$,
+\[
+  \int_0^\pi\cos^2(0\theta)\,d\theta
+   =\int_0^\pi1\,d\theta
+   =\pi.
+\]
+Combining all cases,
+\begin{equation}
+  \int_{-1}^{1}
+    \frac{T_n(x)T_m(x)}{\sqrt{1-x^2}}\,dx
+  =
+  \begin{cases}
+    \pi, & n=m=0,\\[0.2em]
+    \pi/2, & n=m\ge1,\\[0.2em]
+    0, & n\ne m.
+  \end{cases}
+  \label{eq:cheby-ortho}
+\end{equation}
+\end{frame}
+
+\begin{frame}{Useful formulas for the Chebyshev polynomial}
+\footnotesize
+\begin{center}
+\renewcommand{\arraystretch}{1.65}
+\begin{tabular}{ll}
+differential equation
+  & $(1-x^2)T_n''-xT_n'+n^2T_n=0$ \\
+explicit series ($n\ge1$)
+  & $T_n(x)=\dfrac{n}{2}
+       \displaystyle\sum_{k=0}^{\lfloor n/2\rfloor}
+       \dfrac{(-1)^k(n-k-1)!}{k!(n-2k)!}(2x)^{n-2k}$ \\
+standard generating function
+  & $\dfrac{1-xt}{1-2xt+t^2}
+       =\displaystyle\sum_{n=0}^{\infty}T_n(x)t^n$ \\
+symmetric generating function
+  & $\dfrac{1-t^2}{1-2xt+t^2}
+       =T_0(x)+2\displaystyle\sum_{n=1}^{\infty}T_n(x)t^n$ \\
+recurrence
+  & $T_{n+1}=2xT_n-T_{n-1}$ \\
+zeros
+  & $x_k=\cos\!\left(\dfrac{(2k-1)\pi}{2n}\right),
+       \quad k=1,\ldots,n$ \\
+orthogonality and norm
+  & $\displaystyle\int_{-1}^{1}
+       \dfrac{T_nT_m}{\sqrt{1-x^2}}\,dx
+       =\begin{cases}
+          \pi, & n=m=0,\\
+          \pi/2, & n=m\ge1,\\
+          0, & n\ne m .
+        \end{cases}$
+\end{tabular}
+\end{center}
+\vspace{0.2em}
+{\footnotesize For $x\in[-1,1]$, both generating series converge for
+$|t|<1$.}
+\end{frame}
+
+\begin{frame}{Summary: four orthogonal families}
+\footnotesize
+\begin{center}
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{lllc}
+\textbf{Family} & \textbf{Interval} & \textbf{Weight $w(x)$} & \textbf{Arises in} \\
+\hline
+Legendre $P_n$ & $[-1,1]$ & $1$ & spherical harmonics \\
+Hermite $H_n$  & $(-\infty,\infty)$ & $e^{-x^2}$ & quantum oscillator \\
+Laguerre $L_n$ & $[0,\infty)$ & $e^{-x}$ & hydrogen ($L_n^{(\alpha)}$) \\
+Chebyshev $T_n$ & $[-1,1]$ & $(1-x^2)^{-1/2}$ & $\cos n\theta$, interpolation \\
+\end{tabular}
+\end{center}
+\vspace{0.6em}
+The shared structure is a second-order Sturm--Liouville ODE, a generating function, a
+recurrence, and an orthogonality relation on the natural interval and weight. For Legendre,
+Hermite, and Laguerre we also recorded Rodrigues' formulas and Schl\"afli contour integrals.
+Completeness then lets us expand reasonable functions in the corresponding series, exactly
+as Fourier series expand in $e^{inx}$.
+\end{frame}
+
+\end{document}
