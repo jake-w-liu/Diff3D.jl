@@ -2092,7 +2092,7 @@ end
 # World-space bounding sphere of a geometry placed by `world_mat`, then tested
 # against the frustum. The sphere centre is the geometry centre transformed to
 # world; the radius scales by the largest axis scale extracted from `world_mat`
-# (a conservative bound for non-uniform scale that never culls a visible mesh).
+# using a conservative operator-norm bound that also covers hierarchical shear.
 @inline function _mesh_local_bounding_sphere(geo::BufferGeometry, ::Nothing)
     return compute_bounding_sphere(geo)
 end
@@ -2115,7 +2115,7 @@ end
     bs = _mesh_local_bounding_sphere(geo, bounds_cache)
     bs.radius == 0 && geo.n_vertices == 0 && return false
     center = mat4_transform_point(world_mat, bs.center)
-    # Column lengths of the upper-left 3×3 give the per-axis scale factors.
+    # Bound the upper-left 3×3 operator norm, including shear.
     r = bs.radius * _mat4_linear_max_scale(world_mat)
     return frustum_intersects_sphere(frustum, BoundingSphere(center, r))
 end

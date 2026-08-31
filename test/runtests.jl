@@ -21489,8 +21489,10 @@ end
         ))
         @test Diff3D._mat4_linear_column_norm(extreme_linear, 1) ==
               hypot(1.0e308, 1.0e308)
-        @test Diff3D._mat4_linear_max_scale(extreme_linear) ==
-              hypot(1.0e308, 1.0e308)
+        extreme_bound = Diff3D._mat4_linear_max_scale(extreme_linear)
+        extreme_expected = hypot(1.0e308, 1.0e308)
+        @test extreme_bound >= extreme_expected
+        @test extreme_bound <= extreme_expected * (1.0 + 32eps(Float64))
 
         sprite = Sprite(SpriteMaterial())
         sprite.scale = Vec3(1.0e308, 1.0e308, 1.0e308)
@@ -33739,4 +33741,66 @@ end
     @test soft_coincident == soft_reference
     @test_opt_alloc 0 Diff3D._camera_backward_from_view(
         view_matrix(coincident))
+end
+
+@testset "CRC77 — conservative sheared frustum bounds" begin
+    camera = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    camera.target = Vec3()
+
+    parent = Group()
+    parent.position = Vec3(1.6, 0.0, 0.0)
+    parent.scale = Vec3(1.0, 0.1, 0.1)
+    geometry = BoxGeometry()
+    material = MeshBasicMaterial(
+        color=Color3(1.0, 1.0, 1.0), side=:double)
+    mesh = Mesh(geometry, material)
+    mesh.rotation = Euler(0.0, asin(inv(sqrt(3.0))), pi / 4)
+    add!(parent, mesh)
+    scene = Scene()
+    add!(scene, parent)
+
+    world = compute_world_matrix(mesh)
+    column_max = maximum(
+        Diff3D._mat4_linear_column_norm(world, column) for column in 1:3)
+    operator_bound = Diff3D._mat4_linear_max_scale(world)
+    @test operator_bound > column_max
+    local_sphere = compute_bounding_sphere(geometry)
+    world_center = mat4_transform_point(world, local_sphere.center)
+    world_radius = local_sphere.radius * operator_bound
+    @test all(vertex ->
+        norm(mat4_transform_point(world, get_vertex(geometry, vertex)) -
+             world_center) <= world_radius,
+        1:geometry.n_vertices)
+
+    culled = RenderTarget(128, 128)
+    unculled = RenderTarget(128, 128)
+    render!(culled, scene, camera; frustum_cull=true)
+    render!(unculled, scene, camera; frustum_cull=false)
+    @test sum(culled.color) > 0.0
+    @test culled.color == unculled.color
+    @test culled.depth == unculled.depth
+
+    instance_parent = Group()
+    instance_parent.position = parent.position
+    instance_parent.scale = parent.scale
+    instance = InstancedMesh(geometry, material, 1)
+    set_instance_matrix!(
+        instance, 1,
+        quat_to_mat4(quat_from_euler(
+            0.0, asin(inv(sqrt(3.0))), pi / 4)))
+    add!(instance_parent, instance)
+    instance_scene = Scene()
+    add!(instance_scene, instance_parent)
+    instance_culled = RenderTarget(128, 128)
+    instance_unculled = RenderTarget(128, 128)
+    render!(instance_culled, instance_scene, camera;
+            frustum_cull=true)
+    render!(instance_unculled, instance_scene, camera;
+            frustum_cull=false)
+    @test instance_culled.color == instance_unculled.color
+    @test sum(instance_culled.color) > 0.0
+    @test_opt_alloc 64 Diff3D._mat4_linear_max_scale(world)
 end

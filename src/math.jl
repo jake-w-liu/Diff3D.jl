@@ -212,10 +212,34 @@ Mat4() = Mat4{Float64}()
 end
 
 @inline function _mat4_linear_max_scale(m::Mat4)
-    sx = _mat4_linear_column_norm(m, 1)
-    sy = _mat4_linear_column_norm(m, 2)
-    sz = _mat4_linear_column_norm(m, 3)
-    return max(max(sx, sy), sz)
+    values = (mat4_get(m, 1, 1), mat4_get(m, 2, 1), mat4_get(m, 3, 1),
+              mat4_get(m, 1, 2), mat4_get(m, 2, 2), mat4_get(m, 3, 2),
+              mat4_get(m, 1, 3), mat4_get(m, 2, 3), mat4_get(m, 3, 3))
+    scale = maximum(abs, values)
+    iszero(scale) && return scale
+    isfinite(scale) || return scale
+    a11 = values[1] / scale
+    a21 = values[2] / scale
+    a31 = values[3] / scale
+    a12 = values[4] / scale
+    a22 = values[5] / scale
+    a32 = values[6] / scale
+    a13 = values[7] / scale
+    a23 = values[8] / scale
+    a33 = values[9] / scale
+    g11 = a11*a11 + a21*a21 + a31*a31
+    g22 = a12*a12 + a22*a22 + a32*a32
+    g33 = a13*a13 + a23*a23 + a33*a33
+    g12 = a11*a12 + a21*a22 + a31*a32
+    g13 = a11*a13 + a21*a23 + a31*a33
+    g23 = a12*a13 + a22*a23 + a32*a33
+    # λmax(A'A) is bounded by the largest absolute Gershgorin row sum.
+    # Unlike the largest column norm, this remains conservative for shear.
+    bound_squared = max(g11 + abs(g12) + abs(g13),
+                        g22 + abs(g12) + abs(g23),
+                        g33 + abs(g13) + abs(g23))
+    bound = scale * sqrt(bound_squared)
+    return isfinite(bound) ? bound * (1.0 + 16eps(Float64)) : bound
 end
 
 function mat4_multiply(a::Mat4, b::Mat4)
