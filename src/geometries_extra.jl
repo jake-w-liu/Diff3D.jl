@@ -950,13 +950,15 @@ function _nurbs_basis_fractions(left::Float64, right::Float64,
     end
 end
 
-function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
-                       degree::Int, knots::Vector{Float64})
+function _nurbs_basis_with_status!(scratch::Vector{Float64}, span::Int,
+                                   u::Float64, degree::Int,
+                                   knots::Vector{Float64})
     n = degree + 1
     length(scratch) >= 3n || resize!(scratch, 3n)
     left0 = n
     right0 = 2n
     scratch[1] = 1.0
+    needs_precise = false
     for j in 1:degree
         scratch[left0 + j + 1] = u - knots[span - j + 2]
         scratch[right0 + j + 1] = knots[span + j + 1] - u
@@ -964,16 +966,36 @@ function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
         for r in 0:(j - 1)
             left = scratch[left0 + j - r + 1]
             right = scratch[right0 + r + 2]
+            low = knots[span - j + r + 2]
+            high = knots[span + r + 2]
             right_fraction, left_fraction = _nurbs_basis_fractions(
-                left, right, u,
-                knots[span - j + r + 2], knots[span + r + 2])
+                left, right, u, low, high)
+            if low != high
+                needs_precise |=
+                    (!iszero(right) && iszero(right_fraction)) ||
+                    (!iszero(left) && iszero(left_fraction))
+            end
             basis = scratch[r + 1]
-            scratch[r + 1] = saved + basis * right_fraction
-            saved = basis * left_fraction
+            right_product = basis * right_fraction
+            left_product = basis * left_fraction
+            needs_precise |=
+                (!iszero(basis) && !iszero(right_fraction) &&
+                 iszero(right_product)) ||
+                (!iszero(basis) && !iszero(left_fraction) &&
+                 iszero(left_product))
+            scratch[r + 1] = saved + right_product
+            saved = left_product
         end
         scratch[j + 1] = saved
     end
-    return scratch
+    return scratch, needs_precise
+end
+
+function _nurbs_basis!(scratch::Vector{Float64}, span::Int, u::Float64,
+                       degree::Int, knots::Vector{Float64})
+    basis, _ = _nurbs_basis_with_status!(
+        scratch, span, u, degree, knots)
+    return basis
 end
 
 function _nurbs_basis(span::Int, u::Float64, degree::Int, knots::Vector{Float64})
@@ -1032,9 +1054,39 @@ end
                 Float64(z / weight))
 end
 
+function _nurbs_precise_basis(span::Int, u::Float64, degree::Int,
+                              knots::Vector{Float64})
+    n = degree + 1
+    basis = zeros(BigFloat, n)
+    left = zeros(BigFloat, n)
+    right = zeros(BigFloat, n)
+    basis[1] = one(BigFloat)
+    u_big = BigFloat(u)
+    for j in 1:degree
+        left[j + 1] = u_big - BigFloat(knots[span - j + 2])
+        right[j + 1] = BigFloat(knots[span + j + 1]) - u_big
+        saved = zero(BigFloat)
+        for r in 0:(j - 1)
+            denominator = right[r + 2] + left[j - r + 1]
+            if iszero(denominator)
+                basis[r + 1] = saved
+                saved = zero(BigFloat)
+                continue
+            end
+            temporary = basis[r + 1] / denominator
+            basis[r + 1] = saved + right[r + 2] * temporary
+            saved = left[j - r + 1] * temporary
+        end
+        basis[j + 1] = saved
+    end
+    return basis
+end
+
 @noinline function _nurbs_precise_point(
-        curve::NURBSCurve, span::Int, basis::Vector{Float64})
+        curve::NURBSCurve, span::Int, u::Float64)
     return setprecision(BigFloat, 512) do
+        basis = _nurbs_precise_basis(
+            span, u, curve.degree, curve.knots)
         x = zero(BigFloat)
         y = zero(BigFloat)
         z = zero(BigFloat)
@@ -1053,8 +1105,12 @@ end
 
 @noinline function _nurbs_precise_point(
         surface::NURBSSurface, span_u::Int, span_v::Int,
-        basis_u::Vector{Float64}, basis_v::Vector{Float64})
+        u::Float64, v::Float64)
     return setprecision(BigFloat, 512) do
+        basis_u = _nurbs_precise_basis(
+            span_u, u, surface.degree_u, surface.knots_u)
+        basis_v = _nurbs_precise_basis(
+            span_v, v, surface.degree_v, surface.knots_v)
         x = zero(BigFloat)
         y = zero(BigFloat)
         z = zero(BigFloat)
@@ -1074,9 +1130,14 @@ end
 
 @noinline function _nurbs_precise_point(
         volume::NURBSVolume, span_u::Int, span_v::Int, span_w::Int,
-        basis_u::Vector{Float64}, basis_v::Vector{Float64},
-        basis_w::Vector{Float64})
+        u::Float64, v::Float64, w::Float64)
     return setprecision(BigFloat, 512) do
+        basis_u = _nurbs_precise_basis(
+            span_u, u, volume.degree_u, volume.knots_u)
+        basis_v = _nurbs_precise_basis(
+            span_v, v, volume.degree_v, volume.knots_v)
+        basis_w = _nurbs_precise_basis(
+            span_w, w, volume.degree_w, volume.knots_w)
         x = zero(BigFloat)
         y = zero(BigFloat)
         z = zero(BigFloat)
@@ -1101,7 +1162,8 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     u = _nurbs_parameter(t, curve.knots, curve.degree, npoints,
                          "NURBS curve parameter t")
     span = _nurbs_span(curve.degree, curve.knots, npoints, u)
-    _nurbs_basis!(basis, span, u, curve.degree, curve.knots)
+    _, basis_needs_precise = _nurbs_basis_with_status!(
+        basis, span, u, curve.degree, curve.knots)
     weight_scale = 0.0
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
@@ -1111,7 +1173,7 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
     y = 0.0
     z = 0.0
     weight = 0.0
-    needs_precise = false
+    needs_precise = basis_needs_precise
     for j in 0:curve.degree
         cp = curve.control_points[span - curve.degree + j + 1]
         basis_factor = basis[j + 1]
@@ -1131,8 +1193,7 @@ function _nurbs_point(curve::NURBSCurve, t::Real, basis::Vector{Float64})
         z += z_term
         weight += coeff
     end
-    needs_precise && return _nurbs_precise_point(
-        curve, span, basis)
+    needs_precise && return _nurbs_precise_point(curve, span, u)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)
@@ -1164,8 +1225,10 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
                           "NURBS surface parameter v")
     span_u = _nurbs_span(surface.degree_u, surface.knots_u, nu, uu)
     span_v = _nurbs_span(surface.degree_v, surface.knots_v, nv, vv)
-    _nurbs_basis!(basis_u, span_u, uu, surface.degree_u, surface.knots_u)
-    _nurbs_basis!(basis_v, span_v, vv, surface.degree_v, surface.knots_v)
+    _, basis_u_needs_precise = _nurbs_basis_with_status!(
+        basis_u, span_u, uu, surface.degree_u, surface.knots_u)
+    _, basis_v_needs_precise = _nurbs_basis_with_status!(
+        basis_v, span_v, vv, surface.degree_v, surface.knots_v)
     weight_scale = 0.0
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
@@ -1175,7 +1238,7 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
     y = 0.0
     z = 0.0
     weight = 0.0
-    needs_precise = false
+    needs_precise = basis_u_needs_precise || basis_v_needs_precise
     for i in 0:surface.degree_u, j in 0:surface.degree_v
         cp = surface.control_points[span_u - surface.degree_u + i + 1][span_v - surface.degree_v + j + 1]
         basis_u_value = basis_u[i + 1]
@@ -1200,7 +1263,7 @@ function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
         weight += coeff
     end
     needs_precise && return _nurbs_precise_point(
-        surface, span_u, span_v, basis_u, basis_v)
+        surface, span_u, span_v, uu, vv)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)
@@ -1239,9 +1302,12 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     span_u = _nurbs_span(volume.degree_u, volume.knots_u, nu, uu)
     span_v = _nurbs_span(volume.degree_v, volume.knots_v, nv, vv)
     span_w = _nurbs_span(volume.degree_w, volume.knots_w, nw, ww)
-    _nurbs_basis!(basis_u, span_u, uu, volume.degree_u, volume.knots_u)
-    _nurbs_basis!(basis_v, span_v, vv, volume.degree_v, volume.knots_v)
-    _nurbs_basis!(basis_w, span_w, ww, volume.degree_w, volume.knots_w)
+    _, basis_u_needs_precise = _nurbs_basis_with_status!(
+        basis_u, span_u, uu, volume.degree_u, volume.knots_u)
+    _, basis_v_needs_precise = _nurbs_basis_with_status!(
+        basis_v, span_v, vv, volume.degree_v, volume.knots_v)
+    _, basis_w_needs_precise = _nurbs_basis_with_status!(
+        basis_w, span_w, ww, volume.degree_w, volume.knots_w)
     weight_scale = 0.0
     for i in 0:volume.degree_u, j in 0:volume.degree_v,
         k in 0:volume.degree_w
@@ -1252,7 +1318,9 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
     y = 0.0
     z = 0.0
     weight = 0.0
-    needs_precise = false
+    needs_precise = basis_u_needs_precise ||
+                    basis_v_needs_precise ||
+                    basis_w_needs_precise
     for i in 0:volume.degree_u, j in 0:volume.degree_v, k in 0:volume.degree_w
         cp = volume.control_points[span_u - volume.degree_u + i + 1][span_v - volume.degree_v + j + 1][span_w - volume.degree_w + k + 1]
         basis_u_value = basis_u[i + 1]
@@ -1282,7 +1350,7 @@ function _nurbs_point(volume::NURBSVolume, u::Real, v::Real, wparam::Real,
         weight += coeff
     end
     needs_precise && return _nurbs_precise_point(
-        volume, span_u, span_v, span_w, basis_u, basis_v, basis_w)
+        volume, span_u, span_v, span_w, uu, vv, ww)
     if isfinite(x) && isfinite(y) && isfinite(z) &&
        isfinite(weight)
         return _nurbs_finish_point(x, y, z, weight)

@@ -33480,6 +33480,91 @@ end
     @test TeapotGeometry(0.0, 2).n_faces == 0
 end
 
+@testset "CRC72 — precise NURBS basis underflow recovery" begin
+    parameter = 1.0e-162
+    maximum_weight = floatmax(Float64)
+    quadratic_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+    linear_knots = [0.0, 0.0, 1.0, 1.0]
+
+    function coordinate_oracle(factor)
+        return Float64(setprecision(BigFloat, 1024) do
+            parameter_big = BigFloat(parameter)
+            maximum_big = BigFloat(maximum_weight)
+            active_basis = parameter_big^2 * BigFloat(factor)
+            numerator = active_basis * maximum_big
+            denominator = 1 + active_basis * (maximum_big - 1)
+            numerator / denominator
+        end)
+    end
+
+    curve = NURBSCurve(
+        2, quadratic_knots,
+        [Vec4(0.0, 0.0, 0.0, 1.0),
+         Vec4(0.0, 0.0, 0.0, 1.0),
+         Vec4(1.0, 0.0, 0.0, maximum_weight)])
+    curve_oracle = coordinate_oracle(1.0)
+    @test curve_oracle > 0.0
+    @test nurbs_point(curve, parameter) ==
+          Vec3(curve_oracle, 0.0, 0.0)
+
+    surface_points = [
+        [Vec4(0.0, 0.0, 0.0, 1.0) for _ in 1:2]
+        for _ in 1:3
+    ]
+    surface_points[3][1] =
+        Vec4(1.0, 0.0, 0.0, maximum_weight)
+    surface = NURBSSurface(
+        2, 1, quadratic_knots, linear_knots, surface_points)
+    surface_v = 0.25
+    surface_oracle = coordinate_oracle(1.0 - surface_v)
+    @test nurbs_point(surface, parameter, surface_v) ==
+          Vec3(surface_oracle, 0.0, 0.0)
+
+    volume_points = [
+        [[Vec4(0.0, 0.0, 0.0, 1.0) for _ in 1:2]
+          for _ in 1:2] for _ in 1:3
+    ]
+    volume_points[3][1][1] =
+        Vec4(1.0, 0.0, 0.0, maximum_weight)
+    volume = NURBSVolume(
+        2, 1, 1, quadratic_knots, linear_knots, linear_knots,
+        volume_points)
+    volume_v = 0.25
+    volume_w = 0.75
+    volume_oracle = coordinate_oracle(
+        (1.0 - volume_v) * (1.0 - volume_w))
+    @test nurbs_point(volume, parameter, volume_v, volume_w) ==
+          Vec3(volume_oracle, 0.0, 0.0)
+
+    basis = Diff3D._nurbs_basis_scratch(2)
+    _, basis_needs_precise = Diff3D._nurbs_basis_with_status!(
+        basis, 2, parameter, 2, quadratic_knots)
+    @test basis_needs_precise
+    @test basis[1:3] == [1.0, 2.0e-162, 0.0]
+    precise_basis = setprecision(BigFloat, 512) do
+        Diff3D._nurbs_precise_basis(
+            2, parameter, 2, quadratic_knots)
+    end
+    @test precise_basis[3] > 0
+    @test Float64(precise_basis[3]) == 0.0
+
+    ordinary_curve = NURBSCurve(
+        2, quadratic_knots,
+        [Vec4(0.0, 0.0, 0.0, 1.0),
+         Vec4(1.0, 0.0, 0.0, 1.0),
+         Vec4(2.0, 0.0, 0.0, 1.0)])
+    ordinary_basis = Diff3D._nurbs_basis_scratch(2)
+    _, ordinary_needs_precise = Diff3D._nurbs_basis_with_status!(
+        ordinary_basis, 2, 0.5, 2, quadratic_knots)
+    @test !ordinary_needs_precise
+    @test Diff3D._nurbs_point(
+        ordinary_curve, 0.5, ordinary_basis) == Vec3(1.0, 0.0, 0.0)
+    @test_opt_alloc 0 Diff3D._nurbs_basis_with_status!(
+        ordinary_basis, 2, 0.5, 2, quadratic_knots)
+    @test_opt_alloc 0 Diff3D._nurbs_point(
+        ordinary_curve, 0.5, ordinary_basis)
+end
+
 @testset "CRC91 — merged attribute type promotion" begin
     function attributed_triangle(data)
         geometry = BufferGeometry(
