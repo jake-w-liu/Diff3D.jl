@@ -33479,3 +33479,34 @@ end
           TeapotGeometry(1.0, 2).n_faces
     @test TeapotGeometry(0.0, 2).n_faces == 0
 end
+
+@testset "CRC91 — merged attribute type promotion" begin
+    function attributed_triangle(data)
+        geometry = BufferGeometry(
+            [0.0, 0.0, 0.0,
+             1.0, 0.0, 0.0,
+             0.0, 1.0, 0.0],
+            Float64[], Float64[], [1, 2, 3], 3, 1)
+        set_attribute!(geometry, :foo, data, 1)
+        return geometry
+    end
+
+    integer_geometry = attributed_triangle([1, 2, 3, 99])
+    float_geometry = attributed_triangle([1.5, 2.5, 3.5, 99.5])
+    forward = merge_geometries([integer_geometry, float_geometry])
+    reverse_order = merge_geometries([float_geometry, integer_geometry])
+    forward_attribute = get_attribute(forward, :foo)
+    reverse_attribute = get_attribute(reverse_order, :foo)
+    @test forward_attribute.data isa Vector{Float64}
+    @test reverse_attribute.data isa Vector{Float64}
+    @test forward_attribute.data == [1.0, 2.0, 3.0, 1.5, 2.5, 3.5]
+    @test reverse_attribute.data == [1.5, 2.5, 3.5, 1.0, 2.0, 3.0]
+    @test forward.groups == [(1, 1, 0), (2, 1, 1)]
+    @test reverse_order.groups == [(1, 1, 0), (2, 1, 1)]
+    @test forward.indices == [1, 2, 3, 4, 5, 6]
+    @test reverse_order.indices == forward.indices
+
+    merge_geometries([integer_geometry, float_geometry])
+    @test_opt_alloc 12_288 merge_geometries(
+        [integer_geometry, float_geometry])
+end

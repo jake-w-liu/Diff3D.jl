@@ -1893,7 +1893,13 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
                     data_length, logical_length,
                     "merge_geometries attribute length")
             end
-            data = similar(attr.data, data_length)
+            data_type = eltype(attr.data)
+            for g in geos
+                data_type = promote_type(
+                    data_type,
+                    eltype(get_attribute(g, name).data))
+            end
+            data = Vector{data_type}(undef, data_length)
             out = 1
             for g in geos
                 src = get_attribute(g, name).data
