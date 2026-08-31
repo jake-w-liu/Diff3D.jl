@@ -33840,3 +33840,38 @@ end
     @test mat4_inverse(Mat4()) == Mat4()
     @test_opt_alloc 0 mat4_inverse(Mat4())
 end
+
+@testset "CRC90 — CSG operands with widely different feature scales" begin
+    unit = BoxGeometry()
+    unit_bounds = compute_bounding_box(unit)
+    for extent in (1.0e6, 1.0e8)
+        large = BoxGeometry(width=extent, height=extent, depth=extent)
+        frame = Diff3D._csg_operation_frame(large, unit)
+        @test length(Diff3D._csg_geometry_polygons(unit, frame)) ==
+              unit.n_faces
+
+        intersection = csg_intersect(large, unit)
+        subtraction = csg_subtract(large, unit)
+        @test intersection.n_faces == unit.n_faces
+        @test compute_bounding_box(intersection) == unit_bounds
+        @test subtraction.n_faces > large.n_faces
+
+        boundary_unit = transform_geometry(
+            unit, mat4_translation(extent / 2, 0.0, 0.0))
+        boundary_intersection = csg_intersect(large, boundary_unit)
+        boundary_bounds = compute_bounding_box(boundary_intersection)
+        @test boundary_intersection.n_faces == 16
+        @test isapprox(boundary_bounds.min.x, extent / 2 - 0.5;
+                       atol=8eps(extent), rtol=0.0)
+        @test isapprox(boundary_bounds.max.x, extent / 2;
+                       atol=8eps(extent), rtol=0.0)
+        @test all(isfinite, boundary_intersection.positions)
+    end
+
+    degenerate = BufferGeometry(
+        [0.0, 0.0, 0.0,
+         1.0e-12, 0.0, 0.0,
+         2.0e-12, 0.0, 0.0],
+        Float64[], Float64[], [1, 2, 3], 3, 1)
+    @test isempty(Diff3D._csg_geometry_polygons(degenerate))
+end

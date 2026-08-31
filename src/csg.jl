@@ -6,6 +6,10 @@
 
 const _CSG_EPS = 1e-5
 const _CSG_AREA_EPS = _CSG_EPS * _CSG_EPS
+# BSP splitting performs several dot products and interpolations. Keep its
+# adaptive tolerance above their accumulated Float64 roundoff in the normalized
+# operation frame.
+const _CSG_ROUNDOFF_EPS = 64eps(Float64)
 
 # Evaluate both operands in one canonical frame so BSP tolerances are invariant
 # under a shared finite translation and uniform scale.
@@ -25,7 +29,11 @@ end
 struct CSGPlane
     normal::Vec3{Float64}
     w::Float64
+    epsilon::Float64
 end
+
+CSGPlane(normal::Vec3, w::Real) = CSGPlane(
+    convert(Vec3{Float64}, normal), Float64(w), _CSG_EPS)
 
 struct CSGPolygon
     vertices::Vector{CSGVertex}
@@ -59,15 +67,43 @@ function _csg_vertex_lerp(a::CSGVertex, b::CSGVertex, t::Float64)
                           _stable_lerp(a.uv.y, b.uv.y, t)))
 end
 
+function _csg_polygon_scale(vertices::Vector{CSGVertex})
+    isempty(vertices) && return 0.0
+    origin = vertices[1].pos
+    scale = 0.0
+    @inbounds for i in 2:length(vertices)
+        scale = max(scale, norm(vertices[i].pos - origin))
+    end
+    return scale
+end
+
+function _csg_triangle_normal(a::Vec3{Float64}, b::Vec3{Float64},
+                              c::Vec3{Float64}, scale::Float64)
+    iszero(scale) && return nothing
+    # Measure degeneracy relative to the polygon, not the shared operation
+    # frame. Similar triangles must remain valid when one operand is tiny.
+    ab = (b - a) / scale
+    ac = (c - a) / scale
+    n = cross(ab, ac)
+    norm(n) > _CSG_AREA_EPS || return nothing
+    return normalize(n)
+end
+
+@inline function _csg_plane_epsilon(scale::Float64)
+    return max(_CSG_ROUNDOFF_EPS,
+               min(_CSG_EPS, _CSG_EPS * scale))
+end
+
 function _csg_plane_from_vertices(vertices::Vector{CSGVertex})
     length(vertices) >= 3 || return nothing
     origin = vertices[1].pos
+    scale = _csg_polygon_scale(vertices)
     for i in 2:(length(vertices) - 1)
-        n = cross(vertices[i].pos - origin, vertices[i + 1].pos - origin)
-        if norm(n) > _CSG_AREA_EPS
-            normal = normalize(n)
-            return CSGPlane(normal, dot(normal, origin))
-        end
+        normal = _csg_triangle_normal(
+            origin, vertices[i].pos, vertices[i + 1].pos, scale)
+        normal === nothing && continue
+        return CSGPlane(
+            normal, dot(normal, origin), _csg_plane_epsilon(scale))
     end
     return nothing
 end
@@ -78,16 +114,25 @@ function _csg_polygon(vertices::Vector{CSGVertex})
     return CSGPolygon(vertices, plane)
 end
 
-function _csg_polygon_flip(poly::CSGPolygon)
-    vertices = [_csg_vertex_flip(v) for v in Iterators.reverse(poly.vertices)]
-    return CSGPolygon(vertices, CSGPlane(-poly.plane.normal, -poly.plane.w))
+function _csg_polygon(vertices::Vector{CSGVertex}, epsilon::Float64)
+    polygon = _csg_polygon(vertices)
+    polygon === nothing && return nothing
+    plane = polygon.plane
+    return CSGPolygon(vertices, CSGPlane(plane.normal, plane.w, epsilon))
 end
 
-_csg_plane_flip(plane::CSGPlane) = CSGPlane(-plane.normal, -plane.w)
+function _csg_polygon_flip(poly::CSGPolygon)
+    vertices = [_csg_vertex_flip(v) for v in Iterators.reverse(poly.vertices)]
+    return CSGPolygon(vertices, CSGPlane(
+        -poly.plane.normal, -poly.plane.w, poly.plane.epsilon))
+end
+
+_csg_plane_flip(plane::CSGPlane) =
+    CSGPlane(-plane.normal, -plane.w, plane.epsilon)
 
 @inline function _csg_vertex_type(plane::CSGPlane, vertex::CSGVertex)
     t = dot(plane.normal, vertex.pos) - plane.w
-    return t < -_CSG_EPS ? 2 : (t > _CSG_EPS ? 1 : 0)
+    return t < -plane.epsilon ? 2 : (t > plane.epsilon ? 1 : 0)
 end
 
 @inline function _csg_polygon_type(plane::CSGPlane, polygon::CSGPolygon)
@@ -135,7 +180,7 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
             ti != front_type && push!(b, vi)
             if (ti | tj) == spanning
                 denom = dot(plane.normal, vj.pos - vi.pos)
-                if abs(denom) > _CSG_EPS
+                if abs(denom) > plane.epsilon
                     t = (plane.w - dot(plane.normal, vi.pos)) / denom
                     v = _csg_vertex_lerp(vi, vj, clamp(t, 0.0, 1.0))
                     push!(f, v)
@@ -143,8 +188,11 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
                 end
             end
         end
-        fp = _csg_polygon(f)
-        bp = _csg_polygon(b)
+        # Both fragments remain on the source polygon's plane. Preserve its
+        # operation-wide tolerance instead of deriving a larger tolerance from
+        # either fragment's current extent.
+        fp = _csg_polygon(f, polygon.plane.epsilon)
+        bp = _csg_polygon(b, polygon.plane.epsilon)
         fp !== nothing && push!(front, fp)
         bp !== nothing && push!(back, bp)
     end
@@ -312,10 +360,11 @@ function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon},
     n_faces = 0
     for poly in polygons
         length(poly.vertices) >= 3 || continue
+        scale = _csg_polygon_scale(poly.vertices)
         for i in 2:(length(poly.vertices) - 1)
             tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
-            norm(cross(tri[2].pos - tri[1].pos,
-                       tri[3].pos - tri[1].pos)) > _CSG_AREA_EPS ||
+            _csg_triangle_normal(
+                tri[1].pos, tri[2].pos, tri[3].pos, scale) !== nothing ||
                 continue
             n_faces += 1
         end
@@ -330,10 +379,11 @@ function _csg_polygons_to_geometry(polygons::Vector{CSGPolygon},
     vi = 0
     @inbounds for poly in polygons
         length(poly.vertices) >= 3 || continue
+        scale = _csg_polygon_scale(poly.vertices)
         for i in 2:(length(poly.vertices) - 1)
             tri = (poly.vertices[1], poly.vertices[i], poly.vertices[i + 1])
-            norm(cross(tri[2].pos - tri[1].pos,
-                       tri[3].pos - tri[1].pos)) > _CSG_AREA_EPS ||
+            _csg_triangle_normal(
+                tri[1].pos, tri[2].pos, tri[3].pos, scale) !== nothing ||
                 continue
             for v in tri
                 vi += 1
@@ -359,6 +409,21 @@ function _csg_clone_polygons(polygons::Vector{CSGPolygon})
     return [CSGPolygon(copy(p.vertices), p.plane) for p in polygons]
 end
 
+function _csg_use_shared_epsilon!(a::Vector{CSGPolygon},
+                                  b::Vector{CSGPolygon})
+    epsilon = _CSG_EPS
+    @inbounds for polygons in (a, b), polygon in polygons
+        epsilon = min(epsilon, polygon.plane.epsilon)
+    end
+    @inbounds for polygons in (a, b), i in eachindex(polygons)
+        polygon = polygons[i]
+        plane = polygon.plane
+        polygons[i] = CSGPolygon(polygon.vertices, CSGPlane(
+            plane.normal, plane.w, epsilon))
+    end
+    return epsilon
+end
+
 function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
     frame = _csg_operation_frame(a, b)
     ap = _csg_geometry_polygons(a, frame)
@@ -378,6 +443,11 @@ function _csg_operate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
         end
         return _csg_polygons_to_geometry(result, frame)
     end
+    # A plane from the larger operand can pass arbitrarily close to a valid
+    # feature of the smaller operand. Use the smallest input feature tolerance
+    # for every BSP classification so that feature is not mistaken for a
+    # coplanar surface merely because the other operand is much larger.
+    _csg_use_shared_epsilon!(ap, bp)
     A = _csg_node(ap)
     B = _csg_node(bp)
 
