@@ -389,19 +389,47 @@ struct CubeCamera
     cameras::Vector{PerspectiveCamera}   # order: +x, -x, +y, -y, +z, -z
 end
 
+@noinline function _throw_cube_camera_target(axis::String)
+    throw(ArgumentError(
+        "CubeCamera position cannot represent a finite target in the $axis direction"))
+end
+
+@inline function _cube_camera_target_coordinate(value::Float64,
+                                                direction::Float64,
+                                                axis::String)
+    candidate = value + direction
+    isfinite(candidate) && candidate != value && return candidate
+    adjacent = direction > 0.0 ? nextfloat(value) : prevfloat(value)
+    isfinite(adjacent) && adjacent != value && return adjacent
+    return _throw_cube_camera_target(axis)
+end
+
+@inline function _cube_camera_target(position::Vec3{Float64},
+                                     direction::Vec3{Float64},
+                                     axis::String)
+    return Vec3(
+        iszero(direction.x) ? position.x :
+            _cube_camera_target_coordinate(position.x, direction.x, axis),
+        iszero(direction.y) ? position.y :
+            _cube_camera_target_coordinate(position.y, direction.y, axis),
+        iszero(direction.z) ? position.z :
+            _cube_camera_target_coordinate(position.z, direction.z, axis),
+    )
+end
+
 function CubeCamera(; near=0.1, far=1000.0, position=Vec3())
     cube_position = _validated_camera_vector(position, :CubeCamera, :position)
-    faces = ((Vec3( 1.0,0,0), Vec3(0.0,-1,0)),
-             (Vec3(-1.0,0,0), Vec3(0.0,-1,0)),
-             (Vec3(0.0, 1,0), Vec3(0.0,0, 1)),
-             (Vec3(0.0,-1,0), Vec3(0.0,0,-1)),
-             (Vec3(0.0,0, 1), Vec3(0.0,-1,0)),
-             (Vec3(0.0,0,-1), Vec3(0.0,-1,0)))
+    faces = ((Vec3( 1.0,0,0), Vec3(0.0,-1,0), "+X"),
+             (Vec3(-1.0,0,0), Vec3(0.0,-1,0), "-X"),
+             (Vec3(0.0, 1,0), Vec3(0.0,0, 1), "+Y"),
+             (Vec3(0.0,-1,0), Vec3(0.0,0,-1), "-Y"),
+             (Vec3(0.0,0, 1), Vec3(0.0,-1,0), "+Z"),
+             (Vec3(0.0,0,-1), Vec3(0.0,-1,0), "-Z"))
     cams = PerspectiveCamera[]
-    for (dir, up) in faces
+    for (dir, up, axis) in faces
         c = PerspectiveCamera(fov=π/2, aspect=1.0, near=near, far=far)
         c.position = cube_position
-        c.target = cube_position + dir
+        c.target = _cube_camera_target(cube_position, dir, axis)
         c.up = up
         push!(cams, c)
     end

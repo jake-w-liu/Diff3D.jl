@@ -33638,3 +33638,37 @@ end
     @test_opt_alloc 12_288 merge_geometries(
         [integer_geometry, float_geometry])
 end
+
+@testset "CRC89 — CubeCamera extreme face targets" begin
+    position = Vec3(1.0e308, -1.0e308, 1.0e308)
+    cube = CubeCamera(position=position)
+    directions = (
+        Vec3(1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0),
+        Vec3(0.0, 1.0, 0.0), Vec3(0.0, -1.0, 0.0),
+        Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0),
+    )
+    @test length(cube.cameras) == 6
+    for (camera, expected_direction) in zip(cube.cameras, directions)
+        @test camera.position == position
+        actual_direction = normalize(camera.target - camera.position)
+        @test actual_direction == expected_direction
+        view = view_matrix(camera)
+        @test all(isfinite, view.e)
+        backward = Vec3(mat4_get(view, 3, 1),
+                        mat4_get(view, 3, 2),
+                        mat4_get(view, 3, 3))
+        @test norm(backward + expected_direction) == 0.0
+    end
+
+    ordinary = CubeCamera(position=Vec3(2.0, 3.0, 4.0))
+    for (camera, expected_direction) in zip(ordinary.cameras, directions)
+        @test camera.target == camera.position + expected_direction
+    end
+
+    @test_throws "CubeCamera position cannot represent a finite target in the +X direction" CubeCamera(
+        position=Vec3(floatmax(Float64), 0.0, 0.0))
+    @test_throws "CubeCamera position cannot represent a finite target in the -X direction" CubeCamera(
+        position=Vec3(-floatmax(Float64), 0.0, 0.0))
+    @test_opt_alloc 0 Diff3D._cube_camera_target_coordinate(
+        1.0e308, 1.0, "+X")
+end
