@@ -1508,9 +1508,9 @@ function _web_write_light_visibility_json(io::IO, light::AbstractLight,
     return nothing
 end
 
-function _web_write_light_common_json(io::IO, typ::AbstractString, light::AbstractLight,
-                                      num_buf::Vector{UInt8})
-    _validate_light_object(light)
+function _web_write_validated_light_common_json(
+        io::IO, typ::AbstractString, light::AbstractLight,
+        num_buf::Vector{UInt8})
     write(io, "{\"type\":")
     _js_write_str(io, typ)
     write(io, ",\"id\":")
@@ -1530,7 +1530,8 @@ function _web_write_light_json(io::IO, light::AmbientLight;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    _web_write_light_common_json(io, "ambient", light, num_buf)
+    _validate_light_object(light)
+    _web_write_validated_light_common_json(io, "ambient", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"intensity\":")
@@ -1550,10 +1551,11 @@ function _web_write_light_json(io::IO, light::DirectionalLight, scene::Scene;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
+    _validate_light_object(light)
     pos = _light_world_position(light)
     target = light.target
     dir = _direction_between(target, pos)
-    _web_write_light_common_json(io, "directional", light, num_buf)
+    _web_write_validated_light_common_json(io, "directional", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"intensity\":")
@@ -1584,7 +1586,8 @@ function _web_write_light_json(io::IO, light::PointLight, scene::Scene;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    _web_write_light_common_json(io, "point", light, num_buf)
+    _validate_light_object(light)
+    _web_write_validated_light_common_json(io, "point", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"intensity\":")
@@ -1615,13 +1618,14 @@ function _web_write_light_json(io::IO, light::SpotLight, scene::Scene;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
+    _validate_light_object(light)
     pos = _light_world_position(light)
     target = light.target
     dir = _direction_between(pos, target)
     penumbra = clamp(Float64(light.penumbra), 0.0, 1.0)
     cone = clamp(Float64(light.angle), 0.0, pi)
     inner = cone * (1.0 - penumbra)
-    _web_write_light_common_json(io, "spot", light, num_buf)
+    _web_write_validated_light_common_json(io, "spot", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"intensity\":")
@@ -1664,7 +1668,8 @@ function _web_write_light_json(io::IO, light::HemisphereLight;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    _web_write_light_common_json(io, "hemisphere", light, num_buf)
+    _validate_light_object(light)
+    _web_write_validated_light_common_json(io, "hemisphere", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"groundColor\":")
@@ -1686,12 +1691,13 @@ function _web_write_light_json(io::IO, light::RectAreaLight;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
+    _validate_light_object(light)
     pos = _light_world_position(light)
     forward = _direction_between(pos, light.target)
     ref = abs(forward.y) < 0.95 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
     u = normalize(cross(ref, forward))
     v = cross(forward, u)
-    _web_write_light_common_json(io, "rectArea", light, num_buf)
+    _web_write_validated_light_common_json(io, "rectArea", light, num_buf)
     write(io, ",\"color\":")
     _js_write_color(io, light.color, num_buf)
     write(io, ",\"intensity\":")
@@ -1725,7 +1731,8 @@ function _web_write_light_json(io::IO, light::LightProbe;
                                shadow_mode::Symbol=:static,
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
-    _web_write_light_common_json(io, "lightProbe", light, num_buf)
+    _validate_light_object(light)
+    _web_write_validated_light_common_json(io, "lightProbe", light, num_buf)
     write(io, ",\"position\":")
     _js_write_vec(io, _light_world_position(light), num_buf)
     write(io, ",\"coeffs\":[")
