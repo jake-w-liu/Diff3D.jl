@@ -1516,7 +1516,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     # rather than the eye-point vector `cam_pos - wc`, which is exact only for
     # perspective projection. `nothing` selects the perspective test.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera_target, camera_position) : nothing
+        _camera_backward_from_view(view) : nothing
 
     if cache === nothing
         meshes = Mesh[]

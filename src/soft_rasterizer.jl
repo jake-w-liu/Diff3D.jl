@@ -1002,7 +1002,7 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     view = mat4_look_at(camera_position, camera_target, camera_up)
     vp = proj * view
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera_target, camera_position) : nothing
+        _camera_backward_from_view(view) : nothing
 
     scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
     meshes = scene_workspace === nothing ? collect_meshes(scene) :

@@ -33672,3 +33672,71 @@ end
     @test_opt_alloc 0 Diff3D._cube_camera_target_coordinate(
         1.0e308, 1.0, "+X")
 end
+
+@testset "CRC80 — coincident orthographic facing" begin
+    reference = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    reference.position = Vec3(0.0, 0.0, 3.0)
+    reference.target = Vec3()
+    coincident = OrthographicCamera(
+        left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+        near=0.1, far=10.0)
+    coincident.position = Vec3(0.0, 0.0, 3.0)
+    coincident.target = coincident.position
+    @test view_matrix(coincident) == view_matrix(reference)
+    @test Diff3D._camera_backward_from_view(view_matrix(coincident)) ==
+          Vec3(0.0, 0.0, 1.0)
+
+    function front_scene(; instanced=false)
+        scene = Scene()
+        geometry = PlaneGeometry(width=2.0, height=2.0)
+        material = MeshBasicMaterial(
+            color=Color3(1.0, 1.0, 1.0), side=:front)
+        add!(scene, instanced ? InstancedMesh(geometry, material, 1) :
+             Mesh(geometry, material))
+        return scene
+    end
+    for shading in (:flat, :smooth), instanced in (false, true)
+        scene = front_scene(instanced=instanced)
+        expected = RenderTarget(32, 32)
+        actual = RenderTarget(32, 32)
+        render!(expected, scene, reference;
+                shading=shading, frustum_cull=false)
+        render!(actual, scene, coincident;
+                shading=shading, frustum_cull=false)
+        @test sum(actual.color) > 0.0
+        @test actual.color == expected.color
+        @test actual.depth == expected.depth
+    end
+
+    pooled_scene = front_scene()
+    pooled_expected = RenderTarget(32, 32)
+    pooled_actual = RenderTarget(32, 32)
+    render_pooled!(pooled_expected, pooled_scene, reference, RenderCache())
+    pooled_cache = RenderCache()
+    render_pooled!(pooled_actual, pooled_scene, coincident, pooled_cache)
+    @test pooled_actual.color == pooled_expected.color
+    @test_opt_alloc 128 render_pooled!(
+        pooled_actual, pooled_scene, coincident, pooled_cache)
+
+    tiled_actual = RenderTarget(32, 32)
+    tiled_cache = [RenderCache()]
+    render_tiled!(tiled_actual, pooled_scene, coincident;
+                  tiles=1, cache=tiled_cache)
+    @test tiled_actual.color == pooled_expected.color
+
+    back_scene = Scene()
+    back_mesh = Mesh(
+        PlaneGeometry(width=2.0, height=2.0),
+        MeshNormalMaterial(side=:double))
+    back_mesh.rotation = Euler(0.0, pi, 0.0)
+    add!(back_scene, back_mesh)
+    soft_reference = soft_render_scene(
+        back_scene, reference, 12, 12; sigma=0.2, gamma=0.5)
+    soft_coincident = soft_render_scene(
+        back_scene, coincident, 12, 12; sigma=0.2, gamma=0.5)
+    @test soft_coincident == soft_reference
+    @test_opt_alloc 0 Diff3D._camera_backward_from_view(
+        view_matrix(coincident))
+end

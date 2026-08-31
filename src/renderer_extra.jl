@@ -1319,7 +1319,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera_target, camera_position) : nothing
+        _camera_backward_from_view(view) : nothing
     _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                            cache.instanced, cache.instanced_worlds,
                                            scene)
@@ -3158,7 +3158,7 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
-        _direction_between(camera_target, camera_position) : nothing
+        _camera_backward_from_view(view) : nothing
     H = rt.height
     active_tiles = min(tiles, H)
     thread_count = min(active_tiles, max(Threads.nthreads(), 1))

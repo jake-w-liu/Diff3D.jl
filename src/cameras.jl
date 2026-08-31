@@ -123,6 +123,12 @@ end
 @inline _camera_world_position(camera::AbstractCamera) =
     first(_camera_world_pose(camera))
 
+@inline function _camera_backward_from_view(view::Mat4)
+    return Vec3(mat4_get(view, 3, 1),
+                mat4_get(view, 3, 2),
+                mat4_get(view, 3, 3))
+end
+
 function _validated_perspective_params(fov, aspect, near, far)
     fov isa Real && !(fov isa Bool) ||
         throw(ArgumentError("PerspectiveCamera fov must be finite and between 0 and pi radians"))
