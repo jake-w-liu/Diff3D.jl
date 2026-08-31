@@ -32341,9 +32341,17 @@ end
     render!(target, partially_visible, camera;
             frustum_cull=true, cache=cached)
     calls[] = 0
-    @test_opt_alloc 4096 render!(
-        target, partially_visible, camera;
-        frustum_cull=true, cache=cached)
+    if DIFF3D_ALLOC_ASSERTIONS_ENABLED
+        @test_opt_alloc 4096 render!(
+            target, partially_visible, camera;
+            frustum_cull=true, cache=cached)
+    else
+        # The allocation macro deliberately skips its expression in the
+        # low-optimization package-test process. Exercise the cached path here
+        # as well before checking the shader callback count.
+        render!(target, partially_visible, camera;
+                frustum_cull=true, cache=cached)
+    end
     @test calls[] == 1
 end
 
