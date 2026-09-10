@@ -5,7 +5,7 @@
 # --------------------------------------------------------------------------
 
 function _compute_vertex_normals_scaled!(
-        acc::Vector{Float64}, geo::BufferGeometry)
+        acc::Vector{Float64}, geo::BufferGeometry, degenerate_normal::Vec3)
     fill!(acc, 0.0)
     no_exponent = typemin(Int)
     normal_exponents = fill(no_exponent, geo.n_vertices)
@@ -55,16 +55,14 @@ function _compute_vertex_normals_scaled!(
         base = (vi - 1) * 3
         nx, ny, nz = acc[base+1], acc[base+2], acc[base+3]
         len = _norm3(nx, ny, nz)
-        exponent = normal_exponents[vi]
-        if exponent != no_exponent &&
-           ldexp(len, exponent) > 1e-20
+        if !iszero(len)
             acc[base+1] = nx / len
             acc[base+2] = ny / len
             acc[base+3] = nz / len
         else
-            acc[base+1] = 0.0
-            acc[base+2] = 0.0
-            acc[base+3] = 1.0
+            acc[base+1] = degenerate_normal.x
+            acc[base+2] = degenerate_normal.y
+            acc[base+3] = degenerate_normal.z
         end
     end
     return acc
@@ -81,10 +79,18 @@ function compute_vertex_normals!(geo::BufferGeometry)
     nv = geo.n_vertices
     acc = if length(geo.normals) == nv * 3 &&
              geo.normals !== geo.positions && geo.normals !== geo.uvs
-        fill!(geo.normals, 0.0)
+        geo.normals
     else
-        zeros(Float64, nv * 3)
+        Vector{Float64}(undef, nv * 3)
     end
+    _compute_vertex_normals!(acc, geo, Vec3(0.0, 0.0, 1.0))
+    geo.normals = acc
+    return geo
+end
+
+function _compute_vertex_normals!(acc::Vector{Float64}, geo::BufferGeometry,
+                                   degenerate_normal::Vec3)
+    fill!(acc, 0.0)
     needs_scaled_fallback = false
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
@@ -98,6 +104,15 @@ function compute_vertex_normals!(geo::BufferGeometry)
         fn = cross(v2 - v1, v3 - v1)
         needs_scaled_fallback |=
             !(isfinite(fn.x) && isfinite(fn.y) && isfinite(fn.z))
+        if max(abs(fn.x), abs(fn.y), abs(fn.z)) < floatmin(Float64)
+            # Subnormal areas lose relative precision, and a nondegenerate
+            # face may round completely to zero. Test the scaled cross product
+            # so ordinary degenerate triangles do not allocate a fallback.
+            area = _float_representation_cross(
+                _float_vector_difference(v1, v2),
+                _float_vector_difference(v1, v3))
+            needs_scaled_fallback |= any(component -> component.nonzero, area)
+        end
         for idx in (i1, i2, i3)
             base = (idx - 1) * 3
             nx = acc[base+1] + fn.x
@@ -113,27 +128,21 @@ function compute_vertex_normals!(geo::BufferGeometry)
 
     if needs_scaled_fallback
         # A face cross product, or the area-weighted sum of several faces, can
-        # exceed Float64 even though its unit direction is representable. Keep
+        # exceed or underflow Float64 although its direction is representable. Keep
         # one shared binary exponent per vertex and accumulate scaled mantissas
         # only on this exceptional path. Ordinary meshes retain the allocation-
         # free buffer-reuse path above.
-        _compute_vertex_normals_scaled!(acc, geo)
-        geo.normals = acc
-        return geo
+        return _compute_vertex_normals_scaled!(acc, geo, degenerate_normal)
     end
 
-    @inbounds for vi in 1:nv
+    @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * 3
         nx, ny, nz = acc[base+1], acc[base+2], acc[base+3]
-        len = _norm3(nx, ny, nz)
-        if len > 1e-20
-            acc[base+1] = nx/len; acc[base+2] = ny/len; acc[base+3] = nz/len
-        else
-            acc[base+1] = 0.0; acc[base+2] = 0.0; acc[base+3] = 1.0
-        end
+        n = iszero(nx) && iszero(ny) && iszero(nz) ? degenerate_normal :
+            normalize(Vec3(nx, ny, nz))
+        acc[base+1] = n.x; acc[base+2] = n.y; acc[base+3] = n.z
     end
-    geo.normals = acc
-    return geo
+    return acc
 end
 
 # ========================== STL ==========================
@@ -935,62 +944,9 @@ end
 
 function _xyz_parse_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
                           line_no::Int, field::String)
-    sign = 1.0
-    p = first
-    if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
-        bytes[p] == UInt8('-') && (sign = -1.0)
-        p += 1
-    end
-    if p <= last
-        if _ply_ascii_token_eq(bytes, p, last, "nan")
-            _xyz_nonfinite_float(line_no, field)
-        elseif _ply_ascii_token_eq(bytes, p, last, "inf") ||
-               _ply_ascii_token_eq(bytes, p, last, "infinity")
-            _xyz_nonfinite_float(line_no, field)
-        end
-    end
-
-    value = 0.0
-    digits = 0
-    @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-        value = value * 10.0 + Float64(bytes[p] - UInt8('0'))
-        p += 1
-        digits += 1
-    end
-    if p <= last && bytes[p] == UInt8('.')
-        p += 1
-        scale = 0.1
-        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-            value += Float64(bytes[p] - UInt8('0')) * scale
-            scale *= 0.1
-            p += 1
-            digits += 1
-        end
-    end
-    digits > 0 || _xyz_invalid_float(line_no, field)
-    if p <= last && (bytes[p] == UInt8('e') || bytes[p] == UInt8('E'))
-        p += 1
-        exp_sign = 1
-        if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
-            bytes[p] == UInt8('-') && (exp_sign = -1)
-            p += 1
-        end
-        exp_value = 0
-        exp_digits = 0
-        @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-            exp_value = min(exp_value * 10 + Int(bytes[p] - UInt8('0')), 10_000)
-            p += 1
-            exp_digits += 1
-        end
-        exp_digits > 0 || _xyz_invalid_float(line_no, field)
-        exp_value *= exp_sign
-        value = exp_value > 308 ? Inf :
-                exp_value < -324 ? 0.0 :
-                value * (10.0 ^ exp_value)
-    end
-    p == last + 1 || _xyz_invalid_float(line_no, field)
-    value *= sign
-    isfinite(value) || _xyz_nonfinite_float(line_no, field)
+    value, status = _try_parse_ascii_float(bytes, first, last)
+    status == UInt8(2) && _xyz_nonfinite_float(line_no, field)
+    status == UInt8(0) || _xyz_invalid_float(line_no, field)
     return value
 end
 
@@ -1016,7 +972,7 @@ silently ignored or propagated into geometry buffers.
 function parse_xyz(text::AbstractString; source::AbstractString="<string>")
     positions = Float64[]
     colors = nothing
-    bytes = codeunits(text)
+    bytes = codeunits(String(text))
     n = length(bytes)
     row_hint = count(==(UInt8('\n')), bytes) + 1
     sizehint!(positions, 3 * row_hint)
@@ -1234,12 +1190,25 @@ function _ply_ascii_token_eq(bytes::AbstractVector{UInt8}, first::Int, last::Int
     return true
 end
 
-@inline function _ply_try_parse_ascii_float(bytes::AbstractVector{UInt8},
-                                            first::Int, last::Int)
-    sign = 1.0
+@inline function _ascii_float64(bytes::Base.CodeUnits{UInt8,String},
+                                first::Int, last::Int)
+    # This is Base's bounded decimal converter. It inspects the character just
+    # after the token, so pass NUL-terminated String storage, never a raw vector.
+    return ccall(:jl_try_substrtod, Tuple{Bool,Float64},
+                 (Ptr{UInt8}, Csize_t, Csize_t), getfield(bytes, :s),
+                 first - 1, last - first + 1)
+end
+
+function _ascii_float64(bytes::AbstractVector{UInt8}, first::Int, last::Int)
+    text = String(bytes[first:last])
+    return _ascii_float64(codeunits(text), 1, ncodeunits(text))
+end
+
+@inline function _try_parse_ascii_float(bytes::AbstractVector{UInt8},
+                                        first::Int, last::Int)
+    1 <= first <= last <= length(bytes) || return 0.0, UInt8(1)
     p = first
     if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
-        bytes[p] == UInt8('-') && (sign = -1.0)
         p += 1
     end
     if p <= last
@@ -1251,19 +1220,14 @@ end
         end
     end
 
-    value = 0.0
     digits = 0
     @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-        value = value * 10.0 + Float64(bytes[p] - UInt8('0'))
         p += 1
         digits += 1
     end
     if p <= last && bytes[p] == UInt8('.')
         p += 1
-        scale = 0.1
         @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-            value += Float64(bytes[p] - UInt8('0')) * scale
-            scale *= 0.1
             p += 1
             digits += 1
         end
@@ -1271,27 +1235,22 @@ end
     digits > 0 || return 0.0, UInt8(1)
     if p <= last && (bytes[p] == UInt8('e') || bytes[p] == UInt8('E'))
         p += 1
-        exp_sign = 1
         if p <= last && (bytes[p] == UInt8('+') || bytes[p] == UInt8('-'))
-            bytes[p] == UInt8('-') && (exp_sign = -1)
             p += 1
         end
-        exp_value = 0
         exp_digits = 0
         @inbounds while p <= last && _ply_ascii_digit(bytes[p])
-            exp_value = min(exp_value * 10 + Int(bytes[p] - UInt8('0')), 10_000)
             p += 1
             exp_digits += 1
         end
         exp_digits > 0 || return 0.0, UInt8(1)
-        exp_value *= exp_sign
-        value = exp_value > 308 ? Inf :
-                exp_value < -324 ? 0.0 :
-                value * (10.0 ^ exp_value)
     end
     p == last + 1 || return 0.0, UInt8(1)
-    value *= sign
+    hasvalue, value = _ascii_float64(bytes, first, last)
     isfinite(value) || return 0.0, UInt8(2)
+    # The grammar above excludes failed conversions. ERANGE with signed zero
+    # denotes rounded underflow, which these loaders have always accepted.
+    hasvalue || iszero(value) || return 0.0, UInt8(1)
     return value, UInt8(0)
 end
 
@@ -1302,7 +1261,7 @@ end
 
 function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
                                 context::String)
-    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    value, status = _try_parse_ascii_float(bytes, first, last)
     status == UInt8(0) || _ply_ascii_float_context_error(context, status)
     return value
 end
@@ -1319,7 +1278,7 @@ end
 @inline function _ply_parse_ascii_vertex_float(bytes::AbstractVector{UInt8},
                                                first::Int, last::Int,
                                                row::Int, col::Int, props)
-    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    value, status = _try_parse_ascii_float(bytes, first, last)
     status == UInt8(0) || _ply_vertex_ascii_float_error(row, col, props, status)
     return value
 end
@@ -1336,7 +1295,7 @@ end
 @inline function _ply_parse_ascii_face_float(bytes::AbstractVector{UInt8},
                                              first::Int, last::Int,
                                              row::Int, role::Symbol, k::Int=0)
-    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    value, status = _try_parse_ascii_float(bytes, first, last)
     status == UInt8(0) || _ply_face_ascii_float_error(row, role, k, status)
     return value
 end
@@ -1355,7 +1314,7 @@ end
                                                     element::String, row::Int,
                                                     prop::String, t::Symbol,
                                                     item::Int=0)
-    value, status = _ply_try_parse_ascii_float(bytes, first, last)
+    value, status = _try_parse_ascii_float(bytes, first, last)
     status == UInt8(0) ||
         _ply_ascii_property_value_error(element, row, prop, item, status)
     return _ply_ascii_typed_value(value, t, element, row, prop, item)
@@ -1571,6 +1530,10 @@ function load_ply(path::String)
         return iidx
     end
 
+    # Transfer owned ASCII bytes to String storage once. Numeric tokens then
+    # share its trailing NUL and do not allocate a string per field.
+    body = format === :ascii ? codeunits(String(bytes)) : bytes
+
     for (ename, ecount, props) in elements
         _ply_preflight_element(ecount, props, format, _ply_available_bytes(n, i), ename)
         if ename == "vertex"
@@ -1610,14 +1573,14 @@ function load_ply(path::String)
 
             if format == :ascii
                 for v in 0:ecount-1
-                    line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
+                    line_start, line_stop, i = _ply_line_bounds(body, i, n)
                     b3 = v * 3
                     p = line_start
                     for (c, prop) in enumerate(props)
-                        first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+                        first, last, p = _ply_next_ascii_token(body, p, line_stop)
                         first != 0 ||
                             _ply_ascii_missing_property_error("vertex", v + 1, prop[2])
-                        val = _ply_parse_ascii_vertex_float(bytes, first, last,
+                        val = _ply_parse_ascii_vertex_float(body, first, last,
                                                             v + 1, c, props)
                         if prop[1] === :list
                             count_value = _ply_ascii_typed_value(
@@ -1625,12 +1588,12 @@ function load_ply(path::String)
                             nitems = checked_list_count(count_value)
                             for item in 1:nitems
                                 first, last, p = _ply_next_ascii_token(
-                                    bytes, p, line_stop)
+                                    body, p, line_stop)
                                 first != 0 ||
                                     _ply_ascii_missing_property_error(
                                         "vertex", v + 1, prop[2])
                                 _ply_validate_ascii_property_value(
-                                    bytes, first, last, "vertex", v + 1,
+                                    body, first, last, "vertex", v + 1,
                                     prop[2], prop[4], item)
                             end
                         else
@@ -1671,13 +1634,13 @@ function load_ply(path::String)
                             # legal) is count + items; consume both so the byte
                             # cursor stays aligned for the next vertex instead of
                             # reading a single value and desyncing every row after.
-                            cnt, i = read_binary(bytes, i, p[3])
+                            cnt, i = read_binary(body, i, p[3])
                             nitems = checked_list_count(cnt)
                             checked_binary_skip!(_ply_checked_mul(
                                 nitems, _PLY_SIZE[p[4]], "list payload byte count"))
                             continue
                         end
-                        val, i = read_binary(bytes, i, types[c])
+                        val, i = read_binary(body, i, types[c])
                         val = _ply_checked_finite_vertex(val, v + 1, p[2])
                         if c == ix; positions[b3+1] = val
                         elseif c == iy; positions[b3+2] = val
@@ -1715,21 +1678,21 @@ function load_ply(path::String)
             if format == :ascii
                 nverts = length(positions) ÷ 3
                 for face_row in 1:ecount
-                    line_start, line_stop, i = _ply_line_bounds(bytes, i, n)
+                    line_start, line_stop, i = _ply_line_bounds(body, i, n)
                     p = line_start
                     for (prop_col, prop) in enumerate(props)
-                        first, last, p = _ply_next_ascii_token(bytes, p, line_stop)
+                        first, last, p = _ply_next_ascii_token(body, p, line_stop)
                         first != 0 ||
                             _ply_ascii_missing_property_error(
                                 "face", face_row, prop[2])
                         if prop[1] === :scalar
                             _ply_validate_ascii_property_value(
-                                bytes, first, last, "face", face_row,
+                                body, first, last, "face", face_row,
                                 prop[2], prop[3])
                             continue
                         end
                         raw_count = _ply_parse_ascii_face_float(
-                            bytes, first, last, face_row, :count)
+                            body, first, last, face_row, :count)
                         count_value = _ply_ascii_typed_value(
                             raw_count, prop[3], "face", face_row, prop[2])
                         nitems = checked_list_count(count_value)
@@ -1737,13 +1700,13 @@ function load_ply(path::String)
                         prev_idx = 0
                         for k in 1:nitems
                             first, last, p = _ply_next_ascii_token(
-                                bytes, p, line_stop)
+                                body, p, line_stop)
                             first != 0 ||
                                 _ply_ascii_missing_property_error(
                                     "face", face_row, prop[2])
                             if prop_col == list_col
                                 raw_index = _ply_parse_ascii_face_float(
-                                    bytes, first, last, face_row, :index, k)
+                                    body, first, last, face_row, :index, k)
                                 typed_index = _ply_ascii_typed_value(
                                     raw_index, prop[4], "face", face_row,
                                     prop[2], k)
@@ -1759,7 +1722,7 @@ function load_ply(path::String)
                                 end
                             else
                                 _ply_validate_ascii_property_value(
-                                    bytes, first, last, "face", face_row,
+                                    body, first, last, "face", face_row,
                                     prop[2], prop[4], k)
                             end
                         end
@@ -1770,10 +1733,10 @@ function load_ply(path::String)
                 for face_row in 1:ecount
                     for (prop_col, prop) in enumerate(props)
                         if prop[1] === :scalar
-                            _, i = read_binary(bytes, i, prop[3])
+                            _, i = read_binary(body, i, prop[3])
                             continue
                         end
-                        cnt, i = read_binary(bytes, i, prop[3])
+                        cnt, i = read_binary(body, i, prop[3])
                         # A signed count type (e.g. `char`) can decode negative;
                         # validate before consuming the declared list payload.
                         nitems = checked_list_count(cnt)
@@ -1786,7 +1749,7 @@ function load_ply(path::String)
                         first_idx = 0
                         prev_idx = 0
                         for k in 1:nitems
-                            val, i = read_binary(bytes, i, prop[4])
+                            val, i = read_binary(body, i, prop[4])
                             idx = checked_vertex_index(val, nverts) # 0-based
                             if k == 1
                                 first_idx = idx
@@ -1805,7 +1768,7 @@ function load_ply(path::String)
             # Unknown element: skip its rows so the byte cursor stays aligned.
             if format == :ascii
                 for _ in 0:ecount-1
-                    _, _, i = _ply_line_bounds(bytes, i, n)
+                    _, _, i = _ply_line_bounds(body, i, n)
                 end
             else
                 isempty(props) && continue
@@ -1814,7 +1777,7 @@ function load_ply(path::String)
                         if p[1] === :scalar
                             checked_binary_skip!(_PLY_SIZE[p[3]])
                         else
-                            cnt, i = read_binary(bytes, i, p[3])
+                            cnt, i = read_binary(body, i, p[3])
                             nitems = checked_list_count(cnt)
                             checked_binary_skip!(_ply_checked_mul(
                                 nitems, _PLY_SIZE[p[4]], "list payload byte count"))

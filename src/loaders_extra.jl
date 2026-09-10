@@ -497,10 +497,27 @@ function _png_store_palette_pixel!(img::Array{Float64,3}, row::Int, col::Int,
     return img
 end
 
-function _png_decode_palette_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
+@inline function _png_store_packed_pixel!(img, row, col, sample,
+                                          palette::Vector{UInt8}, transparency::Vector{UInt8},
+                                          channels::Int, maximum_sample::Float64)
+    return _png_store_palette_pixel!(img,row,col,sample,palette,transparency,channels)
+end
+
+@inline function _png_store_packed_pixel!(img, row, col, sample,
+                                          ::Nothing, transparency,
+                                          channels::Int, maximum_sample::Float64)
+    img[row,col,1] = sample/maximum_sample
+    if transparency !== nothing
+        img[row,col,2] = sample == transparency[1] ? 0.0 : 1.0
+    end
+    return nothing
+end
+
+function _png_decode_packed_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
                                             W::Int, H::Int, bitdepth::Int,
-                                            palette::Vector{UInt8},
-                                            trns::Vector{UInt8}, channels::Int)
+                                            palette,
+                                            transparency, channels::Int)
+    maximum_sample = Float64((1<<bitdepth)-1)
     stride = cld(W * bitdepth, 8)
     prev = zeros(UInt8, stride)
     cur = Vector{UInt8}(undef, stride)
@@ -513,17 +530,18 @@ function _png_decode_palette_noninterlaced!(img::Array{Float64,3}, raw::Vector{U
         _png_unfilter_scanline!(cur, prev, 1, ftype)
         for pcol in 0:(W - 1)
             idx = _png_packed_index(cur, pcol, bitdepth)
-            _png_store_palette_pixel!(img, row, pcol + 1, idx, palette, trns, channels)
+            _png_store_packed_pixel!(img, row, pcol + 1, idx, palette, transparency, channels, maximum_sample)
         end
         cur, prev = prev, cur
     end
     return img
 end
 
-function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
+function _png_decode_packed_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
                                     W::Int, H::Int, bitdepth::Int,
-                                    palette::Vector{UInt8},
-                                    trns::Vector{UInt8}, channels::Int)
+                                    palette,
+                                    transparency, channels::Int)
+    maximum_sample = Float64((1<<bitdepth)-1)
     p = 1
     @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
         pass_w = _png_pass_size(W, x0, xstep)
@@ -542,7 +560,7 @@ function _png_decode_palette_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
             for pcol in 0:(pass_w - 1)
                 col = x0 + pcol * xstep + 1
                 idx = _png_packed_index(cur, pcol, bitdepth)
-                _png_store_palette_pixel!(img, row, col, idx, palette, trns, channels)
+                _png_store_packed_pixel!(img, row, col, idx, palette, transparency, channels, maximum_sample)
             end
             cur, prev = prev, cur
         end
@@ -633,9 +651,9 @@ end
 """
     load_png(path) -> Array{Float64,3}
 
-Decode an 8-bit or 16-bit PNG (grayscale, grayscale+alpha, RGB, RGBA, or palette) to an H×W×C array in [0,1].
-Implements full INFLATE (stored/fixed/dynamic Huffman), all five PNG filters,
-and Adam7 interlacing for supported 8-bit and 16-bit color types.
+Decode PNG grayscale at 1/2/4/8/16 bits, indexed color at 1/2/4/8 bits, and
+RGB or explicit alpha formats at 8/16 bits into an H×W×C array in [0,1].
+Supports full INFLATE, all five filters, Adam7 interlacing, and tRNS transparency.
 """
 function _decode_png(bytes::AbstractVector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
@@ -739,25 +757,32 @@ function _decode_png(bytes::AbstractVector{UInt8})
     seen_idat || error("PNG IDAT chunk is missing")
     seen_iend || error("PNG IEND chunk is missing")
     (interlace == 0 || interlace == 1) || error("unsupported PNG interlace method $interlace")
-    if colortype == 3
-        bitdepth in (1, 2, 4, 8) || error("unsupported PNG palette bit depth $bitdepth")
-        (!isempty(palette) && length(palette) % 3 == 0 && length(palette) <= 768) ||
-            error("PNG palette is missing or malformed")
-        length(trns) <= length(palette) ÷ 3 ||
-            error("PNG tRNS palette alpha data is longer than the palette")
-        palette_bitdepth = Int(bitdepth)
-        channels = isempty(trns) ? 3 : 4
-        expected = _png_expected_raw_size(W, H, palette_bitdepth, interlace)
-        idat_payload = _png_idat_payload(bytes, idat, idat_start, idat_len)
-        raw = _png_inflate_exact_scanlines(idat_payload, expected)
-        img = Array{Float64}(undef, H, W, channels)
+    if colortype == 3 || (colortype == 0 && bitdepth in (1,2,4))
+        if colortype == 3
+            bitdepth in (1,2,4,8) || error("unsupported PNG palette bit depth $bitdepth")
+            (!isempty(palette) && length(palette)%3 == 0 && length(palette)<=768) ||
+                error("PNG palette is missing or malformed")
+            length(trns)<=length(palette)÷3 ||
+                error("PNG tRNS palette alpha data is longer than the palette")
+            pixel_palette = palette
+            transparency = trns
+            channels = isempty(trns) ? 3 : 4
+        else
+            pixel_palette = nothing
+            transparency = _png_transparent_samples(trns,seen_trns,colortype,Int(bitdepth))
+            channels = transparency === nothing ? 1 : 2
+        end
+        packed_depth = Int(bitdepth)
+        expected = _png_expected_raw_size(W,H,packed_depth,interlace)
+        idat_payload = _png_idat_payload(bytes,idat,idat_start,idat_len)
+        raw = _png_inflate_exact_scanlines(idat_payload,expected)
+        img = Array{Float64}(undef,H,W,channels)
         return interlace == 0 ?
-               _png_decode_palette_noninterlaced!(img, raw, W, H, palette_bitdepth,
-                                                   palette, trns, channels) :
-               _png_decode_palette_adam7!(img, raw, W, H, palette_bitdepth,
-                                          palette, trns, channels)
+               _png_decode_packed_noninterlaced!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels) :
+               _png_decode_packed_adam7!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels)
     end
-    (bitdepth == 8 || bitdepth == 16) || error("only 8-bit and 16-bit PNG decode is supported")
+    (bitdepth == 8 || bitdepth == 16) ||
+        error("unsupported PNG bit depth $bitdepth for color type $colortype")
     channels = colortype == 0 ? 1 : colortype == 2 ? 3 : colortype == 4 ? 2 :
                colortype == 6 ? 4 :
                error("unsupported PNG color type $colortype")
@@ -3073,20 +3098,21 @@ function _font_parse_outline(outline::AbstractString, char::String)
                                         [Vec2(x, y)]))
         elseif cmd == "q"
             need(4, cmd)
-            c = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "control x"),
-                     _font_outline_parse_float(tokens[i + 1], char, cmd, "control y"))
-            p = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "x"),
-                     _font_outline_parse_float(tokens[i + 3], char, cmd, "y"))
+            # Typeface outlines store the endpoint before the control points.
+            p = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "x"),
+                     _font_outline_parse_float(tokens[i + 1], char, cmd, "y"))
+            c = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "control x"),
+                     _font_outline_parse_float(tokens[i + 3], char, cmd, "control y"))
             i += 4
             push!(commands, FontCommand(:quadratic, [c, p]))
         elseif cmd == "b"
             need(6, cmd)
-            c1 = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "control 1 x"),
-                      _font_outline_parse_float(tokens[i + 1], char, cmd, "control 1 y"))
-            c2 = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "control 2 x"),
-                      _font_outline_parse_float(tokens[i + 3], char, cmd, "control 2 y"))
-            p = Vec2(_font_outline_parse_float(tokens[i + 4], char, cmd, "x"),
-                     _font_outline_parse_float(tokens[i + 5], char, cmd, "y"))
+            p = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "x"),
+                     _font_outline_parse_float(tokens[i + 1], char, cmd, "y"))
+            c1 = Vec2(_font_outline_parse_float(tokens[i + 2], char, cmd, "control 1 x"),
+                      _font_outline_parse_float(tokens[i + 3], char, cmd, "control 1 y"))
+            c2 = Vec2(_font_outline_parse_float(tokens[i + 4], char, cmd, "control 2 x"),
+                      _font_outline_parse_float(tokens[i + 5], char, cmd, "control 2 y"))
             i += 6
             push!(commands, FontCommand(:bezier, [c1, c2, p]))
         else
@@ -3392,7 +3418,14 @@ function _font_loop_groups(loops::Vector{Vector{Vec2{Float64}}})
         direct_parent[i] = best
     end
     for i in eachindex(clean)
-        direct_parent[i] == 0 || continue
+        depth = 0
+        parent = direct_parent[i]
+        while parent != 0
+            depth += 1
+            parent = direct_parent[parent]
+        end
+        # A contour inside a hole is filled again and owns its own holes.
+        iseven(depth) || continue
         outer = _font_orient_loop(clean[i], true)
         holes = Vector{Vec2{Float64}}[]
         for j in eachindex(clean)
@@ -3509,6 +3542,18 @@ function _font_triangulate_simple(poly::Vector{Vec2{Float64}})
             end
             contains && continue
             push!(tris, (ip, ic, inext))
+            deleteat!(remaining, pos)
+            clipped = true
+            break
+        end
+        clipped && continue
+        # Repeated collinear boundary runs can block every remaining ear even
+        # though they enclose no area. Remove such a vertex before retrying.
+        for pos in eachindex(remaining)
+            ip = remaining[pos == 1 ? end : pos - 1]
+            ic = remaining[pos]
+            inext = remaining[pos == length(remaining) ? 1 : pos + 1]
+            iszero(_shape_turn(points[ip], points[ic], points[inext])) || continue
             deleteat!(remaining, pos)
             clipped = true
             break
@@ -4139,10 +4184,10 @@ function _svg_style_declarations(raw::AbstractString)
     return attrs
 end
 
-function _svg_drop_ascii_prefix(s::String, n::Integer)
+function _svg_drop_prefix_bytes(s::String, n::Integer)
     n <= 0 && return s
     n >= ncodeunits(s) && return ""
-    return s[nextind(s, firstindex(s), n):end]
+    return s[nextind(s, n):end]
 end
 
 function _svg_unquote_css_attr_value(raw::AbstractString)
@@ -4415,7 +4460,7 @@ function _svg_pseudo_selector(rest::String)
     m = match(r"^:([A-Za-z-]+)", rest)
     m === nothing && return nothing
     name = lowercase(m.captures[1])
-    after = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
+    after = _svg_drop_prefix_bytes(rest, ncodeunits(m.match))
     if name == "root"
         startswith(after, "(") && return nothing
         return _SVGPseudoSelector(:root, 0, 0, "", 10), after
@@ -4462,13 +4507,13 @@ function _svg_simple_selector(selector::AbstractString)
     attributes = _SVGAttributeSelector[]
     pseudos = _SVGPseudoSelector[]
     if startswith(rest, "*")
-        rest = _svg_drop_ascii_prefix(rest, 1)
+        rest = _svg_drop_prefix_bytes(rest, 1)
     elseif !startswith(rest, ".") && !startswith(rest, "#") &&
            !startswith(rest, "[") && !startswith(rest, ":")
         m = match(r"^[A-Za-z][A-Za-z0-9_-]*", rest)
         m === nothing && return nothing
         tag = lowercase(m.match)
-        rest = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
+        rest = _svg_drop_prefix_bytes(rest, ncodeunits(m.match))
     end
 
     while !isempty(rest)
@@ -4480,7 +4525,7 @@ function _svg_simple_selector(selector::AbstractString)
             attr = _svg_attribute_selector(content)
             attr === nothing && return nothing
             push!(attributes, attr)
-            rest = _svg_drop_ascii_prefix(rest, close_idx)
+            rest = _svg_drop_prefix_bytes(rest, close_idx)
         elseif prefix == ':'
             parsed = _svg_pseudo_selector(rest)
             parsed === nothing && return nothing
@@ -4497,7 +4542,7 @@ function _svg_simple_selector(selector::AbstractString)
             else
                 push!(classes, name)
             end
-            rest = _svg_drop_ascii_prefix(rest, ncodeunits(m.match))
+            rest = _svg_drop_prefix_bytes(rest, ncodeunits(m.match))
         end
     end
 
@@ -4597,21 +4642,40 @@ function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
     return true
 end
 
-struct _SVGElementContext
+# Reference links avoid copying every ancestor and preceding sibling. The
+# context fields are fixed at construction; only the parser's sibling state grows.
+mutable struct _SVGElementContext
     tag::String
     attrs::Dict{String,String}
-    ancestors::Vector{_SVGElementContext}
-    previous_siblings::Vector{_SVGElementContext}
+    parent::Union{Nothing,_SVGElementContext}
+    previous_sibling::Union{Nothing,_SVGElementContext}
+    child_index::Int
+    type_index::Int
 end
 
+mutable struct _SVGSiblingState
+    last::Union{Nothing,_SVGElementContext}
+    count::Int
+    type_counts::Dict{String,Int}
+end
+_SVGSiblingState() = _SVGSiblingState(nothing,0,Dict{String,Int}())
+
 const _SVGAncestorStack = Vector{_SVGElementContext}
-const _SVGSiblingStack = Vector{Vector{_SVGElementContext}}
+const _SVGSiblingStack = Vector{_SVGSiblingState}
 
 function _svg_element_context(tag::String, attrs::AbstractDict,
                               ancestors::_SVGAncestorStack,
-                              siblings::Vector{_SVGElementContext})
-    return _SVGElementContext(tag, Dict{String,String}(attrs),
-                              copy(ancestors), copy(siblings))
+                              siblings::_SVGSiblingState)
+    parent = isempty(ancestors) ? nothing : ancestors[end]
+    return _SVGElementContext(tag,Dict{String,String}(attrs),parent,siblings.last,
+                              siblings.count+1,get(siblings.type_counts,tag,0)+1)
+end
+
+function _svg_record_sibling!(siblings::_SVGSiblingState, context::_SVGElementContext)
+    siblings.last = context
+    siblings.count = context.child_index
+    siblings.type_counts[context.tag] = context.type_index
+    return nothing
 end
 
 function _svg_context_matches(selector::_SVGSimpleSelector,
@@ -4646,11 +4710,10 @@ end
 
 function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
                                       context::_SVGElementContext)
-    child_index = length(context.previous_siblings) + 1
-    type_index = count(sibling -> sibling.tag == context.tag,
-                       context.previous_siblings) + 1
+    child_index = context.child_index
+    type_index = context.type_index
     if pseudo.name === :root
-        return isempty(context.ancestors)
+        return context.parent === nothing
     elseif pseudo.name === :first_child
         return child_index == 1
     elseif pseudo.name === :nth_child
@@ -4669,47 +4732,48 @@ function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
     return false
 end
 
-function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
-    _svg_context_matches(rule.chain[end], context) || return false
-    current = context
-    for selector_idx in (length(rule.chain) - 1):-1:1
-        selector = rule.chain[selector_idx]
-        combinator = rule.combinators[selector_idx]
+function _svg_rule_matches_from(rule::_SVGStyleRule, current::_SVGElementContext,
+                                  selector_index::Int, failed)
+    state = (selector_index,current)
+    failed !== nothing && state in failed && return false
+    while true
+        _svg_context_matches(rule.chain[selector_index],current) || break
+        selector_index == 1 && return true
+        combinator = rule.combinators[selector_index-1]
+        selector_index -= 1
         if combinator === :child
-            isempty(current.ancestors) && return false
-            parent = current.ancestors[end]
-            _svg_context_matches(selector, parent) || return false
-            current = parent
-        elseif combinator === :descendant
-            found = false
-            for ancestor in Iterators.reverse(current.ancestors)
-                if _svg_context_matches(selector, ancestor)
-                    found = true
-                    current = ancestor
-                    break
-                end
-            end
-            found || return false
+            current.parent === nothing && break
+            current = current.parent
         elseif combinator === :adjacent
-            isempty(current.previous_siblings) && return false
-            sibling = current.previous_siblings[end]
-            _svg_context_matches(selector, sibling) || return false
-            current = sibling
-        elseif combinator === :sibling
-            found = false
-            for sibling in Iterators.reverse(current.previous_siblings)
-                if _svg_context_matches(selector, sibling)
-                    found = true
-                    current = sibling
-                    break
-                end
+            current.previous_sibling === nothing && break
+            current = current.previous_sibling
+        elseif combinator === :descendant
+            ancestor = current.parent
+            while ancestor !== nothing
+                _svg_rule_matches_from(rule,ancestor,selector_index,failed) && return true
+                ancestor = ancestor.parent
             end
-            found || return false
+            break
+        elseif combinator === :sibling
+            sibling = current.previous_sibling
+            while sibling !== nothing
+                _svg_rule_matches_from(rule,sibling,selector_index,failed) && return true
+                sibling = sibling.previous_sibling
+            end
+            break
         else
-            return false
+            break
         end
     end
-    return true
+    failed === nothing || push!(failed,state)
+    return false
+end
+
+function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
+    has_choices = any(combinator -> combinator === :descendant || combinator === :sibling,
+                      rule.combinators)
+    failed = has_choices ? Set{Tuple{Int,_SVGElementContext}}() : nothing
+    return _svg_rule_matches_from(rule,context,length(rule.chain),failed)
 end
 
 function _svg_css_attrs(tag::String, attrs::AbstractDict,
@@ -4717,7 +4781,7 @@ function _svg_css_attrs(tag::String, attrs::AbstractDict,
                         context::Union{Nothing,_SVGElementContext}=nothing)
     match_context = context === nothing ?
                     _svg_element_context(tag, attrs, _SVGAncestorStack(),
-                                         _SVGElementContext[]) :
+                                         _SVGSiblingState()) :
                     context
     out = Dict{String,String}()
     for rule in sort([rule for rule in rules
@@ -7572,6 +7636,10 @@ function _svg_path_points(raw::AbstractString, segments::Int)
         elseif upper == 'Z'
             finish!(true)
             current = start
+            # Closepath has no implicit coordinate form. A later explicit
+            # drawing command starts a new subpath at the closed origin.
+            cmd = '\0'
+            active = [current]
             last_cubic_control = nothing
             last_quadratic_control = nothing
         else
@@ -7599,7 +7667,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     clip_stack = [_SVGClipApplication[]]
     mask_stack = [_SVGClipApplication[]]
     ancestor_stack = _SVGAncestorStack()
-    sibling_stack = _SVGSiblingStack([_SVGElementContext[]])
+    sibling_stack = _SVGSiblingStack([_SVGSiblingState()])
     css_rules = _svg_css_rules(raw)
     definitions = Dict{String,Vector{SVGPath}}()
     clip_definitions = Dict{String,_SVGClipDefinition}()
@@ -7685,7 +7753,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             else
                 context = _svg_element_context(tag, attrs, ancestor_stack,
                                                sibling_stack[end])
-                push!(sibling_stack[end], context)
+                _svg_record_sibling!(sibling_stack[end], context)
                 if self_closing && tag == "clippath" && haskey(attrs, "id")
                     clip_definitions[attrs["id"]] =
                         _SVGClipDefinition(SVGPath[],
@@ -7760,7 +7828,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                     push!(clip_stack, child_clip_ids)
                     push!(mask_stack, child_mask_ids)
                     push!(ancestor_stack, context)
-                    push!(sibling_stack, _SVGElementContext[])
+                    push!(sibling_stack, _SVGSiblingState())
                     definition = if tag == "clippath"
                         _SVGContainerDefinition(:clip, get(attrs, "id", nothing),
                                                 _svg_clip_path_units(attrs),
@@ -7799,7 +7867,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             _svg_display_visibility(display_stack[end], visibility_stack[end],
                                     attrs, css_rules, tag, context)
         if tag == "use" && (!display_ok || visibility !== :visible)
-            push!(sibling_stack[end], context)
+            _svg_record_sibling!(sibling_stack[end], context)
             continue
         end
         clip_applications = copy(clip_stack[end])
@@ -7885,11 +7953,11 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         end
         append!(container_paths_stack[end], element_paths)
         if !display_ok || visibility !== :visible
-            push!(sibling_stack[end], context)
+            _svg_record_sibling!(sibling_stack[end], context)
             continue
         end
         append!(paths, element_paths)
-        push!(sibling_stack[end], context)
+        _svg_record_sibling!(sibling_stack[end], context)
     end
 
     return SVGDocument(width, height, paths)
@@ -8868,7 +8936,7 @@ function _gltf_checked_component_type(raw, label::String)
     return _gltf_checked_integer(raw, "$label componentType")
 end
 
-# Read accessor `ai` (0-based) as a vector of Float64 tuples / scalars.
+# Read accessor `ai` (0-based) as flat Float64 components and its shape.
 function _gltf_accessor(gltf, buffers, ai::Int)
     accessors = gltf["accessors"]
     0 <= ai < length(accessors) || error("glTF accessor index $ai out of bounds")
@@ -8883,10 +8951,12 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     compbytes = _gltf_component_bytes(ctype)
     out_len = _checked_mul_int(count, ncomp, "glTF accessor output length")
     _checked_mul_int(out_len, sizeof(Float64), "glTF accessor output byte size")
+    element = _gltf_accessor_element_layout(typ, ncomp, compbytes)
 
     dense_layout = if dense_payload
         _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp, ctype, count,
-                                     "accessor")
+                                     "accessor"; element_size=element.size,
+                                     element_stride=element.stride, alignment=element.alignment)
     else
         nothing
     end
@@ -8907,11 +8977,12 @@ function _gltf_accessor(gltf, buffers, ai::Int)
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes = _gltf_component_bytes(ictype)
-        vstride = _checked_mul_int(ncomp, compbytes, "glTF sparse accessor value size")
+        vstride = element.stride
         ibuf, ioffset = _gltf_sparse_buffer_layout(
             gltf, buffers, indices_def, scount, icompbytes, "sparse indices")
         vbuf, voffset = _gltf_sparse_buffer_layout(
-            gltf, buffers, values_def, scount, vstride, "sparse values")
+            gltf, buffers, values_def, scount, element.size, "sparse values";
+            stride=vstride, alignment=element.alignment)
         sparse_layout = (scount, ictype, icompbytes, vstride,
                          ibuf, ioffset, vbuf, voffset)
     end
@@ -8921,32 +8992,66 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     if dense_layout !== nothing
         buf, offset, stride = dense_layout
         _gltf_read_accessor_payload!(out, buf, offset, count, ncomp, ctype, stride,
-                                     normalized)
+                                     normalized, element.offsets)
     end
 
     if sparse_layout !== nothing
         scount, ictype, icompbytes, vstride, ibuf, ioffset, vbuf, voffset =
             sparse_layout
-        prev_idx = -1
-        for s in 0:scount-1
-            raw_idx = _gltf_read_unsigned_index_component(
-                ibuf, ioffset + s * icompbytes, ictype, "sparse accessor index")
-            raw_idx <= UInt64(typemax(Int)) ||
-                error("glTF sparse accessor index is outside the supported integer range")
-            idx = Int(raw_idx)
-            0 <= idx < count || error("glTF sparse accessor index $idx out of bounds")
-            idx > prev_idx || error("glTF sparse accessor indices must be strictly increasing")
-            prev_idx = idx
-            src = voffset + s * vstride
-            dst = idx * ncomp
-            for c in 0:ncomp-1
-                out[dst + c + 1] = _gltf_read_component(
-                    vbuf, src + c * compbytes, ctype, normalized)
-            end
-        end
+        _gltf_apply_sparse_accessor!(out, ncomp, count, ctype, normalized, element.offsets,
+                                     scount, ictype, icompbytes, vstride,
+                                     ibuf, ioffset, vbuf, voffset)
     end
     return (out, ncomp, count)
 end
+
+function _gltf_apply_sparse_accessor!(out::Vector{Float64}, ncomp::Int, count::Int,
+                                      ctype::Int, normalized::Bool, component_offsets::O,
+                                      scount::Int, ictype::Int, icompbytes::Int, vstride::Int,
+                                      ibuf::AbstractVector{UInt8}, ioffset::Int,
+                                      vbuf::AbstractVector{UInt8}, voffset::Int) where {O}
+    prev_idx = -1
+    for s in 0:scount-1
+        raw_idx = _gltf_read_unsigned_index_component(
+            ibuf, ioffset + s * icompbytes, ictype, "sparse accessor index")
+        raw_idx <= UInt64(typemax(Int)) ||
+            error("glTF sparse accessor index is outside the supported integer range")
+        idx = Int(raw_idx)
+        0 <= idx < count || error("glTF sparse accessor index $idx out of bounds")
+        idx > prev_idx || error("glTF sparse accessor indices must be strictly increasing")
+        prev_idx = idx
+        src = voffset + s * vstride
+        dst = idx * ncomp
+        _gltf_read_accessor_payload!(out, vbuf, src, 1, ncomp, ctype, vstride,
+                                     normalized, component_offsets, dst)
+    end
+    return out
+end
+
+function _gltf_accessor_element_layout(typ::String, ncomp::Int, compbytes::Int)
+    rows = typ == "MAT2" ? 2 : typ == "MAT3" ? 3 : typ == "MAT4" ? 4 : 0
+    size = ncomp * compbytes
+    alignment = rows == 0 ? 1 : 4
+    rows == 0 && return (offsets=nothing, size=size, stride=size, alignment=alignment)
+    # glTF matrix columns begin on four-byte boundaries. Padding after the
+    # final column affects the next element's stride, but is not required in
+    # the final element's byte extent.
+    column_size = rows * compbytes
+    column_stride = cld(column_size, 4) * 4
+    column_size == column_stride &&
+        return (offsets=nothing, size=size, stride=size, alignment=alignment)
+    offsets = ntuple(ncomp) do i
+        column, row = divrem(i - 1, rows)
+        column * column_stride + row * compbytes
+    end
+    return (offsets=offsets, size=offsets[end]+compbytes,
+            stride=rows*column_stride, alignment=alignment)
+end
+
+@inline _gltf_accessor_component_offset(::Nothing, component::Int, compbytes::Int) =
+    component * compbytes
+@inline _gltf_accessor_component_offset(offsets::Tuple, component::Int, compbytes::Int) =
+    offsets[component + 1]
 
 function _gltf_component_bytes(ctype::Int)
     ctype == 5120 && return 1  # BYTE
@@ -8998,17 +9103,25 @@ end
 
 function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::AbstractVector{UInt8}, offset::Int,
                                       count::Int, ncomp::Int, ctype::Int, stride::Int,
-                                      normalized::Bool)
+                                      normalized::Bool, component_offsets::O=nothing,
+                                      out_offset::Int=0) where {O}
     compbytes = _gltf_component_bytes(ctype)
     for e in 0:count-1
         base_offset = offset + e * stride
-        base = e * ncomp
+        base = out_offset + e * ncomp
         for c in 0:ncomp-1
-            out[base + c + 1] = _gltf_read_component(buf, base_offset + c * compbytes,
-                                                     ctype, normalized)
+            component_offset = _gltf_accessor_component_offset(component_offsets, c, compbytes)
+            out[base + c + 1] = _gltf_read_component(buf, base_offset + component_offset,
+                                                   ctype, normalized)
         end
     end
     return out
+end
+
+function _gltf_check_column_alignment(offset::Int, alignment::Int, label::String)
+    offset % alignment == 0 ||
+        error("glTF $label must preserve $alignment-byte column alignment")
+    return nothing
 end
 
 function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
@@ -9033,7 +9146,8 @@ end
 
 function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
                                     count::Int, element_size::Int,
-                                    label::String)::Tuple{AbstractVector{UInt8},Int}
+                                    label::String; stride::Int=element_size,
+                                    alignment::Int=1)::Tuple{AbstractVector{UInt8},Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
     bv = buffer_views[_gltf_checked_index(sparse_def["bufferView"],
                                           length(buffer_views),
@@ -9054,14 +9168,19 @@ function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
         get(sparse_def, "byteOffset", 0.0), "$label byteOffset")
     payload_offset <= view_len ||
         error("glTF $label byteOffset exceeds bufferView byteLength")
-    span = _gltf_checked_accessor_span(count, element_size, element_size, label)
+    span = _gltf_checked_accessor_span(count, element_size, stride, label)
     span <= view_len - payload_offset ||
         error("glTF $label payload exceeds bufferView byteLength")
-    return buf, _gltf_checked_byte_end(view_offset, payload_offset, "$label offset")
+    offset = _gltf_checked_byte_end(view_offset, payload_offset, "$label offset")
+    _gltf_check_column_alignment(offset, alignment, "$label offset")
+    return buf, offset
 end
 
 function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int,
-                                      count::Int, label::String)::Tuple{AbstractVector{UInt8},Int,Int}
+                                      count::Int, label::String;
+                                      element_size::Int=ncomp * _gltf_component_bytes(ctype),
+                                      element_stride::Int=element_size,
+                                      alignment::Int=1)::Tuple{AbstractVector{UInt8},Int,Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
     bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views),
                                           "$label bufferView") + 1]::AbstractDict
@@ -9079,22 +9198,23 @@ function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int
     accessor_offset <= view_len ||
         error("glTF $label accessor byteOffset exceeds bufferView byteLength")
     compbytes::Int = _gltf_component_bytes(ctype)
-    element_size::Int = ncomp * compbytes
     raw_stride::Int = _gltf_checked_nonnegative_integer(get(bv, "byteStride", 0.0),
                                                         "bufferView byteStride")
-    stride::Int = raw_stride == 0 ? element_size : raw_stride
-    stride >= element_size ||
+    stride::Int = raw_stride == 0 ? element_stride : raw_stride
+    stride >= element_stride ||
         error("glTF bufferView byteStride is smaller than accessor element size")
     stride % compbytes == 0 ||
         error("glTF bufferView byteStride must be a multiple of component size")
+    _gltf_check_column_alignment(stride, alignment, "$label stride")
     span::Int = _gltf_checked_accessor_span(count, element_size, stride, label)
     if span > view_len - accessor_offset
         error(label == "accessor" ?
               "glTF accessor exceeds bufferView byteLength" :
               "glTF $label accessor exceeds bufferView byteLength")
     end
-    return buf, _gltf_checked_byte_end(view_offset, accessor_offset,
-                                       "$label accessor offset"), stride
+    offset = _gltf_checked_byte_end(view_offset, accessor_offset, "$label accessor offset")
+    _gltf_check_column_alignment(offset, alignment, "$label offset")
+    return buf, offset, stride
 end
 
 @inline function _gltf_read_unsigned_index_component(buf::AbstractVector{UInt8},
@@ -9455,8 +9575,6 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     images = get(gltf, "images", Any[])
     source_idx = _gltf_checked_index(texdef["source"], length(images), "texture source")
     imgdef = images[source_idx + 1]
-    bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
-    bytes === nothing && return nothing
     sampler = if haskey(texdef, "sampler")
         samplers = get(gltf, "samplers", Any[])
         sampler_idx = _gltf_checked_index(texdef["sampler"], length(samplers),
@@ -9483,12 +9601,13 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     if texture_cache !== nothing && haskey(texture_cache, cache_key)
         return texture_cache[cache_key]
     end
+    bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
+    bytes === nothing && return nothing
     data = _gltf_decode_image(bytes, mime)
     # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
     # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
     # raw glTF UVs sample correctly — the flipY=false equivalent of three.js
-    # GLTFLoader. KHR_texture_transform stays correct because
-    # `texture_transform_uv` runs on the untouched glTF-space UVs.
+    # GLTFLoader. Texture transforms then operate on the untouched glTF UVs.
     reverse!(data; dims=1)
     tex = Texture(data;
                   wrap_s=wrap_s,
@@ -9501,16 +9620,32 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
                   repeat=scale,
                   rotation=rotation,
                   tex_coord=tex_coord)
+    if !iszero(rotation)
+        # glTF rotates scaled UV axes; Texture's editable defaults scale after
+        # rotation. Retain authored fields for inspection and store the glTF
+        # transform in the existing manual-matrix representation.
+        cosine,sine = cos(rotation),sin(rotation)
+        tex.matrix_auto_update = false
+        tex.matrix = Mat3{Float64}((
+            scale.x*cosine, scale.y*sine, offset.x,
+            -scale.x*sine, scale.y*cosine, offset.y,
+            0.0, 0.0, 1.0))
+    end
     _gltf_uses_mipmaps(min_filter) && generate_mipmaps!(tex)
     texture_cache !== nothing && (texture_cache[cache_key] = tex)
     return tex
 end
 
 function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
-    mi === nothing && return MeshStandardMaterial()
-    materials = get(gltf, "materials", Any[])
-    material_idx = _gltf_checked_index(mi, length(materials), "material")
-    m = materials[material_idx + 1]
+    # An omitted reference is decoded as an empty glTF material with the
+    # format's schema defaults.
+    m = if mi === nothing
+        Dict{String,Any}()
+    else
+        materials = get(gltf, "materials", Any[])
+        material_idx = _gltf_checked_index(mi, length(materials), "material")
+        materials[material_idx + 1]
+    end
     pbr = get(m, "pbrMetallicRoughness", Dict{String,Any}())
     extensions = get(m, "extensions", Dict{String,Any}())
     bc = _gltf_checked_number_tuple(get(pbr, "baseColorFactor", [1.0,1.0,1.0,1.0]),
@@ -9616,6 +9751,9 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
         sheen_color_factor = _gltf_checked_number_tuple(
             get(sheen_ext, "sheenColorFactor", [0.0, 0.0, 0.0]),
             3, "sheenColorFactor")
+        for component in sheen_color_factor
+            _validated_material_unit_interval(component, :sheenColorFactor)
+        end
         attenuation_color = _gltf_checked_number_tuple(
             get(volume_ext, "attenuationColor", [1.0, 1.0, 1.0]),
             3, "attenuationColor")
@@ -9679,7 +9817,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                                              attenuation_color[3]),
                                     ior=_gltf_checked_finite_number(get(ior_ext, "ior", 1.5),
                                                                     "ior"),
-                                    sheen=maximum(sheen_color_factor),
+                                    sheen=haskey(extensions, "KHR_materials_sheen") ? 1.0 : 0.0,
                                     sheen_color=Color3(sheen_color_factor[1],
                                                        sheen_color_factor[2],
                                                        sheen_color_factor[3]),
@@ -9696,8 +9834,8 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                     iridescence_ior=_gltf_checked_finite_number(
                                         get(iridescence_ext, "iridescenceIor", 1.3),
                                         "iridescenceIor"),
-                                    iridescence_thickness=_stable_midpoint(
-                                        thickness_min, thickness_max),
+                                    iridescence_thickness=thickness_max,
+                                    iridescence_thickness_min=thickness_min,
                                     iridescence_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceTexture", nothing);
                                                                   colorspace=:linear, texture_cache=texture_cache),
                                     iridescence_thickness_map=_gltf_texture(gltf, buffers, dir, get(iridescence_ext, "iridescenceThicknessTexture", nothing);
@@ -9838,6 +9976,7 @@ function _gltf_enable_vertex_colors(m::MeshPhysicalMaterial)
                          sheen_color=m.sheen_color, sheen_roughness=m.sheen_roughness,
                          iridescence=m.iridescence, iridescence_ior=m.iridescence_ior,
                          iridescence_thickness=m.iridescence_thickness,
+                         iridescence_thickness_min=m.iridescence_thickness_min,
                          light_map=m.light_map, clearcoat_map=m.clearcoat_map,
                          clearcoat_roughness_map=m.clearcoat_roughness_map,
                          transmission_map=m.transmission_map, thickness=m.thickness,
@@ -10032,16 +10171,7 @@ function _gltf_validate_node_matrix_trs(matrix::Mat4{Float64})
     return nothing
 end
 
-function _gltf_node_matrix(node)
-    if haskey(node, "matrix")
-        any(name -> haskey(node, name),
-            ("translation", "rotation", "scale")) &&
-            error("glTF node matrix must not be combined with translation, rotation, or scale")
-        m = _gltf_checked_number_tuple(node["matrix"], 16, "node matrix")
-        matrix = Mat4{Float64}(m)
-        _gltf_validate_node_matrix_trs(matrix)
-        return matrix
-    end
+function _gltf_node_trs(node)
     t = _gltf_checked_number_tuple(get(node, "translation", [0.0,0.0,0.0]),
                                    3, "node translation")
     r = _gltf_checked_number_tuple(get(node, "rotation", [0.0,0.0,0.0,1.0]),
@@ -10054,10 +10184,28 @@ function _gltf_node_matrix(node)
         error("glTF node rotation must be a unit quaternion")
     q = Quaternion(r[1] / rotation_length, r[2] / rotation_length,
                    r[3] / rotation_length, r[4] / rotation_length)
-    T = mat4_translation(t[1], t[2], t[3])
-    R = quat_to_mat4(q)
-    S = mat4_scaling(s[1], s[2], s[3])
-    return T * R * S
+    return Vec3(t...), q, Vec3(s...)
+end
+
+function _gltf_node_matrix(node)
+    if haskey(node, "matrix")
+        any(name -> haskey(node, name),
+            ("translation", "rotation", "scale")) &&
+            error("glTF node matrix must not be combined with translation, rotation, or scale")
+        values = _gltf_checked_number_tuple(node["matrix"], 16, "node matrix")
+        matrix = Mat4{Float64}(values)
+        _gltf_validate_node_matrix_trs(matrix)
+        return matrix
+    end
+    position, rotation, scale = _gltf_node_trs(node)
+    return mat4_translation(position.x, position.y, position.z) *
+           quat_to_mat4(rotation) * mat4_scaling(scale.x, scale.y, scale.z)
+end
+
+function _gltf_node_pose(node)
+    haskey(node, "matrix") && return _gltf_decompose(_gltf_node_matrix(node))
+    position, rotation, scale = _gltf_node_trs(node)
+    return position, _transform_quaternion_to_euler(rotation, :XYZ), scale
 end
 
 function _gltf_instance_attribute(gltf, buffers, attrs, name::String, ncomp::Int)
@@ -10114,10 +10262,8 @@ function _gltf_instance_matrices(gltf, buffers, node)
     return matrices
 end
 
-# Decompose a column-major TRS matrix `M` into (position, rotation::Euler{:XYZ},
-# scale), matching three.js `Matrix4.decompose` + `Euler.setFromRotationMatrix`
-# (order XYZ). Returned components recompose as T*R*S exactly as
-# `compute_local_matrix`.
+# Decompose a validated TRS matrix. Missing zero-scale axes admit several
+# rotations; complete a proper orthonormal basis that preserves the matrix.
 function _gltf_decompose(M::Mat4)
     position = Vec3(mat4_get(M,1,4), mat4_get(M,2,4), mat4_get(M,3,4))
     # Column vectors of the upper-left 3x3.
@@ -10125,41 +10271,41 @@ function _gltf_decompose(M::Mat4)
     c2 = Vec3(mat4_get(M,1,2), mat4_get(M,2,2), mat4_get(M,3,2))
     c3 = Vec3(mat4_get(M,1,3), mat4_get(M,2,3), mat4_get(M,3,3))
     sx = norm(c1); sy = norm(c2); sz = norm(c3)
-    # Negative determinant means a reflected basis; three.js folds the sign into sx
-    # only (NOT the column): dividing the original column by the now-negative sx
-    # below yields a proper rotation whose recomposition T*R*S reproduces M. Also
-    # negating c1 here would cancel that and silently drop the reflection.
-    det = dot(c1, cross(c2, c3))
-    if det < 0
-        sx = -sx
-    end
-    # Pure-rotation columns (guard against zero scale).
-    isx = sx == 0 ? zero(sx) : one(sx)/sx
-    isy = sy == 0 ? zero(sy) : one(sy)/sy
-    isz = sz == 0 ? zero(sz) : one(sz)/sz
-    r1 = c1 * isx; r2 = c2 * isy; r3 = c3 * isz
-    # R indexed [row, col]: column r1 -> (R11,R21,R31), r2 -> (R12,R22,R32),
-    # r3 -> (R13,R23,R33).
-    R11 = r1.x
-    R12 = r2.x; R22 = r2.y; R32 = r2.z
-    R13 = r3.x; R23 = r3.y; R33 = r3.z
-    _y = asin(clamp(R13, -one(R13), one(R13)))
-    if abs(R13) < 0.9999999
-        _x = atan(-R23, R33)
-        _z = atan(-R12, R11)
+    all(isfinite, (sx,sy,sz)) || error("glTF node matrix scale must be finite")
+    r1, r2, r3 = normalize(c1), normalize(c2), normalize(c3)
+    if iszero(sx)
+        if iszero(sy)
+            if iszero(sz)
+                r1 = Vec3(one(sx),zero(sx),zero(sx))
+                r2 = Vec3(zero(sx),one(sx),zero(sx))
+                r3 = Vec3(zero(sx),zero(sx),one(sx))
+            else
+                r1, r2 = _perp_basis(r3)
+            end
+        elseif iszero(sz)
+            r3, r1 = _perp_basis(r2)
+        else
+            r1 = normalize(cross(r2,r3))
+        end
+    elseif iszero(sy)
+        if iszero(sz)
+            r2, r3 = _perp_basis(r1)
+        else
+            r2 = normalize(cross(r3,r1))
+        end
+    elseif iszero(sz)
+        r3 = normalize(cross(r1,r2))
     else
-        _x = atan(R32, R22)
-        _z = zero(R13)
+        # Unit columns keep the determinant sign finite across unequal scales.
+        if dot(r1,cross(r2,r3)) < 0
+            sx = -sx
+            r1 = -r1
+        end
     end
-    return (position, Euler(_x, _y, _z, :XYZ), Vec3(sx, sy, sz))
-end
-
-function _gltf_transform_direction(M::Mat4, v::Vec3)
-    o = mat4_transform_point(M, Vec3(0.0, 0.0, 0.0))
-    p = mat4_transform_point(M, v)
-    d = p - o
-    n = norm(d)
-    return n > 0 ? d / n : v
+    z, o = zero(sx), one(sx)
+    rotation = Mat4{typeof(sx)}((r1.x,r1.y,r1.z,z, r2.x,r2.y,r2.z,z,
+                                r3.x,r3.y,r3.z,z, z,z,z,o))
+    return position, _rotation_matrix_to_euler(rotation), Vec3(sx,sy,sz)
 end
 
 function _gltf_color3(v, label::String="color")
@@ -10167,7 +10313,7 @@ function _gltf_color3(v, label::String="color")
     Color3(c[1], c[2], c[3])
 end
 
-function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
+function _gltf_camera(gltf, camera_idx::Int, name::String)
     camdef = gltf["cameras"][camera_idx + 1]
     typ = String(camdef["type"])
     cam = if typ == "perspective"
@@ -10197,21 +10343,8 @@ function _gltf_camera(gltf, camera_idx::Int, name::String, M::Mat4)
     else
         error("unsupported glTF camera type: $typ")
     end
-    pos, rot, scl = _gltf_decompose(M)
-    cam.position = pos
-    cam.rotation = rot
-    cam.scale = scl
-    # glTF camera view matrices ignore scale. Encode the camera node's local
-    # rotation in target/up, then let `_camera_world_pose` apply ancestor
-    # rotations without their scales while still transforming the position by
-    # the full parent matrix.
-    local_rotation = quat_to_mat4(quat_from_euler(
-        rot.x, rot.y, rot.z; order=rot.order))
-    cam.target = pos + normalize(mat4_transform_direction(
-        local_rotation, Vec3(0.0, 0.0, -1.0)))
-    cam.up = normalize(mat4_transform_direction(
-        local_rotation, Vec3(0.0, 1.0, 0.0)))
     cam.ignore_parent_scale = true
+    cam.rotation_driven = true
     return cam
 end
 
@@ -10222,21 +10355,20 @@ function _gltf_punctual_lights(gltf)
     return get(lights_ext, "lights", Any[])
 end
 
-function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
+function _gltf_node_light(gltf, light_idx::Int, name::String)
     lights = _gltf_punctual_lights(gltf)
     ldef = lights[light_idx + 1]
     typ = String(ldef["type"])
     color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]), "light color")
     intensity = _gltf_checked_finite_number(get(ldef, "intensity", 1.0),
                                             "light intensity")
-    pos, rot, scl = _gltf_decompose(M)
     light = if typ == "directional"
-        DirectionalLight(color=color, intensity=intensity, position=pos, name=name)
+        DirectionalLight(color=color, intensity=intensity, name=name)
     elseif typ == "point"
         PointLight(color=color, intensity=intensity,
                    distance=_gltf_checked_finite_number(get(ldef, "range", 0.0),
                                                         "light range"),
-                   position=pos, name=name)
+                   name=name)
     elseif typ == "spot"
         spot = get(ldef, "spot", Dict{String,Any}())
         outer = _gltf_checked_finite_number(get(spot, "outerConeAngle", pi/4),
@@ -10248,20 +10380,27 @@ function _gltf_node_light(gltf, light_idx::Int, name::String, M::Mat4)
                   distance=_gltf_checked_finite_number(get(ldef, "range", 0.0),
                                                        "light range"),
                   angle=outer, penumbra=penumbra,
-                  position=pos, name=name)
+                  name=name)
     else
         error("unsupported glTF punctual light type: $typ")
     end
-    light.rotation = rot
-    light.scale = scl
     if light isa DirectionalLight || light isa SpotLight
-        light.target = pos + _gltf_transform_direction(M, Vec3(0.0, 0.0, -1.0))
+        light.rotation_driven = true
     end
     return light
 end
 
 function _gltf_checked_node_index(raw, node_count::Int, label::String)
     return _gltf_checked_zero_based_index(raw, node_count, "$label node")
+end
+
+function _gltf_animation_target_node(gltf, target)
+    haskey(target, "node") || return nothing
+    nodes = get(gltf, "nodes", Any[])
+    index = _gltf_checked_node_index(target["node"], length(nodes), "animation target")
+    haskey(nodes[index+1], "matrix") &&
+        error("glTF animated node $index must not define matrix")
+    return index
 end
 
 function _gltf_skin_node_sets(gltf)
@@ -10319,7 +10458,7 @@ function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int;
 end
 
 function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
-    haskey(skin, "inverseBindMatrices") || return nothing
+    haskey(skin, "inverseBindMatrices") || return fill(Mat4(),joint_count)
     accessor_index = _gltf_checked_zero_based_index(
         skin["inverseBindMatrices"], length(gltf["accessors"]), "inverseBindMatrices accessor")
     _gltf_validate_attribute_format(
@@ -10328,8 +10467,14 @@ function _gltf_inverse_bind_matrices(gltf, buffers, skin, joint_count::Int)
     ncomp == 16 || error("glTF inverseBindMatrices accessor must be MAT4")
     count >= joint_count ||
         error("glTF inverseBindMatrices count must be at least the joint count")
-    return [Mat4{Float64}(ntuple(k -> data[(i - 1) * 16 + k], 16))
-            for i in 1:joint_count]
+    matrices = Vector{Mat4{Float64}}(undef,joint_count)
+    for i in 1:joint_count
+        matrix = Mat4{Float64}(ntuple(k -> data[(i-1)*16+k],16))
+        iszero(matrix.e[4]) && iszero(matrix.e[8]) && iszero(matrix.e[12]) && matrix.e[16] == 1.0 ||
+            error("glTF inverseBindMatrices must have affine fourth rows [0,0,0,1]")
+        matrices[i] = matrix
+    end
+    return matrices
 end
 
 function _gltf_validate_attribute_shape(name::String, item_size::Int,
@@ -10396,13 +10541,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     morph_animated_nodes = Set{Int}()
     for anim in get(gltf, "animations", Any[]), ch in get(anim, "channels", Any[])
         target = get(ch, "target", Dict{String,Any}())
-        get(target, "path", "") == "weights" && haskey(target, "node") &&
-            push!(morph_animated_nodes,
-                  _gltf_checked_node_index(target["node"], node_count,
-                                           "animation target"))
+        target_node = _gltf_animation_target_node(gltf, target)
+        get(target, "path", "") == "weights" && target_node !== nothing &&
+            push!(morph_animated_nodes, target_node)
     end
-    pending_skin_binds = SkinnedMesh[]
-    pending_inverse_calcs = SkinnedMesh[]
     texture_cache = Dict{Any, Texture}()
     material_cache = Dict{Any, AbstractMaterial}()
 
@@ -10593,43 +10735,47 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             push!(bones, bone)
         end
         inv = _gltf_inverse_bind_matrices(gltf, buffers, skin, length(bones))
-        skeleton = inv === nothing ? Skeleton(bones, fill(Mat4(), length(bones))) : Skeleton(bones, inv)
+        skeleton = Skeleton(bones, inv)
         skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts;
                                          indices=true, joint_count=length(bones))
         skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
         sm = SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
                          morph_target_influences=morph_weights,
                          morph_target_names=morph_names)
-        push!(pending_skin_binds, sm)
-        inv === nothing && push!(pending_inverse_calcs, sm)
         return sm
     end
 
     function create_node_object!(node_idx)
         node = gltf["nodes"][node_idx + 1]
-        M = _gltf_node_matrix(node)
+        pos, rot, scl = _gltf_node_pose(node)
         node_name = String(get(node, "name", "node_$node_idx"))
         obj = if haskey(node, "camera")
             camera_idx = _gltf_checked_zero_based_index(
                 node["camera"], length(get(gltf, "cameras", Any[])), "node camera")
-            _gltf_camera(gltf, camera_idx, node_name, M)
+            _gltf_camera(gltf, camera_idx, node_name)
         elseif haskey(node, "extensions") &&
                haskey(node["extensions"], "KHR_lights_punctual") &&
                haskey(node["extensions"]["KHR_lights_punctual"], "light")
             light_idx = _gltf_checked_zero_based_index(
                 node["extensions"]["KHR_lights_punctual"]["light"],
                 length(_gltf_punctual_lights(gltf)), "node light")
-            _gltf_node_light(gltf, light_idx, node_name, M)
+            _gltf_node_light(gltf, light_idx, node_name)
         elseif node_idx in joint_nodes
             Bone(name=node_name)
         else
             Group()
         end
-        pos, rot, scl = _gltf_decompose(M)   # full TRS, not just translation
         obj.position = pos
         obj.rotation = rot
         obj.scale = scl
         obj.name = node_name
+        if obj isa AbstractCamera || obj isa DirectionalLight || obj isa SpotLight
+            local_rotation = quat_to_mat4(quat_from_euler(rot.x,rot.y,rot.z;order=rot.order))
+            obj.target = pos + normalize(mat4_transform_direction(local_rotation,Vec3(0.0,0.0,-1.0)))
+            if obj isa AbstractCamera
+                obj.up = normalize(mat4_transform_direction(local_rotation,Vec3(0.0,1.0,0.0)))
+            end
+        end
         node_objects[node_idx] = obj
     end
 
@@ -10716,13 +10862,6 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
     for root_idx in skin_root_nodes
         root_idx in scene_linked_nodes || link_node_hierarchy!(root_idx)
-    end
-    for sm in pending_inverse_calcs
-        calculate_inverses!(sm.skeleton)
-    end
-    for sm in pending_skin_binds
-        bind_skeleton!(sm, sm.skeleton, compute_world_matrix(sm);
-                       bind_mode=:attached, calculate_inverses=false)
     end
     return return_nodes ? (scene, node_objects) : scene
 end
@@ -10814,16 +10953,14 @@ end
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
-    node_count = length(get(gltf, "nodes", Any[]))
     for (ai, anim) in enumerate(gltf["animations"])
         samplers = anim["samplers"]
         channels = get(anim, "channels", Any[])
         tracks = AbstractKeyframeTrack[]
         for ch in channels
             target = ch["target"]
-            haskey(target, "node") || continue
-            node_idx = _gltf_checked_node_index(target["node"], node_count,
-                                                "animation target")
+            node_idx = _gltf_animation_target_node(gltf, target)
+            node_idx === nothing && continue
             haskey(node_objects, node_idx) || continue
             path = String(target["path"])
             path in ("translation", "rotation", "scale", "weights") || continue
@@ -10898,6 +11035,8 @@ Load a text glTF 2.0 file into a `Scene`.
 Supports data-URI and external buffers, node transforms, cameras, punctual
 lights, mesh primitives, basic PBR metallic-roughness materials, skin binding,
 morph targets, and texture references supported by Diff3D's built-in loaders.
+Authored translation, rotation, and scale components are preserved for animation,
+including zero and negative scales. Animated nodes must not define `matrix`.
 Use [`load_glb`](@ref) for binary `.glb` containers whose first buffer is stored
 in the GLB BIN chunk.
 """

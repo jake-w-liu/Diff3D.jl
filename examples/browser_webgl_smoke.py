@@ -160,7 +160,9 @@ def smoke_html(browser, path: Path) -> int:
             draw_counts = page.evaluate(
                 """() => {
                     const views = window.__diff3dDebug.activeViewCount ? window.__diff3dDebug.activeViewCount() : 1;
-                    const expected = window.__diff3dDebug.activeObjectCount() * Math.max(1, views);
+                    const expected = window.__diff3dDebug.activeDrawItemCount
+                        ? window.__diff3dDebug.activeDrawItemCount()
+                        : window.__diff3dDebug.activeObjectCount() * Math.max(1, views);
                     const actual = Number((document.getElementById('stats').textContent.match(/\\d+/) || ['0'])[0]);
                     return { expected, actual, views };
                 }"""

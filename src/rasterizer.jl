@@ -3,14 +3,24 @@
 # Produces an H×W×3 Float64 image array (RGB, values in [0,1]).
 # --------------------------------------------------------------------------
 
+# Shared only by the internal target wrapper for one render. These values are
+# fixed after construction; a reference keeps ordinary targets compact.
+mutable struct _RenderViewState
+    model::Union{Nothing,Fog,FogExp2}
+    view::Mat4{Float64}
+    inv_log_far::Float64
+end
+
 struct RenderTarget{T<:Real}
     width::Int
     height::Int
     color::Array{T, 3}    # H × W × 3 (RGB)
     depth::Matrix{T}      # H × W
+    view_state::Union{Nothing,_RenderViewState}
 
     function RenderTarget{T}(width::Int, height::Int, color::Array{T,3},
-                             depth::Matrix{T}) where {T<:Real}
+                             depth::Matrix{T},
+                             view_state::Union{Nothing,_RenderViewState}=nothing) where {T<:Real}
         (width > 0 && height > 0) ||
             throw(ArgumentError("RenderTarget dimensions must be positive"))
         size(color) == (height, width, 3) ||
@@ -20,8 +30,53 @@ struct RenderTarget{T<:Real}
             throw(ArgumentError(
                 "RenderTarget depth dimensions must be height×width"))
         _render_target_type(T)
-        return new{T}(width, height, color, depth)
+        return new{T}(width, height, color, depth, view_state)
     end
+end
+
+@inline _scene_render_fog(scene::Scene) = scene.fog
+function _scene_render_fog(object::AbstractObject3D)
+    parent=get_parent(object)
+    return parent===nothing ? nothing : _scene_render_fog(parent)
+end
+
+@inline function _with_render_state(target::RenderTarget{T}, model, view::Mat4,
+                                    inv_log_far::Float64=0.0) where {T}
+    model === nothing && iszero(inv_log_far) && return target
+    model === nothing || _validate_fog(model)
+    state = _RenderViewState(model, convert(Mat4{Float64}, view), inv_log_far)
+    return RenderTarget{T}(target.width, target.height, target.color, target.depth, state)
+end
+
+@inline _has_render_fog(::Nothing) = false
+@inline _has_render_fog(state::_RenderViewState) = state.model !== nothing
+
+@inline _render_encoded_depth(::Nothing, ndc_z, w) = ndc_z
+@inline _render_encoded_depth(state::_RenderViewState, ndc_z, w) =
+    iszero(state.inv_log_far) ? ndc_z : _encode_log_depth(w, state.inv_log_far)
+
+@inline _camera_log_depth_factor(camera::AbstractCamera, enabled::Bool) =
+    enabled && camera isa PerspectiveCamera ? _inverse_log_depth_far(_camera_far(camera)) : 0.0
+
+@inline function _render_fog_factor(model::Fog,depth)
+    amount=clamp((depth-model.near)/(model.far-model.near),0.0,1.0)
+    return amount*amount*(3.0-2.0amount)
+end
+@inline function _render_fog_factor(model::FogExp2,depth)
+    iszero(model.density) && return 0.0
+    optical_depth=max(depth,0.0)*model.density
+    return -expm1(-(optical_depth*optical_depth))
+end
+@inline _render_fog_color(::Nothing,color::Color3,depth::Real) = color
+@inline function _render_fog_color(state::_RenderViewState,color::Color3,depth::Real)
+    state.model === nothing && return color
+    factor=_render_fog_factor(state.model,depth)
+    return _stable_color_lerp(color,state.model.color,factor)
+end
+@inline _render_fog_color(::Nothing,color::Color3,position::Vec3) = color
+@inline function _render_fog_color(state::_RenderViewState,color::Color3,position::Vec3)
+    state.model === nothing && return color
+    return _render_fog_color(state,color,-mat4_transform_point(state.view,position).z)
 end
 
 RenderTarget(width::Int, height::Int, color::Array{T,3},
@@ -248,6 +303,7 @@ end
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
+    has_fog = _has_render_fog(rt.view_state)
     has_alpha = _needs_fragment_alpha(alpha_test, alpha_base, albedo_map, alpha_map)
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
@@ -257,18 +313,20 @@ end
             w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
+                fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
-                    if has_clip || has_alpha
+                    if has_clip || has_alpha || has_fog
                         # Perspective-correct world position (weight by 1/w).
                         iw = w0*iw1 + w1*iw2 + w2*iw3
                         a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
-                        if has_clip
+                        if has_clip || has_fog
                             wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                                       a0*wp1.y + a1*wp2.y + a2*wp3.y,
                                       a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                            _clip_keep(clipping_planes, wp) || continue
+                            has_clip && !_clip_keep(clipping_planes, wp) && continue
+                            has_fog && (fragment_color = _render_fog_color(rt.view_state,fc,wp))
                         end
                         if has_alpha
                             u = a0*uv1.x + a1*uv2.x + a2*uv3.x
@@ -280,9 +338,9 @@ end
                         end
                     end
                     depth_write && (rt.depth[py, px] = z)
-                    rt.color[py, px, 1] = fc.r
-                    rt.color[py, px, 2] = fc.g
-                    rt.color[py, px, 3] = fc.b
+                    rt.color[py, px, 1] = fragment_color.r
+                    rt.color[py, px, 2] = fragment_color.g
+                    rt.color[py, px, 3] = fragment_color.b
                 end
             end
         end
@@ -311,6 +369,7 @@ end
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
+    has_fog = _has_render_fog(rt.view_state)
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
             cx = px - 0.5
@@ -319,16 +378,18 @@ end
             w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
             w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
+                fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
                     iw = w0*iw1 + w1*iw2 + w2*iw3
                     a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
-                    if has_clip
+                    if has_clip || has_fog
                         wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                                   a0*wp1.y + a1*wp2.y + a2*wp3.y,
                                   a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                        _clip_keep(clipping_planes, wp) || continue
+                        has_clip && !_clip_keep(clipping_planes, wp) && continue
+                            has_fog && (fragment_color = _render_fog_color(rt.view_state,fc,wp))
                     end
                     u = a0*uv1.x + a1*uv2.x + a2*uv3.x
                     v = a0*uv1.y + a1*uv2.y + a2*uv3.y
@@ -337,9 +398,9 @@ end
                     _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2) >= alpha_test ||
                         continue
                     depth_write && (rt.depth[py, px] = z)
-                    rt.color[py, px, 1] = fc.r
-                    rt.color[py, px, 2] = fc.g
-                    rt.color[py, px, 3] = fc.b
+                    rt.color[py, px, 1] = fragment_color.r
+                    rt.color[py, px, 2] = fragment_color.g
+                    rt.color[py, px, 3] = fragment_color.b
                 end
             end
         end
@@ -637,14 +698,8 @@ end
                                               Float64(shininess))
                 elseif material isa MeshStandardMaterial &&
                        (has_roughness || has_metalness) && !has_physical_pbr
-                    ru, rv = roughness_map === nothing ? (u, v) :
-                             _map_uv(roughness_map, u, v, u2, v2)
-                    mu, mv = metalness_map === nothing ? (u, v) :
-                             _map_uv(metalness_map, u, v, u2, v2)
-                    roughness = roughness_map === nothing ? material.roughness :
-                                material.roughness * sample_texture(roughness_map, ru, rv).g
-                    metalness = metalness_map === nothing ? material.metalness :
-                               material.metalness * sample_texture(metalness_map, mu, mv).b
+                    metalness, roughness = _standard_mapped_terms(
+                        material, roughness_map, metalness_map, u, v, u2, v2)
                     vd = _direction_between(wp, cam_pos)
                     col = use_surface_color ?
                           _shade_standard_mapped_vertex_color(wn, vd, wp, material,
@@ -847,7 +902,7 @@ end
                     wn, vd, wp, shade_mat, lights,
                     camera_view, shadow_fn)
             end
-            col = clamp_color(col)
+            col = _render_fog_color(rt.view_state,clamp_color(col),wp)
             if blend
                 # Transparent smooth pass: source-over after half-open fill
                 # ownership has assigned this sample to exactly one shared edge.
@@ -974,7 +1029,7 @@ end
                     wn, vd, wp, material, lights,
                     camera_view, shadow_fn)
             end
-            col = clamp_color(col)
+            col = _render_fog_color(rt.view_state,clamp_color(col),wp)
             if blend
                 ia = 1.0 - alpha_base
                 rt.color[py, px, 1] = col.r * alpha_base + rt.color[py, px, 1] * ia
@@ -1398,9 +1453,10 @@ is monotone in distance, so the "nearer fragment wins" depth test is unchanged,
 while precision is spread logarithmically to stay usable across very large
 far/near ratios where linear NDC z collapses onto the far plane. The encoding is
 interpolated as a vertex varying across each triangle, matching three.js without
-`EXT_frag_depth`. It is applied to the opaque and transparent mesh passes; sprite,
-line, and point primitives continue to write NDC z, so enable it for scenes whose
-occlusion is dominated by mesh geometry.
+`EXT_frag_depth`. All opaque and transparent meshes, wireframes, sprites, lines and points use
+this depth convention, including instances. Orthographic cameras retain NDC z.
+When drawing separate primitive passes into the same target, pass the same
+`logarithmic_depth` setting to each pass.
 
 Pass `cache=RenderCache()` when rendering repeated frames with the same target
 shape to reuse traversal lists, pass buckets, triangle scratch buffers, and the
@@ -1472,15 +1528,41 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
     return nothing
 end
 
-function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
+function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera; kwargs...)
+    return _render_camera!(rt, scene, camera, nothing; kwargs...)
+end
+
+@inline _viewport_projection(proj::Mat4, width::Int, height::Int, ::Nothing) = proj
+
+function _viewport_projection(proj::Mat4, width::Int, height::Int,
+                               viewport::NTuple{4,Int})
+    x, y, w, h = viewport
+    scale_x, scale_y = w / width, h / height
+    offset_x = 2.0 * (x / width) + scale_x - 1.0
+    offset_y = 1.0 - 2.0 * (y / height) - scale_y
+    # Embed the viewport in target clip space. Its top-left pixel origin is
+    # independent of the scissor; clip w and depth remain unchanged.
+    mapping = Mat4{Float64}((scale_x, 0.0, 0.0, 0.0,
+                             0.0, scale_y, 0.0, 0.0,
+                             0.0, 0.0, 1.0, 0.0,
+                             offset_x, offset_y, 0.0, 1.0))
+    return mapping * proj
+end
+
+function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
+                         viewport::Union{Nothing,NTuple{4,Int}};
                  shading::Symbol=:flat, shadows::Bool=false, shadow_resolution::Int=512,
                  frustum_cull::Bool=true, clipping_planes::AbstractVector{<:Plane}=_NO_PLANES,
                  scissor::Union{Nothing,NTuple{4,Int}}=nothing, scissor_test::Bool=false,
                  sort_objects::Bool=true, logarithmic_depth::Bool=false,
                  cache=nothing)
-    proj = projection_matrix(camera)
+    proj = _viewport_projection(projection_matrix(camera), rt.width, rt.height, viewport)
     camera_position, camera_target, camera_up = _camera_world_pose(camera)
-    view = mat4_look_at(camera_position, camera_target, camera_up)
+    view = view_matrix(camera)
+    original_target = rt
+    inv_log_far = _camera_log_depth_factor(camera, logarithmic_depth)
+    log_depth = !iszero(inv_log_far)
+    rt = _with_render_state(rt, _scene_render_fog(scene), view, inv_log_far)
     near = _camera_near(camera)
     far = _camera_far(camera)
     W, H = rt.width, rt.height
@@ -1504,19 +1586,15 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         clear!(rt, scene.background)
     end
 
-    # Logarithmic depth uses the clip-space w as the view distance, which only
-    # carries distance under a perspective projection. Orthographic clip w is
-    # constant, so the encoding would flatten all depths; fall back to NDC z there.
-    log_depth = logarithmic_depth && (camera isa PerspectiveCamera)
-    # Precompute the normalization once per frame for logarithmic depth.
-    inv_log_far = log_depth ? _inverse_log_depth_far(far) : 1.0
-
     # Orthographic cameras project along a constant direction, so back-face
     # culling must test against that direction (the camera's backward axis)
     # rather than the eye-point vector `cam_pos - wc`, which is exact only for
     # perspective projection. `nothing` selects the perspective test.
     ortho_dir = camera isa OrthographicCamera ?
         _camera_backward_from_view(view) : nothing
+
+    layer_mask = _object_layer_mask(camera)
+    _update_scene_lods!(scene, camera)
 
     if cache === nothing
         meshes = Mesh[]
@@ -1531,7 +1609,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         primitive_worlds = Mat4{Float64}[]
         _collect_render_primitives_worlds_into!(
             primitives, primitive_worlds, scene)
-        lights = collect_lights(scene)
+        lights = _collect_lights_into!(SceneLight[], scene, layer_mask)
     else
         primitive_flags = cache.primitive_flags
         meshes = _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
@@ -1545,15 +1623,20 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         primitive_worlds = cache.primitive_worlds
         _collect_render_primitives_worlds_into!(
             primitives, primitive_worlds, scene)
-        lights = _collect_lights_into!(cache.lights, scene)
+        lights = _collect_lights_into!(cache.lights, scene, layer_mask)
     end
+    _filter_object_layers!(meshes, mesh_worlds, layer_mask)
+    _filter_object_layers!(instanced, instanced_worlds, layer_mask)
+    _filter_object_layers!(primitives, primitive_worlds, layer_mask)
     if cache === nothing
-        _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene)
+        _prepare_morph_render_meshes!(meshes)
+        _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene; layer_mask=layer_mask)
     else
+        _prepare_morph_render_meshes!(meshes, cache.morph_meshes, cache.morph_positions)
         _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
                                               cache.skinned, cache.skinned_meshes,
                                               cache.skinned_matrices,
-                                              cache.morph_positions)
+                                              cache.morph_positions; layer_mask=layer_mask)
     end
     # Validate every triangle drawable before frustum, shadow, shader, or
     # rasterization code can index its buffers. The checks are allocation-free.
@@ -2053,7 +2136,7 @@ function render!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         end
     end
 
-    return rt
+    return original_target
 end
 
 """
@@ -2084,7 +2167,8 @@ function render!(rt::RenderTarget, scene::Scene, camera::ArrayCamera;
         (sx < rt.width && sy < rt.height &&
          _saturating_add_int(sx, sw) > 0 &&
          _saturating_add_int(sy, sh) > 0) || continue
-        render!(rt, scene, subcamera; kwargs..., scissor=view_scissor, scissor_test=true)
+        _render_camera!(rt, scene, subcamera, viewport;
+                        kwargs..., scissor=view_scissor, scissor_test=true)
     end
     return rt
 end
@@ -2393,12 +2477,11 @@ end
     alpha_channel = _texture_alpha_channel(albedo_map)
     if alpha_channel != 0
         tu, tv = _map_uv(albedo_map, u, v, u2, v2)
-        a *= sample_texture_channel(
-            albedo_map, tu, tv, alpha_channel; default=1.0)
+        a *= _sample_texture_unit_channel(albedo_map, tu, tv, 4)
     end
     if _has_alpha_map(alpha_map)
         tu, tv = _map_uv(alpha_map, u, v, u2, v2)
-        a *= sample_texture_channel(alpha_map, tu, tv, 2; default=1.0)
+        a *= _sample_texture_unit_channel(alpha_map, tu, tv, 2)
     end
     return a
 end
@@ -2473,7 +2556,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     # by the inverse view matrix recovers the world position. Computed once per
     # mesh and only when clipping is active.
     has_clip = !isempty(clipping_planes)
-    view_inv = has_clip ? mat4_inverse(view) : view
+    needs_world = has_clip || _has_render_fog(rt.view_state)
+    view_inv = needs_world ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
     for fi in _draw_face_range(geo)
@@ -2613,7 +2697,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                      ortho_dir=ortho_dir) :
              face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
-            if has_clip
+            if needs_world
                 # World position and 1/w of each clip vertex for the per-fragment
                 # plane test (perspective-correct world interpolation). Needed by
                 # both the opaque and alpha-blended rasterizers.
@@ -2634,7 +2718,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                       iw1=iw1, iw2=iw2, iw3=iw3,
                                       depth_test=depth_test, depth_write=depth_write,
                                       alpha_test=alpha_test)
-            elseif has_clip
+            elseif needs_world
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
@@ -2686,6 +2770,7 @@ end
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
     max_y = min(ceil(Int, clamp(max(s1y, s2y, s3y), 1.0, fH)), H, yhi)
     has_clip = !isempty(clipping_planes)
+    has_fog = _has_render_fog(rt.view_state)
     has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), albedo_map, alpha_map)
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
@@ -2696,16 +2781,18 @@ end
             if _half_open_triangle_contains(
                     w0, w1, w2, s1x, s1y, s2x, s2y, s3x, s3y,
                     positive_area)
+                fragment_color = fc
                 frag_alpha = alpha
-                if has_clip || has_alpha
+                if has_clip || has_alpha || has_fog
                     # Perspective-correct world position (weight by 1/w).
                     iw = w0*iw1 + w1*iw2 + w2*iw3
                     a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
-                    if has_clip
+                    if has_clip || has_fog
                         wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                                   a0*wp1.y + a1*wp2.y + a2*wp3.y,
                                   a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                        _clip_keep(clipping_planes, wp) || continue
+                        has_clip && !_clip_keep(clipping_planes, wp) && continue
+                            has_fog && (fragment_color = _render_fog_color(rt.view_state,fc,wp))
                     end
                     if has_alpha
                         u = a0*uv1.x + a1*uv2.x + a2*uv3.x
@@ -2720,9 +2807,9 @@ end
                 _inside_far_clip(z) || continue
                 if !depth_test || z < rt.depth[py, px]
                     ia_frag = 1.0 - frag_alpha
-                    rt.color[py, px, 1] = fc.r * frag_alpha + rt.color[py, px, 1] * ia_frag
-                    rt.color[py, px, 2] = fc.g * frag_alpha + rt.color[py, px, 2] * ia_frag
-                    rt.color[py, px, 3] = fc.b * frag_alpha + rt.color[py, px, 3] * ia_frag
+                    rt.color[py, px, 1] = fragment_color.r * frag_alpha + rt.color[py, px, 1] * ia_frag
+                    rt.color[py, px, 2] = fragment_color.g * frag_alpha + rt.color[py, px, 2] * ia_frag
+                    rt.color[py, px, 3] = fragment_color.b * frag_alpha + rt.color[py, px, 3] * ia_frag
                     depth_write && (rt.depth[py, px] = z)
                 end
             end

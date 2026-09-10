@@ -384,6 +384,26 @@ function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
           p.x,        p.y,        p.z,        1.0))
 end
 
+@inline function _sprite_quad_corners(sprite::Sprite, material,
+                                       camera::AbstractCamera, world::Mat4, view::Mat4)
+    matrix = sprite_world_matrix(sprite, camera, world)
+    rotation = _material_field(material, :rotation)
+    rotation === nothing && (rotation = 0.0)
+    size_attenuation = _material_field(material, :size_attenuation)
+    center = Vec3(mat4_get(matrix,1,4),mat4_get(matrix,2,4),mat4_get(matrix,3,4))
+    center_view = mat4_transform_vec4(view,Vec4(center.x,center.y,center.z,1.0))
+    attenuation = size_attenuation === false && camera isa PerspectiveCamera ?
+                  max(0.0001,-center_view.z) : 1.0
+    cosine, sine = cos(rotation), sin(rotation)
+    return ntuple(4) do index
+        x = (index in (2,3) ? 1.0 : 0.0)-sprite.center.x
+        y = (index in (3,4) ? 1.0 : 0.0)-sprite.center.y
+        lx = (cosine*x-sine*y)*attenuation
+        ly = (sine*x+cosine*y)*attenuation
+        mat4_transform_point(matrix,Vec3(lx,ly,0.0))
+    end
+end
+
 # ========================== LOD ==========================
 # Level-of-detail container: child objects keyed by minimum camera distance.
 
@@ -423,11 +443,27 @@ mutable struct LOD <: AbstractObject3D
     name::String
     id::Int
     levels::Vector{LODLevel}   # ascending by minimum distance
+    auto_update::Bool
+    _camera_levels::WeakKeyDict{AbstractCamera,Int}
+    _manual_level::Int
 end
 
-function LOD(; name="LOD")
+LOD(position, rotation, scale, parent, children, visible, name, id, levels) =
+    LOD(position, rotation, scale, parent, children, visible, name, id, levels, true)
+LOD(position, rotation, scale, parent, children, visible, name, id, levels, auto_update::Bool) =
+    LOD(position, rotation, scale, parent, children, visible, name, id, levels,
+        auto_update, WeakKeyDict{AbstractCamera,Int}(), 0)
+
+"""
+    LOD(; name="LOD", auto_update=true)
+
+Group levels by minimum camera distance. Rendering selects a whole level using
+world distance divided by camera zoom, with independent hysteresis per camera.
+Set `auto_update=false` to manage visibility with `lod_update!` yourself.
+"""
+function LOD(; name="LOD", auto_update::Bool=true)
     LOD(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-        true, name, _next_id(), LODLevel[])
+        true, name, _next_id(), LODLevel[], auto_update)
 end
 
 get_position(o::LOD) = o.position
@@ -486,6 +522,8 @@ function add_lod_level!(lod::LOD, distance, obj::AbstractObject3D;
     add!(lod, obj)
     push!(lod.levels, LODLevel(dist, hyst, obj))
     sort!(lod.levels, by = first)
+    empty!(lod._camera_levels)
+    lod._manual_level = 0
     return lod
 end
 
@@ -497,6 +535,8 @@ function remove!(lod::LOD, child::AbstractObject3D)
         set_parent!(child, nothing)
     end
     filter!(level -> level.object !== child, lod.levels)
+    empty!(lod._camera_levels)
+    lod._manual_level = 0
     return lod
 end
 
@@ -512,20 +552,14 @@ function lod_select(lod::LOD, distance)
     return chosen
 end
 
-"""
-Update child visibility using three.js-style LOD thresholds and hysteresis.
-Returns the selected level object, or `nothing` when the LOD has no levels.
-"""
-function lod_update!(lod::LOD, distance)
-    d = _validated_lod_distance(distance, "LOD update distance")
-    _validate_lod_levels(lod, "LOD")
-    isempty(lod.levels) && return nothing
-
+function _lod_level_index(lod::LOD, d::Float64, current::Union{Nothing,Int})
+    isempty(lod.levels) && return 0
     chosen_index = 1
     for i in 2:length(lod.levels)
         level = lod.levels[i]
         threshold = level.distance
-        level_distance = is_visible(level.object) ?
+        was_visible = current === nothing ? is_visible(level.object) : current == level.object.id
+        level_distance = was_visible ?
             threshold * (1 - level.hysteresis) : threshold
         if d >= level_distance
             chosen_index = i
@@ -533,7 +567,11 @@ function lod_update!(lod::LOD, distance)
             break
         end
     end
+    return chosen_index
+end
 
+function _set_lod_level!(lod::LOD, chosen_index::Int)
+    chosen_index == 0 && return nothing
     # Compare by object identity, not index: if the same object is registered at
     # several levels, it must stay visible whenever any of its entries is chosen
     # (an index test would let a later non-chosen entry hide the chosen object).
@@ -543,6 +581,53 @@ function lod_update!(lod::LOD, distance)
         hasproperty(obj, :visible) && setproperty!(obj, :visible, obj === chosen_obj)
     end
     return chosen_obj
+end
+
+"""
+Update child visibility using distance thresholds and hysteresis, returning the
+selected object or `nothing`. A manual selection resets automatic camera state.
+"""
+function lod_update!(lod::LOD, distance)
+    d = _validated_lod_distance(distance, "LOD update distance")
+    _validate_lod_levels(lod, "LOD")
+    chosen = _set_lod_level!(lod, _lod_level_index(lod, d, nothing))
+    # A manual selection is the seed for newly observed cameras. Automatic
+    # selections are kept separately so views cannot change each other's hysteresis.
+    empty!(lod._camera_levels)
+    lod._manual_level = chosen === nothing ? 0 : chosen.id
+    return chosen
+end
+
+"""Update an LOD from the camera's world position and zoom."""
+function lod_update!(lod::LOD, camera::AbstractCamera)
+    position = _camera_world_position(camera)
+    zoom = _validated_camera_zoom(camera.zoom)
+    world = compute_world_matrix(lod)
+    origin = Vec3(world.e[13], world.e[14], world.e[15])
+    all(isfinite, (origin.x, origin.y, origin.z)) ||
+        throw(ArgumentError("LOD world position must be finite"))
+    difference = _float_vector_difference(origin, position)
+    divisor = _float_value_representation(zoom)
+    components = map(value -> _float_representation_ratio(value, divisor), difference)
+    distance = hypot(components...)
+    # All stored thresholds are finite; saturation preserves the selected level
+    # when the camera distance exceeds Float64 after accounting for zoom.
+    _validate_lod_levels(lod, "LOD")
+    previous = get(lod._camera_levels, camera, lod._manual_level)
+    chosen = _set_lod_level!(lod, _lod_level_index(lod, min(distance, floatmax(Float64)), previous))
+    chosen !== nothing && previous != chosen.id && (lod._camera_levels[camera] = chosen.id)
+    return chosen
+end
+
+function _update_scene_lods!(root::AbstractObject3D, camera::AbstractCamera)
+    is_visible(root) || return nothing
+    if root isa LOD && root.auto_update
+        lod_update!(root, camera)
+    end
+    for child in get_children(root)
+        _update_scene_lods!(child, camera)
+    end
+    return nothing
 end
 
 # ========================== Bone / Skeleton / SkinnedMesh ==========================
@@ -799,21 +884,32 @@ function _validate_skinned_mesh(sm::SkinnedMesh, context::String)
     return geo
 end
 
-function _skinning_matrices(sm::SkinnedMesh)
+function _skinning_prefix(sm::SkinnedMesh, space)
+    space === :local && return _skinned_bind_matrix_inverse(sm)
+    if space === :world
+        # Cancel meshWorld * inverse(meshWorld) before forming the palette.
+        # An attached skin is therefore independent of even singular mesh nodes.
+        return sm.bind_mode === :attached ? Mat4() :
+               compute_world_matrix(sm) * sm.bind_matrix_inverse
+    end
+    throw(ArgumentError("skinning space must be :local or :world"))
+end
+
+function _skinning_matrices(sm::SkinnedMesh, space=:local)
     skel = sm.skeleton
     _validate_skeleton(skel, "SkinnedMesh", "skeleton bind_inverses")
     bind = sm.bind_matrix
-    bind_inv = _skinned_bind_matrix_inverse(sm)
+    bind_inv = _skinning_prefix(sm,space)
     [bind_inv * compute_world_matrix(skel.bones[i]) * skel.bind_inverses[i] * bind
      for i in eachindex(skel.bones)]
 end
 
-function _skinning_matrices!(out::Vector{Mat4{Float64}}, sm::SkinnedMesh)
+function _skinning_matrices!(out::Vector{Mat4{Float64}}, sm::SkinnedMesh, space=:local)
     skel = sm.skeleton
     _validate_skeleton(skel, "SkinnedMesh", "skeleton bind_inverses")
     resize!(out, length(skel.bones))
     bind = sm.bind_matrix
-    bind_inv = _skinned_bind_matrix_inverse(sm)
+    bind_inv = _skinning_prefix(sm,space)
     @inbounds for i in eachindex(skel.bones)
         out[i] = bind_inv * compute_world_matrix(skel.bones[i]) *
                  skel.bind_inverses[i] * bind
@@ -824,21 +920,26 @@ end
 @inline function _skin_position(mats, idx::NTuple{4,Int},
                                w::NTuple{4,Float64}, p::Vec3)
     acc = Vec3(0.0, 0.0, 0.0)
+    total = 0.0
     @inbounds for k in 1:4
         wk = w[k]
         wk == 0 && continue
         acc = acc + mat4_transform_point(mats[idx[k]], p) * wk
+        total += wk
     end
-    return acc
+    return total == 1.0 ? acc : acc / total
 end
 
 """
-Linear blend skinning: deform each geometry vertex by the weighted sum of its
-bones' skinning matrices. Returns `Vector{Vec3}` of deformed positions.
+    apply_skinning(mesh; space=:local)
+
+Deform each vertex by the normalized weighted sum of its bone transforms.
+Returns `Vector{Vec3}` in mesh-local coordinates by default. Use `space=:world`
+for world coordinates, including attached skins with singular mesh transforms.
 """
-function apply_skinning(sm::SkinnedMesh)
+function apply_skinning(sm::SkinnedMesh; space=:local)
     geo = _validate_skinned_mesh(sm, "SkinnedMesh")
-    mats = _skinning_matrices(sm)
+    mats = _skinning_matrices(sm,space)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     out = Vector{Vec3{Float64}}(undef, geo.n_vertices)
     @inbounds for vi in 1:geo.n_vertices
@@ -856,6 +957,45 @@ function _skin_direction(mats, idx::NTuple{4,Int}, w::NTuple{4,Float64}, d::Vec3
         acc = acc + mat4_transform_direction(mats[idx[k]], d) * wk
     end
     return normalize(acc)
+end
+
+function _skin_linear_matrix(mats, idx::NTuple{4,Int}, weights::NTuple{4,Float64})
+    values = ntuple(Val(16)) do component
+        component == 16 && return 1.0
+        (component % 4 == 0 || component > 12) && return 0.0
+        value = 0.0
+        @inbounds for slot in 1:4
+            weight = weights[slot]
+            iszero(weight) && continue
+            value += weight * mats[idx[slot]].e[component]
+        end
+        value
+    end
+    return Mat4(values)
+end
+
+@noinline function _skin_normal_precise(matrix::Mat4, normal::Vec3)
+    all(isfinite, matrix.e) || throw(ArgumentError("SkinnedMesh linear transform must be finite"))
+    return setprecision(BigFloat, 8192) do
+        normal_matrix = mat4_normal_matrix(convert(Mat4{BigFloat}, matrix))
+        transformed = normalize(mat4_transform_direction(normal_matrix,convert(Vec3{BigFloat},normal)))
+        result = convert(Vec3{Float64},transformed)
+        all(isfinite,(result.x,result.y,result.z)) ||
+            throw(ArgumentError("SkinnedMesh transformed normal must be finite"))
+        result
+    end
+end
+
+function _skin_normal(matrix::Mat4, normal_matrix::Mat4, normal::Vec3)
+    all(isfinite,(normal.x,normal.y,normal.z)) ||
+        throw(ArgumentError("SkinnedMesh normals must be finite"))
+    unit_normal = normalize(normal)
+    transformed = mat4_transform_direction(normal_matrix,unit_normal)
+    # A unit direction can remain representable when an inverse coefficient
+    # exceeds Float64. Normalize in higher precision before converting it.
+    all(isfinite,(transformed.x,transformed.y,transformed.z)) ||
+        return _skin_normal_precise(matrix,unit_normal)
+    return normalize(transformed)
 end
 
 function _skin_normal_buffer(sm::SkinnedMesh, mats)
@@ -907,10 +1047,22 @@ function _skin_normal_buffer!(out::Vector{Float64}, sm::SkinnedMesh, mats)
         copyto!(out, 1, normals, 1, length(normals))
         return out
     end
+    previous_indices = nothing
+    previous_weights = nothing
+    linear = Mat4()
+    normal_matrix = Mat4()
     @inbounds for vi in 1:geo.n_vertices
         base = 3vi - 2
         n = Vec3(normals[base], normals[base + 1], normals[base + 2])
-        sn = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], n)
+        indices = sm.skin_indices[vi]
+        weights = sm.skin_weights[vi]
+        if indices != previous_indices || weights != previous_weights
+            linear = _skin_linear_matrix(mats,indices,weights)
+            normal_matrix = mat4_normal_matrix(linear)
+            previous_indices = indices
+            previous_weights = weights
+        end
+        sn = _skin_normal(linear,normal_matrix,n)
         out[base] = sn.x
         out[base + 1] = sn.y
         out[base + 2] = sn.z
@@ -923,16 +1075,8 @@ function _skin_tangent_attribute(sm::SkinnedMesh, attr::BufferAttribute, mats,
     geo = _skinned_buffer_geometry(sm)
     attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
         return copy(tangent_data)
-    out = _float64_copy(tangent_data)
-    @inbounds for vi in 1:geo.n_vertices
-        base = (vi - 1) * attr.item_size + 1
-        t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))
-        st = _skin_direction(mats, sm.skin_indices[vi], sm.skin_weights[vi], t)
-        out[base] = st.x
-        out[base + 1] = st.y
-        out[base + 2] = st.z
-    end
-    return out
+    out = Vector{Float64}(undef,length(tangent_data))
+    return _skin_tangent_attribute!(out,sm,attr,mats,tangent_data)
 end
 
 function _skin_tangent_attribute!(out::Vector{Float64}, sm::SkinnedMesh,
@@ -942,6 +1086,9 @@ function _skin_tangent_attribute!(out::Vector{Float64}, sm::SkinnedMesh,
     copyto!(out, 1, tangent_data, 1, length(tangent_data))
     attr.item_size >= 3 && length(tangent_data) >= geo.n_vertices * attr.item_size ||
         return out
+    previous_indices = nothing
+    previous_weights = nothing
+    reverse_orientation = false
     @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * attr.item_size + 1
         t = Vec3(Float64(tangent_data[base]), Float64(tangent_data[base + 1]), Float64(tangent_data[base + 2]))
@@ -949,6 +1096,17 @@ function _skin_tangent_attribute!(out::Vector{Float64}, sm::SkinnedMesh,
         out[base] = st.x
         out[base + 1] = st.y
         out[base + 2] = st.z
+        if attr.item_size >= 4
+            indices = sm.skin_indices[vi]
+            weights = sm.skin_weights[vi]
+            if indices != previous_indices || weights != previous_weights
+                linear = _skin_linear_matrix(mats,indices,weights)
+                reverse_orientation = _mat4_linear_orientation_sign(linear) < 0
+                previous_indices = indices
+                previous_weights = weights
+            end
+            reverse_orientation && (out[base+3] = -out[base+3])
+        end
     end
     return out
 end
@@ -970,7 +1128,7 @@ end
 
 function _skinned_render_geometry(sm::SkinnedMesh)
     geo = _validate_skinned_mesh(sm, "SkinnedMesh")
-    mats = _skinning_matrices(sm)
+    mats = _skinning_matrices(sm,:world)
     positions = Vector{Float64}(undef, geo.n_vertices * 3)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ? apply_morph_targets(sm) : nothing
     _skin_positions!(positions, sm, mats, morphed)
@@ -981,7 +1139,7 @@ function _skinned_render_geometry(sm::SkinnedMesh)
 end
 
 function _skinned_render_mesh(sm::SkinnedMesh)
-    Mesh(sm.position, sm.rotation, sm.scale, sm.parent, AbstractObject3D[],
+    Mesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
          sm.visible, sm.name, sm.id, _skinned_render_geometry(sm), sm.material,
          nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
 end
@@ -991,16 +1149,17 @@ function _skinned_normal_output_length(geo::BufferGeometry)
            length(geo.normals)
 end
 
-@inline _skinned_attr_storage_matches(name::Symbol, proxy::BufferAttribute,
+@inline _deformed_attr_storage_matches(name::Symbol, proxy::BufferAttribute,
                                       source::BufferAttribute) =
     name === :tangent ? (proxy.data isa Vector{Float64}) :
     (typeof(proxy.data) === typeof(source.data))
 
-function _skinned_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeometry)
+function _deformed_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeometry,
+                                          normal_length::Int)
     proxy.n_vertices == geo.n_vertices || return false
     proxy.n_faces == geo.n_faces || return false
     length(proxy.positions) == 3 * geo.n_vertices || return false
-    length(proxy.normals) == _skinned_normal_output_length(geo) || return false
+    length(proxy.normals) == normal_length || return false
     length(proxy.uvs) == length(geo.uvs) || return false
     length(proxy.indices) == length(geo.indices) || return false
     length(proxy.attributes) == length(geo.attributes) || return false
@@ -1009,7 +1168,7 @@ function _skinned_proxy_geometry_matches(proxy::BufferGeometry, geo::BufferGeome
         pattr = proxy.attributes[name]
         pattr.item_size == attr.item_size || return false
         length(pattr.data) == length(attr.data) || return false
-        _skinned_attr_storage_matches(name, pattr, attr) || return false
+        _deformed_attr_storage_matches(name, pattr, attr) || return false
     end
     return true
 end
@@ -1042,9 +1201,10 @@ function _update_skinned_render_geometry!(proxy::BufferGeometry, sm::SkinnedMesh
                                           mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
                                           morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     geo = _validate_skinned_mesh(sm, "SkinnedMesh")
-    _skinned_proxy_geometry_matches(proxy, geo) || return _skinned_render_geometry(sm)
-    mats = mats_scratch === nothing ? _skinning_matrices(sm) :
-           _skinning_matrices!(mats_scratch, sm)
+    _deformed_proxy_geometry_matches(proxy, geo, _skinned_normal_output_length(geo)) ||
+        return _skinned_render_geometry(sm)
+    mats = mats_scratch === nothing ? _skinning_matrices(sm,:world) :
+           _skinning_matrices!(mats_scratch, sm,:world)
     morphed = _has_active_morph_influences(sm.morph_target_influences) ?
               _object_morph_positions(sm, geo, morph_scratch) : nothing
     _skin_positions!(proxy.positions, sm, mats, morphed)
@@ -1062,10 +1222,10 @@ end
 function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh,
                                       mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
                                       morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
-    proxy.position = sm.position
-    proxy.rotation = sm.rotation
-    proxy.scale = sm.scale
-    proxy.parent = sm.parent
+    proxy.position = Vec3()
+    proxy.rotation = Euler()
+    proxy.scale = Vec3(1.0,1.0,1.0)
+    proxy.parent = nothing
     proxy.visible = sm.visible
     proxy.name = sm.name
     proxy.id = sm.id
@@ -1090,9 +1250,10 @@ function _collect_skinned_meshes!(out::Vector{SkinnedMesh}, obj::AbstractObject3
 end
 
 function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D,
-                                        skinned::Vector{SkinnedMesh})
+                                        skinned::Vector{SkinnedMesh}; layer_mask=nothing)
     empty!(skinned)
     _collect_skinned_meshes!(skinned, scene)
+    _filter_object_layers!(skinned, nothing, layer_mask)
     for sm in skinned
         push!(meshes, _skinned_render_mesh(sm))
     end
@@ -1103,9 +1264,11 @@ function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObj
                                         skinned::Vector{SkinnedMesh},
                                         proxies::Vector{Mesh},
                                         mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
-                                        morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
+                                        morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing;
+                                        layer_mask=nothing)
     empty!(skinned)
     _collect_skinned_meshes!(skinned, scene)
+    _filter_object_layers!(skinned, nothing, layer_mask)
     for i in eachindex(skinned)
         sm = skinned[i]
         if i > length(proxies)
@@ -1121,6 +1284,98 @@ end
 function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObject3D)
     skinned = SkinnedMesh[]
     return _append_skinned_render_meshes!(meshes, scene, skinned)
+end
+
+function _morph_render_geometry(mesh::Mesh, scratch)
+    geo = mesh.geometry::BufferGeometry
+    _validate_geometry_vertices(geo, "Mesh morph")
+    attributes = Dict{Symbol,BufferAttribute}()
+    for (name, attr) in geo.attributes
+        data = name === :tangent ? _float64_copy(attr.data) : copy(attr.data)
+        attributes[name] = BufferAttribute(data, attr.item_size)
+    end
+    posed = BufferGeometry(Vector{Float64}(undef, 3 * geo.n_vertices),
+                           copy(geo.normals), copy(geo.uvs), copy(geo.indices),
+                           geo.n_vertices, geo.n_faces, attributes,
+                           copy(geo.groups), geo.draw_range)
+    return _update_morph_render_geometry!(posed, mesh, scratch)
+end
+
+function _update_morph_render_geometry!(posed::BufferGeometry, mesh::Mesh, scratch)
+    geo = mesh.geometry::BufferGeometry
+    _validate_geometry_vertices(geo, "Mesh morph")
+    _deformed_proxy_geometry_matches(posed, geo, length(geo.normals)) ||
+        return _morph_render_geometry(mesh, scratch)
+    weights = mesh.morph_target_influences
+    positions = scratch === nothing ? apply_morph_targets(geo, weights) :
+                apply_morph_targets!(scratch, geo, weights)
+    @inbounds for i in 1:geo.n_vertices
+        base = 3i - 2
+        p = positions[i]
+        posed.positions[base] = p.x
+        posed.positions[base + 1] = p.y
+        posed.positions[base + 2] = p.z
+    end
+    apply_morph_normals!(posed.normals, geo, weights)
+    copyto!(posed.uvs, geo.uvs)
+    copyto!(posed.indices, geo.indices)
+    for (name, attr) in geo.attributes
+        destination = posed.attributes[name].data
+        if name === :tangent
+            apply_morph_tangents!(destination, geo, weights)
+        else
+            copyto!(destination, attr.data)
+        end
+    end
+    _copy_groups!(posed.groups, geo.groups)
+    posed.draw_range = geo.draw_range
+    return posed
+end
+
+function _morph_render_mesh(mesh::Mesh, scratch)
+    return Mesh(mesh.position, mesh.rotation, mesh.scale, mesh.parent,
+                AbstractObject3D[], mesh.visible, mesh.name, mesh.id,
+                _morph_render_geometry(mesh, scratch), mesh.material,
+                mesh.flat_shading, mesh.cast_shadow, mesh.receive_shadow,
+                Float64[], String[])
+end
+
+function _update_morph_render_mesh!(posed::Mesh, mesh::Mesh, scratch)
+    posed.geometry = _update_morph_render_geometry!(posed.geometry, mesh, scratch)
+    posed.position = mesh.position
+    posed.rotation = mesh.rotation
+    posed.scale = mesh.scale
+    posed.parent = mesh.parent
+    posed.visible = mesh.visible
+    posed.name = mesh.name
+    posed.id = mesh.id
+    posed.material = mesh.material
+    posed.flat_shading = mesh.flat_shading
+    posed.cast_shadow = mesh.cast_shadow
+    posed.receive_shadow = mesh.receive_shadow
+    return posed
+end
+
+function _prepare_morph_render_meshes!(meshes::Vector{Mesh},
+                                       proxies::Union{Nothing,Vector{Mesh}}=nothing,
+                                       scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
+    slot = 0
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        _has_active_morph_influences(mesh.morph_target_influences) || continue
+        slot += 1
+        if proxies === nothing
+            meshes[i] = _morph_render_mesh(mesh, scratch)
+        else
+            if slot > length(proxies)
+                push!(proxies, _morph_render_mesh(mesh, scratch))
+            else
+                _update_morph_render_mesh!(proxies[slot], mesh, scratch)
+            end
+            meshes[i] = proxies[slot]
+        end
+    end
+    return meshes
 end
 
 # ========================== World-matrix cache ==========================

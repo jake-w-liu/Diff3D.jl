@@ -29,7 +29,8 @@ end
 function _checked_ssim_constant(value, label::String)
     value isa Bool &&
         throw(ArgumentError("loss_ssim: $label must be positive and finite"))
-    (isfinite(value) && value > zero(value)) ||
+    scalar = _primal_value(value)
+    (isfinite(scalar) && scalar > zero(scalar)) ||
         throw(ArgumentError("loss_ssim: $label must be positive and finite"))
     return value
 end
@@ -37,7 +38,8 @@ end
 function _checked_silhouette_threshold(threshold)
     threshold isa Real && !(threshold isa Bool) ||
         throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
-    (isfinite(threshold) && 0 <= threshold <= 1) ||
+    scalar = _primal_value(threshold)
+    (isfinite(scalar) && 0 <= scalar <= 1) ||
         throw(ArgumentError("loss_silhouette_iou: threshold must be finite and in [0, 1]"))
     return threshold
 end

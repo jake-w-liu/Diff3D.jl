@@ -1393,46 +1393,10 @@ function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
 end
 
 function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, nvertices::Int)
-    normals = zeros(Float64, 3 * nvertices)
-    needs_scaled_fallback = false
-    for fi in 1:(length(indices) ÷ 3)
-        i1 = indices[3fi - 2]
-        i2 = indices[3fi - 1]
-        i3 = indices[3fi]
-        p1 = Vec3(positions[3i1 - 2], positions[3i1 - 1], positions[3i1])
-        p2 = Vec3(positions[3i2 - 2], positions[3i2 - 1], positions[3i2])
-        p3 = Vec3(positions[3i3 - 2], positions[3i3 - 1], positions[3i3])
-        fn = cross(p2 - p1, p3 - p1)
-        needs_scaled_fallback |=
-            !(isfinite(fn.x) && isfinite(fn.y) && isfinite(fn.z))
-        for idx in (i1, i2, i3)
-            base = 3idx - 2
-            nx = normals[base] + fn.x
-            ny = normals[base + 1] + fn.y
-            nz = normals[base + 2] + fn.z
-            needs_scaled_fallback |=
-                !(isfinite(nx) && isfinite(ny) && isfinite(nz))
-            normals[base] = nx
-            normals[base + 1] = ny
-            normals[base + 2] = nz
-        end
-    end
-    if needs_scaled_fallback
-        nfaces = length(indices) ÷ 3
-        geometry = BufferGeometry(
-            positions, normals, Float64[], indices,
-            nvertices, nfaces)
-        _compute_vertex_normals_scaled!(normals, geometry)
-        return normals
-    end
-    for vi in 1:nvertices
-        base = 3vi - 2
-        n = normalize(Vec3(normals[base], normals[base + 1], normals[base + 2]))
-        normals[base] = n.x
-        normals[base + 1] = n.y
-        normals[base + 2] = n.z
-    end
-    return normals
+    normals = Vector{Float64}(undef, 3 * nvertices)
+    geometry = BufferGeometry(positions, normals, Float64[], indices,
+                              nvertices, length(indices) ÷ 3)
+    return _compute_vertex_normals!(normals, geometry, Vec3(0.0, 0.0, 0.0))
 end
 
 function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20)
@@ -2287,17 +2251,23 @@ function wireframe_geometry(geo::BufferGeometry)
         _wireframe_geometry_keyed(geo, UInt128)
 end
 
-function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    max_edges = 3 * geo.n_faces
+function _wireframe_edge_keys(geo::BufferGeometry, faces,
+                               ::Type{K}) where {K<:Union{UInt64,UInt128}}
+    max_edges = 3 * length(faces)
     seen = zeros(K, _edge_table_capacity(max_edges))
     ordered_edges = Vector{K}()
     sizehint!(ordered_edges, _edge_record_hint(geo, max_edges))
-    @inbounds for fi in 1:geo.n_faces
+    @inbounds for fi in faces
         i1, i2, i3 = get_face(geo, fi)
         _record_wireframe_edge!(seen, ordered_edges, i1, i2)
         _record_wireframe_edge!(seen, ordered_edges, i2, i3)
         _record_wireframe_edge!(seen, ordered_edges, i3, i1)
     end
+    return ordered_edges
+end
+
+function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
+    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K)
     positions = Vector{Float64}(undef, 6 * length(ordered_edges))
     vi = 0
     pout = 1

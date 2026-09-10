@@ -556,7 +556,20 @@ end
 
 @inline function _sample_texture_unit_channel(tex::Texture, u, v, channel::Int;
                                               default=1.0)
-    return _sample_texture_channel(tex, u, v, channel, default,
+    # Material components refer to RGBA, while sample_texture_channel exposes
+    # raw storage. Match the gray/gray-alpha expansion used by RGB sampling
+    # and WebGL upload; textures without alpha have an opaque fourth component.
+    channels = size(tex.data, 3)
+    storage_channel = if channels <= 2 && 1 <= channel <= 3
+        1
+    elseif channel == 4 && channels == 2
+        2
+    elseif channel == 4 && channels < 4
+        0
+    else
+        channel
+    end
+    return _sample_texture_channel(tex, u, v, storage_channel, default,
                                    _texture_unit_interval_value)
 end
 

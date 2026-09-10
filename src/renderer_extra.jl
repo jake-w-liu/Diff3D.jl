@@ -143,14 +143,16 @@ end
 
 """Render at `ss`× resolution and box-downsample — supersampled anti-aliasing."""
 function render_aa(scene::Scene, camera::AbstractCamera, width::Int, height::Int;
-                   ss::Int=2, shading::Symbol=:flat, shadows::Bool=false)
+                   ss::Int=2, shading::Symbol=:flat, shadows::Bool=false,
+                   logarithmic_depth::Bool=false)
     ss > 0 || throw(ArgumentError("render_aa ss must be positive"))
     (width > 0 && height > 0) ||
         throw(ArgumentError("render_aa dimensions must be positive"))
     big_w = _render_checked_mul(width, ss, "render_aa supersampled width")
     big_h = _render_checked_mul(height, ss, "render_aa supersampled height")
     rt = RenderTarget(big_w, big_h)
-    render!(rt, scene, camera; shading=shading, shadows=shadows)
+    render!(rt, scene, camera; shading=shading, shadows=shadows,
+            logarithmic_depth=logarithmic_depth)
     return downsample(rt.color, ss)
 end
 
@@ -165,11 +167,12 @@ and renderer scratch buffers across frames.
 """
 function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                       samples::Int=4, shading::Symbol=:flat, shadows::Bool=false,
-                      cache=nothing)
+                      cache=nothing, logarithmic_depth::Bool=false)
     samples > 0 || throw(ArgumentError("render_msaa! samples must be positive"))
     # Exact integer ceil(sqrt(samples)); avoids Float64 rounding at large Ints.
     ss = isqrt(samples - 1) + 1
     ss == 1 && return render!(rt, scene, camera; shading=shading, shadows=shadows,
+                              logarithmic_depth=logarithmic_depth,
                               cache=cache)
     big_w = _render_checked_mul(
         rt.width, ss, "render_msaa! supersampled width")
@@ -178,6 +181,7 @@ function render_msaa!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     big = cache === nothing ? RenderTarget(big_w, big_h) :
           _render_cache_msaa_target!(cache, big_w, big_h)
     render!(big, scene, camera; shading=shading, shadows=shadows,
+            logarithmic_depth=logarithmic_depth,
             cache=cache === nothing ? nothing : cache)
     downsample!(rt.color, big.color, ss)
     _resolve_min_depth!(rt.depth, big.depth, ss)
@@ -228,6 +232,7 @@ mutable struct RenderCache
     instanced_materials::Vector{_InstancedMaterialState}
     skinned::Vector{SkinnedMesh}
     skinned_meshes::Vector{Mesh}
+    morph_meshes::Vector{Mesh}
     mesh_worlds::Vector{Mat4{Float64}}
     instanced_worlds::Vector{Mat4{Float64}}
     primitives::Vector{AbstractObject3D}
@@ -269,7 +274,7 @@ function RenderCache()
     scl = Vector{ShadeVtx}(undef, 0); sizehint!(scl, 6)
     RenderCache(Mesh[], SceneLight[], InstancedMesh[], _InstancedMaterialState[],
                 SkinnedMesh[],
-                Mesh[], Mat4{Float64}[], Mat4{Float64}[],
+                Mesh[], Mesh[], Mat4{Float64}[], Mat4{Float64}[],
                 AbstractObject3D[], Mat4{Float64}[],
                 Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
                 Mesh[], Mat4{Float64}[], Mesh[], Mat4{Float64}[],
@@ -739,12 +744,17 @@ function _collect_meshes_into!(out::Vector{Mesh}, root::AbstractObject3D)
     return out
 end
 
+@inline function _render_parent_world(root::AbstractObject3D)::Mat4{Float64}
+    parent = get_parent(root)
+    return parent === nothing ? Mat4{Float64}() : compute_world_matrix(parent)
+end
+
 function _collect_meshes_worlds_into!(out::Vector{Mesh},
                                       worlds::Vector{Mat4{Float64}},
                                       root::AbstractObject3D)
     empty!(out)
     empty!(worlds)
-    _collect_meshes_worlds_visit!(out, worlds, root, Mat4{Float64}())
+    _collect_meshes_worlds_visit!(out, worlds, root, _render_parent_world(root))
     return out
 end
 
@@ -780,7 +790,7 @@ function _collect_render_drawables_worlds_into!(meshes::Vector{Mesh},
     empty!(instanced_worlds)
     primitive_flags === nothing || _reset_render_primitive_flags!(primitive_flags)
     _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
-                                            instanced_worlds, root, Mat4{Float64}(),
+                                            instanced_worlds, root, _render_parent_world(root),
                                             primitive_flags)
     return meshes
 end
@@ -797,7 +807,7 @@ function _collect_render_primitives_worlds_into!(
     empty!(primitives)
     empty!(worlds)
     _collect_render_primitives_worlds_visit!(
-        primitives, worlds, root, Mat4{Float64}())
+        primitives, worlds, root, _render_parent_world(root))
     return primitives
 end
 
@@ -921,10 +931,10 @@ end
 
 function _append_skinned_render_meshes_worlds!(meshes::Vector{Mesh},
                                                worlds::Vector{Mat4{Float64}},
-                                               scene::AbstractObject3D)
+                                               scene::AbstractObject3D; layer_mask=nothing)
     skinned = SkinnedMesh[]
     start = length(meshes)
-    _append_skinned_render_meshes!(meshes, scene, skinned)
+    _append_skinned_render_meshes!(meshes, scene, skinned; layer_mask=layer_mask)
     @inbounds for i in (start + 1):length(meshes)
         push!(worlds, compute_world_matrix(meshes[i]))
     end
@@ -937,19 +947,21 @@ function _append_skinned_render_meshes_worlds!(meshes::Vector{Mesh},
                                                skinned::Vector{SkinnedMesh},
                                                proxies::Vector{Mesh},
                                                mats_scratch::Union{Nothing,Vector{Mat4{Float64}}}=nothing,
-                                               morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
+                                               morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing;
+                                               layer_mask=nothing)
     start = length(meshes)
     _append_skinned_render_meshes!(meshes, scene, skinned, proxies,
-                                   mats_scratch, morph_scratch)
+                                   mats_scratch, morph_scratch; layer_mask=layer_mask)
     @inbounds for i in (start + 1):length(meshes)
         push!(worlds, compute_world_matrix(meshes[i]))
     end
     return meshes
 end
 
-function _collect_lights_into!(out::Vector{SceneLight}, root::AbstractObject3D)
+function _collect_lights_into!(out::Vector{SceneLight}, root::AbstractObject3D,
+                               layer_mask::Union{Nothing,UInt32}=nothing)
     empty!(out)
-    _collect_lights!(out, root)
+    _collect_lights!(out, root, layer_mask)
     return out
 end
 
@@ -1017,9 +1029,11 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                      flat_attr_tri=nothing,
                                      flat_attr_clipped=nothing,
                                      flat_iw=nothing)
-    if _render_pooled_uses_fragment_alpha(geo, mat)
+    if _has_render_fog(rt.view_state) || _render_pooled_uses_fragment_alpha(geo, mat)
+        inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
         return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
                                     tri, clipped, sx, sy, sz; colorbuf=colorbuf,
+                                    log_depth=!iszero(inv_log_far), inv_log_far=inv_log_far,
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                     ortho_dir=ortho_dir,
                                     flat_attr_tri=flat_attr_tri,
@@ -1063,7 +1077,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             ndcx = cv.x * invw; ndcy = cv.y * invw; ndcz = cv.z * invw
             sx[k] = (ndcx + 1) * 0.5 * rt.width
             sy[k] = (1 - ndcy) * 0.5 * rt.height
-            sz[k] = ndcz
+            sz[k] = _render_encoded_depth(rt.view_state, ndcz, cv.w)
         end
         fc = lazy_shader_faces ?
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
@@ -1310,23 +1324,32 @@ image as `render!` for opaque flat scenes, but with bounded per-frame allocation
 across repeated calls. Transparent meshes, lines and points are skipped here.
 """
 function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
-                        cache::RenderCache; shading::Symbol=:flat)
+                        cache::RenderCache; shading::Symbol=:flat,
+                        logarithmic_depth::Bool=false)
     shading === :flat || throw(ArgumentError("render_pooled! supports only :flat shading"))
     clear!(rt, scene.background)
     proj = projection_matrix(camera)
     camera_position, camera_target, camera_up = _camera_world_pose(camera)
-    view = mat4_look_at(camera_position, camera_target, camera_up)
+    view = view_matrix(camera)
+    original_target = rt
+    rt = _with_render_state(rt, _scene_render_fog(scene), view,
+                            _camera_log_depth_factor(camera, logarithmic_depth))
     near = _camera_near(camera)
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
         _camera_backward_from_view(view) : nothing
+    _update_scene_lods!(scene, camera)
     _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                            cache.instanced, cache.instanced_worlds,
                                            scene)
+    layer_mask = _object_layer_mask(camera)
+    _filter_object_layers!(cache.meshes, cache.mesh_worlds, layer_mask)
+    _filter_object_layers!(cache.instanced, cache.instanced_worlds, layer_mask)
+    _prepare_morph_render_meshes!(cache.meshes, cache.morph_meshes, cache.morph_positions)
     _append_skinned_render_meshes_worlds!(cache.meshes, cache.mesh_worlds, scene,
                                           cache.skinned, cache.skinned_meshes,
-                                          cache.skinned_matrices, cache.morph_positions)
-    _collect_lights_into!(cache.lights, scene)
+                                          cache.skinned_matrices, cache.morph_positions; layer_mask=layer_mask)
+    _collect_lights_into!(cache.lights, scene, layer_mask)
     for i in eachindex(cache.meshes)
         mesh = cache.meshes[i]
         mat = _mesh_material(mesh)
@@ -1349,7 +1372,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
             ortho_dir)
     end
-    return rt
+    return original_target
 end
 
 # ========================== Line / point rasterization ==========================
@@ -1390,127 +1413,216 @@ end
     return wrote
 end
 
-@inline function _put_line_pixel!(rt::RenderTarget, x::Int, y::Int, z, col::Color3,
-                                  radius::Float64,
-                                  xlo::Int=1, xhi::Int=rt.width,
-                                  ylo::Int=1, yhi::Int=rt.height,
-                                  depth_test::Bool=true, depth_write::Bool=true,
-                                  alpha::Float64=1.0,
-                                  stamp=nothing, stamp_id::Int=0)
-    if radius <= 0.5
-        _put_stamped_pixel!(rt, x, y, z, col, xlo, xhi, ylo, yhi,
-                            depth_test, depth_write, alpha, stamp, stamp_id)
-        return nothing
+# The major-axis line equation is used only to bound candidate pixels. Keeping
+# its setup independent of the scissor makes coverage and depth crop invariant.
+function _line_raster_equation(a0::Float64, b0::Float64, a1::Float64, b1::Float64)
+    da, db = a1 - a0, b1 - b0
+    if isfinite(da) && isfinite(db) &&
+       isfinite(b0 * a1) && isfinite(b1 * a0)
+        return db / da, _float_product_difference(b0, a1, b1, a0) / da
     end
-    r = ceil(Int, radius)
-    r2 = radius * radius
-    # A very wide line still touches at most the active render rectangle. Clip
-    # the stamp offsets before iterating instead of scanning the full radius
-    # square, whose work would otherwise grow without relation to target size.
-    ox_lo = max(-r, max(1, xlo) - x)
-    ox_hi = min(r, min(rt.width, xhi) - x)
-    oy_lo = max(-r, max(1, ylo) - y)
-    oy_hi = min(r, min(rt.height, yhi) - y)
-    (ox_lo <= ox_hi && oy_lo <= oy_hi) || return nothing
-    @inbounds for oy in oy_lo:oy_hi, ox in ox_lo:ox_hi
-        Float64(ox) * ox + Float64(oy) * oy <= r2 &&
-            _put_stamped_pixel!(rt, x + ox, y + oy, z, col, xlo, xhi, ylo, yhi,
-                                depth_test, depth_write, alpha, stamp, stamp_id)
+    return setprecision(BigFloat, 256) do
+        aa0, bb0, aa1, bb1 = BigFloat(a0), BigFloat(b0), BigFloat(a1), BigFloat(b1)
+        delta = aa1 - aa0
+        Float64((bb1 - bb0) / delta), Float64((bb0 * aa1 - bb1 * aa0) / delta)
     end
-    return nothing
 end
 
-# Liang–Barsky: clip the parametric segment P(t)=P0+t·(P1−P0), t∈[0,1], to the
-# axis-aligned box [xmin,xmax]×[ymin,ymax]. Returns (t0, t1, visible) with
-# 0≤t0≤t1≤1 for the portion inside the box, or visible=false if it misses.
-@inline function _liang_barsky_t(x0, y0, dx, dy, xmin, xmax, ymin, ymax)
-    t0 = 0.0; t1 = 1.0
-    @inbounds for k in 1:4
-        p = k == 1 ? -dx : k == 2 ? dx : k == 3 ? -dy : dy
-        q = k == 1 ? x0 - xmin : k == 2 ? xmax - x0 : k == 3 ? y0 - ymin : ymax - y0
-        if p == 0
-            q < 0 && return (0.0, 0.0, false)   # parallel to this edge and outside
-        else
-            r = q / p
-            if p < 0
-                r > t1 && return (0.0, 0.0, false)
-                r > t0 && (t0 = r)
-            else
-                r < t0 && return (0.0, 0.0, false)
-                r < t1 && (t1 = r)
-            end
-        end
+@noinline function _line_raster_fraction_scaled(a, b, a0, b0, a1, b1)
+    return setprecision(BigFloat, 256) do
+        aa0, bb0, aa1, bb1 = BigFloat(a0), BigFloat(b0), BigFloat(a1), BigFloat(b1)
+        dx, dy = aa1 - aa0, bb1 - bb0
+        fraction = ((BigFloat(a) - aa0) * dx + (BigFloat(b) - bb0) * dy) / (dx * dx + dy * dy)
+        Float64(clamp(fraction, 0, 1))
     end
-    return (t0, t1, true)
 end
 
-# DDA line with depth interpolation and z-test.
+# Rasterize the circular stroke footprint once per pixel. Scissoring only bounds
+# the scan; it does not resample the segment or change its interpolation.
 function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
                      linewidth::Real=1.0,
                      xlo::Int=1, xhi::Int=rt.width,
                      ylo::Int=1, yhi::Int=rt.height,
                      depth_test::Bool=true, depth_write::Bool=true,
                      alpha::Float64=1.0,
-                     stamp=nothing, stamp_id::Int=0)
+                     stamp=nothing, stamp_id::Int=0, varyings=nothing)
     width = _line_material_width(linewidth)
-    # A non-finite projected endpoint has no well-defined rasterization; skip it.
     (isfinite(x0) && isfinite(y0) && isfinite(x1) && isfinite(y1)) || return nothing
-    dx = x1 - x0; dy = y1 - y0
+    x0, y0, x1, y1 = Float64(x0), Float64(y0), Float64(x1), Float64(y1)
+    xlo, xhi = max(1, xlo), min(rt.width, xhi)
+    ylo, yhi = max(1, ylo), min(rt.height, yhi)
+    (xlo <= xhi && ylo <= yhi) || return nothing
     radius = max(0.5, width / 2)
-    # Clip the DDA parameter range to the viewport (expanded by the stamp radius)
-    # so an endpoint projecting far off-screen drives a step count bounded by the
-    # visible span — not the raw off-axis delta, which would hang the loop or
-    # overflow ceil(Int, ...). Downstream pixels are still bounds-checked, so the
-    # drawn set (and density) is identical to the un-clipped version for any
-    # on-screen segment.
-    m = radius + 1.0
-    t0, t1, vis = _liang_barsky_t(Float64(x0), Float64(y0), Float64(dx), Float64(dy),
-                                  xlo - m, xhi + m, ylo - m, yhi + m)
-    vis || return nothing
-    span = max(abs(dx), abs(dy)) * (t1 - t0)
-    n = max(ceil(Int, span), 1)
-    @inbounds for s in 0:n
-        t = t0 + (t1 - t0) * (s / n)
-        _put_line_pixel!(rt, round(Int, x0 + dx*t), round(Int, y0 + dy*t),
-                         z0 + (z1 - z0)*t, col, radius, xlo, xhi, ylo, yhi,
-                         depth_test, depth_write, alpha, stamp, stamp_id)
+    point_segment = x0 == x1 && y0 == y1
+    scale = max(abs(x0), abs(y0), abs(x1), abs(y1))
+    horizontal = point_segment ||
+        abs(x1 / scale - x0 / scale) >= abs(y1 / scale - y0 / scale)
+    a0, b0, a1, b1 = horizontal ? (x0, y0, x1, y1) : (y0, x0, y1, x1)
+    alo, ahi, blo, bhi = horizontal ? (xlo, xhi, ylo, yhi) : (ylo, yhi, xlo, xhi)
+    first_major = max(Float64(alo), min(a0, a1) - radius)
+    last_major = min(Float64(ahi), max(a0, a1) + radius)
+    first_major <= last_major || return nothing
+    slope, intercept = point_segment ? (0.0, b0) : _line_raster_equation(a0, b0, a1, b1)
+    normal_length = hypot(1.0, slope)
+    extent = radius * normal_length
+    major_delta = a1 - a0
+    fraction_step = point_segment ? 0.0 : slope / major_delta / (1.0 + slope * slope)
+    finite_delta = isfinite(major_delta)
+    for a in ceil(Int, first_major):floor(Int, last_major)
+        center = fma(slope, Float64(a), intercept)
+        center_fraction = point_segment ? 0.0 : (a - a0) / major_delta
+        first_minor = max(Float64(blo), center - extent)
+        last_minor = min(Float64(bhi), center + extent)
+        first_minor <= last_minor || continue
+        for b in ceil(Int, first_minor):floor(Int, last_minor)
+            fraction = fma(fraction_step, b - center, center_fraction)
+            t = finite_delta && !isnan(fraction) ? clamp(fraction, 0.0, 1.0) :
+                _line_raster_fraction_scaled(a, b, a0, b0, a1, b1)
+            distance = if t == 0.0
+                hypot(a - a0, b - b0)
+            elseif t == 1.0
+                hypot(a - a1, b - b1)
+            else
+                abs(b - center) / normal_length
+            end
+            distance <= radius || continue
+            z = point_segment ? min(z0, z1) : _stable_lerp(z0, z1, t)
+            color_parameter = point_segment && z1 < z0 ? 1.0 : t
+            fragment_color = _line_fragment_color(col, varyings, color_parameter)
+            fragment_color === nothing && continue
+            x, y = horizontal ? (a, b) : (b, a)
+            _put_stamped_pixel!(rt, x, y, z, fragment_color, xlo, xhi, ylo, yhi,
+                                depth_test, depth_write, alpha, stamp, stamp_id)
+        end
     end
     return nothing
 end
 
-# Project a world point; returns (sx, sy, ndcz, ok) — ok=false if behind the camera.
-@inline function _project(vp::Mat4, p::Vec3, W, H)
+# Project a point; retain homogeneous w for perspective-correct line attributes.
+@inline function _project(vp::Mat4, p::Vec3, W, H, state=nothing)
     c = mat4_transform_vec4(vp, Vec4(p.x, p.y, p.z, 1.0))
-    c.w <= 1e-6 && return (0.0, 0.0, 0.0, false)
+    c.w <= 1e-6 && return (0.0, 0.0, 0.0, c.w, false)
     iw = 1.0 / c.w
-    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, c.z*iw, true)
+    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H,
+     _render_encoded_depth(state, c.z*iw, c.w), c.w, true)
+end
+
+@inline _line_fragment_color(col::Color3, ::Nothing, t) = col
+
+@inline function _line_fragment_color(col::Color3, varyings, t)
+    wa, wb = varyings.w
+    # w is normalized once per segment, keeping this ratio bounded even when
+    # the endpoint depths are large. Exact endpoints avoid a zero denominator
+    # if the normalized smaller w underflows.
+    perspective_t = t == 0.0 || t == 1.0 ? t :
+        (t * wa) / ((1 - t) * wb + t * wa)
+    parameter = _stable_lerp(varyings.range[1], varyings.range[2], perspective_t)
+    attributes = varyings.attributes
+    if attributes !== nothing && attributes.dash !== nothing
+        d0, d1, scale, dash, gap = attributes.dash
+        distance = _stable_lerp(d0, d1, parameter)
+        _line_dash_visible(distance, scale, dash, gap) || return nothing
+    end
+    colors = attributes === nothing ? nothing : attributes.colors
+    color = colors === nothing ? col :
+        _modulate(col, _stable_color_lerp(colors[1], colors[2], parameter))
+    varyings.fog === nothing && return color
+    depth = _stable_lerp(varyings.depth[1],varyings.depth[2],perspective_t)
+    return _render_fog_color(varyings.fog,color,depth)
+end
+
+@inline function _line_dash_visible(distance::Float64, scale::Float64,
+                                    dash::Float64, gap::Float64)
+    gap == 0.0 && return true
+    total = dash + gap
+    scaled = distance * scale
+    if isfinite(total) && isfinite(scaled) && !issubnormal(scaled) &&
+       (scaled != 0.0 || distance == 0.0)
+        return mod(scaled, total) <= dash
+    end
+    return _line_dash_visible_scaled(distance, scale, dash, gap)
+end
+
+@noinline function _line_dash_visible_scaled(distance, scale, dash, gap)
+    # This precision covers products and periods across Float64's full exponent
+    # range, retaining the remainder without quantizing ordinary dash patterns.
+    return setprecision(BigFloat, 4352) do
+        mod(BigFloat(distance) * BigFloat(scale), BigFloat(dash) + BigFloat(gap)) <= BigFloat(dash)
+    end
+end
+
+@inline function _primitive_vertex_color(attribute::BufferAttribute, index)
+    color = _vertex_color(attribute, index)
+    return Color3(
+        _geometry_finite_float(color.r, "geometry :color components"),
+        _geometry_finite_float(color.g, "geometry :color components"),
+        _geometry_finite_float(color.b, "geometry :color components"),
+    )
+end
+
+@inline function _line_vertex_distance(attribute, index)
+    attribute === nothing && return 0.0
+    value = attribute.data[(index - 1) * attribute.item_size + 1]
+    value isa Real && !(value isa Bool) ||
+        throw(ArgumentError("lineDistance values must be finite real numbers"))
+    distance = Float64(value)
+    isfinite(distance) ||
+        throw(ArgumentError("lineDistance values must be finite real numbers"))
+    return distance
+end
+
+@inline function _line_segment_attributes(color_attribute, distance_attribute,
+                                          material, i1, i2)
+    colors = color_attribute === nothing ? nothing :
+        (_primitive_vertex_color(color_attribute, i1), _primitive_vertex_color(color_attribute, i2))
+    dash = material isa LineDashedMaterial ?
+        (_line_vertex_distance(distance_attribute, i1), _line_vertex_distance(distance_attribute, i2),
+         material.scale, material.dash_size, material.gap_size) : nothing
+    return colors === nothing && dash === nothing ? nothing : (; colors, dash)
 end
 
 # Clip a world-space segment against the view-space near plane (z ≤ -near,
 # matching the mesh path's `_clip_near!`), then project and rasterize it.
 # Segments straddling the plane are shortened instead of dropped, and clipped
-# endpoints keep NDC z ≥ -1, bounding the DDA step count.
+# endpoints retain NDC z ≥ -1 before the screen-space stroke test.
 function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, near,
                                      a::Vec3, b::Vec3, col::Color3, linewidth::Real,
                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                      depth_test::Bool=true, depth_write::Bool=true,
                                      alpha::Float64=1.0,
-                                     stamp=nothing, stamp_id::Int=0)
+                                     stamp=nothing, stamp_id::Int=0, attributes=nothing)
+    # Reversing a segment must not move a dash boundary by a rounding unit.
+    # Choose one endpoint order before clipping/interpolation, keeping all
+    # authored endpoint values paired with their positions.
+    if attributes !== nothing && isless((b.x, b.y, b.z), (a.x, a.y, a.z))
+        a, b = b, a
+        colors, dash = attributes.colors, attributes.dash
+        attributes = (
+            colors=colors === nothing ? nothing : (colors[2], colors[1]),
+            dash=dash === nothing ? nothing : (dash[2], dash[1], dash[3], dash[4], dash[5]),
+        )
+    end
     av = mat4_transform_point(view, a)
     bv = mat4_transform_point(view, b)
     a_in = av.z <= -near; b_in = bv.z <= -near
     (a_in || b_in) || return nothing
+    ta, tb = 0.0, 1.0
     if a_in != b_in
         t = (-near - av.z) / (bv.z - av.z)
         c = Vec3(av.x + t*(bv.x - av.x), av.y + t*(bv.y - av.y), av.z + t*(bv.z - av.z))
         a_in ? (bv = c) : (av = c)
+        a_in ? (tb = t) : (ta = t)
     end
     W, H = rt.width, rt.height
-    (ax, ay, az, oka) = _project(proj, av, W, H)
-    (bx, by, bz, okb) = _project(proj, bv, W, H)
+    (ax, ay, az, aw, oka) = _project(proj, av, W, H, rt.view_state)
+    (bx, by, bz, bw, okb) = _project(proj, bv, W, H, rt.view_state)
+    w_scale = max(aw, bw)
+    varyings = attributes === nothing && !_has_render_fog(rt.view_state) ? nothing :
+        (attributes=attributes, range=(ta, tb), w=(aw / w_scale, bw / w_scale),
+         fog=rt.view_state,depth=(-av.z,-bv.z))
     (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                stamp, stamp_id)
+                                stamp, stamp_id, varyings)
     return nothing
 end
 
@@ -1523,7 +1635,10 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
                                       line_mode::Symbol, proj::Mat4, view::Mat4, near,
                                       xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                       stamp::Matrix{Int}, stamp_id::Int,
-                                      morphed_positions, instance_color::Color3)
+                                      morphed_positions, instance_color::Color3,
+                                      color_attribute::C=_geometry_attribute_for_components(geo, :color, 3),
+                                      distance_attribute::D=material isa LineDashedMaterial ?
+                                          _geometry_attribute_for_components(geo, :lineDistance, 1) : nothing) where {C,D}
     _validate_material_parameters(material)
     col = _point_material_color(material, instance_color)
     linewidth = hasfield(typeof(material), :linewidth) ?
@@ -1543,9 +1658,10 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
         stamp_id += 1
+        attributes = _line_segment_attributes(color_attribute, distance_attribute, material, i1, i2)
         _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                     xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                    stamp, stamp_id)
+                                    stamp, stamp_id, attributes)
         i += stride
     end
     if line_mode === :line_loop && last_entry - first_entry + 1 > 2
@@ -1554,9 +1670,10 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
         stamp_id += 1
+        attributes = _line_segment_attributes(color_attribute, distance_attribute, material, i1, i2)
         _draw_segment_near_clipped!(rt, proj, view, near, a, b, col, linewidth,
                                     xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
-                                    stamp, stamp_id)
+                                    stamp, stamp_id, attributes)
     end
     return stamp_id
 end
@@ -1734,10 +1851,11 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                      xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                      cache::Union{Nothing,RenderCache},
                                      stamp::Union{Nothing,Matrix{Int}},
-                                     stamp_id::Int)
+                                     stamp_id::Int, layer_mask::Union{Nothing,UInt32}=nothing)
     is_visible(obj) || return stamp, stamp_id
     world = parent_world * compute_local_matrix(obj)
-    if obj isa LineObject || obj isa LineSegments || obj isa LineLoop
+    if (obj isa LineObject || obj isa LineSegments || obj isa LineLoop) &&
+       _object_matches_layer_mask(obj, layer_mask)
         line_mode = obj isa LineSegments ? :lines :
                     obj isa LineLoop ? :line_loop : :line_strip
         if _line_geometry_has_segment(obj.geometry, line_mode)
@@ -1749,7 +1867,8 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                           cache === nothing ? nothing :
                                           cache.morph_positions)
         end
-    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj) &&
+           _object_matches_layer_mask(obj, layer_mask)
         if _line_geometry_has_segment(obj.geometry, obj.draw_mode)
             stamp === nothing &&
                 (stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
@@ -1766,27 +1885,27 @@ function _render_lines_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
-                                                          stamp, stamp_id)
+                                                          stamp, stamp_id, layer_mask)
         elseif child isa LineSegments
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
-                                                          stamp, stamp_id)
+                                                          stamp, stamp_id, layer_mask)
         elseif child isa LineLoop
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
-                                                          stamp, stamp_id)
+                                                          stamp, stamp_id, layer_mask)
         elseif child isa InstancedMesh
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
-                                                          stamp, stamp_id)
+                                                          stamp, stamp_id, layer_mask)
         else
             stamp, stamp_id = _render_lines_visible_tree!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, cache,
-                                                          stamp, stamp_id)
+                                                          stamp, stamp_id, layer_mask)
         end
     end
     return stamp, stamp_id
@@ -1797,28 +1916,30 @@ function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObjec
                                             parent_world::Mat4{Float64},
                                             xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                             stamp::Matrix{Int}, stamp_id::Int,
-                                            morph_scratch::Vector{Vec3{Float64}})
+                                            morph_scratch::Vector{Vec3{Float64}},
+                                            layer_mask::Union{Nothing,UInt32}=nothing)
     is_visible(obj) || return stamp_id
     world = parent_world * compute_local_matrix(obj)
-    if obj isa LineObject
+    if obj isa LineObject && _object_matches_layer_mask(obj, layer_mask)
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_strip) &&
             (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
-    elseif obj isa LineSegments
+    elseif obj isa LineSegments && _object_matches_layer_mask(obj, layer_mask)
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :lines) &&
             (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
-    elseif obj isa LineLoop
+    elseif obj isa LineLoop && _object_matches_layer_mask(obj, layer_mask)
         geo = _line_geometry(obj)
         _line_geometry_has_segment(geo, :line_loop) &&
             (stamp_id = _draw_line_object!(rt, obj, world, proj, view, near,
                                            xlo, xhi, ylo, yhi, stamp, stamp_id,
                                            morph_scratch))
-    elseif obj isa InstancedMesh && _instanced_line_drawable(obj)
+    elseif obj isa InstancedMesh && _instanced_line_drawable(obj) &&
+           _object_matches_layer_mask(obj, layer_mask)
         geo = _instanced_geometry(obj)
         if _line_geometry_has_segment(geo, obj.draw_mode)
             stamp_id = _draw_instanced_lines!(rt, obj, world, proj, view, near,
@@ -1833,27 +1954,27 @@ function _render_lines_visible_tree_cached!(rt::RenderTarget, obj::AbstractObjec
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id, morph_scratch)
+                                                          stamp_id, morph_scratch, layer_mask)
         elseif child isa LineSegments
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id, morph_scratch)
+                                                          stamp_id, morph_scratch, layer_mask)
         elseif child isa LineLoop
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id, morph_scratch)
+                                                          stamp_id, morph_scratch, layer_mask)
         elseif child isa InstancedMesh
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id, morph_scratch)
+                                                          stamp_id, morph_scratch, layer_mask)
         else
             stamp_id = _render_lines_visible_tree_cached!(rt, child, proj, view, near,
                                                           world,
                                                           xlo, xhi, ylo, yhi, stamp,
-                                                          stamp_id, morph_scratch)
+                                                          stamp_id, morph_scratch, layer_mask)
         end
     end
     return stamp_id
@@ -1863,22 +1984,28 @@ function render_lines!(rt::RenderTarget, scene::AbstractObject3D, camera::Abstra
                        xlo::Int=1, xhi::Int=rt.width,
                        ylo::Int=1, yhi::Int=rt.height,
                        cache::Union{Nothing,RenderCache}=nothing,
-                       assume_drawable::Bool=false)
+                       assume_drawable::Bool=false, logarithmic_depth::Bool=false)
+    _update_scene_lods!(scene, camera)
     (assume_drawable || _line_subtree_has_drawable(scene)) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
+    original_target = rt
+    rt = _with_render_state(rt, _scene_render_fog(scene), view,
+                            _camera_log_depth_factor(camera, logarithmic_depth))
     near = _camera_near(camera)
+    parent_world = _render_parent_world(scene)
+    layer_mask = _object_layer_mask(camera)
     if cache === nothing
-        _render_lines_visible_tree!(rt, scene, proj, view, near, Mat4{Float64}(),
-                                    xlo, xhi, ylo, yhi, cache, nothing, 0)
+        _render_lines_visible_tree!(rt, scene, proj, view, near, parent_world,
+                                    xlo, xhi, ylo, yhi, cache, nothing, 0, layer_mask)
     else
         stamp = _render_cache_stamp!(cache, rt.height, rt.width)
         _render_lines_visible_tree_cached!(rt, scene, proj, view, near,
-                                           Mat4{Float64}(),
+                                           parent_world,
                                            xlo, xhi, ylo, yhi, stamp, 0,
-                                           cache.morph_positions)
+                                           cache.morph_positions, layer_mask)
     end
-    return rt
+    return original_target
 end
 
 function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
@@ -1968,17 +2095,16 @@ end
 
 # ========================== Sprite rasterization ==========================
 
-# Camera-facing quad corner: project local (lx,ly) on the sprite plane through
-# the sprite's screen-aligned world matrix, returning screen x/y, ndc z, 1/w and
+# Project a camera-facing quad corner, returning screen x/y, ndc z, 1/w and
 # the world position (for clipping). `ok=false` if behind the near plane.
-@inline function _sprite_corner(M::Mat4, vp::Mat4, lx, ly, W, H)
-    wp = mat4_transform_point(M, Vec3(lx, ly, 0.0))
+@inline function _sprite_corner(wp::Vec3, vp::Mat4, W, H, state=nothing)
     c = mat4_transform_vec4(vp, Vec4(wp.x, wp.y, wp.z, 1.0))
     c.w <= 1e-6 && return (0.0, 0.0, 0.0, 0.0, wp, false)
     iw = 1.0 / c.w
     z = c.z * iw
     _inside_near_clip(z) || return (0.0, 0.0, 0.0, 0.0, wp, false)
-    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H, z, iw, wp, true)
+    ((c.x*iw + 1)*0.5*W, (1 - c.y*iw)*0.5*H,
+     _render_encoded_depth(state, z, c.w), iw, wp, true)
 end
 
 # Rasterize one sprite quad triangle with z-test, optional albedo/alpha textures
@@ -2012,6 +2138,7 @@ end
     (min_x <= max_x && min_y <= max_y) || return nothing
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
+    has_fog = _has_render_fog(rt.view_state)
     has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
     needs_uv = has_tex || has_alpha
     @inbounds for py in min_y:max_y
@@ -2026,14 +2153,14 @@ end
             (_inside_near_clip(z) && _inside_far_clip(z)) || continue
             (!depth_test || z < rt.depth[py, px]) || continue
             a0 = b0; a1 = b1; a2 = b2
-            if has_clip || needs_uv
+            if has_clip || needs_uv || has_fog
                 iw = b0*iw1 + b1*iw2 + b2*iw3
                 a0 = b0*iw1/iw; a1 = b1*iw2/iw; a2 = b2*iw3/iw
-                if has_clip
+                if has_clip || has_fog
                     wp = Vec3(a0*wp1.x + a1*wp2.x + a2*wp3.x,
                               a0*wp1.y + a1*wp2.y + a2*wp3.y,
                               a0*wp1.z + a1*wp2.z + a2*wp3.z)
-                    _clip_keep(clipping_planes, wp) || continue
+                    has_clip && !_clip_keep(clipping_planes, wp) && continue
                 end
             end
             u = a0*u1 + a1*u2 + a2*u3
@@ -2048,6 +2175,7 @@ end
                 frag_alpha >= alpha_test || continue
             end
             col = clamp_color(col)
+            has_fog && (col = _render_fog_color(rt.view_state,col,wp))
             depth_write && (rt.depth[py, px] = z)
             if frag_alpha >= 1.0
                 rt.color[py, px, 1] = col.r; rt.color[py, px, 2] = col.g; rt.color[py, px, 3] = col.b
@@ -2092,42 +2220,19 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
     _validate_material_parameters(mat)
     state.stamp_id += 1
     stamp_id = state.stamp_id
-    M = sprite_world_matrix(obj, camera, world)
     tint = _material_field(mat, :color)
     tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
     tex = _material_field(mat, :map)
     alpha_test = material_alpha_test(mat)
     alpha_map = _material_field(mat, :alpha_map)
-    rot = _material_field(mat, :rotation)
-    rot === nothing && (rot = 0.0)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
-    size_attenuation = _material_field(mat, :size_attenuation)
-    size_attenuation === nothing && (size_attenuation = true)
-    center_world = Vec3(mat4_get(M, 1, 4), mat4_get(M, 2, 4), mat4_get(M, 3, 4))
-    center_view = mat4_transform_vec4(view, Vec4(center_world.x, center_world.y, center_world.z, 1.0))
-    attenuation = size_attenuation ? 1.0 : max(0.0001, -center_view.z)
-    c = cos(rot)
-    sr = sin(rot)
-    cx = obj.center.x
-    cy = obj.center.y
-    px0 = -cx;       py0 = -cy
-    px1 = 1.0 - cx;  py1 = -cy
-    px2 = 1.0 - cx;  py2 = 1.0 - cy
-    px3 = -cx;       py3 = 1.0 - cy
-    x0 = (c * px0 - sr * py0) * attenuation
-    y0 = (sr * px0 + c * py0) * attenuation
-    x1 = (c * px1 - sr * py1) * attenuation
-    y1 = (sr * px1 + c * py1) * attenuation
-    x2 = (c * px2 - sr * py2) * attenuation
-    y2 = (sr * px2 + c * py2) * attenuation
-    x3 = (c * px3 - sr * py3) * attenuation
-    y3 = (sr * px3 + c * py3) * attenuation
-    (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(M, vp, x0, y0, W, H)
-    (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(M, vp, x1, y1, W, H)
-    (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(M, vp, x2, y2, W, H)
-    (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(M, vp, x3, y3, W, H)
+    corners = _sprite_quad_corners(obj,mat,camera,world,view)
+    (s0x, s0y, z0, iw0, wp0, ok0) = _sprite_corner(corners[1], vp, W, H, rt.view_state)
+    (s1x, s1y, z1, iw1, wp1, ok1) = _sprite_corner(corners[2], vp, W, H, rt.view_state)
+    (s2x, s2y, z2, iw2, wp2, ok2) = _sprite_corner(corners[3], vp, W, H, rt.view_state)
+    (s3x, s3y, z3, iw3, wp3, ok3) = _sprite_corner(corners[4], vp, W, H, rt.view_state)
     (ok0 && ok1 && ok2 && ok3) || return nothing
     stamp = state.stamp
     if stamp === nothing
@@ -2246,8 +2351,10 @@ function _render_sprites_visible_tree!(rt::RenderTarget, obj::Sprite,
                                        state::_SpriteRenderState)
     is_visible(obj) || return nothing
     world = parent_world * compute_local_matrix(obj)
+    if _object_matches_layer_mask(obj, _object_layer_mask(camera))
     _draw_sprite_object!(rt, obj, world, camera, view, vp, W, H,
                          clipping_planes, xlo, xhi, ylo, yhi, cache, state)
+    end
     _render_sprite_children!(rt, obj, camera, view, vp, W, H, clipping_planes,
                              world, xlo, xhi, ylo, yhi, cache, state)
     return nothing
@@ -2287,7 +2394,8 @@ billboard. Each sprite is a unit quad oriented by [`sprite_world_matrix`](@ref)
 so it squarely faces the camera, shifted by `Sprite.center`, scaled by the
 sprite's scale, projected, and drawn depth-tested. `SpriteMaterial.rotation` is
 applied in the billboard plane, and `SpriteMaterial.size_attenuation=false`
-keeps approximate screen size under perspective projection. The sprite
+keeps approximate screen size under perspective projection. Orthographic size
+is independent of depth with either attenuation setting. The sprite
 material's `map` texture (if any) is sampled per pixel and modulated by its
 `color` tint; `alpha_map`, map alpha, and `alpha_test` mask the same fragments
 as other CPU-rasterized materials. Without a map the flat tint colour is used.
@@ -2297,18 +2405,22 @@ function render_sprites!(rt::RenderTarget, scene::AbstractObject3D, camera::Abst
                          xlo::Int=1, xhi::Int=rt.width,
                          ylo::Int=1, yhi::Int=rt.height,
                          cache::Union{Nothing,RenderCache}=nothing,
-                         assume_drawable::Bool=false)
+                         assume_drawable::Bool=false, logarithmic_depth::Bool=false)
+    _update_scene_lods!(scene, camera)
     (assume_drawable || _sprite_subtree_has_drawable(scene)) || return rt
     view = view_matrix(camera)
+    original_target = rt
+    rt = _with_render_state(rt, _scene_render_fog(scene), view,
+                            _camera_log_depth_factor(camera, logarithmic_depth))
     vp = projection_matrix(camera) * view
     W, H = rt.width, rt.height
     state = cache === nothing ? _SpriteRenderState(nothing, 0) : cache.sprite_state
     state.stamp = nothing
     state.stamp_id = 0
     _render_sprites_visible_tree!(rt, scene, camera, view, vp, W, H, clipping_planes,
-                                  Mat4{Float64}(),
+                                  _render_parent_world(scene),
                                   xlo, xhi, ylo, yhi, cache, state)
-    return rt
+    return original_target
 end
 
 @inline _point_material_color(material, ::Color3) =
@@ -2330,13 +2442,33 @@ end
 @inline _point_material_color(material::MeshPhysicalMaterial, vc::Color3) =
     _is_identity_vertex_color(vc) ? material.color : _modulate(material.color, vc)
 
+@inline function _point_pixel_range(center::Float64,half::Float64,low::Int,high::Int)
+    left,right = center-half,center+half
+    # Conservative candidates avoid losing a covered pixel when adding .5
+    # rounds a boundary onto an integer. Resolve edge ties using the sum error.
+    first_pixel = floor(Int,clamp(left+0.5,Float64(low),Float64(high)+1.0))
+    last_pixel = ceil(Int,clamp(right+0.5,Float64(low)-1.0,Float64(high)))
+    if first_pixel<=last_pixel
+        first_center = first_pixel-0.5
+        if first_center<left || (first_center==left && _float_two_sum_error(center,-half,left)>0)
+            first_pixel += 1
+        end
+        last_center = last_pixel-0.5
+        if last_center>right || (last_center==right && _float_two_sum_error(center,half,right)<=0)
+            last_pixel -= 1
+        end
+    end
+    return first_pixel:last_pixel
+end
+
 function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
                                 camera::AbstractCamera, proj::Mat4, view::Mat4,
                                 near, W::Int, H::Int, xlo::Int, xhi::Int,
                                 ylo::Int, yhi::Int, morphed_positions,
-                                instance_color::Color3)
+                                instance_color::Color3,
+                                color_attribute::C=_geometry_attribute_for_components(geo, :color, 3)) where {C}
     _validate_material_parameters(material)
-    col = _point_material_color(material, instance_color)
+    base_color = _point_material_color(material, instance_color)
     alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
@@ -2355,11 +2487,16 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
     else
         1.0
     end
+    clip_xlo,clip_xhi = max(xlo,1),min(xhi,W)
+    clip_ylo,clip_yhi = max(ylo,1),min(yhi,H)
+    (clip_xlo>clip_xhi || clip_ylo>clip_yhi) && return nothing
     for entry in _draw_entry_range(geo)
         vi = _draw_vertex_index(geo, entry)
+        col = color_attribute === nothing ? base_color :
+            _modulate(base_color, _primitive_vertex_color(color_attribute, vi))
         pv = mat4_transform_point(view, mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi)))
         pv.z <= -near || continue      # near-plane cull, matching the mesh path
-        (px, py, pz, ok) = _project(proj, pv, W, H)
+        (px, py, pz, _, ok) = _project(proj, pv, W, H, rt.view_state)
         ok || continue
         effective_size = base_size
         if size_attenuation && camera isa PerspectiveCamera
@@ -2369,20 +2506,16 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
             throw(ArgumentError("point size must be finite and non-negative"))
         effective_size <= Float64(typemax(Int) ÷ 4) ||
             throw(ArgumentError("point size is too large"))
-        r = max(Int(round(effective_size)) ÷ 2, 0)
-        diameter = max(2r + 1, 1)
-        # Skip a point whose footprint cannot touch the buffer; this also keeps
-        # round(Int, ...) below from overflowing on finite extreme screen coords.
+        diameter = max(effective_size,1.0)
+        half_size = diameter/2
         (isfinite(px) && isfinite(py)) || continue
-        (px + r < xlo || px - r > xhi || py + r < ylo || py - r > yhi) && continue
-        cx = round(Int, px); cy = round(Int, py)
-        min_px = max(cx - r, xlo)
-        max_px = min(cx + r, xhi)
-        min_py = max(cy - r, ylo)
-        max_py = min(cy + r, yhi)
-        for py in min_py:max_py, px in min_px:max_px
-            u = clamp((px - (cx - r) + 0.5) / diameter, 0.0, 1.0)
-            v = clamp(1.0 - (py - (cy - r) + 0.5) / diameter, 0.0, 1.0)
+        # Pixel centers are (x-.5,y-.5). Clip the half-open square before
+        # converting bounds to integers, retaining its full extent for UVs.
+        columns = _point_pixel_range(px,half_size,clip_xlo,clip_xhi)
+        rows = _point_pixel_range(py,half_size,clip_ylo,clip_yhi)
+        for y in rows, x in columns
+            u = clamp(0.5+(x-0.5-px)/diameter,0.0,1.0)
+            v = clamp(0.5-(y-0.5-py)/diameter,0.0,1.0)
             frag_alpha = use_fragment_alpha ?
                 _fragment_alpha(alpha, albedo_map, alpha_map, u, v, u, v) : alpha
             frag_alpha >= alpha_test || continue
@@ -2391,7 +2524,8 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
                 tex_col = sample_texture_linear(albedo_map, u, v)
                 point_col = Color3(col.r * tex_col.r, col.g * tex_col.g, col.b * tex_col.b)
             end
-            _put_pixel!(rt, px, py, pz, point_col, xlo, xhi, ylo, yhi,
+            point_col = _render_fog_color(rt.view_state,point_col,-pv.z)
+            _put_pixel!(rt, x, y, pz, point_col, xlo, xhi, ylo, yhi,
                         depth_test, depth_write, frag_alpha)
         end
     end
@@ -2505,10 +2639,11 @@ function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
                                       morph_scratch::Union{Nothing,Vector{Vec3{Float64}}})
     is_visible(obj) || return nothing
     world = parent_world * compute_local_matrix(obj)
-    if obj isa PointsObject
+    if obj isa PointsObject && _object_matches_layer_mask(obj, _object_layer_mask(camera))
         _draw_points_object!(rt, obj, world, camera, proj, view, near, W, H, xlo, xhi,
                              ylo, yhi, morph_scratch)
-    elseif obj isa InstancedMesh && _instanced_point_drawable(obj)
+    elseif obj isa InstancedMesh && _instanced_point_drawable(obj) &&
+           _object_matches_layer_mask(obj, _object_layer_mask(camera))
         _draw_instanced_points!(rt, obj, world, camera, proj, view, near, W, H, xlo, xhi, ylo, yhi)
     end
     for child in get_children(obj)
@@ -2528,23 +2663,30 @@ function _render_points_visible_tree!(rt::RenderTarget, obj::AbstractObject3D,
     return nothing
 end
 
-"""Rasterize `PointsObject` vertices as small point sprites sized by the material."""
+"""Rasterize point objects and point instances as square sprites.
+Material size is measured in render-target pixels, with a one-pixel minimum
+after perspective depth attenuation. Textures and alpha maps can mask the square.
+"""
 function render_points!(rt::RenderTarget, scene::AbstractObject3D, camera::AbstractCamera;
                         xlo::Int=1, xhi::Int=rt.width,
                         ylo::Int=1, yhi::Int=rt.height,
                         cache::Union{Nothing,RenderCache}=nothing,
-                        assume_drawable::Bool=false)
+                        assume_drawable::Bool=false, logarithmic_depth::Bool=false)
+    _update_scene_lods!(scene, camera)
     (assume_drawable || _point_subtree_has_drawable(scene)) || return rt
     proj = projection_matrix(camera)
     view = view_matrix(camera)
+    original_target = rt
+    rt = _with_render_state(rt, _scene_render_fog(scene), view,
+                            _camera_log_depth_factor(camera, logarithmic_depth))
     near = _camera_near(camera)
     W, H = rt.width, rt.height
 
     _render_points_visible_tree!(rt, scene, camera, proj, view, near, W, H,
-                                 Mat4{Float64}(),
+                                 _render_parent_world(scene),
                                  xlo, xhi, ylo, yhi,
                                  cache === nothing ? nothing : cache.morph_positions)
-    return rt
+    return original_target
 end
 
 # ========================== EffectComposer (post-processing) ==========================
@@ -3142,23 +3284,17 @@ they can run on separate threads (used when Julia is started with > 1 thread).
 Produces the same image as [`render!`] for opaque flat scenes.
 
 Passing a `cache` vector reuses scratch buffers across repeated calls. The vector
-must have at least `min(tiles, target.height, Threads.nthreads())` entries: each
-nonempty tile uses a dedicated cache when there are fewer tiles than Julia
-threads; otherwise each active worker thread uses one cache.
+must have at least `min(tiles, target.height, Threads.nthreads())` entries.
+The active entries must be distinct: each parallel work item owns one cache
+throughout its bands, including when a CPU shader yields. Do not share these
+caches with another concurrent render call.
 """
 function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                        tiles::Int=max(Threads.nthreads(), 1), shading::Symbol=:flat,
-                       cache::Union{Nothing, Vector{RenderCache}}=nothing)
+                       cache::Union{Nothing, Vector{RenderCache}}=nothing,
+                       logarithmic_depth::Bool=false)
     shading === :flat || throw(ArgumentError("render_tiled! supports only :flat shading"))
     tiles > 0 || throw(ArgumentError("render_tiled! tiles must be positive"))
-    clear!(rt, scene.background)
-    proj = projection_matrix(camera)
-    camera_position, camera_target, camera_up = _camera_world_pose(camera)
-    view = mat4_look_at(camera_position, camera_target, camera_up)
-    near = _camera_near(camera)
-    # Same orthographic back-face-culling direction as `render!`.
-    ortho_dir = camera isa OrthographicCamera ?
-        _camera_backward_from_view(view) : nothing
     H = rt.height
     active_tiles = min(tiles, H)
     thread_count = min(active_tiles, max(Threads.nthreads(), 1))
@@ -3167,8 +3303,23 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     else
         length(cache) >= thread_count ||
             throw(ArgumentError("render_tiled! cache must have at least $(thread_count) entries"))
+        for index in 2:thread_count, previous in 1:(index-1)
+            cache[index] === cache[previous] &&
+                throw(ArgumentError("render_tiled! active cache entries must be distinct"))
+        end
         cache
     end
+    clear!(rt, scene.background)
+    proj = projection_matrix(camera)
+    camera_position, camera_target, camera_up = _camera_world_pose(camera)
+    view = view_matrix(camera)
+    original_target = rt
+    rt = _with_render_state(rt, _scene_render_fog(scene), view,
+                            _camera_log_depth_factor(camera, logarithmic_depth))
+    near = _camera_near(camera)
+    # Same orthographic back-face-culling direction as `render!`.
+    ortho_dir = camera isa OrthographicCamera ?
+        _camera_backward_from_view(view) : nothing
 
     # Reuse scene collection buffers on the shared cache entry so repeated calls do
     # not reallocate mesh/light/instance vectors.
@@ -3177,14 +3328,19 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     mesh_worlds = shared_cache.mesh_worlds
     instanced = shared_cache.instanced
     instanced_worlds = shared_cache.instanced_worlds
+    _update_scene_lods!(scene, camera)
     _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
                                            instanced_worlds, scene)
+    layer_mask = _object_layer_mask(camera)
+    _filter_object_layers!(meshes, mesh_worlds, layer_mask)
+    _filter_object_layers!(instanced, instanced_worlds, layer_mask)
+    _prepare_morph_render_meshes!(meshes, shared_cache.morph_meshes, shared_cache.morph_positions)
     _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
                                           shared_cache.skinned, shared_cache.skinned_meshes,
                                           shared_cache.skinned_matrices,
-                                          shared_cache.morph_positions)
+                                          shared_cache.morph_positions; layer_mask=layer_mask)
     lights = shared_cache.lights
-    _collect_lights_into!(lights, scene)
+    _collect_lights_into!(lights, scene, layer_mask)
     instanced_material_states = shared_cache.instanced_materials
     for (instanced_slot, im) in pairs(instanced)
         _validate_instanced_mesh(im, "render_tiled!")
@@ -3206,16 +3362,22 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                                 near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
         end
     else
-        Threads.@threads for t in 1:active_tiles
-            ylo = (t - 1) * band + 1
-            yhi = min(t * band, H)
-            cache_idx = thread_count == active_tiles ? t :
-                        mod1(Threads.threadid() - 1, thread_count)
-            _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
-                                instanced_material_states,
-                                lights, camera_position, proj, view,
-                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+        # Each iteration owns a cache even if a shader yields and its task migrates.
+        # Contiguous bands keep each owner's writes together. Quotient/remainder
+        # partitioning avoids multiplying the tile count by the worker count.
+        bands_per_work, extra_bands = divrem(active_tiles, thread_count)
+        Threads.@threads for cache_idx in 1:thread_count
+            first_band = (cache_idx-1)*bands_per_work + min(cache_idx-1, extra_bands) + 1
+            last_band = first_band + bands_per_work - 1 + (cache_idx <= extra_bands)
+            for t in first_band:last_band
+                ylo = (t - 1) * band + 1
+                yhi = min(t * band, H)
+                _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
+                                    instanced_material_states,
+                                    lights, camera_position, proj, view,
+                                    near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+            end
         end
     end
-    return rt
+    return original_target
 end

@@ -74,7 +74,7 @@ struct IESProfile
     candela::Vector{Float64}   # luminous intensity (cd) at each angle
     max_candela::Float64       # peak candela, for normalization to [0,1]
 
-    function IESProfile(a::Vector{Float64}, c::Vector{Float64})
+    function IESProfile(a::Vector{Float64}, c::Vector{Float64}, ::Val{:owned})
         length(a) == length(c) ||
             throw(ArgumentError(
                 "IESProfile: angles and candela must have equal length"))
@@ -92,7 +92,7 @@ struct IESProfile
                 throw(ArgumentError(
                     "IESProfile: angles must be strictly increasing"))
         end
-        return new(copy(a), copy(c), maximum(c))
+        return new(a, c, maximum(c))
     end
 end
 
@@ -127,11 +127,13 @@ function IESProfile(angles::AbstractVector{<:Real}, candela::AbstractVector{<:Re
     length(angles) >= 1 || throw(ArgumentError("IESProfile: need at least one sample"))
     a = collect(Float64, angles)
     c = collect(Float64, candela)
-    return _ies_profile_checked(a, c)
+    return _ies_profile_from_owned(a, c)
 end
 
-function _ies_profile_checked(a::Vector{Float64}, c::Vector{Float64})
-    return IESProfile(a, c)
+# Only freshly allocated, unshared vectors may enter this ownership transfer.
+# Validation is shared with public construction, whose conversion above copies inputs.
+function _ies_profile_from_owned(a::Vector{Float64}, c::Vector{Float64})
+    return IESProfile(a, c, Val(:owned))
 end
 
 """
@@ -363,7 +365,7 @@ function parse_ies(text::AbstractString)
         value === nothing && throw(ArgumentError("parse_ies: missing candela values"))
         cand[i] = value * scale
     end
-    return _ies_profile_checked(vangles, cand)
+    return _ies_profile_from_owned(vangles, cand)
 end
 
 # ========================== AmbientLight ==========================
@@ -445,7 +447,10 @@ mutable struct DirectionalLight <: AbstractLight
     cast_shadow::Bool
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
+    rotation_driven::Bool
 end
+
+DirectionalLight(args::Vararg{Any,14}) = DirectionalLight(args..., false)
 
 DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
                  color, intensity, target, cast_shadow) =
@@ -456,7 +461,7 @@ DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
 function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
                            cast_shadow=false, shadow_bias=nothing,
-                           shadow_pcf_radius=nothing)
+                           shadow_pcf_radius=nothing, rotation_driven::Bool=false)
     DirectionalLight(_validated_light_vec3(position, :position),
                      Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
@@ -464,7 +469,7 @@ function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                      _validated_light_intensity(intensity), Vec3(),
                      _validated_light_cast_shadow(cast_shadow),
                      _validated_shadow_bias(shadow_bias),
-                     _validated_shadow_pcf_radius(shadow_pcf_radius))
+                     _validated_shadow_pcf_radius(shadow_pcf_radius), rotation_driven)
 end
 
 get_position(o::DirectionalLight) = o.position
@@ -549,7 +554,10 @@ mutable struct SpotLight <: AbstractLight
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
     ies_profile::Union{Nothing, IESProfile}   # nothing = analytic cone
+    rotation_driven::Bool
 end
+
+SpotLight(args::Vararg{Any,19}) = SpotLight(args..., false)
 
 SpotLight(position, rotation, scale, parent, children, visible, name, id,
           color, intensity, distance, angle, penumbra, decay, target, cast_shadow,
@@ -562,7 +570,7 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
                    position=Vec3(0.0, 1.0, 0.0), name="SpotLight",
                    target=Vec3(), cast_shadow=false, shadow_bias=nothing,
-                   shadow_pcf_radius=nothing, ies_profile=nothing)
+                   shadow_pcf_radius=nothing, ies_profile=nothing, rotation_driven::Bool=false)
     SpotLight(_validated_light_vec3(position, :position),
               Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
@@ -576,7 +584,7 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
               _validated_light_cast_shadow(cast_shadow),
               _validated_shadow_bias(shadow_bias),
               _validated_shadow_pcf_radius(shadow_pcf_radius),
-              _validated_light_ies_profile(ies_profile))
+              _validated_light_ies_profile(ies_profile), rotation_driven)
 end
 
 get_position(o::SpotLight) = o.position
@@ -802,6 +810,17 @@ end
     return normalize(mat4_transform_direction(light_world, direction))
 end
 
+@inline function _light_emission_direction(light::Union{DirectionalLight,SpotLight})
+    if light.rotation_driven
+        return normalize(mat4_transform_direction(compute_world_matrix(light), Vec3(0.0,0.0,-1.0)))
+    end
+    return _direction_between(_light_world_position(light), light.target)
+end
+
+@inline function _light_world_target(light::Union{DirectionalLight,SpotLight})
+    return light.rotation_driven ? _light_world_position(light) + _light_emission_direction(light) : light.target
+end
+
 @_compute_world_matrix_method(AmbientLight,
     Scene, Group, Object3D, Mesh, LineObject, PointsObject,
     PerspectiveCamera, OrthographicCamera,
@@ -870,14 +889,15 @@ function _fill_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D, i::Int
     return i
 end
 
-function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D)
+function _collect_lights!(lights::Vector{SceneLight}, obj::AbstractObject3D,
+                           layer_mask::Union{Nothing,UInt32}=nothing)
     is_visible(obj) || return nothing
-    if obj isa AbstractLight
+    if obj isa AbstractLight && _object_matches_layer_mask(obj, layer_mask)
         _validate_light_object(obj)
         push!(lights, obj)
     end
     for child in get_children(obj)
-        _collect_lights!(lights, child)
+        _collect_lights!(lights, child, layer_mask)
     end
     return nothing
 end

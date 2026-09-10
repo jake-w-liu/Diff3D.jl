@@ -782,21 +782,27 @@ function LineDashedMaterial(; color=Color3(1.0, 1.0, 1.0), linewidth=1.0,
                             scale=1.0, dash_size=nothing, gap_size=nothing,
                             dashSize=nothing, gapSize=nothing, opacity=1.0,
                             depth_test=true, depth_write=true)
-    dash = _line_material_nonnegative(:dash_size,
-        _line_material_alias(dash_size, dashSize, 3.0, :dash_size, :dashSize))
-    gap = _line_material_nonnegative(:gap_size,
+    scale, dash, gap = _line_dash_parameters(scale,
+        _line_material_alias(dash_size, dashSize, 3.0, :dash_size, :dashSize),
         _line_material_alias(gap_size, gapSize, 1.0, :gap_size, :gapSize))
-    dash + gap > 0.0 ||
-        throw(ArgumentError("dash_size and gap_size cannot both be zero"))
     LineDashedMaterial(_validated_material_color(color, :color),
                        _line_material_width(linewidth),
-                       _line_material_positive(:scale, scale),
+                       scale,
                        dash, gap, _validated_material_opacity(opacity),
                        depth_test, depth_write)
 end
 
+function _line_dash_parameters(scale, dash_size, gap_size)
+    dash = _line_material_nonnegative(:dash_size, dash_size)
+    gap = _line_material_nonnegative(:gap_size, gap_size)
+    dash > 0.0 || gap > 0.0 ||
+        throw(ArgumentError("dash_size and gap_size cannot both be zero"))
+    return _line_material_positive(:scale, scale), dash, gap
+end
+
 @inline function _validate_material_parameters(material::LineDashedMaterial)
     _validated_material_color(material.color, :color)
+    _line_dash_parameters(material.scale, material.dash_size, material.gap_size)
     return nothing
 end
 
@@ -922,6 +928,7 @@ struct MeshPhysicalMaterial <: AbstractMaterial
     depth_test::Bool
     depth_write::Bool
     clipping_planes::Vector{Plane{Float64}}
+    iridescence_thickness_min::Float64 # mapped lower endpoint in nanometres
 end
 
 function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0.0),
@@ -935,6 +942,7 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                alpha_test=0.0,
                                sheen=0.0, sheen_color=Color3(1.0,1.0,1.0), sheen_roughness=1.0,
                                iridescence=0.0, iridescence_ior=1.3, iridescence_thickness=400.0,
+                               iridescence_thickness_min=0.0,
                                light_map=nothing,
                                clearcoat_map=nothing, clearcoat_roughness_map=nothing,
                                transmission_map=nothing, thickness=0.0, thickness_map=nothing,
@@ -1000,11 +1008,15 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                          _validated_material_finite(anisotropy_rotation,
                                                     :anisotropy_rotation), anisotropy_map,
                          depth_test, depth_write,
-                         _material_clipping_planes(clipping_planes))
+                         _material_clipping_planes(clipping_planes),
+                         _validated_material_nonnegative(iridescence_thickness_min,
+                                                         :iridescence_thickness_min))
 end
 
 MeshPhysicalMaterial(args::Vararg{Any,56}) =
     MeshPhysicalMaterial(args..., Plane{Float64}[])
+MeshPhysicalMaterial(args::Vararg{Any,57}) =
+    MeshPhysicalMaterial(args..., 0.0)
 
 @inline function _validate_material_parameters(material::MeshPhysicalMaterial)
     _validated_material_color(material.color, :color)
@@ -1029,6 +1041,8 @@ MeshPhysicalMaterial(args::Vararg{Any,56}) =
     _validated_material_at_least_one(material.iridescence_ior, :iridescence_ior)
     _validated_material_nonnegative(material.iridescence_thickness,
                                     :iridescence_thickness)
+    _validated_material_nonnegative(material.iridescence_thickness_min,
+                                    :iridescence_thickness_min)
     _validated_material_nonnegative(material.thickness, :thickness)
     _validated_material_nonnegative(material.attenuation_distance,
                                     :attenuation_distance)

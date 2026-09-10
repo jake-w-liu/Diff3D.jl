@@ -21,7 +21,10 @@ mutable struct PerspectiveCamera <: AbstractCamera
     target::Vec3{Float64}  # look-at target
     up::Vec3{Float64}
     ignore_parent_scale::Bool
+    rotation_driven::Bool
 end
+
+PerspectiveCamera(args::Vararg{Any,16}) = PerspectiveCamera(args..., false)
 
 function PerspectiveCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                            scale::Vec3{Float64},
@@ -80,6 +83,10 @@ end
 end
 
 function _camera_world_pose(camera::AbstractCamera)
+    if hasfield(typeof(camera), :rotation_driven) && camera.rotation_driven
+        position, direction, up = _camera_rotation_pose(camera)
+        return position, position + direction, up
+    end
     kind = nameof(typeof(camera))
     position, target, up = _validated_camera_view_vectors(camera, kind)
     parent = get_parent(camera)
@@ -89,17 +96,7 @@ function _camera_world_pose(camera::AbstractCamera)
         mat4_transform_point(parent_world, position), kind, :position)
     if hasfield(typeof(camera), :ignore_parent_scale) &&
        getfield(camera, :ignore_parent_scale)
-        parent_rotation = Quaternion()
-        ancestor = parent
-        while ancestor !== nothing
-            _validate_object_transform(ancestor)
-            rotation = get_rotation(ancestor)::Euler{Float64}
-            local_rotation = quat_from_euler(
-                rotation.x, rotation.y, rotation.z; order=rotation.order)
-            parent_rotation = quat_multiply(local_rotation, parent_rotation)
-            ancestor = get_parent(ancestor)
-        end
-        rotation_matrix = quat_to_mat4(quat_normalize(parent_rotation))
+        rotation_matrix = _rotation_without_scale(parent)
         world_direction = _validated_camera_vector(
             mat4_transform_direction(rotation_matrix, target - position),
             kind, :target)
@@ -118,6 +115,71 @@ function _camera_world_pose(camera::AbstractCamera)
     max(abs(world_up.x), abs(world_up.y), abs(world_up.z)) > 0.0 ||
         _throw_camera_zero_up(kind)
     return world_position, world_target, world_up
+end
+
+function _rotation_without_scale(object::AbstractObject3D)
+    quaternion = Quaternion()
+    node = object
+    while node !== nothing
+        _validate_object_transform(node)
+        angles = get_rotation(node)
+        quaternion = quat_multiply(quat_from_euler(
+            angles.x, angles.y, angles.z; order=angles.order), quaternion)
+        node = get_parent(node)
+    end
+    return quat_to_mat4(quat_normalize(quaternion))
+end
+
+# Camera orientation excludes its own scale. glTF also excludes inherited scale.
+function _camera_rotation_pose(camera::AbstractCamera)
+    _validate_object_transform(camera)
+    parent = get_parent(camera)
+    parent_world = parent === nothing ? Mat4() : compute_world_matrix(parent)
+    position = mat4_transform_point(parent_world, camera.position)
+    rotation = camera.rotation
+    local_rotation = quat_to_mat4(quat_from_euler(
+        rotation.x, rotation.y, rotation.z; order=rotation.order))
+    world_rotation = if camera.ignore_parent_scale
+        _rotation_without_scale(camera)
+    else
+        parent_world * local_rotation
+    end
+    direction = normalize(mat4_transform_direction(world_rotation, Vec3(0.0,0.0,-1.0)))
+    up = normalize(mat4_transform_direction(world_rotation, Vec3(0.0,1.0,0.0)))
+    kind = nameof(typeof(camera))
+    _validated_camera_vector(position, kind, :position)
+    _validated_camera_vector(direction, kind, :target)
+    _validated_camera_vector(up, kind, :up)
+    max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 || _throw_camera_zero_up(kind)
+    return position, direction, up
+end
+
+function _camera_control_target(camera::AbstractCamera)
+    camera.rotation_driven || return camera.target
+    angles = camera.rotation
+    rotation = quat_to_mat4(quat_from_euler(angles.x, angles.y, angles.z; order=angles.order))
+    return camera.position + mat4_transform_direction(rotation, Vec3(0.0,0.0,-1.0))
+end
+
+function _prepare_camera_control_up!(camera::AbstractCamera)
+    camera.rotation_driven || return camera
+    _validate_object_transform(camera)
+    angles = camera.rotation
+    rotation = quat_to_mat4(quat_from_euler(angles.x, angles.y, angles.z; order=angles.order))
+    camera.up = mat4_transform_direction(rotation, Vec3(0.0,1.0,0.0))
+    return camera
+end
+
+@inline function _view_from_direction(position::Vec3, direction::Vec3, up::Vec3)
+    return mat4_look_at(Vec3(), direction, up) *
+           mat4_translation(-position.x, -position.y, -position.z)
+end
+
+function _sync_camera_rotation_from_view!(camera::AbstractCamera)
+    hasfield(typeof(camera), :rotation_driven) && camera.rotation_driven || return camera
+    rotation = mat4_transpose(mat4_look_at(camera.position, camera.target, camera.up))
+    camera.rotation = _rotation_matrix_to_euler(rotation, camera.rotation.order)
+    return camera
 end
 
 @inline _camera_world_position(camera::AbstractCamera) =
@@ -185,13 +247,13 @@ function _validated_orthographic_params(left, right, bottom, top, near, far)
 end
 
 function PerspectiveCamera(; fov=π/4, aspect=1.0, near=0.1, far=1000.0,
-                           zoom=1.0, name="PerspectiveCamera")
+                           zoom=1.0, name="PerspectiveCamera", rotation_driven::Bool=false)
     f, a, n, fr = _validated_perspective_params(fov, aspect, near, far)
     PerspectiveCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
         f, a, n, fr, _validated_camera_zoom(zoom),
-        Vec3(), Vec3(0.0, 1.0, 0.0), false
+        Vec3(), Vec3(0.0, 1.0, 0.0), false, rotation_driven
     )
 end
 
@@ -232,6 +294,7 @@ function projection_matrix(c::PerspectiveCamera)
 end
 
 function view_matrix(c::PerspectiveCamera)
+    c.rotation_driven && return _view_from_direction(_camera_rotation_pose(c)...)
     position, target, up = _camera_world_pose(c)
     mat4_look_at(position, target, up)
 end
@@ -255,7 +318,10 @@ mutable struct OrthographicCamera <: AbstractCamera
     target::Vec3{Float64}
     up::Vec3{Float64}
     ignore_parent_scale::Bool
+    rotation_driven::Bool
 end
+
+OrthographicCamera(args::Vararg{Any,18}) = OrthographicCamera(args..., false)
 
 function OrthographicCamera(position::Vec3{Float64}, rotation::Euler{Float64},
                             scale::Vec3{Float64},
@@ -284,13 +350,13 @@ end
 
 function OrthographicCamera(; left=-1.0, right=1.0, bottom=-1.0, top=1.0,
                              near=0.1, far=1000.0, zoom=1.0,
-                             name="OrthographicCamera")
+                             name="OrthographicCamera", rotation_driven::Bool=false)
     l, r, b, t, n, fr = _validated_orthographic_params(left, right, bottom, top, near, far)
     OrthographicCamera(
         Vec3(0.0, 0.0, 5.0), Euler(), Vec3(1.0, 1.0, 1.0),
         nothing, AbstractObject3D[], true, name, _next_id(),
         l, r, b, t, n, fr, _validated_camera_zoom(zoom),
-        Vec3(), Vec3(0.0, 1.0, 0.0), false
+        Vec3(), Vec3(0.0, 1.0, 0.0), false, rotation_driven
     )
 end
 
@@ -332,6 +398,7 @@ function projection_matrix(c::OrthographicCamera)
 end
 
 function view_matrix(c::OrthographicCamera)
+    c.rotation_driven && return _view_from_direction(_camera_rotation_pose(c)...)
     position, target, up = _camera_world_pose(c)
     mat4_look_at(position, target, up)
 end

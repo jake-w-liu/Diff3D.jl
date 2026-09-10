@@ -135,6 +135,7 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf)
+    _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
     minimum_distance, maximum_distance =
@@ -190,7 +191,7 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
 end
 
 OrbitControls(cam::PerspectiveCamera; kwargs...) =
-    OrbitControls(cam, cam.target; kwargs...)
+    OrbitControls(cam, _camera_control_target(cam); kwargs...)
 
 # Current spherical (radius, polar from +y, azimuth) of the camera about target.
 _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
@@ -227,6 +228,7 @@ function _orbit_apply!(oc::OrbitControls, s::Spherical)
         position, "OrbitControls camera position")
     oc.camera.position = position
     oc.camera.target = oc.target
+    _sync_camera_rotation_from_view!(oc.camera)
     return oc
 end
 
@@ -258,6 +260,7 @@ function orbit_reset!(oc::OrbitControls)
     oc.camera.position = position
     oc.target = target
     oc.camera.target = target
+    _sync_camera_rotation_from_view!(oc.camera)
     oc.v_azimuth = 0.0
     oc.v_polar = 0.0
     oc.v_zoom = 0.0
@@ -296,6 +299,7 @@ function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     oc.target = target
     oc.camera.position = position
     oc.camera.target = target
+    _sync_camera_rotation_from_view!(oc.camera)
     return oc
 end
 
@@ -409,6 +413,7 @@ function orbit_update!(oc::OrbitControls)
         oc.target = target
         oc.camera.position = position
         oc.camera.target = target
+        _sync_camera_rotation_from_view!(oc.camera)
     end
     # Decay residual velocities; snap tiny remnants to zero.
     thresh = 1e-9
@@ -431,8 +436,9 @@ mutable struct TrackballControls
     up0::Vec3{Float64}
 end
 
-function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=cam.target;
+function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=_camera_control_target(cam);
                            enabled::Bool=true)
+    _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(
         target, "TrackballControls target")
@@ -463,6 +469,7 @@ function trackball_reset!(tc::TrackballControls)
     tc.camera.up = up
     tc.target = target
     tc.camera.target = target
+    _sync_camera_rotation_from_view!(tc.camera)
     return tc
 end
 
@@ -474,6 +481,7 @@ function _trackball_apply!(tc::TrackballControls, s::Spherical)
     tc.camera.position = _checked_control_vec3(
         position, "TrackballControls camera position")
     tc.camera.target = tc.target
+    _sync_camera_rotation_from_view!(tc.camera)
     return tc
 end
 
@@ -516,6 +524,7 @@ function trackball_pan!(tc::TrackballControls, dx, dy)
     tc.target = target
     tc.camera.position = position
     tc.camera.target = target
+    _sync_camera_rotation_from_view!(tc.camera)
     return tc
 end
 
@@ -944,79 +953,7 @@ end
 end
 
 function _transform_quaternion_to_euler(q::Quaternion, order::Symbol)
-    qn = quat_normalize(q)
-    x, y, z, w = qn.x, qn.y, qn.z, qn.w
-    norm2 = x*x + y*y + z*z + w*w
-    scale = (one(norm2) + one(norm2)) / norm2
-    m11 = one(scale) - scale * (y*y + z*z)
-    m12 = scale * (x*y - w*z)
-    m13 = scale * (x*z + w*y)
-    m21 = scale * (x*y + w*z)
-    m22 = one(scale) - scale * (x*x + z*z)
-    m23 = scale * (y*z - w*x)
-    m31 = scale * (x*z - w*y)
-    m32 = scale * (y*z + w*x)
-    m33 = one(scale) - scale * (x*x + y*y)
-    threshold = 0.9999999
-
-    if order === :XYZ
-        ey = asin(clamp(m13, -one(m13), one(m13)))
-        if abs(m13) < threshold
-            ex = atan(-m23, m33)
-            ez = atan(-m12, m11)
-        else
-            ex = atan(m32, m22)
-            ez = zero(ey)
-        end
-    elseif order === :YXZ
-        ex = asin(-clamp(m23, -one(m23), one(m23)))
-        if abs(m23) < threshold
-            ey = atan(m13, m33)
-            ez = atan(m21, m22)
-        else
-            ey = atan(-m31, m11)
-            ez = zero(ex)
-        end
-    elseif order === :ZXY
-        ex = asin(clamp(m32, -one(m32), one(m32)))
-        if abs(m32) < threshold
-            ey = atan(-m31, m33)
-            ez = atan(-m12, m22)
-        else
-            ey = zero(ex)
-            ez = atan(m21, m11)
-        end
-    elseif order === :ZYX
-        ey = asin(-clamp(m31, -one(m31), one(m31)))
-        if abs(m31) < threshold
-            ex = atan(m32, m33)
-            ez = atan(m21, m11)
-        else
-            ex = zero(ey)
-            ez = atan(-m12, m22)
-        end
-    elseif order === :YZX
-        ez = asin(clamp(m21, -one(m21), one(m21)))
-        if abs(m21) < threshold
-            ex = atan(-m23, m22)
-            ey = atan(-m31, m11)
-        else
-            ex = zero(ez)
-            ey = atan(m13, m33)
-        end
-    elseif order === :XZY
-        ez = asin(-clamp(m12, -one(m12), one(m12)))
-        if abs(m12) < threshold
-            ex = atan(m32, m22)
-            ey = atan(m13, m11)
-        else
-            ex = atan(-m23, m33)
-            ey = zero(ez)
-        end
-    else
-        throw(ArgumentError("unknown Euler order :$order"))
-    end
-    return Euler(ex, ey, ez, order)
+    return _rotation_matrix_to_euler(quat_to_mat4(quat_normalize(q)), order)
 end
 
 @inline _transform_axis_has(::Nothing, ::Char) = false
@@ -1398,6 +1335,7 @@ function _animation_property_alias(s::AbstractString)
     s == "iridescenceIor" && return :iridescence_ior
     s == "iridescenceIOR" && return :iridescence_ior
     s == "iridescenceThickness" && return :iridescence_thickness
+    s == "iridescenceThicknessMinimum" && return :iridescence_thickness_min
     s == "specularIntensity" && return :specular_intensity
     s == "specularColor" && return :specular_color
     s == "attenuationDistance" && return :attenuation_distance
@@ -2194,6 +2132,27 @@ function _replace_field_value(x, property::Symbol, value)
     return typeof(x)(vals...)
 end
 
+function _replace_field_value(material::MeshPhongMaterial, property::Symbol, value)
+    if property !== :shininess && property !== :glossiness
+        return invoke(_replace_field_value, Tuple{Any,Symbol,Any},
+                      material, property, value)
+    end
+    # These are two representations of one surface parameter. Resolve both
+    # through the constructor policy before replacing the target's material.
+    shininess, glossiness = property === :shininess ?
+        _resolve_material_phong_parameters(value, nothing) :
+        _resolve_material_phong_parameters(nothing, value)
+    if isequal(shininess, material.shininess) &&
+       isequal(glossiness, material.glossiness)
+        return material
+    end
+    values = map(fieldnames(MeshPhongMaterial)) do field
+        field === :shininess ? shininess :
+        field === :glossiness ? glossiness : getfield(material, field)
+    end
+    return MeshPhongMaterial(values...)
+end
+
 @inline _material_noop_update(::Any, ::Symbol, ::Any) = false
 @inline function _material_noop_update(mat::MeshBasicMaterial, property::Symbol, value)
     if property === :opacity
@@ -2693,14 +2652,14 @@ end
 
 """A single segment from a directional light's position toward its target."""
 function DirectionalLightHelper(light::DirectionalLight; color=Color3(1.0,1.0,0.0))
-    p = light.position; t = light.target
+    p = _light_world_position(light); t = _light_world_target(light)
     LineSegments(_line_geo(Float64[p.x,p.y,p.z, t.x,t.y,t.z]),
                  LineBasicMaterial(color=color); name="DirectionalLightHelper")
 end
 
 """Cross-hair lines marking a point light's position."""
 function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0))
-    p = light.position
+    p = _light_world_position(light)
     size = _geometry_finite_float(size, "PointLightHelper size")
     pos = Float64[p.x-size,p.y,p.z, p.x+size,p.y,p.z,
                   p.x,p.y-size,p.z, p.x,p.y+size,p.z,
@@ -2714,14 +2673,6 @@ end
     return pos
 end
 
-# Orthonormal basis (u, v) spanning the plane perpendicular to unit vector `w`.
-function _perp_basis(w::Vec3)
-    ref = abs(w.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
-    u = normalize(cross(ref, w))
-    v = cross(w, u)
-    return u, v
-end
-
 """
 Cone outline of a spot light: the apex sits at the light position and the base
 circle marks the cone of half-angle `light.angle` at the distance to the target
@@ -2729,8 +2680,8 @@ circle marks the cone of half-angle `light.angle` at the distance to the target
 """
 function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
     segments = _geometry_nonnegative_int(segments, "SpotLightHelper segments")
-    apex = light.position
-    axis = light.target - apex
+    apex = _light_world_position(light)
+    axis = _light_world_target(light) - apex
     len = norm(axis)
     dir = len > 0 ? normalize(axis) : Vec3(0.0, -1.0, 0.0)
     len = len > 0 ? len : 1.0

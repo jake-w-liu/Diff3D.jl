@@ -21,7 +21,8 @@ end
 function _soft_positive_finite(value, label::String)
     value isa Real && !(value isa Bool) ||
         throw(ArgumentError("$label must be finite and positive"))
-    (isfinite(value) && value > zero(value)) ||
+    scalar = _primal_value(value)
+    (isfinite(scalar) && scalar > zero(scalar)) ||
         throw(ArgumentError("$label must be finite and positive"))
     return value
 end
@@ -111,7 +112,19 @@ mutable struct SoftRenderSceneWorkspace
     soft::SoftRenderWorkspace{Float64}
     meshes::Vector{Mesh}
     lights::Vector{SceneLight}
+    morph_meshes::Vector{Mesh}
+    morph_positions::Vector{Vec3{Float64}}
+    skinned::Vector{SkinnedMesh}
+    skinned_meshes::Vector{Mesh}
+    skinning_matrices::Vector{Mat4{Float64}}
+    instanced::Vector{InstancedMesh}
+    instanced_materials::Vector{_InstancedMaterialState}
 end
+
+SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft, meshes, lights) =
+    SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft, meshes, lights,
+                             Mesh[], Vec3{Float64}[], SkinnedMesh[], Mesh[],
+                             Mat4{Float64}[], InstancedMesh[], _InstancedMaterialState[])
 
 SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft) =
     SoftRenderSceneWorkspace(vertices, faces, colors, face_colors, soft,
@@ -518,14 +531,13 @@ end
                              ortho_dir=ortho_dir)
 end
 
-function _soft_shade_mesh_faces_for_mesh!(colors::Vector{Color3{Float64}},
+@inline function _soft_shade_mesh_faces_from_material!(colors::Vector{Color3{Float64}},
                                           geo::BufferGeometry, world_mat::Mat4,
-                                          mesh::Mesh,
+                                          @nospecialize(mat),
                                           lights::Vector{<:AbstractLight},
                                           cam_pos::Vec3,
                                           camera_view::Mat4,
                                           ortho_dir)
-    mat = mesh.material
     if mat isa MeshBasicMaterial
         return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
     elseif mat isa MeshLambertMaterial
@@ -988,9 +1000,45 @@ end
 
 # ========================== High-level differentiable render ==========================
 
+@inline function _soft_append_geometry!(vertices, faces, colors, face_colors,
+                                 geo::BufferGeometry, world::Mat4, @nospecialize(material),
+                                 lights, camera_position, view, ortho_dir,
+                                 vertex_offset::Int, face_offset::Int)
+    selected = _draw_face_range(geo)
+    isempty(selected) && return vertex_offset, face_offset
+    for vertex in 1:geo.n_vertices
+        vertices[vertex_offset+vertex] = mat4_transform_point(world,get_vertex(geo,vertex))
+    end
+    _soft_shade_mesh_faces_from_material!(face_colors,geo,world,material,
+                                         lights,camera_position,view,ortho_dir)
+    for face in selected
+        i1,i2,i3 = get_face(geo,face)
+        face_offset += 1
+        faces[face_offset] = (i1+vertex_offset,i2+vertex_offset,i3+vertex_offset)
+        colors[face_offset] = face_colors[face]
+    end
+    return vertex_offset+geo.n_vertices, face_offset
+end
+
+function _soft_append_instances!(vertices, faces, colors, face_colors,
+                                  object::InstancedMesh, materials::Vector{M},
+                                  lights, camera_position, view, ortho_dir,
+                                  vertex_offset::Int, face_offset::Int) where {M<:AbstractMaterial}
+    geo = _instanced_geometry(object)
+    base = compute_world_matrix(object)
+    for index in eachindex(object.instance_matrices)
+        world = base*object.instance_matrices[index]
+        vertex_offset,face_offset = _soft_append_geometry!(vertices,faces,colors,face_colors,
+            geo,world,materials[index],lights,camera_position,view,ortho_dir,vertex_offset,face_offset)
+    end
+    return vertex_offset,face_offset
+end
+
 """
-Differentiable render of a scene — extracts geometry data and calls soft_render.
-Suitable for wrapping in ForwardDiff.
+Render visible triangle meshes, posed skins, and triangle instances with soft
+coverage. Honors camera layers, LOD selection, and geometry draw ranges.
+For derivatives with respect to geometry or cameras, use `soft_render` or
+`diff_render` with explicit parametric inputs.
 """
 function soft_render_scene(scene::Scene, camera::AbstractCamera,
                            width::Int, height::Int;
@@ -999,16 +1047,38 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
 
     proj = projection_matrix(camera)
     camera_position, camera_target, camera_up = _camera_world_pose(camera)
-    view = mat4_look_at(camera_position, camera_target, camera_up)
+    view = view_matrix(camera)
     vp = proj * view
     ortho_dir = camera isa OrthographicCamera ?
         _camera_backward_from_view(view) : nothing
 
     scene_workspace = workspace isa SoftRenderSceneWorkspace ? workspace : nothing
+    _update_scene_lods!(scene, camera)
     meshes = scene_workspace === nothing ? collect_meshes(scene) :
         _collect_meshes_into!(scene_workspace.meshes, scene)
-    lights = scene_workspace === nothing ? collect_lights(scene) :
-        _collect_lights_into!(scene_workspace.lights, scene)
+    layer_mask = _object_layer_mask(camera)
+    _filter_object_layers!(meshes, nothing, layer_mask)
+    if scene_workspace === nothing
+        _prepare_morph_render_meshes!(meshes)
+        _append_skinned_render_meshes!(meshes,scene,SkinnedMesh[]; layer_mask=layer_mask)
+    else
+        _prepare_morph_render_meshes!(meshes, scene_workspace.morph_meshes,
+                                      scene_workspace.morph_positions)
+        _append_skinned_render_meshes!(meshes,scene,scene_workspace.skinned,
+            scene_workspace.skinned_meshes,scene_workspace.skinning_matrices,
+            scene_workspace.morph_positions; layer_mask=layer_mask)
+    end
+    instanced = scene_workspace === nothing ? _collect_instanced_into!(InstancedMesh[],scene) :
+        _collect_instanced_into!(scene_workspace.instanced,scene)
+    _filter_object_layers!(instanced,nothing,layer_mask)
+    for object in instanced
+        _validate_instanced_mesh(object,"soft_render_scene")
+    end
+    filter!(_instanced_triangle_drawable,instanced)
+    instance_materials = scene_workspace === nothing ? _InstancedMaterialState[] : scene_workspace.instanced_materials
+    length(instance_materials)>length(instanced) && resize!(instance_materials,length(instanced))
+    lights = scene_workspace === nothing ? _collect_lights_into!(SceneLight[], scene, layer_mask) :
+        _collect_lights_into!(scene_workspace.lights, scene, layer_mask)
 
     total_vertices = 0
     total_faces = 0
@@ -1016,11 +1086,27 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     for mesh in meshes
         geo = _mesh_geometry(mesh)
         _validate_triangle_geometry_indices(geo, "soft_render_scene")
+        mesh.material isa AbstractMaterial ||
+            throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
+        selected = _draw_face_range(geo)
+        isempty(selected) && continue
         total_vertices = _geometry_checked_add(
             total_vertices, geo.n_vertices, "soft_render_scene vertex count")
         total_faces = _geometry_checked_add(
-            total_faces, geo.n_faces, "soft_render_scene face count")
+            total_faces, length(selected), "soft_render_scene face count")
         max_mesh_faces = max(max_mesh_faces, geo.n_faces)
+    end
+    for object in instanced
+        geo = _instanced_geometry(object)
+        _validate_triangle_geometry_indices(geo,"soft_render_scene")
+        selected = _draw_face_range(geo)
+        count = length(object.instance_matrices)
+        (isempty(selected) || iszero(count)) && continue
+        vertices = _geometry_checked_mul(geo.n_vertices,count,"soft_render_scene instance vertex count")
+        faces = _geometry_checked_mul(length(selected),count,"soft_render_scene instance face count")
+        total_vertices = _geometry_checked_add(total_vertices,vertices,"soft_render_scene vertex count")
+        total_faces = _geometry_checked_add(total_faces,faces,"soft_render_scene face count")
+        max_mesh_faces = max(max_mesh_faces,geo.n_faces)
     end
 
     soft_workspace = scene_workspace === nothing ? workspace : scene_workspace.soft
@@ -1038,27 +1124,16 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     for mesh in meshes
         world_mat = compute_world_matrix(mesh)
         geo = _mesh_geometry(mesh)
-
-        # Transform vertices to world space
-        for vi in 1:geo.n_vertices
-            v = get_vertex(geo, vi)
-            wv = mat4_transform_point(world_mat, v)
-            all_verts[vert_offset + vi] = wv
-        end
-
-        # Compute face colors
-        _soft_shade_mesh_faces_for_mesh!(face_colors, geo, world_mat, mesh,
-                                         lights, camera_position, view,
-                                         ortho_dir)
-
-        for fi in 1:geo.n_faces
-            i1, i2, i3 = get_face(geo, fi)
-            out_fi = face_offset + fi
-            all_faces[out_fi] = (i1 + vert_offset, i2 + vert_offset, i3 + vert_offset)
-            all_colors[out_fi] = face_colors[fi]
-        end
-        vert_offset += geo.n_vertices
-        face_offset += geo.n_faces
+        vert_offset,face_offset = _soft_append_geometry!(all_verts,all_faces,all_colors,face_colors,
+            geo,world_mat,mesh.material,lights,camera_position,view,ortho_dir,vert_offset,face_offset)
+    end
+    for (slot,object) in pairs(instanced)
+        geo = _instanced_geometry(object)
+        isempty(_draw_face_range(geo)) && continue
+        materials = _instanced_materials!(instance_materials,slot,object,
+            _instanced_material(object),object.instance_colors)
+        vert_offset,face_offset = _soft_append_instances!(all_verts,all_faces,all_colors,face_colors,
+            object,materials,lights,camera_position,view,ortho_dir,vert_offset,face_offset)
     end
 
     soft_render(all_verts, all_faces, all_colors, vp, width, height, config;

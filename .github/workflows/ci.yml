@@ -27,15 +27,16 @@ jobs:
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run package tests
         run: julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()'
+      - name: Verify concurrent rendering
+        run: julia --project=. --threads=4 -O0 --compile=min test/tiled_cache_ownership.jl
 
   examples-browser:
     name: Registered examples browser smoke
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    # CI renders WebGL in software (swiftshader), ~50-100x slower than a GPU.
-    # Shard the 108 examples across parallel runners so wall-clock is ~30 min
-    # instead of ~3 h. fail-fast: false so one shard's failure still lets the
-    # others report.
+    env:
+      PYTHONUNBUFFERED: "1"
+    # Split example generation and browser checks across six runners.
     strategy:
       fail-fast: false
       matrix:
@@ -56,5 +57,8 @@ jobs:
           python -m pip install playwright
           sudo grep -rl "packages.microsoft.com" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | xargs -r sudo rm -f
           python -m playwright install --with-deps chromium
+      - name: Verify browser rendering pixels
+        if: matrix.shard == '1/6'
+        run: python test/browser_rendering.py
       - name: Verify registered examples
         run: python examples/verify_examples_registry.py --shard ${{ matrix.shard }}

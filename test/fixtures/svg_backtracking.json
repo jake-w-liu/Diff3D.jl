@@ -1,0 +1,74 @@
+[
+  {
+    "name": "ancestor choice",
+    "selector": ".outer > .target rect",
+    "markup": "<g class='outer'><g class='target'><g class='target'><rect width='1' height='1'/></g></g></g>",
+    "match": true
+  },
+  {
+    "name": "ancestor failure",
+    "selector": ".outer > .target rect",
+    "markup": "<g><g class='target'><g class='target'><rect width='1' height='1'/></g></g></g>",
+    "match": false
+  },
+  {
+    "name": "sibling choice",
+    "selector": ".a + .b ~ rect",
+    "markup": "<g class='a'/><g class='b'/><g class='b'/><rect width='1' height='1'/>",
+    "match": true
+  },
+  {
+    "name": "sibling failure",
+    "selector": ".a + .b ~ rect",
+    "markup": "<g class='a'/><g/><g class='b'/><g class='b'/><rect width='1' height='1'/>",
+    "match": false
+  },
+  {
+    "name": "nested is",
+    "selector": "rect:is(.outer > .target rect)",
+    "markup": "<g class='outer'><g class='target'><g class='target'><rect width='1' height='1'/></g></g></g>",
+    "match": true
+  },
+  {
+    "name": "nested not",
+    "selector": "rect:not(.outer > .target rect)",
+    "markup": "<g class='outer'><g class='target'><g class='target'><rect width='1' height='1'/></g></g></g>",
+    "match": false
+  },
+  {
+    "name": "mixed choices",
+    "selector": ".a + .b ~ g rect",
+    "markup": "<g class='a'/><g class='b'/><g class='b'/><g><rect width='1' height='1'/></g>",
+    "match": true
+  },
+  {
+    "name": "repeated failing choices",
+    "selector": ".missing g g g g g g g g rect",
+    "markup": "<g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><rect width='1' height='1'/></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g>",
+    "match": false
+  },
+  {
+    "name": "hidden siblings count",
+    "selector": ".scope > rect:nth-of-type(2):nth-child(3)",
+    "markup": "<g class='scope'><g/><rect display='none' width='1' height='1'/><rect width='1' height='1'/></g>",
+    "match": true
+  },
+  {
+    "name": "hidden first type does not match visible second",
+    "selector": ".scope > rect:first-of-type",
+    "markup": "<g class='scope'><g/><rect display='none' width='1' height='1'/><rect width='1' height='1'/></g>",
+    "match": false
+  },
+  {
+    "name": "ordinals reset under each parent",
+    "selector": ".inner > rect:first-child:first-of-type",
+    "markup": "<g><g><rect display='none' width='1' height='1'/></g><g class='inner'><rect width='1' height='1'/></g></g>",
+    "match": true
+  },
+  {
+    "name": "mixed element types retain child positions",
+    "selector": ".scope > rect:nth-child(4):nth-of-type(2)",
+    "markup": "<g class='scope'><rect display='none' width='1' height='1'/><g/><g/><rect width='1' height='1'/></g>",
+    "match": true
+  }
+]

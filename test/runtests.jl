@@ -4021,9 +4021,11 @@ end
         lod_near_drawables = join(Diff3D._web_collect_drawables(scene, Set{Int}(), 5.0), ",")
         @test occursin("\"name\":\"export_lod_near\"", lod_near_drawables)
         @test occursin("\"name\":\"export_lod_far\"", lod_near_drawables)
-        @test occursin("\"lodGroup\":$(lod.id)", lod_near_drawables)
-        @test occursin("\"lodDistance\":10", lod_near_drawables)
-        @test occursin("\"lodHysteresis\":0.25", lod_near_drawables)
+        @test occursin("\"lodPath\":[[$(lod.id),$(lod_near.id)]]", lod_near_drawables)
+        @test occursin("\"lodPath\":[[$(lod.id),$(lod_far.id)]]", lod_near_drawables)
+        lod_policy = Diff3D._json_parse(Diff3D._web_transform_node_json(lod))
+        @test lod_policy["lodLevels"][2]["distance"] == 10.0
+        @test lod_policy["lodLevels"][2]["hysteresis"] == 0.25
         f = tempname() * ".html"
         web_case = WebGLExportCase("case", "Case", "Generated from </script><script>alert(1)</script>", scene;
                                    target=Vec3(0.0,0.0,0.0), animations=[clip],
@@ -4497,7 +4499,8 @@ end
         @test occursin("t.needsUpdate=false", html)
         @test occursin("t.__webglTexture=tex", html)
         @test occursin("function refreshObjectTextures(o)", html)
-        @test occursin("for(const o of visibleScratch) refreshObjectTextures(o); updateDynamicShadows(active,visibleScratch,clip);", html)
+        @test occursin("for(const o of visibleScratch) refreshObjectTextures(o);", html)
+        @test occursin("updateDynamicShadows(active,viewVisibleScratch,clip,mask);", html)
         @test occursin("\"needsUpdate\":false", html)
         @test occursin("if(packed){ if(o.physicalScalarTex) uploadTextureData(packed,o.physicalScalarTex);", html)
         @test occursin("\"maxAnisotropy\":8", html)
@@ -4675,8 +4678,9 @@ end
         @test occursin("uPointSizeAttenuation", html)
         @test occursin("uPointReferenceDistance", html)
         @test occursin("vec4 viewPos=uView*w", html)
-        @test occursin("float atten=uPointSizeAttenuation<0.5?1.0:max(0.1,uPointReferenceDistance/max(0.0001,-viewPos.z))", html)
-        @test occursin("pointUv=(uPointMatrix*vec3(gl_PointCoord,1.0)).xy", html)
+        @test occursin("float atten=uPointSizeAttenuation<0.5?1.0:uPointReferenceDistance/max(0.000001,-viewPos.z); gl_PointSize=max(1.0,uPointSize*atten)", html)
+        @test occursin("pointCoord=vec2(gl_PointCoord.x,1.0-gl_PointCoord.y)", html)
+        @test occursin("pointUv=(uPointMatrix*vec3(pointCoord,1.0)).xy", html)
         @test occursin("uniformTexMatrix(p,\"uPointMatrix\",o.texture)", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointSizeAttenuation\"),(o.pointSizeAttenuation===false||(currentDrawCamera&&currentDrawCamera.type===\"orthographic\"))?0:1)", html)
         @test occursin("gl.uniform1f(gl.getUniformLocation(p,\"uPointReferenceDistance\"),Math.max(1e-6,currentDrawDistance))", html)
@@ -4685,7 +4689,7 @@ end
         @test occursin("colorTex(uPointMap,pointUv,uPointColorSpace)", html)
         @test occursin("uUsePointAlphaMap", html)
         @test occursin("uPointAlphaTest", html)
-        @test occursin("pointAlphaUv=(uPointAlphaMatrix*vec3(gl_PointCoord,1.0)).xy", html)
+        @test occursin("pointAlphaUv=(uPointAlphaMatrix*vec3(pointCoord,1.0)).xy", html)
         @test occursin("alphaTex=uUsePointAlphaMap<0.5?1.0:texture2D(uPointAlphaMap,pointAlphaUv).g", html)
         @test occursin("if(outAlpha<uPointAlphaTest) discard", html)
         @test occursin("uniformTexMatrix(p,\"uPointAlphaMatrix\",o.alphaTexture)", html)
@@ -5016,12 +5020,12 @@ end
         @test occursin("varying vec4 vTangent", html)
         @test occursin("uniform mat4 uBoneMatrices[64]", html)
         @test occursin("uBindMatrix,uBindMatrixInverse", html)
-        @test occursin("function currentBindMatrixInverse", html)
+        @test occursin("function skinWorldPrefix", html)
         @test occursin("mat4 skinMatrix()", html)
         @test occursin("vec4 skinPosition(mat4 skin)", html)
-        @test occursin("vec3 skinDirection(mat4 skin, vec3 d)", html)
+        @test occursin("mat3 tangentTransform=mat3(uModel)*mat3(inst)*deformation", html)
         @test occursin("uBindMatrixInverse*(skin*(uBindMatrix*p))", html)
-        @test occursin("mat3(uBindMatrixInverse)*mat3(skin)*mat3(uBindMatrix)*d", html)
+        @test occursin("mat3 deformation=uUseSkin==1?mat3(uBindMatrixInverse)*mat3(skin)*mat3(uBindMatrix):mat3(1.0)", html)
         @test occursin("o.shaderSkin", html)
         @test occursin("o.hasMorphTargets=!!((o.morphTargets&&o.morphTargets.length)", html)
         @test occursin("!o.hasMorphTargets", html)
@@ -5046,7 +5050,7 @@ end
         @test occursin(Regex("\"name\":\"export_hierarchy_child\".*?\"parentId\":$(hierarchy_root.id)"), html)
         @test occursin("\"target\":$(hierarchy_root.id),\"property\":\"position\"", html)
         @test occursin("function updateBoneGraph", html)
-        @test occursin("if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)) parent=graph.get(b.parentId).matrix; }", html)
+        @test occursin("if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)){ const p=graph.get(b.parentId); parent=p.transformMatrix||p.matrix; } }", html)
         @test occursin("updateTransformGraph(c); updateBoneGraph(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); }", html)
         @test occursin("uUseSkin", html)
         @test occursin("uUseTangents", html)
@@ -5062,7 +5066,9 @@ end
         @test occursin("\"name\":\"export_bone_texture_65\"", html)
         @test occursin("\"indices\":[64,0,0,0,64,0,0,0,64,0,0,0]", html)
         @test occursin("const VSH_BONE_TEXTURE", html)
-        @test occursin("const DVSH_BONE_TEXTURE=DVSH", html)
+        @test occursin("const DVSH_BONE_TEXTURE=boneTextureShader(DVSH)", html)
+        @test occursin("const CVSH_BONE_TEXTURE=boneTextureShader(CVSH)", html)
+        @test occursin("const CVSH=INSTANCING_GLSL+SKINNING_GLSL", html)
         @test occursin("const PDVSH=DVSH", html)
         @test occursin("const PDVSH_BONE_TEXTURE=DVSH_BONE_TEXTURE", html)
         @test occursin("MAX_COMBINED_TEXTURE_IMAGE_UNITS", html)
@@ -5172,7 +5178,7 @@ end
         @test occursin("function updateTransformGraph", html)
         @test occursin("nodeMap.set(n.id,n)", html)
         @test occursin("nodeMap.set(o.id,o)", html)
-        @test occursin("o.instanceMatrices=(o.instanceMatrices&&o.instanceMatrices.length)?o.instanceMatrices.map(m=>m.slice()):null", html)
+        @test occursin("o.instanceMatrices=Array.isArray(o.instanceMatrices)?o.instanceMatrices.map(m=>m.slice()):null", html)
         @test occursin("o.instanceMatrix=o.instanceMatrix?o.instanceMatrix.slice():M4.ident()", html)
         @test occursin("M4.mul(world,o.instanceMatrix||M4.ident())", html)
         @test occursin("o.baseTransparent=!!o.transparent", html)
@@ -5322,7 +5328,7 @@ end
         @test occursin("function drawShadowCaster(o,viewProj,clip)", html)
         @test occursin("function drawPointShadowCaster(o,viewProj,pos,far,clip)", html)
         @test occursin("else if(l.shadow.type===\"pointDynamic\") renderDynamicPointShadow(l,visible,clip)", html)
-        @test occursin("updateDynamicShadows(active,visibleScratch,clip); const light=lighting(active)", html)
+        @test occursin("updateDynamicShadows(active,viewVisibleScratch,clip,mask); const light=lighting(active,mask)", html)
         @test occursin("uShadowMode[0]", html)
         @test occursin("uShadowPointMatrix0[0]", html)
         @test occursin("pointShadowSample0", html)
@@ -5382,13 +5388,12 @@ end
         @test occursin("function lodChoices", html)
         @test occursin("function activeVisibleCount()", html)
         @test occursin("activeObjectCount:()=>activeVisibleCount()", html)
-        @test occursin("lod.get(o.lodGroup)!==o", html)
-        @test occursin("\"lodGroup\":$(lod.id)", html)
-        @test occursin("\"lodDistance\":10", html)
-        @test occursin("\"lodHysteresis\":0.25", html)
-        @test occursin("c.lodState||(c.lodState=new Map())", html)
-        @test occursin("o.lodHysteresis||0", html)
-        @test occursin("lodChoices(active,eye)", html)
+        @test occursin("lodMembershipVisible(o.lodPath,lod)", html)
+        @test occursin("\"lodPath\":[[$(lod.id),$(lod_near.id)]]", html)
+        @test occursin("\"object\":$(lod_far.id),\"distance\":10,\"hysteresis\":0.25", html)
+        @test occursin("if(update) state.set(node.id,chosen)", html)
+        @test occursin("level.distance*(wasVisible?1-level.hysteresis:1)", html)
+        @test occursin("lodChoices(active,state.eye,state.camera,true)", html)
         @test occursin("transparentScratch.sort(compareTransparentDepth)", html)
         cap_scene = Scene()
         add!(cap_scene, Mesh(BoxGeometry(), MeshStandardMaterial(color=Color3(0.4, 0.5, 0.6))))
@@ -5476,7 +5481,7 @@ end
         @test occursin("\"depthWrite\":false", html)
         @test occursin("o.depthTest===false", html)
         @test occursin("gl.depthMask(o.depthWrite!==false)", html)
-        @test occursin("const visibleScratch=[], viewScratch=[], transparentScratch=[]", html)
+        @test occursin("const visibleScratch=[], viewVisibleScratch=[], viewScratch=[], transparentScratch=[]", html)
         @test occursin("function objectVisibleInCase(o,lod)", html)
         @test occursin("function cameraEye(cam)", html)
         @test occursin("function objectIsTransparent(o)", html)
@@ -7517,9 +7522,15 @@ end
         for mat in (MeshBasicMaterial(), MeshLambertMaterial(), MeshStandardMaterial(),
                     MeshPhysicalMaterial(), MeshToonMaterial(), MeshMatcapMaterial(),
                     MeshNormalMaterial(), MeshDepthMaterial())
-            names = (n for n in fieldnames(typeof(mat)) if n !== :clipping_planes)
+            # These positional signatures predate clipping planes and the
+            # subsequently appended physical iridescence minimum.
+            names = (n for n in fieldnames(typeof(mat))
+                     if n !== :clipping_planes && n !== :iridescence_thickness_min)
             legacy = typeof(mat)((getfield(mat, n) for n in names)...)
             @test isempty(legacy.clipping_planes)
+            if legacy isa MeshPhysicalMaterial
+                @test legacy.iridescence_thickness_min == 0.0
+            end
         end
         legacy_basic = MeshBasicMaterial(Color3(1,1,1), 1.0, false, false,
                                          :front, nothing, nothing, false,
@@ -8417,7 +8428,7 @@ end
               "ha": 800,
               "x_min": 0,
               "x_max": 1000,
-              "o": "m 0 0 q 500 1000 1000 0 b 900 -200 100 -200 0 0"
+              "o": "m 0 0 q 1000 0 500 1000 b 0 0 900 -200 100 -200"
             },
             "O": {
               "ha": 1200,
@@ -13252,10 +13263,11 @@ end
                 @test mat.map.repeat == Vec2(2.0, 3.0)
                 @test mat.map.rotation ≈ 0.75
                 expected_matrix = Mat3{Float64}((
-                    2.0*cos(0.75), 2.0*sin(0.75), 0.25,
-                    -3.0*sin(0.75), 3.0*cos(0.75), 0.5,
+                    2.0*cos(0.75), 3.0*sin(0.75), 0.25,
+                    -2.0*sin(0.75), 3.0*cos(0.75), 0.5,
                     0.0, 0.0, 1.0))
                 @test maximum(abs.(collect(mat.map.matrix.e) .- collect(expected_matrix.e))) < 1e-12
+                @test !mat.map.matrix_auto_update
                 @test Diff3D.texture_transform_uv(mat.map, 0.0, 0.0) == (expected_matrix.e[3], expected_matrix.e[6])
                 @test mat.map.wrap_s === :clamp && mat.map.wrap_t === :mirror
                 @test mat.map.filter === :nearest
@@ -13446,14 +13458,15 @@ end
                 @test mat.thickness_map isa Texture
                 @test mat.attenuation_distance ≈ 3.0
                 @test mat.attenuation_color == Color3(0.7, 0.8, 0.9)
-                @test mat.sheen ≈ 0.5
+                @test mat.sheen == 1.0
                 @test mat.sheen_color == Color3(0.5, 0.25, 0.125)
                 @test mat.sheen_roughness ≈ 0.8
                 @test mat.sheen_color_map isa Texture && mat.sheen_color_map.colorspace === :srgb
                 @test mat.sheen_roughness_map isa Texture
                 @test mat.iridescence ≈ 0.4
                 @test mat.iridescence_ior ≈ 1.6
-                @test mat.iridescence_thickness ≈ 300.0
+                @test mat.iridescence_thickness == 500.0
+                @test mat.iridescence_thickness_min == 100.0
                 @test mat.iridescence_map isa Texture
                 @test mat.iridescence_thickness_map isa Texture
                 @test mat.specular_intensity ≈ 0.65
@@ -16269,11 +16282,13 @@ end
             @test sm isa SkinnedMesh
             @test joint isa Bone
             @test sm.bind_mode === :attached
-            @test sm.bind_matrix.e == compute_world_matrix(sm).e
-            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 0.0
-            @test apply_skinning(sm)[2].x ≈ 1.0
+            @test sm.bind_matrix == Mat4()
+            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 5.0
+            @test apply_skinning(sm)[2].x ≈ -4.0
+            @test apply_skinning(sm; space=:world)[2].x ≈ 6.0
             joint.position = Vec3(4.0, 0.0, 0.0)
-            @test apply_skinning(sm)[2].x ≈ 2.0
+            @test apply_skinning(sm)[2].x ≈ -3.0
+            @test apply_skinning(sm; space=:world)[2].x ≈ 7.0
         end
 
         @testset "load_gltf_asset skin.skeleton root outside scene" begin
@@ -16317,10 +16332,12 @@ end
             @test skeleton_root !== nothing
             @test skeleton_root.name == "skeleton_root"
             @test get_parent(skeleton_root) === nothing
-            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 0.0
-            @test apply_skinning(sm)[2].x ≈ 1.0
+            @test mat4_transform_point(sm.skeleton.bind_inverses[1], Vec3(5.0, 0.0, 0.0)).x ≈ 5.0
+            @test apply_skinning(sm)[2].x ≈ -4.0
+            @test apply_skinning(sm; space=:world)[2].x ≈ 6.0
             skeleton_root.position = Vec3(4.0, 0.0, 0.0)
-            @test apply_skinning(sm)[2].x ≈ 3.0
+            @test apply_skinning(sm)[2].x ≈ -2.0
+            @test apply_skinning(sm; space=:world)[2].x ≈ 8.0
 
             explicit_path = joinpath(dir, "skin_skeleton_root_explicit.gltf")
             write(explicit_path,
@@ -16333,9 +16350,11 @@ end
             explicit_root = get_parent(explicit_joint)
             @test explicit_root !== nothing
             @test explicit_sm.skeleton.bones == [explicit_joint]
-            @test apply_skinning(explicit_sm)[2].x ≈ 1.0
+            @test apply_skinning(explicit_sm)[2].x ≈ -9.0
+            @test apply_skinning(explicit_sm; space=:world)[2].x ≈ 1.0
             explicit_root.position = Vec3(4.0, 0.0, 0.0)
-            @test apply_skinning(explicit_sm)[2].x ≈ 3.0
+            @test apply_skinning(explicit_sm)[2].x ≈ -7.0
+            @test apply_skinning(explicit_sm; space=:world)[2].x ≈ 3.0
 
             invalid = joinpath(dir, "bad_skin_skeleton_root.gltf")
             write(invalid, """
@@ -24353,7 +24372,8 @@ end
     @test converted.skin_weights isa Vector{NTuple{4,Float64}}
     tolerant = SkinnedMesh(one_vertex, material, one_bone, valid_indices,
                            [(1.0 + 5.0e-7, 0.0, 0.0, 0.0)])
-    @test apply_skinning(tolerant)[1].x ≈ 1.0 + 5.0e-7
+    @test apply_skinning(tolerant)[1].x == 1.0
+    @test tolerant.skin_weights[1][1] == 1.0 + 5.0e-7
 
     mutable_geo = PlaneGeometry(width=1.0, height=1.0)
     mutable_sm = SkinnedMesh(
@@ -31504,7 +31524,8 @@ end
         ones(Float64, 1, 1, 3);
         filter=:nearest, colorspace=:linear)
     alpha_half = ones(Float64, 1, 1, 2)
-    alpha_half[1, 1, 2] = 0.5
+    # alpha_map samples green, which is luminance for a gray+alpha texture.
+    alpha_half[1, 1, 1] = 0.5
     alpha_half_texture = Texture(
         alpha_half; filter=:nearest, colorspace=:linear)
     function texture_alpha_sprite()
@@ -33883,3 +33904,74 @@ end
         Float64[], Float64[], [1, 2, 3], 3, 1)
     @test isempty(Diff3D._csg_geometry_polygons(degenerate))
 end
+
+include("animation_materials.jl")
+include("svg_path_state.jl")
+include("material_texture_channels.jl")
+include("geometry_normals.jl")
+include("loader_decimal_numbers.jl")
+include("font_outline_coordinates.jl")
+include("array_camera_viewports.jl")
+include("line_rasterization.jl")
+include("subnormal_normalization.jl")
+include("font_nested_contours.jl")
+include("font_collinear_contours.jl")
+include("mesh_morph_integration.jl")
+include("parented_render_roots.jl")
+include("web_instance_batches.jl")
+include("transformed_morph_targets.jl")
+include("camera_layers.jl")
+include("web_transform_graph.jl")
+include("lod_rendering.jl")
+
+include("primitive_appearance.jl")
+
+include("gltf_default_material.jl")
+
+include("gltf_matrix_padding.jl")
+
+include("rotation_reconstruction.jl")
+
+include("gltf_node_transforms.jl")
+
+include("deformation_normals.jl")
+
+include("skin_world_space.jl")
+
+include("tangent_handedness.jl")
+
+include("soft_scene_objects.jl")
+
+include("web_wireframe_deformation.jl")
+
+include("raycast_primitives.jl")
+
+include("point_footprints.jl")
+
+include("gltf_texture_transforms.jl")
+
+include("gltf_sheen.jl")
+
+include("svg_unicode_selectors.jl")
+
+include("svg_selector_backtracking.jl")
+
+include("png_packed_grayscale.jl")
+
+include("scene_fog.jl")
+
+include("lighting_energy.jl")
+
+include("iridescence_ranges.jl")
+
+include("ies_storage.jl")
+
+include("logarithmic_primitives.jl")
+
+include("tiled_cache_ownership.jl")
+
+include("forwarddiff_validation.jl")
+
+include("forwarddiff_primal_branches.jl")
+
+include("gltf_view_poses.jl")

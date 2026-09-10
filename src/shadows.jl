@@ -105,7 +105,8 @@ end
 
 function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
     light_position = _light_world_position(light)
-    dir = _shadow_direction(light.target, light_position) # toward the light
+    dir = light.rotation_driven ? -_light_emission_direction(light) :
+          _shadow_direction(light.target, light_position) # toward the light
     eye = center + dir * (radius * 2.0)
     lv = mat4_look_at(eye, center, _safe_up(dir))
     s = radius * 1.1
@@ -131,9 +132,10 @@ end
 
 function _light_view_proj(light::SpotLight, center::Vec3, radius)
     light_position = _light_world_position(light)
-    lv = mat4_look_at(
-        light_position, light.target,
-        _safe_up(_shadow_direction(light_position, light.target)))
+    direction = light.rotation_driven ? _light_emission_direction(light) :
+                _shadow_direction(light_position, light.target)
+    lv = light.rotation_driven ? _view_from_direction(light_position, direction, _safe_up(direction)) :
+         mat4_look_at(light_position, light.target, _safe_up(direction))
     near, far = _perspective_shadow_planes(light_position, center, radius)
     lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
     return lp * lv
@@ -463,6 +465,7 @@ function compute_shadow_map(scene, light; resolution::Int=512, bias=nothing, pcf
     _validate_light_object(light)
     res = _validated_shadow_resolution(resolution)
     meshes = collect_meshes(scene)
+    _prepare_morph_render_meshes!(meshes)
     _append_skinned_render_meshes!(meshes, scene)
     instanced = collect_instanced(scene)
     depth = Matrix{Float64}(undef, res, res)
@@ -571,6 +574,7 @@ end
 function _build_shadow_query(scene, lights; resolution::Int=512, bias=nothing, pcf_radius=nothing,
                              clipping_planes=_NO_PLANES)
     meshes = collect_meshes(scene)
+    _prepare_morph_render_meshes!(meshes)
     _append_skinned_render_meshes!(meshes, scene)
     instanced = collect_instanced(scene)
     maps = IdDict{AbstractLight, ShadowMap}()

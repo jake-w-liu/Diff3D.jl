@@ -370,6 +370,14 @@ end
 get_attribute(g::BufferGeometry, name::Symbol) = g.attributes[name]
 has_attribute(g::BufferGeometry, name::Symbol) = haskey(g.attributes, name)
 
+function _geometry_attribute_for_components(geo::BufferGeometry, name::Symbol, min_item_size::Int)
+    has_attribute(geo, name) || return nothing
+    attr = get_attribute(geo, name)
+    attr.item_size >= min_item_size || return nothing
+    length(attr.data) ÷ attr.item_size >= geo.n_vertices || return nothing
+    return attr
+end
+
 function _line_distance_write!(distances::Vector{Float64}, seen::Vector{Bool},
                                vertex_index::Int, value::Float64)
     if seen[vertex_index]

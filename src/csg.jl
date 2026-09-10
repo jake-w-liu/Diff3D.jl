@@ -518,7 +518,7 @@ end
 
 function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
                                        geo::BufferGeometry, matrix::Mat4,
-                                       reverse_orientation::Bool)
+                                       reverse_orientation::Bool, direction_sign::Float64)
     has_attribute(geo, :tangent) || return attributes
     source = get_attribute(geo, :tangent)
     item_size = source.item_size
@@ -530,7 +530,8 @@ function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
     @inbounds for vi in 1:geo.n_vertices
         base = (vi - 1) * item_size
         tangent = Vec3(data[base + 1], data[base + 2], data[base + 3])
-        transformed = normalize(mat4_transform_direction(matrix, tangent))
+        transformed, _ = _transform_geometry_direction_pair(
+            matrix, tangent, Vec3(), direction_sign)
         data[base + 1] = transformed.x
         data[base + 2] = transformed.y
         data[base + 3] = transformed.z
@@ -541,42 +542,106 @@ function _transform_geometry_tangents!(attributes::Dict{Symbol,BufferAttribute},
     return attributes
 end
 
-function _mat4_linear_orientation_sign(matrix::Mat4)
-    values = matrix.e
-    a, b, c = values[1], values[5], values[9]
-    d, e, f = values[2], values[6], values[10]
-    g, h, i = values[3], values[7], values[11]
-    scale = maximum(abs, (a, b, c, d, e, f, g, h, i))
-    iszero(scale) && return 0
-    an, bn, cn = a / scale, b / scale, c / scale
-    dn, en, fn = d / scale, e / scale, f / scale
-    gn, hn, inn = g / scale, h / scale, i / scale
-    terms = (
-        an * en * inn, -an * fn * hn,
-        -bn * dn * inn, bn * fn * gn,
-        cn * dn * hn, -cn * en * gn,
-    )
-    determinant = sum(terms)
-    permanent = sum(abs, terms)
-    error_bound = 64 * eps(Float64) * permanent
-    isfinite(determinant) && abs(determinant) > error_bound &&
-        return determinant < 0.0 ? -1 : 1
-    return setprecision(BigFloat, 256) do
-        ab, bb, cb = BigFloat(a), BigFloat(b), BigFloat(c)
-        db, eb, fb = BigFloat(d), BigFloat(e), BigFloat(f)
-        gb, hb, ib = BigFloat(g), BigFloat(h), BigFloat(i)
-        determinant_b = ab * (eb * ib - fb * hb) -
-                        bb * (db * ib - fb * gb) +
-                        cb * (db * hb - eb * gb)
-        determinant_b < 0 ? -1 : determinant_b > 0 ? 1 : 0
+function _transform_geometry_direction_pair_big(matrix::Mat4, base::Vec3,
+                                                delta::Vec3, direction_sign::Float64)
+    # Products of finite Float64 inputs can span 2^-2148 through 2^2048.
+    # Preserve their cancellation before normalizing on this exceptional path.
+    return setprecision(BigFloat, 4352) do
+        base_values = (base.x, base.y, base.z)
+        delta_values = (delta.x, delta.y, delta.z)
+        transformed_base = [sum(BigFloat(mat4_get(matrix, row, col)) *
+                                BigFloat(base_values[col]) for col in 1:3) for row in 1:3]
+        transformed_delta = [sum(BigFloat(mat4_get(matrix, row, col)) *
+                                 BigFloat(delta_values[col]) for col in 1:3) for row in 1:3]
+        length = sqrt(sum(abs2, transformed_base))
+        divisor = iszero(length) ? one(length) : length
+        normal = Vec3((Float64(direction_sign * value / divisor) for value in transformed_base)...)
+        relative = Vec3((Float64(direction_sign * value / divisor) for value in transformed_delta)...)
+        all(isfinite, (normal.x, normal.y, normal.z, relative.x, relative.y, relative.z)) ||
+            throw(ArgumentError("transform_geometry morph direction must be finite"))
+        return normal, relative
     end
 end
 
+function _transform_geometry_direction_pair(matrix::Mat4, base::Vec3,
+                                            delta::Vec3, direction_sign::Float64)
+    transformed_base = mat4_transform_direction(matrix, base)
+    transformed_delta = mat4_transform_direction(matrix, delta)
+    length = norm(transformed_base)
+    if isfinite(length) && !iszero(length) && !_normal_length_needs_scaling(length)
+        normal = convert(Vec3{Float64}, transformed_base * direction_sign / length)
+        relative = convert(Vec3{Float64}, transformed_delta * direction_sign / length)
+        all(isfinite, (normal.x, normal.y, normal.z, relative.x, relative.y, relative.z)) &&
+            return normal, relative
+    elseif iszero(base.x) && iszero(base.y) && iszero(base.z)
+        relative = convert(Vec3{Float64}, transformed_delta * direction_sign)
+        all(isfinite, (relative.x, relative.y, relative.z)) && return Vec3(), relative
+    end
+    return _transform_geometry_direction_pair_big(matrix, base, delta, direction_sign)
+end
+
+function _transform_geometry_morphs!(attributes::Dict{Symbol,BufferAttribute},
+                                     geo::BufferGeometry, matrix::Mat4,
+                                     normal_matrix::Mat4, affine::Bool,
+                                     direction_sign::Float64)
+    linear = typeof(matrix)(ntuple(i -> 13 <= i <= 15 ? zero(matrix.e[i]) : matrix.e[i], 16))
+    for (name, source) in geo.attributes
+        match_kind = match(r"^morph(Position|Normal|Tangent)[0-9]+$", String(name))
+        match_kind === nothing && continue
+        affine || throw(ArgumentError("transform_geometry with morph targets requires an affine matrix"))
+        kind = match_kind.captures[1]
+        if kind == "Position"
+            _validate_morph_position_attribute(source, name, geo.n_vertices)
+        else
+            _validate_morph_vec3_attribute(source, name, geo.n_vertices)
+        end
+        data = _float64_copy(source.data)
+        label = "transform_geometry $name"
+        for vertex in 1:geo.n_vertices
+            offset = (vertex - 1) * source.item_size
+            delta = Vec3(data[offset+1], data[offset+2], data[offset+3])
+            transformed = if kind == "Position"
+                mat4_transform_point(linear, delta)
+            elseif kind == "Normal"
+                base = isempty(geo.normals) ? Vec3() : get_normal(geo, vertex)
+                _, relative = _transform_geometry_direction_pair(normal_matrix, base, delta, direction_sign)
+                relative
+            else
+                base = if has_attribute(geo, :tangent)
+                    tangent = get_attribute(geo, :tangent)
+                    start = (vertex - 1) * tangent.item_size
+                    Vec3(Float64(tangent.data[start+1]), Float64(tangent.data[start+2]), Float64(tangent.data[start+3]))
+                else
+                    Vec3()
+                end
+                _, relative = _transform_geometry_direction_pair(matrix, base, delta, direction_sign)
+                relative
+            end
+            data[offset+1] = _geometry_finite_float(transformed.x, label)
+            data[offset+2] = _geometry_finite_float(transformed.y, label)
+            data[offset+3] = _geometry_finite_float(transformed.z, label)
+        end
+        attributes[name] = BufferAttribute(data, source.item_size)
+    end
+    return attributes
+end
+
+"""
+    transform_geometry(geometry, matrix)
+
+Return an independent transformed geometry, including tangent and morph data.
+Geometry with relative morph targets requires an affine matrix; fixed linear
+deltas cannot in general preserve morph interpolation through a projective map.
+"""
 function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     _validate_transform_geometry(geo)
-    reverse_orientation = _mat4_linear_orientation_sign(matrix) < 0
+    affine = iszero(matrix.e[4]) && iszero(matrix.e[8]) && iszero(matrix.e[12]) &&
+             isfinite(matrix.e[16]) && !iszero(matrix.e[16])
+    direction_sign = affine && matrix.e[16] < 0 ? -1.0 : 1.0
+    reverse_orientation = _mat4_linear_orientation_sign(matrix) * direction_sign < 0
     has_normals = !isempty(geo.normals)
-    normal_matrix = has_normals ?
+    has_morph_normals = any(name -> occursin(r"^morphNormal[0-9]+$", String(name)), keys(geo.attributes))
+    normal_matrix = has_normals || has_morph_normals ?
                     mat4_transpose(mat4_inverse(matrix)) : Mat4()
     positions = Vector{Float64}(undef, 3 * geo.n_vertices)
     normals = has_normals ?
@@ -589,7 +654,7 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
         positions[pbase + 2] = p.z
         if has_normals
             n = get_normal(geo, vi)
-            tn = normalize(mat4_transform_direction(normal_matrix, n))
+            tn, _ = _transform_geometry_direction_pair(normal_matrix, n, Vec3(), direction_sign)
             normals[pbase] = tn.x
             normals[pbase + 1] = tn.y
             normals[pbase + 2] = tn.z
@@ -611,7 +676,8 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     # arrays, so the transformed geometry would alias the source's custom attributes.
     attributes = deepcopy(geo.attributes)
     _transform_geometry_tangents!(
-        attributes, geo, matrix, reverse_orientation)
+        attributes, geo, matrix, reverse_orientation, direction_sign)
+    _transform_geometry_morphs!(attributes, geo, matrix, normal_matrix, affine, direction_sign)
     return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces,
                           attributes, copy(geo.groups), geo.draw_range)
 end

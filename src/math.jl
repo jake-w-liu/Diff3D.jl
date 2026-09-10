@@ -76,13 +76,17 @@ end
 @inline _norm4(x, y, z, w) = hypot(x, y, z, w)
 
 norm(a::Vec3) = _norm3(a.x, a.y, a.z)
+
+@inline _normal_length_needs_scaling(length) =
+    !isfinite(length) || (length isa Base.IEEEFloat && issubnormal(length))
+
 function normalize(a::Vec3)
     l = norm(a)
-    iszero(l) && return Vec3(zero(a.x), zero(a.y), zero(a.z))
-    isfinite(l) && return a / l
+    iszero(_primal_value(l)) && return Vec3(zero(a.x), zero(a.y), zero(a.z))
+    !_normal_length_needs_scaling(l) && return a / l
 
-    # A finite vector can have a mathematical length larger than typemax(T).
-    # Scale first in that case so its unit direction remains representable.
+    # Scaling preserves direction when the length overflows or its subnormal
+    # rounding would lose relative precision before division.
     scale = max(max(abs(a.x), abs(a.y)), abs(a.z))
     isfinite(scale) || return a / l
     scaled = a / scale
@@ -387,7 +391,7 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     # Guard the degenerate eye==target case before normalising (three.js lookAt):
     # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
     z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
-        iszero(d.x) && iszero(d.y) && iszero(d.z) ?
+        iszero(_primal_value(d.x)) && iszero(_primal_value(d.y)) && iszero(_primal_value(d.z)) ?
             Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
     else
         # Finite endpoints with opposite extreme signs can overflow during the
@@ -425,14 +429,16 @@ end
 end
 
 function mat4_perspective(fov, aspect, near, far)
-    isfinite(fov) && 0 < fov < Float64(pi) ||
+    fov_value, aspect_value = _primal_value(fov), _primal_value(aspect)
+    near_value, far_value = _primal_value(near), _primal_value(far)
+    isfinite(fov_value) && 0 < fov_value < Float64(pi) ||
         throw(ArgumentError("mat4_perspective fov must be finite and between 0 and pi radians"))
-    isfinite(aspect) && aspect > 0 ||
+    isfinite(aspect_value) && aspect_value > 0 ||
         throw(ArgumentError("mat4_perspective aspect must be finite and positive"))
-    isfinite(near) && near > 0 ||
+    isfinite(near_value) && near_value > 0 ||
         throw(ArgumentError("mat4_perspective near must be finite and positive"))
-    !isnan(far) || throw(ArgumentError("mat4_perspective far must not be NaN"))
-    (isinf(far) && far > 0) || (isfinite(far) && far > near) ||
+    !isnan(far_value) || throw(ArgumentError("mat4_perspective far must not be NaN"))
+    (isinf(far_value) && far_value > 0) || (isfinite(far_value) && far_value > near_value) ||
         throw(ArgumentError("mat4_perspective far must be finite and greater than near, or +Inf"))
     t = tan(fov / 2)
     T = promote_type(typeof(t), typeof(aspect), typeof(near), typeof(far))
@@ -477,11 +483,11 @@ function mat4_orthographic(left, right, bottom, top, near, far)
         throw(ArgumentError("mat4_orthographic left and right must be finite"))
     isfinite(bottom) && isfinite(top) ||
         throw(ArgumentError("mat4_orthographic bottom and top must be finite"))
-    left != right || throw(ArgumentError("mat4_orthographic left and right must differ"))
-    bottom != top || throw(ArgumentError("mat4_orthographic bottom and top must differ"))
+    _primal_value(left) != _primal_value(right) || throw(ArgumentError("mat4_orthographic left and right must differ"))
+    _primal_value(bottom) != _primal_value(top) || throw(ArgumentError("mat4_orthographic bottom and top must differ"))
     isfinite(near) && isfinite(far) ||
         throw(ArgumentError("mat4_orthographic near and far must be finite"))
-    far != near || throw(ArgumentError("mat4_orthographic near and far must differ"))
+    _primal_value(far) != _primal_value(near) || throw(ArgumentError("mat4_orthographic near and far must differ"))
     sx, tx = _mat4_orthographic_axis(
         left, right, "mat4_orthographic left/right")
     sy, ty = _mat4_orthographic_axis(
@@ -549,9 +555,10 @@ end
     end
 end
 
-@inline _mat4_inverse_scale_value(value) = value
-@inline _mat4_inverse_scale_value(value::ForwardDiff.Dual) =
-    _mat4_inverse_scale_value(ForwardDiff.value(value))
+# Domain checks and numerical scaling use scalar values, not AD perturbations.
+@inline _primal_value(value) = value
+@inline _primal_value(value::ForwardDiff.Dual) =
+    _primal_value(ForwardDiff.value(value))
 
 @inline function _mat4_zero_like(value)
     z = zero(value)
@@ -574,22 +581,22 @@ function mat4_inverse(m::Mat4)
     # underflows their small counterparts to a false zero determinant.
     balanced = all(isfinite, e)
     if balanced
-        r0 = max(max(abs(_mat4_inverse_scale_value(a00)),
-                     abs(_mat4_inverse_scale_value(a01))),
-                 max(abs(_mat4_inverse_scale_value(a02)),
-                     abs(_mat4_inverse_scale_value(a03))))
-        r1 = max(max(abs(_mat4_inverse_scale_value(a10)),
-                     abs(_mat4_inverse_scale_value(a11))),
-                 max(abs(_mat4_inverse_scale_value(a12)),
-                     abs(_mat4_inverse_scale_value(a13))))
-        r2 = max(max(abs(_mat4_inverse_scale_value(a20)),
-                     abs(_mat4_inverse_scale_value(a21))),
-                 max(abs(_mat4_inverse_scale_value(a22)),
-                     abs(_mat4_inverse_scale_value(a23))))
-        r3 = max(max(abs(_mat4_inverse_scale_value(a30)),
-                     abs(_mat4_inverse_scale_value(a31))),
-                 max(abs(_mat4_inverse_scale_value(a32)),
-                     abs(_mat4_inverse_scale_value(a33))))
+        r0 = max(max(abs(_primal_value(a00)),
+                     abs(_primal_value(a01))),
+                 max(abs(_primal_value(a02)),
+                     abs(_primal_value(a03))))
+        r1 = max(max(abs(_primal_value(a10)),
+                     abs(_primal_value(a11))),
+                 max(abs(_primal_value(a12)),
+                     abs(_primal_value(a13))))
+        r2 = max(max(abs(_primal_value(a20)),
+                     abs(_primal_value(a21))),
+                 max(abs(_primal_value(a22)),
+                     abs(_primal_value(a23))))
+        r3 = max(max(abs(_primal_value(a30)),
+                     abs(_primal_value(a31))),
+                 max(abs(_primal_value(a32)),
+                     abs(_primal_value(a33))))
         if iszero(r0) || iszero(r1) || iszero(r2) || iszero(r3)
             return _mat4_zero_like(a00)
         end
@@ -599,22 +606,22 @@ function mat4_inverse(m::Mat4)
         a20 /= r2; a21 /= r2; a22 /= r2; a23 /= r2
         a30 /= r3; a31 /= r3; a32 /= r3; a33 /= r3
 
-        c0 = max(max(abs(_mat4_inverse_scale_value(a00)),
-                     abs(_mat4_inverse_scale_value(a10))),
-                 max(abs(_mat4_inverse_scale_value(a20)),
-                     abs(_mat4_inverse_scale_value(a30))))
-        c1 = max(max(abs(_mat4_inverse_scale_value(a01)),
-                     abs(_mat4_inverse_scale_value(a11))),
-                 max(abs(_mat4_inverse_scale_value(a21)),
-                     abs(_mat4_inverse_scale_value(a31))))
-        c2 = max(max(abs(_mat4_inverse_scale_value(a02)),
-                     abs(_mat4_inverse_scale_value(a12))),
-                 max(abs(_mat4_inverse_scale_value(a22)),
-                     abs(_mat4_inverse_scale_value(a32))))
-        c3 = max(max(abs(_mat4_inverse_scale_value(a03)),
-                     abs(_mat4_inverse_scale_value(a13))),
-                 max(abs(_mat4_inverse_scale_value(a23)),
-                     abs(_mat4_inverse_scale_value(a33))))
+        c0 = max(max(abs(_primal_value(a00)),
+                     abs(_primal_value(a10))),
+                 max(abs(_primal_value(a20)),
+                     abs(_primal_value(a30))))
+        c1 = max(max(abs(_primal_value(a01)),
+                     abs(_primal_value(a11))),
+                 max(abs(_primal_value(a21)),
+                     abs(_primal_value(a31))))
+        c2 = max(max(abs(_primal_value(a02)),
+                     abs(_primal_value(a12))),
+                 max(abs(_primal_value(a22)),
+                     abs(_primal_value(a32))))
+        c3 = max(max(abs(_primal_value(a03)),
+                     abs(_primal_value(a13))),
+                 max(abs(_primal_value(a23)),
+                     abs(_primal_value(a33))))
         if iszero(c0) || iszero(c1) || iszero(c2) || iszero(c3)
             return _mat4_zero_like(a00)
         end
@@ -651,7 +658,7 @@ function mat4_inverse(m::Mat4)
         abs(det) <= 256 * eps(typeof(det)) * permanent)
         return _mat4_inverse_precise(m)
     end
-    if iszero(det)                  # singular matrix: return zero matrix (three.js Matrix4.invert)
+    if iszero(_primal_value(det))    # singular matrix: return zero matrix (three.js Matrix4.invert)
         return _mat4_zero_like(a00)
     end
     inv_det = one(det) / det
@@ -710,6 +717,37 @@ end
 # direction by this matrix keeps it perpendicular under non-uniform scale.
 function mat4_normal_matrix(m::Mat4)
     return mat4_transpose(mat4_inverse(m))
+end
+
+function _mat4_linear_orientation_sign(matrix::Mat4)
+    values = matrix.e
+    a, b, c = values[1], values[5], values[9]
+    d, e, f = values[2], values[6], values[10]
+    g, h, i = values[3], values[7], values[11]
+    scale = maximum(abs, (a, b, c, d, e, f, g, h, i))
+    iszero(scale) && return 0
+    an, bn, cn = a / scale, b / scale, c / scale
+    dn, en, fn = d / scale, e / scale, f / scale
+    gn, hn, inn = g / scale, h / scale, i / scale
+    terms = (
+        an * en * inn, -an * fn * hn,
+        -bn * dn * inn, bn * fn * gn,
+        cn * dn * hn, -cn * en * gn,
+    )
+    determinant = sum(terms)
+    permanent = sum(abs, terms)
+    error_bound = 64 * eps(Float64) * permanent
+    isfinite(determinant) && abs(determinant) > error_bound &&
+        return determinant < 0.0 ? -1 : 1
+    return setprecision(BigFloat, 256) do
+        ab, bb, cb = BigFloat(a), BigFloat(b), BigFloat(c)
+        db, eb, fb = BigFloat(d), BigFloat(e), BigFloat(f)
+        gb, hb, ib = BigFloat(g), BigFloat(h), BigFloat(i)
+        determinant_b = ab * (eb * ib - fb * hb) -
+                        bb * (db * ib - fb * gb) +
+                        cb * (db * hb - eb * gb)
+        determinant_b < 0 ? -1 : determinant_b > 0 ? 1 : 0
+    end
 end
 
 # ========================== Mat3 ==========================
@@ -803,10 +841,10 @@ function quat_normalize(q::Quaternion)
     if l == zero(l)    # zero quaternion: return identity (three.js Quaternion.normalize)
         return Quaternion(zero(q.x), zero(q.y), zero(q.z), one(q.w))
     end
-    isfinite(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
+    !_normal_length_needs_scaling(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
 
-    # Preserve the direction of finite components even when their true
-    # four-dimensional length exceeds the floating-point range.
+    # Preserve direction when the four-dimensional length overflows or rounds
+    # to a subnormal value.
     scale = max(max(abs(q.x), abs(q.y)), max(abs(q.z), abs(q.w)))
     if isfinite(scale) && scale > zero(scale)
         x, y, z, w = q.x/scale, q.y/scale, q.z/scale, q.w/scale
@@ -828,6 +866,49 @@ Euler() = Euler(0.0, 0.0, 0.0, :XYZ)
 Euler(x, y, z) = Euler(promote(x, y, z)..., :XYZ)
 Base.convert(::Type{Euler{T}}, e::Euler) where {T<:Real} =
     Euler{T}(convert(T, e.x), convert(T, e.y), convert(T, e.z), e.order)
+
+function _rotation_matrix_to_euler(matrix::Mat4, order::Symbol=:XYZ)
+    axes, orientation = if order === :XYZ
+        (1,2,3), 1
+    elseif order === :XZY
+        (1,3,2), -1
+    elseif order === :YXZ
+        (2,1,3), -1
+    elseif order === :YZX
+        (2,3,1), 1
+    elseif order === :ZXY
+        (3,1,2), 1
+    elseif order === :ZYX
+        (3,2,1), -1
+    else
+        throw(ArgumentError("unknown Euler order :$order"))
+    end
+    a, b, c = axes
+    r11 = mat4_get(matrix,a,a); r12 = mat4_get(matrix,a,b)
+    r13 = mat4_get(matrix,a,c)
+    r21 = mat4_get(matrix,b,a); r22 = mat4_get(matrix,b,b)
+    r31 = mat4_get(matrix,c,a); r32 = mat4_get(matrix,c,b)
+    # A signed axis permutation reduces every intrinsic order to XYZ. Keep
+    # the small cosine explicitly; asin loses it near a gimbal position.
+    cosine_middle = hypot(r11,r12)
+    third = iszero(cosine_middle) ? zero(cosine_middle) : atan(-r12,r11)
+    sine_third, cosine_third = sincos(third)
+    # Recover the first angle from rows whose magnitude remains near one,
+    # retaining the coupled phase even when the first row is almost singular.
+    first = atan(r32*cosine_third+r31*sine_third,
+                 r22*cosine_third+r21*sine_third)
+    middle = atan(r13,cosine_middle)
+    angles = ntuple(i -> orientation*(i==a ? first : i==b ? middle : third),3)
+    return Euler(angles...,order)
+end
+
+# Orthonormal basis (u, v) spanning the plane perpendicular to unit vector w.
+function _perp_basis(w::Vec3)
+    ref = abs(w.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
+    u = normalize(cross(ref, w))
+    v = cross(w, u)
+    return u, v
+end
 
 # ========================== Bounding volumes ==========================
 
@@ -1638,7 +1719,7 @@ end
 
 function cartesian_to_spherical(v::Vec3)
     r = norm(v)
-    r == 0 && return Spherical(zero(r), zero(r), zero(r))
+    iszero(_primal_value(r)) && return Spherical(zero(r), zero(r), zero(r))
     phi = if isfinite(r)
         acos(clamp(v.y / r, -one(r), one(r)))
     else
@@ -1677,7 +1758,7 @@ function _validate_interpolant_inputs(kind::AbstractString, times::AbstractVecto
         isfinite(times[i]) ||
             throw(ArgumentError("$kind times must be finite"))
         i == firstindex(times) && continue
-        times[i] > times[i - 1] ||
+        _primal_value(times[i]) > _primal_value(times[i - 1]) ||
             throw(ArgumentError("$kind times must be strictly increasing"))
     end
     return length(times)
@@ -1710,13 +1791,13 @@ end
 
 @inline function _make_plane(a, b, c, d)
     n = _norm3(a, b, c)
-    if isfinite(n)
+    if !_normal_length_needs_scaling(n)
         inv = n > zero(n) ? one(n)/n : one(n)
         return Plane(Vec3(a*inv, b*inv, c*inv), d*inv)
     end
 
-    # Keep finite plane coefficients normalizable when their mathematical norm
-    # exceeds the scalar range. Dividing d by the same scale preserves a·x+d=0.
+    # Keep finite plane coefficients normalizable at either end of the scalar
+    # range. Dividing d by the same scale preserves a·x+d=0.
     scale = max(max(abs(a), abs(b)), abs(c))
     if isfinite(scale) && scale > zero(scale)
         sa, sb, sc = a/scale, b/scale, c/scale

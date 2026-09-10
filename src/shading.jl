@@ -185,7 +185,7 @@ end
     (_texture_uv_set(tex) == 1 || (default_uv2 && _texture_uv_set(tex) == 0)) ? (u2, v2) : (u, v)
 
 @inline function _ambient_occlusion_factor(tex::Texture, u, v, intensity)
-    occlusion = sample_texture_channel(tex, u, v, 1)
+    occlusion = _sample_texture_unit_channel(tex, u, v, 1)
     return 1.0 + (occlusion - 1.0) * intensity
 end
 
@@ -410,6 +410,7 @@ function _with_vertex_color(m::MeshPhysicalMaterial, vc::Color3)
                          sheen_roughness=m.sheen_roughness,
                          iridescence=m.iridescence, iridescence_ior=m.iridescence_ior,
                          iridescence_thickness=m.iridescence_thickness,
+                         iridescence_thickness_min=m.iridescence_thickness_min,
                          light_map=m.light_map,
                          clearcoat_map=m.clearcoat_map,
                          clearcoat_roughness_map=m.clearcoat_roughness_map,
@@ -642,6 +643,12 @@ function _standard_mapped_terms(m::MeshStandardMaterial, roughness_map, metalnes
                 m.metalness * _sample_texture_unit_channel(metalness_map, mu, mv, 3)
     return metalness, roughness
 end
+@inline function _mapped_iridescence_thickness(m::MeshPhysicalMaterial,u,v)
+    m.iridescence_thickness_map === nothing && return m.iridescence_thickness
+    sample = _sample_texture_unit_channel(m.iridescence_thickness_map,u,v,2)
+    return _stable_lerp(m.iridescence_thickness_min,m.iridescence_thickness,sample)
+end
+
 function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, u, v)
     roughness = roughness_map === nothing ? m.roughness :
                 m.roughness * _sample_texture_unit_channel(roughness_map, u, v, 2)
@@ -657,7 +664,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
     end
     sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, u, v, 4)
     iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, u, v, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, u, v, 2)
+    iridescence_thickness = _mapped_iridescence_thickness(m,u,v)
     specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, u, v, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, u, v)
@@ -678,7 +685,8 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                           alpha_test=m.alpha_test,
                           sheen=m.sheen, sheen_color=sheen_color, sheen_roughness=sheen_roughness,
                           iridescence=iridescence, iridescence_ior=m.iridescence_ior,
-                          iridescence_thickness=iridescence_thickness, light_map=m.light_map,
+                          iridescence_thickness=iridescence_thickness,
+                         iridescence_thickness_min=m.iridescence_thickness_min, light_map=m.light_map,
                           clearcoat_map=m.clearcoat_map,
                           clearcoat_roughness_map=m.clearcoat_roughness_map,
                           transmission_map=m.transmission_map,
@@ -733,7 +741,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
     end
     sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
     iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, itu, itv, 2)
+    iridescence_thickness = _mapped_iridescence_thickness(m,itu,itv)
     specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, spcu, spcv)
@@ -755,7 +763,8 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                          alpha_test=m.alpha_test,
                          sheen=m.sheen, sheen_color=sheen_color, sheen_roughness=sheen_roughness,
                          iridescence=iridescence, iridescence_ior=m.iridescence_ior,
-                         iridescence_thickness=iridescence_thickness, light_map=m.light_map,
+                         iridescence_thickness=iridescence_thickness,
+                         iridescence_thickness_min=m.iridescence_thickness_min, light_map=m.light_map,
                          clearcoat_map=m.clearcoat_map,
                          clearcoat_roughness_map=m.clearcoat_roughness_map,
                          transmission_map=m.transmission_map,
@@ -833,7 +842,7 @@ function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
     end
     sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
     iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
-    iridescence_thickness = m.iridescence_thickness_map === nothing ? m.iridescence_thickness : m.iridescence_thickness * _sample_texture_unit_channel(m.iridescence_thickness_map, itu, itv, 2)
+    iridescence_thickness = _mapped_iridescence_thickness(m,itu,itv)
     specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
     specular_color = m.specular_color_map === nothing ? m.specular_color : begin
         c = sample_texture_linear(m.specular_color_map, spcu, spcv)
@@ -2662,7 +2671,8 @@ end
 
 function light_contribution(light::DirectionalLight, position::Vec3)
     _validate_light_parameters(light)
-    dir = _direction_between(light.target, _light_world_position(light))
+    dir = light.rotation_driven ? -_light_emission_direction(light) :
+          _direction_between(light.target, _light_world_position(light))
     (light.color, light.intensity, dir)
 end
 
@@ -2697,8 +2707,7 @@ function light_contribution(light::SpotLight, position::Vec3)
         _light_direction_and_distance(position, light_position)
 
     # Spot cone
-    target_dir =
-        _direction_between(light_position, light.target)
+    target_dir = _light_emission_direction(light)
     # dir points from surface to light, so -dir points from light to surface.
     cos_angle = dot(-dir, target_dir)
     cos_outer = cos(light.angle)

@@ -3,12 +3,20 @@
 # Uses the Möller–Trumbore algorithm against world-space triangles.
 # --------------------------------------------------------------------------
 
+"""A picking result. `instance_id` is 1-based for instances and `nothing` otherwise.
+`face_index` identifies a mesh face, point vertex, or line segment's start vertex;
+it is zero for a sprite.
+"""
 struct Intersection
     distance::Float64
     point::Vec3{Float64}
     object::AbstractObject3D
     face_index::Int
+    instance_id::Union{Nothing,Int}
 end
+
+Intersection(distance,point,object,face_index) =
+    Intersection(distance,point,object,face_index,nothing)
 
 """
 Möller–Trumbore ray/triangle test. Returns the ray parameter `t > 0` at the
@@ -111,7 +119,13 @@ mutable struct Raycaster
     line_threshold::Float64  # world-space pick radius for Line/LineSegments segments (three.js params.Line.threshold)
     skinning_matrices::Vector{Mat4{Float64}}
     morph_positions::Vector{Vec3{Float64}}
+    camera::Union{Nothing,AbstractCamera}
 end
+
+Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+          skinning_matrices,morph_positions) =
+    Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+              skinning_matrices,morph_positions,nothing)
 
 function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
                    layers::Layers, point_threshold::Float64,
@@ -185,12 +199,14 @@ end
 
 Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
           layers::Layers=layers_enable_all!(Layers()),
-          point_threshold=1.0, line_threshold=1.0) = begin
+          point_threshold=1.0, line_threshold=1.0,
+          camera::Union{Nothing,AbstractCamera}=nothing) = begin
     n, f = _raycaster_range(near, far)
     Raycaster(Ray(_raycaster_vec3(origin, "origin"), _raycaster_direction(dir)),
               n, f, layers,
               _raycaster_threshold(point_threshold, "point_threshold"),
-              _raycaster_threshold(line_threshold, "line_threshold"))
+              _raycaster_threshold(line_threshold, "line_threshold"),
+              Mat4{Float64}[],Vec3{Float64}[],camera)
 end
 
 const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
@@ -226,6 +242,25 @@ end
 
 @inline _layers_test_object(obj::AbstractObject3D, layers::Layers) =
     (_object_layer_mask(obj) & layers.mask) != 0
+
+@inline _object_matches_layer_mask(obj::AbstractObject3D, ::Nothing) = true
+@inline _object_matches_layer_mask(obj::AbstractObject3D, mask::UInt32) =
+    (_object_layer_mask(obj) & mask) != 0
+
+function _filter_object_layers!(objects::Vector, worlds, mask::Union{Nothing,UInt32})
+    mask === nothing && return objects
+    output = 0
+    for i in eachindex(objects)
+        object = objects[i]
+        _object_matches_layer_mask(object, mask) || continue
+        output += 1
+        objects[output] = object
+        worlds === nothing || (worlds[output] = worlds[i])
+    end
+    resize!(objects, output)
+    worlds === nothing || resize!(worlds, output)
+    return objects
+end
 
 # Distance from point `p` to the ray, and the ray parameter `t` (in units of the
 # ray direction `d`, which `Raycaster` keeps normalised) at the closest approach.
@@ -429,21 +464,92 @@ function _camera_ray(camera::AbstractCamera, ndc_x, ndc_y)
     Ray(_raycaster_vec3(p_near, "origin"), _raycaster_direction(p_far - p_near))
 end
 
-"""Aim the raycaster through screen NDC `(x,y)` from a camera (three.js `setFromCamera`)."""
+"""Aim through screen NDC `(x,y)` and retain the camera for sprite picking."""
 function set_from_camera!(rc::Raycaster, camera::AbstractCamera, ndc_x, ndc_y)
     x = Float64(ndc_x)
     y = Float64(ndc_y)
     isfinite(x) && isfinite(y) ||
         throw(ArgumentError("set_from_camera! NDC coordinates must be finite"))
     rc.ray = _camera_ray(camera, x, y)
+    rc.camera = camera
     return rc
+end
+
+function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
+                            morphed_positions,instance_id=nothing)
+    o,d = rc.ray.origin,rc.ray.direction
+    thr = rc.point_threshold
+    @inbounds for entry in _draw_entry_range(geo)
+        vi = _draw_vertex_index(geo, entry)
+        p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
+        t, dist = _ray_point_distance(o, d, p)
+        if dist < thr && rc.near <= t <= rc.far
+            # Report the point itself as the hit location; face_index = vertex index.
+            push!(hits, Intersection(t, p, obj, vi, instance_id))
+        end
+    end
+    return hits
+end
+
+function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
+                           morphed_positions,mode::Symbol,instance_id=nothing)
+    o,d = rc.ray.origin,rc.ray.direction
+    thr = rc.line_threshold
+    # LineSegments: disjoint pairs. LineObject: consecutive vertices.
+    # LineLoop closes the final vertex back to the first, matching three.js.
+    step = mode === :lines ? 2 : 1
+    entries = _draw_entry_range(geo)
+    isempty(entries) && return hits
+    first_entry = first(entries)
+    last_entry = last(entries)
+    @inbounds for entry in first_entry:step:(last_entry - 1)
+        vi1 = _draw_vertex_index(geo, entry)
+        vi2 = _draw_vertex_index(geo, entry + 1)
+        a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
+        b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
+        t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
+        if dist < thr && rc.near <= t <= rc.far
+            # face_index = the segment's start vertex index (three.js index).
+            push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
+        end
+    end
+    if mode === :line_loop && last_entry - first_entry + 1 > 2
+        vi1 = _draw_vertex_index(geo, last_entry)
+        vi2 = _draw_vertex_index(geo, first_entry)
+        a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
+        b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
+        t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
+        if dist < thr && rc.near <= t <= rc.far
+            push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
+        end
+    end
+    return hits
+end
+
+function _raycast_sprite!(hits,rc::Raycaster,obj::Sprite,wm::Mat4)
+    camera = rc.camera
+    camera === nothing && throw(ArgumentError(
+        "Sprite picking requires a camera; call set_from_camera! or pass camera to Raycaster"))
+    _validate_sprite_center(obj,"Sprite raycast")
+    _validate_material_parameters(obj.material)
+    a,b,c,d = _sprite_quad_corners(obj,obj.material,camera,wm,view_matrix(camera))
+    origin,direction = rc.ray.origin,rc.ray.direction
+    first_hit = _ray_triangle_intersect_unchecked(origin,direction,a,b,c,1e-9,:double)
+    second_hit = _ray_triangle_intersect_unchecked(origin,direction,a,c,d,1e-9,:double)
+    distance = first_hit === nothing ? second_hit :
+               second_hit === nothing ? first_hit : min(first_hit,second_hit)
+    if distance !== nothing && rc.near <= distance <= rc.far
+        push!(hits,Intersection(distance,origin+direction*distance,obj,0))
+    end
+    return hits
 end
 
 # Test a single object's own geometry against the ray, appending any hits to
 # `hits`. Layers and visibility are already checked by the caller. Mesh uses the
 # Möller–Trumbore triangle path; PointsObject uses per-vertex pick radius;
 # LineObject/LineSegments use per-segment pick radius. Other object types (Group,
-# Scene, Bone, Sprite, ...) carry no testable geometry and add nothing.
+# Scene, Bone, ...) carry no testable geometry and add nothing. Sprites use
+# their camera-facing quad.
 function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
                           obj::AbstractObject3D, wm::Mat4{Float64})
     o = rc.ray.origin; d = rc.ray.direction
@@ -451,35 +557,45 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
     if obj isa Mesh
         geo = _mesh_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")
+        morphed_positions = _raycast_morph_positions(rc, obj, geo)
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = material_side(_mesh_material(obj))
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
-            a = mat4_transform_point(wm, get_vertex(geo, i1))
-            b = mat4_transform_point(wm, get_vertex(geo, i2))
-            c = mat4_transform_point(wm, get_vertex(geo, i3))
+            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
+            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
+            c = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i3))
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
             end
         end
-    elseif obj isa InstancedMesh && _instanced_triangle_drawable(obj)
-        # Each instance is the geometry under world_matrix * instance_matrix; test
-        # all of them (was silently skipped, so instanced scenes returned no hits).
+    elseif obj isa InstancedMesh
         geo = _instanced_geometry(obj)
-        _validate_triangle_geometry_indices(geo, "raycast")
-        side = material_side(_instanced_material(obj))
-        @inbounds for im in obj.instance_matrices
-            m = wm * im
-            for fi in _draw_face_range(geo)
-                i1, i2, i3 = get_face(geo, fi)
-                a = mat4_transform_point(m, get_vertex(geo, i1))
-                b = mat4_transform_point(m, get_vertex(geo, i2))
-                c = mat4_transform_point(m, get_vertex(geo, i3))
-                t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
-                if t !== nothing && rc.near <= t <= rc.far
-                    push!(hits, Intersection(t, o + d * t, obj, fi))
+        triangle_mode = _instanced_triangle_drawable(obj)
+        if triangle_mode
+            _validate_triangle_geometry_indices(geo,"raycast")
+        else
+            _validate_indexed_geometry(geo,"raycast")
+        end
+        side = triangle_mode ? material_side(_instanced_material(obj)) : :double
+        @inbounds for (instance_index,im) in pairs(obj.instance_matrices)
+            m = wm*im
+            if triangle_mode
+                for fi in _draw_face_range(geo)
+                    i1, i2, i3 = get_face(geo, fi)
+                    a = mat4_transform_point(m, get_vertex(geo, i1))
+                    b = mat4_transform_point(m, get_vertex(geo, i2))
+                    c = mat4_transform_point(m, get_vertex(geo, i3))
+                    t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
+                    if t !== nothing && rc.near <= t <= rc.far
+                        push!(hits, Intersection(t, o + d * t, obj, fi, instance_index))
+                    end
                 end
+            elseif _instanced_point_drawable(obj)
+                _raycast_points!(hits,rc,obj,geo,m,nothing,instance_index)
+            else
+                _raycast_lines!(hits,rc,obj,geo,m,nothing,obj.draw_mode,instance_index)
             end
         end
     elseif obj isa SkinnedMesh
@@ -488,14 +604,14 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         geo = _skinned_buffer_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")
         _validate_skinned_mesh(obj, "SkinnedMesh")
-        mats = _skinning_matrices!(rc.skinning_matrices, obj)
+        mats = _skinning_matrices!(rc.skinning_matrices, obj, :world)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         side = material_side(obj.material)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
-            a = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1))
-            b = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i2))
-            c = mat4_transform_point(wm, _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i3))
+            a = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1)
+            b = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i2)
+            c = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i3)
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))
@@ -503,51 +619,17 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         end
     elseif obj isa PointsObject
         geo = _points_geometry(obj)
-        _validate_indexed_geometry(geo, "raycast")
-        morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        thr = rc.point_threshold
-        @inbounds for entry in _draw_entry_range(geo)
-            vi = _draw_vertex_index(geo, entry)
-            p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
-            t, dist = _ray_point_distance(o, d, p)
-            if dist < thr && rc.near <= t <= rc.far
-                # Report the point itself as the hit location; face_index = vertex index.
-                push!(hits, Intersection(t, p, obj, vi))
-            end
-        end
+        _validate_indexed_geometry(geo,"raycast")
+        morphed_positions = _raycast_morph_positions(rc,obj,geo)
+        _raycast_points!(hits,rc,obj,geo,wm,morphed_positions)
     elseif obj isa LineObject || obj isa LineSegments || obj isa LineLoop
         geo = _line_geometry(obj)
-        _validate_indexed_geometry(geo, "raycast")
-        morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        thr = rc.line_threshold
-        # LineSegments: disjoint pairs. LineObject: consecutive vertices.
-        # LineLoop closes the final vertex back to the first, matching three.js.
-        step = obj isa LineSegments ? 2 : 1
-        entries = _draw_entry_range(geo)
-        isempty(entries) && return hits
-        first_entry = first(entries)
-        last_entry = last(entries)
-        @inbounds for entry in first_entry:step:(last_entry - 1)
-            vi1 = _draw_vertex_index(geo, entry)
-            vi2 = _draw_vertex_index(geo, entry + 1)
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
-            t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
-            if dist < thr && rc.near <= t <= rc.far
-                # face_index = the segment's start vertex index (three.js index).
-                push!(hits, Intersection(t, seg_pt, obj, vi1))
-            end
-        end
-        if obj isa LineLoop && last_entry - first_entry + 1 > 2
-            vi1 = _draw_vertex_index(geo, last_entry)
-            vi2 = _draw_vertex_index(geo, first_entry)
-            a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
-            b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
-            t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
-            if dist < thr && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, seg_pt, obj, vi1))
-            end
-        end
+        _validate_indexed_geometry(geo,"raycast")
+        morphed_positions = _raycast_morph_positions(rc,obj,geo)
+        mode = obj isa LineSegments ? :lines : obj isa LineLoop ? :line_loop : :line_strip
+        _raycast_lines!(hits,rc,obj,geo,wm,morphed_positions,mode)
+    elseif obj isa Sprite
+        _raycast_sprite!(hits,rc,obj,wm)
     end
     return hits
 end
@@ -588,8 +670,10 @@ Intersect the ray with `root` and (when `recursive`) every descendant, returning
 `Intersection`s sorted by distance (nearest first) and filtered to `[near, far]`.
 
 Meshes are tested with the Möller–Trumbore triangle path; `PointsObject`
-vertices and `LineObject`/`LineSegments` segments use the raycaster's
+vertices and line segments, including instanced draw modes, use the raycaster's
 `point_threshold`/`line_threshold` pick radii (three.js `params.Points`/`Line`).
+Instance hits carry a 1-based `instance_id`. Sprites use their camera-facing quad;
+configure their camera with `set_from_camera!` or `Raycaster(...; camera=camera)`.
 Objects whose layer mask shares no channel with `rc.layers` are skipped (their
 children are still traversed when `recursive`). Invisible objects are skipped
 hierarchically, matching the renderer: an object inside a `visible = false`

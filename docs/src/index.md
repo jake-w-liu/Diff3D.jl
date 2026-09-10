@@ -114,6 +114,22 @@ println("OK math: |a|=$(norm(a)), tri area=$area, plane dist=$sd, closest x=$(cp
 
 Diff3D mirrors the three.js scene graph: a `Scene` (with a background color and optional fog) is the root of a tree of `Group`, `Mesh`, and other `Object3D` nodes linked with `add!`/`remove!`. Each node carries a local `position`/`rotation`/`scale`, and world transforms compose down the parent chain — computed one node at a time with `compute_world_matrix` or in a single cached pass with `compute_world_matrices`.
 
+CPU scene rendering and WebGL export apply `Fog` or `FogExp2` per fragment using
+camera-space depth, before alpha compositing. Fog leaves the clear background
+unchanged. Primitive passes inherit fog from their enclosing scene.
+
+Cameras and directional/spot lights accept `rotation_driven=true` to use their
+node rotation for orientation. glTF loading enables this mode, so camera and
+light animation follows node transforms. Cameras look along local −Z with +Y
+up; imported camera orientation ignores scale. The default camera mode uses
+`target`/`up`, and default light targets remain world-space points. Orbit and
+trackball controls also update rotation when rotation mode is enabled.
+
+`logarithmic_depth=true` uses one logarithmic depth convention for meshes,
+wireframes, lines, points and sprites, including instances. It is also supported
+by the pooled, tiled, AA and separate primitive passes; use the same setting
+when composing passes into one target. Orthographic cameras retain NDC depth.
+
 ```julia
 # A Scene owns a background color and (optionally) fog.
 scene = Scene(background=Color3(0.05, 0.06, 0.09),
@@ -277,6 +293,11 @@ println("OK csg")
 ### Materials
 
 Diff3D.jl mirrors the three.js material hierarchy: every shading model is an `AbstractMaterial` built from keyword arguments, and a small set of query helpers reads the fields they share (opacity, transparency, side, wireframe) uniformly across all of them. The example below constructs one material of each kind, exercises the shared knobs, and renders a lit scene to prove they work.
+
+For physical materials, `iridescence_thickness` sets the film thickness in
+nanometres. With a thickness map, its green channel interpolates from
+`iridescence_thickness_min` (default `0`) to `iridescence_thickness`.
+The endpoints may be in descending order.
 
 ```julia
 # One material per shading model, plus the shared knobs
@@ -603,9 +624,18 @@ println("OK objects: instances=", instanced_count(inst),
         " lit_px=", lit)
 ```
 
+Line and point geometry uses its `:color` RGB attribute when present, multiplying
+it by the material color and any instance color. CPU and browser lines
+interpolate these colors and `:lineDistance` through perspective projection.
+`LineDashedMaterial` repeats a dash of `dash_size` and a gap of `gap_size` over
+`scale * lineDistance`; gap fragments leave color and depth unchanged. Call
+`compute_line_distances!` after authoring or changing the geometry, or supply
+custom distances. Distances stay in geometry units when the object is scaled.
+A missing distance attribute is zero, so it does not produce gaps.
+
 ### LOD, Skinning & Layers
 
-Diff3D.jl mirrors three.js's discrete level-of-detail, skeletal animation, and layer-bitmask systems. An `LOD` container swaps child objects by camera distance, a `Skeleton` of `Bone`s drives linear-blend `SkinnedMesh` deformation, and per-object `Layers` masks gate visibility on 32 independent channels.
+An `LOD` container selects whole child subtrees from world camera distance divided by camera zoom. Renderers update it automatically and retain separate hysteresis state for each camera; use `LOD(auto_update=false)` for manual selection. A `Skeleton` of `Bone`s drives `SkinnedMesh` deformation, and per-object `Layers` masks select rendered objects and lights on 32 channels.
 
 ```julia
 # --- LOD: distance-keyed level of detail (three.js LOD) ---
@@ -653,6 +683,12 @@ println("OK lod")
 
 Diff3D's `Raycaster` mirrors three.js: aim a world-space ray (directly or via `set_from_camera!` through NDC screen coordinates), then `raycast` a scene or object tree to get `Intersection`s sorted nearest-first. The lower-level `ray_triangle_intersect` exposes the Möller–Trumbore test used internally.
 
+Point and line instances use the same world-space picking thresholds as ordinary
+primitives. Each instanced hit includes a 1-based `instance_id`. Sprite picking
+uses the camera retained by `set_from_camera!`; for a world-space ray, supply
+`Raycaster(origin, direction; camera=camera)`. A sprite returns one hit with
+`face_index=0` for its billboard quad.
+
 ```julia
 
 # Build a small scene: two unit cubes in front of the camera along -Z.
@@ -676,7 +712,7 @@ set_from_camera!(rc, camera, 0.0, 0.0)
 
 # raycast returns Intersections sorted nearest-first, filtered to [near, far].
 hits = raycast(rc, scene; recursive=true)
-hit = first(hits)   # nearest Intersection: fields distance, point, object, face_index
+hit = first(hits)   # nearest hit; instance_id is nothing for an ordinary mesh
 println("hits=", length(hits), "  nearest=", hit.object.name,
         "  face=", hit.face_index,
         "  dist=", round(hit.distance, digits=4),
@@ -899,6 +935,10 @@ println("OK io: png $(size(decoded)), stl faces=$(mesh.n_faces), ",
         "obj v=$(obj.n_vertices), ply faces=$(ply.n_faces), ",
         "cloud pts=$(cloud.n_vertices), mtls=$(collect(keys(mtls)))")
 ```
+
+Rotated glTF textures store their UV transform in `Texture.matrix` with
+`matrix_auto_update=false`. Their authored `offset`, `repeat`, and `rotation`
+fields remain available for inspection.
 
 ### Interactive WebGL HTML Export
 
