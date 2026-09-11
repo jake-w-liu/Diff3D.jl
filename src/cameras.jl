@@ -182,6 +182,20 @@ function _sync_camera_rotation_from_view!(camera::AbstractCamera)
     return camera
 end
 
+# Retargeting a glTF-style camera (rotation_driven && ignore_parent_scale)
+# through the public target/up fields must re-derive the driving rotation,
+# otherwise the stale node rotation silently keeps the old aim. Cameras that
+# are only rotation_driven treat rotation as the sole orientation contract.
+function Base.setproperty!(camera::AbstractCamera, name::Symbol, value)
+    setfield!(camera, name, convert(fieldtype(typeof(camera), name), value))
+    if (name === :target || name === :up) &&
+       hasfield(typeof(camera), :ignore_parent_scale) &&
+       getfield(camera, :ignore_parent_scale)
+        _sync_camera_rotation_from_view!(camera)
+    end
+    return value
+end
+
 @inline _camera_world_position(camera::AbstractCamera) =
     first(_camera_world_pose(camera))
 

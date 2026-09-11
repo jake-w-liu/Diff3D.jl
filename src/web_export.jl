@@ -2567,9 +2567,14 @@ function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{
     lod_path = Tuple{Int,Int}[]
     ancestor_ids = Int[]
     ancestor_visibility = Bool[]
-    function visit(obj::AbstractObject3D, parent_world::Mat4, managed_visibility::Bool=false)
+    function visit(obj::AbstractObject3D, parent_world::Mat4, managed_visibility::Bool=false,
+                   ancestor_forced::Bool=false)
         visible = managed_visibility || is_visible(obj)
-        (visible || obj.id in forced_subtree_ids) || return
+        forced = ancestor_forced || obj.id in force_ids
+        # Descendants of animated (forced) nodes are emitted too: the runtime
+        # toggles them through ancestor visibility tracks, and exported lights
+        # under such ancestors require their transform nodes to exist.
+        (visible || forced || obj.id in forced_subtree_ids) || return
         world = parent_world * compute_local_matrix(obj)
         if (!(obj isa Scene) || obj.id in force_ids) &&
            !_web_is_drawable(obj)
@@ -2588,15 +2593,15 @@ function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{
                 child.id in level_ids && continue
                 push!(level_ids, child.id)
                 obj.auto_update && push!(lod_path, (obj.id, child.id))
-                visit(child, world, obj.auto_update)
+                visit(child, world, obj.auto_update, forced)
                 obj.auto_update && pop!(lod_path)
             end
             for child in get_children(obj)
-                child.id in level_ids || visit(child, world)
+                child.id in level_ids || visit(child, world, false, forced)
             end
         else
             for child in get_children(obj)
-                visit(child, world)
+                visit(child, world, false, forced)
             end
         end
         pop!(ancestor_ids)
@@ -3221,9 +3226,13 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
     ancestor_ids = Int[]
     ancestor_visibility = Bool[]
     lod_path = Tuple{Int,Int}[]
-    function visit(obj::AbstractObject3D, parent_world::Mat4, managed_visibility::Bool=false)
+    function visit(obj::AbstractObject3D, parent_world::Mat4, managed_visibility::Bool=false,
+                   ancestor_forced::Bool=false)
         obj_visible = managed_visibility || is_visible(obj)
-        (obj_visible || obj.id in forced_subtree_ids) || return
+        forced = ancestor_forced || obj.id in force_ids
+        # Match the lights writer: forced (animated) nodes propagate export to
+        # their subtree so runtime visibility tracks can reveal them.
+        (obj_visible || forced || obj.id in forced_subtree_ids) || return
         obj isa InstancedMesh &&
             _validate_instanced_mesh(obj, "WebGL export")
         world = parent_world * compute_local_matrix(obj)
@@ -3237,11 +3246,11 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
                 child.id in level_ids && continue
                 push!(level_ids, child.id)
                 obj.auto_update && push!(lod_path, (obj.id, child.id))
-                visit(child, world, obj.auto_update)
+                visit(child, world, obj.auto_update, forced)
                 obj.auto_update && pop!(lod_path)
             end
             for child in get_children(obj)
-                child.id in level_ids || visit(child, world)
+                child.id in level_ids || visit(child, world, false, forced)
             end
             pop!(ancestor_ids)
             pop!(ancestor_visibility)
@@ -3404,7 +3413,7 @@ function _web_visit_drawables(emit::F, root::AbstractObject3D,
         push!(ancestor_ids, obj.id)
         push!(ancestor_visibility, obj_visible)
         for child in get_children(obj)
-            visit(child, world)
+            visit(child, world, false, forced)
         end
         pop!(ancestor_ids)
         pop!(ancestor_visibility)
@@ -4712,8 +4721,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function resetRenderableAnim(o){ const b=o.baseRenderable; if(!b)return; for(const k in b) o[k]=Array.isArray(b[k])?b[k].slice():b[k]; for(const t of objectTextures(o)) resetTextureAnim(t); o.animTransparent=o.baseTransparent; for(const s of (o.visibilityStates||[])) s.visible=s.baseVisible; }
   function setLightAnim(l,prop,v,component=0){ if(!(prop in l)) return false; if(prop==="visible"){ l.visible=v[0]>=.5; refreshLightDerived(l); return true; } if(Array.isArray(l[prop])) assignComponent(l[prop],component,v); else l[prop]=component>0?v[0]:v[0]; refreshLightDerived(l); return true; }
   function resetLightAnim(l){ const b=l.baseLight; if(!b)return; for(const k in b) l[k]=cloneAnimValue(b[k]); for(const s of (l.visibilityStates||[])) s.visible=s.baseVisible; refreshLightDerived(l); }
-  function setCameraAnim(cam,prop,v,component=0){ if(!cam||!(prop in cam)) return false; if(prop==="target"||prop==="up"){ assignComponent(prop==="target"?cam.localTarget:cam.localUp,component,v); return true; } if(Array.isArray(cam[prop])) assignComponent(cam[prop],component,v); else cam[prop]=component>0?v[0]:v[0]; return true; }
-  function resetCameraAnim(cam){ if(!cam)return; if(cam.type==="array"){ for(const child of cam.cameras||[]) resetCameraAnim(child); return; } const b=cam.baseCamera; if(!b)return; for(const k in b) if(b[k]!==undefined) cam[k]=Array.isArray(b[k])?b[k].slice():b[k]; }
+  function setCameraAnim(cam,prop,v,component=0){ if(!cam||!(prop in cam)) return false; if(prop==="target"||prop==="up"){ assignComponent(prop==="target"?cam.localTarget:cam.localUp,component,v); if(cam.rotationDriven&&cam.ignoreParentScale) cam.viewDriven=true; return true; } if(Array.isArray(cam[prop])) assignComponent(cam[prop],component,v); else cam[prop]=component>0?v[0]:v[0]; return true; }
+  function resetCameraAnim(cam){ if(!cam)return; if(cam.type==="array"){ for(const child of cam.cameras||[]) resetCameraAnim(child); return; } cam.viewDriven=false; const b=cam.baseCamera; if(!b)return; for(const k in b) if(b[k]!==undefined) cam[k]=Array.isArray(b[k])?b[k].slice():b[k]; }
   function setNodeAnim(n,prop,v,component=0){ if(prop==="position") assignComponent(n.animPos,component,v); else if(prop==="scale") assignComponent(n.animScale,component,v); else if(prop==="quaternion"){ assignComponent(n.animQuat,component,v); n.animQuat=norm4(n.animQuat); } else if(prop==="rotation"){ assignComponent(n.animEuler,component,v); n.animQuat=eulerToQuat(n.animEuler,n.baseEulerOrder||"XYZ"); } n.matrix=M4.mul(n.parentMatrix||M4.ident(),M4.trs(n.animPos,n.animQuat,n.animScale)); }
   function updateTransformGraph(c){
     const nodeMap=new Map(), state=new Map();
@@ -4760,7 +4769,10 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       if(!node) throw new Error("Missing camera transform node "+cam.id);
       const parent=node.parentMatrix||M4.ident();
       cam.position=transformPoint(node.transformMatrix,[0,0,0]);
-      if(cam.rotationDriven){
+      // A rotation-driven glTF camera whose target/up were animated is
+      // retargeted through the ignoreParentScale look-at path, matching the
+      // CPU-side setproperty! rotation sync.
+      if(cam.rotationDriven && !cam.viewDriven){
         const rotation=cam.ignoreParentScale?rotationWithoutScale(node,graph):
           M4.mul(parent,M4.trs([0,0,0],node.animQuat,[1,1,1]));
         const direction=norm(transformDir(rotation,[0,0,-1]));
