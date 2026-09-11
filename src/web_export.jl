@@ -4177,7 +4177,7 @@ end
 
 function _web_write_webgl_html(io::IO, data_json::String, title::String;
                                light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4),
-                               extra_rewrites=())
+                               extra_rewrites=(), chrome::Bool=true)
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
     max_spot = max(1, Int(light_caps.spot))
@@ -4217,6 +4217,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     button strong { display:block; font-size:14px; margin-bottom:5px; }
     button span { display:block; color:var(--muted); font-size:12px; line-height:1.35; }
     @media (max-width: 840px) { header { display:block; } .layout { grid-template-columns:1fr; } .cases { grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); } }
+    $(chrome ? "" : "header,.top,.bar,#cases{display:none!important}.layout{display:block}main{width:100vw;max-width:none;margin:0;padding:0}.stage{position:static;border:0;border-radius:0}canvas{aspect-ratio:auto;height:100vh}")
   </style>
 </head>
 <body>
@@ -5214,9 +5215,9 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     return nothing
 end
 
-function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4))
+function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4), chrome::Bool=true)
     io = IOBuffer(sizehint=170_000 + sizeof(data_json))
-    _web_write_webgl_html(io, data_json, title; light_caps)
+    _web_write_webgl_html(io, data_json, title; light_caps, chrome)
     return String(take!(io))
 end
 
@@ -5233,14 +5234,17 @@ function _validate_webgl_case_ids(cases::AbstractVector{WebGLExportCase})
 end
 
 """
-    save_webgl_html(path, cases; title="Diff3D.jl Live WebGL Showcase")
+    save_webgl_html(path, cases; title="Diff3D.jl Live WebGL Showcase", chrome=true)
 
 Export one or more `WebGLExportCase`s to a standalone interactive HTML file.
 The browser runtime is intentionally small; the scene data is produced from
 Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
+With `chrome=false`, the header, playback controls, stats, case list, and
+title bar are hidden via CSS (DOM ids retained for the JS runtime), leaving
+a canvas-only page.
 """
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
-                         title::String="Diff3D.jl Live WebGL Showcase")
+                         title::String="Diff3D.jl Live WebGL Showcase", chrome::Bool=true)
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
     for case in cases
         _validate_webgl_export_case(case)
@@ -5258,7 +5262,7 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
         return nothing
     end
     open(path, "w") do io
-        _web_write_webgl_html(io, data_marker, title; light_caps,
+        _web_write_webgl_html(io, data_marker, title; light_caps, chrome,
                               extra_rewrites=(data_rewrite,))
     end
     data_inserted[] || error("WebGL HTML data insertion marker missing")
