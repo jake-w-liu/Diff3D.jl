@@ -837,10 +837,14 @@ function quat_to_mat4(q::Quaternion)
 end
 
 function quat_normalize(q::Quaternion)
-    l = _norm4(q.x, q.y, q.z, q.w)
-    if l == zero(l)    # zero quaternion: return identity (three.js Quaternion.normalize)
+    # Check component primals: hypot(::Dual...) at zero yields NaN value for
+    # 4 args, so length primal cannot be trusted (VERIFIED: hypot 4xDual(0,1)
+    # -> Dual(NaN,NaN) while 3-arg preserves 0). Matches normalize() intent.
+    if iszero(_primal_value(q.x)) && iszero(_primal_value(q.y)) &&
+       iszero(_primal_value(q.z)) && iszero(_primal_value(q.w))
         return Quaternion(zero(q.x), zero(q.y), zero(q.z), one(q.w))
     end
+    l = _norm4(q.x, q.y, q.z, q.w)
     !_normal_length_needs_scaling(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
 
     # Preserve direction when the four-dimensional length overflows or rounds
