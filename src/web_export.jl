@@ -2618,7 +2618,8 @@ function _web_for_each_transform_node(f, root::AbstractObject3D, force_ids::Set{
             push!(emitted_ids, node.id)
         end
     end
-    append_ancestry(root)
+    root_parent = get_parent(root)
+    root_parent === nothing || append_ancestry(root_parent)
     function append_camera(cam)
         cam === nothing && return
         if cam isa ArrayCamera
@@ -5108,8 +5109,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function objectDepth(o,eye){ const x=o.matrix[12]-eye[0], y=o.matrix[13]-eye[1], z=o.matrix[14]-eye[2]; return x*x+y*y+z*z; }
   function cameraOrbitState(cam){
     if(!cam){ const target=add(active.target,targetOffset); return {target:target,eye:[target[0]+dist*Math.cos(pitch)*Math.cos(yaw),target[1]+dist*Math.sin(pitch),target[2]+dist*Math.cos(pitch)*Math.sin(yaw)],up:[0,1,0],distance:dist}; }
-    const s=orbitStateFromVector(sub(cam.position,cam.target)), d=Math.max(1e-6,s.dist*orbitDistScale), py=Math.max(-1.35,Math.min(1.35,s.pitch+orbitPitchOffset)), yw=s.yaw+orbitYawOffset, target=add(cam.target,targetOffset);
-    return {target:target,eye:[target[0]+d*Math.cos(py)*Math.cos(yw),target[1]+d*Math.sin(py),target[2]+d*Math.cos(py)*Math.sin(yw)],up:cam.up||[0,1,0],distance:d};
+    const v=sub(cam.position,cam.target), s=orbitStateFromVector(v), d=Math.max(1e-6,s.dist*orbitDistScale), py=Math.max(-1.35,Math.min(1.35,s.pitch+orbitPitchOffset)), yw=s.yaw+orbitYawOffset, target=add(cam.target,targetOffset);
+    return {target:target,eye:orbitYawOffset===0&&orbitPitchOffset===0?add(target,scale(v,orbitDistScale)):[target[0]+d*Math.cos(py)*Math.cos(yw),target[1]+d*Math.sin(py),target[2]+d*Math.cos(py)*Math.sin(yw)],up:cam.up||[0,1,0],distance:d};
   }
   function cameraProjection(cam,viewport){
     const viewportAspect=viewport&&viewport[3]>0?Math.max(1e-6,viewport[2]/viewport[3]):Math.max(1e-6,canvas.width/canvas.height), aspect=cam&&cam.aspect!=null?cam.aspect:viewportAspect, camZoom=cam&&cam.zoom!=null?Math.max(1e-6,cam.zoom):1, near=cam&&cam.near!=null?cam.near:.1, far=cam&&cam.far!=null?cam.far:180;

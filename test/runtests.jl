@@ -5051,7 +5051,7 @@ end
         @test occursin("\"target\":$(hierarchy_root.id),\"property\":\"position\"", html)
         @test occursin("function updateBoneGraph", html)
         @test occursin("if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)){ const p=graph.get(b.parentId); parent=p.transformMatrix||p.matrix; } }", html)
-        @test occursin("updateTransformGraph(c); updateBoneGraph(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); }", html)
+        @test occursin("updateTransformGraph(c); updateBoneGraph(c); updateViewAndLightPoses(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); }", html)
         @test occursin("uUseSkin", html)
         @test occursin("uUseTangents", html)
         @test occursin("function updateSkin", html)
