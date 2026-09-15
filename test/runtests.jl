@@ -18353,6 +18353,12 @@ end
             @test occursin("uProbeCoeff[4]", html)
             @test occursin("probeCoeffs:probe.flat()", html)
             @test occursin("uniform3v(p,\"uProbeCoeff[0]\",light.probeCoeffs", html)
+            # 7. Orbit camera pitch is not clamped below the poles: the up
+            # vector follows the meridian so drags can tumble over the top.
+            @test occursin("pitch=wrapPi(pitch+dy*.006)", html)
+            @test occursin("function orbitUpVec(yaw_,pitch_)", html)
+            @test occursin("up:orbitUpVec(yaw,pitch)", html)
+            @test !occursin("Math.min(1.35", html)
 
             shader_scene = Scene()
             add!(shader_scene, Mesh(BoxGeometry(), ShaderMaterial(); name="regress_shader_material"))
