@@ -18340,7 +18340,7 @@ end
             @test occursin("o.envMapIntensity==null?1:o.envMapIntensity", html)
             # 4. initial camera pitch is derived from the exported case height
             @test occursin("\"height\":0.5", html)
-            @test occursin("active.height==null?3.0:active.height", html)
+            @test occursin("active.height==null?dist*ORBIT_DEFAULT_HEIGHT_RATIO:active.height", html)
             # 5. BufferGeometry draw range serializes to WebGL drawElements offset/count
             @test occursin(r"\"name\":\"regress_draw_range_points\".*\"drawStart\":1,\"drawCount\":2", html)
             @test occursin("o.drawStart=Math.max(0,Math.min(Math.floor(Number(o.drawStart)||0),o.indices.length))", html)
@@ -34021,3 +34021,5 @@ include("forwarddiff_validation.jl")
 include("forwarddiff_primal_branches.jl")
 
 include("gltf_view_poses.jl")
+
+include("web_orbit_limits.jl")

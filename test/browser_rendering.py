@@ -90,7 +90,8 @@ def main() -> None:
                 "fog_linear", "fog_exponential", "fog_transparent", "lighting_energy",
                 "iridescence_range_ascending", "iridescence_range_descending",
                 "matcap_normal_tangent", "matcap_normal_derivative", "toon_normal_tangent", "toon_normal_derivative",
-                "gltf_view_camera", "gltf_view_lights", "gltf_view_pole")
+                "gltf_view_camera", "gltf_view_lights", "gltf_view_pole",
+                "orbit_zoom_limits")
     baked_fixtures = {"skin_normals_uniform", "skin_normals_texture", "skin_normals_cpu",
                       "skin_normals_singular", "instanced_normals", "instanced_normals_reflected", "scaled_normals",
                       "skin_world_uniform", "skin_world_texture", "skin_world_cpu", "skin_world_detached", "skin_world_animated",
@@ -373,6 +374,50 @@ def main() -> None:
                                 correct = correct and blue[2] > 200 and max(blue[:2]) < 20
                             elif name == "empty_instances":
                                 correct = max(pixels["center"][:3]) < 20 and pixels["visible"] == 0
+                            elif name == "orbit_zoom_limits":
+                                # No explicit camera: the runtime derives zoom limits and clip planes
+                                # from the fitted distance (2200 units here), never from fixed units.
+                                blue = pixels["center"]
+                                if not (blue[2] > 200 and max(blue[:2]) < 20):
+                                    raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped {pixels}")
+                                zoom = page.evaluate("""() => {
+                                    const d=window.__diff3dDebug, canvas=document.querySelector('canvas');
+                                    const wheel=(dy,n)=>{ for(let i=0;i<n;i++) canvas.dispatchEvent(new WheelEvent('wheel',{deltaY:dy,bubbles:true,cancelable:true})); };
+                                    const base=d.orbitDistance(), limits=d.orbitDistanceLimits(), fitted=d.clipPlanes();
+                                    wheel(-1,60); const zoomedIn=d.orbitDistance(), zoomedClip=d.clipPlanes();
+                                    wheel(1,460); const farOut=d.orbitDistance(), farClip=d.clipPlanes();
+                                    wheel(-1,900); const nearIn=d.orbitDistance();
+                                    canvas.dispatchEvent(new WheelEvent('wheel',{deltaY:0,bubbles:true,cancelable:true}));
+                                    const afterZero=d.orbitDistance();
+                                    let steps=0; while(d.orbitDistance()<base/1.0001&&steps++<2000) wheel(1,1);
+                                    return {base,limits,fitted,zoomedIn,zoomedClip,farOut,farClip,nearIn,afterZero,restored:d.orbitDistance()};
+                                }""")
+                                base = zoom["base"]
+                                def close(actual, expected, rel=1e-9):
+                                    return abs(actual - expected) <= rel * abs(expected)
+                                checks = (
+                                    close(base, 2200.0),
+                                    close(zoom["limits"]["min"], 1e-3 * base) and close(zoom["limits"]["max"], 1e3 * base),
+                                    close(zoom["fitted"]["near"], 1e-2 * base) and close(zoom["fitted"]["far"], base + 64 * base),
+                                    close(zoom["zoomedIn"], base * 0.92 ** 60, 1e-6),
+                                    close(zoom["zoomedClip"]["near"], 1e-2 * zoom["zoomedIn"]) and close(zoom["zoomedClip"]["far"], zoom["zoomedIn"] + 64 * base),
+                                    close(zoom["farOut"], 1e3 * base),
+                                    close(zoom["farClip"]["near"], 10 * base) and close(zoom["farClip"]["far"], 1e3 * base + 64 * base),
+                                    close(zoom["nearIn"], 1e-3 * base),
+                                    zoom["afterZero"] == zoom["nearIn"],
+                                    base / 1.0001 <= zoom["restored"] < base * 1.08,
+                                )
+                                if not all(checks):
+                                    raise AssertionError(f"{name} at {width}x{height}: orbit limits {zoom} checks {checks}")
+                                page.wait_for_timeout(500)
+                                restored = page.evaluate("""() => {
+                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),pixel=new Uint8Array(4);
+                                    gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+                                    return {pixel:Array.from(pixel).slice(0,3),error:gl.getError()};
+                                }""")
+                                correct = restored["error"] == 0 and restored["pixel"][2] > 200 and max(restored["pixel"][:2]) < 20
+                                if not correct:
+                                    raise AssertionError(f"{name} at {width}x{height}: view restored after zooming is clipped {restored}")
                             else:
                                 blue = pixels["center"]
                                 correct = blue[2] > 200 and max(blue[:2]) < 20

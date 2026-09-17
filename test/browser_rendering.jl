@@ -729,3 +729,15 @@ for mode in (:triangles, :lines, :points)
         [WebGLExportCase("instanced-$mode", "Instanced $mode", "Red left, blue right",
                          instance_scene; camera=camera_at(0.0, 3.0))])
 end
+
+# Orbit limits without an explicit camera: the runtime must fit, zoom and clip a scene 2200
+# units across exactly like a 2-unit one (0.1.7 clamped the orbit to 2.5..24 units and the
+# far plane to 180 units, so this plane was invisible and the fitted view unreachable).
+orbit_scene = Scene(background=Color3(0.01, 0.01, 0.01))
+orbit_plane = Mesh(PlaneGeometry(width=4000.0, height=4000.0),
+                   MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0), side=:double))
+orbit_plane.rotation = Euler(-pi / 2, 0.0, 0.0)
+add!(orbit_scene, orbit_plane)
+save_webgl_html(joinpath(output, "orbit_zoom_limits.html"),
+    [WebGLExportCase("orbit-zoom", "Orbit zoom limits", "Scale-relative zoom and clip planes",
+                     orbit_scene; radius=2200.0, height=825.0)])
