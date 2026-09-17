@@ -377,9 +377,18 @@ def main() -> None:
                             elif name == "orbit_zoom_limits":
                                 # No explicit camera: the runtime derives zoom limits and clip planes
                                 # from the fitted distance (2200 units here), never from fixed units.
-                                blue = pixels["center"]
-                                if not (blue[2] > 200 and max(blue[:2]) < 20):
-                                    raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped {pixels}")
+                                # Each viewport pass starts from the fitted orbit (the previous pass
+                                # leaves the orbit within one wheel notch of it).
+                                page.evaluate("() => { setCase(active.id); }")
+                                page.wait_for_timeout(300)
+                                fitted = page.evaluate("""() => {
+                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),pixel=new Uint8Array(4);
+                                    gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+                                    return {pixel:Array.from(pixel).slice(0,3),error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
+                                }""")
+                                blue = fitted["pixel"]
+                                if not (fitted["error"] == 0 and blue[2] > 200 and max(blue[:2]) < 20 and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
+                                    raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped or not fitted {fitted}")
                                 zoom = page.evaluate("""() => {
                                     const d=window.__diff3dDebug, canvas=document.querySelector('canvas');
                                     const wheel=(dy,n)=>{ for(let i=0;i<n;i++) canvas.dispatchEvent(new WheelEvent('wheel',{deltaY:dy,bubbles:true,cancelable:true})); };
