@@ -1515,7 +1515,7 @@ function _draw_line!(rt::RenderTarget, x0, y0, z0, x1, y1, z1, col::Color3,
             distance <= radius || continue
             z = point_segment ? min(z0, z1) : _stable_lerp(z0, z1, t)
             color_parameter = point_segment && z1 < z0 ? 1.0 : t
-            fragment_color = _line_fragment_color(col, varyings, color_parameter)
+            fragment_color = _line_fragment_color(col, varyings, color_parameter, rt.view_state)
             fragment_color === nothing && continue
             x, y = horizontal ? (a, b) : (b, a)
             _put_stamped_pixel!(rt, x, y, z, fragment_color, xlo, xhi, ylo, yhi,
@@ -1534,9 +1534,11 @@ end
      _render_encoded_depth(state, c.z*iw, c.w), c.w, true)
 end
 
-@inline _line_fragment_color(col::Color3, ::Nothing, t) = col
+@inline function _line_fragment_color(col::Color3, ::Nothing, t, fog)
+    return col
+end
 
-@inline function _line_fragment_color(col::Color3, varyings, t)
+@inline function _line_fragment_color(col::Color3, varyings, t, fog)
     wa, wb = varyings.w
     # w is normalized once per segment, keeping this ratio bounded even when
     # the endpoint depths are large. Exact endpoints avoid a zero denominator
@@ -1553,9 +1555,9 @@ end
     colors = attributes === nothing ? nothing : attributes.colors
     color = colors === nothing ? col :
         _modulate(col, _stable_color_lerp(colors[1], colors[2], parameter))
-    varyings.fog === nothing && return color
+    fog === nothing && return color
     depth = _stable_lerp(varyings.depth[1],varyings.depth[2],perspective_t)
-    return _render_fog_color(varyings.fog,color,depth)
+    return _render_fog_color(fog,color,depth)
 end
 
 @inline function _line_dash_visible(distance::Float64, scale::Float64,
@@ -1646,7 +1648,7 @@ function _draw_segment_near_clipped!(rt::RenderTarget, proj::Mat4, view::Mat4, n
     w_scale = max(aw, bw)
     varyings = attributes === nothing && !_has_render_fog(rt.view_state) ? nothing :
         (attributes=attributes, range=(ta, tb), w=(aw / w_scale, bw / w_scale),
-         fog=rt.view_state,depth=(-av.z,-bv.z))
+         depth=(-av.z, -bv.z))
     (oka && okb) && _draw_line!(rt, ax, ay, az, bx, by, bz, col, linewidth,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write, alpha,
                                 stamp, stamp_id, varyings)

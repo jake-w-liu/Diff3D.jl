@@ -9,8 +9,8 @@ using Diff3D
         distances === nothing || set_attribute!(constructed_geometry, :lineDistance, distances, 1)
         return constructed_geometry
     end
-    function appearance_render(object, camera; draw=render!, kwargs...)
-        container = Scene(); add!(container, object)
+    function appearance_render(object, camera; draw=render!, fog=nothing, kwargs...)
+        container = Scene(fog=fog); add!(container, object)
         target = RenderTarget(64, 32)
         draw(target, container, camera; kwargs...)
         return target
@@ -32,6 +32,15 @@ using Diff3D
             size=1.0, size_attenuation=false, color=Color3(0.4, 0.6, 0.8))), ortho)
         @test points.color[16, 8, :] ≈ [0.4, 0.0, 0.0]
         @test points.color[16, 56, :] ≈ [0.0, 0.0, 0.8]
+    end
+
+    # Both fog models mix 50% green at this camera's depth of two units.
+    for fog in (Fog(color=Color3(0.0,1.0,0.0), near=1.0, far=3.0),
+                FogExp2(color=Color3(0.0,1.0,0.0), density=sqrt(log(2.0))/2)),
+        material in (LineBasicMaterial(), LineDashedMaterial(gap_size=0.0))
+        colored = appearance_geometry(endpoints; colors=red_blue, distances=[0.0,1.5])
+        fogged = appearance_render(LineSegments(colored,material),ortho;fog)
+        @test fogged.color[16,32,:] ≈ [0.25,0.5,0.25] atol=1e-12
     end
 
     perspective = PerspectiveCamera(fov=π/2, aspect=2.0, near=0.1, far=100.0)
@@ -199,15 +208,16 @@ end
 
 if Base.JLOptions().opt_level > 0
     @testset "Cached primitive attributes allocate per draw" begin
-        function cached_appearance_bytes(material, points)
+        function cached_appearance_bytes(material, points; count=256,
+                                         scalar_type=Float64, colored=true, fog=nothing)
             positions = Float64[]
-            for i in 1:256
-                append!(positions,[-0.75,i/256-0.5,0.0,0.75,i/256-0.5,0.0])
+            for i in 1:count
+                append!(positions,[-0.75,i/count-0.5,0.0,0.75,i/count-0.5,0.0])
             end
-            geometry = BufferGeometry(positions,Float64[],Float64[],Int[],512,0)
-            set_attribute!(geometry,:color,repeat([1.0,0.0,0.0,0.0,0.0,1.0],256),3)
-            set_attribute!(geometry,:lineDistance,repeat([0.0,1.5],256),1)
-            scene = Scene()
+            geometry = BufferGeometry(positions,Float64[],Float64[],Int[],2count,0)
+            colored && set_attribute!(geometry,:color,repeat(scalar_type[1,0,0,0,0,1],count),3)
+            set_attribute!(geometry,:lineDistance,repeat(scalar_type[0,1.5],count),1)
+            scene = Scene(fog=fog)
             add!(scene,points ? PointsObject(geometry,material) : LineSegments(geometry,material))
             camera = OrthographicCamera();camera.position=Vec3(0.0,0.0,2.0)
             target=RenderTarget(32,32);cache=RenderCache()
@@ -217,8 +227,11 @@ if Base.JLOptions().opt_level > 0
             end
             return @allocated draw(target,scene,camera;cache=cache)
         end
-        @test cached_appearance_bytes(LineBasicMaterial(),false) <= 4096
-        @test cached_appearance_bytes(LineDashedMaterial(),false) <= 4096
+        for material in (LineBasicMaterial(),LineDashedMaterial()), count in (1,256),
+            scalar_type in (Float32,Float64), colored in (false,true),
+            fog in (nothing,Fog(),FogExp2())
+            @test cached_appearance_bytes(material,false;count,scalar_type,colored,fog) <= 4096
+        end
         @test cached_appearance_bytes(PointsMaterial(),true) <= 4096
     end
 end
