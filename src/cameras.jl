@@ -147,9 +147,9 @@ function _camera_rotation_pose(camera::AbstractCamera)
     direction = normalize(mat4_transform_direction(world_rotation, Vec3(0.0,0.0,-1.0)))
     up = normalize(mat4_transform_direction(world_rotation, Vec3(0.0,1.0,0.0)))
     kind = nameof(typeof(camera))
-    _validated_camera_vector(position, kind, :position)
-    _validated_camera_vector(direction, kind, :target)
-    _validated_camera_vector(up, kind, :up)
+    position = _validated_camera_vector(position, kind, :position)
+    direction = _validated_camera_vector(direction, kind, :target)
+    up = _validated_camera_vector(up, kind, :up)
     max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 || _throw_camera_zero_up(kind)
     return position, direction, up
 end
