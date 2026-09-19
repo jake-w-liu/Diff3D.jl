@@ -29641,7 +29641,7 @@ end
         @test maximum(color) > 0.0
     end
     @test_opt_alloc 0 Diff3D._albedo_map_before_lighting(
-        MeshPhongMaterial())
+        mapped_phong)
 end
 
 @testset "fresh audit round 251 fixes" begin
