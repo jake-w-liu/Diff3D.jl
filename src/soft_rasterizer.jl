@@ -278,6 +278,10 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                 s1, s4, s5, cols[fi], σ, eps, W, H)
         end
     end
+    # Heap-backed scalar slots can retain an earlier differentiation graph.
+    if workspace !== nothing && !isbitstype(T)
+        resize!(screen_tris, n_screen_tris)
+    end
     n_screen_tris == 0 && return _soft_background_image(T, H, W, bg, workspace)
 
     if n_screen_tris <= 8
@@ -513,6 +517,9 @@ end
 
 function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T},
                                 workspace=nothing) where {T}
+    if workspace !== nothing && !isbitstype(T)
+        empty!(workspace.screen_tris)
+    end
     image = workspace === nothing ? Array{T}(undef, H, W, 3) :
         _soft_image_buffer!(workspace, H, W)
     @inbounds for j in 1:W, i in 1:H
