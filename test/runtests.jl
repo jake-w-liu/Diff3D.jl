@@ -34027,3 +34027,5 @@ include("web_orbit_limits.jl")
 include("light_direction_scale.jl")
 
 include("camera_pose_allocations.jl")
+
+include("soft_mixed_allocations.jl")

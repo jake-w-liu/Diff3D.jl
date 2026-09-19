@@ -194,9 +194,24 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     # `=== T` short-circuits and performs no extra work or allocation.
     T = promote_type(Tv, Tc, eltype(view_proj.e), typeof(config.sigma),
                      typeof(config.gamma), typeof(config.bg_color.r), typeof(config.eps))
-    verts = Tv === T ? vertices : Vec3{T}[Vec3(T(v.x), T(v.y), T(v.z)) for v in vertices]
-    cols  = Tc === T ? face_colors : Color3{T}[Color3(T(c.r), T(c.g), T(c.b)) for c in face_colors]
-    vp    = eltype(view_proj.e) === T ? view_proj : Mat4{T}(ntuple(k -> T(view_proj.e[k]), 16))
+    # Inline scalar values can be promoted on access without allocating input
+    # copies. Heap-backed scalars retain eager conversion so shared vertices do
+    # not repeatedly create BigFloat values or reverse-mode tape nodes.
+    verts = if Tv === T
+        vertices
+    elseif isbitstype(T)
+        _promote_vec3_source(vertices, T)
+    else
+        Vec3{T}[Vec3(T(v.x), T(v.y), T(v.z)) for v in vertices]
+    end
+    cols = if Tc === T
+        face_colors
+    elseif isbitstype(T)
+        _promote_color_source(face_colors, T)
+    else
+        Color3{T}[Color3(T(c.r), T(c.g), T(c.b)) for c in face_colors]
+    end
+    vp = _promote_mat4(view_proj, T)
 
     σ = T(config.sigma)
     γ = T(config.gamma)
