@@ -1603,27 +1603,26 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         instanced = InstancedMesh[]
         instanced_worlds = Mat4{Float64}[]
         primitive_flags = _RenderPrimitiveFlags()
-        _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
-                                               instanced_worlds, scene,
-                                               primitive_flags)
         primitives = AbstractObject3D[]
         primitive_worlds = Mat4{Float64}[]
-        _collect_render_primitives_worlds_into!(
-            primitives, primitive_worlds, scene)
+        _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
+                                               instanced_worlds, scene,
+                                               primitive_flags, primitives,
+                                               primitive_worlds)
         lights = _collect_lights_into!(SceneLight[], scene, layer_mask)
     else
         primitive_flags = cache.primitive_flags
         meshes = _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                                         cache.instanced,
                                                         cache.instanced_worlds,
-                                                        scene, primitive_flags)
+                                                        scene, primitive_flags,
+                                                        cache.primitives,
+                                                        cache.primitive_worlds)
         mesh_worlds = cache.mesh_worlds
         instanced = cache.instanced
         instanced_worlds = cache.instanced_worlds
         primitives = cache.primitives
         primitive_worlds = cache.primitive_worlds
-        _collect_render_primitives_worlds_into!(
-            primitives, primitive_worlds, scene)
         lights = _collect_lights_into!(cache.lights, scene, layer_mask)
     end
     _filter_object_layers!(meshes, mesh_worlds, layer_mask)

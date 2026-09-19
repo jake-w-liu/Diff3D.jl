@@ -827,15 +827,19 @@ function _collect_render_drawables_worlds_into!(meshes::Vector{Mesh},
                                                 instanced::Vector{InstancedMesh},
                                                 instanced_worlds::Vector{Mat4{Float64}},
                                                 root::AbstractObject3D,
-                                                primitive_flags::Union{Nothing,_RenderPrimitiveFlags}=nothing)
+                                                primitive_flags::Union{Nothing,_RenderPrimitiveFlags}=nothing,
+                                                primitives::Union{Nothing,Vector{AbstractObject3D}}=nothing,
+                                                primitive_worlds::Union{Nothing,Vector{Mat4{Float64}}}=nothing)
     empty!(meshes)
     empty!(mesh_worlds)
     empty!(instanced)
     empty!(instanced_worlds)
     primitive_flags === nothing || _reset_render_primitive_flags!(primitive_flags)
+    primitives === nothing || empty!(primitives)
+    primitive_worlds === nothing || empty!(primitive_worlds)
     _collect_render_drawables_worlds_visit!(meshes, mesh_worlds, instanced,
                                             instanced_worlds, root, _render_parent_world(root),
-                                            primitive_flags)
+                                            primitive_flags, primitives, primitive_worlds)
     return meshes
 end
 
@@ -844,36 +848,6 @@ end
     obj isa LineLoop || obj isa PointsObject ||
     (obj isa InstancedMesh &&
      (_instanced_line_drawable(obj) || _instanced_point_drawable(obj)))
-
-function _collect_render_primitives_worlds_into!(
-        primitives::Vector{AbstractObject3D},
-        worlds::Vector{Mat4{Float64}}, root::AbstractObject3D)
-    empty!(primitives)
-    empty!(worlds)
-    _collect_render_primitives_worlds_visit!(
-        primitives, worlds, root, _render_parent_world(root))
-    return primitives
-end
-
-function _collect_render_primitives_worlds_visit!(
-        primitives::Vector{AbstractObject3D},
-        worlds::Vector{Mat4{Float64}}, obj::AbstractObject3D,
-        parent_world::Mat4{Float64})
-    is_visible(obj) || return nothing
-    children = get_children(obj)
-    primitive = _is_render_primitive(obj)
-    !primitive && isempty(children) && return nothing
-    world = parent_world * compute_local_matrix(obj)
-    if primitive
-        push!(primitives, obj)
-        push!(worlds, world)
-    end
-    @inbounds for child in children
-        _collect_render_primitives_worlds_visit!(
-            primitives, worlds, child, world)
-    end
-    return nothing
-end
 
 @inline _mark_render_primitive_flags!(::Nothing, obj::AbstractObject3D) = nothing
 
@@ -902,11 +876,14 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
                                                  instanced_worlds::Vector{Mat4{Float64}},
                                                  obj::AbstractObject3D,
                                                  parent_world::Mat4{Float64},
-                                                 primitive_flags::Union{Nothing,_RenderPrimitiveFlags})
+                                                 primitive_flags::Union{Nothing,_RenderPrimitiveFlags},
+                                                 primitives::Union{Nothing,Vector{AbstractObject3D}},
+                                                 primitive_worlds::Union{Nothing,Vector{Mat4{Float64}}})
     is_visible(obj) || return nothing
     children = get_children(obj)
     _mark_render_primitive_flags!(primitive_flags, obj)
-    if !(obj isa Mesh) && !(obj isa InstancedMesh) && isempty(children)
+    primitive = primitives !== nothing && _is_render_primitive(obj)
+    if !(obj isa Mesh) && !(obj isa InstancedMesh) && !primitive && isempty(children)
         return nothing
     end
     world = parent_world * compute_local_matrix(obj)
@@ -917,57 +894,61 @@ function _collect_render_drawables_worlds_visit!(meshes::Vector{Mesh},
         push!(instanced, obj)
         push!(instanced_worlds, world)
     end
+    if primitive
+        push!(primitives, obj)
+        push!(primitive_worlds, world)
+    end
     @inbounds for child in children
         if child isa Mesh
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa InstancedMesh
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa Group
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa Object3D
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa Scene
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa LineObject
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa LineSegments
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa LineLoop
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa PointsObject
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa Sprite
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif child isa SkinnedMesh
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         elseif isempty(get_children(child))
             continue
         else
             _collect_render_drawables_worlds_visit!(
                 meshes, mesh_worlds, instanced, instanced_worlds, child,
-                world, primitive_flags)
+                world, primitive_flags, primitives, primitive_worlds)
         end
     end
     return nothing

@@ -34035,3 +34035,5 @@ include("render_cache_lifetimes.jl")
 include("soft_workspace_lifetimes.jl")
 
 include("numerical_gradient_range.jl")
+
+include("scene_collection_allocations.jl")
