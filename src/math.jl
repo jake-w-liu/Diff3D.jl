@@ -1619,32 +1619,40 @@ line3_at(l::Line3, t) = Vec3(
     return difference, scale, true
 end
 
-@inline function _difference_direction_and_logscale(a::Vec3, b::Vec3)
+@inline function _difference_divided_by(a::Vec3, b::Vec3,
+                                        difference::Vec3, scale)
+    return Vec3(
+        isfinite(_primal_value(difference.x)) ? difference.x / scale :
+            b.x / scale - a.x / scale,
+        isfinite(_primal_value(difference.y)) ? difference.y / scale :
+            b.y / scale - a.y / scale,
+        isfinite(_primal_value(difference.z)) ? difference.z / scale :
+            b.z / scale - a.z / scale)
+end
+
+@inline function _difference_direction_and_scale(a::Vec3, b::Vec3)
     difference = b - a
-    # Hold the reference scale constant during AD. Direct division retains the
-    # derivative of a zero component without evaluating its sign or logarithm.
+    # A primal reference scale keeps zero-component derivatives in the vector.
     scale = max(abs(_primal_value(difference.x)),
                 abs(_primal_value(difference.y)),
                 abs(_primal_value(difference.z)))
-    if isfinite(scale)
-        if iszero(scale)
-            z = zero(difference.x + difference.y + difference.z)
-            return Vec3(z, z, z), z, false
-        end
-        scaled = difference / scale
-    else
-        # Scale endpoints only where subtraction overflowed; direct differences
-        # on the other axes preserve nearby values and zero-component gradients.
+    if iszero(scale)
+        return difference, one(scale), false
+    end
+    if !isfinite(scale)
+        # Only overflowing differences require scaling the finite endpoints.
         scale = max(abs(_primal_value(a.x)), abs(_primal_value(a.y)),
                     abs(_primal_value(a.z)), abs(_primal_value(b.x)),
                     abs(_primal_value(b.y)), abs(_primal_value(b.z)))
-        scaled = Vec3(
-            isfinite(_primal_value(difference.x)) ? difference.x / scale :
-                b.x / scale - a.x / scale,
-            isfinite(_primal_value(difference.y)) ? difference.y / scale :
-                b.y / scale - a.y / scale,
-            isfinite(_primal_value(difference.z)) ? difference.z / scale :
-                b.z / scale - a.z / scale)
+    end
+    return _difference_divided_by(a, b, difference, scale), scale, true
+end
+
+@inline function _difference_direction_and_logscale(a::Vec3, b::Vec3)
+    scaled, scale, nonzero = _difference_direction_and_scale(a, b)
+    if !nonzero
+        z = zero(scaled.x + scaled.y + scaled.z)
+        return Vec3(z, z, z), z, false
     end
     return scaled, oftype(scaled.x, log(scale)), true
 end
@@ -1667,27 +1675,40 @@ end
 
 """Parameter `t` of the point on the line/segment closest to `p`."""
 function line3_closest_point_parameter(l::Line3, p::Vec3; clamp_to_segment=true)
-    direction, direction_logscale, nondegenerate =
-        _difference_direction_and_logscale(l.start, l.finish)
-    nondegenerate || return zero(direction_logscale)
-    offset, offset_logscale, nonzero_offset =
-        _difference_direction_and_logscale(l.start, p)
-    nonzero_offset || return zero(offset_logscale)
-
+    direction, direction_scale, nondegenerate =
+        _difference_direction_and_scale(l.start, l.finish)
+    nondegenerate || return zero(l.start.x + l.finish.x + p.x)
     denominator = dot(direction, direction)
+    # A common scale evaluates the projection directly, including its AD
+    # derivative at coincident or perpendicular query points.
+    offset = _difference_divided_by(l.start, p, p - l.start, direction_scale)
+    if isfinite(_primal_value(offset.x)) && isfinite(_primal_value(offset.y)) &&
+       isfinite(_primal_value(offset.z))
+        parameter = dot(offset, direction) / denominator
+        if isfinite(_primal_value(parameter))
+            return clamp_to_segment ?
+                clamp(parameter, zero(parameter), one(parameter)) : parameter
+        end
+    end
+
+    offset, offset_scale, _ = _difference_direction_and_scale(l.start, p)
     ratio = dot(offset, direction) / denominator
-    iszero(ratio) && return zero(ratio)
+    if iszero(_primal_value(ratio))
+        # Evaluate the linear projection without log(0), retaining derivatives.
+        weight = (direction / denominator) / direction_scale
+        parameter = dot(p - l.start, weight)
+        return clamp_to_segment ?
+            clamp(parameter, zero(parameter), one(parameter)) : parameter
+    end
     if clamp_to_segment && ratio < zero(ratio)
         return zero(ratio)
     end
-    log_parameter =
-        offset_logscale - direction_logscale + log(abs(ratio))
+    log_parameter = log(offset_scale) - log(direction_scale) + log(abs(ratio))
     if clamp_to_segment && log_parameter >= zero(log_parameter)
         return one(ratio)
     end
     parameter = (ratio / abs(ratio)) * exp(log_parameter)
-    return clamp_to_segment ?
-           clamp(parameter, zero(parameter), one(parameter)) : parameter
+    return clamp_to_segment ? clamp(parameter, zero(parameter), one(parameter)) : parameter
 end
 
 function line3_closest_point_parameter(

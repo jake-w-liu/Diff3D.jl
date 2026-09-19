@@ -34054,3 +34054,5 @@ include("lod_manual_allocations.jl")
 include("instanced_render_allocations.jl")
 
 include("scaled_direction_gradients.jl")
+
+include("line_projection_gradients.jl")
