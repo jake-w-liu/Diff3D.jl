@@ -45,6 +45,77 @@ def verify_packed_texture_storage(page) -> None:
         raise AssertionError(f"Packed texture storage: {result}")
 
 
+def verify_shared_texture_refresh(page) -> None:
+    results = page.evaluate("""() => {
+        if(!physicalTexturesEnabled) throw new Error('Physical texture path is unavailable');
+        const previousFramebuffer=gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        const previousTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
+        const textures=new Set(), framebuffer=gl.createFramebuffer();
+        const originalUpload=gl.texImage2D;
+        let uploads=0;
+        gl.texImage2D=function(...args){ uploads++; return originalUpload.apply(this,args); };
+        const make=descriptor=>{ const texture=makeTexture(descriptor); textures.add(texture); return texture; };
+        const read=texture=>{
+            gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);
+            if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)
+                throw new Error('Shared texture test framebuffer is incomplete');
+            const pixels=new Uint8Array(4);
+            gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+            return Array.from(pixels);
+        };
+        try {
+            const results=[];
+            for(const ordinary of [true,false]) for(const thickness of [true,false]){
+                const source={width:1,height:1,data:[10,20,30,40],
+                              filter:'nearest',wrapS:'clamp',wrapT:'clamp'};
+                const objects=[0,1].map(()=>({clearcoatTexture:source,
+                    iridescenceTexture:source,iridescenceThicknessTexture:source,
+                    specularIntensityTexture:source,
+                    thicknessTexture:thickness?source:null,anisotropyTexture:thickness?null:source,
+                    physicalScalarTex:make(packedTexture([source,null,null,null],[0,1,0,3])),
+                    physicalScalar2Tex:make(packedTexture([source,source,source,source],[0,1,3,thickness?1:2]))}));
+                const original=ordinary?make(source):null;
+                if(ordinary) for(const object of objects) object.texture=source;
+                const handles=objects.map(o=>[o.physicalScalarTex,o.physicalScalar2Tex]);
+                const rounds=[];
+                for(const [round,red] of [70,110].entries()){
+                    source.data=[red,80,90,100]; source.needsUpdate=true;
+                    const before=uploads, order=round===0?objects:[objects[1],objects[0]];
+                    // A later object must observe an update already consumed by an earlier one.
+                    for(const object of order) refreshObjectTextures(object);
+                    const changedUploads=uploads-before;
+                    const packed=objects.map(o=>[read(o.physicalScalarTex),read(o.physicalScalar2Tex)]);
+                    for(let frame=0;frame<3;frame++) for(const object of objects) refreshObjectTextures(object);
+                    rounds.push({packed,original:ordinary?read(original):null,
+                                 dirty:source.needsUpdate,changedUploads,idleUploads:uploads-before-changedUploads});
+                }
+                results.push({ordinary,thickness,rounds,
+                    reused:objects.every((o,i)=>o.physicalScalarTex===handles[i][0]&&o.physicalScalar2Tex===handles[i][1]),
+                    error:gl.getError()});
+                for(const object of objects){ textures.add(object.physicalScalarTex); textures.add(object.physicalScalar2Tex); }
+            }
+            return results;
+        } finally {
+            gl.texImage2D=originalUpload;
+            gl.bindFramebuffer(gl.FRAMEBUFFER,previousFramebuffer);
+            gl.deleteFramebuffer(framebuffer);
+            for(const texture of textures) gl.deleteTexture(texture);
+            gl.bindTexture(gl.TEXTURE_2D,previousTexture);
+        }
+    }""")
+    for result in results:
+        expected_rounds = []
+        for red in (70, 110):
+            packed = [[red, 255, 255, 255], [red, 80, 100, 80 if result["thickness"] else 90]]
+            expected_rounds.append({"packed": [packed, packed],
+                                    "original": [red, 80, 90, 100] if result["ordinary"] else None,
+                                    "dirty": False, "changedUploads": 5 if result["ordinary"] else 4,
+                                    "idleUploads": 0})
+        if result["rounds"] != expected_rounds or not result["reused"] or result["error"] != 0:
+            raise AssertionError(f"Shared packed texture refresh: {result}")
+
+
 def select_render_case(page, case_id: str) -> None:
     page.evaluate("""id => {
         const button=document.querySelector('button[data-case="'+id+'"]');
@@ -208,6 +279,7 @@ def main() -> None:
                         page.goto((Path(directory) / f"{name}.html").as_uri(), timeout=120000)
                         if not checked_texture_storage:
                             verify_packed_texture_storage(page)
+                            verify_shared_texture_refresh(page)
                             checked_texture_storage = True
                         if name in controlled_fixtures:
                             page.evaluate("window.__diff3dTestRenderFrame()")

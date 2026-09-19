@@ -4613,18 +4613,29 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function resolveTextureRefs(c){ const table=new Map(); for(const e of (c.textures||[])) if(e&&e.id!=null) table.set(e.id,e.texture||null); for(const o of (c.objects||[])) for(const f of textureFields){ const t=o[f]; if(t&&t.ref!=null) o[f]=table.get(t.ref)||null; } }
   function resolveEnvTextureRefs(c){ const table=new Map(); for(const e of (c.envTextures||[])) if(e&&e.id!=null) table.set(e.id,e.texture||null); for(const o of (c.objects||[])){ const t=o.envTexture; if(t&&t.ref!=null) o.envTexture=table.get(t.ref)||null; } }
   function objectTextures(o){ return textureFields.map(f=>o[f]).filter(t=>t); }
-  function refreshTexture(t){ if(t&&t.needsUpdate===true&&t.__webglTexture) uploadTextureData(t,t.__webglTexture); }
+  let textureUpdateVersion=0;
+  function textureVersion(t){ return (t&&t.__textureUpdateVersion)||0; }
+  function refreshTexture(t){
+    if(!t||t.needsUpdate!==true) return;
+    if(t.__webglTexture) uploadTextureData(t,t.__webglTexture);
+    // Every derived map must observe this change, including objects drawn later.
+    t.__textureUpdateVersion=++textureUpdateVersion;
+    t.needsUpdate=false;
+  }
   function refreshObjectTextures(o){
-    const dirty=objectTextures(o).filter(t=>t.needsUpdate===true);
-    for(const t of dirty) refreshTexture(t);
-    if(physicalTexturesEnabled&&dirty.length){
-      if([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture].some(t=>dirty.indexOf(t)>=0)){
+    for(const field of textureFields) refreshTexture(o[field]);
+    if(physicalTexturesEnabled){
+      const scalarVersion=Math.max(textureVersion(o.clearcoatTexture),textureVersion(o.clearcoatRoughnessTexture),textureVersion(o.transmissionTexture),textureVersion(o.sheenRoughnessTexture));
+      if(scalarVersion>(o.physicalScalarVersion||0)){
         const packed=packedTexture([o.clearcoatTexture,o.clearcoatRoughnessTexture,o.transmissionTexture,o.sheenRoughnessTexture],[0,1,0,3]);
         if(packed){ if(o.physicalScalarTex) uploadTextureData(packed,o.physicalScalarTex); else o.physicalScalarTex=makeTexture(packed); }
+        o.physicalScalarVersion=scalarVersion;
       }
-      if([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture,o.anisotropyTexture].some(t=>dirty.indexOf(t)>=0)){
+      const scalar2Version=Math.max(textureVersion(o.iridescenceTexture),textureVersion(o.iridescenceThicknessTexture),textureVersion(o.specularIntensityTexture),textureVersion(o.thicknessTexture||o.anisotropyTexture));
+      if(scalar2Version>(o.physicalScalar2Version||0)){
         const packed=packedTexture([o.iridescenceTexture,o.iridescenceThicknessTexture,o.specularIntensityTexture,o.thicknessTexture||o.anisotropyTexture],[0,1,3,o.thicknessTexture?1:2]);
         if(packed){ if(o.physicalScalar2Tex) uploadTextureData(packed,o.physicalScalar2Tex); else o.physicalScalar2Tex=makeTexture(packed); }
+        o.physicalScalar2Version=scalar2Version;
       }
     }
   }
