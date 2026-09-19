@@ -1463,23 +1463,15 @@ shape to reuse traversal lists, pass buckets, triangle scratch buffers, and the
 transparent-pass stamp buffer. Leaving `cache=nothing` preserves the historical
 allocation behavior.
 """
-function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat,
+function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_materials,
                                       instance_colors::Vector{Color3{Float64}},
                                       instance_matrices::Vector{Mat4{Float64}},
                                       base::Mat4, lights, proj::Mat4, view::Mat4,
-                                      near, cam_pos::Vec3, tri, clipped, sx, sy, sz;
-                                      shadow_fn=nothing,
-                                      clipping_planes::AbstractVector{<:Plane}=_NO_PLANES,
-                                      colorbuf=nothing,
-                                      xlo::Int=1, xhi::Int=rt.width,
-                                      ylo::Int=1, yhi::Int=rt.height,
-                                      log_depth::Bool=false,
-                                      inv_log_far=1.0,
-                                      ortho_dir=nothing,
-                                      stamp_cache=nothing,
-                                      instance_materials=nothing,
-                                      frustum=nothing,
-                                      bounds_cache=nothing)
+                                      near, cam_pos::Vec3, tri, clipped, sx, sy, sz,
+                                      shadow_fn, clipping_planes::AbstractVector{<:Plane},
+                                      colorbuf, xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                      log_depth::Bool, inv_log_far, ortho_dir,
+                                      stamp_cache, frustum, bounds_cache)
     wireframe = material_wireframe(mat)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
@@ -1827,17 +1819,12 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             end
             continue
         end
-        _render_instanced_mesh_flat!(rt, geo, mat, im.instance_colors,
+        _render_instanced_mesh_flat!(rt, geo, mat, instance_materials, im.instance_colors,
                                      im.instance_matrices, base, lights, proj, view, near,
-                                     camera_position, tri, clipped, sx, sy, sz;
-                                     shadow_fn=mesh_shadow_fn, clipping_planes=clipping_planes,
-                                     colorbuf=colorbuf,
-                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                                     log_depth=log_depth, inv_log_far=inv_log_far,
-                                     ortho_dir=ortho_dir, stamp_cache=cache,
-                                     instance_materials=instance_materials,
-                                     frustum=frustum,
-                                     bounds_cache=bounds_cache)
+                                     camera_position, tri, clipped, sx, sy, sz,
+                                     mesh_shadow_fn, clipping_planes, colorbuf,
+                                     xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                     ortho_dir, cache, frustum, bounds_cache)
     end
 
     # Smooth (per-pixel) opaque meshes share the same depth buffer.

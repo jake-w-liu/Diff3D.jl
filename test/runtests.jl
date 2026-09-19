@@ -11947,10 +11947,13 @@ end
         r4 = RenderTarget(32,32); render_tiled!(r4, scene, cam; tiles=2)
         @test maximum(abs.(r1.color .- r4.color)) < 1e-12
         cached_instanced_call(rt, im, base, cache, proj, view, near, cam_pos) =
-            Diff3D._render_instanced_mesh_flat!(rt, im.geometry, im.material, im.instance_colors,
+            Diff3D._render_instanced_mesh_flat!(rt, im.geometry, im.material, nothing, im.instance_colors,
                                                 im.instance_matrices, base, cache.lights, proj,
                                                 view, near, cam_pos, cache.tri, cache.clipped,
-                                                cache.sx, cache.sy, cache.sz; colorbuf=cache.colors)
+                                                cache.sx, cache.sy, cache.sz, nothing,
+                                                Diff3D._NO_PLANES, cache.colors,
+                                                1, rt.width, 1, rt.height, false, 1.0,
+                                                nothing, nothing, nothing, nothing)
         cached_instanced_call(r3, im, base, cache2, proj, view, near, cam.position)
         @test_opt_alloc 4096 cached_instanced_call(r3, im, base, cache2, proj, view, near,
                                                    cam.position)
@@ -34047,3 +34050,5 @@ include("numerical_gradient_range.jl")
 include("scene_collection_allocations.jl")
 
 include("lod_manual_allocations.jl")
+
+include("instanced_render_allocations.jl")
