@@ -22765,8 +22765,13 @@ end
                 reshape([x, x], 1, 2, 1), zeros_image),
             2.0,
         ) == 4.0
-        @test_opt_alloc 0 loss_l1(l1_image, zeros_image)
-        @test_opt_alloc 0 loss_mse(mse_image, zeros_image)
+        # Overflow-sized losses use the precision fallback. The ordinary
+        # Float64 path retains its zero-allocation contract.
+        ordinary_image = fill(0.25, 1, 2, 1)
+        loss_l1(ordinary_image, zeros_image)
+        loss_mse(ordinary_image, zeros_image)
+        @test_opt_alloc 0 loss_l1(ordinary_image, zeros_image)
+        @test_opt_alloc 0 loss_mse(ordinary_image, zeros_image)
     end
 
     @testset "fresh audit round 128 fixes" begin
