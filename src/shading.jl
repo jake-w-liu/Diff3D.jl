@@ -2652,12 +2652,11 @@ end
     # direction from scaled component differences; the distance may correctly
     # remain infinite when its mathematical value exceeds Float64's range.
     if _finite_light_vec3(from) && _finite_light_vec3(to)
-        scaled, logscale, nonzero =
+        scaled, _, nonzero =
             _difference_direction_and_logscale(from, to)
         if nonzero
             scaled_norm = norm(scaled)
             direction = scaled / scaled_norm
-            distance = exp(logscale + log(scaled_norm))
             return direction, distance
         end
     end

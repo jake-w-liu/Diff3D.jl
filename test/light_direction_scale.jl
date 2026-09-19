@@ -7,6 +7,43 @@ function light_direction_allocation(from, to)
     return @allocated Diff3D._light_direction_and_distance(from, to)
 end
 
+@testset "Overflowed light ranges preserve finite cutoff boundaries" begin
+    for T in (Float16,Float32,Float64), sign in (-one(T),one(T))
+        largest=floatmax(T)
+        half_ulp=(largest-prevfloat(largest))/T(2)
+        # The half-ulp tie is the round-to-nearest overflow boundary.
+        for offset in (prevfloat(half_ulp),half_ulp,nextfloat(half_ulp),T(2)*half_ulp,largest)
+            from=Vec3(-sign*offset,zero(T),zero(T))
+            to=Vec3(sign*largest,zero(T),zero(T))
+            expected=setprecision(BigFloat,256) do
+                T(BigFloat(largest)+BigFloat(offset))
+            end
+            direction,distance=Diff3D._light_direction_and_distance(from,to)
+            @test direction==Vec3(sign,zero(T),zero(T))
+            @test distance==expected
+        end
+    end
+
+    largest=floatmax(Float64)
+    offset=(largest-prevfloat(largest))/2
+    surface=Vec3(-offset,0.0,0.0)
+    for Material in (PointLight,SpotLight), cutoff in (0.0,largest)
+        light=Material===SpotLight ?
+            Material(position=Vec3(largest,0.0,0.0),target=surface,decay=0.0,distance=cutoff) :
+            Material(position=Vec3(largest,0.0,0.0),decay=0.0,distance=cutoff)
+        _,intensity,direction=light_contribution(light,surface)
+        @test intensity==(iszero(cutoff) ? 1.0 : 0.0)
+        @test direction==Vec3(1.0,0.0,0.0)
+        @test ForwardDiff.derivative(-offset) do x
+            light_contribution(light,Vec3(x,0.0,0.0))[2]
+        end == 0.0
+    end
+    if Base.JLOptions().opt_level > 0
+        light_direction_allocation(surface,Vec3(largest,0.0,0.0))
+        @test light_direction_allocation(surface,Vec3(largest,0.0,0.0)) <= 64
+    end
+end
+
 function area_direction_allocation(from, to)
     Diff3D._rect_area_sample_direction(from, to)
     return @allocated Diff3D._rect_area_sample_direction(from, to)
