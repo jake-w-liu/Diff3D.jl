@@ -1269,6 +1269,7 @@ function _append_skinned_render_meshes!(meshes::Vector{Mesh}, scene::AbstractObj
     empty!(skinned)
     _collect_skinned_meshes!(skinned, scene)
     _filter_object_layers!(skinned, nothing, layer_mask)
+    length(proxies) > length(skinned) && resize!(proxies, length(skinned))
     for i in eachindex(skinned)
         sm = skinned[i]
         if i > length(proxies)
@@ -1375,6 +1376,7 @@ function _prepare_morph_render_meshes!(meshes::Vector{Mesh},
             meshes[i] = proxies[slot]
         end
     end
+    proxies === nothing || resize!(proxies, slot)
     return meshes
 end
 

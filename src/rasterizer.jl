@@ -1594,6 +1594,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         _camera_backward_from_view(view) : nothing
 
     layer_mask = _object_layer_mask(camera)
+    cache === nothing || _reset_render_cache_scene_refs!(cache)
     _update_scene_lods!(scene, camera)
 
     if cache === nothing
@@ -1628,6 +1629,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     _filter_object_layers!(meshes, mesh_worlds, layer_mask)
     _filter_object_layers!(instanced, instanced_worlds, layer_mask)
     _filter_object_layers!(primitives, primitive_worlds, layer_mask)
+    cache === nothing || _prepare_instanced_material_states!(cache.instanced_materials, instanced)
     if cache === nothing
         _prepare_morph_render_meshes!(meshes)
         _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene; layer_mask=layer_mask)

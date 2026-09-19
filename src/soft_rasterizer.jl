@@ -1091,7 +1091,7 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
     end
     filter!(_instanced_triangle_drawable,instanced)
     instance_materials = scene_workspace === nothing ? _InstancedMaterialState[] : scene_workspace.instanced_materials
-    length(instance_materials)>length(instanced) && resize!(instance_materials,length(instanced))
+    _prepare_instanced_material_states!(instance_materials, instanced)
     lights = scene_workspace === nothing ? _collect_lights_into!(SceneLight[], scene, layer_mask) :
         _collect_lights_into!(scene_workspace.lights, scene, layer_mask)
 

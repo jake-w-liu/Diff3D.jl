@@ -34029,3 +34029,5 @@ include("light_direction_scale.jl")
 include("camera_pose_allocations.jl")
 
 include("soft_mixed_allocations.jl")
+
+include("render_cache_lifetimes.jl")

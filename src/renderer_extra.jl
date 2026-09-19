@@ -290,6 +290,31 @@ function RenderCache()
                 Vec3{Float64}[])
 end
 
+function _reset_render_cache_scene_refs!(cache::RenderCache)
+    # Render entry points use different subsets of these lists. Release prior
+    # scene owners even when the next path does not use that list or feature.
+    empty!(cache.meshes)
+    empty!(cache.mesh_worlds)
+    empty!(cache.lights)
+    empty!(cache.instanced)
+    empty!(cache.instanced_worlds)
+    empty!(cache.skinned)
+    empty!(cache.primitives)
+    empty!(cache.primitive_worlds)
+    empty!(cache.transparent)
+    empty!(cache.transparent_worlds)
+    empty!(cache.opaque_flat)
+    empty!(cache.opaque_flat_worlds)
+    empty!(cache.smooth_meshes)
+    empty!(cache.smooth_worlds)
+    empty!(cache.wireframe_meshes)
+    empty!(cache.wireframe_worlds)
+    empty!(cache.bound_geometries)
+    empty!(cache.bounds)
+    empty!(cache.shadow_maps)
+    return cache
+end
+
 function _render_cache_msaa_target!(cache::RenderCache, width::Int, height::Int)
     target = cache.msaa_target
     if target === nothing || target.width != width || target.height != height
@@ -334,6 +359,25 @@ function _instanced_material_state!(states::Vector{_InstancedMaterialState}, slo
         push!(states, _InstancedMaterialState())
     end
     return states[slot]
+end
+
+function _prepare_instanced_material_states!(states::Vector{_InstancedMaterialState},
+                                             objects::Vector{InstancedMesh})
+    length(states) > length(objects) && resize!(states, length(objects))
+    for slot in eachindex(states)
+        state = states[slot]
+        object = objects[slot]
+        if state.mesh !== object ||
+           (state.base_material !== nothing &&
+            !_same_instanced_base_material(state.base_material, object.material))
+            # Skipped batches may never reach _instanced_materials! this frame.
+            state.mesh = object
+            state.base_material = nothing
+            empty!(state.colors)
+            empty!(state.materials)
+        end
+    end
+    return states
 end
 
 function _instanced_materials!(states::Vector{_InstancedMaterialState}, slot::Int,
@@ -1338,6 +1382,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # Same orthographic back-face-culling direction as `render!`.
     ortho_dir = camera isa OrthographicCamera ?
         _camera_backward_from_view(view) : nothing
+    _reset_render_cache_scene_refs!(cache)
     _update_scene_lods!(scene, camera)
     _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
                                            cache.instanced, cache.instanced_worlds,
@@ -1345,6 +1390,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     layer_mask = _object_layer_mask(camera)
     _filter_object_layers!(cache.meshes, cache.mesh_worlds, layer_mask)
     _filter_object_layers!(cache.instanced, cache.instanced_worlds, layer_mask)
+    _prepare_instanced_material_states!(cache.instanced_materials, cache.instanced)
     _prepare_morph_render_meshes!(cache.meshes, cache.morph_meshes, cache.morph_positions)
     _append_skinned_render_meshes_worlds!(cache.meshes, cache.mesh_worlds, scene,
                                           cache.skinned, cache.skinned_meshes,
@@ -3328,12 +3374,24 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     mesh_worlds = shared_cache.mesh_worlds
     instanced = shared_cache.instanced
     instanced_worlds = shared_cache.instanced_worlds
+    for index in 1:thread_count
+        scratch = thread_caches[index]
+        _reset_render_cache_scene_refs!(scratch)
+        if index > 1
+            # Worker caches own numeric scratch only; the first cache owns the
+            # scene extraction and material states shared by all workers.
+            empty!(scratch.morph_meshes)
+            empty!(scratch.skinned_meshes)
+            empty!(scratch.instanced_materials)
+        end
+    end
     _update_scene_lods!(scene, camera)
     _collect_render_drawables_worlds_into!(meshes, mesh_worlds, instanced,
                                            instanced_worlds, scene)
     layer_mask = _object_layer_mask(camera)
     _filter_object_layers!(meshes, mesh_worlds, layer_mask)
     _filter_object_layers!(instanced, instanced_worlds, layer_mask)
+    _prepare_instanced_material_states!(shared_cache.instanced_materials, instanced)
     _prepare_morph_render_meshes!(meshes, shared_cache.morph_meshes, shared_cache.morph_positions)
     _append_skinned_render_meshes_worlds!(meshes, mesh_worlds, scene,
                                           shared_cache.skinned, shared_cache.skinned_meshes,
