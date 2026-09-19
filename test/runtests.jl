@@ -34058,3 +34058,5 @@ include("scaled_direction_gradients.jl")
 include("line_projection_gradients.jl")
 
 include("triangle_gradients.jl")
+
+include("mean_gradients.jl")

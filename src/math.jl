@@ -1499,6 +1499,11 @@ function triangle_area(tri::Triangle{T}) where {T<:AbstractFloat}
 end
 
 @inline function _mean3_scaled(a, b, c)
+    # The zero mean is still linear in every input; bypass scale selection
+    # without discarding AD derivatives or dividing by a zero-valued scale.
+    if iszero(_primal_value(a)) && iszero(_primal_value(b)) && iszero(_primal_value(c))
+        return (a + b + c) / 3
+    end
     scale = max(max(abs(a), abs(b)), abs(c))
     iszero(scale) && return zero(a)
     return ((a / scale + b / scale + c / scale) / 3) * scale
