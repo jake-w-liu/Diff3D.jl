@@ -34052,3 +34052,5 @@ include("scene_collection_allocations.jl")
 include("lod_manual_allocations.jl")
 
 include("instanced_render_allocations.jl")
+
+include("scaled_direction_gradients.jl")

@@ -1620,37 +1620,33 @@ line3_at(l::Line3, t) = Vec3(
 end
 
 @inline function _difference_direction_and_logscale(a::Vec3, b::Vec3)
-    dx, sx, has_x = _axis_difference(a.x, b.x)
-    dy, sy, has_y = _axis_difference(a.y, b.y)
-    dz, sz, has_z = _axis_difference(a.z, b.z)
-    if !(has_x || has_y || has_z)
-        z = zero(dx + dy + dz)
-        return Vec3(z, z, z), z, false
-    end
-
-    if has_x
-        logscale = log(abs(dx)) + log(sx)
-    elseif has_y
-        logscale = log(abs(dy)) + log(sy)
+    difference = b - a
+    # Hold the reference scale constant during AD. Direct division retains the
+    # derivative of a zero component without evaluating its sign or logarithm.
+    scale = max(abs(_primal_value(difference.x)),
+                abs(_primal_value(difference.y)),
+                abs(_primal_value(difference.z)))
+    if isfinite(scale)
+        if iszero(scale)
+            z = zero(difference.x + difference.y + difference.z)
+            return Vec3(z, z, z), z, false
+        end
+        scaled = difference / scale
     else
-        logscale = log(abs(dz)) + log(sz)
+        # Scale endpoints only where subtraction overflowed; direct differences
+        # on the other axes preserve nearby values and zero-component gradients.
+        scale = max(abs(_primal_value(a.x)), abs(_primal_value(a.y)),
+                    abs(_primal_value(a.z)), abs(_primal_value(b.x)),
+                    abs(_primal_value(b.y)), abs(_primal_value(b.z)))
+        scaled = Vec3(
+            isfinite(_primal_value(difference.x)) ? difference.x / scale :
+                b.x / scale - a.x / scale,
+            isfinite(_primal_value(difference.y)) ? difference.y / scale :
+                b.y / scale - a.y / scale,
+            isfinite(_primal_value(difference.z)) ? difference.z / scale :
+                b.z / scale - a.z / scale)
     end
-    if has_y
-        ly = log(abs(dy)) + log(sy)
-        ly > logscale && (logscale = ly)
-    end
-    if has_z
-        lz = log(abs(dz)) + log(sz)
-        lz > logscale && (logscale = lz)
-    end
-
-    x = has_x ? (dx / abs(dx)) *
-        exp(log(abs(dx)) + log(sx) - logscale) : zero(dx)
-    y = has_y ? (dy / abs(dy)) *
-        exp(log(abs(dy)) + log(sy) - logscale) : zero(dy)
-    z = has_z ? (dz / abs(dz)) *
-        exp(log(abs(dz)) + log(sz) - logscale) : zero(dz)
-    return Vec3(x, y, z), logscale, true
+    return scaled, oftype(scaled.x, log(scale)), true
 end
 
 @inline function _direction_between(a::Vec3, b::Vec3)
