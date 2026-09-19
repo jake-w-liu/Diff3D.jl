@@ -28716,7 +28716,7 @@ end
 end
 
 @testset "fresh audit round 239 fixes" begin
-    function scaled_triangle_hit(scale; direction_scale=1.0, side=:double)
+    scaled_triangle_hit = function (scale; direction_scale=1.0, side=:double)
         return ray_triangle_intersect(
             Vec3(scale / 4, scale / 4, 1.0),
             Vec3(0.0, 0.0, -direction_scale),
