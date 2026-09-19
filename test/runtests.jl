@@ -34045,3 +34045,5 @@ include("soft_workspace_lifetimes.jl")
 include("numerical_gradient_range.jl")
 
 include("scene_collection_allocations.jl")
+
+include("lod_manual_allocations.jl")

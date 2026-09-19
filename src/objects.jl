@@ -583,6 +583,12 @@ function _set_lod_level!(lod::LOD, chosen_index::Int)
     return chosen_obj
 end
 
+function _set_lod_manual_level!(lod::LOD, chosen)
+    # Specialize the property access on the selected object's concrete type.
+    lod._manual_level = chosen === nothing ? 0 : chosen.id
+    return nothing
+end
+
 """
 Update child visibility using distance thresholds and hysteresis, returning the
 selected object or `nothing`. A manual selection resets automatic camera state.
@@ -594,7 +600,7 @@ function lod_update!(lod::LOD, distance)
     # A manual selection is the seed for newly observed cameras. Automatic
     # selections are kept separately so views cannot change each other's hysteresis.
     empty!(lod._camera_levels)
-    lod._manual_level = chosen === nothing ? 0 : chosen.id
+    _set_lod_manual_level!(lod, chosen)
     return chosen
 end
 
