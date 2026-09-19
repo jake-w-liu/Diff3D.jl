@@ -9,6 +9,42 @@ import tempfile
 from playwright.sync_api import sync_playwright
 
 
+def verify_packed_texture_storage(page) -> None:
+    result = page.evaluate("""() => {
+        const previousFramebuffer=gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        const previousTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
+        const textures=new Set(), framebuffer=gl.createFramebuffer();
+        const read=texture=>{
+            gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);
+            if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)
+                throw new Error('Packed texture test framebuffer is incomplete');
+            const pixels=new Uint8Array(4);
+            gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+            return Array.from(pixels);
+        };
+        try {
+            const source={width:1,height:1,data:[20,40,60,80],
+                          filter:'nearest',wrapS:'clamp',wrapT:'clamp'};
+            const original=makeTexture(source); textures.add(original);
+            const packed=packedTexture([source,source,null,source],[2,1,0,3]);
+            const first=makeTexture(packed); textures.add(first);
+            const second=makeTexture(packedTexture([source,source,source,source],[1,3,0,2]));
+            textures.add(second);
+            return {original:read(original),first:read(first),second:read(second),
+                    reused:makeTexture(packed)===first,error:gl.getError()};
+        } finally {
+            gl.bindFramebuffer(gl.FRAMEBUFFER,previousFramebuffer);
+            gl.deleteFramebuffer(framebuffer);
+            for(const texture of textures) gl.deleteTexture(texture);
+            gl.bindTexture(gl.TEXTURE_2D,previousTexture);
+        }
+    }""")
+    if result != {"original": [20, 40, 60, 80], "first": [60, 40, 255, 80],
+                  "second": [40, 80, 20, 60], "reused": True, "error": 0}:
+        raise AssertionError(f"Packed texture storage: {result}")
+
+
 def select_render_case(page, case_id: str) -> None:
     page.evaluate("""id => {
         const button=document.querySelector('button[data-case="'+id+'"]');
@@ -124,6 +160,7 @@ def main() -> None:
                       "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
             )
             try:
+                checked_texture_storage = False
                 for name, instancing_enabled in cases:
                     page = browser.new_page(viewport={"width": 1024, "height": 800})
                     errors = []
@@ -169,6 +206,9 @@ def main() -> None:
                                 };
                             })();""")
                         page.goto((Path(directory) / f"{name}.html").as_uri(), timeout=120000)
+                        if not checked_texture_storage:
+                            verify_packed_texture_storage(page)
+                            checked_texture_storage = True
                         if name in controlled_fixtures:
                             page.evaluate("window.__diff3dTestRenderFrame()")
                         expected_views = 2 if name.startswith("lod_") or name in ("stacked", "overlap", "layered_views", "layered_lights", "layered_shadows") else 1

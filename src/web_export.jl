@@ -4571,6 +4571,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     const base=items.find(t=>t);
     if(!base) return null;
     const out=Object.assign({},base,{data:new Array(4*base.width*base.height).fill(255)});
+    // Repacked channels need their own storage even if the source was uploaded.
+    delete out.__webglTexture;
     for(let y=0;y<base.height;y++) for(let x=0;x<base.width;x++){
       const dst=4*(y*base.width+x);
       for(let k=0;k<4;k++){
