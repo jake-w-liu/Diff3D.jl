@@ -34033,3 +34033,5 @@ include("soft_mixed_allocations.jl")
 include("render_cache_lifetimes.jl")
 
 include("soft_workspace_lifetimes.jl")
+
+include("numerical_gradient_range.jl")

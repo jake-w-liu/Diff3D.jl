@@ -28,7 +28,7 @@ jobs:
       - name: Run package tests
         run: julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()'
       - name: Verify optimized allocation regressions
-        run: julia --project=. -e 'include("test/light_direction_scale.jl"); include("test/camera_pose_allocations.jl"); include("test/soft_mixed_allocations.jl"); include("test/render_cache_lifetimes.jl"); include("test/soft_workspace_lifetimes.jl")'
+        run: julia --project=. -e 'include("test/light_direction_scale.jl"); include("test/camera_pose_allocations.jl"); include("test/soft_mixed_allocations.jl"); include("test/render_cache_lifetimes.jl"); include("test/soft_workspace_lifetimes.jl"); include("test/numerical_gradient_range.jl")'
       - name: Verify concurrent rendering
         run: julia --project=. --threads=4 -O0 --compile=min -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'
 

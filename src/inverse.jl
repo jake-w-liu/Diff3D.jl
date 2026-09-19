@@ -324,7 +324,24 @@ function numerical_gradient(f, params::Vector{Float64}; δ=1e-5)
         f_plus = f(work)
         copyto!(work, params)
         work[i] -= δ
-        grad[i] = (f_plus - f(work)) / (2 * δ)
+        f_minus = f(work)
+        # Preserve exact offset cancellation without wrapping integer outputs.
+        difference = if f_plus isa Signed && f_minus isa Signed
+            widen(f_plus) - widen(f_minus)
+        elseif f_plus isa Integer && f_minus isa Integer
+            big(f_plus) - big(f_minus)
+        else
+            f_plus - f_minus
+        end
+        # The output is Float64; widen integer/narrow steps before doubling.
+        denominator = 2.0 * δ
+        if !isfinite(difference) && isfinite(f_plus) && isfinite(f_minus)
+            grad[i] = (0.5 * f_plus - 0.5 * f_minus) / δ
+        elseif isfinite(difference) && !isfinite(denominator)
+            grad[i] = 0.5 * (difference / δ)
+        else
+            grad[i] = difference / denominator
+        end
     end
     return grad
 end
