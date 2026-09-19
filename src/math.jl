@@ -1032,13 +1032,12 @@ end
     max(max(abs(v.x), abs(v.y)), abs(v.z))
 
 @inline function _triangle_axis_edges(a, b, c)
-    scale = max(max(abs(a), abs(b)), abs(c))
-    if iszero(scale)
-        z = zero(a)
-        return z, z, scale
-    end
-    a_scaled = a / scale
-    return b / scale - a_scaled, c / scale - a_scaled, scale
+    scale = max(abs(_primal_value(a)), abs(_primal_value(b)), abs(_primal_value(c)))
+    # A zero coordinate axis still has edge derivatives when vertices move.
+    iszero(scale) && return b - a, c - a, one(scale)
+    ab, ac = b - a, c - a
+    return (isfinite(_primal_value(ab)) ? ab / scale : b / scale - a / scale),
+           (isfinite(_primal_value(ac)) ? ac / scale : c / scale - a / scale), scale
 end
 
 @inline function _triangle_scaled_cross(tri::Triangle)
@@ -1057,39 +1056,36 @@ end
 @inline _triangle_cross_logmag(minor, scale1, scale2) =
     log(abs(minor)) + log(scale1) + log(scale2)
 
+@inline function _triangle_rescale_minor(minor, scale1, scale2, logscale)
+    exponent = log(scale1) + log(scale2) - logscale
+    factor = exp(exponent)
+    if isfinite(factor) && !iszero(factor)
+        return minor * factor
+    end
+    # An IEEE axis-scale ratio divided by a nonzero minor can exceed the
+    # scalar range. Five stages keep each individual factor representable.
+    factor = exp(exponent / 5)
+    return ((((minor * factor) * factor) * factor) * factor) * factor
+end
+
 function _triangle_cross_direction_and_logscale(tri::Triangle)
     nx, ny, nz, sx, sy, sz = _triangle_scaled_cross(tri)
-    has_x = !iszero(nx) && !iszero(sy) && !iszero(sz)
-    has_y = !iszero(ny) && !iszero(sx) && !iszero(sz)
-    has_z = !iszero(nz) && !iszero(sx) && !iszero(sy)
+    px, py, pz = _primal_value(nx), _primal_value(ny), _primal_value(nz)
+    has_x, has_y, has_z = !iszero(px), !iszero(py), !iszero(pz)
     if !(has_x || has_y || has_z)
         z = zero(nx + ny + nz)
         return Vec3(z, z, z), z, false
     end
-
-    if has_x
-        logscale = _triangle_cross_logmag(nx, sy, sz)
-    elseif has_y
-        logscale = _triangle_cross_logmag(ny, sx, sz)
-    else
-        logscale = _triangle_cross_logmag(nz, sx, sy)
-    end
-    if has_y
-        ly = _triangle_cross_logmag(ny, sx, sz)
-        ly > logscale && (logscale = ly)
-    end
-    if has_z
-        lz = _triangle_cross_logmag(nz, sx, sy)
-        lz > logscale && (logscale = lz)
-    end
-
-    cx = has_x ? (nx / abs(nx)) *
-         exp(_triangle_cross_logmag(nx, sy, sz) - logscale) : zero(nx)
-    cy = has_y ? (ny / abs(ny)) *
-         exp(_triangle_cross_logmag(ny, sx, sz) - logscale) : zero(ny)
-    cz = has_z ? (nz / abs(nz)) *
-         exp(_triangle_cross_logmag(nz, sx, sy) - logscale) : zero(nz)
-    return Vec3(cx, cy, cz), logscale, true
+    # Select a primal reference magnitude, then retain every component's AD
+    # dependence through linear scaling, including components whose value is 0.
+    logscale = has_x ? _triangle_cross_logmag(px, sy, sz) :
+        has_y ? _triangle_cross_logmag(py, sx, sz) : _triangle_cross_logmag(pz, sx, sy)
+    has_y && (logscale = max(logscale, _triangle_cross_logmag(py, sx, sz)))
+    has_z && (logscale = max(logscale, _triangle_cross_logmag(pz, sx, sy)))
+    scaled = Vec3(_triangle_rescale_minor(nx, sy, sz, logscale),
+                  _triangle_rescale_minor(ny, sx, sz, logscale),
+                  _triangle_rescale_minor(nz, sx, sy, logscale))
+    return scaled, oftype(scaled.x, logscale), true
 end
 
 function triangle_normal(tri::Triangle)
