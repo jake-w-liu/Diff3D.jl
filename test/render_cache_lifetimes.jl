@@ -139,3 +139,17 @@ end
         @test isempty(states[1].materials)
     end
 end
+
+function scene_reset_allocations(cache)
+    Diff3D._reset_render_cache_scene_refs!(cache)
+    return @allocated Diff3D._reset_render_cache_scene_refs!(cache)
+end
+
+@testset "Clearing an empty scene cache reuses its storage" begin
+    cache = RenderCache()
+    @test Diff3D._reset_render_cache_scene_refs!(cache) === cache
+    if Base.JLOptions().opt_level > 0
+        scene_reset_allocations(cache)
+        @test scene_reset_allocations(cache) == 0
+    end
+end

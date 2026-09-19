@@ -311,7 +311,7 @@ function _reset_render_cache_scene_refs!(cache::RenderCache)
     empty!(cache.wireframe_worlds)
     empty!(cache.bound_geometries)
     empty!(cache.bounds)
-    empty!(cache.shadow_maps)
+    isempty(cache.shadow_maps) || empty!(cache.shadow_maps)
     return cache
 end
 
