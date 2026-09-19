@@ -12135,6 +12135,9 @@ end
         @test maximum(abs.(many_line_expected.color .- many_line_actual.color)) < 1e-12
         @test_opt_alloc 4096 render!(many_line_actual, many_line_objects_scene, line_cam;
                                      cache=many_line_cache)
+        # The direct line renderer uses a separate stamp buffer from render!.
+        render_lines!(many_line_actual, many_line_objects_scene, line_cam;
+                      cache=many_line_cache)
         @test_opt_alloc 1024 render_lines!(many_line_actual, many_line_objects_scene, line_cam;
                                            cache=many_line_cache)
 
