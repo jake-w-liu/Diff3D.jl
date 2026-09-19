@@ -1951,10 +1951,12 @@ end
     distance_squared = dot(displacement, displacement)
     if _finite_light_vec3(displacement)
         bounded_distance_squared = max(distance_squared, 1e-10)
-        return isfinite(distance_squared) ?
-            (displacement / sqrt(bounded_distance_squared),
+        # The near-field attenuation floor must not shorten the unit direction
+        # used by the surface and emitter cosine terms.
+        return isfinite(distance_squared) && distance_squared >= 1e-10 ?
+            (displacement / sqrt(distance_squared),
              bounded_distance_squared) :
-            (normalize(displacement), distance_squared)
+            (normalize(displacement), bounded_distance_squared)
     end
 
     if _finite_light_vec3(position) &&
@@ -2640,8 +2642,8 @@ end
     displacement = to - from
     distance = norm(displacement)
     if _finite_light_vec3(displacement)
-        return isfinite(distance) ?
-            (displacement / max(distance, 1e-10), distance) :
+        return !iszero(_primal_value(distance)) && !_normal_length_needs_scaling(distance) ?
+            (displacement / distance, distance) :
             (normalize(displacement), distance)
     end
 

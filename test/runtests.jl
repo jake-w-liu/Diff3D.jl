@@ -34023,3 +34023,5 @@ include("forwarddiff_primal_branches.jl")
 include("gltf_view_poses.jl")
 
 include("web_orbit_limits.jl")
+
+include("light_direction_scale.jl")
