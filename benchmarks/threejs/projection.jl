@@ -27,6 +27,14 @@ projection_forward(objective, parameters) = ForwardDiff.gradient(objective, para
 projection_finite(objective, parameters) = numerical_gradient(objective, parameters; δ=1e-5)
 gradient_allocated(operation::F, objective, parameters) where {F} = @allocated operation(objective, parameters)
 
+function check_projection_gradient(name, gradient, reference)
+    length(gradient) == length(reference) || error("$name gradient length mismatch")
+    error_value = maximum(abs(actual - expected) for (actual, expected) in zip(gradient, reference))
+    isfinite(error_value) && error_value < 1e-9 ||
+        error("$name gradient oracle failed: $error_value")
+    return error_value
+end
+
 function measure_projection(name, operation::F, case, matrix, samples, warmup) where {F}
     count = Int(case["count"])
     count > 0 || error("positive point count required")
@@ -41,25 +49,29 @@ function measure_projection(name, operation::F, case, matrix, samples, warmup) w
     started = time_ns()
     result = operation(problem, parameters)
     first_ns = Int(time_ns() - started)
-    gradient_error = maximum(abs.(result .- case["expected_gradient"]))
-    gradient_error < 1e-9 || error("$name gradient oracle failed: $gradient_error")
+    gradient_error = check_projection_gradient(name, result, case["expected_gradient"])
     for _ in 1:warmup
-        operation(problem, parameters)
+        check_projection_gradient(name, operation(problem, parameters), case["expected_gradient"])
     end
     gradient_allocated(operation, problem, parameters)
     allocated = gradient_allocated(operation, problem, parameters)
     GC.gc()
     timings = Vector{Int}(undef, samples)
+    timed_gradient_error = 0.0
     for i in eachindex(timings)
         started = time_ns()
-        operation(problem, parameters)
+        measured_gradient = operation(problem, parameters)
         timings[i] = Int(time_ns() - started)
+        # Consume the complete timed result, with validation outside its clock.
+        timed_gradient_error = max(timed_gradient_error,
+            check_projection_gradient(name, measured_gradient, case["expected_gradient"]))
     end
     evaluations = Ref(0)
     counted(p) = (evaluations[] += 1; problem(p))
     operation(counted, parameters)
     record = Dict{String,Any}("method" => name, "count" => count, "loss" => loss,
         "gradient" => result, "gradient_max_error" => gradient_error,
+        "timed_gradient_max_error" => timed_gradient_error,
         "objective_evaluations" => evaluations[], "first_invocation_ns" => first_ns,
         "samples_ns" => timings, "allocated_bytes" => allocated)
 

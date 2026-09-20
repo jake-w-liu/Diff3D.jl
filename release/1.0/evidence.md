@@ -443,3 +443,31 @@ finite-number checks: `/tmp/diff3d-1.0-web-portable-native-110.{log,toml}`.
 Workflow YAML, quoted-argument checks, coverage-validator tests and
 `git diff --check` passed. Windows execution and the final complete release
 matrix are still required; these local checks do not substitute for them.
+
+## R6 — complete runner and observable timed gradients
+
+The clean `f0d7b21` run completed all nine sequential commands and both engine
+orders. Its 40 recorded file hashes were independently recomputed; all 32
+numerical records and 18 matched browser cases passed. Each browser record has
+21 samples of eight completed frames, with zero pixel mismatches outside the
+declared edge ties. Raw directory:
+`/tmp/diff3d-1.0-candidate-comparison-f0d7b21`; driver log has the same path plus
+`.log`. This shared host had 10 logical CPUs and load averages of 28.93 at the
+start and 24.42 at the end; the two orders show substantial timing variation.
+These results must retain that qualification.
+
+Review then found that the numerical loops discarded timed gradients after
+checking the initial invocation. Both loops now consume and validate every
+timed result after stopping its clock, and record the maximum error across
+samples. This makes their actual outputs observable; it is not a claim that
+compiler elimination occurred in the earlier run. Fixtures, derivative methods,
+sample counts and timing boundaries remain the same.
+
+All 16 method/size combinations passed the added checks, with the same errors
+as their initial oracles: `/tmp/diff3d-1.0-projection-observed.{toml,json}`.
+Wrong-length, wrong-value and nonfinite oracle inputs were also rejected.
+For each language, a mutant corrupting only the first timed gradient passed the
+previous harness and failed the corrected one, while preserving a failed result
+record: `/tmp/diff3d-1.0-gradient-observability-mutants/check.log` and its adjacent
+sources/results. The complete clean two-order run must be recollected with this
+stronger check before final timing claims are published.

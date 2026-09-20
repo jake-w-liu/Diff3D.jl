@@ -37,8 +37,10 @@ possible JavaScript derivative. A hand-derived gradient or another AD library
 would be an additional baseline with a different implementation contract.
 
 Each method records its first invocation separately, five warmups and 21 timed
-gradients, plus actual objective-evaluation counts. Julia reports total allocated
-bytes for one warmed gradient. Node reports retained heap/ArrayBuffer deltas
+gradients, plus actual objective-evaluation counts. Every timed gradient is
+consumed and checked against the independent oracle after its clock stops;
+reports retain the largest error across those samples. Julia reports total
+allocated bytes for one warmed gradient. Node reports retained heap/ArrayBuffer deltas
 after GC, result storage and an RSS snapshot. These are different memory
 quantities and must not be divided into an allocation-efficiency ratio.
 First-invocation time includes compilation encountered by that call; it does not

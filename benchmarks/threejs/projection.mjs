@@ -43,6 +43,14 @@ function centralDifference(objective, parameters) {
   return gradient;
 }
 
+function checkGradient(gradient, reference) {
+  if (gradient.length !== reference.length) throw new Error('gradient length mismatch');
+  let error = 0;
+  for (let i = 0; i < gradient.length; ++i) error = Math.max(error, Math.abs(gradient[i] - reference[i]));
+  if (!Number.isFinite(error) || error >= 1e-9) throw new Error(`gradient oracle failed: ${error}`);
+  return error;
+}
+
 const report = {status: 'failed', three_revision: REVISION, node: process.version,
   os: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? 'unavailable',
   fixture_sha256: createHash('sha256').update(input).digest('hex'), results: []};
@@ -65,15 +73,17 @@ try {
     let started = process.hrtime.bigint();
     const result = centralDifference(objective, parameters);
     const first = Number(process.hrtime.bigint() - started);
-    const gradientError = Math.max(...result.map((value, i) => Math.abs(value - c.expected_gradient[i])));
-    if (!Number.isFinite(gradientError) || gradientError >= 1e-9) throw new Error(`gradient oracle failed: ${gradientError}`);
-    for (let i = 0; i < fixture.warmup; ++i) centralDifference(objective, parameters);
+    const gradientError = checkGradient(result, c.expected_gradient);
+    for (let i = 0; i < fixture.warmup; ++i) checkGradient(centralDifference(objective, parameters), c.expected_gradient);
     global.gc();
     const samples = [];
+    let timedGradientError = 0;
     for (let i = 0; i < fixture.samples; ++i) {
       started = process.hrtime.bigint();
-      centralDifference(objective, parameters);
+      const measuredGradient = centralDifference(objective, parameters);
       samples.push(Number(process.hrtime.bigint() - started));
+      // Consume the complete timed result, with validation outside its clock.
+      timedGradientError = Math.max(timedGradientError, checkGradient(measuredGradient, c.expected_gradient));
     }
     let evaluations = 0;
     centralDifference(p => { evaluations++; return objective(p); }, parameters);
@@ -84,6 +94,7 @@ try {
     const after = process.memoryUsage();
     const record = {method: 'central_difference', count: c.count, loss,
       gradient: Array.from(result), gradient_max_error: gradientError,
+      timed_gradient_max_error: timedGradientError,
       objective_evaluations: evaluations, first_invocation_ns: first, samples_ns: samples,
       retained_heap_delta_bytes: after.heapUsed - before.heapUsed,
       retained_array_buffer_delta_bytes: after.arrayBuffers - before.arrayBuffers,
