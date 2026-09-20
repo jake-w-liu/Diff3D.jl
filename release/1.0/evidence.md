@@ -161,8 +161,9 @@ and 1.12.7, plus one deliberately broken fixture assertion used to check that
 expected broken tests are distinct from failures. A nested failing subprocess
 also leaves its report failed and executes the later test unit.
 
-The Julia 1.13 standard-library source was checked against tag `v1.13.0`; runtime
-verification on that version remains required. Logs:
+The Julia 1.13 standard-library source was checked against tag `v1.13.0`.
+After installing Julia 1.13.0 locally, the same 47 assertions and deliberately
+broken fixture also passed on that runtime (`/tmp/diff3d-1.0-runner-final-113.log`). Logs:
 `/tmp/diff3d-1.0-runner-final-110.log`, `/tmp/diff3d-1.0-runner-counts-112.log`,
 and `/tmp/diff3d-1.0-ci-aggregated-106016474433.log`.
 
@@ -222,3 +223,22 @@ feature scales, stable UV interpolation, and the duplicate allocation guard.
 Earlier partial optimizations still exceeded the union limit and were not
 treated as passing. Logs: `/tmp/diff3d-1.0-csg-buffers-{110,112}.log`; the original
 allocation profile is `/tmp/diff3d-1.0-csg-profile-110.log`.
+
+## R7 — versioned documentation and publishing procedure
+
+Documentation pushes from `main` now target `/dev/`; version tags produce
+versioned pages and the stable alias. The workflow checks out tag history and
+retains the built site. The previous deployment-history deletion step and
+unconfigured SSH-key input were removed. A tag/package-version guard accepted
+the main branch and matching 0.1.8 tag and rejected a mismatching 999.0.0 tag:
+four assertions passed locally. The first scratch check incorrectly expected a
+successful Julia `if` expression to return `nothing`; its assertion was corrected
+without changing the production guard. Log:
+`/tmp/diff3d-1.0-docs-tag-policy-fixed.log`.
+
+`publishing.md` records the exact-commit registration/tag/docs/release sequence;
+`migration.md` describes the public contract, corrected soft-render examples,
+backend boundaries, and file/workspace ownership. The docs introduction no
+longer describes Julia image arrays as row-major or claims an upstream three.js
+CSG algorithm. YAML parsing and `git diff --check` passed. A strict build of these
+documentation changes and final candidate/tag validation remain required.

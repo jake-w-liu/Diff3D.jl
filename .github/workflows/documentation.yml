@@ -1,27 +1,16 @@
 name: Documentation
 
-on:
+"on":
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
 jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    permissions: write-all
-    steps:
-      - name: Delete deployment
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: strumwolf/delete-deployment-environment@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          environment: github-pages
-          onlyRemoveDeployments: true
-
   build:
-    needs: cleanup
     permissions:
       actions: write
       contents: write
@@ -30,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -43,6 +34,10 @@ jobs:
       - name: Build and deploy
         run: julia --project=docs docs/make.jl
         env:
-          DOCUMENTER_DEPLOY: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          DOCUMENTER_DEPLOY: ${{ github.event_name == 'push' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-${{ github.sha }}
+          path: docs/build/
+          if-no-files-found: error

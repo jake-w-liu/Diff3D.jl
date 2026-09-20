@@ -266,7 +266,7 @@ println("OK geometry")
 
 ### Constructive Solid Geometry (CSG)
 
-Diff3D evaluates boolean operations over closed triangle `BufferGeometry` solids with a BSP polygon-clipping evaluator (the same algorithm behind three.js CSG). `csg_union`, `csg_subtract`, and `csg_intersect` return non-indexed `BufferGeometry` results, `transform_geometry` bakes a `Mat4` into an operand to position it, and `csg_evaluate` is the dispatching entry point that also accepts operation aliases.
+Diff3D evaluates boolean operations over closed triangle `BufferGeometry` solids with a BSP polygon-clipping evaluator. `csg_union`, `csg_subtract`, and `csg_intersect` return non-indexed `BufferGeometry` results, `transform_geometry` bakes a `Mat4` into an operand to position it, and `csg_evaluate` is the dispatching entry point that also accepts operation aliases.
 
 ```@example csg
 using Diff3D # hide
@@ -349,7 +349,7 @@ println("OK materials: ", length(mats), " types, pixel-sum=",
 
 ### Textures
 
-Diff3D stores image data as row-major `H×W×C` `Float64` arrays (UV `(0,0)` is bottom-left) and wraps them in a `Texture`, which powers procedural generators, UV sampling with wrap/filter modes and mipmaps, cube maps built from equirectangular environments, and PMREM roughness prefiltering. Textures plug straight into materials via `map=` and render through the standard rasterizer.
+Diff3D stores image data as `H×W×C` `Float64` arrays (UV `(0,0)` is bottom-left) and wraps them in a `Texture`, which powers procedural generators, UV sampling with wrap/filter modes and mipmaps, cube maps built from equirectangular environments, and PMREM roughness prefiltering. Textures plug straight into materials via `map=` and render through the standard rasterizer.
 
 ```@example textures
 using Diff3D # hide
