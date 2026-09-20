@@ -1,12 +1,16 @@
-"""Verify exported rendering through Chromium pixels and draw counts."""
+"""Verify exported rendering through browser pixels and draw counts."""
 
 import argparse
 import math
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
+from browser_support import BROWSERS, launch_browser, report_browser_environment
 
 
 def verify_packed_texture_storage(page) -> None:
@@ -178,6 +182,7 @@ def compare_baked_geometry(page, name: str, width: int, height: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--julia", default="julia", help="Julia executable")
+    parser.add_argument("--browser", choices=BROWSERS, default="chromium")
     parser.add_argument("--only", action="append", help="Run a named fixture (repeatable)")
     parser.add_argument("--fallback-only", action="store_true", help="Exercise missing ANGLE instancing")
     args = parser.parse_args()
@@ -225,13 +230,10 @@ def main() -> None:
             cwd=root, check=True, timeout=300,
         )
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                args=["--use-angle=swiftshader", "--use-gl=angle",
-                      "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
-            )
+            browser = launch_browser(playwright, args.browser)
             try:
                 checked_texture_storage = False
+                reported_environment = False
                 for name, instancing_enabled in cases:
                     page = browser.new_page(viewport={"width": 1024, "height": 800})
                     errors = []
@@ -277,6 +279,9 @@ def main() -> None:
                                 };
                             })();""")
                         page.goto((Path(directory) / f"{name}.html").as_uri(), timeout=120000)
+                        if not reported_environment:
+                            report_browser_environment(browser, page)
+                            reported_environment = True
                         if not checked_texture_storage:
                             verify_packed_texture_storage(page)
                             verify_shared_texture_refresh(page)

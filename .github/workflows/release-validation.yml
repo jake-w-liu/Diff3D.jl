@@ -1,0 +1,13 @@
+name: Release validation
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  platforms:
+    uses: ./.github/workflows/ci.yml
+    with:
+      full_platform: true

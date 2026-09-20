@@ -1,25 +1,16 @@
 from pathlib import Path
+import argparse
 import sys
 
 from playwright.sync_api import sync_playwright
+from browser_support import BROWSERS, launch_browser, report_browser_environment
 
 
-def _chromium_args() -> list[str]:
-    return [
-        "--use-angle=swiftshader",
-        "--use-gl=angle",
-        "--enable-unsafe-swiftshader",
-        "--ignore-gpu-blocklist",
-    ]
-
-
-def smoke_html(browser, path: Path) -> int:
+def smoke_html(browser, path: Path, *, report_environment: bool = True) -> int:
     url = path.resolve().as_uri()
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     try:
-        # CI uses a software (swiftshader) renderer that is ~50-100x slower than a
-        # local GPU. WebGL init and per-frame layout settle slowly, so the default
-        # 30s action timeout is too tight for slow runners.
+        # Allow up to two minutes for WebGL initialization and UI actions in CI.
         page.set_default_timeout(120000)
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -27,6 +18,8 @@ def smoke_html(browser, path: Path) -> int:
         page.goto(url)
         page.wait_for_selector("canvas")
         page.wait_for_timeout(1000)
+        if report_environment:
+            report_browser_environment(browser, page)
 
         speed = page.locator("#speed")
         if speed.count():
@@ -194,15 +187,16 @@ def smoke_html(browser, path: Path) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: python examples/browser_webgl_smoke.py <html> [<html> ...]", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description="Check exported WebGL scenes and controls.")
+    parser.add_argument("--browser", choices=BROWSERS, default="chromium")
+    parser.add_argument("html", nargs="+", type=Path)
+    args = parser.parse_args()
     rc = 0
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_chromium_args())
+        browser = launch_browser(p, args.browser)
         try:
-            for arg in sys.argv[1:]:
-                rc = max(rc, smoke_html(browser, Path(arg)))
+            for index, path in enumerate(args.html):
+                rc = max(rc, smoke_html(browser, path, report_environment=index == 0))
         finally:
             browser.close()
     return rc

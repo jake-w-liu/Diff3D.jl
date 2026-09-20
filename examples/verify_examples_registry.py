@@ -8,6 +8,8 @@ import signal
 import subprocess
 import sys
 
+from browser_support import BROWSERS
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - depends on host Python.
@@ -67,6 +69,8 @@ def parse_args() -> argparse.Namespace:
         default=sys.executable,
         help="Python executable to use for browser smoke.",
     )
+    parser.add_argument("--browser", choices=BROWSERS,
+                        default="chromium", help="Browser engine for WebGL validation.")
     parser.add_argument(
         "--shard",
         default=None,
@@ -217,7 +221,8 @@ def main() -> int:
             smoke_paths.append(html.relative_to(REPO_ROOT))
 
     if smoke_paths:
-        run_checked([args.python, SMOKE_SCRIPT, *(str(path) for path in smoke_paths)],
+        run_checked([args.python, SMOKE_SCRIPT, "--browser", args.browser,
+                     *(str(path) for path in smoke_paths)],
                     label="REGISTRY_SMOKE",
                     timeout_s=args.browser_timeout)
 

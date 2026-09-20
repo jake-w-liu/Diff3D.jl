@@ -165,3 +165,23 @@ The Julia 1.13 standard-library source was checked against tag `v1.13.0`; runtim
 verification on that version remains required. Logs:
 `/tmp/diff3d-1.0-runner-final-110.log`, `/tmp/diff3d-1.0-runner-counts-112.log`,
 and `/tmp/diff3d-1.0-ci-aggregated-106016474433.log`.
+
+## R4 — platform and browser validation infrastructure
+
+The release workflow reuses the routine CI workflow with the full matrix:
+36 optimized native jobs (two Julia versions, three operating systems, six
+complete shards), plus all six example groups in each of three browser engines.
+The coverage job requires six complete runtime/platform groups. Playwright is
+pinned to 1.63.0 and launch/environment reporting is shared across browser tests.
+
+On macOS 26.5.1/aarch64, all 14 gallery scenes and controls passed in Chromium
+153.0.8010.12 (ANGLE SwiftShader), Firefox 155.0 (reported Apple M1 or similar),
+and WebKit 26.6 (reported Apple GPU). The detailed Firefox and WebKit pixel suites
+then failed their physical-texture availability assertion. The runtime currently
+requires 17 fragment samplers plus an optional environment cube for that path;
+this is being investigated without removing the assertion.
+
+Python compilation, CLI argument checks, Ruby YAML parsing, and the three
+coverage-validator test methods passed. Full platform/browser release results
+remain pending. Logs: `/tmp/diff3d-1.0-browser-{chromium,firefox,webkit}-pilot.log`
+and `/tmp/diff3d-1.0-browser-{firefox,webkit}-pixels.log`.

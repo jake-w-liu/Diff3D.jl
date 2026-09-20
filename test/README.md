@@ -30,3 +30,17 @@ julia --project=. --threads=4 -e 'include("test/tiled_cache_ownership.jl")'
 
 The runner's structural/failure checks are `julia --project=. test/test_runner.jl`
 and `python test/test_check_shards.py` (Python 3.11+).
+
+The **Release validation** workflow runs the same complete suite on Linux,
+macOS, and Windows, for the minimum and latest stable Julia. Its coverage job
+requires all 36 native shard reports from six runtime/platform groups. It also
+runs all registered examples and rendering pixel fixtures in Chromium, Firefox,
+and WebKit. These are release gates; routine CI retains Linux and Chromium.
+
+To reproduce a browser check, install `test/requirements-browser.txt`, run
+`python -m playwright install chromium firefox webkit`, then run
+`python test/browser_rendering.py --browser firefox` (or another listed engine).
+Browser logs include the engine version, operating system, GPU renderer,
+context settings, and texture limits. Chromium's validation launcher explicitly
+uses SwiftShader; these results are software-renderer validation, not GPU
+performance measurements.
