@@ -4510,8 +4510,10 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       if(!f||f.width!==first.width||f.height!==first.height||f.width!==f.height||!f.data||f.data.length!==f.width*f.height*4){ gl.deleteTexture(tex); return null; }
       gl.texImage2D(cubeTargets[i],0,gl.RGBA,f.width,f.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(f.data));
     }
+    const pot=isPow2(first.width)&&isPow2(first.height);
     let uploadedMipmaps=false, mipCount=0;
-    if(env.faces.every(f=>Array.isArray(f.mipmaps))){
+    // WebGL 1 permits NPOT cube faces only at level zero, without mip sampling.
+    if(pot&&env.faces.every(f=>Array.isArray(f.mipmaps))){
       const count=env.faces[0].mipmaps.length;
       let complete=count>0;
       for(let level=1;complete&&level<=count;level++){
@@ -4532,7 +4534,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
         uploadedMipmaps=true;
       }
     }
-    const pot=isPow2(first.width)&&isPow2(first.height), minFilter=first.minFilter||first.filter, magFilter=first.magFilter||first.filter;
+    const minFilter=first.minFilter||first.filter, magFilter=first.magFilter||first.filter;
     if(pot&&!uploadedMipmaps) gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
     const maxLod=uploadedMipmaps?mipCount:(pot?Math.floor(Math.log2(first.width)):0);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);

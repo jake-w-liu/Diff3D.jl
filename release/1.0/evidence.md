@@ -571,3 +571,82 @@ precision, one-pixel shifts, wrong interior/background/edge colors, alpha
 corruption, empty/full images and invalid buffer size. The tests and JavaScript
 syntax check passed; the comparison workflow now runs these negative checks.
 The complete local Chromium replay and exact candidate CI remain required.
+
+The full Chromium replay subsequently finished successfully in both orders:
+all 18 fixture pairs passed, with `[0, 0]` initial/final cross-engine mismatches
+outside edge ties. Both engines reported four subpixel bits in all cases.
+Fixture hashes were checked against the frozen `284eadd` input. Raw JSON and
+logs are retained in the [replay archive](comparison/2026-09-20-chromium-replay.tar.gz)
+(SHA-256 `578c748953c673f59f949750f8047bcd417495e0c6c9d0e0f79776deebada84a`).
+Archive members were compared byte-for-byte with the completed outputs. The
+first process records a dirty `284eadd` checkout containing the oracle repair;
+the second records clean `c5114d9`. Both use the same frozen exported HTML.
+This is accuracy replay evidence, not a new clean candidate timing report.
+
+## R4 — non-power-of-two browser cube maps
+
+**VERIFIED:** WebKit registry job
+[106025464089](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994/job/106025464089)
+failed in the glTF loader example with `INVALID_VALUE` mip uploads. The example
+creates a 12×12 cube with authored mipmaps. Instrumenting actual WebKit 26.6
+uploads locally reproduced twelve errors: six 6×6 faces at level one and six
+3×3 faces at level two. The canonical `makeCubeTexture` uploader attempted
+these uploads before checking whether the base dimensions were powers of two.
+A 3×3 cube also incorrectly reported maximum LOD one, despite using base-level
+sampling. Raw probe: `/tmp/diff3d-1.0-portability-webkit-before.log`.
+
+The uploader now applies its existing power-of-two predicate before authored
+mip uploads, matching the 2D texture path. NPOT faces retain their base pixels
+and report maximum LOD zero; POT generated/authored mipmaps remain supported.
+No input data, example sizes, browser error checks or pixel tolerances changed.
+The backend restriction is documented in the compatibility contract.
+
+A browser regression checks real upload levels, all sampled output pixels,
+maximum LOD, cached object reuse and GL errors for face sizes 1, 3, 4 and 12,
+with and without authored mipmaps. It fails against the pre-repair export and
+passes all eight configurations in Chromium 153, Firefox 155 and WebKit 26.6
+on macOS arm64. The regenerated glTF/GLB example also passed its complete
+WebKit controls/render smoke test (`cases=2`). Logs:
+`/tmp/diff3d-1.0-cube-{chromium,firefox,webkit}-after.log` and
+`/tmp/diff3d-1.0-gltf-cube-webkit-smoke.log`.
+
+Two other Ubuntu failures remain under investigation: Firefox cannot create a
+WebGL context in the current headless launch, and WebKit's UV0 baked comparison
+reports maximum channel error four against its unchanged limit of three.
+Local WebKit and Chromium/Metal report 23-bit mediump precision and pass that
+UV comparison; this does not establish the Linux cause. A separate diagnostic
+branch/run records Linux context-creation events and compares fragment precision
+without changing main's acceptance workflow. No release gate is marked complete.
+
+## R4/R5 — actual Windows consumer after formatter repair
+
+**VERIFIED:** the Julia 1.10 Windows installed-consumer job
+[106033831389](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35494065177/job/106033831389)
+passed at `f0d7b21` using Julia 1.10.12 on NT/x86_64. Its downloaded report,
+manifest and Git tree agree on version 1.0.0, revision
+`f0d7b21de82b6bb9c48937942bafd52fbe2a65fc` and tree
+`3287a43e8dbd71e684f64c619c75db79d4e68846`. The public acceptance-script hash,
+PNG hash and exported HTML byte count were independently recomputed and match
+its report. Maximum gradient error was `1.1102230246251565e-16`; forward and
+reverse inverse fits ended at loss `1.3269127490142768e-20`.
+Artifacts: `/tmp/diff3d-1.0-consumer-windows-f0d7b21/`. Remaining native Windows
+shards and the final candidate's full consumer matrix are separate gates.
+
+The NPOT repair also passed the existing optimized WebGL-export unit on Julia
+1.10.12: `julia +1.10 --project=/tmp/diff3d-deep-debug-idzwWW/julia110-env
+test/runtests.jl --shard=40/516 --require-optimized` completed with all 3,242
+assertions and unchanged allocation limits. The generated runtime passed
+`node --check`; the modified Python harness compiled without errors.
+
+All six installed-consumer jobs in the same `f0d7b21` run subsequently passed:
+Julia 1.10.12 and 1.13.0 on Linux/x86_64, Windows/x86_64 and macOS/aarch64.
+Each report was checked against its downloaded manifest, exact Git tree,
+acceptance-script hash, PNG hash and HTML length. Artifacts are retained in
+`/tmp/diff3d-1.0-consumer-f0d7b21-all/`. These results verify the actual Windows
+formatter repair in consumer workflows; they do not close later-candidate or
+browser-export validation.
+
+The complete local WebKit browser suite then passed all 72 configurations,
+including the new cube upload/sampling check and all unchanged baked-image,
+instancing-fallback, resource and shader-location checks. Log:
+`/tmp/diff3d-1.0-cube-webkit-fixtures.log`.

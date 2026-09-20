@@ -116,6 +116,14 @@ incorrect edge colors and shifted/corrupted images. The archived timings and
 their source remain unchanged. See the [current protocol](../../benchmarks/threejs/README.md)
 and [verification evidence](evidence.md#chromium-subpixel-precision-oracle).
 
+The complete [Chromium replay](comparison/2026-09-20-chromium-replay.tar.gz)
+subsequently passed all nine fixtures in both orders, with zero cross-engine
+pixel mismatches outside edge ties. It used the frozen `284eadd` HTML with the
+corrected oracle; the first process began with uncommitted oracle edits and the
+second began at clean `c5114d9`. These records verify the corrected accuracy
+checks and retain that provenance; they do not replace the clean Firefox timing
+report or the final candidate's Linux comparison gate.
+
 Warmed cells show **median [95th percentile] milliseconds per completed frame**.
 Each sample is an eight-frame batch; there are 21 samples after five warmup
 batches. These are synchronized frame costs, not monitor-refresh FPS.

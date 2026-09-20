@@ -195,6 +195,79 @@ def verify_shared_texture_refresh(page) -> None:
             raise AssertionError(f"Shared packed texture refresh: {result}")
 
 
+def verify_cube_texture_storage(page) -> None:
+    results = page.evaluate("""() => {
+        const previous={framebuffer:gl.getParameter(gl.FRAMEBUFFER_BINDING),
+            program:gl.getParameter(gl.CURRENT_PROGRAM),viewport:gl.getParameter(gl.VIEWPORT),
+            active:gl.getParameter(gl.ACTIVE_TEXTURE),flip:gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
+            mask:gl.getParameter(gl.COLOR_WRITEMASK)};
+        gl.activeTexture(gl.TEXTURE0);
+        previous.cube=gl.getParameter(gl.TEXTURE_BINDING_CUBE_MAP);
+        previous.texture=gl.getParameter(gl.TEXTURE_BINDING_2D);
+        const capabilities=[gl.DEPTH_TEST,gl.BLEND,gl.CULL_FACE,gl.SCISSOR_TEST];
+        const enabled=capabilities.map(capability=>gl.isEnabled(capability));
+        const framebuffer=gl.createFramebuffer(),output=gl.createTexture(),textures=[];
+        const upload=gl.texImage2D;
+        let samplingProgram=null;
+        try {
+            samplingProgram=program('void main(){ gl_Position=vec4(0.0,0.0,0.0,1.0); gl_PointSize=4.0; }',
+                'precision mediump float; uniform samplerCube uCube; void main(){ gl_FragColor=textureCube(uCube,vec3(1.0,gl_PointCoord*2.0-1.0),16.0); }');
+            gl.bindTexture(gl.TEXTURE_2D,output);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,4,4,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+            gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,output,0);
+            if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)
+                throw new Error('Cube texture test framebuffer is incomplete');
+            for(const capability of capabilities) gl.disable(capability);
+            gl.colorMask(true,true,true,true); gl.viewport(0,0,4,4);
+            gl.useProgram(samplingProgram); gl.uniform1i(uniformLocation(samplingProgram,'uCube'),0);
+            const results=[];
+            for(const size of [1,3,4,12]) for(const authored of [false,true]){
+                const face=(width,color)=>({width,height:width,
+                    data:Array.from({length:width*width},()=>color).flat(),
+                    minFilter:'linear_mipmap_linear',magFilter:'nearest'});
+                const env={faces:Array.from({length:6},()=>{
+                    const result=face(size,[31,63,127,255]); result.mipmaps=[];
+                    if(authored) for(let width=size>>1;width;width>>=1)
+                        result.mipmaps.push(face(width,[93,127,191,255]));
+                    return result;
+                })};
+                const levels=[];
+                gl.texImage2D=function(...args){ levels.push(args[1]); return upload.apply(this,args); };
+                const result=makeCubeTexture(env); textures.push(result.texture);
+                gl.texImage2D=upload;
+                gl.drawArrays(gl.POINTS,0,1);
+                const pixels=new Uint8Array(4*4*4);
+                gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+                results.push({size,authored,maxLod:result.maxLod,levels,pixels:Array.from(pixels),
+                              reused:makeCubeTexture(env)===result,error:gl.getError()});
+            }
+            return results;
+        } finally {
+            gl.texImage2D=upload;
+            gl.bindFramebuffer(gl.FRAMEBUFFER,previous.framebuffer); gl.deleteFramebuffer(framebuffer);
+            gl.useProgram(previous.program);
+            if(samplingProgram){
+                for(const shader of gl.getAttachedShaders(samplingProgram)) gl.deleteShader(shader);
+                gl.deleteProgram(samplingProgram);
+            }
+            for(const texture of textures) gl.deleteTexture(texture); gl.deleteTexture(output);
+            gl.bindTexture(gl.TEXTURE_2D,previous.texture); gl.bindTexture(gl.TEXTURE_CUBE_MAP,previous.cube);
+            gl.activeTexture(previous.active); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,previous.flip);
+            gl.viewport(...previous.viewport); gl.colorMask(...previous.mask);
+            capabilities.forEach((capability,index)=>enabled[index]?gl.enable(capability):gl.disable(capability));
+        }
+    }""")
+    for result in results:
+        mipmapped = result["size"] == 4
+        levels = [0]*6 + ([1]*6 + [2]*6 if mipmapped and result["authored"] else [])
+        pixel = [93, 127, 191, 255] if mipmapped and result["authored"] else [31, 63, 127, 255]
+        if (result["maxLod"] != (2 if mipmapped else 0) or result["levels"] != levels
+                or result["pixels"] != pixel*16 or not result["reused"] or result["error"]):
+            raise AssertionError(f"Cube texture upload/sampling: {result}")
+
+
 def select_render_case(page, case_id: str) -> None:
     page.evaluate("""id => {
         const button=document.querySelector('button[data-case="'+id+'"]');
@@ -361,6 +434,7 @@ def main() -> None:
                         if not checked_texture_storage:
                             verify_packed_texture_storage(page)
                             verify_shared_texture_refresh(page)
+                            verify_cube_texture_storage(page)
                             checked_texture_storage = True
                         if name in controlled_fixtures:
                             page.evaluate("window.__diff3dTestRenderFrame()")

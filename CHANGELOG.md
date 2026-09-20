@@ -19,6 +19,8 @@ Changes included in this release:
 - Share mutually exclusive material samplers so the full physical-texture path
   fits the tested 16-sampler contexts. Reuse linked-program shader locations
   during repeated browser rendering.
+- Keep non-power-of-two browser cube maps at level zero, preventing invalid
+  WebGL mip uploads in exported environments such as the glTF loader example.
 - Reduce allocations in affine morph transforms, exact integer serialization,
   CSG clipping/inversion, and standard-material lighting with ambient occlusion.
 - Execute all tutorials and publish versioned documentation. Main-branch docs

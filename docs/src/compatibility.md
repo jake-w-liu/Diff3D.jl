@@ -46,6 +46,11 @@ string fields do not constitute a browser shader implementation. Export rejects
 this material instead of replacing its effect. Browser export is a scene export,
 not a live connection to subsequent Julia scene mutations.
 
+WebGL 1 textures whose dimensions are not powers of two use clamp-to-edge
+wrapping and base-level nearest or linear filtering. Exported cube maps follow
+the same restriction: their authored mipmaps are not uploaded and their maximum
+LOD is zero. Use power-of-two faces for mipmapped browser environment maps.
+
 Cache call forms are `render!(target, scene, camera; cache=RenderCache())`,
 `render_pooled!(target, scene, camera, RenderCache())`, and
 `render_tiled!(target, scene, camera; tiles=1, cache=[RenderCache()])`.
