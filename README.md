@@ -7,10 +7,10 @@ animation controls, loaders, and self-contained WebGL HTML export.
 
 ## Status
 
-Diff3D.jl is pre-1.0. The public API is broad and tested, but may still change
-as the package matures. The [1.0 release plan](RELEASE_PLAN.md) tracks the
-remaining validation. The [compatibility contract](docs/src/compatibility.md)
-defines the API and backend boundaries intended for the 1.x series.
+The [1.x compatibility contract](docs/src/compatibility.md) defines the stable
+public API and the supported behavior of each rendering backend. The
+[release plan](RELEASE_PLAN.md) records validation status and candidate evidence.
+Use the documentation for the package version you install.
 
 ## Installation
 

@@ -83,7 +83,7 @@ version = "1.11.0"
 deps = ["ColorTypes", "ForwardDiff", "JpegTurbo", "LinearAlgebra", "Printf"]
 path = ".."
 uuid = "72681062-5925-4945-963f-74d9429756fe"
-version = "0.1.8"
+version = "1.0.0"
 
 [[deps.DiffResults]]
 deps = ["StaticArraysCore"]

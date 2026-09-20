@@ -381,3 +381,28 @@ YAML and Python/JavaScript syntax checks passed. Complete two-pass measurements
 on a clean candidate and the comparison workflow remain required. All local
 prototype timings above were collected alongside other work and must not be
 published as controlled release measurements or universal performance claims.
+
+## R7 — 1.0.0 candidate metadata
+
+`Project.toml` and the resolved tracked docs manifest now identify version
+1.0.0. The README and compatibility page describe the 1.x contract without
+claiming that pending release gates have passed. `CHANGELOG.md` and the migration
+guide record the supported scope and accepted fixes. The matching-version docs
+guard passed all four checks again against the installed 1.0.0 package:
+`/tmp/diff3d-1.0-candidate-tag-policy.log`. The package-level public-contract
+and atomic-export checks are running; exact-commit release validation remains
+required.
+
+The exported-file permission wording is now explicitly about POSIX permission
+bits. Julia's actual Windows `mktemp` implementation uses `GetTempFileNameW`,
+while its POSIX path uses `mkstemp`; the earlier wording exceeded the platforms
+on which owner-only mode bits had been verified. This changes documentation,
+not export behavior.
+
+The standalone three.js comparison artifacts now include the installed
+package's complete MIT license verbatim, both in each HTML file and as a separate
+artifact. All nine files were checked against that license; their executable
+script contents are unchanged. The final comparison regenerates and measures
+these complete artifacts. Package resolution, YAML/syntax checks and
+`git diff --check` passed. No tag, registry submission or public release has
+been created.

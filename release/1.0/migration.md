@@ -15,8 +15,8 @@ release's compatibility contract and evidence when selecting a version.
   export uses WebGL 1 and built-in materials; `ShaderMaterial` export was already
   rejected in registered 0.1.8. Its Julia callback belongs to CPU rendering.
 - Failed WebGL exports now preserve the existing destination. A successful save
-  replaces a symlink instead of overwriting its target. New files have owner
-  read/write permissions; existing regular-file permission bits are preserved.
+  replaces a symlink instead of overwriting its target. On POSIX systems, new
+  files have owner read/write permissions and existing regular-file permission bits are preserved.
   Set the permissions explicitly when another local account must read a new file.
 - Reuse render caches and workspaces according to their ownership rules. Copy
   soft-workspace images that must outlive another call, and give concurrent

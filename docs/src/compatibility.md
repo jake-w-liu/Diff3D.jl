@@ -1,8 +1,8 @@
 # Compatibility
 
-This contract defines the intended supported surface for Diff3D 1.x. The package
-is currently preparing its first 1.0 release. Consult the documentation for the
-package version you use; development documentation can include unreleased work.
+This contract defines the supported surface for Diff3D 1.x. Consult the
+documentation for the package version you use; development documentation can
+include unreleased work.
 
 ## Public API and versioning
 

@@ -5306,8 +5306,8 @@ a canvas-only page.
 
 The complete export replaces `path` only after serialization succeeds. A failed
 export leaves an existing destination intact. A destination symlink is replaced
-without changing its target. Existing regular-file permissions are preserved;
-new output files use owner-only read/write permissions.
+without changing its target. On POSIX systems, existing regular-file permission
+bits are preserved and new output files use owner-only read/write permissions.
 """
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase", chrome::Bool=true)
