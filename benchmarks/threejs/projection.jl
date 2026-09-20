@@ -101,7 +101,12 @@ function main(arguments)
     all(isfinite, fixture["matrix"]) && !isempty(fixture["cases"]) || error("finite matrix and nonempty cases required")
     matrix = Mat4(Tuple(Float64.(fixture["matrix"])))
     repository = normpath(joinpath(@__DIR__, "..", ".."))
+    realpath(pkgdir(Diff3D)) == realpath(repository) ||
+        error("comparison must load Diff3D from the recorded checkout")
     report = Dict{String,Any}("status" => "failed", "julia" => string(VERSION),
+        "diff3d_version" => string(pkgversion(Diff3D)),
+        "forwarddiff_version" => string(pkgversion(ForwardDiff)),
+        "package_source" => realpath(pkgdir(Diff3D)),
         "os" => string(Sys.KERNEL), "arch" => string(Sys.ARCH), "cpu" => Sys.CPU_NAME,
         "threads" => Threads.nthreads(), "fixture_sha256" => bytes2hex(sha256(read(arguments[1]))),
         "revision" => strip(read(`git -C $repository rev-parse HEAD`, String)),

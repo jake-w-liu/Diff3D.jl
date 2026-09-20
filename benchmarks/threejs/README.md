@@ -19,6 +19,14 @@ metadata. `--allow-dirty` enables development probes, which must not be cited as
 final release measurements. Avoid running other heavy tasks during measurement;
 the report records system load, but cannot make different machine loads equal.
 
+The run also captures the resolved Julia `Project.toml` and `Manifest.toml` in
+`julia-environment/` before measurement and requires them to remain unchanged.
+These files lock the exact Julia package versions and dependency tree hashes
+used for that run; both numerical passes check their loaded Diff3D/ForwardDiff
+versions. To reproduce a recorded run, use its Julia version in a clean checkout
+of its source revision, copy these environment files to the checkout root, and
+instantiate them before running the harness.
+
 ## Numerical differentiation
 
 `fixtures.py` writes identical Float64 inputs in JSON and TOML at 16, 64, 256

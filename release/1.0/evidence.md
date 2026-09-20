@@ -471,3 +471,26 @@ previous harness and failed the corrected one, while preserving a failed result
 record: `/tmp/diff3d-1.0-gradient-observability-mutants/check.log` and its adjacent
 sources/results. The complete clean two-order run must be recollected with this
 stronger check before final timing claims are published.
+
+## R1/R6 — dependency compatibility and measurement provenance
+
+A fresh environment installed the immutable `f0d7b21` source from GitHub with
+ForwardDiff 0.10.39 on Julia 1.10.12. Eight existing AD/optimizer/gradient test
+units passed 550 assertions, including their enabled allocation guards and
+mixed forward/reverse scalar operations. This supplements the ForwardDiff 1.x
+checks; it is a focused dependency-compatibility result, not another complete
+platform matrix. Source tree: `3287a43e8dbd71e684f64c619c75db79d4e68846`.
+Log: `/tmp/diff3d-1.0-forwarddiff-010-remote.log`; the adjacent environment
+directory retains the resolved manifest.
+
+The comparison now captures the exact resolved Julia Project/Manifest before
+running and fails if either changes. Numerical reports identify the loaded
+Diff3D and ForwardDiff versions and require Diff3D to come from the recorded
+checkout; both passes compare those versions with the captured files. The
+native provenance probe passed, a different installed source was rejected, and
+an injected launch failure retained byte-identical environment files plus a
+failed run record. Evidence: `/tmp/diff3d-1.0-projection-environment.toml`,
+`/tmp/diff3d-1.0-wrong-package-environment.log` and
+`/tmp/diff3d-1.0-comparison-environment-failure/`. Syntax and whitespace checks
+passed. The final complete run will exercise the added provenance checks on
+both measured passes.

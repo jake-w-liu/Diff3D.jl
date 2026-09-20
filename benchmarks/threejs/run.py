@@ -54,6 +54,18 @@ def main():
         print(f"COMPARISON_STEP_OK {name}", flush=True)
 
     try:
+        # Preserve the exact resolved Julia dependencies, including their tree
+        # hashes, before running either implementation. Manifest.toml is ignored
+        # in this library repository, so a clean Git tree alone cannot lock it.
+        environment = output / "julia-environment"
+        environment.mkdir()
+        environment_bytes = {name: (ROOT / name).read_bytes()
+                             for name in ("Project.toml", "Manifest.toml")}
+        for name, contents in environment_bytes.items():
+            (environment / name).write_bytes(contents)
+        project = tomllib.loads(environment_bytes["Project.toml"].decode())
+        manifest = tomllib.loads(environment_bytes["Manifest.toml"].decode())
+        forwarddiff_version = manifest["deps"]["ForwardDiff"][0]["version"]
         run("fixtures", [sys.executable, str(BENCH / "fixtures.py"), str(output / "fixtures")])
         julia = [args.julia, "--startup-file=no", f"--project={ROOT}"]
         run("browser-build-diff3d", julia + [str(BENCH / "browser.jl"), str(output / "fixtures/browser.toml"), str(output / "html")])
@@ -88,6 +100,8 @@ def main():
             browser = json.loads((output / f"browser-{iteration}.json").read_text())
             if any(item["status"] != "passed" for item in (native, node, browser)):
                 raise AssertionError("Incomplete comparison result")
+            if native["diff3d_version"] != project["version"] or native["forwarddiff_version"] != forwarddiff_version:
+                raise AssertionError("Loaded Julia packages do not match the captured environment")
             for item, expected in ((native, expected_native), (node, expected_node)):
                 identities = [(record["count"], record["method"]) for record in item["results"]]
                 if len(identities) != len(expected) or set(identities) != expected:
@@ -101,6 +115,8 @@ def main():
         current_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True))
         if current_revision != revision or current_dirty != dirty:
             raise AssertionError("Checkout changed while collecting evidence")
+        if any((ROOT / name).read_bytes() != contents for name, contents in environment_bytes.items()):
+            raise AssertionError("Julia dependency environment changed while collecting evidence")
         report["status"] = "passed"
     finally:
         report["finished_unix_seconds"] = time.time()
