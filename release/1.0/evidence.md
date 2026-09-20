@@ -23,4 +23,38 @@ observed results; a planned command is not a passed check.
 - Available local commands: Julia 1.12.7, Node 26.5.0, Python 3.14.7. Other
   supported runtime/platform results remain to be established for this release.
 
-No 1.0 gate has passed yet. The previous audit is baseline evidence only.
+No complete 1.0 gate has passed yet. The previous audit is baseline evidence only.
+
+## R1/R5 — preserve HTML exports when serialization fails
+
+VERIFIED on the starting implementation: `save_webgl_html` opened/truncated the
+destination before scene serialization. A required `ShaderMaterial` rejection in
+a later case left a partial new file and damaged an existing file. The focused
+public regression (`test/web_export_atomicity.jl`) recorded 15 passes and 7
+failures before the fix.
+
+The canonical exporter now streams to a sibling temporary file, closes it, and
+commits by one filesystem rename. It propagates errors, preserves existing
+regular-file permissions, and replaces a destination symlink without modifying
+its target. New files use owner-only read/write permissions. HTML serialization
+and its streaming implementation are unchanged.
+
+Observed validation on macOS/aarch64:
+
+| Check | Result |
+|---|---|
+| `julia --startup-file=no -O0 --compile=min --project -e 'include("test/web_export_atomicity.jl"); include("test/public_contract.jl")'` | 22 export and 45 public-contract assertions passed, Julia 1.12.7 |
+| Export regression under Julia 1.10.12 with a separately resolved 1.10 environment | 22 assertions passed |
+| Existing two-sphere streamed-export allocation workload under normal Julia 1.12.7 compilation | 226,576 bytes; unchanged budget 350,000 bytes |
+| Successful HTML compared with the existing complete-HTML writer | Byte-for-byte equal |
+
+The first minimum-Julia attempt reused the ignored Julia 1.12 root manifest and
+failed in `PrecompileTools` before loading Diff3D. Repeating with the separately
+resolved Julia 1.10 environment passed. Release consumer validation must resolve
+dependencies for its actual Julia version.
+
+Local raw logs: `/tmp/diff3d-1.0-export-before.log`,
+`/tmp/diff3d-1.0-public-contract-fixed.log`,
+`/tmp/diff3d-1.0-export-julia110-resolved.log`, and
+`/tmp/diff3d-1.0-export-allocation.log`. Full candidate and browser checks remain
+required.

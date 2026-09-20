@@ -5282,6 +5282,11 @@ Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
 With `chrome=false`, the header, playback controls, stats, case list, and
 title bar are hidden via CSS (DOM ids retained for the JS runtime), leaving
 a canvas-only page.
+
+The complete export replaces `path` only after serialization succeeds. A failed
+export leaves an existing destination intact. A destination symlink is replaced
+without changing its target. Existing regular-file permissions are preserved;
+new output files use owner-only read/write permissions.
 """
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase", chrome::Bool=true)
@@ -5301,10 +5306,19 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
         write(io, ';')
         return nothing
     end
-    open(path, "w") do io
+    destination = abspath(path)
+    mktemp(dirname(destination)) do temporary, io
         _web_write_webgl_html(io, data_marker, title; light_caps, chrome,
                               extra_rewrites=(data_rewrite,))
+        data_inserted[] || error("WebGL HTML data insertion marker missing")
+        close(io)
+        if isfile(destination) && !islink(destination)
+            chmod(temporary, filemode(destination) & 0o777)
+        end
+        # Commit without a delete/copy fallback. Julia 1.10's mv/rename can
+        # fall back to copying; use the same libuv primitive directly instead.
+        result = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), temporary, destination)
+        result < 0 && Base.uv_error("rename WebGL export to $(repr(path))", result)
     end
-    data_inserted[] || error("WebGL HTML data insertion marker missing")
     return path
 end
