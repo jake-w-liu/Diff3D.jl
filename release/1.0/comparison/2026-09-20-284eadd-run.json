@@ -1,0 +1,191 @@
+{
+  "status": "passed",
+  "revision": "284eadd7b899661f4f1c78a0d55d4ede45ffa75c",
+  "dirty": false,
+  "os": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "arch": "arm64",
+  "cpu_count": 10,
+  "load_average_start": [
+    23.51611328125,
+    25.44873046875,
+    27.2685546875
+  ],
+  "started_unix_seconds": 1789888293.906394,
+  "commands": [
+    {
+      "name": "fixtures",
+      "argv": [
+        "/private/tmp/diff3d-deep-debug-idzwWW/browser-env/bin/python",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/fixtures.py",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures"
+      ],
+      "exit_code": 0,
+      "log": "fixtures.log",
+      "process_elapsed_seconds": 0.3337511250283569
+    },
+    {
+      "name": "browser-build-diff3d",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=/Users/jake/EMPIRE/codes/Diff3D.jl",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/browser.jl",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/browser.toml",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/html"
+      ],
+      "exit_code": 0,
+      "log": "browser-build-diff3d.log",
+      "process_elapsed_seconds": 65.56266391696408
+    },
+    {
+      "name": "browser-build-three",
+      "argv": [
+        "node",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/browser_build.mjs",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/browser.json",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/html"
+      ],
+      "exit_code": 0,
+      "log": "browser-build-three.log",
+      "process_elapsed_seconds": 1.466051583061926
+    },
+    {
+      "name": "projection-diff3d-1",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=/Users/jake/EMPIRE/codes/Diff3D.jl",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/projection.jl",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/projection.toml",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/projection-diff3d-1.toml"
+      ],
+      "exit_code": 0,
+      "log": "projection-diff3d-1.log",
+      "process_elapsed_seconds": 58.03674558305647
+    },
+    {
+      "name": "projection-three-1",
+      "argv": [
+        "node",
+        "--expose-gc",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/projection.mjs",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/projection.json",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/projection-three-1.json"
+      ],
+      "exit_code": 0,
+      "log": "projection-three-1.log",
+      "process_elapsed_seconds": 2.676823624991812
+    },
+    {
+      "name": "browser-1",
+      "argv": [
+        "/private/tmp/diff3d-deep-debug-idzwWW/browser-env/bin/python",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/browser.py",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/browser.json",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/html",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/browser-1.json",
+        "--browser",
+        "firefox",
+        "--order",
+        "diff3d-first"
+      ],
+      "exit_code": 0,
+      "log": "browser-1.log",
+      "process_elapsed_seconds": 466.55283824994694
+    },
+    {
+      "name": "projection-three-2",
+      "argv": [
+        "node",
+        "--expose-gc",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/projection.mjs",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/projection.json",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/projection-three-2.json"
+      ],
+      "exit_code": 0,
+      "log": "projection-three-2.log",
+      "process_elapsed_seconds": 2.2844577089417726
+    },
+    {
+      "name": "projection-diff3d-2",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=/Users/jake/EMPIRE/codes/Diff3D.jl",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/projection.jl",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/projection.toml",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/projection-diff3d-2.toml"
+      ],
+      "exit_code": 0,
+      "log": "projection-diff3d-2.log",
+      "process_elapsed_seconds": 44.18997866695281
+    },
+    {
+      "name": "browser-2",
+      "argv": [
+        "/private/tmp/diff3d-deep-debug-idzwWW/browser-env/bin/python",
+        "/Users/jake/EMPIRE/codes/Diff3D.jl/benchmarks/threejs/browser.py",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/fixtures/browser.json",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/html",
+        "/private/tmp/diff3d-1.0-candidate-comparison-284eadd/browser-2.json",
+        "--browser",
+        "firefox",
+        "--order",
+        "three-first"
+      ],
+      "exit_code": 0,
+      "log": "browser-2.log",
+      "process_elapsed_seconds": 335.43263545795344
+    }
+  ],
+  "finished_unix_seconds": 1789889270.8601,
+  "load_average_end": [
+    19.0751953125,
+    20.3740234375,
+    23.2763671875
+  ],
+  "files_sha256": {
+    "browser-1.json": "a3ca440ca95adfc13946f18cc82e0b5a067711eb87603f7e7a5b24e5492a803c",
+    "browser-1.log": "7a09536b9c2117d55820f20aefa30e3bbe8266e99e286518bf5893cf712bb177",
+    "browser-2.json": "99424ddee55fd02b87dfa3b5fe862a1795ad5d6d8fb932b0d29357810a3b27eb",
+    "browser-2.log": "6c19c3f8ee378088294f6ab8aa4581505bfaef4fd337ca6544821a21c1f5353a",
+    "browser-build-diff3d.log": "d356bef41378da3ed165235e4ee4b341a2af6908a8a5a3dbb7e87d960eb541fd",
+    "browser-build-three.log": "a0a82d2eb3028717ee59996e12ce0626046faace30bd6ed2c84105166738dc72",
+    "fixtures/browser.json": "8cd892ee507518d1df300f9cae3be9d20cb42e53804bec1a5233e77bacc14b75",
+    "fixtures/browser.toml": "f79c9d8320dff9745a32a5d322af6a97b0b4cc7571534392b5743fa0a0768471",
+    "fixtures/projection.json": "86fd54a1a89a71d297d472e117f18d1a7a49bd49681b3841314f98cb239a4c84",
+    "fixtures/projection.toml": "8ea38411c849d0c8afd1dae4fe1eeeb3b847e7de4a358e6c5b97cb51bfad703b",
+    "fixtures.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "html/diff3d-build.toml": "7e641673ced8036dd68c64308dedde7b6bbf6f666278f9638f4b6fc4dd920d0b",
+    "html/diff3d-dynamic-128.html": "a811a18cd08ef9fb9ca241332e178e7f89b52eda9bb7375ea1da4598b6671607",
+    "html/diff3d-dynamic-16.html": "b3c6c5a02dd68756ea47b566a2300a7d840ea81986c5358702cc8cfdcdb343f9",
+    "html/diff3d-dynamic-512.html": "7ef710dfa653d7c4089d621f0dd2cc8e8ed92077b3238be79b9136e4d21b9a44",
+    "html/diff3d-instanced-128.html": "d0520d3f637f1e51079770016f2bd1eb8bf9ec44365cb6dcecd838fec3dfff5e",
+    "html/diff3d-instanced-16.html": "5a0088ec5fdb763169ecf691c997f5fdfa8bf221f622ed3aa11e1c32f29dc700",
+    "html/diff3d-instanced-512.html": "170b49cdea981431c591b61100f557ff1f86d9b8f8914f625515c823f87e4509",
+    "html/diff3d-static-128.html": "c7ad9f23fab2945fabeae68e098e08e609e508835a305566197db20ce7880b63",
+    "html/diff3d-static-16.html": "23ffb7dabe55d5b39ba885e6fca0dc3e16c61b68f7cf6dcd8779669483244361",
+    "html/diff3d-static-512.html": "6e598ebc0de24800cdaeca93f582ea996a66a0969d681a97d57ab5caded4379d",
+    "html/three-LICENSE.txt": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+    "html/three-build.json": "631e7f49d5be84399a44f5a659e1f4ab34af9a77a4b21a200633390a5645b6c6",
+    "html/three-dynamic-128.html": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
+    "html/three-dynamic-16.html": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
+    "html/three-dynamic-512.html": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
+    "html/three-instanced-128.html": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
+    "html/three-instanced-16.html": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
+    "html/three-instanced-512.html": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
+    "html/three-static-128.html": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
+    "html/three-static-16.html": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
+    "html/three-static-512.html": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
+    "julia-environment/Manifest.toml": "c8b83dfa615304e51bfe5374b29ac48f31bf2d707278027539f00c5cc6be855b",
+    "julia-environment/Project.toml": "83100053865b28a6ab396021e71a1b83edc71a59cfd930668a4629c2ae6843ff",
+    "projection-diff3d-1.log": "5d5981719d5a024226d6ee1ed4e66c795abcca808cd6d433348644906d1a32d0",
+    "projection-diff3d-1.toml": "a320262bd2cc4f55d14eccfcd4c170b7ed7a374a74a21c6c58367f840363d595",
+    "projection-diff3d-2.log": "adb34f2f6b7dbd298f796a39195229fb79f61c900fe70b66ccf37992bf281104",
+    "projection-diff3d-2.toml": "37fbaa9987c159ab9296a2ee5db3b5db20bfa6807210bdb07104a414a4c77ec0",
+    "projection-three-1.json": "96e47d150f9e9e6e22b5984a44fe1155a4ce72fbc7bb46feeb3da15312eba868",
+    "projection-three-1.log": "64b416ff8d4fddd84edb4d138e052c889e666db90443bca05ff9b2a3092733de",
+    "projection-three-2.json": "8f342a1c58a9619a464abf21a5f7affddaa12457b751b68d86126136624fb9eb",
+    "projection-three-2.log": "746a5cb040e1cd8f7d9ddd392c25d8ec2611a9fefc19f540d226246c102c85fc"
+  }
+}

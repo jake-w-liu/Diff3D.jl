@@ -494,3 +494,80 @@ failed run record. Evidence: `/tmp/diff3d-1.0-projection-environment.toml`,
 `/tmp/diff3d-1.0-comparison-environment-failure/`. Syntax and whitespace checks
 passed. The final complete run will exercise the added provenance checks on
 both measured passes.
+
+## Complete recorded comparison and final contract review
+
+The clean two-order run at `284eadd7b899661f4f1c78a0d55d4ede45ffa75c`
+completed all nine commands, all 32 numerical method/size records and all 18
+paired browser cases. All 42 raw-file hashes were recomputed successfully. Each
+of the 43 archive members (including the run record) was checked byte-for-byte
+against its original. [The report](comparison.md) publishes both orders,
+median/95th-percentile times, startup, allocations, artifact sizes, accuracy and
+unfavorable cases. The raw archive and derived statistics are committed under
+`release/1.0/comparison/`; they do not depend on temporary files remaining present.
+
+The numerical maximum timed-gradient error was `3.4723482769671854e-13`, and the
+16-parameter recovery error was at most `4.99853491930935e-11`. Browser output
+pairs had zero mismatches outside the specified edge ties. Reverse AD had lower
+median cost than the explicit three.js finite-difference baseline at 1,024
+parameters; three.js had lower browser-frame medians in 17 of 18 measurements.
+The report includes the larger reverse-AD allocation and first-call compilation
+costs. The shared host's one-minute load average was 23.52/19.08 at start/end on
+10 logical CPUs, so these timings are qualified observations. The physical host
+reported Apple M5; Julia's CPU target and Firefox's renderer reported different
+strings, both retained without treating them as independent hardware detection.
+
+Final source review at that revision traced the public contracts back through
+the production diff, temporary-file/rename error paths, formatter buffer bounds,
+filtered lighting dispatch, CSG input/storage ownership and per-program location
+caches. Comparing the moved test suite against the starting `runtests.jl`
+confirmed that the low-optimization respawn was removed, the original allocation
+limits were retained, and the other existing assertion changes correspond to
+warmup/error-measurement handling and the changed browser location/sampler source.
+The review also checked shard failure aggregation/inventory, installed-package
+isolation, comparison clocks/oracles and the versioned-docs guard. No additional
+confirmed production defect emerged; this review does not replace the remaining
+actual platform checks. Notes: `/tmp/diff3d-1.0-final-contract-review.md`.
+
+The later-completing old Windows 1.10 shards 2, 3 and 5 in run `35490876994`
+failed on the same missing `snprintf` symbol and resulting export assertions;
+the report path also lost its Windows separators. Their inspected logs are
+`/tmp/diff3d-1.0-release-windows-{106025464415,106025464345,106025464326}.log`.
+These are pre-repair `bb44801` results, not results for the `f0d7b21` repair.
+Actual repaired Windows checks and the complete final candidate matrix remain
+required. No failed run has been deleted or relabelled as passing.
+
+## Chromium subpixel precision oracle
+
+**VERIFIED:** comparison job
+[106030312701](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35492724064/job/106030312701)
+at `16f043a` failed on the `static-128` initial pixel oracle. Current local
+Chromium reproduced the same failure (`/tmp/diff3d-1.0-chromium-static128-reproduction.log`).
+Complete captured Diff3D/three.js RGBA buffers were byte-identical, and both
+contexts reported `SUBPIXEL_BITS = 4`. An independent scanline check found 23
+non-edge disagreements with ideal continuous vertices, but zero after snapping
+window vertices to the 1/16-pixel grid. The first disputed pixel is 0.008944 pixels
+from its ideal edge, beyond the previous fixed 0.002 tolerance. The full buffers,
+reported renderer and scanline check are retained under
+`/tmp/diff3d-1.0-raster-precision-probe/` and
+`/tmp/diff3d-1.0-raster-precision-{probe,check}.log`.
+The [committed counterexample archive](comparison/2026-09-20-chromium-subpixel.tar.gz)
+also retains both complete RGBA buffers, their hashes, context metadata, fixture
+and scanline-check result.
+
+The [OpenGL ES specification, table 6.18](https://registry.khronos.org/OpenGL/specs/es/2.0/es_full_spec_2.0.pdf)
+permits this four-bit minimum; section 3.5.1 defines edge coverage. The canonical
+comparison oracle now records the queried precision and bounds the edge band by
+one subpixel step per coordinate, plus its existing Float32 transform allowance:
+`0.002 + sqrt(2) * 2^(-SUBPIXEL_BITS)`. Geometry, timings, sample counts, colors,
+all pixels outside that band, resource checks and both engine paths are unchanged.
+The full captured buffers now pass with a 0.090388-pixel band; 1,220 of 65,536
+pixels are classified as edge ties. This repair concerns the oracle, not a
+rendering defect in either engine.
+
+Six regression tests use a fixed measured 16×16 mask. They accept the four-bit
+image, reject it under the narrower eight-bit contract, and reject invalid
+precision, one-pixel shifts, wrong interior/background/edge colors, alpha
+corruption, empty/full images and invalid buffer size. The tests and JavaScript
+syntax check passed; the comparison workflow now runs these negative checks.
+The complete local Chromium replay and exact candidate CI remain required.

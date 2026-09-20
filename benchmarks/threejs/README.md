@@ -76,9 +76,13 @@ The harness drives the real frame callbacks at identical simulation times and
 calls `gl.finish()` after **every** frame. It checks actual draw and triangle
 counts, initial/final pixels against an independent triangle oracle and against
 the other engine, animation advancement, WebGL errors and GPU-resource reuse.
-Only samples within 0.002 pixels of an ideal triangle edge may differ by edge
-coverage; channel quantization may differ by one byte. All other pixels must
-match their expected foreground/background values.
+The permitted edge-coverage band is `0.002 + sqrt(2) * 2^(-SUBPIXEL_BITS)` pixels.
+The queried WebGL precision bounds one subpixel step in each window coordinate;
+0.002 pixels additionally covers Float32 transforms. The precision and resulting
+band are recorded, and color must still be foreground or background on an edge.
+Channel quantization may differ by one byte. All other pixels must match their
+expected foreground/background values. `test_browser_oracle.py` checks a
+captured four-bit rasterization mask and rejects shifted or corrupted images.
 
 Navigation through the first completed frame is recorded separately. Warm
 measurements contain five warmup batches and 21 measured batches of eight
@@ -94,4 +98,5 @@ establish overall feature parity or universal superiority.
 Primary references: [three.js WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html),
 [three.js matrix projection](https://github.com/mrdoob/three.js/blob/r186/src/math/Vector3.js),
 [WebGL completion](https://registry.khronos.org/webgl/specs/latest/1.0/#5.14.11),
+[OpenGL ES subpixel precision (table 6.18)](https://registry.khronos.org/OpenGL/specs/es/2.0/es_full_spec_2.0.pdf),
 and [Diff3D compatibility](../../docs/src/compatibility.md).

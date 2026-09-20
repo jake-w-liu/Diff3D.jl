@@ -28,6 +28,8 @@ jobs:
           npm ci --prefix benchmarks/threejs --ignore-scripts --no-audit --no-fund
           python -m pip install -r test/requirements-browser.txt
           python -m playwright install --with-deps chromium
+      - name: Verify independent pixel oracle
+        run: python benchmarks/threejs/test_browser_oracle.py
       - name: Verify matched outputs and retain both measurement orders
         run: python benchmarks/threejs/run.py benchmarks/threejs/results --browser chromium
       - uses: actions/upload-artifact@v4

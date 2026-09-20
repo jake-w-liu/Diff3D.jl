@@ -50,14 +50,20 @@ save_png("cube.png", target.color)
 
 The snippets below are a hands-on tour of the major subsystems. Each is
 self-contained and runnable as-is; all assume you have already run `using
-Diff3D`. They mirror the corresponding three.js concepts while staying pure
-Julia and differentiable-friendly. The Differentiable Rendering & Inverse
-example additionally uses ForwardDiff, which you can add to your project with
-`] add ForwardDiff`.
+Diff3D`. They expose the corresponding graphics concepts through Julia APIs.
+The [compatibility contract](compatibility.md) describes each backend and the
+supported numerical and differentiation inputs. The Differentiable Rendering &
+Inverse example additionally uses ForwardDiff, which you can add to your project
+with `] add ForwardDiff`.
 
 ### Math & Transforms
 
-Diff3D ships a self-contained, ForwardDiff-friendly math core that mirrors three.js conventions: immutable `Vec2`/`Vec3`/`Vec4`, column-major `Mat4`, quaternions and Euler angles, bounding volumes, geometric primitives, spherical/cylindrical coordinates, and frustum culling. Every type is parametric so it flows through automatic differentiation unchanged.
+Diff3D's math core includes immutable `Vec2`/`Vec3`/`Vec4`, column-major `Mat4`,
+quaternions and Euler angles, bounding volumes, geometric primitives,
+spherical/cylindrical coordinates, and frustum culling. Parametric numerical
+inputs preserve differentiated scalar types on the supported math paths.
+Discrete decisions such as culling and indexing are subject to the
+[differentiation limits](compatibility.md#Numeric-and-differentiation-inputs).
 
 ```@example math
 using Diff3D # hide

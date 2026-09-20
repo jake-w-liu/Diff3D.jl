@@ -34,5 +34,6 @@ A matching three.js API name does not imply matching backend coverage or speed.
 
 The [release tracker](RELEASE_PLAN.md) records the candidate's validation status;
 its checks must pass before publication. The
-[comparison protocol](benchmarks/threejs/README.md) defines how measured
-advantages and limitations are established.
+[comparison report](release/1.0/comparison.md) includes both measurement orders,
+raw data, observed advantages and unfavorable results; the
+[protocol](benchmarks/threejs/README.md) describes how to reproduce it.

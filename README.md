@@ -12,6 +12,13 @@ public API and the supported behavior of each rendering backend. The
 [release plan](RELEASE_PLAN.md) records validation status and candidate evidence.
 Use the documentation for the package version you install.
 
+The [measured comparison with three.js](release/1.0/comparison.md) records native
+gradient timings, browser frames, startup and artifact sizes, including both
+execution orders and the raw evidence. Diff3D's advantages in those fixtures are
+Julia differentiation and smaller compressed standalone exports. Three.js had
+lower browser-frame medians in 17 of 18 measurements; the shared-host timings
+do not establish general rendering superiority.
+
 ## Installation
 
 Install the registered package with:

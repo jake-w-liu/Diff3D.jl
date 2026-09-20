@@ -83,6 +83,7 @@
             vendor: gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR),
             context: gl.getContextAttributes(), width: gl.drawingBufferWidth, height: gl.drawingBufferHeight,
             fragmentTextures: gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS),
+            subpixelBits: gl.getParameter(gl.SUBPIXEL_BITS),
             userAgent: navigator.userAgent, devicePixelRatio,
             animationTime: window.__diff3dDebug?.animationTime() ?? window.__threeBenchmark?.animationTime(),
             objectCount: window.__diff3dDebug?.activeObjectCount() ?? window.__threeBenchmark?.objectCount};

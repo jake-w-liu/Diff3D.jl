@@ -18,7 +18,14 @@ sys.path.insert(0, str(ROOT / "examples"))
 from browser_support import BROWSERS, launch_browser
 
 
-def validate_pixels(pixels, fixture, case, animation_time):
+def validate_pixels(pixels, fixture, case, animation_time, subpixel_bits):
+    if type(subpixel_bits) is not int or subpixel_bits < 4:
+        raise AssertionError("Invalid WebGL subpixel precision")
+    # Window vertices have implementation-dependent fixed-point precision.
+    # One grid step in each coordinate bounds either rounding or truncation;
+    # retain the separate Float32 transform allowance. ES 2.0 table 6.18 sets
+    # the minimum at four bits, so a fixed 0.002-pixel band is insufficient.
+    edge_tolerance = 0.002 + math.sqrt(2) * 2.0 ** -subpixel_bits
     width, height = fixture["width"], fixture["height"]
     if len(pixels) != width * height * 4:
         raise AssertionError("Unexpected pixel buffer size")
@@ -32,9 +39,7 @@ def validate_pixels(pixels, fixture, case, animation_time):
         points = [((vertices[i] + cx + 1) * width / 2,
                    (vertices[i + 1] + cy + shift + 1) * height / 2) for i in (0, 3, 6)]
         edges = list(zip(points, points[1:] + points[:1]))
-        # Exclude only points within 0.002 pixels of an ideal edge: Float32
-        # matrix/vertex rounding and rasterization tie rules differ by backend.
-        tolerances = [0.002 * math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in edges]
+        tolerances = [edge_tolerance * math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in edges]
         for y in range(max(0, math.floor(min(p[1] for p in points))), min(height, math.ceil(max(p[1] for p in points)))):
             for x in range(max(0, math.floor(min(p[0] for p in points))), min(width, math.ceil(max(p[0] for p in points)))):
                 values = [(b[0] - a[0]) * (y + 0.5 - a[1]) - (b[1] - a[1]) * (x + 0.5 - a[0]) for a, b in edges]
@@ -61,7 +66,7 @@ def validate_pixels(pixels, fixture, case, animation_time):
     if failures or not colored:
         raise AssertionError(f"Independent triangle pixel oracle failed: {failures}, colored={colored}")
     return {"pixel_sha256": hashlib.sha256(bytes(pixels)).hexdigest(), "colored_pixels": colored,
-            "edge_tie_pixels": len(boundary)}, boundary
+            "edge_tie_pixels": len(boundary), "edge_tolerance_pixels": edge_tolerance}, boundary
 
 
 def measure(page, html, fixture, case, instrument):
@@ -86,7 +91,7 @@ def measure(page, html, fixture, case, instrument):
     if environment["objectCount"] != expected_objects or abs(environment["animationTime"]) > 1e-9:
         raise AssertionError(f"Incorrect initial scene state: {environment}")
     first_pixels = page.evaluate("window.__benchmarkPixels()")
-    first_oracle, first_boundary = validate_pixels(first_pixels, fixture, case, 0)
+    first_oracle, first_boundary = validate_pixels(first_pixels, fixture, case, 0, environment["subpixelBits"])
     frames, batches = [first], []
     batch_size = fixture["frames_per_sample"]
     for index in range(fixture["warmup"] + fixture["samples"]):
@@ -105,7 +110,7 @@ def measure(page, html, fixture, case, instrument):
     if abs(actual_time - final_time) > 1e-9:
         raise AssertionError(f"Animation clock {actual_time} != {final_time}")
     final_pixels = page.evaluate("window.__benchmarkPixels()")
-    final_oracle, final_boundary = validate_pixels(final_pixels, fixture, case, final_time)
+    final_oracle, final_boundary = validate_pixels(final_pixels, fixture, case, final_time, environment["subpixelBits"])
     if case["mode"] == "dynamic" and first_pixels == final_pixels:
         raise AssertionError("Dynamic fixture did not change the image")
     if errors or network:
