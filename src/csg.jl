@@ -584,7 +584,7 @@ function _transform_geometry_morphs!(attributes::Dict{Symbol,BufferAttribute},
                                      geo::BufferGeometry, matrix::Mat4,
                                      normal_matrix::Mat4, affine::Bool,
                                      direction_sign::Float64)
-    linear = typeof(matrix)(ntuple(i -> 13 <= i <= 15 ? zero(matrix.e[i]) : matrix.e[i], 16))
+    linear = typeof(matrix)(ntuple(i -> 13 <= i <= 15 ? zero(matrix.e[i]) : matrix.e[i], Val(16)))
     for (name, source) in geo.attributes
         match_kind = match(r"^morph(Position|Normal|Tangent)[0-9]+$", String(name))
         match_kind === nothing && continue

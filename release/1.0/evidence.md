@@ -119,3 +119,18 @@ claims were corrected. Local logs: `/tmp/diff3d-1.0-docs-first.log`,
 `/tmp/diff3d-1.0-docs-resolve.log`, `/tmp/diff3d-1.0-docs-second.log`, and
 `/tmp/diff3d-1.0-ast-check.log`. Versioned deployment and final-candidate docs
 validation remain separate release gates.
+
+## R3 — geometry transform allocation repair
+
+The minimum-version shard exposed 4,160 bytes for transforming the existing
+custom-attribute fixture (limit: 4,096). An allocation profile traced temporary
+tuple construction to `_transform_geometry_morphs!`. Giving `ntuple` the matrix's
+fixed 16-element length as `Val(16)` reduced the measured fixture to 3,424 bytes
+on Julia 1.10.12 and 3,344 bytes on Julia 1.12.7, without changing the result or
+the allocation limit.
+
+The canonical optimized unit 145 passed all 31 assertions on both versions.
+`transformed_morph_targets.jl`, `deformation_normals.jl`, and
+`tangent_handedness.jl` then passed 827, 112, and 387 assertions respectively on
+both versions. Logs: `/tmp/diff3d-1.0-transform-fixed-{110,112}.log`; profiles and
+before/after measurements: `/tmp/diff3d-1.0-transform-{profile,variant}-{110,112}.log`.
