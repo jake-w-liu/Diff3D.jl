@@ -292,3 +292,21 @@ running. Logs: `/tmp/diff3d-1.0-standard-fixed-110.log`,
 `/tmp/diff3d-1.0-standard-direct-final-110.log`,
 `/tmp/diff3d-1.0-standard-profile-110.log` and
 `/tmp/diff3d-1.0-direct-light-variants-110.log`.
+
+## R4 — full physical materials on 16-sampler contexts
+
+Roughness, matcap and toon-gradient textures already shared texture unit 5,
+but their shader declarations consumed three sampler uniforms. Those mutually
+exclusive material families now use one sampler while retaining their own
+texture transforms and color controls. The full shader requires 15 2D samplers
+plus its environment cube, within the 16-fragment-sampler limit reported by
+the tested Firefox and WebKit contexts.
+
+Both complete pixel suites passed: all 65 fixtures / 72 configurations on each
+engine, including disabled-ANGLE-instancing fallbacks and texture-storage/dirty
+refresh checks. Fixture identities were checked against the script's complete
+inventory. No pixel expectation or physical-texture availability assertion was
+removed. Logs: `/tmp/diff3d-1.0-browser-{firefox,webkit}-samplers.log`.
+The complete Chromium pixel run and native export unit are still running;
+their results will be recorded separately. This is evidence for the tested
+contexts, not a claim of support for every WebGL 1 device.

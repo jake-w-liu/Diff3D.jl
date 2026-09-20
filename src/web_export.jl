@@ -4358,7 +4358,11 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   uniform int uShadowLightIndex[MAX_SHADOW],uShadowKind[MAX_SHADOW],uShadowMode[MAX_SHADOW],uShadowPcfRadius[MAX_SHADOW];
   uniform vec4 uClipPlane[MAX_CLIP];
   uniform float uPointDistance[MAX_POINT],uPointDecay[MAX_POINT],uSpotDistance[MAX_SPOT],uSpotDecay[MAX_SPOT],uSpotConeCos[MAX_SPOT],uSpotPenumbraCos[MAX_SPOT];
-  uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uClearcoatNormalMap,uMatcapMap,uGradientMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uShadowMap0,uShadowMap1;
+  // These material families already share texture unit 5. Aliasing the sampler
+  // also avoids consuming three fragment sampler declarations for one unit.
+  #define uMatcapMap uRoughnessMap
+  #define uGradientMap uRoughnessMap
+  uniform sampler2D uMap,uAlphaMap,uEmissiveMap,uAoMap,uLightMap,uRoughnessMap,uMetalnessMap,uNormalMap,uClearcoatNormalMap,uPhysicalScalarMap,uPhysicalScalar2Map,uSheenColorMap,uSpecularColorMap,uShadowMap0,uShadowMap1;
   uniform samplerCube uEnvCubeMap;
   vec2 txUv(mat3 m, vec2 uv){ vec3 q=m*vec3(uv,1.0); return q.xy; }
   vec2 uvFor(mat3 m, int set){ return set==1?txUv(m,vUv2):txUv(m,vUv); }
@@ -4435,8 +4439,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   const shadowTextureUnits=usesClearcoatNormal&&clearcoatNormalTexturesEnabled?[12]:[12,15];
   const boneTexturesEnabled=!!floatTextureExt&&vertexTextureUnits>0&&maxCombinedTextureUnits>boneTextureUnit;
   const cubeTexturesEnabled=maxTextureUnits>envCubeTextureUnit&&maxCombinedTextureUnits>envCubeTextureUnit;
-  // Full physical materials declare 17 sampler2D uniforms plus the optional env cube sampler.
-  const fullPhysicalSamplerCount=17+(cubeTexturesEnabled?1:0);
+  // Full physical materials declare 15 sampler2D uniforms plus the optional env cube sampler.
+  const fullPhysicalSamplerCount=15+(cubeTexturesEnabled?1:0);
   const physicalTexturesEnabled=maxTextureUnits>=fullPhysicalSamplerCount&&maxCombinedTextureUnits>=fullPhysicalSamplerCount;
   const meshFragmentShader=physicalTexturesEnabled?FSH_EMISSIVE_VOLUME:FSH_EMISSIVE_CORE;
   const meshFragmentShaderCubeLod=(cubeTexturesEnabled&&textureLodExt)?meshFragmentShader
@@ -5065,8 +5069,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       if(o.normalTex){ gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D,o.normalTex); gl.uniform1i(gl.getUniformLocation(p,"uNormalMap"),7); }
       if(o.clearcoatNormalTex){ gl.activeTexture(gl.TEXTURE0+clearcoatNormalTextureUnit); gl.bindTexture(gl.TEXTURE_2D,o.clearcoatNormalTex); gl.uniform1i(gl.getUniformLocation(p,"uClearcoatNormalMap"),clearcoatNormalTextureUnit); }
       // Matcap and toon have no roughness map; their family map uses its unit.
-      if(o.matcapTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.matcapTex); gl.uniform1i(gl.getUniformLocation(p,"uMatcapMap"),5); }
-      if(o.gradientTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.gradientTex); gl.uniform1i(gl.getUniformLocation(p,"uGradientMap"),5); }
+      if(o.matcapTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.matcapTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
+      if(o.gradientTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.gradientTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
       if(o.physicalScalarTex){ gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalarTex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalarMap"),8); }
       if(o.physicalScalar2Tex){ gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalar2Tex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalar2Map"),9); }
       if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSheenColorMap"),10); }

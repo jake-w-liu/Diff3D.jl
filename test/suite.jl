@@ -4868,7 +4868,7 @@ end
         @test occursin("function reportStartupError", html)
         @test occursin("window.addEventListener(\"error\",e=>reportStartupError", html)
         @test occursin("physicalTexturesEnabled", html)
-        @test occursin("const fullPhysicalSamplerCount=17+(cubeTexturesEnabled?1:0)", html)
+        @test occursin("const fullPhysicalSamplerCount=15+(cubeTexturesEnabled?1:0)", html)
         @test occursin("const physicalTexturesEnabled=maxTextureUnits>=fullPhysicalSamplerCount&&maxCombinedTextureUnits>=fullPhysicalSamplerCount", html)
         @test occursin("packedTexture", html)
         @test occursin("uUsePhysicalScalarMap", html)
