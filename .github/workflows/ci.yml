@@ -45,7 +45,7 @@ jobs:
       - name: Verify test runner
         run: julia --project=. --depwarn=error test/test_runner.jl
       - name: Run complete optimized package test shard
-        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=ARGS)' -- --shard=${{ matrix.shard }}/6 --require-optimized --report=${{ github.workspace }}/test-results/shard.toml
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=ARGS)' -- --shard=${{ matrix.shard }}/6 --require-optimized --report="${{ github.workspace }}/test-results/shard.toml"
       - name: Verify concurrent rendering
         if: matrix.shard == 1
         run: julia --project=. --threads=4 -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'

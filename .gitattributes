@@ -1,0 +1,2 @@
+# Keep Julia source assertions and release suite hashes identical on every OS.
+*.jl text eol=lf

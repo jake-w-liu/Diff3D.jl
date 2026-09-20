@@ -242,18 +242,15 @@ function _js_str(s::AbstractString)
     return String(take!(io))
 end
 const _WEB_NUM_BUFFER_BYTES = 64
-const _WEB_NUM_PRINTF_FORMAT = "%.17g"
+const _WEB_NUM_PRINTF_FORMAT = Printf.Format("%.17g")
+const _WEB_INT_PRINTF_FORMAT = Printf.Format("%d")
 
 _web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
 
 @inline function _js_write_int(io::IO, x::Int, buf::Vector{UInt8})
-    # A signed 64-bit decimal needs at most 20 bytes plus its C terminator.
+    # A signed 64-bit decimal needs at most 20 bytes.
     length(buf) < 21 && resize!(buf, 21)
-    n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
-                                         length(buf)::Csize_t,
-                                         "%lld"::Cstring;
-                                         x::Clonglong)::Cint
-    0 <= n < length(buf) || error("failed to format WebGL JSON integer")
+    n = Printf.format(buf, 1, _WEB_INT_PRINTF_FORMAT, x) - 1
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
     return nothing
 end
@@ -264,22 +261,12 @@ function _js_num(x::Real)
     return String(take!(io))
 end
 
-# Use libc snprintf into a reusable caller-owned buffer: Printf.@printf keeps
-# exact formatting but allocates heavily in large numeric JSON arrays.
+# Printf's buffer method preserves %.17g formatting without a per-number
+# allocation or a platform-dependent libc symbol lookup. The 64-byte buffer
+# also fits the scientific-notation scratch output used by general formatting.
 @inline function _js_write_finite_num(io::IO, x::Float64, buf::Vector{UInt8})
-    n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
-                                         length(buf)::Csize_t,
-                                         _WEB_NUM_PRINTF_FORMAT::Cstring;
-                                         x::Cdouble)::Cint
-    n >= 0 || error("failed to format finite WebGL JSON number")
-    if n >= length(buf)
-        resize!(buf, Int(n) + 1)
-        n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
-                                             length(buf)::Csize_t,
-                                             _WEB_NUM_PRINTF_FORMAT::Cstring;
-                                             x::Cdouble)::Cint
-        n >= 0 || error("failed to format finite WebGL JSON number")
-    end
+    length(buf) < _WEB_NUM_BUFFER_BYTES && resize!(buf, _WEB_NUM_BUFFER_BYTES)
+    n = Printf.format(buf, 1, _WEB_NUM_PRINTF_FORMAT, x) - 1
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
     return nothing
 end

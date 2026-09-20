@@ -3080,6 +3080,37 @@ end
                 @test_opt_alloc 0 Diff3D._js_write_int(devnull, typemin(Int), buffer)
             end
         end
+        @testset "Portable finite number formatting" begin
+            # Literal decimal oracles include signed zero and both Float64
+            # exponent extremes; parsing checks preserve the actual value.
+            cases = ((0.0, "0"), (-0.0, "-0"), (1.0, "1"),
+                     (0.1, "0.10000000000000001"),
+                     (floatmin(Float64), "2.2250738585072014e-308"),
+                     (nextfloat(0.0), "4.9406564584124654e-324"),
+                     (floatmax(Float64), "1.7976931348623157e+308"))
+            for buffer_size in (0, 1, 20, 24, 25, 64)
+                buffer = Vector{UInt8}(undef, buffer_size)
+                for (value, expected) in cases
+                    io = IOBuffer()
+                    Diff3D._js_write_num(io, value, buffer)
+                    actual = String(take!(io))
+                    @test actual == expected
+                    @test isequal(parse(Float64, actual), value)
+                end
+                Diff3D._js_write_num(devnull, floatmax(Float64), buffer)
+                @test_opt_alloc 0 Diff3D._js_write_num(devnull, floatmax(Float64), buffer)
+            end
+            for value in (NaN, Inf, -Inf)
+                @test Diff3D._js_num(value) == "0"
+            end
+            for exponent in -323:308
+                value = 10.0^exponent
+                for neighbor in (prevfloat(value), value, nextfloat(value))
+                    isfinite(neighbor) || continue
+                    @test isequal(parse(Float64, Diff3D._js_num(neighbor)), neighbor)
+                end
+            end
+        end
         scene = Scene(background=Color3(0.01, 0.02, 0.03),
                       fog=Fog(color=Color3(0.6, 0.7, 0.8), near=2.0, far=18.0))
         ambient = AmbientLight(color=Color3(0.2, 0.3, 0.4), intensity=0.5)

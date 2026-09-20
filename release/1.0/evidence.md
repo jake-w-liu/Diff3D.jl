@@ -353,8 +353,9 @@ Strict versioned documentation builds passed for
 [`ea75e07`](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490709153), and
 [`42e394c`](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490806027).
 The first full platform/consumer release run was dispatched at `bb44801` as
-[run 35490876994](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994);
-it remains queued. The final candidate must pass its own complete validation.
+[run 35490876994](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994).
+Its later Windows failures are recorded below. The final candidate must pass
+its own complete validation.
 
 ## R6 — pinned comparison harness
 
@@ -389,8 +390,9 @@ published as controlled release measurements or universal performance claims.
 claiming that pending release gates have passed. `CHANGELOG.md` and the migration
 guide record the supported scope and accepted fixes. The matching-version docs
 guard passed all four checks again against the installed 1.0.0 package:
-`/tmp/diff3d-1.0-candidate-tag-policy.log`. The package-level public-contract
-and atomic-export checks are running; exact-commit release validation remains
+`/tmp/diff3d-1.0-candidate-tag-policy.log`. The local Julia 1.12.7 public-contract
+and atomic-export checks passed all 45 and 22 assertions respectively:
+`/tmp/diff3d-1.0-candidate-contract.log`. Exact-commit release validation remains
 required.
 
 The exported-file permission wording is now explicitly about POSIX permission
@@ -406,3 +408,38 @@ script contents are unchanged. The final comparison regenerates and measures
 these complete artifacts. Package resolution, YAML/syntax checks and
 `git diff --check` passed. No tag, registry submission or public release has
 been created.
+
+## R4 — Windows number formatting, checkout and report paths
+
+The first full matrix exposed three Windows defects. Both installed-consumer
+jobs failed at the exporter's unqualified `snprintf` lookup on Julia 1.10 and
+1.13: [minimum Julia](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994/job/106025464075)
+and [current Julia](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994/job/106025464103).
+The [current-Julia first shard](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994/job/106025464137)
+also failed three multiline source assertions in a CRLF checkout and uploaded
+no shard report. Raw logs are retained as
+`/tmp/diff3d-1.0-release-windows-{job-id}.log`.
+
+**VERIFIED:** Bash removes the backslashes from the workflow's unquoted Windows
+report path. Quoting the argument preserves it exactly. The workflow now quotes
+that path and still requires the report artifact. `*.jl text eol=lf` preserves
+the source assertions and the byte-identical suite digest required across
+platforms. A fresh Git checkout simulation with `core.autocrlf=true` changed all
+221 Julia files to CRLF before this rule; with it all 221 matched the source
+bytes. Log: `/tmp/diff3d-1.0-windows-checkout-probe.log`.
+
+Both numeric writers now use the existing Printf dependency's buffer method,
+whose implementations were inspected in Julia 1.10, 1.12 and 1.13. Integer IDs
+remain integers; finite numbers retain `%.17g`; caller-owned buffers are reused.
+No platform fallback or allocating string conversion is added. An independent
+macOS libc differential/round-trip probe passed 101,901 checks on each of Julia
+1.10.12 and 1.13.0, including exponent boundaries, generated Float64 bit patterns,
+integer extrema, tiny buffers and zero warmed allocations. Logs:
+`/tmp/diff3d-1.0-portable-format-probe-{110,113}.log`.
+
+The actual optimized WebGL export unit passed all 3,242 assertions on Julia
+1.10.12, with its existing scene allocation budgets unchanged and 1,989 new
+finite-number checks: `/tmp/diff3d-1.0-web-portable-native-110.{log,toml}`.
+Workflow YAML, quoted-argument checks, coverage-validator tests and
+`git diff --check` passed. Windows execution and the final complete release
+matrix are still required; these local checks do not substitute for them.

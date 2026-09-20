@@ -14,6 +14,8 @@ Changes included in this release:
   areas, scaled vector differences, and zero line-projection parameters.
 - Preserve existing WebGL exports when serialization fails. Replace destination
   symlinks without changing their targets and preserve POSIX regular-file modes.
+- Format exported numbers through Julia's reusable Printf buffer on every
+  platform, preserving Float64 precision and exact integer IDs on Windows.
 - Share mutually exclusive material samplers so the full physical-texture path
   fits the tested 16-sampler contexts. Reuse linked-program shader locations
   during repeated browser rendering.
