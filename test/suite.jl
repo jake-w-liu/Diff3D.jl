@@ -19260,12 +19260,26 @@ end
             return take!(io)
         end
 
-        empty_large_png = png_rgb_bytes(1024, 1024, UInt8[])
-        empty_png_alloc = @allocated try
-            Diff3D._decode_png(empty_large_png)
-        catch err
-            @test occursin("PNG image data is truncated", sprint(showerror, err))
+        function decode_failure(decoder, bytes)
+            try
+                decoder(bytes)
+            catch err
+                err isa ErrorException || rethrow()
+                return err
+            end
+            return nothing
         end
+        # Warm rejection with a different, small image before measuring the first
+        # large input. Keep compilation and Test's error formatting outside the
+        # allocation window; allocating the declared large image must still fail.
+        small_png_failure = decode_failure(Diff3D._decode_png, png_rgb_bytes(1, 1, UInt8[]))
+        @test small_png_failure isa ErrorException
+        empty_large_png = png_rgb_bytes(1024, 1024, UInt8[])
+        png_failure = Ref{Union{Nothing,ErrorException}}(nothing)
+        empty_png_alloc = _diff3d_test_opt_allocated(
+            () -> (png_failure[] = decode_failure(Diff3D._decode_png, empty_large_png)))
+        @test png_failure[] isa ErrorException
+        @test occursin("PNG image data is truncated", sprint(showerror, png_failure[]))
         @test empty_png_alloc < 2_000_000
 
         trailing_png = png_rgb_bytes(1, 1,
@@ -19273,13 +19287,16 @@ end
                                           fill(UInt8(0), 16)))
         @test_throws Exception Diff3D._decode_png(trailing_png)
 
+        small_hdr = Vector{UInt8}(codeunits(
+            "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 8\n"))
+        @test decode_failure(Diff3D._decode_rgbe, small_hdr) isa ErrorException
         empty_large_hdr = Vector{UInt8}(codeunits(
             "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1024 +X 1024\n"))
-        empty_hdr_alloc = @allocated try
-            Diff3D._decode_rgbe(empty_large_hdr)
-        catch err
-            @test occursin("truncated", sprint(showerror, err))
-        end
+        hdr_failure = Ref{Union{Nothing,ErrorException}}(nothing)
+        empty_hdr_alloc = _diff3d_test_opt_allocated(
+            () -> (hdr_failure[] = decode_failure(Diff3D._decode_rgbe, empty_large_hdr)))
+        @test hdr_failure[] isa ErrorException
+        @test occursin("truncated", sprint(showerror, hdr_failure[]))
         @test empty_hdr_alloc < 2_000_000
     end
 

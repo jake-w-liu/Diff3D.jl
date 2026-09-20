@@ -134,3 +134,19 @@ The canonical optimized unit 145 passed all 31 assertions on both versions.
 `tangent_handedness.jl` then passed 827, 112, and 387 assertions respectively on
 both versions. Logs: `/tmp/diff3d-1.0-transform-fixed-{110,112}.log`; profiles and
 before/after measurements: `/tmp/diff3d-1.0-transform-{profile,variant}-{110,112}.log`.
+
+## R3 — malformed-image allocation guard
+
+The previous truncated-HDR test measured the first decoder call and `Test`
+error formatting together: the same input measured 21,600,080 bytes on its
+first local call, then 2,480 bytes on each repeated call. The guard now warms
+rejection with a different small image, measures the first large-image rejection
+through the existing allocation helper, and checks the error outside that
+window. Both original 2,000,000-byte limits are unchanged.
+
+The canonical optimized unit 162 passed all 9 assertions on Julia 1.10.12 and
+1.12.7. A runtime-only mutant moved the large HDR image allocation ahead of
+payload validation: the corrected test rejected it at 25,167,392 bytes (8 pass,
+1 expected failure). Logs: `/tmp/diff3d-1.0-loader-bounds-fixed-{110,112}.log`,
+`/tmp/diff3d-1.0-loader-bounds-mutant.log`, and
+`/tmp/diff3d-1.0-hdr-allocation-112.log`. No loader behavior or test budget changed.
