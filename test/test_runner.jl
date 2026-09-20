@@ -41,6 +41,7 @@ end
             @testset "third" begin
                 push!(visits, 3)
                 @test later(twice(3)) == 9
+                @test_broken false
             end
             """)
         write(joinpath(directory, "included.jl"), """
@@ -81,5 +82,13 @@ end
         @test TOML.parsefile(report_path)["status"] == "failed"
         @test TOML.parsefile(report_path)["encountered_units"] == 2
         @test read(completed, String) == "completed"
+
+        # Nested use must also leave a failed report; outer Test aggregation
+        # delays its exception until after run_tests has returned.
+        nested = "using Test; include(ARGS[1]); @testset \"outer\" begin Diff3DTestRunner.run_tests(Main, [\"--report=\" * ARGS[3]]; suite=ARGS[2]); end"
+        nested_command = `$(Base.julia_cmd()) --startup-file=no -e $nested $runner $suite $report_path`
+        @test !success(pipeline(nested_command; stdout=devnull, stderr=devnull))
+        @test TOML.parsefile(report_path)["status"] == "failed"
+        @test TOML.parsefile(report_path)["encountered_units"] == 2
     end
 end

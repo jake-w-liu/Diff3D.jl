@@ -150,3 +150,18 @@ payload validation: the corrected test rejected it at 25,167,392 bytes (8 pass,
 1 expected failure). Logs: `/tmp/diff3d-1.0-loader-bounds-fixed-{110,112}.log`,
 `/tmp/diff3d-1.0-loader-bounds-mutant.log`, and
 `/tmp/diff3d-1.0-hdr-allocation-112.log`. No loader behavior or test budget changed.
+
+## R3 — test result compatibility
+
+CI on Julia 1.13.0 exposed a `TypeError` in the runner's use of Test's internal
+`anynonpass` field: it is now a `UInt8` cache rather than a Boolean. The runner
+now inspects failure/error counts from `Test.get_test_counts`, including its
+Julia 1.10 tuple return form. Local checks passed 47 assertions on Julia 1.10.12
+and 1.12.7, plus one deliberately broken fixture assertion used to check that
+expected broken tests are distinct from failures. A nested failing subprocess
+also leaves its report failed and executes the later test unit.
+
+The Julia 1.13 standard-library source was checked against tag `v1.13.0`; runtime
+verification on that version remains required. Logs:
+`/tmp/diff3d-1.0-runner-final-110.log`, `/tmp/diff3d-1.0-runner-counts-112.log`,
+and `/tmp/diff3d-1.0-ci-aggregated-106016474433.log`.

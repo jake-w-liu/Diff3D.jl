@@ -121,8 +121,12 @@ function run_tests(target::Module, arguments; suite=joinpath(@__DIR__, "suite.jl
         result = @testset "Diff3D shard $(config.shard)/$(config.shards)" begin
             Base.include(select_expression, target, suite)
         end
-        Test.get_test_counts(result)
-        result.anynonpass && error("test shard contains failing assertions")
+        counts = Test.get_test_counts(result)
+        # Julia 1.10 returns (pass, fail, error, broken, cumulative counts,
+        # duration); current Julia returns the documented TestCounts record.
+        failures = counts isa Tuple ? counts[2] + counts[3] + counts[6] + counts[7] :
+            counts.fails + counts.errors + counts.cumulative_fails + counts.cumulative_errors
+        failures > 0 && error("test shard contains failing assertions")
         count == length(units) || error("test unit inventory was not fully encountered")
         read(suite, String) == source || error("test source changed during execution")
         report["allocation_assertions"] =
