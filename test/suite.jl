@@ -34064,3 +34064,5 @@ include("mean_gradients.jl")
 include("public_contract.jl")
 
 include("web_export_atomicity.jl")
+
+include("standard_direct_lights.jl")

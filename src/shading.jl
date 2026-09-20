@@ -2342,12 +2342,16 @@ end
 
 function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
                                 material::MeshStandardMaterial,
-                                lights::Vector{SceneLight}, shadow_fn,
+                                lights::Union{Vector{SceneLight},_DirectLightView{Vector{SceneLight}}},
+                                shadow_fn,
                                 metalness::Float64, roughness::Float64)
     result = material.emissive * material.emissive_intensity
-    @inbounds for i in eachindex(lights)
+    source = lights isa _DirectLightView ? lights.lights : lights
+    @inbounds for i in eachindex(source)
+        light = source[i]
+        lights isa _DirectLightView && _is_fill_light(light) && continue
         result = _dispatch_scene_light(
-            _dispatch_accumulate_standard_light, lights[i], result, material,
+            _dispatch_accumulate_standard_light, light, result, material,
             normal, view_dir, position, shadow_fn, metalness, roughness)
     end
     return result
@@ -2400,13 +2404,17 @@ end
 
 function _shade_standard_mapped_vertex_color(
         normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshStandardMaterial, lights::Vector{SceneLight}, shadow_fn,
+        material::MeshStandardMaterial,
+        lights::Union{Vector{SceneLight},_DirectLightView{Vector{SceneLight}}}, shadow_fn,
         metalness::Float64, roughness::Float64, vertex_color::Color3)
     albedo = _modulate(material.color, vertex_color)
     result = material.emissive * material.emissive_intensity
-    @inbounds for i in eachindex(lights)
+    source = lights isa _DirectLightView ? lights.lights : lights
+    @inbounds for i in eachindex(source)
+        light = source[i]
+        lights isa _DirectLightView && _is_fill_light(light) && continue
         result = _dispatch_scene_light(
-            _dispatch_accumulate_standard_mapped_vertex_color, lights[i],
+            _dispatch_accumulate_standard_mapped_vertex_color, light,
             result, normal, view_dir, position, material, shadow_fn, metalness,
             roughness, albedo)
     end

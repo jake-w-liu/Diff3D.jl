@@ -271,3 +271,24 @@ systems and both Julia versions, retains manifests/evidence/outputs, then
 checks the installed export in all three browsers. The Windows load-path
 separator follows Julia's platform rule. YAML parsing and Python compilation
 passed; the platform matrix and exact candidate installation remain required.
+
+## R3 — mapped standard lighting with ambient occlusion
+
+The complete minimum-Julia shard also exposed an existing 4,096-byte pooled
+rendering guard. Its 32-sphere standard-material/AO fixture measured 98,528
+bytes. Allocation profiling and inferred-code inspection traced per-pixel
+boxing to the generic filtered direct-light iterator. Extending the existing
+built-in light dispatch to the filtered view removed allocations in both mapped
+standard shading functions while preserving the generic custom-light path.
+
+The canonical optimized pooled-render unit passed all 94 assertions on Julia
+1.10.12, including its original pixel and allocation checks. Additional checks
+passed 22 assertions for all built-in lights, custom lights, Float64/BigFloat
+results and zero-allocation reused built-in shading, followed by 9 lighting
+energy assertions. The new test initially compared whole BigFloat-containing
+struct identity; it now compares the three numerical channels exactly. No
+pixel tolerance or allocation budget changed. Julia 1.12 verification is still
+running. Logs: `/tmp/diff3d-1.0-standard-fixed-110.log`,
+`/tmp/diff3d-1.0-standard-direct-final-110.log`,
+`/tmp/diff3d-1.0-standard-profile-110.log` and
+`/tmp/diff3d-1.0-direct-light-variants-110.log`.
