@@ -355,3 +355,29 @@ Strict versioned documentation builds passed for
 The first full platform/consumer release run was dispatched at `bb44801` as
 [run 35490876994](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994);
 it remains queued. The final candidate must pass its own complete validation.
+
+## R6 — pinned comparison harness
+
+The harness pins three.js 0.186.0 and esbuild 0.28.2. JSON/TOML fixtures contain
+identical checked Float64 values. The projection objective passed independent
+loss/gradient expectations at 16/64/256/1,024 parameters for Diff3D reverse AD,
+ForwardDiff and central differences, and three.js central differences: 16
+method/size combinations. All four 16-parameter fits recovered the known depths.
+Logs/results: `/tmp/diff3d-1.0-projection-{julia,node}-final-code.{log,toml,json}`
+(Julia results use TOML; Node results use JSON).
+
+The browser comparison passed all nine matched fixtures (static/instanced/
+animated, 16/128/512 triangles) against independent pixels and actual draw
+counts. Both engines reported the same GPU/vendor. Initial/final pixels matched
+outside the declared subpixel edge ties, and neither engine allocated/deleted
+GPU resources after its first frame. The final harness records 21 batches of
+eight completed frames, after five warmup batches. Report:
+`/tmp/diff3d-1.0-comparison-batched-check.json`.
+
+The sequential runner retains commands, raw samples, input/output hashes and
+failures, and reverses engine order on its second pass. Its dirty-checkout,
+occupied-output and missing-executable rejection paths were exercised. Workflow
+YAML and Python/JavaScript syntax checks passed. Complete two-pass measurements
+on a clean candidate and the comparison workflow remain required. All local
+prototype timings above were collected alongside other work and must not be
+published as controlled release measurements or universal performance claims.

@@ -7,6 +7,8 @@ permissions:
   contents: read
 
 jobs:
+  comparison:
+    uses: ./.github/workflows/comparison.yml
   consumer:
     uses: ./.github/workflows/consumer.yml
   platforms:

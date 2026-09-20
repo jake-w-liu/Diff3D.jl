@@ -1,0 +1,38 @@
+name: Pinned three.js comparison
+
+"on":
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.13.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.5.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install comparison dependencies
+        run: |
+          julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate()'
+          npm ci --prefix benchmarks/threejs --ignore-scripts --no-audit --no-fund
+          python -m pip install -r test/requirements-browser.txt
+          python -m playwright install --with-deps chromium
+      - name: Verify matched outputs and retain both measurement orders
+        run: python benchmarks/threejs/run.py benchmarks/threejs/results --browser chromium
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comparison-${{ github.sha }}
+          path: benchmarks/threejs/results/
+          if-no-files-found: error
