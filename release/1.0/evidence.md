@@ -287,8 +287,8 @@ passed 22 assertions for all built-in lights, custom lights, Float64/BigFloat
 results and zero-allocation reused built-in shading, followed by 9 lighting
 energy assertions. The new test initially compared whole BigFloat-containing
 struct identity; it now compares the three numerical channels exactly. No
-pixel tolerance or allocation budget changed. Julia 1.12 verification is still
-running. Logs: `/tmp/diff3d-1.0-standard-fixed-110.log`,
+pixel tolerance or allocation budget changed. The same 94 + 22 + 9 assertions
+also passed on Julia 1.12.7 (`/tmp/diff3d-1.0-standard-fixed-112.log`). Logs: `/tmp/diff3d-1.0-standard-fixed-110.log`,
 `/tmp/diff3d-1.0-standard-direct-final-110.log`,
 `/tmp/diff3d-1.0-standard-profile-110.log` and
 `/tmp/diff3d-1.0-direct-light-variants-110.log`.
@@ -307,6 +307,51 @@ engine, including disabled-ANGLE-instancing fallbacks and texture-storage/dirty
 refresh checks. Fixture identities were checked against the script's complete
 inventory. No pixel expectation or physical-texture availability assertion was
 removed. Logs: `/tmp/diff3d-1.0-browser-{firefox,webkit}-samplers.log`.
-The complete Chromium pixel run and native export unit are still running;
-their results will be recorded separately. This is evidence for the tested
+The native optimized export unit passed all 1,253 assertions on Julia 1.10.12
+(`/tmp/diff3d-1.0-web-samplers-native-110.log`). Chromium also completed every
+one of the 72 configurations (`/tmp/diff3d-1.0-browser-chromium-samplers.log`). This is evidence for the tested
 contexts, not a claim of support for every WebGL 1 device.
+
+## R6 — reuse linked-program shader locations
+
+The matched browser fixture exposed repeated uniform/attribute queries in the
+per-object draw path. A diagnostic runtime variant changed only those queries
+to per-program caches. For 128 separate triangles in Firefox, original/cached/
+cached/original median frame-call times were 119 / 24 / 30 / 99 ms, with identical
+first/final pixel hashes and the independent triangle oracle passing. These
+measurements ran under concurrent system load and are diagnostic evidence,
+not the final three.js comparison. Logs and raw samples:
+`/tmp/diff3d-1.0-location-probe-fixed.log` and
+`/tmp/diff3d-1.0-location-probe/measurements.json`.
+
+The canonical runtime now caches locations by linked program in page-owned
+WeakMaps, including inactive `null` uniforms and `-1` attributes. Each link
+creates a new program. Mechanically undoing the lookup rewrite and removing
+the two helpers reconstructs the previous shader/draw source exactly, including
+its specialization templates. The 14 affected string assertions were updated
+to the equivalent helper calls.
+
+The native optimized export unit passed 1,253 assertions on Julia 1.10.12. All
+72 pixel configurations passed again in Firefox and WebKit; Chromium passed the
+stacked-camera, native/fallback instance and matcap pilot. New actual-GL checks
+verify two programs with the same uniform names, inactive locations, correct
+uniform values, and zero shader-location queries during warmed drawing.
+Logs: `/tmp/diff3d-1.0-web-locations-native-110.log`,
+`/tmp/diff3d-1.0-browser-location-{firefox,webkit}.log`, and
+`/tmp/diff3d-1.0-browser-location-chromium-pilot.log`.
+
+## R3/R7 — additional remote results
+
+[The runner-compatibility revision](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35488434799)
+completed every native shard on Julia 1.13.0 successfully. Its minimum-version
+failures are the WebGL integer writer, CSG and standard/AO allocation guards
+repaired in later commits; the failed run is retained as evidence. This older
+revision is not the final release check.
+
+Strict versioned documentation builds passed for
+[`adc9f3d`](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490654471),
+[`ea75e07`](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490709153), and
+[`42e394c`](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490806027).
+The first full platform/consumer release run was dispatched at `bb44801` as
+[run 35490876994](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35490876994);
+it remains queued. The final candidate must pass its own complete validation.

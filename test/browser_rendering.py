@@ -13,6 +13,81 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
 from browser_support import BROWSERS, launch_browser, report_browser_environment
 
 
+def verify_program_location_cache(page) -> None:
+    result = page.evaluate("""async () => {
+        const originalUniform=gl.getUniformLocation, originalAttribute=gl.getAttribLocation;
+        const previousProgram=gl.getParameter(gl.CURRENT_PROGRAM), programs=[];
+        let uniforms=0, attributes=0;
+        gl.getUniformLocation=function(...args){ uniforms++; return originalUniform.apply(this,args); };
+        gl.getAttribLocation=function(...args){ attributes++; return originalAttribute.apply(this,args); };
+        let programChecks;
+        try {
+            const vs='attribute vec3 aPosition; void main(){ gl_Position=vec4(aPosition,1.0); }';
+            const fs='precision mediump float; uniform float uValue; void main(){ gl_FragColor=vec4(uValue,0.0,0.0,1.0); }';
+            for(let i=0;i<2;i++) programs.push(program(vs,fs));
+            const values=[];
+            for(const [index,p] of programs.entries()){
+                const location=uniformLocation(p,'uValue'), attribute=attributeLocation(p,'aPosition');
+                if(location===null||attribute<0) throw new Error('Active shader location missing');
+                for(let i=0;i<3;i++){
+                    if(uniformLocation(p,'uValue')!==location||attributeLocation(p,'aPosition')!==attribute)
+                        throw new Error('Shader location changed on cache lookup');
+                    if(uniformLocation(p,'inactive')!==null||attributeLocation(p,'inactive')!==-1)
+                        throw new Error('Inactive shader location was not preserved');
+                }
+                gl.useProgram(p); gl.uniform1f(location,index===0?.25:.75);
+                values.push(gl.getUniform(p,location));
+            }
+            programChecks={uniforms,attributes,values,error:gl.getError()};
+        } finally {
+            gl.getUniformLocation=originalUniform; gl.getAttribLocation=originalAttribute;
+            gl.useProgram(previousProgram);
+            for(const p of programs){
+                for(const shader of gl.getAttachedShaders(p)) gl.deleteShader(shader);
+                gl.deleteProgram(p);
+            }
+        }
+        const frames=async () => {
+            if(window.__diff3dTestRenderFrame){
+                for(let i=0;i<3;i++) window.__diff3dTestRenderFrame();
+            } else {
+                await new Promise(resolve => {
+                    let count=0;
+                    function next(){ if(++count===3) resolve(); else requestAnimationFrame(next); }
+                    requestAnimationFrame(next);
+                });
+            }
+        };
+        await frames();
+        uniforms=0; attributes=0;
+        let draws=0;
+        const restorations=[];
+        function countDraw(owner,name){
+            const original=owner[name]; if(typeof original!=='function') return;
+            owner[name]=function(...args){ draws++; return original.apply(this,args); };
+            restorations.push(()=>{owner[name]=original;});
+        }
+        countDraw(gl,'drawArrays'); countDraw(gl,'drawElements');
+        const extension=gl.getExtension('ANGLE_instanced_arrays');
+        if(extension){ countDraw(extension,'drawArraysInstancedANGLE'); countDraw(extension,'drawElementsInstancedANGLE'); }
+        gl.getUniformLocation=function(...args){ uniforms++; return originalUniform.apply(this,args); };
+        gl.getAttribLocation=function(...args){ attributes++; return originalAttribute.apply(this,args); };
+        try {
+            await frames();
+            return {programChecks,uniforms,attributes,draws,
+                    expectedDraws:window.__diff3dDebug.activeDrawItemCount()>0,error:gl.getError()};
+        } finally {
+            gl.getUniformLocation=originalUniform; gl.getAttribLocation=originalAttribute;
+            for(const restore of restorations) restore();
+        }
+    }""")
+    if result["programChecks"] != {"uniforms": 4, "attributes": 4, "values": [0.25, 0.75], "error": 0}:
+        raise AssertionError(f"Shader locations must belong to their linked program: {result}")
+    if result["uniforms"] or result["attributes"] or result["error"] or (result["expectedDraws"] and not result["draws"]):
+        raise AssertionError(f"Warmed rendering must reuse shader locations: {result}")
+    print("BROWSER_LOCATION_CACHE_OK", result, flush=True)
+
+
 def verify_packed_texture_storage(page) -> None:
     result = page.evaluate("""() => {
         const previousFramebuffer=gl.getParameter(gl.FRAMEBUFFER_BINDING);
@@ -233,6 +308,7 @@ def main() -> None:
             browser = launch_browser(playwright, args.browser)
             try:
                 checked_texture_storage = False
+                checked_location_cache = False
                 reported_environment = False
                 for name, instancing_enabled in cases:
                     page = browser.new_page(viewport={"width": 1024, "height": 800})
@@ -300,6 +376,9 @@ def main() -> None:
                                 " && /\\d+/.test(document.getElementById('stats').textContent)",
                                 timeout=120000,
                             )
+                        if not checked_location_cache:
+                            verify_program_location_cache(page)
+                            checked_location_cache = True
                         for width, height in ((1024, 800), (900, 720)):
                             page.set_viewport_size({"width": width, "height": height})
                             if name in controlled_fixtures:

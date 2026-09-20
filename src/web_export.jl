@@ -4424,6 +4424,11 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   const SVSH=`attribute vec3 aPosition; attribute vec3 aColor; attribute vec2 aUv; uniform mat4 uModel,uView,uProj; uniform vec3 uCameraRight,uCameraUp; uniform vec2 uSpriteCenter; uniform float uSpriteRotation,uSpriteSizeAttenuation; varying vec3 vWorld,vColor; varying vec2 vUv; varying float vViewZ; void main(){ vec2 p=aPosition.xy-uSpriteCenter; float c=cos(uSpriteRotation), s=sin(uSpriteRotation); p=vec2(c*p.x-s*p.y,s*p.x+c*p.y); vec3 center=uModel[3].xyz; float sx=length(uModel[0].xyz); float sy=length(uModel[1].xyz); vec4 cv=uView*vec4(center,1.0); float atten=mix(max(0.0001,-cv.z),1.0,uSpriteSizeAttenuation); vec3 w=center+uCameraRight*p.x*sx*atten+uCameraUp*p.y*sy*atten; vWorld=w; vViewZ=(uView*vec4(w,1.0)).z; vColor=aColor; vUv=aUv; gl_Position=uProj*uView*vec4(w,1.0); }`;
   const SFSH=`precision mediump float; varying float vViewZ; const int MAX_CLIP=4; varying vec3 vWorld,vColor; varying vec2 vUv; uniform vec3 uColor,uCamera,uFogColor; uniform float uOpacity,uUseSpriteMap,uUseSpriteAlphaMap,uSpriteAlphaTest,uFogNear,uFogFar,uFogDensity,uToneExposure; uniform int uClipCount,uFogType,uToneMapping,uOutputColorSpace,uSpriteColorSpace; uniform vec4 uClipPlane[MAX_CLIP]; uniform sampler2D uSpriteMap,uSpriteAlphaMap; uniform mat3 uSpriteMatrix,uSpriteAlphaMatrix; bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; } float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ if(uFogDensity==0.0) return 0.0; float opticalDepth=max(d,0.0)*uFogDensity; return 1.0-exp(-opticalDepth*opticalDepth); } return 0.0; } vec3 srgbToLinear(vec3 c){ return mix(c/12.92,pow((c+vec3(0.055))/1.055,vec3(2.4)),step(vec3(0.04045),c)); } vec4 colorTex(sampler2D tex, vec2 uv, int colorSpace){ vec4 c=texture2D(tex,uv); if(colorSpace==1) c.rgb=srgbToLinear(c.rgb); return c; } vec3 toneMap(vec3 c){ c=max(c,vec3(0.0)); if(uToneMapping==0) return clamp(c,0.0,1.0); c*=uToneExposure; if(uToneMapping==2) c=c/(vec3(1.0)+c); else if(uToneMapping==3) c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14); return clamp(c,0.0,1.0); } vec3 outputColor(vec3 c){ return uOutputColorSpace==1?mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,step(vec3(0.0031308),c)):c; } void main(){ if(clipped(vWorld)) discard; vec2 spriteUv=(uSpriteMatrix*vec3(vUv,1.0)).xy; vec2 spriteAlphaUv=(uSpriteAlphaMatrix*vec3(vUv,1.0)).xy; vec4 tex=mix(vec4(1.0),colorTex(uSpriteMap,spriteUv,uSpriteColorSpace),uUseSpriteMap); float alphaTex=uUseSpriteAlphaMap<0.5?1.0:texture2D(uSpriteAlphaMap,spriteAlphaUv).g; float outAlpha=uOpacity*tex.a*alphaTex; if(outAlpha<uSpriteAlphaTest) discard; vec3 base=uColor*vColor*tex.rgb; vec3 c=mix(base,uFogColor,fogFactor(max(-vViewZ,0.0))); gl_FragColor=vec4(outputColor(toneMap(c)),outAlpha); }`;
   function shader(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  // Each link creates a new program. Cache inactive locations too, and let
+  // program/context collection release their location tables.
+  const programUniformLocations=new WeakMap(), programAttributeLocations=new WeakMap();
+  function uniformLocation(p,name){ let locations=programUniformLocations.get(p); if(!locations){ locations=new Map(); programUniformLocations.set(p,locations); } if(!locations.has(name)) locations.set(name,gl.getUniformLocation(p,name)); return locations.get(name); }
+  function attributeLocation(p,name){ let locations=programAttributeLocations.get(p); if(!locations){ locations=new Map(); programAttributeLocations.set(p,locations); } if(!locations.has(name)) locations.set(name,gl.getAttribLocation(p,name)); return locations.get(name); }
   function program(vs,fs){ const p=gl.createProgram(); gl.attachShader(p,shader(gl.VERTEX_SHADER,vs)); gl.attachShader(p,shader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
   const maxTextureUnits=gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) || 8;
   const maxCombinedTextureUnits=gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) || maxTextureUnits;
@@ -4697,21 +4702,21 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   const morphById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const id of (o.morphTargetIds||[o.id])){ if(!morphById.has(id)) morphById.set(id,[]); morphById.get(id).push(o); }
   const visibilityById = new Map(); for(const c of DATA.cases) for(const o of c.objects) for(const s of (o.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); } for(const c of DATA.cases) for(const l of c.lights||[]) for(const s of (l.visibilityStates||[])){ if(!visibilityById.has(s.id)) visibilityById.set(s.id,[]); visibilityById.get(s.id).push(s); } for(const c of DATA.cases) for(const n of c.nodes||[]) for(const state of n.visibilityStates||[]){ if(!visibilityById.has(state.id)) visibilityById.set(state.id,[]); visibilityById.get(state.id).push(state); }
   const nodeById = new Map(); for(const c of DATA.cases) for(const n of c.nodes||[]){ if(!nodeById.has(n.id)) nodeById.set(n.id,[]); nodeById.get(n.id).push(n); } for(const c of DATA.cases) for(const o of c.objects) if(o.skin) for(const b of o.skin.bones){ if(!nodeById.has(b.id)) nodeById.set(b.id,[]); nodeById.get(b.id).push(b); }
-  function attrib(p,name,b,size=3){ const loc=gl.getAttribLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
+  function attrib(p,name,b,size=3){ const loc=attributeLocation(p,name); if(loc<0)return; gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0); }
   function drawOffset(o){ return o.drawStart*(o.indexType===gl.UNSIGNED_INT?4:2); }
   function instanceAttribs(p,o){
     if(!(instancingExt&&o.instanceBuf&&o.instanceCount>0)) return false;
     const names=["aInstanceMatrix0","aInstanceMatrix1","aInstanceMatrix2","aInstanceMatrix3"], stride=64;
     gl.bindBuffer(gl.ARRAY_BUFFER,o.instanceBuf);
     for(let i=0;i<4;i++){
-      const loc=gl.getAttribLocation(p,names[i]);
+      const loc=attributeLocation(p,names[i]);
       if(loc<0) continue;
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc,4,gl.FLOAT,false,stride,i*16);
       instancingExt.vertexAttribDivisorANGLE(loc,1);
     }
     if(o.instanceColorBuf){
-      const colorLoc=gl.getAttribLocation(p,"aInstanceColor");
+      const colorLoc=attributeLocation(p,"aInstanceColor");
       if(colorLoc>=0){
         gl.bindBuffer(gl.ARRAY_BUFFER,o.instanceColorBuf);
         gl.enableVertexAttribArray(colorLoc);
@@ -4725,12 +4730,12 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     if(!instancingExt) return;
     const names=["aInstanceMatrix0","aInstanceMatrix1","aInstanceMatrix2","aInstanceMatrix3"];
     for(let i=0;i<4;i++){
-      const loc=gl.getAttribLocation(p,names[i]);
+      const loc=attributeLocation(p,names[i]);
       if(loc<0) continue;
       instancingExt.vertexAttribDivisorANGLE(loc,0);
       gl.disableVertexAttribArray(loc);
     }
-    const colorLoc=gl.getAttribLocation(p,"aInstanceColor");
+    const colorLoc=attributeLocation(p,"aInstanceColor");
     if(colorLoc>=0){
       instancingExt.vertexAttribDivisorANGLE(colorLoc,0);
       gl.disableVertexAttribArray(colorLoc);
@@ -4840,19 +4845,19 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function objectClipping(o,clip){ const planes=clip.planes.slice(), locals=o.clippingPlanes||[]; let count=clip.count; for(let i=0;i<locals.length&&count<4;i++,count++){ const p=locals[i], k=count*4; planes[k]=p[0]; planes[k+1]=p[1]; planes[k+2]=p[2]; planes[k+3]=p[3]; } return {count:count, planes:planes}; }
   function fog(c){ const f=c.fog; if(!f) return {type:0,color:[0,0,0],near:1,far:1000,density:0}; return {type:f.type==="exp2"?2:1,color:f.color,near:f.near==null?1:f.near,far:f.far||1000,density:f.density||0}; }
   function lighting(c,layerMask=null){ const amb=[0,0,0], dirs=[], points=[], spots=[], hemis=[], rects=[], shadows=[]; const addShadow=(kind,index,l)=>{ if(l.shadowTexture&&shadows.length<shadowTextureSlots.length){ const pointMode=l.shadow&&l.shadow.type==="pointDynamic"; shadows.push({kind:kind,index:index,tex:l.shadowTexture,matrix:l.shadow.matrix,bias:l.shadow.bias==null?0.0015:l.shadow.bias,pcfRadius:l.shadow.pcfRadius==null?0:l.shadow.pcfRadius,texel:1/(l.shadow.size||64),mode:pointMode?1:0,pointPosition:l.position||[0,0,0],pointFar:l.shadow.far||1,pointMatrices:l.shadow.matrices||[]}); } }; for(const l of c.lights||[]){ if(!layerMatches(l,layerMask)) continue; if(l.visible===false||(l.visibilityStates||[]).some(s=>s.visible===false)) continue; const scaled=[l.color?.[0]*(l.intensity||0),l.color?.[1]*(l.intensity||0),l.color?.[2]*(l.intensity||0)]; if(l.type==="ambient"){ amb[0]+=scaled[0]; amb[1]+=scaled[1]; amb[2]+=scaled[2]; } else if(l.type==="directional" && dirs.length<MAX_DIR){ const idx=dirs.length; dirs.push({color:scaled,direction:l.direction}); addShadow(1,idx,l); } else if(l.type==="rectArea" && rects.length<MAX_RECT){ rects.push({color:scaled,position:l.position,forward:l.forward,u:l.u,v:l.v,size:[l.width||0,l.height||0]}); } else if(l.type==="point" && points.length<MAX_POINT){ const idx=points.length; points.push({color:scaled,position:l.position,distance:l.distance||0,decay:l.decay==null?2:l.decay}); addShadow(3,idx,l); } else if(l.type==="spot" && spots.length<MAX_SPOT){ const idx=spots.length; spots.push({color:scaled,position:l.position,direction:l.direction,distance:l.distance||0,decay:l.decay==null?2:l.decay,coneCos:l.coneCos,penumbraCos:l.penumbraCos}); addShadow(2,idx,l); } else if(l.type==="hemisphere" && hemis.length<MAX_HEMI){ hemis.push({sky:scaled,ground:[l.groundColor[0]*(l.intensity||0),l.groundColor[1]*(l.intensity||0),l.groundColor[2]*(l.intensity||0)]}); } } return {ambient:amb,dirCount:dirs.length,dirColor:padded3(dirs,MAX_DIR,l=>l.color),direction:padded3(dirs,MAX_DIR,l=>l.direction),shadows:shadows,rectCount:rects.length,rectColor:padded3(rects,MAX_RECT,l=>l.color),rectPosition:padded3(rects,MAX_RECT,l=>l.position),rectForward:padded3(rects,MAX_RECT,l=>l.forward),rectU:padded3(rects,MAX_RECT,l=>l.u),rectV:padded3(rects,MAX_RECT,l=>l.v),rectSize:padded2(rects,MAX_RECT,l=>l.size),pointCount:points.length,pointColor:padded3(points,MAX_POINT,l=>l.color),pointPosition:padded3(points,MAX_POINT,l=>l.position),pointDistance:padded1(points,MAX_POINT,l=>l.distance),pointDecay:padded1(points,MAX_POINT,l=>l.decay,2),spotCount:spots.length,spotColor:padded3(spots,MAX_SPOT,l=>l.color),spotPosition:padded3(spots,MAX_SPOT,l=>l.position),spotDirection:padded3(spots,MAX_SPOT,l=>l.direction),spotDistance:padded1(spots,MAX_SPOT,l=>l.distance),spotDecay:padded1(spots,MAX_SPOT,l=>l.decay,2),spotConeCos:padded1(spots,MAX_SPOT,l=>l.coneCos),spotPenumbraCos:padded1(spots,MAX_SPOT,l=>l.penumbraCos),hemiCount:hemis.length,hemiSky:padded3(hemis,MAX_HEMI,l=>l.sky),hemiGround:padded3(hemis,MAX_HEMI,l=>l.ground)}; }
-  function uniform3v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
-  function uniform2v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
-  function uniform4v(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
-  function uniform1fv(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1fv(loc,new Float32Array(val)); }
-  function uniform1iv(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1iv(loc,new Int32Array(val)); }
-  function uniform1f(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1f(loc,val); }
-  function uniform1i(p,name,val){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniform1i(loc,val); }
-  function bindSkinState(p,o){ uniform1i(p,"uUseSkin",(o.shaderSkin||o.textureSkin)?1:0); uniform1i(p,"uUseBoneTexture",o.textureSkin?1:0); const bindLoc=gl.getUniformLocation(p,"uBindMatrix"); if(bindLoc!==null) gl.uniformMatrix4fv(bindLoc,false,new Float32Array(o.bindMatrix||M4.ident())); const bindInvLoc=gl.getUniformLocation(p,"uBindMatrixInverse"); if(bindInvLoc!==null) gl.uniformMatrix4fv(bindInvLoc,false,new Float32Array(skinWorldPrefix(o))); if(o.textureSkin&&o.boneTex){ updateBoneTexture(o); uniform1i(p,"uBoneTexture",boneTextureUnit); uniform2v(p,"uBoneTextureSize",[o.boneTex.size,o.boneTex.size]); } const boneLoc=gl.getUniformLocation(p,"uBoneMatrices[0]"); if(boneLoc!==null) gl.uniformMatrix4fv(boneLoc,false,new Float32Array(skinMatrices(o))); }
+  function uniform3v(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform3fv(loc,new Float32Array(val)); }
+  function uniform2v(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform2fv(loc,new Float32Array(val)); }
+  function uniform4v(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform4fv(loc,new Float32Array(val)); }
+  function uniform1fv(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform1fv(loc,new Float32Array(val)); }
+  function uniform1iv(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform1iv(loc,new Int32Array(val)); }
+  function uniform1f(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform1f(loc,val); }
+  function uniform1i(p,name,val){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniform1i(loc,val); }
+  function bindSkinState(p,o){ uniform1i(p,"uUseSkin",(o.shaderSkin||o.textureSkin)?1:0); uniform1i(p,"uUseBoneTexture",o.textureSkin?1:0); const bindLoc=uniformLocation(p,"uBindMatrix"); if(bindLoc!==null) gl.uniformMatrix4fv(bindLoc,false,new Float32Array(o.bindMatrix||M4.ident())); const bindInvLoc=uniformLocation(p,"uBindMatrixInverse"); if(bindInvLoc!==null) gl.uniformMatrix4fv(bindInvLoc,false,new Float32Array(skinWorldPrefix(o))); if(o.textureSkin&&o.boneTex){ updateBoneTexture(o); uniform1i(p,"uBoneTexture",boneTextureUnit); uniform2v(p,"uBoneTextureSize",[o.boneTex.size,o.boneTex.size]); } const boneLoc=uniformLocation(p,"uBoneMatrices[0]"); if(boneLoc!==null) gl.uniformMatrix4fv(boneLoc,false,new Float32Array(skinMatrices(o))); }
   function shadowMatrices(shadows){ const out=[]; for(let i=0;i<2;i++) out.push(...((shadows[i]&&shadows[i].matrix)||M4.ident())); return out; }
   function shadowValues(shadows,key,fill){ const out=[]; for(let i=0;i<2;i++) out.push(shadows[i]&&shadows[i][key]!=null?shadows[i][key]:fill); return out; }
   function shadowPointPositions(shadows){ const out=[]; for(let i=0;i<2;i++) out.push(...((shadows[i]&&shadows[i].pointPosition)||[0,0,0])); return out; }
   function shadowPointMatrices(shadows,slot){ const s=shadows[slot], out=[]; for(let i=0;i<6;i++) out.push(...((s&&s.pointMatrices&&s.pointMatrices[i])||M4.ident())); return out; }
-  function bindShadowMaps(p,shadows){ const n=Math.min(shadows.length,shadowTextureSlots.length,2); for(let i=0;i<n;i++){ const s=shadows[i]; if(!s||!s.tex) continue; const unit=shadowTextureSlots[i]; gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,s.tex); gl.uniform1i(gl.getUniformLocation(p,i===0?"uShadowMap0":"uShadowMap1"),unit); } }
+  function bindShadowMaps(p,shadows){ const n=Math.min(shadows.length,shadowTextureSlots.length,2); for(let i=0;i<n;i++){ const s=shadows[i]; if(!s||!s.tex) continue; const unit=shadowTextureSlots[i]; gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,s.tex); gl.uniform1i(uniformLocation(p,i===0?"uShadowMap0":"uShadowMap1"),unit); } }
   function includeShadowPoint(bounds,p){ for(let k=0;k<3;k++){ bounds.min[k]=Math.min(bounds.min[k],p[k]); bounds.max[k]=Math.max(bounds.max[k],p[k]); } }
   function currentSkinMatrices(o){ if(!(o.skin&&o.skin.bones)) return null; const bind=o.bindMatrix||M4.ident(), bindInv=skinWorldPrefix(o); return o.skin.bones.map((b,i)=>M4.mul(M4.mul(bindInv,M4.mul(b.matrix,o.skin.bindInverses[i])),bind)); }
   function skinnedShadowPosition(o,vi,mats){ const p=o.positions||[], base=[p[3*vi],p[3*vi+1],p[3*vi+2]], idx=o.skin.indices, weights=o.skin.weights; let out=[0,0,0], weightSum=0; for(let k=0;k<4;k++){ const w=weights[4*vi+k]||0, bi=idx[4*vi+k]||0; if(!w||!mats[bi]) continue; const q=transformPoint(mats[bi],base); out[0]+=q[0]*w; out[1]+=q[1]*w; out[2]+=q[2]*w; weightSum+=w; } return weightSum>0?out.map(value=>value/weightSum):base; }
@@ -4875,8 +4880,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function pointShadowMatrices(pos,far){ const near=Math.max(Math.min(far*0.01,0.1),1e-4), proj=M4.perspective(Math.PI/2,1,near,far); return pointShadowFaces.map(f=>M4.mul(proj,M4.lookAt(pos,add(pos,f.dir),f.up))); }
   function ensureDynamicPointShadowTarget(l){ if(!l.dynamicShadowTarget){ const size=Math.max(1,l.shadow&&l.shadow.size?l.shadow.size:64); l.dynamicShadowTarget=makeDynamicShadowTarget(size*4,size*2); l.dynamicShadowTarget.faceSize=size; } l.shadowTexture=l.dynamicShadowTarget.texture; return l.dynamicShadowTarget; }
   function bindShadowMaterialState(p,o,clip){ attrib(p,"aUv",o.uvBuf,2); attrib(p,"aUv2",o.uv2Buf,2); const objClip=objectClipping(o,clip||{count:0,planes:new Array(16).fill(0)}); uniform1i(p,"uShadowClipCount",objClip.count); uniform4v(p,"uShadowClipPlane[0]",objClip.planes); uniform1f(p,"uShadowAlphaTest",o.alphaTest||0); uniform1f(p,"uShadowOpacity",o.opacity==null?1:o.opacity); uniform1i(p,"uShadowMapTexCoord",texCoord(o.texture,0)); uniform1i(p,"uShadowAlphaTexCoord",texCoord(o.alphaTexture,0)); uniformTexMatrix(p,"uShadowMapMatrix",o.texture); uniformTexMatrix(p,"uShadowAlphaMatrix",o.alphaTexture); uniform1f(p,"uShadowUseMap",o.tex?1:0); uniform1f(p,"uShadowUseAlphaMap",o.alphaTex?1:0); uniform1i(p,"uShadowColorMap",0); uniform1i(p,"uShadowAlphaMap",1); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex||null); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex||null); }
-  function drawShadowCaster(o,viewProj,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?depthBoneProgram:depthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
-  function drawPointShadowCaster(o,viewProj,pos,far,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?pointDepthBoneProgram:pointDepthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=gl.getUniformLocation(p,"uModel"), vpLoc=gl.getUniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(gl.getUniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); gl.uniform3fv(gl.getUniformLocation(p,"uPointShadowPos"),new Float32Array(pos)); gl.uniform1f(gl.getUniformLocation(p,"uPointShadowFar"),far); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
+  function drawShadowCaster(o,viewProj,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?depthBoneProgram:depthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=uniformLocation(p,"uModel"), vpLoc=uniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(uniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
+  function drawPointShadowCaster(o,viewProj,pos,far,clip){ if(o.mode!=="triangles"||o.castShadow!==true) return; applySide(o); const p=o.textureSkin?pointDepthBoneProgram:pointDepthProgram; gl.useProgram(p); attrib(p,"aPosition",o.posBuf); attrib(p,"aSkinIndex",o.skinIndexBuf,4); attrib(p,"aSkinWeight",o.skinWeightBuf,4); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf); const gpuInstanced=instanceAttribs(p,o), modelLoc=uniformLocation(p,"uModel"), vpLoc=uniformLocation(p,"uViewProj"); gl.uniformMatrix4fv(vpLoc,false,new Float32Array(viewProj)); gl.uniform1i(uniformLocation(p,"uUseInstancing"),gpuInstanced?1:0); gl.uniform3fv(uniformLocation(p,"uPointShadowPos"),new Float32Array(pos)); gl.uniform1f(uniformLocation(p,"uPointShadowFar"),far); bindSkinState(p,o); bindShadowMaterialState(p,o,clip); if(gpuInstanced){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); instancingExt.drawElementsInstancedANGLE(gl.TRIANGLES,o.count,o.indexType,drawOffset(o),o.instanceCount); clearInstanceAttribs(p); } else if(o.instanceMatrices&&o.instanceMatrices.length){ for(const im of o.instanceMatrices){ gl.uniformMatrix4fv(modelLoc,false,new Float32Array(M4.mul(o.matrix,im))); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } } else { gl.uniformMatrix4fv(modelLoc,false,new Float32Array(o.matrix)); gl.drawElements(gl.TRIANGLES,o.count,o.indexType,drawOffset(o)); } }
   function renderDynamicDirectionalShadow(l,visible,clip){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=directionalShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m,clip); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
   function renderDynamicSpotShadow(l,visible,clip){ const target=ensureDynamicShadowTarget(l), b=shadowBounds(visible), m=spotShadowMatrix(l,b.center,b.radius); l.shadow.matrix=m; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.size,target.size); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(const o of visible) drawShadowCaster(o,m,clip); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
   function renderDynamicPointShadow(l,visible,clip){ const target=ensureDynamicPointShadowTarget(l), b=shadowBounds(visible), pos=l.position||[0,0,0], far=pointShadowFar(l,b.center,b.radius), matrices=pointShadowMatrices(pos,far); l.shadow.matrix=M4.ident(); l.shadow.matrices=matrices; l.shadow.far=far; gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer); gl.viewport(0,0,target.width,target.height); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); for(let i=0;i<6;i++){ const f=pointShadowFaces[i]; gl.viewport(f.cell[0]*target.faceSize,f.cell[1]*target.faceSize,target.faceSize,target.faceSize); for(const o of visible) drawPointShadowCaster(o,matrices[i],pos,far,clip); } gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
@@ -4887,7 +4892,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function texCoord(t,def=0){ return t&&t.texCoord!=null?t.texCoord:def; }
   function textureColorSpace(t){ return t&&t.colorspace==="srgb"?1:0; }
   function texMatrix(t){ const tm=(t&&t.matrix)||[1,0,0,0,1,0,0,0,1]; return [tm[0],tm[3],tm[6],tm[1],tm[4],tm[7],tm[2],tm[5],tm[8]]; }
-  function uniformTexMatrix(p,name,t){ const loc=gl.getUniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
+  function uniformTexMatrix(p,name,t){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
   function draw(o,view,proj,eye,basis,light,clip,fg,tm){
     applySide(o);
     if(o.mode==="lines"||o.mode==="line_loop"||o.mode==="line_strip") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);
@@ -4903,11 +4908,11 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     if(o.mode==="sprite"){ attrib(p,"aUv",o.uvBuf,2); }
     const gpuInstanced=instanceAttribs(p,o);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.idxBuf);
-    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uModel"),false,new Float32Array(o.matrix));
-    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uView"),false,new Float32Array(view));
-    gl.uniformMatrix4fv(gl.getUniformLocation(p,"uProj"),false,new Float32Array(proj));
-    gl.uniform3fv(gl.getUniformLocation(p,"uColor"),new Float32Array(o.color));
-    gl.uniform1f(gl.getUniformLocation(p,"uOpacity"),o.opacity);
+    gl.uniformMatrix4fv(uniformLocation(p,"uModel"),false,new Float32Array(o.matrix));
+    gl.uniformMatrix4fv(uniformLocation(p,"uView"),false,new Float32Array(view));
+    gl.uniformMatrix4fv(uniformLocation(p,"uProj"),false,new Float32Array(proj));
+    gl.uniform3fv(uniformLocation(p,"uColor"),new Float32Array(o.color));
+    gl.uniform1f(uniformLocation(p,"uOpacity"),o.opacity);
     const objClip=objectClipping(o,clip);
     uniform1i(p,"uClipCount",objClip.count);
     uniform4v(p,"uClipPlane[0]",objClip.planes);
@@ -4916,15 +4921,15 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     uniform1i(p,"uOutputColorSpace",tm.output);
     uniform1i(p,"uUseInstancing",gpuInstanced?1:0);
     uniform1i(p,"uUseInstanceColor",(gpuInstanced&&o.instanceColorBuf)?1:0);
-    gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye));
-    gl.uniform3fv(gl.getUniformLocation(p,"uFogColor"),new Float32Array(fg.color));
+    gl.uniform3fv(uniformLocation(p,"uCamera"),new Float32Array(eye));
+    gl.uniform3fv(uniformLocation(p,"uFogColor"),new Float32Array(fg.color));
     uniform1i(p,"uFogType",fg.type);
-    gl.uniform1f(gl.getUniformLocation(p,"uFogNear"),fg.near);
-    gl.uniform1f(gl.getUniformLocation(p,"uFogFar"),fg.far);
-    gl.uniform1f(gl.getUniformLocation(p,"uFogDensity"),fg.density);
+    gl.uniform1f(uniformLocation(p,"uFogNear"),fg.near);
+    gl.uniform1f(uniformLocation(p,"uFogFar"),fg.far);
+    gl.uniform1f(uniformLocation(p,"uFogDensity"),fg.density);
     if(o.mode==="triangles"){
-      gl.uniformMatrix3fv(gl.getUniformLocation(p,"uNormalMat"),false,new Float32Array(M4.normal3(o.matrix)));
-      gl.uniformMatrix3fv(gl.getUniformLocation(p,"uViewNormalMat"),false,new Float32Array(M4.normal3(view)));
+      gl.uniformMatrix3fv(uniformLocation(p,"uNormalMat"),false,new Float32Array(M4.normal3(o.matrix)));
+      gl.uniformMatrix3fv(uniformLocation(p,"uViewNormalMat"),false,new Float32Array(M4.normal3(view)));
       uniform1i(p,"uUseTangents",o.hasTangents?1:0);
       uniform1i(p,"uMaterialMode",o.materialType==="normal"?1:(o.materialType==="depth"?2:(o.materialType==="toon"?3:(o.materialType==="matcap"?4:(o.materialType==="basic"?5:(o.materialType==="lambert"?6:(o.materialType==="phong"?7:0)))))));
       uniform1f(p,"uDepthNear",o.depthNear==null?0.1:o.depthNear);
@@ -4932,12 +4937,12 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniform1i(p,"uDepthPacking",o.depthPackingMode||0);
       uniform1i(p,"uDepthOrthographic",currentDrawCamera&&currentDrawCamera.type==="orthographic"?1:0);
       uniform1f(p,"uToonSteps",o.toonSteps==null?3:o.toonSteps);
-      gl.uniform3fv(gl.getUniformLocation(p,"uCamera"),new Float32Array(eye));
-      gl.uniform3fv(gl.getUniformLocation(p,"uAmbientColor"),new Float32Array(light.ambient));
+      gl.uniform3fv(uniformLocation(p,"uCamera"),new Float32Array(eye));
+      gl.uniform3fv(uniformLocation(p,"uAmbientColor"),new Float32Array(light.ambient));
       uniform3v(p,"uDirLight[0]",light.direction); uniform3v(p,"uDirColor[0]",light.dirColor); uniform1i(p,"uDirCount",light.dirCount);
       const objShadows=(o.receiveShadow!==false)?(light.shadows||[]):[];
       uniform1i(p,"uShadowCount",objShadows.length);
-      gl.uniformMatrix4fv(gl.getUniformLocation(p,"uShadowMatrix[0]"),false,new Float32Array(shadowMatrices(objShadows)));
+      gl.uniformMatrix4fv(uniformLocation(p,"uShadowMatrix[0]"),false,new Float32Array(shadowMatrices(objShadows)));
       uniform1fv(p,"uShadowBias[0]",shadowValues(objShadows,"bias",0.0015));
       uniform1iv(p,"uShadowPcfRadius[0]",shadowValues(objShadows,"pcfRadius",1));
       uniform1fv(p,"uShadowTexel[0]",shadowValues(objShadows,"texel",0.015625));
@@ -4946,8 +4951,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniform1iv(p,"uShadowMode[0]",shadowValues(objShadows,"mode",0));
       uniform3v(p,"uShadowPointPos[0]",shadowPointPositions(objShadows));
       uniform1fv(p,"uShadowPointFar[0]",shadowValues(objShadows,"pointFar",1));
-      const spm0=gl.getUniformLocation(p,"uShadowPointMatrix0[0]"); if(spm0!==null) gl.uniformMatrix4fv(spm0,false,new Float32Array(shadowPointMatrices(objShadows,0)));
-      const spm1=gl.getUniformLocation(p,"uShadowPointMatrix1[0]"); if(spm1!==null) gl.uniformMatrix4fv(spm1,false,new Float32Array(shadowPointMatrices(objShadows,1)));
+      const spm0=uniformLocation(p,"uShadowPointMatrix0[0]"); if(spm0!==null) gl.uniformMatrix4fv(spm0,false,new Float32Array(shadowPointMatrices(objShadows,0)));
+      const spm1=uniformLocation(p,"uShadowPointMatrix1[0]"); if(spm1!==null) gl.uniformMatrix4fv(spm1,false,new Float32Array(shadowPointMatrices(objShadows,1)));
       uniform3v(p,"uPointColor[0]",light.pointColor); uniform3v(p,"uPointPos[0]",light.pointPosition); uniform1i(p,"uPointCount",light.pointCount);
       uniform1fv(p,"uPointDistance[0]",light.pointDistance); uniform1fv(p,"uPointDecay[0]",light.pointDecay);
       uniform3v(p,"uSpotColor[0]",light.spotColor); uniform3v(p,"uSpotPos[0]",light.spotPosition); uniform3v(p,"uSpotDir[0]",light.spotDirection); uniform1i(p,"uSpotCount",light.spotCount);
@@ -4955,21 +4960,21 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniform3v(p,"uHemiSky[0]",light.hemiSky); uniform3v(p,"uHemiGround[0]",light.hemiGround); uniform1i(p,"uHemiCount",light.hemiCount);
       uniform3v(p,"uRectColor[0]",light.rectColor); uniform3v(p,"uRectPos[0]",light.rectPosition); uniform3v(p,"uRectForward[0]",light.rectForward);
       uniform3v(p,"uRectU[0]",light.rectU); uniform3v(p,"uRectV[0]",light.rectV); uniform2v(p,"uRectSize[0]",light.rectSize); uniform1i(p,"uRectCount",light.rectCount);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseMap"),o.tex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseAlphaMap"),o.alphaTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseEmissiveMap"),o.emissiveTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseAoMap"),o.aoTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseLightMap"),o.lightTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseRoughnessMap"),o.roughnessTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseMetalnessMap"),o.metalnessTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseNormalMap"),o.normalTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseClearcoatNormalMap"),o.clearcoatNormalTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseMatcapMap"),o.matcapTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseGradientMap"),o.gradientTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUsePhysicalScalarMap"),o.physicalScalarTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseSheenColorMap"),o.sheenColorTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUsePhysicalScalar2Map"),o.physicalScalar2Tex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseSpecularColorMap"),o.specularColorTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseMap"),o.tex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseAlphaMap"),o.alphaTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseEmissiveMap"),o.emissiveTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseAoMap"),o.aoTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseLightMap"),o.lightTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseRoughnessMap"),o.roughnessTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseMetalnessMap"),o.metalnessTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseNormalMap"),o.normalTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseClearcoatNormalMap"),o.clearcoatNormalTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseMatcapMap"),o.matcapTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseGradientMap"),o.gradientTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUsePhysicalScalarMap"),o.physicalScalarTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseSheenColorMap"),o.sheenColorTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUsePhysicalScalar2Map"),o.physicalScalar2Tex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseSpecularColorMap"),o.specularColorTex?1:0);
       uniform1f(p,"uUseGlossinessMap",o.glossinessPacked&&o.specularColorTex?1:0);
       uniform1f(p,"uUseClearcoatMap",o.physicalScalarTex&&o.clearcoatTexture?1:0);
       uniform1f(p,"uUseClearcoatRoughnessMap",o.physicalScalarTex&&o.clearcoatRoughnessTexture?1:0);
@@ -4978,10 +4983,10 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniform1f(p,"uUseIridescenceMap",o.physicalScalar2Tex&&o.iridescenceTexture?1:0);
       uniform1f(p,"uUseIridescenceThicknessMap",o.physicalScalar2Tex&&o.iridescenceThicknessTexture?1:0);
       uniform1f(p,"uUseSpecularIntensityMap",o.physicalScalar2Tex&&o.specularIntensityTexture?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseThicknessMap"),o.physicalScalar2Tex&&o.thicknessTexture?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseAnisotropyMap"),o.physicalScalar2Tex&&!o.thicknessTexture&&o.anisotropyTexture?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseEnvMap"),o.envTexture?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseEnvCubeMap"),o.envCubeTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseThicknessMap"),o.physicalScalar2Tex&&o.thicknessTexture?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseAnisotropyMap"),o.physicalScalar2Tex&&!o.thicknessTexture&&o.anisotropyTexture?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseEnvMap"),o.envTexture?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseEnvCubeMap"),o.envCubeTex?1:0);
       uniform1i(p,"uMapTexCoord",texCoord(o.texture,0));
       uniform1i(p,"uAlphaTexCoord",texCoord(o.alphaTexture,0));
       uniform1i(p,"uEmissiveTexCoord",texCoord(o.emissiveTexture,0));
@@ -5007,38 +5012,38 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniform1i(p,"uMatcapColorSpace",textureColorSpace(o.matcapTexture));
       uniform1i(p,"uSheenColorSpace",textureColorSpace(o.sheenColorTexture));
       uniform1i(p,"uSpecularColorSpace",textureColorSpace(o.specularColorTexture));
-      gl.uniform3fv(gl.getUniformLocation(p,"uEmissive"),new Float32Array(o.emissive||[0,0,0]));
-      gl.uniform1f(gl.getUniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity==null?1:o.emissiveIntensity);
-      gl.uniform1f(gl.getUniformLocation(p,"uAoIntensity"),o.aoIntensity==null?1:o.aoIntensity);
-      gl.uniform1f(gl.getUniformLocation(p,"uLightMapIntensity"),o.lightMapIntensity==null?1:o.lightMapIntensity);
-      gl.uniform1f(gl.getUniformLocation(p,"uEnvMapIntensity"),o.envMapIntensity==null?1:o.envMapIntensity);
-      gl.uniform1f(gl.getUniformLocation(p,"uAlphaTest"),o.alphaTest||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uNormalScale"),o.normalScale==null?1:o.normalScale);
-      gl.uniform1f(gl.getUniformLocation(p,"uClearcoatNormalScale"),o.clearcoatNormalScale==null?1:o.clearcoatNormalScale);
+      gl.uniform3fv(uniformLocation(p,"uEmissive"),new Float32Array(o.emissive||[0,0,0]));
+      gl.uniform1f(uniformLocation(p,"uEmissiveIntensity"),o.emissiveIntensity==null?1:o.emissiveIntensity);
+      gl.uniform1f(uniformLocation(p,"uAoIntensity"),o.aoIntensity==null?1:o.aoIntensity);
+      gl.uniform1f(uniformLocation(p,"uLightMapIntensity"),o.lightMapIntensity==null?1:o.lightMapIntensity);
+      gl.uniform1f(uniformLocation(p,"uEnvMapIntensity"),o.envMapIntensity==null?1:o.envMapIntensity);
+      gl.uniform1f(uniformLocation(p,"uAlphaTest"),o.alphaTest||0);
+      gl.uniform1f(uniformLocation(p,"uNormalScale"),o.normalScale==null?1:o.normalScale);
+      gl.uniform1f(uniformLocation(p,"uClearcoatNormalScale"),o.clearcoatNormalScale==null?1:o.clearcoatNormalScale);
       uniform3v(p,"uEnvColor[0]",o.envTexture?o.envTexture.colors.flat():new Array(18).fill(0));
-      gl.uniform1f(gl.getUniformLocation(p,"uRoughness"),o.roughness==null?.65:o.roughness);
-      gl.uniform1f(gl.getUniformLocation(p,"uMetalness"),o.metalness||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uClearcoat"),o.clearcoat||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uClearcoatRoughness"),o.clearcoatRoughness||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uTransmission"),o.transmission||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uThickness"),o.thickness||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uAttenuationDistance"),o.attenuationDistance||0);
-      gl.uniform3fv(gl.getUniformLocation(p,"uAttenuationColor"),new Float32Array(o.attenuationColor||[1,1,1]));
-      gl.uniform1f(gl.getUniformLocation(p,"uIor"),o.ior||1.5);
-      gl.uniform1f(gl.getUniformLocation(p,"uDispersion"),o.dispersion||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uSheen"),o.sheen||0);
-      gl.uniform3fv(gl.getUniformLocation(p,"uSheenColor"),new Float32Array(o.sheenColor||[1,1,1]));
-      gl.uniform1f(gl.getUniformLocation(p,"uSheenRoughness"),o.sheenRoughness==null?1:o.sheenRoughness);
-      gl.uniform1f(gl.getUniformLocation(p,"uIridescence"),o.iridescence||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uIridescenceIor"),o.iridescenceIor||1.3);
-      gl.uniform1f(gl.getUniformLocation(p,"uIridescenceThickness"),o.iridescenceThickness==null?400:o.iridescenceThickness);
-      gl.uniform1f(gl.getUniformLocation(p,"uIridescenceThicknessMinimum"),o.iridescenceThicknessMinimum==null?0:o.iridescenceThicknessMinimum);
-      gl.uniform1f(gl.getUniformLocation(p,"uSpecularIntensity"),o.specularIntensity==null?1:o.specularIntensity);
-      gl.uniform3fv(gl.getUniformLocation(p,"uSpecularColor"),new Float32Array(o.specularColor||[1,1,1]));
-      gl.uniform1f(gl.getUniformLocation(p,"uAnisotropy"),o.anisotropy||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uAnisotropyRotation"),o.anisotropyRotation||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uGlossiness"),o.glossiness==null?0.5:o.glossiness);
-      gl.uniform1f(gl.getUniformLocation(p,"uShininess"),o.shininess==null?32:o.shininess);
+      gl.uniform1f(uniformLocation(p,"uRoughness"),o.roughness==null?.65:o.roughness);
+      gl.uniform1f(uniformLocation(p,"uMetalness"),o.metalness||0);
+      gl.uniform1f(uniformLocation(p,"uClearcoat"),o.clearcoat||0);
+      gl.uniform1f(uniformLocation(p,"uClearcoatRoughness"),o.clearcoatRoughness||0);
+      gl.uniform1f(uniformLocation(p,"uTransmission"),o.transmission||0);
+      gl.uniform1f(uniformLocation(p,"uThickness"),o.thickness||0);
+      gl.uniform1f(uniformLocation(p,"uAttenuationDistance"),o.attenuationDistance||0);
+      gl.uniform3fv(uniformLocation(p,"uAttenuationColor"),new Float32Array(o.attenuationColor||[1,1,1]));
+      gl.uniform1f(uniformLocation(p,"uIor"),o.ior||1.5);
+      gl.uniform1f(uniformLocation(p,"uDispersion"),o.dispersion||0);
+      gl.uniform1f(uniformLocation(p,"uSheen"),o.sheen||0);
+      gl.uniform3fv(uniformLocation(p,"uSheenColor"),new Float32Array(o.sheenColor||[1,1,1]));
+      gl.uniform1f(uniformLocation(p,"uSheenRoughness"),o.sheenRoughness==null?1:o.sheenRoughness);
+      gl.uniform1f(uniformLocation(p,"uIridescence"),o.iridescence||0);
+      gl.uniform1f(uniformLocation(p,"uIridescenceIor"),o.iridescenceIor||1.3);
+      gl.uniform1f(uniformLocation(p,"uIridescenceThickness"),o.iridescenceThickness==null?400:o.iridescenceThickness);
+      gl.uniform1f(uniformLocation(p,"uIridescenceThicknessMinimum"),o.iridescenceThicknessMinimum==null?0:o.iridescenceThicknessMinimum);
+      gl.uniform1f(uniformLocation(p,"uSpecularIntensity"),o.specularIntensity==null?1:o.specularIntensity);
+      gl.uniform3fv(uniformLocation(p,"uSpecularColor"),new Float32Array(o.specularColor||[1,1,1]));
+      gl.uniform1f(uniformLocation(p,"uAnisotropy"),o.anisotropy||0);
+      gl.uniform1f(uniformLocation(p,"uAnisotropyRotation"),o.anisotropyRotation||0);
+      gl.uniform1f(uniformLocation(p,"uGlossiness"),o.glossiness==null?0.5:o.glossiness);
+      gl.uniform1f(uniformLocation(p,"uShininess"),o.shininess==null?32:o.shininess);
       uniformTexMatrix(p,"uMapMatrix",o.texture);
       uniformTexMatrix(p,"uAlphaMatrix",o.alphaTexture);
       uniformTexMatrix(p,"uEmissiveMatrix",o.emissiveTexture);
@@ -5059,58 +5064,58 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       uniformTexMatrix(p,"uAnisotropyMatrix",o.anisotropyTexture);
       uniformTexMatrix(p,"uSheenColorMatrix",o.sheenColorTexture);
       uniformTexMatrix(p,"uSpecularColorMatrix",o.specularColorTexture);
-      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uMap"),0); }
-      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(gl.getUniformLocation(p,"uAlphaMap"),1); }
-      if(o.emissiveTex){ gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,o.emissiveTex); gl.uniform1i(gl.getUniformLocation(p,"uEmissiveMap"),2); }
-      if(o.aoTex){ gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D,o.aoTex); gl.uniform1i(gl.getUniformLocation(p,"uAoMap"),3); }
-      if(o.lightTex){ gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D,o.lightTex); gl.uniform1i(gl.getUniformLocation(p,"uLightMap"),4); }
-      if(o.roughnessTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.roughnessTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
-      if(o.metalnessTex){ gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D,o.metalnessTex); gl.uniform1i(gl.getUniformLocation(p,"uMetalnessMap"),6); }
-      if(o.normalTex){ gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D,o.normalTex); gl.uniform1i(gl.getUniformLocation(p,"uNormalMap"),7); }
-      if(o.clearcoatNormalTex){ gl.activeTexture(gl.TEXTURE0+clearcoatNormalTextureUnit); gl.bindTexture(gl.TEXTURE_2D,o.clearcoatNormalTex); gl.uniform1i(gl.getUniformLocation(p,"uClearcoatNormalMap"),clearcoatNormalTextureUnit); }
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(uniformLocation(p,"uMap"),0); }
+      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(uniformLocation(p,"uAlphaMap"),1); }
+      if(o.emissiveTex){ gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,o.emissiveTex); gl.uniform1i(uniformLocation(p,"uEmissiveMap"),2); }
+      if(o.aoTex){ gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D,o.aoTex); gl.uniform1i(uniformLocation(p,"uAoMap"),3); }
+      if(o.lightTex){ gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D,o.lightTex); gl.uniform1i(uniformLocation(p,"uLightMap"),4); }
+      if(o.roughnessTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.roughnessTex); gl.uniform1i(uniformLocation(p,"uRoughnessMap"),5); }
+      if(o.metalnessTex){ gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D,o.metalnessTex); gl.uniform1i(uniformLocation(p,"uMetalnessMap"),6); }
+      if(o.normalTex){ gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D,o.normalTex); gl.uniform1i(uniformLocation(p,"uNormalMap"),7); }
+      if(o.clearcoatNormalTex){ gl.activeTexture(gl.TEXTURE0+clearcoatNormalTextureUnit); gl.bindTexture(gl.TEXTURE_2D,o.clearcoatNormalTex); gl.uniform1i(uniformLocation(p,"uClearcoatNormalMap"),clearcoatNormalTextureUnit); }
       // Matcap and toon have no roughness map; their family map uses its unit.
-      if(o.matcapTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.matcapTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
-      if(o.gradientTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.gradientTex); gl.uniform1i(gl.getUniformLocation(p,"uRoughnessMap"),5); }
-      if(o.physicalScalarTex){ gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalarTex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalarMap"),8); }
-      if(o.physicalScalar2Tex){ gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalar2Tex); gl.uniform1i(gl.getUniformLocation(p,"uPhysicalScalar2Map"),9); }
-      if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSheenColorMap"),10); }
-      if(o.specularColorTex){ gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D,o.specularColorTex); gl.uniform1i(gl.getUniformLocation(p,"uSpecularColorMap"),11); }
+      if(o.matcapTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.matcapTex); gl.uniform1i(uniformLocation(p,"uRoughnessMap"),5); }
+      if(o.gradientTex){ gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D,o.gradientTex); gl.uniform1i(uniformLocation(p,"uRoughnessMap"),5); }
+      if(o.physicalScalarTex){ gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalarTex); gl.uniform1i(uniformLocation(p,"uPhysicalScalarMap"),8); }
+      if(o.physicalScalar2Tex){ gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D,o.physicalScalar2Tex); gl.uniform1i(uniformLocation(p,"uPhysicalScalar2Map"),9); }
+      if(o.sheenColorTex){ gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D,o.sheenColorTex); gl.uniform1i(uniformLocation(p,"uSheenColorMap"),10); }
+      if(o.specularColorTex){ gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D,o.specularColorTex); gl.uniform1i(uniformLocation(p,"uSpecularColorMap"),11); }
       bindShadowMaps(p,objShadows);
       if(cubeTexturesEnabled){ const envTex=o.envCubeTex||defaultEnvCubeTex; gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_CUBE_MAP,envTex.texture); uniform1i(p,"uEnvCubeMap",envCubeTextureUnit); uniform1f(p,"uEnvMaxLod",envTex.maxLod||0); }
     }
     if(o.mode==="points"){
-      gl.uniform1f(gl.getUniformLocation(p,"uPointSize"),o.pointSize);
-      gl.uniform1f(gl.getUniformLocation(p,"uPointSizeAttenuation"),(o.pointSizeAttenuation===false||(currentDrawCamera&&currentDrawCamera.type==="orthographic"))?0:1);
-      gl.uniform1f(gl.getUniformLocation(p,"uPointReferenceDistance"),Math.max(1e-6,currentDrawDistance));
-      gl.uniform1f(gl.getUniformLocation(p,"uUsePointMap"),o.tex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUsePointAlphaMap"),o.alphaTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uPointAlphaTest"),o.alphaTest||0);
+      gl.uniform1f(uniformLocation(p,"uPointSize"),o.pointSize);
+      gl.uniform1f(uniformLocation(p,"uPointSizeAttenuation"),(o.pointSizeAttenuation===false||(currentDrawCamera&&currentDrawCamera.type==="orthographic"))?0:1);
+      gl.uniform1f(uniformLocation(p,"uPointReferenceDistance"),Math.max(1e-6,currentDrawDistance));
+      gl.uniform1f(uniformLocation(p,"uUsePointMap"),o.tex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUsePointAlphaMap"),o.alphaTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uPointAlphaTest"),o.alphaTest||0);
       uniform1i(p,"uPointColorSpace",textureColorSpace(o.texture));
       uniformTexMatrix(p,"uPointMatrix",o.texture);
       uniformTexMatrix(p,"uPointAlphaMatrix",o.alphaTexture);
-      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uPointMap"),0); }
-      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(gl.getUniformLocation(p,"uPointAlphaMap"),1); }
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(uniformLocation(p,"uPointMap"),0); }
+      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(uniformLocation(p,"uPointAlphaMap"),1); }
     }
     if(o.mode==="sprite"){
-      gl.uniform3fv(gl.getUniformLocation(p,"uCameraRight"),new Float32Array(basis.right));
-      gl.uniform3fv(gl.getUniformLocation(p,"uCameraUp"),new Float32Array(basis.up));
-      gl.uniform2fv(gl.getUniformLocation(p,"uSpriteCenter"),new Float32Array(o.spriteCenter||[.5,.5]));
-      gl.uniform1f(gl.getUniformLocation(p,"uSpriteRotation"),o.spriteRotation||0);
-      gl.uniform1f(gl.getUniformLocation(p,"uSpriteSizeAttenuation"),(o.spriteSizeAttenuation===false&&currentDrawCamera&&currentDrawCamera.type!=="orthographic")?0:1);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseSpriteMap"),o.tex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uUseSpriteAlphaMap"),o.alphaTex?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uSpriteAlphaTest"),o.alphaTest||0);
+      gl.uniform3fv(uniformLocation(p,"uCameraRight"),new Float32Array(basis.right));
+      gl.uniform3fv(uniformLocation(p,"uCameraUp"),new Float32Array(basis.up));
+      gl.uniform2fv(uniformLocation(p,"uSpriteCenter"),new Float32Array(o.spriteCenter||[.5,.5]));
+      gl.uniform1f(uniformLocation(p,"uSpriteRotation"),o.spriteRotation||0);
+      gl.uniform1f(uniformLocation(p,"uSpriteSizeAttenuation"),(o.spriteSizeAttenuation===false&&currentDrawCamera&&currentDrawCamera.type!=="orthographic")?0:1);
+      gl.uniform1f(uniformLocation(p,"uUseSpriteMap"),o.tex?1:0);
+      gl.uniform1f(uniformLocation(p,"uUseSpriteAlphaMap"),o.alphaTex?1:0);
+      gl.uniform1f(uniformLocation(p,"uSpriteAlphaTest"),o.alphaTest||0);
       uniform1i(p,"uSpriteColorSpace",textureColorSpace(o.texture));
       uniformTexMatrix(p,"uSpriteMatrix",o.texture);
       uniformTexMatrix(p,"uSpriteAlphaMatrix",o.alphaTexture);
-      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(gl.getUniformLocation(p,"uSpriteMap"),0); }
-      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(gl.getUniformLocation(p,"uSpriteAlphaMap"),1); }
+      if(o.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,o.tex); gl.uniform1i(uniformLocation(p,"uSpriteMap"),0); }
+      if(o.alphaTex){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,o.alphaTex); gl.uniform1i(uniformLocation(p,"uSpriteAlphaMap"),1); }
     }
     if(o.mode==="lines"||o.mode==="line_loop"||o.mode==="line_strip"){
-      gl.uniform1f(gl.getUniformLocation(p,"uLineDashed"),o.lineDashed?1:0);
-      gl.uniform1f(gl.getUniformLocation(p,"uDashSize"),Math.max(0,o.dashSize||0));
-      gl.uniform1f(gl.getUniformLocation(p,"uGapSize"),Math.max(0,o.gapSize||0));
-      gl.uniform1f(gl.getUniformLocation(p,"uDashScale"),Math.max(0.0001,o.dashScale||1));
+      gl.uniform1f(uniformLocation(p,"uLineDashed"),o.lineDashed?1:0);
+      gl.uniform1f(uniformLocation(p,"uDashSize"),Math.max(0,o.dashSize||0));
+      gl.uniform1f(uniformLocation(p,"uGapSize"),Math.max(0,o.gapSize||0));
+      gl.uniform1f(uniformLocation(p,"uDashScale"),Math.max(0.0001,o.dashScale||1));
     }
     const mode=o.mode==="points"?gl.POINTS:(o.mode==="lines"?gl.LINES:(o.mode==="line_loop"?gl.LINE_LOOP:(o.mode==="line_strip"?gl.LINE_STRIP:gl.TRIANGLES)));
     const offset=drawOffset(o);
@@ -5118,8 +5123,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       instancingExt.drawElementsInstancedANGLE(mode,o.count,o.indexType,offset,o.instanceCount);
       clearInstanceAttribs(p);
     } else if(o.instanceMatrices&&o.instanceMatrices.length){
-      const base=o.matrix.slice(), modelLoc=gl.getUniformLocation(p,"uModel"), normalLoc=o.mode==="triangles"?gl.getUniformLocation(p,"uNormalMat"):null;
-      const instanceColorLoc=gl.getAttribLocation(p,"aInstanceColor");
+      const base=o.matrix.slice(), modelLoc=uniformLocation(p,"uModel"), normalLoc=o.mode==="triangles"?uniformLocation(p,"uNormalMat"):null;
+      const instanceColorLoc=attributeLocation(p,"aInstanceColor");
       if(instanceColorLoc>=0){ gl.disableVertexAttribArray(instanceColorLoc); uniform1i(p,"uUseInstanceColor",1); }
       for(let instanceIndex=0;instanceIndex<o.instanceMatrices.length;instanceIndex++){
         const im=o.instanceMatrices[instanceIndex], color=o.instanceColors&&o.instanceColors[instanceIndex];
@@ -5257,8 +5262,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
             "} else if(l.type===\"lightProbe\"){ addProbe(l.coeffs,l.intensity||0); } else if(l.type===\"directional\" && dirs.length<MAX_DIR){",
         "return {ambient:amb,dirCount:" =>
             "return {ambient:amb,probeCoeffs:probe.flat(),dirCount:",
-        "gl.uniform3fv(gl.getUniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient));" =>
-            "gl.uniform3fv(gl.getUniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient)); uniform3v(p,\"uProbeCoeff[0]\",light.probeCoeffs||new Array(12).fill(0));",
+        "gl.uniform3fv(uniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient));" =>
+            "gl.uniform3fv(uniformLocation(p,\"uAmbientColor\"),new Float32Array(light.ambient)); uniform3v(p,\"uProbeCoeff[0]\",light.probeCoeffs||new Array(12).fill(0));",
         "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4; const int MAX_RECT=4;" =>
             "const int MAX_DIR=$max_dir; const int MAX_POINT=$max_point; const int MAX_SPOT=$max_spot; const int MAX_HEMI=$max_hemi; const int MAX_RECT=$max_rect;",
         "const int MAX_DIR=4; const int MAX_POINT=4; const int MAX_SPOT=4; const int MAX_HEMI=4;" =>
