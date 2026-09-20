@@ -166,10 +166,10 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     elseif polygon_type == back_type
         push!(back, polygon)
     elseif polygon_type == spanning
-        f = CSGVertex[]
-        b = CSGVertex[]
-        sizehint!(f, n + 1)
-        sizehint!(b, n + 1)
+        f = Vector{CSGVertex}(undef, n + 1)
+        b = Vector{CSGVertex}(undef, n + 1)
+        empty!(f)
+        empty!(b)
         for i in 1:n
             j = i == n ? 1 : i + 1
             vi = polygon.vertices[i]
@@ -246,7 +246,7 @@ function _csg_all_polygons(node::CSGNode)
 end
 
 function _csg_invert!(node::CSGNode)
-    node.polygons = [_csg_polygon_flip(p) for p in node.polygons]
+    map!(_csg_polygon_flip, node.polygons, node.polygons)
     node.plane !== nothing && (node.plane = _csg_plane_flip(node.plane))
     node.front !== nothing && _csg_invert!(node.front)
     node.back !== nothing && _csg_invert!(node.back)
@@ -255,16 +255,18 @@ function _csg_invert!(node::CSGNode)
 end
 
 function _csg_clip_polygons(node::CSGNode, polygons::Vector{CSGPolygon})
-    node.plane === nothing && return copy(polygons)
+    (isempty(polygons) || node.plane === nothing) && return copy(polygons)
     front = CSGPolygon[]
     back = CSGPolygon[]
     for p in polygons
         _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back)
     end
-    node.front !== nothing && (front = _csg_clip_polygons(node.front, front))
-    back = node.back === nothing ? CSGPolygon[] :
-           _csg_clip_polygons(node.back, back)
-    append!(front, back)
+    if !isempty(front) && node.front !== nothing
+        front = _csg_clip_polygons(node.front, front)
+    end
+    if !isempty(back) && node.back !== nothing
+        append!(front, _csg_clip_polygons(node.back, back))
+    end
     return front
 end
 

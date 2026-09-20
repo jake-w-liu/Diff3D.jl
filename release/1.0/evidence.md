@@ -202,3 +202,23 @@ buffer guard. Adjacent hierarchy, instance-batch, and atomic-export tests passed
 `/tmp/diff3d-1.0-web-integer-fixed-{110,112}.log`. Two initial comparison-script
 runs stopped before measurement because its definition count omitted an
 overload; the corrected scripts completed all checks above.
+
+## R3 — CSG allocation repair
+
+BSP clipping now skips empty branches, inversion reuses each node's polygon
+vector, and split fragments allocate their initial storage in one step. Plane
+classification, interpolation, operation frames and epsilon rules are unchanged.
+The same box union/subtraction/intersection outputs matched the previous
+implementation's complete position, normal, UV and index arrays.
+
+On Julia 1.10.12, union/subtraction/intersection measured 101,696 / 91,200 /
+80,688 bytes, down from 113,472 / 108,928 / 99,856. All three original limits
+(105,000 / 102,000 / 95,000) passed. Julia 1.12.7 measured 69,216 / 60,704 /
+55,792 bytes, down from 73,728 / 68,512 / 64,240.
+
+Every existing top-level unit containing CSG work passed on both versions:
+2,838 assertions, including degeneracy, reflected solids, widely differing
+feature scales, stable UV interpolation, and the duplicate allocation guard.
+Earlier partial optimizations still exceeded the union limit and were not
+treated as passing. Logs: `/tmp/diff3d-1.0-csg-buffers-{110,112}.log`; the original
+allocation profile is `/tmp/diff3d-1.0-csg-profile-110.log`.
