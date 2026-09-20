@@ -1,0 +1,61 @@
+name: Consumer acceptance
+
+"on":
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  install:
+    name: Installed consumer (${{ matrix.os }}, Julia ${{ matrix.julia }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        julia: ["1.10", "1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - name: Install committed package and exercise public workflows
+        run: julia --startup-file=no release/1.0/consumer_install.jl consumer-results ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consumer-${{ matrix.os }}-${{ matrix.julia }}
+          path: consumer-results/
+          if-no-files-found: error
+
+  browser:
+    name: Installed export (${{ matrix.browser }})
+    needs: install
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: consumer-ubuntu-latest-1
+          path: consumer-results
+      - name: Install browser
+        run: |
+          python -m pip install -r test/requirements-browser.txt
+          python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Check standalone imported asset pixels
+        run: python release/1.0/consumer_browser.py consumer-results/triangle.html --browser ${{ matrix.browser }}

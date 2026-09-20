@@ -7,6 +7,8 @@ permissions:
   contents: read
 
 jobs:
+  consumer:
+    uses: ./.github/workflows/consumer.yml
   platforms:
     uses: ./.github/workflows/ci.yml
     with:

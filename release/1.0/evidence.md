@@ -242,3 +242,32 @@ backend boundaries, and file/workspace ownership. The docs introduction no
 longer describes Julia image arrays as row-major or claims an upstream three.js
 CSG algorithm. YAML parsing and `git diff --check` passed. A strict build of these
 documentation changes and final candidate/tag validation remain required.
+
+## R5 — independent installed consumer
+
+The bootstrap installs an immutable local Git commit through `Pkg.add` into a
+fresh environment with Diff3D as its only direct dependency, then starts an
+isolated Julia consumer process. It verifies the resolved revision/tree and
+package-store source, imports a hand-authored glTF triangle, checks CPU pixels
+and a PNG round trip, and exports a standalone browser page. An identifiable
+three-parameter inverse-color problem checks gradients against an algebraic
+derivative and independent central differences, then recovers the parameters
+with both public forward- and reverse-AD Adam paths. Documented unsupported
+glTF extensions and browser shader callbacks must fail explicitly.
+
+The first run installed `9d4085e7740996990aff944ec4a671434ea8db1c`, tree
+`b011f3341c812b3485b43e3bf27d9b861f86cef3`, on Julia 1.12.7/macOS arm64.
+All 39 assertions passed. Maximum gradient error was
+`1.1102230246251565e-16`; both optimizers reached MSE
+`1.326912711409517e-20` and recovered `[0.2, 0.4, 0.6]` within `4e-10`.
+Its exported triangle passed Chromium, Firefox and WebKit: center RGBA
+`[51, 102, 153, 255]`, black opaque corner, no WebGL/page errors or remote
+requests. Logs: `/tmp/diff3d-1.0-consumer-first.log`,
+`/tmp/diff3d-1.0-consumer-first/consumer.toml`, and
+`/tmp/diff3d-1.0-consumer-browser-{chromium,firefox,webkit}.log`.
+
+The reusable workflow repeats installation on all three release operating
+systems and both Julia versions, retains manifests/evidence/outputs, then
+checks the installed export in all three browsers. The Windows load-path
+separator follows Julia's platform rule. YAML parsing and Python compilation
+passed; the platform matrix and exact candidate installation remain required.
