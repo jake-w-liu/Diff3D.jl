@@ -1057,10 +1057,18 @@ function _soft_append_instances!(vertices, faces, colors, face_colors,
 end
 
 """
+    soft_render_scene(scene, camera, width, height;
+                      sigma=1.0, gamma=1.0, workspace=nothing)
+
 Render visible triangle meshes, posed skins, and triangle instances with soft
 coverage. Honors camera layers, LOD selection, and geometry draw ranges.
-For derivatives with respect to geometry or cameras, use `soft_render` or
-`diff_render` with explicit parametric inputs.
+Scene extraction uses `Float64` geometry and colors. For derivatives with
+respect to geometry or cameras, use [`soft_render`](@ref) or
+[`differentiable_render`](@ref) with explicit parametric inputs.
+
+Pass a [`SoftRenderSceneWorkspace`](@ref) to reuse scene-extraction and render
+buffers. Its returned image is overwritten by the next render that reuses the
+same workspace and dimensions; copy the image to retain it.
 """
 function soft_render_scene(scene::Scene, camera::AbstractCamera,
                            width::Int, height::Int;
@@ -1163,9 +1171,17 @@ function soft_render_scene(scene::Scene, camera::AbstractCamera,
 end
 
 """
-Differentiable render with explicit parameters for AD.
-`params` is a flat vector of parameters being optimized.
-`param_injector!` is a function that injects params into the scene/camera before rendering.
+    differentiable_render(params, setup_fn, width, height;
+                          sigma=1.0, gamma=1.0, workspace=nothing)
+
+Render an image from explicit parameters. `setup_fn(params)` returns
+`(vertices, faces, face_colors, view_proj, bg_color)`. Preserve the parameter
+scalar type in these values when differentiating with ForwardDiff or `ADVar`;
+converting a differentiated value to `Float64` discards its derivative.
+
+This function delegates to [`soft_render`](@ref). `workspace` follows the
+[`SoftRenderWorkspace`](@ref) ownership and scalar-type rules. The function does
+not mutate a scene or camera on the caller's behalf.
 """
 function differentiable_render(params::AbstractVector{T},
                                setup_fn::Function,

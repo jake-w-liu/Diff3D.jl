@@ -3,11 +3,10 @@
 # pure Julia, no external dependencies. `ADVar <: Real` flows through the same
 # generic math used by the soft rasterizer, so a scalar loss over high-dimensional
 # parameters (vertex positions, per-face colours) gets its full gradient in a
-# single backward pass — O(1) in output dimension, unlike ForwardDiff's O(n).
+# single backward traversal of the recorded operations.
 #
-# This is the engine's own reverse mode; it intentionally avoids heavy external
-# AD packages (Enzyme/Zygote) that cannot be installed under the §14 disk
-# constraint. Correctness is validated against ForwardDiff in the test suite.
+# This is the engine's own Float64 reverse mode. Correctness is validated against
+# ForwardDiff and independent derivative oracles in the test suite.
 # --------------------------------------------------------------------------
 
 mutable struct ADVar <: Real

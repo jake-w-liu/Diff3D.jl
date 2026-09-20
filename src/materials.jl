@@ -1367,7 +1367,8 @@ MeshDepthMaterial(args::Vararg{Any,12}) =
 end
 
 # ========================== ShaderMaterial ==========================
-# Placeholder for custom GLSL
+# GLSL strings are metadata; CPU shading executes `program` when supplied.
+# Browser export rejects this material because it cannot execute that callback.
 
 struct ShaderMaterial <: AbstractMaterial
     vertex_shader::String

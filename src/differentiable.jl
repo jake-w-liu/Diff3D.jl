@@ -1,9 +1,9 @@
 # --------------------------------------------------------------------------
 # High-dimensional differentiable rendering: gradients of the soft rasterizer
 # with respect to vertex positions and per-face colors ("differentiable
-# textures"), plus optimization demos. Gradients use ForwardDiff; the pipeline
-# is fully dual-number compatible. (Full reverse-mode via Enzyme/Zygote is left
-# as future work — see THREEJS_PARITY.md §12.)
+# textures"), plus optimization helpers. The render functions preserve scalar
+# types for ForwardDiff and the package's ADVar reverse engine. The optimization
+# convenience functions use inverse_render_adam's default gradient method.
 # --------------------------------------------------------------------------
 
 # Promote a Mat4 to element type T so AD duals flow through projection.

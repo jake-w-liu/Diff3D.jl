@@ -95,3 +95,27 @@ not waived. The runner now groups results with a standard outer `Test` test set,
 so later test units still execute after a failed assertion. Its updated checks
 passed 44 assertions on Julia 1.10.12 and 1.12.7, including a deliberately failing
 subprocess whose later unit runs while the report remains failed.
+
+## R1/R2 — compatibility contract and executable documentation
+
+The intended 1.x compatibility contract now describes public API ownership,
+backend boundaries, numeric/AD types, mutation, concurrency, errors, asset
+extensions and deprecation. The public inventory records 453 exported names.
+Undefined `diff_render` and obsolete `param_injector!` references were corrected;
+the four edited source files were checked for identical executable ASTs after
+removing documentation and source locations.
+
+All 18 tutorial blocks now execute in isolated Documenter example scopes. The
+first strict build failed because the inverse example imported ForwardDiff
+without declaring it directly in the docs environment. The dependency and its
+compatibility range were added, the tracked docs manifest was resolved, and
+`DOCUMENTER_DEPLOY=false julia --startup-file=no --project=docs docs/make.jl`
+completed successfully on Julia 1.12.7 with `warnonly=false`, export documentation
+checks and doctests enabled. This includes the tutorial's finite-difference
+gradient comparison and inverse-loss reduction checks.
+
+Installation wording, actual I/O support, shader boundaries and inverse-example
+claims were corrected. Local logs: `/tmp/diff3d-1.0-docs-first.log`,
+`/tmp/diff3d-1.0-docs-resolve.log`, `/tmp/diff3d-1.0-docs-second.log`, and
+`/tmp/diff3d-1.0-ast-check.log`. Versioned deployment and final-candidate docs
+validation remain separate release gates.

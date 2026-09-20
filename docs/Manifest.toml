@@ -2,7 +2,7 @@
 
 julia_version = "1.12.7"
 manifest_format = "2.0"
-project_hash = "3021cc0afa3367c7976c3499a4d4641befbaad4d"
+project_hash = "16cfa867a28fdc954b30ec510df2a9b5255c653e"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -83,7 +83,7 @@ version = "1.11.0"
 deps = ["ColorTypes", "ForwardDiff", "JpegTurbo", "LinearAlgebra", "Printf"]
 path = ".."
 uuid = "72681062-5925-4945-963f-74d9429756fe"
-version = "0.1.5"
+version = "0.1.8"
 
 [[deps.DiffResults]]
 deps = ["StaticArraysCore"]

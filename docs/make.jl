@@ -16,6 +16,7 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "Example Gallery" => "gallery.md",
+        "Compatibility" => "compatibility.md",
         "API Reference" => "api.md",
         "Publication Audit" => "audit.md",
     ],

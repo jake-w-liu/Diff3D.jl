@@ -8,11 +8,13 @@ animation controls, loaders, and self-contained WebGL HTML export.
 ## Status
 
 Diff3D.jl is pre-1.0. The public API is broad and tested, but may still change
-as the package matures.
+as the package matures. The [1.0 release plan](RELEASE_PLAN.md) tracks the
+remaining validation. The [compatibility contract](docs/src/compatibility.md)
+defines the API and backend boundaries intended for the 1.x series.
 
 ## Installation
 
-After registration, install the package with:
+Install the registered package with:
 
 ```julia
 using Pkg
@@ -20,7 +22,7 @@ Pkg.add("Diff3D")
 using Diff3D
 ```
 
-During registration, or when working from a checkout, use:
+To use a local development checkout, use:
 
 ```julia
 using Pkg

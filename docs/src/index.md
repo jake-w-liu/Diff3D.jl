@@ -7,7 +7,7 @@ WebGL HTML export.
 
 ## Minimal Render
 
-```julia
+```@example minimal
 using Diff3D
 
 scene = Scene(background = Color3(0.03, 0.04, 0.05))
@@ -59,7 +59,8 @@ example additionally uses ForwardDiff, which you can add to your project with
 
 Diff3D ships a self-contained, ForwardDiff-friendly math core that mirrors three.js conventions: immutable `Vec2`/`Vec3`/`Vec4`, column-major `Mat4`, quaternions and Euler angles, bounding volumes, geometric primitives, spherical/cylindrical coordinates, and frustum culling. Every type is parametric so it flows through automatic differentiation unchanged.
 
-```julia
+```@example math
+using Diff3D # hide
 # Vectors: dot / cross / norm / normalize / lerp / distance (Vec2/Vec3/Vec4)
 a, b = Vec3(1.0, 2.0, 2.0), Vec3(4.0, 0.0, 3.0)
 n   = normalize(a)                       # unit-length copy, |n| = 1
@@ -130,7 +131,8 @@ wireframes, lines, points and sprites, including instances. It is also supported
 by the pooled, tiled, AA and separate primitive passes; use the same setting
 when composing passes into one target. Orthographic cameras retain NDC depth.
 
-```julia
+```@example hierarchy
+using Diff3D # hide
 # A Scene owns a background color and (optionally) fog.
 scene = Scene(background=Color3(0.05, 0.06, 0.09),
               fog=Fog(color=Color3(0.05, 0.06, 0.09), near=8.0, far=40.0))
@@ -173,7 +175,8 @@ println("OK scene | planet world x=", round(wp.x, digits=2),
 
 Diff3D provides three.js-style cameras that produce standard view and projection matrices. `PerspectiveCamera` and `OrthographicCamera` are aimed by setting their `position` and `target` fields, while `StereoCamera`, `CubeCamera`, and `ArrayCamera` compose them for stereo, cube-map, and multi-viewport rendering; matching `*_from_params` helpers build the same matrices from raw scalars for autodiff.
 
-```julia
+```@example cameras
+using Diff3D # hide
 # Perspective camera: aim it by setting position/target fields.
 cam = PerspectiveCamera(fov=pi/4, aspect=16/9, near=0.1, far=100.0)
 cam.position = Vec3(0.0, 2.0, 6.0)
@@ -212,7 +215,8 @@ println("OK cameras: eye_gap=", round(eye_gap, digits=4),
 
 Diff3D ships a full library of three.js-style geometry generators that build `BufferGeometry` (flat position/normal/UV arrays plus triangle indices). Constructors take keyword arguments mirroring their three.js counterparts, and helpers let you derive wireframes, batch meshes, and inspect vertices and bounds.
 
-```julia
+```@example geometry
+using Diff3D # hide
 # Primitives — three.js-style keyword constructors
 box    = BoxGeometry(width=2.0, height=1.0, depth=1.0)
 sphere = SphereGeometry(radius=1.0, width_segments=24, height_segments=16)
@@ -264,7 +268,8 @@ println("OK geometry")
 
 Diff3D evaluates boolean operations over closed triangle `BufferGeometry` solids with a BSP polygon-clipping evaluator (the same algorithm behind three.js CSG). `csg_union`, `csg_subtract`, and `csg_intersect` return non-indexed `BufferGeometry` results, `transform_geometry` bakes a `Mat4` into an operand to position it, and `csg_evaluate` is the dispatching entry point that also accepts operation aliases.
 
-```julia
+```@example csg
+using Diff3D # hide
 # Two closed triangle solids as CSG operands.
 box = BoxGeometry(width=1.6, height=1.6, depth=1.6)
 sphere = SphereGeometry(radius=1.0, width_segments=24, height_segments=16)
@@ -299,7 +304,8 @@ nanometres. With a thickness map, its green channel interpolates from
 `iridescence_thickness_min` (default `0`) to `iridescence_thickness`.
 The endpoints may be in descending order.
 
-```julia
+```@example materials
+using Diff3D # hide
 # One material per shading model, plus the shared knobs
 # (opacity/transparent, side, wireframe, alpha_test).
 mats = AbstractMaterial[
@@ -345,7 +351,8 @@ println("OK materials: ", length(mats), " types, pixel-sum=",
 
 Diff3D stores image data as row-major `H×W×C` `Float64` arrays (UV `(0,0)` is bottom-left) and wraps them in a `Texture`, which powers procedural generators, UV sampling with wrap/filter modes and mipmaps, cube maps built from equirectangular environments, and PMREM roughness prefiltering. Textures plug straight into materials via `map=` and render through the standard rasterizer.
 
-```julia
+```@example textures
+using Diff3D # hide
 # Procedural checker + grid textures (H×W×3, RGB in [0,1])
 checker = checker_texture(n=4, cell=8, a=Color3(0.9, 0.9, 0.9), b=Color3(0.1, 0.1, 0.2))
 grid = grid_texture(size_px=64, cell=16, thickness=2)
@@ -394,7 +401,8 @@ println("OK textures | raw=", round(raw.r, digits=3), " lin=", round(lin.r, digi
 
 Diff3D mirrors the three.js light hierarchy - ambient, hemisphere, probe, point, rect-area, spot, and directional lights - and layers on measured IESNA photometric profiles plus shadow mapping. Lights are gathered from a scene with `collect_lights`, while `compute_shadow_map`/`shadow_visibility` (or simply `render!(...; shadows=true)`) resolve depth-based occlusion.
 
-```julia
+```@example lighting
+using Diff3D # hide
 # --- Lights mirroring the three.js hierarchy ---
 scene = Scene(background=Color3(0.02, 0.02, 0.03))
 add!(scene, AmbientLight(color=Color3(0.6, 0.7, 1.0), intensity=0.25))
@@ -460,7 +468,8 @@ println("OK lights: ", length(lights), " lights; occluded=", round(occluded, dig
 
 Diff3D rasterizes a scene into a `RenderTarget` (an H×W×3 color buffer plus a depth buffer) and offers several render entry points — flat vs. smooth shading, pooled/tiled/MSAA variants — followed by a linear-light post-processing pipeline (tone mapping, sRGB encoding, and supersample anti-aliasing). This example walks a small scene through every mode and then tone-maps and encodes the buffer for display.
 
-```julia
+```@example rendering
+using Diff3D # hide
 # Build a small scene: a box and a sphere lit by an ambient + directional key.
 scene = Scene(background = Color3(0.05, 0.06, 0.09))
 box = Mesh(BoxGeometry(width = 1.5, height = 1.5, depth = 1.5),
@@ -511,7 +520,8 @@ println("OK render: rgb8 $(size(rgb8)) $(eltype(rgb8)), img $(size(img)), ",
 
 Diff3D renders into a `RenderTarget` that keeps both a color image (`rt.color`) and a depth buffer (`rt.depth`). The `EffectComposer` chains post-processing passes over that color image: color-only passes (bloom, FXAA, tone mapping, sRGB, grayscale) and depth-aware passes (outline, SSAO, bokeh) that capture `rt.depth` when built. You register passes with `add_pass!` and run the whole chain with `compose`.
 
-```julia
+```@example postprocessing
+using Diff3D # hide
 
 # A small lit scene rendered to a RenderTarget (keeps rt.color and rt.depth).
 scene = Scene(background=Color3(0.02, 0.03, 0.05))
@@ -562,7 +572,8 @@ println("OK postfx  img=", size(img), "  focus=", round(focus, digits=3),
 
 Beyond triangle meshes, Diff3D mirrors the three.js scene-graph primitives for drawing many copies of one geometry cheaply (`InstancedMesh`), rendering raw vertex buffers as point clouds or line primitives, and placing camera-facing billboards (`Sprite`). Point, line, and sprite overlays are drawn with their own passes (`render_points!`, `render_lines!`, `render_sprites!`) on top of the rasterized triangles.
 
-```julia
+```@example primitives
+using Diff3D # hide
 # Ground BufferGeometry helpers (examples/official_showcase.jl): raw vertex
 # positions, no faces — the substrate for point and line primitives.
 positions_geometry(pts) =
@@ -637,7 +648,8 @@ A missing distance attribute is zero, so it does not produce gaps.
 
 An `LOD` container selects whole child subtrees from world camera distance divided by camera zoom. Renderers update it automatically and retain separate hysteresis state for each camera; use `LOD(auto_update=false)` for manual selection. A `Skeleton` of `Bone`s drives `SkinnedMesh` deformation, and per-object `Layers` masks select rendered objects and lights on 32 channels.
 
-```julia
+```@example skinning
+using Diff3D # hide
 # --- LOD: distance-keyed level of detail (three.js LOD) ---
 lod = LOD(name="rock")
 hi  = Mesh(IcosahedronGeometry(radius=1.0, detail=3), MeshBasicMaterial(); name="hi")
@@ -689,7 +701,8 @@ uses the camera retained by `set_from_camera!`; for a world-space ray, supply
 `Raycaster(origin, direction; camera=camera)`. A sprite returns one hit with
 `face_index=0` for its billboard quad.
 
-```julia
+```@example raycasting
+using Diff3D # hide
 
 # Build a small scene: two unit cubes in front of the camera along -Z.
 scene = Scene()
@@ -730,7 +743,8 @@ println("OK raycast")
 
 Diff3D ships headless counterparts of the three.js `examples/` control rigs, a `Clock`, and a keyframe animation system. All of them mutate a camera or object in place, so you can drive interaction, timing, and animation programmatically and read the resulting state back out.
 
-```julia
+```@example animation
+using Diff3D # hide
 # --- OrbitControls with inertia: queue moves, ease to a stop via orbit_update! ---
 cam = PerspectiveCamera(fov=π/4, aspect=16/9)
 cam.position = Vec3(0.0, 0.0, 6.0)
@@ -789,9 +803,15 @@ println("OK controls")
 
 ### Differentiable Rendering & Inverse
 
-Diff3D ships a fully differentiable soft rasterizer whose RGB output is smooth with respect to vertices, per-face materials, and camera, so image-space losses can be back-propagated to scene parameters. Gradients flow through either ForwardDiff duals or the package's own reverse-mode `ADVar` tape, and the `inverse_render_*` optimizers drive a rendered image toward a target — here recovering a cube's per-face colors from a single view.
+The soft rasterizer propagates derivatives from image losses to explicit vertex,
+face-color, and camera inputs through ForwardDiff duals or the reverse-mode
+`ADVar` tape. Keep topology fixed and respect the discrete boundaries described
+in [Compatibility](compatibility.md). This example fits a cube's per-face colors
+to reduce the target-image loss; it checks gradient agreement and loss reduction.
+Add ForwardDiff to the example's environment with `Pkg.add("ForwardDiff")`.
 
-```julia
+```@example inverse
+using Diff3D # hide
 using ForwardDiff
 
 # A cube with one differentiable RGB color per triangular face.
@@ -841,7 +861,7 @@ val, g_rev = reverse_value_gradient(f, x0)
 @assert reverse_gradient(f, x0) ≈ g_rev ≈ ForwardDiff.gradient(f, x0)
 println("reverse-AD  f=", round(val; sigdigits=4), "  grad=", round.(g_rev; sigdigits=3))
 
-# Inverse rendering: recover the per-face materials (Adam + vanilla gradient descent).
+# Inverse rendering: fit per-face colors (Adam + vanilla gradient descent).
 est, hist   = inverse_render_adam(copy(init), tgt_img, p -> render_params(p, W),
                                   loss_mse; lr = 0.06, n_iters = 40, verbose = false)
 _,  hist_gd = inverse_render_optimize(copy(init), tgt_img, p -> render_params(p, W),
@@ -854,9 +874,14 @@ println("inverse  adam ", round(hist[1]; sigdigits=3), " -> ", round(hist[end]; 
 
 ### Image & Mesh I/O
 
-Diff3D ships pure-Julia readers and writers for the common image and mesh formats, so a rendered `H×W×3` buffer can be exported to PNG, PPM, or PDF, and meshes can round-trip through STL, OBJ, PLY, and XYZ without any external dependencies. Larger binary assets (HDR, EXR, JPEG, KTX2, glTF/GLB) load from file paths.
+Diff3D exports image buffers to PNG, PPM, and PDF, writes and reads STL meshes,
+and loads OBJ/MTL, PLY, and XYZ data. The example creates small input files for
+these loaders. HDR, EXR, JPEG, KTX2, and glTF/GLB loaders accept file paths; JPEG
+decoding uses the package's JpegTurbo dependency. Supported format subsets are
+described in the [compatibility contract](compatibility.md).
 
-```julia
+```@example io
+using Diff3D # hide
 dir = mktempdir()  # all written files stay contained here
 
 # --- Image export: a rendered H×W×3 buffer in [0,1] -> PNG / PPM / PDF ---
@@ -928,7 +953,7 @@ disk_cloud = load_xyz(joinpath(dir, "pts.xyz"))
 # env  = load_hdr("studio.hdr")        # Radiance RGBE -> H×W×3 linear HDR
 # exr  = load_exr("render.exr")        # OpenEXR half/float
 # tex  = load_jpeg("albedo.jpg")       # baseline JPEG -> H×W×3 in [0,1]
-# ktx  = load_ktx2("cubemap.ktx2")     # KTX2 uncompressed formats
+# ktx  = load_ktx2("texture.ktx2")     # supported uncompressed 2D formats
 # scene = load_gltf("model.gltf")      # glTF -> Scene (load_glb for .glb)
 
 println("OK io: png $(size(decoded)), stl faces=$(mesh.n_faces), ",
@@ -944,7 +969,8 @@ fields remain available for inspection.
 
 Diff3D.jl can serialize a scene into a standalone, interactive WebGL page: wrap a `Scene` (plus optional camera, tone mapping, clipping planes, and animation clips) in a `WebGLExportCase`, then pass a vector of cases to `save_webgl_html` to write a single self-contained `.html` file with a small embedded runtime.
 
-```julia
+```@example webgl
+using Diff3D # hide
 
 # Build a lit scene from Diff3D.jl objects, geometries, and materials.
 scene = Scene(background=Color3(0.02, 0.03, 0.05))
@@ -977,7 +1003,7 @@ case = WebGLExportCase("hero", "Interactive Hero", "TorusKnot exported to live W
                        animations=[clip])
 
 # save_webgl_html takes a Vector of cases and writes a self-contained HTML file.
-out = joinpath(tempdir(), "diff3d_webgl_demo.html")
+out = joinpath(mktempdir(), "diff3d_webgl_demo.html")
 save_webgl_html(out, [case]; title="Diff3D.jl WebGL Demo")
 
 bytes = filesize(out)
