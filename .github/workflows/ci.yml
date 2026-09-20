@@ -5,19 +5,21 @@ name: CI
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   package-tests:
-    name: Package tests (Julia ${{ matrix.julia }})
+    name: Optimized tests (Julia ${{ matrix.julia }}, shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         julia: ["1.10", "1"]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -25,12 +27,38 @@ jobs:
           version: ${{ matrix.julia }}
       - name: Instantiate package environment
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
-      - name: Run package tests
-        run: julia --project=. -O0 --compile=min -e 'using Pkg; Pkg.test()'
-      - name: Verify optimized allocation regressions
-        run: julia --project=. -e 'include("test/light_direction_scale.jl"); include("test/scaled_direction_gradients.jl"); include("test/line_projection_gradients.jl"); include("test/triangle_gradients.jl"); include("test/mean_gradients.jl"); include("test/camera_pose_allocations.jl"); include("test/soft_mixed_allocations.jl"); include("test/render_cache_lifetimes.jl"); include("test/soft_workspace_lifetimes.jl"); include("test/numerical_gradient_range.jl"); include("test/scene_collection_allocations.jl"); include("test/lod_manual_allocations.jl"); include("test/instanced_render_allocations.jl"); include("test/primitive_appearance.jl")'
+      - name: Verify test runner
+        run: julia --project=. --depwarn=error test/test_runner.jl
+      - name: Run complete optimized package test shard
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=ARGS)' -- --shard=${{ matrix.shard }}/6 --require-optimized --report=${{ github.workspace }}/test-results/shard.toml
       - name: Verify concurrent rendering
-        run: julia --project=. --threads=4 -O0 --compile=min -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'
+        if: matrix.shard == 1
+        run: julia --project=. --threads=4 -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ matrix.julia }}-${{ matrix.shard }}
+          path: test-results/*.toml
+          if-no-files-found: error
+
+  native-coverage:
+    name: Complete optimized test coverage
+    needs: package-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify coverage validator
+        run: python test/test_check_shards.py
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: test-results
+      - name: Require every optimized shard on this revision
+        run: python test/check_shards.py test-results --groups=2 --revision=${{ github.sha }}
 
   examples-browser:
     name: Registered examples browser smoke

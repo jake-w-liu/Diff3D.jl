@@ -58,3 +58,31 @@ Local raw logs: `/tmp/diff3d-1.0-export-before.log`,
 `/tmp/diff3d-1.0-export-julia110-resolved.log`, and
 `/tmp/diff3d-1.0-export-allocation.log`. Full candidate and browser checks remain
 required.
+
+## R3 — complete optimized test runner
+
+The suite was moved to `test/suite.jl`. After removing the automatic low-compile
+respawn header, all moved source bodies and allocation budgets were checked by
+text and normalized Julia AST comparison. Three pre-existing trailing comment
+spaces were removed; executable ASTs and budgets are unchanged. The inventory contains
+455 top-level test sets and 60 complete included regression files (515 units).
+
+Observed checks:
+
+- `julia --startup-file=no --depwarn=error --project test/test_runner.jl`:
+  42 assertions passed under Julia 1.12.7. The same runner checks passed under
+  Julia 1.10.12. They cover exhaustive/disjoint partitions, included files,
+  shared declarations, invalid options, and failing-process report propagation.
+- `python3 test/test_check_shards.py`: all 3 validator test methods passed,
+  including missing/duplicate shards and 16 mutations of otherwise valid reports.
+- A real `Pkg.test(test_args=ARGS)` invocation with `--shard=515/515
+  --require-optimized --report=/tmp/diff3d-1.0-real-shard.toml` passed the 22 export
+  assertions. Its report recorded Julia 1.12.7, macOS/aarch64, optimization level
+  2, normal compilation, enabled allocation assertions, and all 515 source units
+  encountered. This is one selected unit, not a full-suite pass.
+
+Two initial runner-fixture issues were corrected: a dynamically created test
+module lacked the standard `include` binding, and Julia 1.12 required latest-world
+access to newly included bindings. The final minimum/current runner checks passed.
+Full optimized correctness/allocation results will come from the complete CI
+shard reports; they remain pending.
