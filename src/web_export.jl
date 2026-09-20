@@ -246,6 +246,18 @@ const _WEB_NUM_PRINTF_FORMAT = "%.17g"
 
 _web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
 
+@inline function _js_write_int(io::IO, x::Int, buf::Vector{UInt8})
+    # A signed 64-bit decimal needs at most 20 bytes plus its C terminator.
+    length(buf) < 21 && resize!(buf, 21)
+    n = GC.@preserve buf @ccall snprintf(pointer(buf)::Ptr{UInt8},
+                                         length(buf)::Csize_t,
+                                         "%lld"::Cstring;
+                                         x::Clonglong)::Cint
+    0 <= n < length(buf) || error("failed to format WebGL JSON integer")
+    GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
+    return nothing
+end
+
 function _js_num(x::Real)
     io = IOBuffer(sizehint=32)
     _js_write_num(io, x)
@@ -1538,7 +1550,7 @@ function _web_write_validated_light_common_json(
     write(io, "{\"type\":")
     _js_write_str(io, typ)
     write(io, ",\"id\":")
-    print(io, light.id)
+    _js_write_int(io, light.id, num_buf)
     write(io, ",\"name\":")
     _js_write_str(io, light.name)
     write(io, ",\"visible\":")
@@ -2470,11 +2482,11 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
     parent = get_parent(obj)
     parent_id = parent === nothing ? 0 : parent.id
     write(io, "{\"id\":")
-    print(io, obj.id)
+    _js_write_int(io, obj.id, num_buf)
     write(io, ",\"name\":")
     _js_write_str(io, getproperty(obj, :name))
     write(io, ",\"parentId\":")
-    print(io, parent_id)
+    _js_write_int(io, parent_id, num_buf)
     write(io, ",\"matrix\":")
     _js_write_mat(io, world, num_buf)
     write(io, ",\"parentMatrix\":")

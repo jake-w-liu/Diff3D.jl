@@ -185,3 +185,20 @@ Python compilation, CLI argument checks, Ruby YAML parsing, and the three
 coverage-validator test methods passed. Full platform/browser release results
 remain pending. Logs: `/tmp/diff3d-1.0-browser-{chromium,firefox,webkit}-pilot.log`
 and `/tmp/diff3d-1.0-browser-{firefox,webkit}-pixels.log`.
+
+## R3 — exact WebGL integer serialization
+
+The shared light/transform writers now format integer IDs into the numeric
+buffer they already receive. Decimal bytes remain exact for signed integer
+extrema and values beyond Float64's exact range. The 28-light fixture measured
+18,848 bytes on Julia 1.10.12 (previously 26,240; unchanged limit 25,000) and
+16,480 on Julia 1.12.7 (previously 21,856). Complete JSON matched the previous
+writers byte for byte at 0, 7, 28, and 112 lights.
+
+The canonical optimized WebGL unit passed 1,253 assertions on both versions,
+including integer extrema, empty/short buffers, and a zero-allocation reused
+buffer guard. Adjacent hierarchy, instance-batch, and atomic-export tests passed
+18, 36, and 22 assertions respectively on both versions. Logs:
+`/tmp/diff3d-1.0-web-integer-fixed-{110,112}.log`. Two initial comparison-script
+runs stopped before measurement because its definition count omitted an
+overload; the corrected scripts completed all checks above.

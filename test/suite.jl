@@ -3068,6 +3068,18 @@ end
     end
 
     @testset "I/O — WebGL HTML export" begin
+        @testset "Exact integer formatting reuses numeric storage" begin
+            for buffer_size in (0, 1, 20, 21, 64)
+                buffer = Vector{UInt8}(undef, buffer_size)
+                for value in (typemin(Int), -1, 0, 1, typemax(Int) ÷ 2, typemax(Int))
+                    io = IOBuffer()
+                    Diff3D._js_write_int(io, value, buffer)
+                    @test String(take!(io)) == string(value)
+                end
+                Diff3D._js_write_int(devnull, typemin(Int), buffer)
+                @test_opt_alloc 0 Diff3D._js_write_int(devnull, typemin(Int), buffer)
+            end
+        end
         scene = Scene(background=Color3(0.01, 0.02, 0.03),
                       fog=Fog(color=Color3(0.6, 0.7, 0.8), near=2.0, far=18.0))
         ambient = AmbientLight(color=Color3(0.2, 0.3, 0.4), intensity=0.5)
