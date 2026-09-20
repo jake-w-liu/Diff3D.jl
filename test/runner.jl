@@ -2,6 +2,7 @@ module Diff3DTestRunner
 
 using SHA
 using TOML
+using Test
 
 function options(arguments)
     shard, shards, listing, report, require_optimized = 1, 1, false, nothing, false
@@ -115,7 +116,13 @@ function run_tests(target::Module, arguments; suite=joinpath(@__DIR__, "suite.jl
         return expression
     end
     try
-        Base.include(select_expression, target, suite)
+        # Include remains dynamic: this groups results without compiling the
+        # entire suite as one syntax tree, and lets later units run after a failure.
+        result = @testset "Diff3D shard $(config.shard)/$(config.shards)" begin
+            Base.include(select_expression, target, suite)
+        end
+        Test.get_test_counts(result)
+        result.anynonpass && error("test shard contains failing assertions")
         count == length(units) || error("test unit inventory was not fully encountered")
         read(suite, String) == source || error("test source changed during execution")
         report["allocation_assertions"] =

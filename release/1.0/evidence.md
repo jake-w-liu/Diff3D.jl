@@ -86,3 +86,12 @@ module lacked the standard `include` binding, and Julia 1.12 required latest-wor
 access to newly included bindings. The final minimum/current runner checks passed.
 Full optimized correctness/allocation results will come from the complete CI
 shard reports; they remain pending.
+
+The first complete CI run (`35486410719`, source `357d95e`) passed seven native
+shards and exposed allocation failures in WebGL case serialization, transformed
+custom attributes, CSG operations, and the cold truncated-HDR test. Raw job logs
+are retained under `/tmp/diff3d-1.0-ci-*.log`; these failures are being investigated,
+not waived. The runner now groups results with a standard outer `Test` test set,
+so later test units still execute after a failed assertion. Its updated checks
+passed 44 assertions on Julia 1.10.12 and 1.12.7, including a deliberately failing
+subprocess whose later unit runs while the report remains failed.

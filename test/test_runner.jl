@@ -62,12 +62,24 @@ end
         end
 
         # A fresh process has the same top-level Test failure handling as Pkg.test.
-        write(suite, "using Test\n@testset \"intentional failure\" begin\n@test false\nend\n")
+        completed = joinpath(directory, "later-unit.txt")
+        write(suite, """
+            using Test
+            @testset "intentional failure" begin
+                @test false
+            end
+            @testset "later test still runs" begin
+                write($(repr(completed)), "completed")
+                @test true
+            end
+            """)
         report_path = joinpath(directory, "failed.toml")
         runner = joinpath(@__DIR__, "runner.jl")
         script = "include(ARGS[1]); Diff3DTestRunner.run_tests(Main, [\"--report=\" * ARGS[3]]; suite=ARGS[2])"
         command = `$(Base.julia_cmd()) --startup-file=no -e $script $runner $suite $report_path`
         @test !success(pipeline(command; stdout=devnull, stderr=devnull))
         @test TOML.parsefile(report_path)["status"] == "failed"
+        @test TOML.parsefile(report_path)["encountered_units"] == 2
+        @test read(completed, String) == "completed"
     end
 end
