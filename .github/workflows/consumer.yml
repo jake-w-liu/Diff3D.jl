@@ -38,16 +38,13 @@ jobs:
   browser:
     name: Installed export (${{ matrix.browser }})
     needs: install
-    runs-on: ubuntu-latest
+    # Firefox is validated on macOS for the reason recorded in ci.yml.
+    runs-on: ${{ matrix.browser == 'firefox' && 'macos-latest' || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         browser: [chromium, firefox, webkit]
-    env:
-      # Firefox refuses to create a WebGL context without an X display on the
-      # Linux runners; Chromium and WebKit keep their existing headless setup.
-      XVFB: ${{ matrix.browser == 'firefox' && 'xvfb-run --auto-servernum' || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -60,7 +57,10 @@ jobs:
       - name: Install browser
         run: |
           python -m pip install -r test/requirements-browser.txt
-          python -m playwright install --with-deps ${{ matrix.browser }}
-          if [ -n "$XVFB" ]; then sudo apt-get install -y --no-install-recommends xvfb; fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python -m playwright install --with-deps ${{ matrix.browser }}
+          else
+            python -m playwright install ${{ matrix.browser }}
+          fi
       - name: Check standalone imported asset pixels
-        run: $XVFB python release/1.0/consumer_browser.py consumer-results/triangle.html --browser ${{ matrix.browser }}
+        run: python release/1.0/consumer_browser.py consumer-results/triangle.html --browser ${{ matrix.browser }}

@@ -65,3 +65,5 @@ libraries, use `python -m playwright install --with-deps chromium`.
 - `test/check_no_local_paths.py` rejects machine-specific filesystem paths in
   every tracked file and inside every tracked evidence archive, because a
   registered package ships all of them.
+- Browser validation runs Chromium and WebKit on Linux and Firefox on macOS;
+  headless Linux Firefox cannot reliably create a WebGL context.

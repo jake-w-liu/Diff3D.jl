@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import unittest
 
-from check_no_local_paths import findings, scan
+from check_no_local_paths import SELF, findings, scan
 
 
 class PathDetection(unittest.TestCase):
@@ -71,6 +71,17 @@ class RepositoryScan(unittest.TestCase):
                 ("a.toml", 2, "/Users/someone/pkg"),
                 ("evidence.tar.gz:run.json", 2, "/Users/someone/run.py"),
             ])
+
+    def test_only_the_guard_and_its_tests_are_exempt(self):
+        self.assertEqual(SELF, ("test/check_no_local_paths.py",
+                                "test/test_check_no_local_paths.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "test").mkdir()
+            contents = 'path = "/Users/someone/pkg"\n'
+            results = self.repository(root, {name: contents for name in SELF}
+                                      | {"test/other_check.py": contents})
+            self.assertEqual(results, [("test/other_check.py", 1, "/Users/someone/pkg")])
 
     def test_untracked_files_are_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

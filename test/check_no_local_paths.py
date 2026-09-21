@@ -14,6 +14,10 @@ import subprocess
 import sys
 import tarfile
 
+# This guard states the forbidden patterns and its tests exercise them, so both
+# files necessarily contain example paths as data. They are the only exemptions.
+SELF = ("test/check_no_local_paths.py", "test/test_check_no_local_paths.py")
+
 # Home directories and per-machine temporary roots on the supported platforms.
 # A trailing component is required so that the bare mount points, which appear
 # in prose such as "files under /home", are not reported.
@@ -40,6 +44,8 @@ def scan(root: Path) -> list[tuple[str, int, str]]:
                              stdout=subprocess.PIPE).stdout
     results = []
     for name in sorted(entry for entry in listing.decode().split("\0") if entry):
+        if name in SELF:
+            continue
         path = root / name
         if not path.is_file():
             continue  # A submodule or a deleted-but-staged entry has no contents.
