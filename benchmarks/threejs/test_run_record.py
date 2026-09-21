@@ -1,9 +1,10 @@
-"""Check that recorded comparison commands carry no machine-specific paths."""
+"""Check the comparison harness records and the published summary derivation."""
 
 from pathlib import Path
 import unittest
 
 from run import portable_argument
+from summarize import median, statistics
 
 
 class PortableArgumentTests(unittest.TestCase):
@@ -53,6 +54,33 @@ class PortableArgumentTests(unittest.TestCase):
             with self.subTest(output=output):
                 recorded = [self.portable(argument, output) for argument in command]
                 self.assertFalse([value for value in recorded if Path(value).is_absolute()])
+
+
+class TimingStatisticsTests(unittest.TestCase):
+    def test_nearest_rank_percentile_matches_the_published_definition(self):
+        # ceil(0.95 * 21) = 20, so the 20th of 21 sorted samples is quoted.
+        samples = [float(value) for value in range(21, 0, -1)]
+        self.assertEqual(statistics(samples), {
+            "samples": 21, "minimum_ms": 1.0, "median_ms": 11.0,
+            "p95_nearest_rank_ms": 20.0, "maximum_ms": 21.0})
+
+    def test_single_sample_is_its_own_statistic(self):
+        self.assertEqual(statistics([2.5]), {
+            "samples": 1, "minimum_ms": 2.5, "median_ms": 2.5,
+            "p95_nearest_rank_ms": 2.5, "maximum_ms": 2.5})
+
+    def test_even_sample_count_averages_the_middle_pair(self):
+        self.assertEqual(median([1.0, 2.0, 3.0, 5.0]), 2.5)
+        # ceil(0.95 * 4) = 4, so an even distribution quotes its maximum.
+        self.assertEqual(statistics([5.0, 1.0, 3.0, 2.0])["p95_nearest_rank_ms"], 5.0)
+
+    def test_unsorted_input_is_ordered_before_summarising(self):
+        self.assertEqual(statistics([9.0, 1.0, 5.0]),
+                         statistics([1.0, 5.0, 9.0]))
+
+    def test_an_empty_distribution_is_rejected(self):
+        with self.assertRaises(ValueError):
+            statistics([])
 
 
 if __name__ == "__main__":
