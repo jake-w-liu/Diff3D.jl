@@ -46,6 +46,12 @@ string fields do not constitute a browser shader implementation. Export rejects
 this material instead of replacing its effect. Browser export is a scene export,
 not a live connection to subsequent Julia scene mutations.
 
+Exported fragment shaders request `highp` float precision when the browser's
+context reports it and fall back to `mediump` otherwise. WebGL 1 only guarantees
+10-bit `mediump` floats, which is too coarse for interpolated texture
+coordinates. A context without fragment `highp` support therefore renders
+textured surfaces less precisely than the validated environments.
+
 WebGL 1 textures whose dimensions are not powers of two use clamp-to-edge
 wrapping and base-level nearest or linear filtering. Exported cube maps follow
 the same restriction: their authored mipmaps are not uploaded and their maximum

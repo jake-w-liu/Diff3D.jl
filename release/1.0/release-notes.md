@@ -11,6 +11,9 @@ Incompatible public changes require a later major release.
   numbers portably on Windows while preserving Float64 precision and integer IDs.
 - Fit the full physical-texture browser path into the tested 16-sampler contexts
   and reuse shader locations during repeated rendering.
+- Keep browser cube maps within WebGL 1 limits, completing the physical mip
+  pyramid for partial authored chains, and request `highp` fragment precision
+  wherever the browser reports it.
 - Reduce allocations in affine morph transforms, CSG clipping/inversion,
   integer serialization, and standard-material lighting with ambient occlusion.
 - Execute the documented tutorials and provide versioned documentation, complete
@@ -24,7 +27,9 @@ three.js has lower browser-frame medians in 17 of 18 Firefox measurements. The r
 qualifies the shared-host timings and does not claim general rendering parity
 or superiority.
 
-Julia 1.10 or later in the 1.x series is supported. CPU rendering, soft
+Julia 1.10 or later in the 1.x series is supported. Release validation runs the
+minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
+and Windows. CPU rendering, soft
 differentiable rendering and browser export have distinct supported scopes.
 Browser export uses WebGL 1 and built-in materials; it does not export Julia
 ShaderMaterial callbacks. The glTF loader rejects required Draco, Meshopt and

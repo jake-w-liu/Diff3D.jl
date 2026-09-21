@@ -21,6 +21,11 @@ Changes included in this release:
   during repeated browser rendering.
 - Keep non-power-of-two browser cube maps at level zero, preventing invalid
   WebGL mip uploads in exported environments such as the glTF loader example.
+  Complete the physical mip pyramid for a partial authored power-of-two chain so
+  those environments keep sampling their authored levels.
+- Request `highp` fragment precision in exported shaders wherever the browser
+  reports it, so texture coordinates survive contexts that honour the 10-bit
+  WebGL 1 `mediump` minimum.
 - Reduce allocations in affine morph transforms, exact integer serialization,
   CSG clipping/inversion, and standard-material lighting with ambient occlusion.
 - Execute all tutorials and publish versioned documentation. Main-branch docs
@@ -28,7 +33,9 @@ Changes included in this release:
 - Add complete optimized test shards, release platform/browser matrices, fresh
   package-consumer checks, and pinned comparisons with three.js 0.186.0.
 
-Julia 1.10 or later in the 1.x series is supported. CPU rendering, soft
+Julia 1.10 or later in the 1.x series is supported; release validation runs the
+minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
+and Windows. CPU rendering, soft
 differentiable rendering and WebGL export have distinct contracts. Browser
 export uses WebGL 1 and built-in materials; it does not export `ShaderMaterial`
 callbacks. Required Draco, Meshopt and Basis glTF extensions remain unsupported.

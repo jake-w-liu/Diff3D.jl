@@ -195,6 +195,73 @@ def verify_shared_texture_refresh(page) -> None:
             raise AssertionError(f"Shared packed texture refresh: {result}")
 
 
+def verify_fragment_precision(page) -> None:
+    result = page.evaluate("""() => {
+        const previous={framebuffer:gl.getParameter(gl.FRAMEBUFFER_BINDING),
+            program:gl.getParameter(gl.CURRENT_PROGRAM),viewport:gl.getParameter(gl.VIEWPORT),
+            texture:gl.getParameter(gl.TEXTURE_BINDING_2D),mask:gl.getParameter(gl.COLOR_WRITEMASK)};
+        const capabilities=[gl.DEPTH_TEST,gl.BLEND,gl.CULL_FACE,gl.SCISSOR_TEST];
+        const enabled=capabilities.map(capability=>gl.isEnabled(capability));
+        const framebuffer=gl.createFramebuffer(),output=gl.createTexture();
+        let probe=null;
+        try {
+            const formats={};
+            for(const kind of ['MEDIUM_FLOAT','HIGH_FLOAT']){
+                const format=gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER,gl[kind]);
+                formats[kind]=format?format.precision:0;
+            }
+            const declarations={};
+            for(const [name,source] of Object.entries({DFSH,PDFSH,FSH,FSH_EMISSIVE,CFSH,PFSH,SFSH}))
+                declarations[name]=source.match(/precision\\s+(?:lowp|mediump|highp)\\s+float\\s*;/g)||[];
+            gl.bindTexture(gl.TEXTURE_2D,output);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+            gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,output,0);
+            if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)
+                throw new Error('Fragment precision test framebuffer is incomplete');
+            for(const capability of capabilities) gl.disable(capability);
+            gl.colorMask(true,true,true,true); gl.viewport(0,0,1,1);
+            // A uniform 2^-11 added to 1.0 disappears in a 10-bit mantissa and
+            // survives a wider one. The uniform prevents constant folding.
+            probe=program('void main(){ gl_Position=vec4(0.0,0.0,0.0,1.0); gl_PointSize=1.0; }',
+                FRAGMENT_PRECISION+'uniform float uDelta; void main(){ float v=1.0+uDelta;'
+                +' gl_FragColor=vec4((v-1.0)*2048.0,0.0,0.0,1.0); }');
+            gl.useProgram(probe);
+            gl.uniform1f(uniformLocation(probe,'uDelta'),1.0/2048.0);
+            gl.drawArrays(gl.POINTS,0,1);
+            const pixel=new Uint8Array(4);
+            gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
+            return {selected:FRAGMENT_PRECISION,formats,declarations,
+                    mantissa:Array.from(pixel),error:gl.getError()};
+        } finally {
+            gl.bindFramebuffer(gl.FRAMEBUFFER,previous.framebuffer); gl.deleteFramebuffer(framebuffer);
+            gl.useProgram(previous.program);
+            if(probe){
+                for(const shader of gl.getAttachedShaders(probe)) gl.deleteShader(shader);
+                gl.deleteProgram(probe);
+            }
+            gl.deleteTexture(output); gl.bindTexture(gl.TEXTURE_2D,previous.texture);
+            gl.viewport(...previous.viewport); gl.colorMask(...previous.mask);
+            capabilities.forEach((capability,index)=>enabled[index]?gl.enable(capability):gl.disable(capability));
+        }
+    }""")
+    high, medium = result["formats"]["HIGH_FLOAT"], result["formats"]["MEDIUM_FLOAT"]
+    expected = "precision highp float; " if high > 0 else "precision mediump float; "
+    if result["selected"] != expected or result["error"]:
+        raise AssertionError(f"Exported shaders must select the widest fragment precision: {result}")
+    for name, declarations in result["declarations"].items():
+        if declarations != [expected.strip()]:
+            raise AssertionError(f"{name} must declare exactly the selected precision: {result}")
+    # A declared precision is a lower bound, so a 10-bit declaration may still be
+    # evaluated more precisely; a wider declaration may not be evaluated coarsely.
+    bits = high if high > 0 else medium
+    red, rest = result["mantissa"][0], result["mantissa"][1:]
+    if rest != [0, 0, 255] or not (red == 255 if bits >= 11 else red == 255 or red <= 2):
+        raise AssertionError(f"Declared fragment precision is not in effect: {result}")
+    print("BROWSER_FRAGMENT_PRECISION_OK", result["selected"].strip(), result["formats"], flush=True)
+
+
 def verify_cube_texture_storage(page) -> None:
     results = page.evaluate("""() => {
         const previous={framebuffer:gl.getParameter(gl.FRAMEBUFFER_BINDING),
@@ -446,6 +513,7 @@ def main() -> None:
                             report_browser_environment(browser, page)
                             reported_environment = True
                         if not checked_texture_storage:
+                            verify_fragment_precision(page)
                             verify_packed_texture_storage(page)
                             verify_shared_texture_refresh(page)
                             verify_cube_texture_storage(page)
