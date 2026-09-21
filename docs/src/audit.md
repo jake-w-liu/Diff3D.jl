@@ -66,4 +66,6 @@ libraries, use `python -m playwright install --with-deps chromium`.
   every tracked file and inside every tracked evidence archive, because a
   registered package ships all of them.
 - Browser validation runs Chromium and WebKit on Linux and Firefox on macOS;
-  headless Linux Firefox cannot reliably create a WebGL context.
+  headless Linux Firefox cannot reliably create a WebGL context. Every engine
+  runs `test/browser_rendering.py`; the registered-example sweep runs in
+  Chromium and WebKit, where a shard takes minutes rather than hours.

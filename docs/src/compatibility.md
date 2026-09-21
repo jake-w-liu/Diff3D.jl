@@ -163,7 +163,9 @@ exact runtime; a newer stable Julia is added to the matrix rather than replacing
 a supported version silently. Browser export is validated with Chromium, Firefox,
 and WebKit; a working WebGL context is required. Chromium and WebKit are
 exercised on Linux with software rendering and Firefox on macOS, because
-headless Linux Firefox cannot reliably obtain a WebGL context.
+headless Linux Firefox cannot reliably obtain a WebGL context. All three engines
+run the full rendering-contract suite; the registered-example sweep runs in
+Chromium and WebKit, whose runners are fast enough for it.
 Browser engine tests do not certify every device, GPU driver, or vendor browser
 build. Release evidence records the exact environments exercised.
 

@@ -941,3 +941,49 @@ doctests enabled and no error or warning lines in its output. It regenerated the
 108-case example gallery, ran all 18 executable tutorials and recorded the
 automatic inventory version `1.0.0` from `Project.toml`. The candidate's
 Documentation workflow run repeats this build on the pushed source.
+
+## R4 — macOS Firefox: two wall-clock assumptions, and the sweep's scope
+
+The candidate validation run
+[35562468487](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35562468487)
+moved Firefox to macOS and produced two failures, both fixed-delay assumptions
+in the harness rather than rendering defects.
+
+**VERIFIED — the registered-example shard is a host-speed problem.** In the
+standalone macOS smoke run
+[35562194332](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35562194332)
+Firefox 155 reported its environment, selected `precision highp float;` with both
+float formats at 23 bits, and passed 71 of the 72 browser configurations in
+36.1 minutes. The validation's `firefox, examples 4/6` shard reported
+`BROWSER_ENVIRONMENT` and `BROWSER_WEBGL_OK` for seven examples, taking between
+1.5 and 6 minutes each, then exceeded the smoke harness's fixed 120-second
+selector wait on the eighth — Playwright's call log shows the canvas *resolved
+to visible*, so the page was alive but its main thread could not service the
+poll. Measured shard durations: Linux Firefox 5.9–10.5 min, Linux WebKit
+6.4–9.3 min, macOS Firefox 30.5 min for 8 of 18 examples.
+
+The registered-example sweep is an upstream-parity smoke check over the same
+exported runtime, while `test/browser_rendering.py` is what actually exercises
+per-engine behaviour — shaders, textures, cube maps, samplers, resource reuse.
+Firefox therefore runs the full 72-configuration contract suite on macOS, and
+the 108-example sweep runs in Chromium and WebKit on Linux, where a shard takes
+minutes. No engine loses contract coverage and no assertion was relaxed.
+
+**VERIFIED — the 72nd configuration failed on an undrawn buffer.** The macOS
+smoke run failed `orbit_zoom_limits at 1024x800` with centre pixel `[3, 3, 3]`
+while reporting the correct fitted distance of exactly 2200. The check reset the
+case and then waited a fixed 300 ms before reading pixels, so on a host where one
+frame takes longer than that it sampled a buffer that had not yet been drawn; the
+correct distance shows the state reset had already applied. The wait now polls
+presented frames — reading after `gl.finish()` and awaiting
+`requestAnimationFrame` until the fitted view appears, bounded at 120 frames —
+so a slow host is tolerated while a genuinely clipped view still fails. The
+thresholds (`blue[2] > 200`, `max(blue[:2]) < 20`, exact distance) are unchanged.
+The repaired fixture passes locally in Chromium 153, Firefox 155 and WebKit 26.6.
+
+**VERIFIED — the installed-consumer export hit Playwright's 30-second default.**
+`consumer / Installed export (firefox)` failed with
+`Page.wait_for_function: Timeout 30000ms exceeded` on macOS. That call used
+Playwright's default timeout while the other harnesses set 120 seconds
+explicitly; the consumer check now sets the same 120-second default. Its pixel
+and error assertions are unchanged.

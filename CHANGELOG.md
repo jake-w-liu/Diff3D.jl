@@ -36,12 +36,13 @@ Changes included in this release:
 - Reject machine-specific filesystem paths anywhere in the published package
   tree, including inside the committed release evidence archives.
 
-Julia 1.10 or later in the 1.x series is supported; release validation runs the
+Julia 1.10 or later in the 1.x series is supported. Release validation runs the
 minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
-and Windows. CPU rendering, soft
-differentiable rendering and WebGL export have distinct contracts. Browser
-export uses WebGL 1 and built-in materials; it does not export `ShaderMaterial`
-callbacks. Required Draco, Meshopt and Basis glTF extensions remain unsupported.
+and Windows, with browser export checked in Chromium and WebKit on Linux and in
+Firefox on macOS. CPU rendering, soft differentiable rendering and WebGL export
+have distinct contracts. Browser export uses WebGL 1 and built-in materials; it
+does not export `ShaderMaterial` callbacks. Required Draco, Meshopt and Basis
+glTF extensions remain unsupported.
 A matching three.js API name does not imply matching backend coverage or speed.
 
 The [release tracker](RELEASE_PLAN.md) records the candidate's validation status;

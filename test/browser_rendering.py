@@ -732,11 +732,20 @@ def main() -> None:
                                 # Each viewport pass starts from the fitted orbit (the previous pass
                                 # leaves the orbit within one wheel notch of it).
                                 page.evaluate("() => { setCase(active.id); }")
-                                page.wait_for_timeout(300)
-                                fitted = page.evaluate("""() => {
-                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),pixel=new Uint8Array(4);
-                                    gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
-                                    return {pixel:Array.from(pixel).slice(0,3),error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
+                                # Wait for presented frames rather than a fixed delay: a slow
+                                # host can take longer than any wall-clock guess to draw the
+                                # reset view, and reading early returns an undrawn buffer.
+                                fitted = page.evaluate("""async () => {
+                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl');
+                                    const read=()=>{ const p=new Uint8Array(4); gl.finish();
+                                        gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);
+                                        return Array.from(p).slice(0,3); };
+                                    let pixel=read(), frames=0;
+                                    while(pixel[2]<=200 && frames<120){
+                                        await new Promise(resolve => requestAnimationFrame(resolve));
+                                        frames++; pixel=read();
+                                    }
+                                    return {pixel,frames,error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
                                 }""")
                                 blue = fitted["pixel"]
                                 if not (fitted["error"] == 0 and blue[2] > 200 and max(blue[:2]) < 20 and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):

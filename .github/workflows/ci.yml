@@ -104,6 +104,21 @@ jobs:
       matrix:
         browser: ${{ inputs.full_platform && fromJSON('["chromium", "firefox", "webkit"]') || fromJSON('["chromium"]') }}
         shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
+        # The macOS runners render these scenes about five times slower than the
+        # Linux ones, so Firefox runs only the engine-contract browser suite,
+        # which is what actually differs between engines. The 108 registered
+        # examples are swept in Chromium and WebKit on Linux.
+        exclude:
+          - browser: firefox
+            shard: "2/6"
+          - browser: firefox
+            shard: "3/6"
+          - browser: firefox
+            shard: "4/6"
+          - browser: firefox
+            shard: "5/6"
+          - browser: firefox
+            shard: "6/6"
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
@@ -128,4 +143,5 @@ jobs:
         if: matrix.shard == '1/6'
         run: python test/browser_rendering.py --browser ${{ matrix.browser }}
       - name: Verify registered examples
+        if: matrix.browser != 'firefox'
         run: python examples/verify_examples_registry.py --browser ${{ matrix.browser }} --shard ${{ matrix.shard }}

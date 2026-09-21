@@ -21,6 +21,9 @@ def main() -> None:
         browser = launch_browser(playwright, args.browser)
         try:
             page = browser.new_page(viewport={"width": 800, "height": 600})
+            # Loading and initialising the exported viewer takes far longer than
+            # Playwright's 30s default on the slower release runners.
+            page.set_default_timeout(120000)
             errors, remote_requests = [], []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("console", lambda message: errors.append(message.text)

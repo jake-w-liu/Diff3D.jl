@@ -28,14 +28,15 @@ ties, a largest timed-gradient error of 3.47e-13, smaller compressed Diff3D
 exports in every fixture, and Diff3D reverse AD ahead of the three.js
 central-difference baseline by 12.9x and 11.7x at 1,024 parameters on the Linux
 runner. Three.js has the lower browser-frame median in all 18 measurements of
-both runs, and is faster than Diff3D reverse AD on the smaller parameter counts.
+both runs, and is faster than Diff3D reverse AD at 64 parameters in every pass.
 The report qualifies each host and claims no general rendering parity or
 superiority.
 
 Julia 1.10 or later in the 1.x series is supported. Release validation runs the
 minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
-and Windows. CPU rendering, soft
-differentiable rendering and browser export have distinct supported scopes.
+and Windows, with browser export checked in Chromium and WebKit on Linux and in
+Firefox on macOS. CPU rendering, soft differentiable rendering and browser
+export have distinct supported scopes.
 Browser export uses WebGL 1 and built-in materials; it does not export Julia
 ShaderMaterial callbacks. The glTF loader rejects required Draco, Meshopt and
 Basis extensions.
