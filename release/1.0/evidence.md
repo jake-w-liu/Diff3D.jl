@@ -682,3 +682,138 @@ Logs: `/tmp/diff3d-1.0-cube-partial-{chromium,firefox,webkit}-after.log`.
 The same three-browser check was rerun on 2026-09-21 from an independently
 created Playwright 1.63.0 environment against the current tree and printed
 `CUBE_UPLOAD_AND_SAMPLING_OK` for each browser.
+
+## R4 — Ubuntu Firefox WebGL context and WebKit fragment precision
+
+Both Ubuntu browser failures recorded in the `c5114d9` release-validation run
+[35497954369](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35497954369)
+now have measured causes. The isolated diagnostic job
+[106049101765](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35499683333/job/106049101765)
+ran on Ubuntu 24.04 (`Linux-6.17.0-1022-azure-x86_64-with-glibc2.39`) and its
+`firefox-context.log` and `webkit-precision.log` artifacts are the evidence
+below.
+
+**VERIFIED — Firefox needs an X display.** Headless Firefox 155.0 with no
+display reported `created: false` and
+`WebGL creation failed: * WebglAllowWindowsNativeGl:false restricts context
+creation on this system. () * Exhausted GL driver options.
+(FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS)`. Forcing the native-GL preference
+produced the same failure through `tryNativeGL`. With an Xvfb display the same
+build created a context in both headless and headful launches, reported renderer
+`llvmpipe, or similar`, and read back the expected `[64, 128, 191, 255]` pixel
+with GL error zero. This is a runner environment requirement, not a defect in
+the export: macOS Firefox 155 passes the same suite without a display. The Linux
+browser jobs now run Firefox under `xvfb-run --auto-servernum`; Chromium and
+WebKit keep their existing headless launch, which the same diagnostic shows is
+sufficient for them. The effect of this workflow change must be confirmed by the
+candidate Ubuntu run.
+
+**VERIFIED — the WebKit UV0 failure is a 10-bit `mediump` fragment precision.**
+On the same runner, WebKit 26.6 reported `MEDIUM_FLOAT precision 10` — the
+OpenGL ES minimum — while `HIGH_FLOAT` reported 23. Against the unchanged baked
+comparison limit of three, the default-precision export measured maximum channel
+error four on `gltf_texture_uv0` (22 pixels over the limit) and on
+`gltf_texture_uv1` (9 pixels over); `gltf_texture_mirrored` measured three. The
+identical fixtures with `highp` forced measured maximum channel error **one**
+with zero pixels over the limit in all three cases. Local macOS WebKit and
+Firefox report 23-bit `mediump` and never reproduced the failure, which is why
+the earlier local probes could not establish this cause.
+
+The exporter now selects its fragment precision from the context instead of
+hard-coding `mediump`: `FRAGMENT_PRECISION` is `precision highp float;` when
+`gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT).precision` is
+positive and `precision mediump float;` otherwise. All seven exported fragment
+shaders — `DFSH`, `PDFSH`, `FSH`, `FSH_EMISSIVE`, `CFSH`, `PFSH` and `SFSH` —
+use it, and `FSH_EMISSIVE` keeps its `#extension` directive on the first line.
+No shader body, uniform, sampler budget or pixel tolerance changed.
+
+A browser regression checks the selection against the context's reported
+formats, requires each of the seven shader sources to declare exactly the
+selected qualifier, and confirms the declaration takes effect by adding a
+uniform `2^-11` to `1.0` in a probe shader: a 10-bit mantissa discards it, a
+wider one preserves it. It fails against any export that hard-codes `mediump` on
+a `highp`-capable context. Local verification on macOS arm64: Chromium 153
+reported `MEDIUM_FLOAT 10 / HIGH_FLOAT 23`, Firefox 155 and WebKit 26.6 reported
+23 for both, and all three selected `precision highp float;` and read the
+expected centre pixel with GL error zero. The complete 72-configuration browser
+suite passed on WebKit 26.6 and Firefox 155 with the new shaders. The Ubuntu
+result remains required from the candidate run.
+
+## R1/R3/R4 — pinned Julia versions and current dependencies
+
+The validation matrices previously used the floating `"1"` alias, which resolved
+to whatever the latest stable Julia was on the day a job ran, so recorded results
+could not be reproduced later. The optimized test matrix, the installed-consumer
+matrix, the browser fixture generator and the documentation build now name
+`1.10` (the minimum in `Project.toml`) and `1.13` (the current stable release)
+explicitly; the comparison workflow already pinned `1.13.0`. The resulting
+runtime/platform group count is unchanged, so `test/check_shards.py --groups`
+keeps its existing values. `Project.toml` still declares `julia = "1.10"`, which
+admits every 1.x release from 1.10 onward.
+
+`"1"` already resolved to Julia 1.13.0 in the runs recorded above, so this change
+pins what was measured rather than adding an untested runtime. Locally, the
+canonical optimized WebGL export unit passed under
+`julia +1.13 --project=. -e 'using Pkg; Pkg.test(test_args=ARGS)' --
+--shard=40/515 --require-optimized` on Julia 1.13.0/macOS arm64, and the browser
+fixture generator produced all 65 fixtures on the same version.
+
+Every dependency resolves to its latest registered version. Checked against the
+General registry after `Pkg.Registry.update()` on 2026-09-21: ColorTypes 0.12.1,
+ForwardDiff 1.4.6, JpegTurbo 0.1.6 and, for the documentation environment,
+Documenter 1.19.0. The declared `[compat]` entries already admitted each of
+these. One transitive package is held below its latest release:
+FixedPointNumbers resolves to 0.8.6 rather than 0.9.1. **VERIFIED** as an
+upstream constraint, not a Diff3D one — the General registry's `Compat.toml`
+records `FixedPointNumbers = "0.8"` for ColorTypes `0.12-0`, Colors `0.13-0` and
+ImageCore `0.9-0`, and `"0.8.2-0.8"` for ColorVectorSpace `0.9.3-0`.
+`ForwardDiff = "0.10, 1"` deliberately keeps the validated 0.10 lower bound; it
+does not prevent the latest 1.x from resolving.
+
+The tracked `docs/Manifest.toml` was re-resolved and updated on Julia 1.13.0, so
+it records `julia_version = "1.13.0"` and the pinned documentation toolchain
+agrees with it. The workflow action versions were raised to their current
+majors — `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7`,
+`actions/upload-artifact@v7`, `actions/download-artifact@v8`,
+`julia-actions/setup-julia@v3` and `julia-actions/cache@v3` — which also clears
+the Node 20 deprecation warnings the earlier runs reported. Python pins moved to
+3.14 and the comparison's Node pin to 26.9.0. These workflow changes are
+unverified until the candidate run executes them.
+
+## R8 — no machine-specific paths in the published tree
+
+A registered package ships every tracked file, so a path from the machine that
+produced a file is neither reproducible nor meaningful to a consumer.
+
+**VERIFIED:** re-resolving the documentation environment with an absolute
+`Pkg.develop` path rewrote the tracked `docs/Manifest.toml` entry for Diff3D
+from `path = ".."` to `path = "/Users/<account>/…/Diff3D.jl"`. Re-developing by
+the repository-relative `".."` restored it, and `docs/Project.toml` now declares
+`[sources] Diff3D = {path = ".."}` so the documentation environment resolves
+without any absolute path. A scan of the tree at that point found the remaining
+offenders only in the superseded `284eadd` comparison record and its archive:
+the comparison harness recorded each command's absolute `argv`, and
+`projection.jl` recorded `package_source` as `realpath(pkgdir(Diff3D))`.
+
+`benchmarks/threejs/run.py` now records commands through `portable_argument`,
+which rewrites output-directory and repository prefixes to `<output>` and
+`<repo>` and reduces any other absolute path to its program name, and refuses to
+record a command if any argument is still absolute. The output directory is
+substituted first because it can live inside the repository.
+`projection.jl` records the checkout-relative package location instead; the
+existing check that Diff3D was loaded from the recorded checkout is unchanged.
+`benchmarks/threejs/test_run_record.py` passed all 6 cases, covering both
+output-inside-repository and output-outside-repository layouts.
+
+`test/check_no_local_paths.py` scans every tracked file, and every member of
+every tracked `.tar.gz`, for home directories and per-machine temporary roots on
+Linux, macOS and Windows. Its own tests (`test/test_check_no_local_paths.py`,
+7 cases) check that portable text such as `path = ".."`, `<repo>`, `<output>`,
+`/usr/bin/python3` and a generic `/tmp/diff3d-comparison` example is accepted,
+that binary payloads are skipped, that untracked files are ignored and that both
+a tracked file and an archive member are reported with their line numbers. Run
+against the tree before the comparison was regenerated, the guard reported 70
+paths, all in `release/1.0/comparison/2026-09-20-284eadd-run.json` and inside
+`2026-09-20-284eadd.tar.gz` (`run.json`, `projection-diff3d-1.toml`,
+`projection-diff3d-2.toml`). The other two committed archives were already
+clean. The guard runs as its own CI job on every push and pull request.

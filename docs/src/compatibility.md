@@ -155,9 +155,13 @@ renderer dispatch and generated browser JavaScript are not plugin interfaces.
 
 ## Platform and validation policy
 
-The 1.0 release validation targets the minimum Julia version in `Project.toml`
-and the latest stable Julia on Linux, macOS, and Windows. Browser export is
-validated with Chromium, Firefox, and WebKit; a working WebGL context is required.
+Diff3D 1.x supports Julia 1.10 and later in the 1.x series, as declared in
+`Project.toml`. The 1.0 release validation runs the minimum supported version,
+Julia 1.10, and the current stable release, Julia 1.13, on Linux, macOS, and
+Windows. Both versions are pinned in the workflows so recorded evidence names an
+exact runtime; a newer stable Julia is added to the matrix rather than replacing
+a supported version silently. Browser export is validated with Chromium, Firefox,
+and WebKit; a working WebGL context is required.
 Browser engine tests do not certify every device, GPU driver, or vendor browser
 build. Release evidence records the exact environments exercised.
 

@@ -18,25 +18,26 @@ jobs:
       statuses: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: '1'
-      - uses: julia-actions/cache@v2
+          version: '1.13'
+      - uses: julia-actions/cache@v3
       - name: Install dependencies
+        # docs/Project.toml declares the package through a repository-relative
+        # source, so no absolute development path is written into the checkout.
         shell: julia --color=yes --project=docs {0}
         run: |
           using Pkg
-          Pkg.develop(PackageSpec(path=pwd()))
           Pkg.instantiate()
       - name: Build and deploy
         run: julia --project=docs docs/make.jl
         env:
           DOCUMENTER_DEPLOY: ${{ github.event_name == 'push' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: documentation-${{ github.sha }}
           path: docs/build/

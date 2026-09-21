@@ -12,16 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: "1.13.0"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "26.5.0"
-      - uses: actions/setup-python@v5
+          node-version: "26.9.0"
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install comparison dependencies
         run: |
           julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate()'
@@ -30,9 +30,11 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Verify independent pixel oracle
         run: python benchmarks/threejs/test_browser_oracle.py
+      - name: Verify portable command recording
+        run: python benchmarks/threejs/test_run_record.py
       - name: Verify matched outputs and retain both measurement orders
         run: python benchmarks/threejs/run.py benchmarks/threejs/results --browser chromium
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: comparison-${{ github.sha }}

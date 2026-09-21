@@ -58,5 +58,10 @@ libraries, use `python -m playwright install --with-deps chromium`.
 ## CI Coverage
 
 - `.github/workflows/ci.yml` runs package tests on the minimum supported Julia
-  release and the latest stable Julia release, plus the full registered-example
-  browser smoke sweep through `examples/verify_examples_registry.py`.
+  release (1.10) and the current stable release (1.13), plus the full
+  registered-example browser smoke sweep through
+  `examples/verify_examples_registry.py`. Both versions are named explicitly so
+  a recorded result stays reproducible after a newer stable Julia appears.
+- `test/check_no_local_paths.py` rejects machine-specific filesystem paths in
+  every tracked file and inside every tracked evidence archive, because a
+  registered package ships all of them.

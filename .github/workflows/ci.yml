@@ -25,6 +25,20 @@ defaults:
     shell: bash
 
 jobs:
+  published-tree:
+    name: Published tree hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Verify the path guard
+        run: python test/test_check_no_local_paths.py
+      - name: Reject machine-specific paths in the published package tree
+        run: python test/check_no_local_paths.py
+
   package-tests:
     name: Optimized tests (${{ matrix.os }}, Julia ${{ matrix.julia }}, shard ${{ matrix.shard }}/6)
     runs-on: ${{ matrix.os }}
@@ -33,11 +47,11 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ inputs.full_platform && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        julia: ["1.10", "1"]
+        julia: ["1.10", "1.13"]
         shard: [1, 2, 3, 4, 5, 6]
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.julia }}
       - name: Instantiate package environment
@@ -49,7 +63,7 @@ jobs:
       - name: Verify concurrent rendering
         if: matrix.shard == 1
         run: julia --project=. --threads=4 -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: native-${{ matrix.os }}-${{ matrix.julia }}-${{ matrix.shard }}
@@ -62,13 +76,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Verify coverage validator
         run: python test/test_check_shards.py
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: test-results
@@ -81,6 +95,9 @@ jobs:
     timeout-minutes: 120
     env:
       PYTHONUNBUFFERED: "1"
+      # Firefox refuses to create a WebGL context without an X display on the
+      # Linux runners; Chromium and WebKit keep their existing headless setup.
+      XVFB: ${{ matrix.browser == 'firefox' && 'xvfb-run --auto-servernum' || '' }}
     # Split example generation and browser checks across six runners.
     strategy:
       fail-fast: false
@@ -88,13 +105,13 @@ jobs:
         browser: ${{ inputs.full_platform && fromJSON('["chromium", "firefox", "webkit"]') || fromJSON('["chromium"]') }}
         shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: "1"
-      - uses: actions/setup-python@v5
+          version: "1.13"
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Instantiate package environment
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Install Playwright
@@ -103,8 +120,9 @@ jobs:
           python -m pip install -r test/requirements-browser.txt
           sudo grep -rl "packages.microsoft.com" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | xargs -r sudo rm -f
           python -m playwright install --with-deps ${{ matrix.browser }}
+          if [ -n "$XVFB" ]; then sudo apt-get install -y --no-install-recommends xvfb; fi
       - name: Verify browser rendering pixels
         if: matrix.shard == '1/6'
-        run: python test/browser_rendering.py --browser ${{ matrix.browser }}
+        run: $XVFB python test/browser_rendering.py --browser ${{ matrix.browser }}
       - name: Verify registered examples
-        run: python examples/verify_examples_registry.py --browser ${{ matrix.browser }} --shard ${{ matrix.shard }}
+        run: $XVFB python examples/verify_examples_registry.py --browser ${{ matrix.browser }} --shard ${{ matrix.shard }}
