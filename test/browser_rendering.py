@@ -349,6 +349,63 @@ def verify_cube_texture_storage(page) -> None:
             raise AssertionError(f"Cube texture upload/sampling: {result}")
 
 
+# The orbit fixture reads the centre of the fitted view twice: once after the
+# case is reset and once after the zoom sequence returns to it. Both waits must
+# track presented frames rather than the clock, and both must report enough
+# state to diagnose a failure without another CI round trip.
+ORBIT_CENTRE_PROBE = """async () => {
+    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),d=window.__diff3dDebug;
+    const block=9;
+    const read=()=>{
+        const p=new Uint8Array(4*block*block); gl.finish();
+        gl.readPixels(Math.floor(c.width/2)-(block>>1),Math.floor(c.height/2)-(block>>1),
+                      block,block,gl.RGBA,gl.UNSIGNED_BYTE,p);
+        let blue=0, worstOther=0, sample=null;
+        for(let i=0;i<block*block;i++){
+            const r=p[4*i],g=p[4*i+1],b=p[4*i+2];
+            if(i===(block*block>>1)) sample=[r,g,b];
+            if(b>200&&Math.max(r,g)<20) blue++; else worstOther=Math.max(worstOther,b);
+        }
+        return {blue,worstOther,sample};
+    };
+    let state=read(), frames=0;
+    while(state.blue<block*block && frames<120){
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        frames++; state=read();
+    }
+    let census=null;
+    if(state.blue<block*block){
+        const all=new Uint8Array(4*c.width*c.height); gl.finish();
+        gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
+        let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
+        const cols=16,rows=10,map=Array.from({length:rows},()=>new Array(cols).fill(0));
+        const seen={};
+        for(let y=0;y<c.height;y++) for(let x=0;x<c.width;x++){
+            const i=4*(y*c.width+x), r=all[i],g=all[i+1],b=all[i+2];
+            const key=r+','+g+','+b; seen[key]=(seen[key]||0)+1;
+            if(b>200&&Math.max(r,g)<20){
+                n++; sx+=x; sy+=y;
+                if(x<minX)minX=x; if(x>maxX)maxX=x;
+                if(y<minY)minY=y; if(y>maxY)maxY=y;
+                map[Math.min(rows-1,Math.floor(y*rows/c.height))][Math.min(cols-1,Math.floor(x*cols/c.width))]++;
+            }
+        }
+        census={bluePixels:n,fraction:+(n/(c.width*c.height)).toFixed(4),
+                box:n?[minX,minY,maxX,maxY]:null,centroid:n?[Math.round(sx/n),Math.round(sy/n)]:null,
+                topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4),
+                map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
+    }
+    return {pixel:state.sample,blue:state.blue,of:block*block,census,
+            worstOther:state.worstOther,frames,error:gl.getError(),
+            dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
+            clip:d.clipPlanes(),targetOffset:d.targetOffset(),
+            objects:d.activeObjectCount(),draws:d.activeDrawItemCount(),views:d.activeViewCount(),
+            canvas:[c.width,c.height],dpr:window.devicePixelRatio,
+            rect:[Math.round(c.getBoundingClientRect().width),
+                  Math.round(c.getBoundingClientRect().height)]};
+}"""
+
+
 def select_render_case(page, case_id: str) -> None:
     page.evaluate("""id => {
         const button=document.querySelector('button[data-case="'+id+'"]');
@@ -735,65 +792,7 @@ def main() -> None:
                                 # Wait for presented frames rather than a fixed delay: a slow
                                 # host can take longer than any wall-clock guess to draw the
                                 # reset view, and reading early returns an undrawn buffer.
-                                fitted = page.evaluate("""async () => {
-                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),d=window.__diff3dDebug;
-                                    // Sample a small block: the fitted plane covers the middle of
-                                    // the view, so a single pixel would make this fixture hostage
-                                    // to one sample while proving nothing extra.
-                                    const block=9;
-                                    const read=()=>{
-                                        const p=new Uint8Array(4*block*block); gl.finish();
-                                        gl.readPixels(Math.floor(c.width/2)-(block>>1),Math.floor(c.height/2)-(block>>1),
-                                                      block,block,gl.RGBA,gl.UNSIGNED_BYTE,p);
-                                        let blue=0, worstOther=0, sample=null;
-                                        for(let i=0;i<block*block;i++){
-                                            const r=p[4*i],g=p[4*i+1],b=p[4*i+2];
-                                            if(i===(block*block>>1)) sample=[r,g,b];
-                                            if(b>200&&Math.max(r,g)<20) blue++; else worstOther=Math.max(worstOther,b);
-                                        }
-                                        return {blue,worstOther,sample};
-                                    };
-                                    let state=read(), frames=0;
-                                    while(state.blue<block*block && frames<120){
-                                        await new Promise(resolve => requestAnimationFrame(resolve));
-                                        frames++; state=read();
-                                    }
-                                    // On failure, census the whole frame: whether the plane is
-                                    // drawn at all, and where, is the thing a centre sample cannot say.
-                                    let census=null;
-                                    if(state.blue<block*block){
-                                        const all=new Uint8Array(4*c.width*c.height); gl.finish();
-                                        gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
-                                        let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
-                                        const cols=16,rows=10,map=Array.from({length:rows},()=>new Array(cols).fill(0));
-                                        const seen={};
-                                        for(let y=0;y<c.height;y++) for(let x=0;x<c.width;x++){
-                                            const i=4*(y*c.width+x), r=all[i],g=all[i+1],b=all[i+2];
-                                            const key=r+','+g+','+b; seen[key]=(seen[key]||0)+1;
-                                            if(b>200&&Math.max(r,g)<20){
-                                                n++; sx+=x; sy+=y;
-                                                if(x<minX)minX=x; if(x>maxX)maxX=x;
-                                                if(y<minY)minY=y; if(y>maxY)maxY=y;
-                                                map[Math.min(rows-1,Math.floor(y*rows/c.height))][Math.min(cols-1,Math.floor(x*cols/c.width))]++;
-                                            }
-                                        }
-                                        const colours=Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4);
-                                        census={bluePixels:n,fraction:+(n/(c.width*c.height)).toFixed(4),
-                                                box:n?[minX,minY,maxX,maxY]:null,
-                                                centroid:n?[Math.round(sx/n),Math.round(sy/n)]:null,
-                                                topColours:colours,
-                                                map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
-                                    }
-                                    return {pixel:state.sample,blue:state.blue,of:block*block,census,
-                                            worstOther:state.worstOther,frames,error:gl.getError(),
-                                            dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
-                                            clip:d.clipPlanes(),targetOffset:d.targetOffset(),
-                                            objects:d.activeObjectCount(),draws:d.activeDrawItemCount(),
-                                            views:d.activeViewCount(),
-                                            canvas:[c.width,c.height],dpr:window.devicePixelRatio,
-                                            rect:[Math.round(c.getBoundingClientRect().width),
-                                                  Math.round(c.getBoundingClientRect().height)]};
-                                }""")
+                                fitted = page.evaluate(ORBIT_CENTRE_PROBE)
                                 if not (fitted["error"] == 0 and fitted["blue"] == fitted["of"]
                                         and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
                                     raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped or not fitted {fitted}")
@@ -829,29 +828,7 @@ def main() -> None:
                                 # Same rule as the fitted check above: the zoom sequence ends with
                                 # ~1,400 wheel events, so wait for presented frames rather than a
                                 # fixed delay, and sample a block instead of one pixel.
-                                restored = page.evaluate("""async () => {
-                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl');
-                                    const block=9;
-                                    const read=()=>{
-                                        const p=new Uint8Array(4*block*block); gl.finish();
-                                        gl.readPixels(Math.floor(c.width/2)-(block>>1),Math.floor(c.height/2)-(block>>1),
-                                                      block,block,gl.RGBA,gl.UNSIGNED_BYTE,p);
-                                        let blue=0, sample=null;
-                                        for(let i=0;i<block*block;i++){
-                                            const r=p[4*i],g=p[4*i+1],b=p[4*i+2];
-                                            if(i===(block*block>>1)) sample=[r,g,b];
-                                            if(b>200&&Math.max(r,g)<20) blue++;
-                                        }
-                                        return {blue,sample};
-                                    };
-                                    let state=read(), frames=0;
-                                    while(state.blue<block*block && frames<120){
-                                        await new Promise(resolve => requestAnimationFrame(resolve));
-                                        frames++; state=read();
-                                    }
-                                    return {pixel:state.sample,blue:state.blue,of:block*block,frames,
-                                            error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
-                                }""")
+                                restored = page.evaluate(ORBIT_CENTRE_PROBE)
                                 if not (restored["error"] == 0 and restored["blue"] == restored["of"]):
                                     raise AssertionError(f"{name} at {width}x{height}: view restored after zooming is clipped {restored}")
                                 # Every orbit assertion above raises on failure, so reaching here
