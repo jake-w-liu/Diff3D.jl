@@ -70,9 +70,10 @@ same step, `1e-5`. All initial, warmup and timed gradients are checked, with the
 timed-result check outside the clock.
 
 Both runs agree exactly on accuracy. The largest timed-gradient absolute error
-was **3.47e-13** across all 32 method/size/pass records of each run, and all four
-methods recovered the 16 known depths within **5.00e-11** after the same 1,000
-updates.
+was **3.47e-13** across all 32 method/size/pass records of each run. In the
+16-parameter problem, which is the one that also requires recovery, all four
+methods reached the known depths within **5.00e-11** after the same 1,000
+gradient-descent updates, in both passes of both runs.
 
 The three.js baseline uses its public Matrix4/Vector3 operations plus explicit
 central differences. A hand-derived gradient or another JavaScript AD system
