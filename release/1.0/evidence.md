@@ -808,10 +808,12 @@ output-inside-repository and output-outside-repository layouts.
 `test/check_no_local_paths.py` scans every tracked file, and every member of
 every tracked `.tar.gz`, for home directories and per-machine temporary roots on
 Linux, macOS and Windows. Its own tests (`test/test_check_no_local_paths.py`,
-7 cases) check that portable text such as `path = ".."`, `<repo>`, `<output>`,
+8 cases) check that portable text such as `path = ".."`, `<repo>`, `<output>`,
 `/usr/bin/python3` and a generic `/tmp/diff3d-comparison` example is accepted,
-that binary payloads are skipped, that untracked files are ignored and that both
-a tracked file and an archive member are reported with their line numbers. Run
+that binary payloads are skipped, that untracked files are ignored, that both
+a tracked file and an archive member are reported with their line numbers, and
+that the `SELF` exemption covers exactly the guard and its own tests while a
+third file with identical contents is still reported. Run
 against the tree before the comparison was regenerated, the guard reported 70
 paths, all in `release/1.0/comparison/2026-09-20-284eadd-run.json` and inside
 `2026-09-20-284eadd.tar.gz` (`run.json`, `projection-diff3d-1.toml`,
@@ -889,7 +891,7 @@ superseded `284eadd` record:
   Chromium 153.0.8010.12 with the ANGLE/SwiftShader software renderer.
 - **macOS / Firefox**, revision `8cec4f2`, run locally from a clean checkout.
   Julia 1.13.0, ForwardDiff 1.4.6, Node 26.5.0, Firefox 155.0 on an Apple GPU,
-  with load 28.72 falling to 27.06 on 10 CPUs.
+  with load 28.75 falling to 27.08 on 10 CPUs.
 
 Both reported `status = passed` with 42 hashed raw files, all 32 numerical
 records and all 18 browser pairs. Both measured a largest timed-gradient error
@@ -904,12 +906,17 @@ macOS; three.js had the lower browser-frame median in all 18 measurements of
 both runs, and was faster than Diff3D reverse AD at 64 parameters in every pass.
 Unfavourable results are published alongside the favourable ones.
 
-**VERIFIED:** the measured source is unchanged between those revisions and the
-final candidate. `git diff --stat 017289a HEAD -- src/ benchmarks/threejs/*.jl
-benchmarks/threejs/*.py benchmarks/threejs/*.mjs benchmarks/threejs/package.json`
-is empty, and the only difference under `benchmarks/` since `8cec4f2` is prose in
-its README. The later commits change workflows, documentation and evidence only,
-so both comparison records remain valid for this candidate.
+**VERIFIED:** every program that produced these measurements is unchanged
+between those revisions and the final candidate. `git diff --name-status 017289a
+HEAD -- src/ benchmarks/` reports exactly three entries: `benchmarks/threejs/README.md`
+(prose), the added `benchmarks/threejs/summarize.py`, and the extended
+`benchmarks/threejs/test_run_record.py`. The first is documentation; the second
+only derives statistics from files a completed run already wrote; the third is a
+unit test. Since `8cec4f2` the only change under `benchmarks/` is that README.
+Nothing under `src/`, and no fixture generator, driver, harness or dependency pin
+that a measurement executes, differs — so both comparison records remain valid
+for this candidate. The later commits change workflows, documentation, evidence
+and the browser harness only.
 
 `benchmarks/threejs/summarize.py` derives each published statistics file from the
 retained raw files. **VERIFIED:** re-deriving the superseded `284eadd` summary
@@ -987,3 +994,59 @@ The repaired fixture passes locally in Chromium 153, Firefox 155 and WebKit 26.6
 Playwright's default timeout while the other harnesses set 120 seconds
 explicitly; the consumer check now sets the same 120-second default. Its pixel
 and error assertions are unchanged.
+
+## R8 — independent audit of the candidate, and the corrections it forced
+
+An eight-dimension review of `39a59cc` ran 92 agents over the exporter change,
+the workflows, the browser harness, the path guard, the comparison harness, every
+published claim, registry packaging and the Julia 1.13 coverage. Each candidate
+finding was then put to three independent verifiers instructed to refute it; 15
+of 28 survived. The corrections they forced are recorded here because several
+contradict statements this file previously made.
+
+**Corrected — the `orbit_zoom_limits` root cause was stated too early.** This
+file previously recorded as VERIFIED that the failure was an undrawn buffer
+caused by the fixed 300 ms wait, and that polling presented frames repaired it.
+The candidate run
+[35565028839](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35565028839)
+refutes that: with the frame-polling fix in place the same configuration failed
+with `{'pixel': [3, 3, 3], 'frames': 120, 'error': 0, 'dist': 2200}`. The
+`frames: 120` field proves the bound was exhausted with the centre pixel still at
+the clear colour, so the wall-clock wait was at most a contributing factor and
+not the cause. The earlier claim should not have been labelled VERIFIED before a
+passing run existed. What is established: `[3, 3, 3]` is exactly the scene
+background `Color3(0.01, 0.01, 0.01)`, `setCase` restores the camera correctly
+(`dist` exactly 2200, pitch `asin(825/2200)`), and the same fixture passes in
+Chromium 153, Firefox 155 and WebKit 26.6 locally. The check now reports the
+viewer's full state on failure so the cause can be measured rather than inferred.
+
+**Corrected — cancelled runs were reported as failures.** `native-coverage` used
+`if: always()`, which GitHub evaluates as true for a cancelled run as well. A
+cancelled run therefore still started that job, which downloaded no shard
+artifacts and exited with
+`ValueError: reports, a positive group count, and a revision are required`,
+turning a cancelled run into a red failure; the `if: always()` upload steps
+likewise emitted `if-no-files-found` errors on cancelled jobs. All four
+conditions are now `${{ !cancelled() }}`, which keeps the intended behaviour of
+still running when a shard genuinely fails. This is what produced the
+"3 successful, 18 cancelled" check banner on the candidate commit.
+
+**Corrected — cross-renderer determinism is not engine-specific.** The report
+said the three 16-mesh Diff3D first-frame buffers were byte-identical across the
+Apple GPU and SwiftShader while "all nine three.js buffers" differed. Hashing the
+committed summaries shows three.js is byte-identical on exactly the same three
+fixtures, so this is a property of the small fixtures, not of either engine.
+
+**Corrected — three quantitative slips.** The published macOS load averages were
+28.72/27.06 against 28.74951171875/27.08056640625 in the committed run record;
+they now read 28.75/27.08. "Both runs agree exactly on accuracy" was too strong —
+the worst-case figures agree exactly, but 22 per-record losses and 6 gradient
+errors differ between the runs; the wording now says so. The path guard's test
+file was described as 7 cases when it has 8, and the description omitted the
+`SELF` exemption test.
+
+**Checked and dismissed.** One surviving finding claimed each comparison archive
+holds 86 members, half of them macOS AppleDouble `._*` sidecars. Direct
+inspection refutes it: `tar tzf` reports exactly 43 members for each of the two
+comparison archives and `grep -c '\._'` reports zero. The published "43 files"
+counts are correct.

@@ -64,7 +64,7 @@ jobs:
         if: matrix.shard == 1
         run: julia --project=. --threads=4 -e 'include("test/tiled_cache_ownership.jl"); include("test/render_cache_lifetimes.jl")'
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: ${{ !cancelled() }}
         with:
           name: native-${{ matrix.os }}-${{ matrix.julia }}-${{ matrix.shard }}
           path: test-results/*.toml
@@ -73,7 +73,10 @@ jobs:
   native-coverage:
     name: Complete optimized test coverage
     needs: package-tests
-    if: always()
+    # Not always(): that is true for a cancelled run too, so the job would start
+    # with no shard artifacts to validate and report a failure for a run nobody
+    # let finish. !cancelled() still runs it when a shard genuinely failed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

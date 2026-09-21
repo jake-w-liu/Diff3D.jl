@@ -14,8 +14,8 @@ rendering superiority or three.js parity.
 
 **Measurement qualification:** the Linux runner had a one-minute load average of
 1.63 at the start and 3.63 at the end on 4 logical CPUs, and is the more reliable
-timing environment. The macOS host was shared and busy, with load 28.72 falling
-to 27.06 on 10 logical CPUs; its percentiles are correspondingly wide and it is
+timing environment. The macOS host was shared and busy, with load 28.75 falling
+to 27.08 on 10 logical CPUs; its percentiles are correspondingly wide and it is
 published for its hardware renderer and for its second engine, not for precise
 timing. Reversing execution order exposes substantial variation on both. Treat
 the numbers as observations of these runs, not isolated-machine guarantees.
@@ -69,8 +69,11 @@ gradient independently of either implementation. Central differences use the
 same step, `1e-5`. All initial, warmup and timed gradients are checked, with the
 timed-result check outside the clock.
 
-Both runs agree exactly on accuracy. The largest timed-gradient absolute error
-was **3.47e-13** across all 32 method/size/pass records of each run. In the
+Both runs meet the same accuracy bounds, and their worst cases agree exactly:
+the largest timed-gradient absolute error was **3.47e-13** across all 32
+method/size/pass records of each run. The per-record losses and gradient errors
+are not bit-identical between the two runs, as different hardware and Julia
+builds reorder floating-point work. In the
 16-parameter problem, which is the one that also requires recovery, all four
 methods reached the known depths within **5.00e-11** after the same 1,000
 gradient-descent updates, in both passes of both runs.
@@ -157,8 +160,10 @@ edge colors and shifted or corrupted images. In the three 16-mesh fixtures
 Diff3D's first-frame buffers were byte-identical on both the Apple GPU and
 SwiftShader — `static-16` hashed to `482ffcd625d56300...` in each — so those
 exports are bit-deterministic across the two renderers rather than merely within
-tolerance. The 128- and 512-mesh Diff3D buffers, and all nine three.js buffers,
-differ between the renderers while staying inside the permitted band.
+tolerance. Three.js behaves the same way on those three fixtures, so this is a
+property of the small fixtures rather than of either engine. The 128- and
+512-mesh buffers of both engines differ between the renderers while staying
+inside the permitted band.
 
 The [earlier subpixel counterexample](comparison/2026-09-20-chromium-subpixel.tar.gz)
 and [Chromium replay](comparison/2026-09-20-chromium-replay.tar.gz) archives

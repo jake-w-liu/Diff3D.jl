@@ -35,7 +35,7 @@ jobs:
       - name: Verify matched outputs and retain both measurement orders
         run: python benchmarks/threejs/run.py benchmarks/threejs/results --browser chromium
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: ${{ !cancelled() }}
         with:
           name: comparison-${{ github.sha }}
           path: benchmarks/threejs/results/
