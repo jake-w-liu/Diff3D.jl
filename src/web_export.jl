@@ -4525,6 +4525,9 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
       }
       if(complete){
         mipCount=count;
+        // A supplied prefix still needs a complete WebGL 1 storage pyramid.
+        // Generate missing levels first so authored pixels survive the uploads.
+        if(mipCount<Math.floor(Math.log2(first.width))) gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
         for(let level=1;level<=mipCount;level++){
           for(let i=0;i<6;i++){
             const m=env.faces[i].mipmaps[level-1];

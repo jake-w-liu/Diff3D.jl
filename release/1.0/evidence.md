@@ -650,3 +650,35 @@ The complete local WebKit browser suite then passed all 72 configurations,
 including the new cube upload/sampling check and all unchanged baked-image,
 instancing-fallback, resource and shader-location checks. Log:
 `/tmp/diff3d-1.0-cube-webkit-fixtures.log`.
+
+## R4 — partial power-of-two cube mip chains
+
+**VERIFIED:** at `4ca753f`, WebKit 26.6 sampling of a valid but incomplete
+authored cube chain returned `[0, 0, 0, 255]` with no GL error. The recorded
+probe (`/tmp/diff3d-1.0-cube-partial-chain-before.log`, replayed in
+`/tmp/diff3d-1.0-cube-partial-chain-before-replay.log`) shows a 4×4 cube missing
+its 1×1 level and an 8×8 cube missing its 1×1 level both sampling black, while
+the same base cubes with no authored levels sample `[31, 63, 127, 255]`.
+`makeCubeTexture` accepted the validated prefix and uploaded only those levels,
+leaving the texture mipmap-incomplete under `LINEAR_MIPMAP_LINEAR` minification.
+
+The uploader now generates the physical pyramid from the base before writing the
+authored levels whenever the validated prefix is shorter than
+`floor(log2(width))`. Authored pixels overwrite the generated prefix and the
+reported maximum LOD still stops at the last authored level, so explicit
+environment LOD is unchanged. Complete chains skip generation entirely; NPOT
+cubes keep their just-verified base-only behavior. No serialized data, public
+API or pixel tolerance changed. The backend rule is documented in the
+compatibility contract.
+
+The browser regression now covers face sizes 1, 3, 4, 8 and 12 with empty,
+complete and partial chains, checking actual upload levels, maximum LOD, cached
+object reuse, GL errors, high-bias sampling of the last physical level and
+bias-one sampling of a supplied level. It fails against the frozen `4ca753f`
+export (`/tmp/diff3d-1.0-cube-partial-regression-before.log`: the 4×4 partial
+case reported all-black supplied and physical samples) and passes all fifteen
+configurations in Chromium 153, Firefox 155 and WebKit 26.6 on macOS arm64.
+Logs: `/tmp/diff3d-1.0-cube-partial-{chromium,firefox,webkit}-after.log`.
+The same three-browser check was rerun on 2026-09-21 from an independently
+created Playwright 1.63.0 environment against the current tree and printed
+`CUBE_UPLOAD_AND_SAMPLING_OK` for each browser.

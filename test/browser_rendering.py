@@ -211,7 +211,7 @@ def verify_cube_texture_storage(page) -> None:
         let samplingProgram=null;
         try {
             samplingProgram=program('void main(){ gl_Position=vec4(0.0,0.0,0.0,1.0); gl_PointSize=4.0; }',
-                'precision mediump float; uniform samplerCube uCube; void main(){ gl_FragColor=textureCube(uCube,vec3(1.0,gl_PointCoord*2.0-1.0),16.0); }');
+                'precision mediump float; uniform samplerCube uCube; uniform float uBias; void main(){ gl_FragColor=textureCube(uCube,vec3(1.0,gl_PointCoord*2.0-1.0),uBias); }');
             gl.bindTexture(gl.TEXTURE_2D,output);
             gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,4,4,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
             gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
@@ -223,24 +223,33 @@ def verify_cube_texture_storage(page) -> None:
             gl.colorMask(true,true,true,true); gl.viewport(0,0,4,4);
             gl.useProgram(samplingProgram); gl.uniform1i(uniformLocation(samplingProgram,'uCube'),0);
             const results=[];
-            for(const size of [1,3,4,12]) for(const authored of [false,true]){
+            for(const size of [1,3,4,8,12]) for(const chain of ['none','complete','partial']){
                 const face=(width,color)=>({width,height:width,
                     data:Array.from({length:width*width},()=>color).flat(),
                     minFilter:'linear_mipmap_linear',magFilter:'nearest'});
                 const env={faces:Array.from({length:6},()=>{
                     const result=face(size,[31,63,127,255]); result.mipmaps=[];
-                    if(authored) for(let width=size>>1;width;width>>=1)
+                    if(chain!=='none') for(let width=size>>1;width;width>>=1)
                         result.mipmaps.push(face(width,[93,127,191,255]));
+                    if(chain==='partial') result.mipmaps.pop();
                     return result;
                 })};
                 const levels=[];
                 gl.texImage2D=function(...args){ levels.push(args[1]); return upload.apply(this,args); };
                 const result=makeCubeTexture(env); textures.push(result.texture);
                 gl.texImage2D=upload;
+                gl.uniform1f(uniformLocation(samplingProgram,'uBias'),16);
                 gl.drawArrays(gl.POINTS,0,1);
                 const pixels=new Uint8Array(4*4*4);
                 gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
-                results.push({size,authored,maxLod:result.maxLod,levels,pixels:Array.from(pixels),
+                // On a 4-pixel point, bias one selects LOD log2(size)-1:
+                // the last supplied level in the partial 4x4 and 8x8 chains.
+                gl.uniform1f(uniformLocation(samplingProgram,'uBias'),1);
+                gl.drawArrays(gl.POINTS,0,1);
+                const supplied=new Uint8Array(4*4*4);
+                gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,supplied);
+                results.push({size,chain,maxLod:result.maxLod,levels,pixels:Array.from(pixels),
+                              supplied:Array.from(supplied),
                               reused:makeCubeTexture(env)===result,error:gl.getError()});
             }
             return results;
@@ -260,11 +269,16 @@ def verify_cube_texture_storage(page) -> None:
         }
     }""")
     for result in results:
-        mipmapped = result["size"] == 4
-        levels = [0]*6 + ([1]*6 + [2]*6 if mipmapped and result["authored"] else [])
-        pixel = [93, 127, 191, 255] if mipmapped and result["authored"] else [31, 63, 127, 255]
-        if (result["maxLod"] != (2 if mipmapped else 0) or result["levels"] != levels
-                or result["pixels"] != pixel*16 or not result["reused"] or result["error"]):
+        full_lod = {1: 0, 4: 2, 8: 3}.get(result["size"], 0)
+        authored_lod = (full_lod if result["chain"] == "complete" else
+                        max(0, full_lod-1) if result["chain"] == "partial" else 0)
+        levels = [level for level in range(authored_lod+1) for _ in range(6)]
+        base, authored = [31, 63, 127, 255], [93, 127, 191, 255]
+        pixel = authored if authored_lod and authored_lod == full_lod else base
+        supplied = authored if authored_lod else base
+        if (result["maxLod"] != (authored_lod or full_lod) or result["levels"] != levels
+                or result["pixels"] != pixel*16 or result["supplied"] != supplied*16
+                or not result["reused"] or result["error"]):
             raise AssertionError(f"Cube texture upload/sampling: {result}")
 
 

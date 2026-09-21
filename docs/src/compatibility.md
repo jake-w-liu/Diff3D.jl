@@ -50,6 +50,10 @@ WebGL 1 textures whose dimensions are not powers of two use clamp-to-edge
 wrapping and base-level nearest or linear filtering. Exported cube maps follow
 the same restriction: their authored mipmaps are not uploaded and their maximum
 LOD is zero. Use power-of-two faces for mipmapped browser environment maps.
+For a partial power-of-two authored chain, the exporter fills the physical mip
+pyramid from the base before uploading the authored levels. Explicit environment
+LOD remains capped at the last authored level; automatic minification can reach
+the generated tail. Supply a complete chain to author every sampled level.
 
 Cache call forms are `render!(target, scene, camera; cache=RenderCache())`,
 `render_pooled!(target, scene, camera, RenderCache())`, and
