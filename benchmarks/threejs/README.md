@@ -91,6 +91,17 @@ reduces the effect of browser clock quantization. The measurement includes the
 shared callback/draw instrumentation and completion checks. It is not an
 asynchronous GPU enqueue measurement or a monitor-refresh FPS estimate.
 
+`summarize.py` derives the published statistics file from a completed output
+directory: it keeps the identities, accuracy results, environments and resource
+counts, and replaces each raw sample array with its sample count, minimum,
+median, nearest-rank 95th percentile and maximum. It reads only the retained raw
+files and measures nothing itself, so the published numbers stay checkable
+against the archive.
+
+Recorded commands use `<repo>` and `<output>` placeholders instead of absolute
+paths, and the harness refuses to record a command whose arguments would still
+name this machine's filesystem layout.
+
 Publish both passes and unfavorable cases with their raw files. Ratios apply to
 the measured fixture, derivative method, backend and machine; they do not
 establish overall feature parity or universal superiority.

@@ -13,11 +13,13 @@ public API and the supported behavior of each rendering backend. The
 Use the documentation for the package version you install.
 
 The [measured comparison with three.js](release/1.0/comparison.md) records native
-gradient timings, browser frames, startup and artifact sizes, including both
-execution orders and the raw evidence. Diff3D's advantages in those fixtures are
-Julia differentiation and smaller compressed standalone exports. Three.js had
-lower browser-frame medians in 17 of 18 measurements; the shared-host timings
-do not establish general rendering superiority.
+gradient timings, browser frames, startup and artifact sizes from two matched
+runs — a Linux runner with software rendering and a macOS host with a hardware
+GPU — including both execution orders and the raw evidence. Diff3D's advantages
+in those fixtures are Julia differentiation at larger parameter counts and
+smaller compressed standalone exports. Three.js had the lower browser-frame
+median in all 18 measurements of both runs; these results do not establish
+general rendering superiority for either engine.
 
 ## Installation
 

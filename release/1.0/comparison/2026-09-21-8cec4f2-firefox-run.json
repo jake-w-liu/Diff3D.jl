@@ -1,0 +1,191 @@
+{
+  "status": "passed",
+  "revision": "8cec4f2a56460c122e157d16a82527c11b2e09c3",
+  "dirty": false,
+  "os": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "arch": "arm64",
+  "cpu_count": 10,
+  "load_average_start": [
+    28.74951171875,
+    29.66015625,
+    31.46337890625
+  ],
+  "started_unix_seconds": 1789963930.118779,
+  "commands": [
+    {
+      "name": "fixtures",
+      "argv": [
+        "python",
+        "<repo>/benchmarks/threejs/fixtures.py",
+        "<output>/fixtures"
+      ],
+      "exit_code": 0,
+      "log": "fixtures.log",
+      "process_elapsed_seconds": 0.7529719169251621
+    },
+    {
+      "name": "browser-build-diff3d",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=<repo>",
+        "<repo>/benchmarks/threejs/browser.jl",
+        "<output>/fixtures/browser.toml",
+        "<output>/html"
+      ],
+      "exit_code": 0,
+      "log": "browser-build-diff3d.log",
+      "process_elapsed_seconds": 100.7016891669482
+    },
+    {
+      "name": "browser-build-three",
+      "argv": [
+        "node",
+        "<repo>/benchmarks/threejs/browser_build.mjs",
+        "<output>/fixtures/browser.json",
+        "<output>/html"
+      ],
+      "exit_code": 0,
+      "log": "browser-build-three.log",
+      "process_elapsed_seconds": 2.0067225840175524
+    },
+    {
+      "name": "projection-diff3d-1",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=<repo>",
+        "<repo>/benchmarks/threejs/projection.jl",
+        "<output>/fixtures/projection.toml",
+        "<output>/projection-diff3d-1.toml"
+      ],
+      "exit_code": 0,
+      "log": "projection-diff3d-1.log",
+      "process_elapsed_seconds": 109.76209933299106
+    },
+    {
+      "name": "projection-three-1",
+      "argv": [
+        "node",
+        "--expose-gc",
+        "<repo>/benchmarks/threejs/projection.mjs",
+        "<output>/fixtures/projection.json",
+        "<output>/projection-three-1.json"
+      ],
+      "exit_code": 0,
+      "log": "projection-three-1.log",
+      "process_elapsed_seconds": 2.737397541059181
+    },
+    {
+      "name": "browser-1",
+      "argv": [
+        "python",
+        "<repo>/benchmarks/threejs/browser.py",
+        "<output>/fixtures/browser.json",
+        "<output>/html",
+        "<output>/browser-1.json",
+        "--browser",
+        "firefox",
+        "--order",
+        "diff3d-first"
+      ],
+      "exit_code": 0,
+      "log": "browser-1.log",
+      "process_elapsed_seconds": 647.2583011660026
+    },
+    {
+      "name": "projection-three-2",
+      "argv": [
+        "node",
+        "--expose-gc",
+        "<repo>/benchmarks/threejs/projection.mjs",
+        "<output>/fixtures/projection.json",
+        "<output>/projection-three-2.json"
+      ],
+      "exit_code": 0,
+      "log": "projection-three-2.log",
+      "process_elapsed_seconds": 3.5178156659239903
+    },
+    {
+      "name": "projection-diff3d-2",
+      "argv": [
+        "julia",
+        "--startup-file=no",
+        "--project=<repo>",
+        "<repo>/benchmarks/threejs/projection.jl",
+        "<output>/fixtures/projection.toml",
+        "<output>/projection-diff3d-2.toml"
+      ],
+      "exit_code": 0,
+      "log": "projection-diff3d-2.log",
+      "process_elapsed_seconds": 75.39052549994085
+    },
+    {
+      "name": "browser-2",
+      "argv": [
+        "python",
+        "<repo>/benchmarks/threejs/browser.py",
+        "<output>/fixtures/browser.json",
+        "<output>/html",
+        "<output>/browser-2.json",
+        "--browser",
+        "firefox",
+        "--order",
+        "three-first"
+      ],
+      "exit_code": 0,
+      "log": "browser-2.log",
+      "process_elapsed_seconds": 493.3857755829813
+    }
+  ],
+  "finished_unix_seconds": 1789965365.856523,
+  "load_average_end": [
+    27.08056640625,
+    28.32373046875,
+    30.34765625
+  ],
+  "files_sha256": {
+    "browser-1.json": "ec51798239dd62a88342157262d4972885737970eab4c819b0e6b3adde2673b3",
+    "browser-1.log": "d97d4a6baffc6efdfb4c5c8f5f799a327b3a45db186affb7a92e05c6cd93f0ac",
+    "browser-2.json": "910b7cfd4f5014cdae785d128137fa79aefe4c419e0db28a07b7727476b2d447",
+    "browser-2.log": "e51d6777ceda0d20b17a16725c6d48e36c8fe2d02fcbb810f6073886e75dc49c",
+    "browser-build-diff3d.log": "d356bef41378da3ed165235e4ee4b341a2af6908a8a5a3dbb7e87d960eb541fd",
+    "browser-build-three.log": "a0a82d2eb3028717ee59996e12ce0626046faace30bd6ed2c84105166738dc72",
+    "fixtures/browser.json": "8cd892ee507518d1df300f9cae3be9d20cb42e53804bec1a5233e77bacc14b75",
+    "fixtures/browser.toml": "f79c9d8320dff9745a32a5d322af6a97b0b4cc7571534392b5743fa0a0768471",
+    "fixtures/projection.json": "86fd54a1a89a71d297d472e117f18d1a7a49bd49681b3841314f98cb239a4c84",
+    "fixtures/projection.toml": "8ea38411c849d0c8afd1dae4fe1eeeb3b847e7de4a358e6c5b97cb51bfad703b",
+    "fixtures.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "html/diff3d-build.toml": "720d5f67bf3c750dcf2fd96aa4c8456967aa142783f0eff80843d44adf887e61",
+    "html/diff3d-dynamic-128.html": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
+    "html/diff3d-dynamic-16.html": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
+    "html/diff3d-dynamic-512.html": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
+    "html/diff3d-instanced-128.html": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
+    "html/diff3d-instanced-16.html": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
+    "html/diff3d-instanced-512.html": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
+    "html/diff3d-static-128.html": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
+    "html/diff3d-static-16.html": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
+    "html/diff3d-static-512.html": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
+    "html/three-LICENSE.txt": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+    "html/three-build.json": "631e7f49d5be84399a44f5a659e1f4ab34af9a77a4b21a200633390a5645b6c6",
+    "html/three-dynamic-128.html": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
+    "html/three-dynamic-16.html": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
+    "html/three-dynamic-512.html": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
+    "html/three-instanced-128.html": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
+    "html/three-instanced-16.html": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
+    "html/three-instanced-512.html": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
+    "html/three-static-128.html": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
+    "html/three-static-16.html": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
+    "html/three-static-512.html": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
+    "julia-environment/Manifest.toml": "711b20ad80cd7e9fadf2923a96641247e734a15b1ad68df681f6cfcfe0e8edcd",
+    "julia-environment/Project.toml": "83100053865b28a6ab396021e71a1b83edc71a59cfd930668a4629c2ae6843ff",
+    "projection-diff3d-1.log": "38af5086d03422675d35c0fb04161919b89a3912861b1d54695c88c7b8a5b0c8",
+    "projection-diff3d-1.toml": "3f52320cb247db8baa6c8a5c3e248cb44c8f60c4ab6b0e856ea40e629060749c",
+    "projection-diff3d-2.log": "ca5adc2d4d5b4adf0ad44f971b41f712efafa07b69c13b5517dff6d2423e3d21",
+    "projection-diff3d-2.toml": "90dd76f4fded1bb2f5468247d38a5d19314ca680f53747fc795f75ea5df5b98d",
+    "projection-three-1.json": "7b238f1535a2f8c9e152ad5d11d79ff5b73584c78b01fd711b972b7572f06ae6",
+    "projection-three-1.log": "c8beb75ad18a64879142d8e3141a3259bfccb8df136f6bc66d4f02c3dc9267d0",
+    "projection-three-2.json": "fadc99d2212ffdcae75723976a55ba4ef27d1ccffcb8bd7c3d9da5330ff8a253",
+    "projection-three-2.log": "f133f1ad28734820bbb6cdb13d1862d7d4c729f344c2e954dc85fa07fc029db5"
+  }
+}

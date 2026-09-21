@@ -1,42 +1,64 @@
 # Diff3D 1.0 comparison with three.js
 
-The measured advantages are native Julia differentiation and smaller compressed
-standalone artifacts in these fixtures. At 1,024 depth parameters, the three.js
-central-difference baseline took 6.8× and 6.9× as long as Diff3D reverse AD by
-median time in the two passes. Three.js had lower median browser frame times in
-17 of 18 measurements. This evidence supports a Julia numerical-workflow use
-case; it does not establish overall rendering superiority or three.js parity.
+Two matched runs measure the release candidate: a quiet Linux runner with
+software rendering, and a busy macOS host with a hardware GPU. Both validate
+their outputs before timing anything.
 
-**Measurement qualification:** this was a shared, busy host. Its one-minute load
-average was 23.52 at the start and 19.08 at the end on 10 logical CPUs. Reversing
-execution order exposed substantial timing variation. Treat the numbers as
-observations of this run, not isolated-machine performance guarantees. No causal
-claim about the remaining browser cost is established by these measurements.
+The measured advantages are native Julia differentiation and smaller compressed
+standalone artifacts. At 1,024 depth parameters the three.js central-difference
+baseline took 12.9x and 11.7x as long as Diff3D reverse AD by median time on the
+Linux runner, and 5.0x and 11.6x on the macOS host. Three.js had the lower median
+browser frame time in **all 18 measurements of both runs**. This evidence
+supports a Julia numerical-workflow use case; it does not establish overall
+rendering superiority or three.js parity.
+
+**Measurement qualification:** the Linux runner had a one-minute load average of
+1.63 at the start and 3.63 at the end on 4 logical CPUs, and is the more reliable
+timing environment. The macOS host was shared and busy, with load 28.72 falling
+to 27.06 on 10 logical CPUs; its percentiles are correspondingly wide and it is
+published for its hardware renderer and for its second engine, not for precise
+timing. Reversing execution order exposes substantial variation on both. Treat
+the numbers as observations of these runs, not isolated-machine guarantees.
 
 ## Source and reproducibility
 
-- Date: 2026-09-20. Clean, unchanged Diff3D source:
-  [`284eadd7b899661f4f1c78a0d55d4ede45ffa75c`](https://github.com/jake-w-liu/Diff3D.jl/tree/284eadd7b899661f4f1c78a0d55d4ede45ffa75c),
-  package version 1.0.0; Julia 1.12.7, one thread, optimization level 2;
-  ForwardDiff 1.4.5. Exact Julia project/manifest files are archived.
-- Host: Apple M5, arm64, macOS 26.5.1, 10 logical CPUs. Julia reports CPU target
-  `apple-m1`; Firefox reports renderer `Apple M1, or similar`, vendor `Apple`.
-  Those strings are preserved as reported and are not a separate GPU-model test.
-- Three.js 0.186.0, esbuild 0.28.2, Node 26.5.0; Playwright 1.63.0,
-  Firefox 155.0, Python 3.14.7. Both engines reported the same browser renderer.
-- [Run record and 42 file hashes](comparison/2026-09-20-284eadd-run.json),
-  [readable derived statistics](comparison/2026-09-20-284eadd-summary.json), and
-  [complete raw evidence archive](comparison/2026-09-20-284eadd.tar.gz).
-  The archive includes all 43 original files: run record, raw samples, commands,
-  logs, fixtures, dependency snapshots and 18 working HTML artifacts.
-  Archive SHA-256: `b9b61b309a756085f4753b32f9b10aa7500c19551e7cbd6e4eefb02899de6413`.
+| | Linux / Chromium | macOS / Firefox |
+|---|---|---|
+| Diff3D revision | [`017289a`](https://github.com/jake-w-liu/Diff3D.jl/tree/017289a7bd30d062ebcba62ed3d471911598c00b) | [`8cec4f2`](https://github.com/jake-w-liu/Diff3D.jl/tree/8cec4f2a56460c122e157d16a82527c11b2e09c3) |
+| Package version | 1.0.0 | 1.0.0 |
+| Host | `Linux-6.17.0-1022-azure-x86_64`, 4 CPUs, AMD EPYC 7763 | `macOS-26.5.1-arm64`, 10 CPUs, Apple M5 |
+| Julia | 1.13.0, one thread, optimization level 2, CPU target `znver3` | 1.13.0, one thread, optimization level 2, CPU target `apple-m1` |
+| ForwardDiff | 1.4.6 | 1.4.6 |
+| Node / three.js / esbuild | 26.9.0 / 0.186.0 / 0.28.2 | 26.5.0 / 0.186.0 / 0.28.2 |
+| Browser | Chromium 153.0.8010.12, Playwright 1.63.0, Python 3.14.7 | Firefox 155.0, Playwright 1.63.0, Python 3.14.7 |
+| Reported renderer | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)` — software | `Apple M1, or similar` — hardware |
+| Clean checkout | yes | yes |
 
-Follow the [comparison protocol](../../benchmarks/threejs/README.md) using the
+Both revisions contain the same measured `src/` and `benchmarks/` trees; `8cec4f2`
+only adds the summary derivation script and its tests on top of `017289a`. Exact
+resolved Julia `Project.toml` and `Manifest.toml` files are archived inside each
+run and are required to stay unchanged for its duration.
+
+- Linux/Chromium: [run record and 42 file hashes](comparison/2026-09-21-017289a-chromium-run.json),
+  [derived statistics](comparison/2026-09-21-017289a-chromium-summary.json), and the
+  [complete raw archive](comparison/2026-09-21-017289a-chromium.tar.gz)
+  (43 files; SHA-256 `d8eb85eee5db739ad996bdb2f5f3e884743a89b89c903af7b9be49151842899a`).
+- macOS/Firefox: [run record and 42 file hashes](comparison/2026-09-21-8cec4f2-firefox-run.json),
+  [derived statistics](comparison/2026-09-21-8cec4f2-firefox-summary.json), and the
+  [complete raw archive](comparison/2026-09-21-8cec4f2-firefox.tar.gz)
+  (43 files; SHA-256 `92b99487afdd6c18585b57b1a41b56fc558374553373c1b5a4f0a22760db62f6`).
+
+Each archive holds the run record, raw samples, commands, logs, fixtures,
+dependency snapshots and 18 working HTML artifacts. Recorded commands use the
+`<repo>` and `<output>` placeholders so no published file carries a local
+filesystem layout. The statistics files are derived from the raw files by
+`benchmarks/threejs/summarize.py`; they add no measurement of their own.
+
+Follow the [comparison protocol](../../benchmarks/threejs/README.md) with the
 recorded source and environment. Run `python benchmarks/threejs/run.py OUTPUT
---browser firefox` with a new output directory. Both orders must finish with
-`status = passed`; preserve all raw files. The release CI also replays the
-protocol on Linux/Chromium with software rendering. Its candidate result is a
-separate gate in [the release tracker](../../RELEASE_PLAN.md).
+--browser firefox` into a new output directory; both orders must finish with
+`status = passed`. The **Pinned three.js comparison** workflow reproduces the
+Linux/Chromium run on every dispatch.
 
 ## Numerical objective and accuracy
 
@@ -45,9 +67,12 @@ Float64 points through the same perspective matrix and minimize the same mean
 squared coordinate error. An algebraic oracle checks the loss and complete
 gradient independently of either implementation. Central differences use the
 same step, `1e-5`. All initial, warmup and timed gradients are checked, with the
-timed-result check outside the clock. The largest timed-gradient absolute error
-was **3.48e-13 or less** across all 32 method/size/pass records. All four methods
-recovered the 16 known depths within **5.0e-11** after the same 1,000 updates.
+timed-result check outside the clock.
+
+Both runs agree exactly on accuracy. The largest timed-gradient absolute error
+was **3.47e-13** across all 32 method/size/pass records of each run, and all four
+methods recovered the 16 known depths within **5.00e-11** after the same 1,000
+updates.
 
 The three.js baseline uses its public Matrix4/Vector3 operations plus explicit
 central differences. A hand-derived gradient or another JavaScript AD system
@@ -56,116 +81,167 @@ projection-gradient measurements, not differentiable image-rendering timings.
 
 Each cell is **median [95th percentile] milliseconds per gradient**, from 21
 samples after five warmups. The percentile is the nearest-rank statistic
-(`ceil(0.95 × 21)`, the 20th sorted sample). Pass 1 runs Julia first; pass 2 runs
-Node first. Every method and both orders are shown.
+(`ceil(0.95 x 21)`, the 20th sorted sample). Pass 1 runs Julia first; pass 2 runs
+Node first.
+
+**Linux / Chromium runner:**
 
 | Parameters | Pass | Diff3D reverse AD | Julia ForwardDiff | Julia central difference | three.js central difference |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 1 | 0.1050 [0.7096] | 0.0035 [0.0654] | 0.0188 [0.0670] | 0.0695 [0.2873] |
-| 16 | 2 | 0.0332 [0.2452] | 0.0039 [0.0045] | 0.0187 [0.0240] | 0.0191 [0.0248] |
-| 64 | 1 | 0.1991 [1.0840] | 0.0425 [0.1914] | 0.3935 [0.5882] | 0.0587 [0.1422] |
-| 64 | 2 | 0.1311 [0.2194] | 0.0516 [0.2194] | 0.3927 [1.2559] | 0.0564 [0.1186] |
-| 256 | 1 | 0.8705 [3.4192] | 0.8542 [1.8762] | 8.4596 [44.8564] | 1.7337 [4.5395] |
-| 256 | 2 | 1.2817 [17.4889] | 1.2451 [6.6484] | 6.1574 [11.7765] | 1.9529 [9.9497] |
-| 1,024 | 1 | 4.0925 [19.5025] | 12.6187 [20.0829] | 196.2070 [348.5995] | 27.9323 [70.9915] |
-| 1,024 | 2 | 3.6699 [28.0106] | 15.7728 [25.2982] | 134.1733 [207.4279] | 25.4462 [52.4534] |
+| 16 | 1 | 0.0194 [0.0425] | 0.0029 [0.0036] | 0.0258 [0.0258] | 0.0211 [0.0322] |
+| 16 | 2 | 0.0204 [0.0213] | 0.0026 [0.0030] | 0.0258 [0.0271] | 0.0259 [0.0300] |
+| 64 | 1 | 0.0883 [0.1674] | 0.0261 [0.0481] | 0.4146 [0.4265] | 0.0681 [0.0966] |
+| 64 | 2 | 0.1009 [0.1533] | 0.0263 [0.0336] | 0.4071 [0.4182] | 0.0682 [0.1074] |
+| 256 | 1 | 0.3174 [0.4930] | 0.4355 [0.4458] | 6.5610 [6.6747] | 1.0464 [1.1080] |
+| 256 | 2 | 0.3298 [0.4415] | 0.4348 [0.4549] | 6.5441 [6.5777] | 1.1097 [1.1197] |
+| 1,024 | 1 | 1.2842 [1.7486] | 6.7634 [6.7925] | 105.0718 [106.5205] | 16.6172 [16.8560] |
+| 1,024 | 2 | 1.4326 [1.6523] | 6.7582 [6.7905] | 104.7490 [106.6261] | 16.7006 [17.0063] |
+
+**macOS / Firefox host:**
+
+| Parameters | Pass | Diff3D reverse AD | Julia ForwardDiff | Julia central difference | three.js central difference |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 1 | 0.0287 [0.3074] | 0.0028 [0.0035] | 0.0183 [0.1025] | 0.0202 [0.1067] |
+| 16 | 2 | 0.0303 [0.1782] | 0.0030 [0.0037] | 0.0179 [1.6670] | 0.0202 [0.0816] |
+| 64 | 1 | 0.1670 [8.6544] | 0.0315 [0.0412] | 0.3304 [5.8194] | 0.0611 [3.1304] |
+| 64 | 2 | 0.1394 [11.2605] | 0.0355 [0.1648] | 0.2795 [6.8110] | 0.0575 [6.4649] |
+| 256 | 1 | 0.6783 [0.8812] | 0.5548 [1.9023] | 10.8354 [63.4633] | 1.0370 [6.8542] |
+| 256 | 2 | 0.6146 [10.8933] | 0.4864 [1.8629] | 17.2556 [70.0534] | 6.2565 [48.5912] |
+| 1,024 | 1 | 9.0138 [77.1057] | 53.5998 [111.5650] | 305.1523 [571.8335] | 44.6340 [130.4581] |
+| 1,024 | 2 | 5.4748 [53.3995] | 50.7525 [107.4771] | 325.2635 [592.1810] | 63.5831 [142.6885] |
 
 At 1,024 parameters, reverse AD used one objective evaluation, ForwardDiff used
 86, and each central-difference method used 2,048. The evaluated objective and
 AD work differ within those calls; these counts are not engine-speed ratios.
-ForwardDiff had the lowest median at 16, 64 and 256 parameters in both passes.
-Three.js central differences were faster than Julia central differences at
-64/256/1,024 parameters in both passes.
+ForwardDiff had the lowest median of the four methods at 16 and 64 parameters in
+every pass of both runs, and at 256 parameters on the macOS host; Diff3D reverse
+AD had the lowest median at 256 parameters on the Linux runner and at 1,024
+parameters in both runs. Three.js central differences were faster than Julia
+central differences at 64, 256 and 1,024 parameters in every pass of both runs.
+They were also faster than Diff3D reverse AD at 64 parameters in every pass of
+both runs, and at 16 parameters on the macOS host. Diff3D's reverse-AD advantage
+in this objective appears only as the parameter count grows.
 
 Julia's compilation cost matters for short jobs. At 16 parameters, first-call
-times were 1.986/1.579 seconds for reverse AD and 2.054/2.001 seconds for
-ForwardDiff, versus 0.939/4.327 milliseconds for the three.js finite-difference
-call. These clocks exclude process launch and package import; full command
-elapsed times are in the run record. First calls at larger sizes can include
-further specialization and are retained in the raw data.
+times were 0.425/0.420 seconds for reverse AD and 0.533/0.515 seconds for
+ForwardDiff on the Linux runner, versus 0.615/0.608 milliseconds for the three.js
+finite-difference call. The loaded macOS host needed 5.371/5.643 and 6.682/4.085
+seconds for the same first calls. These clocks exclude process launch and package
+import; full command elapsed times are in each run record.
 
-Warmed Julia allocation totals at 1,024 parameters were **4,481,488 bytes** for
-reverse AD, **124,528 bytes** for ForwardDiff and **16,512 bytes** for central
-differences in both passes. Reverse AD's time advantage here costs more allocated
-memory. Node records retained heap/ArrayBuffer changes after GC and an RSS
-snapshot, not total allocations or peak memory. Its 1,024-element result stores
-8,192 bytes. A zero retained-heap delta does not mean zero allocation; these
-memory measures do not support a cross-language allocation ratio.
+Warmed Julia allocation totals at 1,024 parameters were **4,436,808 bytes** for
+reverse AD, **116,352 bytes** for ForwardDiff and **16,528 bytes** for central
+differences on the Linux runner (4,481,488 / 124,528 / 16,512 on macOS). Reverse
+AD's time advantage here costs more allocated memory. Node records retained
+heap/ArrayBuffer changes after GC and an RSS snapshot, not total allocations or
+peak memory. Its 1,024-element result stores 8,192 bytes. A zero retained-heap
+delta does not mean zero allocation; these memory measures do not support a
+cross-language allocation ratio.
 
 ## Browser frames, startup and artifact sizes
 
 Nine fixtures cover 16/128/512 separate static meshes, one instance batch, and
 separate animated meshes. Both engines draw the same triangles, colors, camera,
-256×256 buffer and animation times, with antialiasing disabled and linear RGB.
+256x256 buffer and animation times, with antialiasing disabled and linear RGB.
 Diff3D exports WebGL 1; three.js uses WebGL 2. The protocol calls `gl.finish()`
 after every frame and includes the shared instrumentation/completion checks.
 
-All 18 paired measurements passed the independent initial/final pixel oracle,
-draw/triangle counts, animation checks, zero external-request check and stable
-GPU-resource counts. There were **zero cross-engine pixel mismatches outside
-edge ties**. The archived Firefox run permits one byte of channel quantization
-and a 0.002-pixel edge tolerance; it does not require CPU/soft-render parity.
+All 36 paired measurements across the two runs passed the independent
+initial/final pixel oracle, draw/triangle counts, animation checks, the zero
+external-request check and the stable GPU-resource counts. There were **zero
+cross-engine pixel mismatches outside edge ties** in every pair. Both contexts of
+both runs reported four subpixel bits, giving the edge band
+`0.002 + sqrt(2) * 2^-4 = 0.090388` pixels; the harness still rejects incorrect
+edge colors and shifted or corrupted images. In the three 16-mesh fixtures
+Diff3D's first-frame buffers were byte-identical on both the Apple GPU and
+SwiftShader — `static-16` hashed to `482ffcd625d56300...` in each — so those
+exports are bit-deterministic across the two renderers rather than merely within
+tolerance. The 128- and 512-mesh Diff3D buffers, and all nine three.js buffers,
+differ between the renderers while staying inside the permitted band.
 
-A later Chromium/SwiftShader check exposed the fixed edge tolerance as too
-narrow for its reported four-bit subpixel grid: both engines produced identical
-buffers, including 23 pixels that disagreed with the continuous-coordinate
-oracle. All non-edge pixels matched an independent oracle after vertex snapping
-to that grid. The current harness records `SUBPIXEL_BITS` and uses
-`0.002 + sqrt(2) * 2^(-SUBPIXEL_BITS)` for edge coverage, while still rejecting
-incorrect edge colors and shifted/corrupted images. The archived timings and
-their source remain unchanged. See the [current protocol](../../benchmarks/threejs/README.md)
-and [verification evidence](evidence.md#chromium-subpixel-precision-oracle).
-
-The complete [Chromium replay](comparison/2026-09-20-chromium-replay.tar.gz)
-subsequently passed all nine fixtures in both orders, with zero cross-engine
-pixel mismatches outside edge ties. It used the frozen `284eadd` HTML with the
-corrected oracle; the first process began with uncommitted oracle edits and the
-second began at clean `c5114d9`. These records verify the corrected accuracy
-checks and retain that provenance; they do not replace the clean Firefox timing
-report or the final candidate's Linux comparison gate.
+The [earlier subpixel counterexample](comparison/2026-09-20-chromium-subpixel.tar.gz)
+and [Chromium replay](comparison/2026-09-20-chromium-replay.tar.gz) archives
+document how that edge band was derived and checked against frozen exports. See
+the [protocol](../../benchmarks/threejs/README.md) and
+[verification evidence](evidence.md#chromium-subpixel-precision-oracle).
 
 Warmed cells show **median [95th percentile] milliseconds per completed frame**.
 Each sample is an eight-frame batch; there are 21 samples after five warmup
 batches. These are synchronized frame costs, not monitor-refresh FPS.
 
+**Linux / Chromium runner (software rendering):**
+
 | Fixture | Diff3D pass 1 | three.js pass 1 | Diff3D pass 2 | three.js pass 2 |
 |---|---:|---:|---:|---:|
-| static-16 | 10.875 [30.875] | 5.000 [19.000] | 9.250 [17.250] | 2.125 [8.375] |
-| instanced-16 | 5.125 [23.875] | 3.875 [10.750] | 6.500 [14.000] | 3.375 [7.625] |
-| dynamic-16 | 14.500 [30.875] | 4.875 [17.250] | 10.375 [16.875] | 2.625 [18.500] |
-| static-128 | 69.750 [98.875] | 4.125 [17.875] | 32.375 [58.125] | 3.500 [14.000] |
-| instanced-128 | 5.625 [19.250] | 3.500 [16.625] | 2.375 [12.000] | 1.750 [4.125] |
-| dynamic-128 | 67.625 [101.125] | 8.875 [17.500] | 39.625 [77.250] | 5.500 [10.250] |
-| static-512 | 213.625 [274.375] | 19.375 [39.500] | 112.375 [142.125] | 9.125 [12.750] |
-| instanced-512 | 6.750 [17.375] | 8.125 [14.875] | 5.125 [6.875] | 1.750 [3.250] |
-| dynamic-512 | 135.625 [170.125] | 9.750 [18.625] | 134.000 [183.625] | 8.750 [18.125] |
+| static-16 | 2.888 [24.037] | 0.275 [0.338] | 3.738 [24.087] | 0.237 [0.325] |
+| instanced-16 | 1.338 [21.375] | 0.250 [0.325] | 1.337 [22.487] | 0.238 [0.363] |
+| dynamic-16 | 4.287 [25.375] | 0.238 [0.325] | 3.188 [25.113] | 0.250 [0.338] |
+| static-128 | 16.362 [18.138] | 0.525 [1.100] | 18.463 [19.863] | 0.537 [0.900] |
+| instanced-128 | 1.513 [26.975] | 0.250 [0.375] | 9.100 [28.500] | 0.288 [0.562] |
+| dynamic-128 | 16.900 [23.125] | 0.638 [0.875] | 16.412 [19.825] | 0.575 [0.763] |
+| static-512 | 51.200 [56.600] | 1.088 [1.325] | 53.100 [58.600] | 1.175 [1.600] |
+| instanced-512 | 0.888 [43.775] | 0.250 [0.337] | 0.675 [1.188] | 0.250 [0.300] |
+| dynamic-512 | 54.162 [61.763] | 1.363 [1.950] | 54.400 [61.925] | 1.263 [3.025] |
 
-The lone lower Diff3D median, `instanced-512` in pass 1, reverses in pass 2.
-The data do not support a consistent browser-rendering speed advantage.
+**macOS / Firefox host (hardware renderer, busy machine):**
+
+| Fixture | Diff3D pass 1 | three.js pass 1 | Diff3D pass 2 | three.js pass 2 |
+|---|---:|---:|---:|---:|
+| static-16 | 25.625 [76.000] | 2.125 [8.000] | 11.875 [38.375] | 3.125 [10.375] |
+| instanced-16 | 7.375 [14.625] | 2.375 [8.875] | 2.125 [6.250] | 1.875 [13.125] |
+| dynamic-16 | 11.500 [36.125] | 3.250 [7.500] | 15.375 [29.500] | 3.625 [7.875] |
+| static-128 | 54.875 [94.625] | 5.000 [11.625] | 65.500 [118.000] | 2.625 [15.500] |
+| instanced-128 | 4.625 [44.375] | 2.125 [18.125] | 1.500 [3.875] | 1.375 [6.375] |
+| dynamic-128 | 137.250 [205.375] | 11.125 [28.375] | 52.625 [88.125] | 2.250 [5.750] |
+| static-512 | 227.750 [291.000] | 13.750 [31.125] | 198.250 [303.000] | 8.250 [12.125] |
+| instanced-512 | 4.125 [17.000] | 1.250 [7.250] | 3.375 [22.875] | 1.625 [6.250] |
+| dynamic-512 | 248.375 [427.375] | 10.125 [28.625] | 175.625 [263.375] | 9.375 [13.500] |
+
+Three.js has the lower median in all nine fixtures of both passes of both runs.
+The data show no browser-rendering speed advantage for Diff3D in these fixtures;
+the gap is largest for the separate-mesh static and dynamic scenes, where Diff3D
+issues one draw call per mesh.
 
 Navigation-to-first-completed-frame times are **milliseconds**, measured
 separately from warmed frames. They include local HTML loading and browser
 initialization encountered by that page, with no network asset fetch.
 
+**Linux / Chromium runner:**
+
 | Fixture | Diff3D pass 1 / 2 | three.js pass 1 / 2 | Diff3D HTML / gzip kB | three.js HTML / gzip kB |
 |---|---:|---:|---:|---:|
-| static-16 | 2966 / 1349 | 1238 / 1509 | 210.2 / 40.3 | 553.3 / 139.1 |
-| instanced-16 | 1574 / 1408 | 1080 / 646 | 171.2 / 39.6 | 553.3 / 139.1 |
-| dynamic-16 | 1725 / 1312 | 1330 / 878 | 214.0 / 40.7 | 553.3 / 139.1 |
-| static-128 | 2244 / 1706 | 923 / 824 | 527.5 / 45.8 | 557.2 / 139.6 |
-| instanced-128 | 2196 / 1362 | 1239 / 979 | 179.8 / 40.2 | 557.2 / 139.6 |
-| dynamic-128 | 1688 / 1663 | 958 / 845 | 557.0 / 47.9 | 557.2 / 139.6 |
-| static-512 | 3119 / 1880 | 1838 / 674 | 1611.1 / 60.8 | 573.3 / 141.2 |
-| instanced-512 | 1754 / 1188 | 1012 / 674 | 209.7 / 42.1 | 573.3 / 141.2 |
-| dynamic-512 | 1983 / 1786 | 904 / 679 | 1729.3 / 68.0 | 573.3 / 141.2 |
+| static-16 | 467 / 478 | 89 / 79 | 211.0 / 40.7 | 553.3 / 139.1 |
+| instanced-16 | 386 / 365 | 60 / 61 | 172.0 / 40.0 | 553.3 / 139.1 |
+| dynamic-16 | 365 / 373 | 60 / 65 | 214.8 / 41.1 | 553.3 / 139.1 |
+| static-128 | 380 / 432 | 62 / 67 | 528.2 / 46.1 | 557.2 / 139.6 |
+| instanced-128 | 350 / 345 | 60 / 60 | 180.6 / 40.6 | 557.2 / 139.6 |
+| dynamic-128 | 387 / 380 | 68 / 66 | 557.8 / 48.3 | 557.2 / 139.6 |
+| static-512 | 461 / 488 | 68 / 73 | 1611.9 / 61.2 | 573.3 / 141.2 |
+| instanced-512 | 338 / 366 | 66 / 64 | 210.5 / 42.4 | 573.3 / 141.2 |
+| dynamic-512 | 472 / 469 | 82 / 79 | 1730.1 / 68.4 | 573.3 / 141.2 |
 
-Sizes use decimal kB. Diff3D's artifact is the full standalone viewer; the
-three.js artifact is an esbuild bundle of the matched minimal application.
-Diff3D's gzip sizes are smaller in every fixture, while its uncompressed
-512-mesh static/dynamic exports are larger. This is a delivery-size observation
-for these functioning artifacts, not equal-feature bundle-size equivalence.
-Both implementations work offline in these checks; offline delivery is not an
-exclusive Diff3D capability.
+**macOS / Firefox host:**
+
+| Fixture | Diff3D pass 1 / 2 | three.js pass 1 / 2 | Diff3D HTML / gzip kB | three.js HTML / gzip kB |
+|---|---:|---:|---:|---:|
+| static-16 | 2,643 / 2,194 | 1,749 / 2,118 | 211.0 / 40.7 | 553.3 / 139.1 |
+| instanced-16 | 1,928 / 2,988 | 1,026 / 1,703 | 172.0 / 40.0 | 553.3 / 139.1 |
+| dynamic-16 | 1,864 / 2,370 | 1,070 / 1,505 | 214.8 / 41.1 | 553.3 / 139.1 |
+| static-128 | 2,353 / 2,454 | 1,542 / 1,804 | 528.2 / 46.1 | 557.2 / 139.6 |
+| instanced-128 | 2,683 / 956 | 1,254 / 1,048 | 180.6 / 40.6 | 557.2 / 139.6 |
+| dynamic-128 | 3,215 / 1,879 | 2,527 / 671 | 557.8 / 48.3 | 557.2 / 139.6 |
+| static-512 | 3,868 / 2,616 | 1,725 / 1,008 | 1611.9 / 61.2 | 573.3 / 141.2 |
+| instanced-512 | 2,216 / 2,529 | 1,203 / 931 | 210.5 / 42.4 | 573.3 / 141.2 |
+| dynamic-512 | 2,169 / 1,790 | 1,174 / 1,549 | 1730.1 / 68.4 | 573.3 / 141.2 |
+
+Sizes use decimal kB and are identical in both runs, as they are properties of
+the artifacts rather than of the host. Diff3D's artifact is the full standalone
+viewer; the three.js artifact is an esbuild bundle of the matched minimal
+application. Diff3D's gzip sizes are smaller in every fixture, while its
+uncompressed `dynamic-128`, `static-512` and `dynamic-512` exports are larger. This is a delivery-size
+observation for these functioning artifacts, not equal-feature bundle-size
+equivalence. Both implementations work offline in these checks; offline delivery
+is not an exclusive Diff3D capability.
 
 ## Capability boundaries and positioning
 
@@ -176,10 +252,10 @@ exclusive Diff3D capability.
 | Browser backend | Standalone WebGL 1 export; Julia callbacks and arbitrary ShaderMaterial export are unsupported. | [WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html) uses WebGL 2; [WebGPURenderer](https://threejs.org/docs/pages/WebGPURenderer.html) supports WebGPU with a WebGL 2 fallback. |
 | Compressed glTF assets | Required Draco, Meshopt and Basis extensions are rejected and tested as errors. | [GLTFLoader](https://threejs.org/docs/pages/GLTFLoader.html) supports these paths when the corresponding decoder/transcoder is configured. |
 
-Diff3D's demonstrated role is a Julia graphics and differentiation workflow
-with standalone delivery. Browser frame time and compressed-asset/backend
-coverage remain concrete areas where this candidate does not match three.js.
-Performance on other scenes, GPUs, isolated hosts, WebGPU, JavaScript AD or full
-inverse-image workloads requires new matched measurements. Release readiness
-also depends on the platform, consumer and documentation gates; a benchmark
-win does not replace those checks.
+Diff3D's demonstrated role is a Julia graphics and differentiation workflow with
+standalone delivery. Browser frame time and compressed-asset/backend coverage
+remain concrete areas where this candidate does not match three.js. Performance
+on other scenes, GPUs, isolated hosts, WebGPU, JavaScript AD or full
+inverse-image workloads requires new matched measurements. Release readiness also
+depends on the platform, consumer and documentation gates; a benchmark win does
+not replace those checks.

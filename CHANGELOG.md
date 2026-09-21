@@ -31,7 +31,10 @@ Changes included in this release:
 - Execute all tutorials and publish versioned documentation. Main-branch docs
   use `/dev/`; version tags provide versioned pages and the stable alias.
 - Add complete optimized test shards, release platform/browser matrices, fresh
-  package-consumer checks, and pinned comparisons with three.js 0.186.0.
+  package-consumer checks, and pinned comparisons with three.js 0.186.0 on both
+  a software-rendering Linux runner and a hardware-GPU macOS host.
+- Reject machine-specific filesystem paths anywhere in the published package
+  tree, including inside the committed release evidence archives.
 
 Julia 1.10 or later in the 1.x series is supported; release validation runs the
 minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS

@@ -817,3 +817,109 @@ paths, all in `release/1.0/comparison/2026-09-20-284eadd-run.json` and inside
 `2026-09-20-284eadd.tar.gz` (`run.json`, `projection-diff3d-1.toml`,
 `projection-diff3d-2.toml`). The other two committed archives were already
 clean. The guard runs as its own CI job on every push and pull request.
+
+## R4 — Ubuntu WebKit UV precision closed; Firefox moves to macOS
+
+**VERIFIED:** the candidate release validation
+[35559707286](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35559707286)
+at `017289a` passed every Ubuntu WebKit browser job, including shard 1/6, which
+runs `test/browser_rendering.py` and contains the baked `gltf_texture_uv0` and
+`gltf_texture_uv1` comparisons that failed before the `highp` change with a
+maximum channel error of four against their unchanged limit of three. The same
+run passed all six installed-consumer jobs — Linux, macOS and Windows on Julia
+1.10.12 and 1.13.0 — the Chromium and WebKit installed exports, every Chromium
+example shard, and the optimized test shards on all three operating systems for
+both Julia versions.
+
+Xvfb improved Ubuntu Firefox but did not make it reliable. In the same run
+`xvfb-run --auto-servernum` ran with `xvfb` installed, and four of the six
+Firefox example shards passed while shards 3/6 and 6/6 failed with
+`Validation browser has no WebGL 1 context` on the first page they opened; the
+installed-consumer Firefox export timed out waiting for the viewer's first frame.
+A passing shard reported renderer `llvmpipe, or similar`, vendor `Mesa`,
+`WebGL 1.0` and 32 fragment texture units, so the display and drivers were
+present when it worked.
+
+**VERIFIED:** the isolated diagnostic run
+[35560737171](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35560737171)
+(branch `diagnose/firefox-gl`) created a WebGL context in all three dependency
+variants — `--with-deps firefox` alone, the same plus
+`libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri`, and the same plus WebKit's
+dependency set. Each reported `DISPLAY=:99`, renderer `llvmpipe, or similar` and
+the expected `[64, 128, 191, 255]` readback with GL error zero. A missing GL
+library is therefore ruled out: the release job's Firefox failures are an
+unreliable context in a job that has already run the full Julia example
+generation, not a dependency gap.
+
+Firefox browser validation and the installed-consumer Firefox export now run on
+`macos-latest`, where Firefox uses the host GPU and needs no display server, and
+the Xvfb workaround is removed. Chromium and WebKit keep their Linux headless
+jobs. The complete 72-configuration local browser suite passes on macOS
+Firefox 155, so the engine is fully exercised; the compatibility contract and
+the publication audit now state which platform validates which engine.
+
+## R4 — exported fragment precision on every local engine
+
+The new `verify_fragment_precision` regression was run against the current
+export on macOS arm64 in all three engines. Each selected
+`precision highp float;` and passed the shader-declaration and mantissa checks:
+Chromium 153 reported `MEDIUM_FLOAT 10 / HIGH_FLOAT 23`, Firefox 155 and
+WebKit 26.6 reported 23 for both. Chromium's 10-bit `mediump` shows that the
+previous exports lost texture-coordinate precision on SwiftShader as well as on
+Ubuntu WebKit. Run against a frozen pre-change export the regression fails
+immediately, because `FRAGMENT_PRECISION` is undefined there; against an export
+that defined it but hard-coded a qualifier, the per-shader declaration check is
+what rejects it.
+
+The complete 72-configuration browser suite passed on WebKit 26.6 and
+Firefox 155 with the new shaders, and the Chromium run of the same suite was
+still in progress when the candidate was assembled; Ubuntu Chromium covers the
+same suite in CI.
+
+## R6 — final candidate comparisons
+
+Two matched comparison runs were completed and published, replacing the
+superseded `284eadd` record:
+
+- **Linux / Chromium**, revision `017289a`, produced by the release validation's
+  comparison job on a runner whose one-minute load average was 1.63 at the start
+  and 3.63 at the end on 4 CPUs. Julia 1.13.0, ForwardDiff 1.4.6, Node 26.9.0,
+  Chromium 153.0.8010.12 with the ANGLE/SwiftShader software renderer.
+- **macOS / Firefox**, revision `8cec4f2`, run locally from a clean checkout.
+  Julia 1.13.0, ForwardDiff 1.4.6, Node 26.5.0, Firefox 155.0 on an Apple GPU,
+  with load 28.72 falling to 27.06 on 10 CPUs.
+
+Both reported `status = passed` with 42 hashed raw files, all 32 numerical
+records and all 18 browser pairs. Both measured a largest timed-gradient error
+of `3.4723482769671854e-13` and recovered the known depths within
+`4.99853491930935e-11`; both recorded zero cross-engine pixel mismatches outside
+edge ties, four subpixel bits and the same 0.090388-pixel edge band. The two
+runs produced byte-identical exported artifacts, and byte-identical Diff3D
+first-frame buffers for the three 16-mesh fixtures across the Apple GPU and
+SwiftShader. At 1,024 parameters the three.js central-difference baseline took
+12.94x and 11.66x the Diff3D reverse-AD median on Linux and 4.95x and 11.61x on
+macOS; three.js had the lower browser-frame median in all 18 measurements of
+both runs, and was faster than Diff3D reverse AD at 64 parameters in every pass.
+Unfavourable results are published alongside the favourable ones.
+
+**VERIFIED:** the measured source is unchanged between those revisions and the
+final candidate. `git diff --stat 017289a HEAD -- src/ benchmarks/threejs/*.jl
+benchmarks/threejs/*.py benchmarks/threejs/*.mjs benchmarks/threejs/package.json`
+is empty, and the only difference under `benchmarks/` since `8cec4f2` is prose in
+its README. The later commits change workflows, documentation and evidence only,
+so both comparison records remain valid for this candidate.
+
+`benchmarks/threejs/summarize.py` derives each published statistics file from the
+retained raw files. **VERIFIED:** re-deriving the superseded `284eadd` summary
+from its archive reproduced the committed file exactly when nanoseconds are
+scaled the way the original ad-hoc derivation scaled them; the committed script
+divides instead, which is correctly rounded and differs by at most 2.2e-16
+relative. `benchmarks/threejs/test_run_record.py` passed all 11 cases, covering
+the portable-argument rewriting and the timing statistics.
+
+The path guard initially reported its own pattern and its test fixtures, which
+contain example paths as data. Those two files are now the only exemptions,
+named explicitly in `SELF` and checked by a test that a third file with the same
+contents is still reported. With the superseded archive replaced, the guard
+reports no machine-specific paths in the published tree, and the Linux/Chromium
+comparison artifact produced by CI was independently confirmed to contain none.
