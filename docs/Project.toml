@@ -1,7 +1,10 @@
 [deps]
-Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 Diff3D = "72681062-5925-4945-963f-74d9429756fe"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+
+[sources]
+Diff3D = {path = ".."}
 
 [compat]
 Documenter = "1"

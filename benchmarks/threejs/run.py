@@ -15,6 +15,21 @@ ROOT = Path(__file__).resolve().parents[2]
 BENCH = Path(__file__).resolve().parent
 
 
+def portable_argument(argument: str, *, root: Path, output: Path) -> str:
+    """Rewrite one command argument so a published record carries no local layout.
+
+    Paths inside the output directory and the repository become the stable
+    `<output>` and `<repo>` placeholders. Any remaining absolute path belongs to
+    a tool installed elsewhere, such as the interpreter, and is reduced to its
+    program name. Relative arguments and plain options are returned unchanged.
+    """
+    # The output directory can live inside the repository, so replace it first.
+    text = argument.replace(str(output), "<output>").replace(str(root), "<repo>")
+    if text == argument and Path(argument).is_absolute():
+        return Path(argument).name
+    return text
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
@@ -38,7 +53,10 @@ def main():
     def run(name, command):
         start = time.monotonic()
         log = output / f"{name}.log"
-        command_record = {"name": name, "argv": command, "exit_code": None, "log": log.name}
+        argv = [portable_argument(argument, root=ROOT, output=output) for argument in command]
+        if any(Path(argument).is_absolute() for argument in argv):
+            raise AssertionError(f"{name} would record a machine-specific path: {argv}")
+        command_record = {"name": name, "argv": argv, "exit_code": None, "log": log.name}
         report["commands"].append(command_record)
         try:
             with log.open("w") as stream:

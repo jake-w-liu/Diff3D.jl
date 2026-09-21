@@ -106,7 +106,9 @@ function main(arguments)
     report = Dict{String,Any}("status" => "failed", "julia" => string(VERSION),
         "diff3d_version" => string(pkgversion(Diff3D)),
         "forwarddiff_version" => string(pkgversion(ForwardDiff)),
-        "package_source" => realpath(pkgdir(Diff3D)),
+        # Record the checkout-relative location; the check above already
+        # requires this checkout, and an absolute path is machine specific.
+        "package_source" => relpath(realpath(pkgdir(Diff3D)), realpath(repository)),
         "os" => string(Sys.KERNEL), "arch" => string(Sys.ARCH), "cpu" => Sys.CPU_NAME,
         "threads" => Threads.nthreads(), "fixture_sha256" => bytes2hex(sha256(read(arguments[1]))),
         "revision" => strip(read(`git -C $repository rev-parse HEAD`, String)),
