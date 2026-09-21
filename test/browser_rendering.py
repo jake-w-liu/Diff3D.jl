@@ -788,11 +788,17 @@ def main() -> None:
                                 # from the fitted distance (2200 units here), never from fixed units.
                                 # Each viewport pass starts from the fitted orbit (the previous pass
                                 # leaves the orbit within one wheel notch of it).
+                                # Record the view as loaded, before any reset: if the scene never
+                                # rendered on this host, that is a different defect from a reset
+                                # that loses it, and the failure message must distinguish them.
+                                at_load = page.evaluate(ORBIT_CENTRE_PROBE)
                                 page.evaluate("() => { setCase(active.id); }")
                                 # Wait for presented frames rather than a fixed delay: a slow
                                 # host can take longer than any wall-clock guess to draw the
                                 # reset view, and reading early returns an undrawn buffer.
                                 fitted = page.evaluate(ORBIT_CENTRE_PROBE)
+                                fitted["atLoad"] = {k: at_load[k] for k in
+                                                    ("blue", "pixel", "frames", "dist", "angles")}
                                 if not (fitted["error"] == 0 and fitted["blue"] == fitted["of"]
                                         and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
                                     raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped or not fitted {fitted}")
