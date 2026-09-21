@@ -736,19 +736,40 @@ def main() -> None:
                                 # host can take longer than any wall-clock guess to draw the
                                 # reset view, and reading early returns an undrawn buffer.
                                 fitted = page.evaluate("""async () => {
-                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl');
-                                    const read=()=>{ const p=new Uint8Array(4); gl.finish();
-                                        gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);
-                                        return Array.from(p).slice(0,3); };
-                                    let pixel=read(), frames=0;
-                                    while(pixel[2]<=200 && frames<120){
+                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),d=window.__diff3dDebug;
+                                    // Sample a small block: the fitted plane covers the middle of
+                                    // the view, so a single pixel would make this fixture hostage
+                                    // to one sample while proving nothing extra.
+                                    const block=9;
+                                    const read=()=>{
+                                        const p=new Uint8Array(4*block*block); gl.finish();
+                                        gl.readPixels(Math.floor(c.width/2)-(block>>1),Math.floor(c.height/2)-(block>>1),
+                                                      block,block,gl.RGBA,gl.UNSIGNED_BYTE,p);
+                                        let blue=0, worstOther=0, sample=null;
+                                        for(let i=0;i<block*block;i++){
+                                            const r=p[4*i],g=p[4*i+1],b=p[4*i+2];
+                                            if(i===(block*block>>1)) sample=[r,g,b];
+                                            if(b>200&&Math.max(r,g)<20) blue++; else worstOther=Math.max(worstOther,b);
+                                        }
+                                        return {blue,worstOther,sample};
+                                    };
+                                    let state=read(), frames=0;
+                                    while(state.blue<block*block && frames<120){
                                         await new Promise(resolve => requestAnimationFrame(resolve));
-                                        frames++; pixel=read();
+                                        frames++; state=read();
                                     }
-                                    return {pixel,frames,error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
+                                    return {pixel:state.sample,blue:state.blue,of:block*block,
+                                            worstOther:state.worstOther,frames,error:gl.getError(),
+                                            dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
+                                            clip:d.clipPlanes(),targetOffset:d.targetOffset(),
+                                            objects:d.activeObjectCount(),draws:d.activeDrawItemCount(),
+                                            views:d.activeViewCount(),
+                                            canvas:[c.width,c.height],dpr:window.devicePixelRatio,
+                                            rect:[Math.round(c.getBoundingClientRect().width),
+                                                  Math.round(c.getBoundingClientRect().height)]};
                                 }""")
-                                blue = fitted["pixel"]
-                                if not (fitted["error"] == 0 and blue[2] > 200 and max(blue[:2]) < 20 and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
+                                if not (fitted["error"] == 0 and fitted["blue"] == fitted["of"]
+                                        and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
                                     raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped or not fitted {fitted}")
                                 zoom = page.evaluate("""() => {
                                     const d=window.__diff3dDebug, canvas=document.querySelector('canvas');
