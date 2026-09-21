@@ -758,7 +758,33 @@ def main() -> None:
                                         await new Promise(resolve => requestAnimationFrame(resolve));
                                         frames++; state=read();
                                     }
-                                    return {pixel:state.sample,blue:state.blue,of:block*block,
+                                    // On failure, census the whole frame: whether the plane is
+                                    // drawn at all, and where, is the thing a centre sample cannot say.
+                                    let census=null;
+                                    if(state.blue<block*block){
+                                        const all=new Uint8Array(4*c.width*c.height); gl.finish();
+                                        gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
+                                        let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
+                                        const cols=16,rows=10,map=Array.from({length:rows},()=>new Array(cols).fill(0));
+                                        const seen={};
+                                        for(let y=0;y<c.height;y++) for(let x=0;x<c.width;x++){
+                                            const i=4*(y*c.width+x), r=all[i],g=all[i+1],b=all[i+2];
+                                            const key=r+','+g+','+b; seen[key]=(seen[key]||0)+1;
+                                            if(b>200&&Math.max(r,g)<20){
+                                                n++; sx+=x; sy+=y;
+                                                if(x<minX)minX=x; if(x>maxX)maxX=x;
+                                                if(y<minY)minY=y; if(y>maxY)maxY=y;
+                                                map[Math.min(rows-1,Math.floor(y*rows/c.height))][Math.min(cols-1,Math.floor(x*cols/c.width))]++;
+                                            }
+                                        }
+                                        const colours=Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4);
+                                        census={bluePixels:n,fraction:+(n/(c.width*c.height)).toFixed(4),
+                                                box:n?[minX,minY,maxX,maxY]:null,
+                                                centroid:n?[Math.round(sx/n),Math.round(sy/n)]:null,
+                                                topColours:colours,
+                                                map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
+                                    }
+                                    return {pixel:state.sample,blue:state.blue,of:block*block,census,
                                             worstOther:state.worstOther,frames,error:gl.getError(),
                                             dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
                                             clip:d.clipPlanes(),targetOffset:d.targetOffset(),
