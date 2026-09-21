@@ -871,10 +871,12 @@ immediately, because `FRAGMENT_PRECISION` is undefined there; against an export
 that defined it but hard-coded a qualifier, the per-shader declaration check is
 what rejects it.
 
-The complete 72-configuration browser suite passed on WebKit 26.6 and
-Firefox 155 with the new shaders, and the Chromium run of the same suite was
-still in progress when the candidate was assembled; Ubuntu Chromium covers the
-same suite in CI.
+The complete 72-configuration browser suite passed on all three local engines —
+Chromium 153, Firefox 155 and WebKit 26.6 — with the new shaders, each process
+exiting zero. A further complete WebKit run with the regression wired into the
+suite also passed all 72 configurations and printed
+`BROWSER_FRAGMENT_PRECISION_OK precision highp float;` with both float formats
+reporting 23 bits.
 
 ## R6 — final candidate comparisons
 
@@ -928,10 +930,10 @@ comparison artifact produced by CI was independently confirmed to contain none.
 
 The full browser suite passed all 72 configurations in each of Chromium 153,
 Firefox 155 and WebKit 26.6 on macOS arm64 with the `highp` shaders and both
-cube-map repairs, each process exiting zero. These runs used the exporter as
-committed; the `verify_fragment_precision` regression was exercised separately
-against the same exports in all three engines and then as part of a further
-complete WebKit run.
+cube-map repairs, each process exiting zero. Those three runs predate wiring the
+`verify_fragment_precision` regression into the suite; it was exercised
+separately against the same exports in all three engines, and a further complete
+WebKit run with it wired in passed all 72 configurations as well.
 
 `DOCUMENTER_DEPLOY=false julia +1.13 --startup-file=no --project=docs
 docs/make.jl` completed with `DOCS_EXIT=0` on Julia 1.13.0, with `warnonly=false`,
