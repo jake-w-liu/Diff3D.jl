@@ -40,7 +40,8 @@ jobs:
     needs: install
     # Firefox is validated on macOS for the reason recorded in ci.yml.
     runs-on: ${{ matrix.browser == 'firefox' && 'macos-latest' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # The macOS runner downloads its browser without a cached apt layer.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
