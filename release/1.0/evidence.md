@@ -923,3 +923,19 @@ named explicitly in `SELF` and checked by a test that a third file with the same
 contents is still reported. With the superseded archive replaced, the guard
 reports no machine-specific paths in the published tree, and the Linux/Chromium
 comparison artifact produced by CI was independently confirmed to contain none.
+
+## R2/R4 — complete local checks on the candidate source
+
+The full browser suite passed all 72 configurations in each of Chromium 153,
+Firefox 155 and WebKit 26.6 on macOS arm64 with the `highp` shaders and both
+cube-map repairs, each process exiting zero. These runs used the exporter as
+committed; the `verify_fragment_precision` regression was exercised separately
+against the same exports in all three engines and then as part of a further
+complete WebKit run.
+
+`DOCUMENTER_DEPLOY=false julia +1.13 --startup-file=no --project=docs
+docs/make.jl` completed with `DOCS_EXIT=0` on Julia 1.13.0, with `warnonly=false`,
+doctests enabled and no error or warning lines in its output. It regenerated the
+108-case example gallery, ran all 18 executable tutorials and recorded the
+automatic inventory version `1.0.0` from `Project.toml`. The candidate's
+Documentation workflow run repeats this build on the pushed source.
