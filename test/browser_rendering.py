@@ -826,15 +826,37 @@ def main() -> None:
                                 )
                                 if not all(checks):
                                     raise AssertionError(f"{name} at {width}x{height}: orbit limits {zoom} checks {checks}")
-                                page.wait_for_timeout(500)
-                                restored = page.evaluate("""() => {
-                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl'),pixel=new Uint8Array(4);
-                                    gl.readPixels(Math.floor(c.width/2),Math.floor(c.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
-                                    return {pixel:Array.from(pixel).slice(0,3),error:gl.getError()};
+                                # Same rule as the fitted check above: the zoom sequence ends with
+                                # ~1,400 wheel events, so wait for presented frames rather than a
+                                # fixed delay, and sample a block instead of one pixel.
+                                restored = page.evaluate("""async () => {
+                                    const c=document.querySelector('canvas'),gl=c.getContext('webgl');
+                                    const block=9;
+                                    const read=()=>{
+                                        const p=new Uint8Array(4*block*block); gl.finish();
+                                        gl.readPixels(Math.floor(c.width/2)-(block>>1),Math.floor(c.height/2)-(block>>1),
+                                                      block,block,gl.RGBA,gl.UNSIGNED_BYTE,p);
+                                        let blue=0, sample=null;
+                                        for(let i=0;i<block*block;i++){
+                                            const r=p[4*i],g=p[4*i+1],b=p[4*i+2];
+                                            if(i===(block*block>>1)) sample=[r,g,b];
+                                            if(b>200&&Math.max(r,g)<20) blue++;
+                                        }
+                                        return {blue,sample};
+                                    };
+                                    let state=read(), frames=0;
+                                    while(state.blue<block*block && frames<120){
+                                        await new Promise(resolve => requestAnimationFrame(resolve));
+                                        frames++; state=read();
+                                    }
+                                    return {pixel:state.sample,blue:state.blue,of:block*block,frames,
+                                            error:gl.getError(),dist:window.__diff3dDebug.orbitDistance()};
                                 }""")
-                                correct = restored["error"] == 0 and restored["pixel"][2] > 200 and max(restored["pixel"][:2]) < 20
-                                if not correct:
+                                if not (restored["error"] == 0 and restored["blue"] == restored["of"]):
                                     raise AssertionError(f"{name} at {width}x{height}: view restored after zooming is clipped {restored}")
+                                # Every orbit assertion above raises on failure, so reaching here
+                                # means this fixture passed; the shared check below reads `correct`.
+                                correct = True
                             else:
                                 blue = pixels["center"]
                                 correct = blue[2] > 200 and max(blue[:2]) < 20
