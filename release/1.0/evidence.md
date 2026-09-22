@@ -1122,11 +1122,39 @@ same instrumentation but the previous success-path-only re-arm, it fails with
 `Render loop did not survive one thrown frame: {'advanced': 0, 'stopped': False,
 'lastError': 'injected render fault', 'lost': False}, errors ['injected render
 fault']`. Against the candidate it prints `BROWSER_RENDER_RECOVERY_OK` in Firefox
-155, Chromium and WebKit, and the complete 72-configuration suite passes in Firefox
-and WebKit locally.
+155, Chromium 153 and WebKit 26.6, and the complete 72-configuration suite passes in
+all three engines locally, each process exiting zero.
 
 The `statsAfterFrame` probe added while diagnosing this was removed. Its comment
 claimed that a change in the stats text across one frame proves the loop is alive;
 `render()` writes `${drawn} draw items`, a pure function of the draw count, so on
 this single-object fixture a healthy loop rewrites the identical string every frame
 and the field could never discriminate anything.
+
+## R1 — the declared ForwardDiff floor, re-checked on the candidate
+
+`Project.toml` declares `ForwardDiff = "0.10, 1"`, and no CI job resolves the lower
+bound: every matrix entry takes the 1.x release. The earlier 0.10 result in this file
+was collected at `f0d7b21`, several source changes back, so it no longer covered the
+candidate.
+
+**VERIFIED — the 0.10 floor passes on the candidate source.** A separate environment
+resolved `ForwardDiff v0.10.39` against the working tree (`Diff3D v1.0.0`,
+Julia 1.13.0) and ran the AD, gradient and soft-differentiation units directly:
+
+| Unit | Assertions |
+|---|---|
+| `forwarddiff_primal_branches` | 3 |
+| `forwarddiff_validation` | 75 |
+| `line_projection_gradients` | 24 |
+| `mean_gradients` | 3 |
+| `numerical_gradient_range` | 1 |
+| `scaled_direction_gradients` | 203 |
+| `triangle_gradients` | 8 |
+| `soft_mixed_allocations` | 9 |
+| `soft_scene_objects` | 37 |
+| `soft_workspace_lifetimes` | 9 |
+
+All ten units passed, 372 assertions in total, with their allocation guards enabled.
+This is a focused dependency-compatibility result on the candidate, not a platform
+matrix: the declared floor is exercised by this recorded run rather than by CI.
