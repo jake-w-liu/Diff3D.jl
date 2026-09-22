@@ -8,6 +8,13 @@ Compatible additions use minor releases; incompatible public changes require a
 major release. See [compatibility](docs/src/compatibility.md) and the
 [0.1.8 migration guide](release/1.0/migration.md).
 
+This release is breaking relative to the registered 0.1.8, which carried no
+compatibility promise. Corrected numerical, shading, deformation and loader
+behaviour changes previously incorrect pixels and derivatives, failed WebGL
+exports and destination symlinks are now handled differently, and mutable
+render caches and soft workspaces have explicit ownership rules. Recheck
+application baselines rather than accepting every changed result as equivalent.
+
 Changes included in this release:
 
 - Correct gradient propagation through zero means, planar triangle normals and
@@ -26,6 +33,12 @@ Changes included in this release:
 - Request `highp` fragment precision in exported shaders wherever the browser
   reports it, so texture coordinates survive contexts that honour the 10-bit
   WebGL 1 `mediump` minimum.
+- Keep the exported viewer's frame loop alive when a frame raises, and bound the
+  retry so a viewer that fails every frame stops instead of rethrowing about sixty
+  times a second. Report the completed-frame count, the last frame error and the
+  context-loss state, so a canvas showing only its background can be told apart
+  from a loop that died, a frame that drew nothing, and a draw that rasterised
+  nothing without another validation round trip.
 - Reduce allocations in affine morph transforms, exact integer serialization,
   CSG clipping/inversion, and standard-material lighting with ambient occlusion.
 - Execute all tutorials and publish versioned documentation. Main-branch docs

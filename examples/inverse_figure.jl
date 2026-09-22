@@ -19,7 +19,12 @@ Pkg.activate(joinpath(@__DIR__, ".."))
 using Diff3D
 using Printf
 
-const PROJECT_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+const PROJECT_ROOT = normpath(get(ENV, "DIFF3D_EXAMPLE_ROOT",
+    # Research outputs sit beside the repository in a development checkout. An
+    # installed copy has no such sibling, so writing through `..` would land inside
+    # the package depot; fall back to a writable scratch directory instead.
+    ispath(joinpath(@__DIR__, "..", ".git")) ? joinpath(@__DIR__, "..", "..") :
+                                               joinpath(tempdir(), "diff3d-examples")))
 const FIGS = joinpath(PROJECT_ROOT, "paper", "figs")
 isdir(FIGS) || mkpath(FIGS)
 

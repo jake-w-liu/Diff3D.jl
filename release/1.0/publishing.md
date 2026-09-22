@@ -24,10 +24,35 @@ TagBot or an unconfigured SSH deploy key.
 
 After the candidate and publication are approved:
 
-1. Submit `@JuliaRegistrator register` on the **verified candidate commit**, with
-   its prepared release notes. Check the generated General registry PR against
-   that commit's package UUID, version, tree hash and compatibility entries.
-   Wait for registry checks and merge; do not substitute a later `main` commit.
+1. Submit `@JuliaRegistrator register` on the **verified candidate commit**, and
+   paste `release/1.0/release-notes.md` into that same comment under a
+   `Release notes:` line, so Registrator copies it into the registry pull
+   request between its `<!-- BEGIN RELEASE NOTES -->` and
+   `<!-- END RELEASE NOTES -->` markers:
+
+   ```
+   @JuliaRegistrator register
+
+   Release notes:
+
+   ## Breaking changes
+   ...
+   ```
+
+   This is required, not optional. Registering 1.0.0 over 0.1.8 changes the major
+   version, so `RegistryTools` adds the `BREAKING` label
+   ([`src/register.jl`](https://github.com/JuliaRegistries/RegistryTools.jl/blob/master/src/register.jl),
+   `version.major != previous.major` -> `:breaking`). General runs AutoMerge with
+   `check_breaking_explanation = true`, whose guideline rejects a `BREAKING`
+   registration unless the release notes in the pull-request body match
+   `breaking|changelog`
+   ([`AutoMerge/src/guidelines.jl`](https://github.com/JuliaRegistries/RegistryCI.jl/blob/master/AutoMerge/src/guidelines.jl),
+   `meets_breaking_explanation_check`). The prepared notes open with a
+   `## Breaking changes` section for exactly this reason; keep that wording.
+
+   Check the generated General registry PR against that commit's package UUID,
+   version, tree hash and compatibility entries. Wait for registry checks and
+   merge; do not substitute a later `main` commit.
 2. Create the annotated `v1.0.0` Git tag at that same commit and push that exact
    tag through the current Git credentials. The tag push triggers versioned
    documentation. A tag/package-version mismatch fails before the docs build.

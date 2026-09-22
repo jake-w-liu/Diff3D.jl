@@ -368,6 +368,7 @@ ORBIT_CENTRE_PROBE = """async () => {
         }
         return {blue,worstOther,sample};
     };
+    const framesAtStart=d.renderedFrames();
     let state=read(), frames=0;
     while(state.blue<block*block && frames<120){
         await new Promise(resolve => requestAnimationFrame(resolve));
@@ -400,10 +401,121 @@ ORBIT_CENTRE_PROBE = """async () => {
             dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
             clip:d.clipPlanes(),targetOffset:d.targetOffset(),
             objects:d.activeObjectCount(),draws:d.activeDrawItemCount(),views:d.activeViewCount(),
+            // objects/draws/views re-run the visibility filter at probe time; they are
+            // not a record of any frame. The fields below are, and they separate the
+            // three ways this canvas can end up showing only the background colour:
+            //   renderedDelta==0 and lastRenderError set -> a frame threw
+            //   renderedDelta>0 and stats "0 draw items" -> the frame drew nothing
+            //   renderedDelta>0 and stats "1 draw items" -> it drew and rasterised nothing
+            // Comparing the stats text across one frame cannot tell these apart: render()
+            // writes a pure function of the draw count, so a healthy loop on this
+            // single-object fixture rewrites the identical string every frame.
+            stats:document.getElementById('stats').textContent,
+            renderedFrames:d.renderedFrames(),
+            renderedDelta:d.renderedFrames()-framesAtStart,
+            renderStopped:d.renderStopped(), lastRenderError:d.lastRenderError(),
+            contextLost:d.contextLost(),
             canvas:[c.width,c.height],dpr:window.devicePixelRatio,
             rect:[Math.round(c.getBoundingClientRect().width),
                   Math.round(c.getBoundingClientRect().height)]};
 }"""
+
+
+def verify_render_loop_recovery(browser, fixture_path: Path) -> None:
+    """The exported viewer must survive a frame that throws, and must stop retrying a
+    frame that always throws.
+
+    render() clears the whole canvas to the background colour before it draws anything,
+    and the context keeps its drawing buffer, so a frame that raises after that clear
+    leaves the canvas showing nothing but the background. If the loop is not re-armed
+    the viewer stays that way for good; if it is re-armed without a bound, a viewer that
+    fails every frame rethrows and rewrites the DOM for as long as the page is open.
+    Both halves are checked here against the real exported file.
+    """
+    page = browser.new_page(viewport={"width": 1024, "height": 800})
+    errors = []
+    page.on("pageerror", lambda error, target=errors: target.append(str(error)))
+    try:
+        # Wrap the draw entry points before the viewer runs, so the ANGLE extension
+        # object it caches at start-up is wrapped too, and keep the fault disarmed
+        # until a healthy frame has been observed.
+        page.add_init_script("""(() => {
+            window.__fault={mode:'off',fired:0};
+            const trip=()=>{
+                const f=window.__fault;
+                if(f.mode==='always'||(f.mode==='once'&&f.fired===0)){
+                    f.fired++; throw new Error('injected render fault');
+                }
+            };
+            const hook=(owner,name)=>{
+                const original=owner&&owner[name];
+                if(typeof original!=='function') return;
+                owner[name]=function(...args){ trip(); return original.apply(this,args); };
+            };
+            for(const name of ['drawElements','drawArrays'])
+                hook(WebGLRenderingContext.prototype,name);
+            const getExtension=WebGLRenderingContext.prototype.getExtension;
+            WebGLRenderingContext.prototype.getExtension=function(name){
+                const ext=getExtension.call(this,name);
+                if(ext&&name==='ANGLE_instanced_arrays'){
+                    hook(ext,'drawArraysInstancedANGLE');
+                    hook(ext,'drawElementsInstancedANGLE');
+                }
+                return ext;
+            };
+        })();""")
+        page.goto(fixture_path.as_uri(), timeout=120000)
+        page.wait_for_function(
+            "window.__diff3dDebug && window.__diff3dDebug.renderedFrames() > 2", timeout=120000)
+
+        centre = """() => {
+            const c=document.querySelector('canvas'), gl=c.getContext('webgl');
+            const p=new Uint8Array(4*9*9); gl.finish();
+            gl.readPixels(Math.floor(c.width/2)-4,Math.floor(c.height/2)-4,9,9,
+                          gl.RGBA,gl.UNSIGNED_BYTE,p);
+            return Array.from(p);
+        }"""
+        healthy = page.evaluate(centre)
+        if max(healthy) == 0:
+            raise AssertionError("Render loop recovery: fixture did not draw before the fault")
+
+        # One transient fault: the loop must report it and carry on.
+        page.evaluate("() => { window.__fault.mode='once'; }")
+        page.wait_for_function("window.__fault.fired >= 1", timeout=120000)
+        page.evaluate("() => { window.__fault.mode='off'; }")
+        resumed = page.evaluate("""async () => {
+            const d=window.__diff3dDebug, start=d.renderedFrames();
+            for(let i=0;i<120 && d.renderedFrames()-start<3;i++)
+                await new Promise(resolve => requestAnimationFrame(resolve));
+            return {advanced:d.renderedFrames()-start, stopped:d.renderStopped(),
+                    lastError:d.lastRenderError(), lost:d.contextLost()};
+        }""")
+        restored = page.evaluate(centre)
+        if resumed["advanced"] < 3 or resumed["stopped"] or resumed["lost"]:
+            raise AssertionError(
+                f"Render loop did not survive one thrown frame: {resumed}, errors {errors}")
+        if not errors or not resumed["lastError"]:
+            raise AssertionError(
+                f"The thrown frame was swallowed instead of reported: "
+                f"{resumed}, errors {errors}")
+        if restored != healthy:
+            raise AssertionError("Render loop resumed but the view did not come back")
+
+        # A permanent fault: the loop must give up rather than retry for ever.
+        page.evaluate("() => { window.__fault.mode='always'; }")
+        page.wait_for_function(
+            "window.__diff3dDebug.renderStopped() === true", timeout=120000)
+        settled = page.evaluate("() => ({fired:window.__fault.fired,"
+                                " frames:window.__diff3dDebug.renderedFrames()})")
+        page.wait_for_timeout(500)
+        after = page.evaluate("() => ({fired:window.__fault.fired,"
+                              " frames:window.__diff3dDebug.renderedFrames()})")
+        if after != settled:
+            raise AssertionError(
+                f"Render loop kept retrying a permanently failing frame: {settled} -> {after}")
+    finally:
+        page.close()
+    print("BROWSER_RENDER_RECOVERY_OK", flush=True)
 
 
 def select_render_case(page, case_id: str) -> None:
@@ -519,6 +631,7 @@ def main() -> None:
             browser = launch_browser(playwright, args.browser)
             try:
                 checked_texture_storage = False
+                checked_render_recovery = False
                 checked_location_cache = False
                 reported_environment = False
                 for name, instancing_enabled in cases:
@@ -575,6 +688,10 @@ def main() -> None:
                             verify_shared_texture_refresh(page)
                             verify_cube_texture_storage(page)
                             checked_texture_storage = True
+                        if not checked_render_recovery:
+                            verify_render_loop_recovery(
+                                browser, Path(directory) / "orbit_zoom_limits.html")
+                            checked_render_recovery = True
                         if name in controlled_fixtures:
                             page.evaluate("window.__diff3dTestRenderFrame()")
                         expected_views = 2 if name.startswith("lod_") or name in ("stacked", "overlap", "layered_views", "layered_lights", "layered_shadows") else 1
@@ -801,7 +918,8 @@ def main() -> None:
                                                     ("blue", "pixel", "frames", "dist", "angles")}
                                 if not (fitted["error"] == 0 and fitted["blue"] == fitted["of"]
                                         and abs(fitted["dist"] - 2200.0) <= 1e-9 * 2200.0):
-                                    raise AssertionError(f"{name} at {width}x{height}: fitted view is clipped or not fitted {fitted}")
+                                    raise AssertionError(f"{name} at {width}x{height}: fitted view is not drawn "
+                                                         f"or not fitted {fitted}, browser errors {errors}")
                                 zoom = page.evaluate("""() => {
                                     const d=window.__diff3dDebug, canvas=document.querySelector('canvas');
                                     const wheel=(dy,n)=>{ for(let i=0;i<n;i++) canvas.dispatchEvent(new WheelEvent('wheel',{deltaY:dy,bubbles:true,cancelable:true})); };
@@ -836,7 +954,8 @@ def main() -> None:
                                 # fixed delay, and sample a block instead of one pixel.
                                 restored = page.evaluate(ORBIT_CENTRE_PROBE)
                                 if not (restored["error"] == 0 and restored["blue"] == restored["of"]):
-                                    raise AssertionError(f"{name} at {width}x{height}: view restored after zooming is clipped {restored}")
+                                    raise AssertionError(f"{name} at {width}x{height}: view restored after zooming "
+                                                         f"is not drawn {restored}, browser errors {errors}")
                                 # Every orbit assertion above raises on failure, so reaching here
                                 # means this fixture passed; the shared check below reads `correct`.
                                 correct = True

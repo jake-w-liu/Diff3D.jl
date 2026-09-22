@@ -5,6 +5,33 @@ differentiation APIs. It covers supported calls and properties, backend and
 numeric limits, errors, extension points, and ownership of mutable data.
 Incompatible public changes require a later major release.
 
+## Breaking changes
+
+This release is breaking. Registered 0.1.8 made no compatibility promise; 1.0 fixes
+the documented public surface for the whole 1.x series, and several corrected
+behaviours change results that 0.1.8 produced.
+
+- Corrected numerical, shading, deformation and loader behaviour changes previously
+  incorrect pixels and derivatives. Recheck application image and gradient baselines
+  against known expectations rather than accepting every changed result as equivalent.
+- A failed WebGL export now preserves the existing destination instead of leaving a
+  partial file, a successful save replaces a destination symlink rather than writing
+  through it, and on POSIX systems new files are created owner read/write with
+  existing regular-file permission bits preserved.
+- Render caches and soft workspaces have explicit ownership rules. Copy a
+  soft-workspace image that must outlive another call, and give concurrent
+  independent renders separate mutable resources.
+- Only exported names and documented calls, properties and behaviour are covered.
+  Internal helpers, cache fields and the generated browser JavaScript are
+  implementation details.
+- Documentation that referred to `diff_render` or `param_injector!` was incorrect;
+  `differentiable_render(params, setup_fn, width, height)` is the supported call.
+
+The migration guide below gives the full 0.1.8 upgrade path, and the changelog lists
+everything included in this release.
+
+## Changes included
+
 - Correct gradient propagation through zero means, planar triangle normals and
   areas, scaled vector differences, and zero line-projection parameters.
 - Preserve an existing WebGL export when saving fails, and format exported
@@ -14,6 +41,8 @@ Incompatible public changes require a later major release.
 - Keep browser cube maps within WebGL 1 limits, completing the physical mip
   pyramid for partial authored chains, and request `highp` fragment precision
   wherever the browser reports it.
+- Keep the exported viewer's frame loop alive when a frame raises, bound that
+  retry, and report completed frames, the last frame error and context loss.
 - Reduce allocations in affine morph transforms, CSG clipping/inversion,
   integer serialization, and standard-material lighting with ambient occlusion.
 - Execute the documented tutorials and provide versioned documentation, complete
