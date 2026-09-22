@@ -375,9 +375,29 @@ ORBIT_CENTRE_PROBE = """async () => {
         frames++; state=read();
     }
     const glError=gl.getError();
-    let census=null, diagnostics=null;
+    let census=null, diagnostics=null, composited=null;
     if(state.blue<block*block){
         diagnostics=d.frameDiagnostics();
+        // Read the canvas a second time through the compositor rather than through
+        // readPixels. If this sees the scene while readPixels does not, the frame was
+        // drawn and only the readback is wrong, which is a harness fault rather than a
+        // rendering one; if both agree the frame really produced nothing.
+        try{
+            const copy=document.createElement('canvas');
+            copy.width=c.width; copy.height=c.height;
+            const ctx=copy.getContext('2d');
+            ctx.drawImage(c,0,0);
+            const all=ctx.getImageData(0,0,c.width,c.height).data;
+            let blue=0; const seen={};
+            for(let i=0;i<all.length;i+=4){
+                const key=all[i]+','+all[i+1]+','+all[i+2];
+                seen[key]=(seen[key]||0)+1;
+                if(all[i+2]>200&&Math.max(all[i],all[i+1])<20) blue++;
+            }
+            const mid=4*((c.height>>1)*c.width+(c.width>>1));
+            composited={bluePixels:blue,centre:[all[mid],all[mid+1],all[mid+2]],
+                        topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,3)};
+        }catch(err){ composited={error:String(err)}; }
         const all=new Uint8Array(4*c.width*c.height); gl.finish();
         gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
         let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
@@ -398,7 +418,7 @@ ORBIT_CENTRE_PROBE = """async () => {
                 topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4),
                 map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
     }
-    return {pixel:state.sample,blue:state.blue,of:block*block,census,diagnostics,
+    return {pixel:state.sample,blue:state.blue,of:block*block,census,diagnostics,composited,
             worstOther:state.worstOther,frames,error:glError,
             dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
             clip:d.clipPlanes(),targetOffset:d.targetOffset(),
