@@ -374,8 +374,10 @@ ORBIT_CENTRE_PROBE = """async () => {
         await new Promise(resolve => requestAnimationFrame(resolve));
         frames++; state=read();
     }
-    let census=null;
+    const glError=gl.getError();
+    let census=null, diagnostics=null;
     if(state.blue<block*block){
+        diagnostics=d.frameDiagnostics();
         const all=new Uint8Array(4*c.width*c.height); gl.finish();
         gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
         let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
@@ -396,8 +398,8 @@ ORBIT_CENTRE_PROBE = """async () => {
                 topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4),
                 map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
     }
-    return {pixel:state.sample,blue:state.blue,of:block*block,census,
-            worstOther:state.worstOther,frames,error:gl.getError(),
+    return {pixel:state.sample,blue:state.blue,of:block*block,census,diagnostics,
+            worstOther:state.worstOther,frames,error:glError,
             dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
             clip:d.clipPlanes(),targetOffset:d.targetOffset(),
             objects:d.activeObjectCount(),draws:d.activeDrawItemCount(),views:d.activeViewCount(),

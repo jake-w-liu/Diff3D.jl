@@ -1206,3 +1206,59 @@ report are generated verbatim from those committed summaries. The superseded
   archive SHA-256 `cacdf458e56f95dd8c7f0406482b0271412b41d8a945a6d3e77da3043c322f77`.
 - macOS/Firefox `0dddaff`, run locally on a clean checkout, archive SHA-256
   `53d99d935d3c4008058d907484d66ebdb4c77751491fd6d965eb685d76af7042`.
+
+## R4 — the instrumented failure, and what it rules out
+
+Release validation
+[35678519977](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35678519977)
+on `3fee531` reproduced the failure with the new probe in place (job 106590098572,
+57 of 61 jobs green at the time of reading, the sole failure being
+`platforms / Browser validation (firefox, examples 1/6)`). The recorded state:
+
+```
+'stats': '1 draw items', 'renderedFrames': 278, 'renderedDelta': 120,
+'renderStopped': False, 'lastRenderError': None, 'contextLost': False,
+'error': 0, browser errors []
+'pixel': [3,3,3], 'census': {'topColours': [['3,3,3', 287472]]},
+'dist': 2200, 'atLoad': {'blue': 0, 'frames': 120, 'dist': 2200}
+```
+
+**VERIFIED — the render loop was alive and nothing threw.** `renderedDelta` is 120:
+the viewer completed a frame for every one of the 120 frames the probe waited, the
+failure counter never advanced, no frame error was recorded, the context was not
+lost, and the page collected no errors at all. The dead-render-loop mechanism this
+file previously recorded as the cause is therefore refuted for this failure, not
+merely unproven. The bounded re-arm remains correct hardening for a real defect, but
+it is not the fix for this.
+
+**VERIFIED — the frame drew, and the draw rasterised nothing.** `stats` reads
+`1 draw items`, so `render()` reached its end having submitted the fixture's single
+object, and `draw()` issues `gl.drawElements` unconditionally. The canvas is
+nevertheless the background colour over all 287,472 pixels with `gl.getError()` at 0.
+
+**VERIFIED — the zoom sequence is not involved.** `atLoad` records the view before
+any reset, and it is already blank with the fitted distance correct at exactly 2200.
+This failure occurred at the first orbit check, whereas the `b002186` failure passed
+that check and failed only after zooming. The common element is a blank frame from a
+healthy loop, not the wheel sequence.
+
+Seventy-one fixtures passed in the same browser process before this one, each on its
+own page, so the browser and driver were rendering correctly throughout. The fixture
+is the only one whose scene is 2,200 units across, with clip planes derived as
+near 22 and far 143,000.
+
+**Hypothesis (untested) — the remaining candidates.** A submitted `drawElements` that
+rasterises nothing, with no GL error, is consistent with a zero or wrong element
+count, an out-of-range offset, a program that is bound but not usable, a degenerate
+or out-of-frustum transform, or a driver-level fault on that host. **Decisive test:**
+`__diff3dDebug.frameDiagnostics()` now captures, only when a frame comes back blank,
+the drawing-buffer and canvas sizes, framebuffer binding, viewport, scissor box and
+enable, depth test/func/range/mask, colour mask, cull enable/mode/front face, blend,
+the view and projection matrices with a finiteness check, the link status of every
+program, and each object's mode, element count, index type, draw offset, instance
+count, buffer presence, side, visibility and matrix finiteness. The healthy baseline
+for this fixture, measured locally in Firefox 155, is `count` 6, `indexType` 5123,
+`offset` 0, all four programs linked, cull disabled, `depthFunc` 513, `depthRange`
+[0,1], viewport `[0,0,678,424]`, all matrices finite and `error` 0. The next
+occurrence reports the same fields, and any divergence from that baseline names the
+mechanism.
