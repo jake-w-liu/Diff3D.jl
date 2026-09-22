@@ -1,24 +1,24 @@
 {
- "revision": "017289a7bd30d062ebcba62ed3d471911598c00b",
+ "revision": "3fee5313ea9103da48397b9517eebdab5b070695",
  "status": "passed",
  "raw_files_verified": 42,
- "run_sha256": "2a627a3bdc793293e58e90f793137578a6e1ac3ee9c2d1bedd31f067f9b2b1ca",
+ "run_sha256": "52716e6f243882765b97ea4df5138242fc7abeea4308c39e2d666c0988fc8451",
  "environment": {
   "os": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
   "arch": "x86_64",
   "cpu_count": 4,
   "load_average_start": [
-   1.63330078125,
-   0.64453125,
-   0.236328125
+   1.2578125,
+   0.55712890625,
+   0.2080078125
   ],
   "load_average_end": [
-   3.6328125,
-   2.46484375,
-   1.134765625
+   3.9853515625,
+   2.3232421875,
+   1.0478515625
   ],
-  "started_unix_seconds": 1789963618.2377203,
-  "finished_unix_seconds": 1789963914.852477,
+  "started_unix_seconds": 1790043673.1800282,
+  "finished_unix_seconds": 1790043974.686238,
   "julia": {
    "julia": "1.13.0",
    "cpu": "znver3",
@@ -46,7 +46,7 @@
   {
    "allocated_bytes": 73696,
    "count": 16,
-   "first_invocation_ns": 424668160,
+   "first_invocation_ns": 425298998,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 3.2526065174565133e-19,
    "loss": 0.0009130644269739578,
@@ -58,16 +58,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.018726,
-    "median_ms": 0.019356,
-    "p95_nearest_rank_ms": 0.04251,
-    "maximum_ms": 0.121969
+    "minimum_ms": 0.018876,
+    "median_ms": 0.019597,
+    "p95_nearest_rank_ms": 0.020979,
+    "maximum_ms": 0.12838
    }
   },
   {
    "allocated_bytes": 2368,
    "count": 16,
-   "first_invocation_ns": 533159466,
+   "first_invocation_ns": 527520457,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 2.168404344971009e-19,
    "loss": 0.0009130644269739578,
@@ -79,16 +79,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.002876,
-    "median_ms": 0.002926,
-    "p95_nearest_rank_ms": 0.003587,
-    "maximum_ms": 0.011662
+    "minimum_ms": 0.002545,
+    "median_ms": 0.002615,
+    "p95_nearest_rank_ms": 0.003086,
+    "maximum_ms": 0.009899
    }
   },
   {
    "allocated_bytes": 384,
    "count": 16,
-   "first_invocation_ns": 26179,
+   "first_invocation_ns": 26860,
    "fitted_loss": 4.8483652483741445e-23,
    "gradient_max_error": 3.4723482769671854e-13,
    "loss": 0.0009130644269739578,
@@ -101,15 +101,15 @@
    "timing": {
     "samples": 21,
     "minimum_ms": 0.025708,
-    "median_ms": 0.025759,
-    "p95_nearest_rank_ms": 0.025809,
-    "maximum_ms": 0.027782
+    "median_ms": 0.025768,
+    "p95_nearest_rank_ms": 0.028143,
+    "maximum_ms": 0.048651
    }
   },
   {
    "allocated_bytes": 267976,
    "count": 64,
-   "first_invocation_ns": 175410,
+   "first_invocation_ns": 197811,
    "gradient_max_error": 8.131516293641283e-20,
    "loss": 0.0008975323800219512,
    "method": "reverse_ad",
@@ -119,16 +119,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.073639,
-    "median_ms": 0.088316,
-    "p95_nearest_rank_ms": 0.167394,
-    "maximum_ms": 0.199225
+    "minimum_ms": 0.077215,
+    "median_ms": 0.106219,
+    "p95_nearest_rank_ms": 0.166282,
+    "maximum_ms": 0.193182
    }
   },
   {
    "allocated_bytes": 8152,
    "count": 64,
-   "first_invocation_ns": 211705954,
+   "first_invocation_ns": 211619732,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008975323800219512,
    "method": "forward_ad",
@@ -138,16 +138,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.025768,
-    "median_ms": 0.02606,
-    "p95_nearest_rank_ms": 0.0481,
-    "maximum_ms": 0.086603
+    "minimum_ms": 0.023083,
+    "median_ms": 0.023244,
+    "p95_nearest_rank_ms": 0.050073,
+    "maximum_ms": 0.100709
    }
   },
   {
    "allocated_bytes": 1152,
    "count": 64,
-   "first_invocation_ns": 406344,
+   "first_invocation_ns": 408274,
    "gradient_max_error": 1.3661543684512223e-13,
    "loss": 0.0008975323800219512,
    "method": "central_difference",
@@ -157,16 +157,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.405883,
-    "median_ms": 0.41456,
-    "p95_nearest_rank_ms": 0.426481,
-    "maximum_ms": 0.427273
+    "minimum_ms": 0.407152,
+    "median_ms": 0.408645,
+    "p95_nearest_rank_ms": 0.430766,
+    "maximum_ms": 0.455482
    }
   },
   {
    "allocated_bytes": 1109704,
    "count": 256,
-   "first_invocation_ns": 360839,
+   "first_invocation_ns": 352520,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604817,
    "method": "reverse_ad",
@@ -176,16 +176,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.304864,
-    "median_ms": 0.317386,
-    "p95_nearest_rank_ms": 0.492986,
-    "maximum_ms": 0.536809
+    "minimum_ms": 0.309239,
+    "median_ms": 0.322344,
+    "p95_nearest_rank_ms": 0.55578,
+    "maximum_ms": 0.562543
    }
   },
   {
    "allocated_bytes": 30336,
    "count": 256,
-   "first_invocation_ns": 216221560,
+   "first_invocation_ns": 210536545,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604817,
    "method": "forward_ad",
@@ -195,16 +195,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.4308,
-    "median_ms": 0.435488,
-    "p95_nearest_rank_ms": 0.445838,
-    "maximum_ms": 0.530818
+    "minimum_ms": 0.392524,
+    "median_ms": 0.404507,
+    "p95_nearest_rank_ms": 0.447678,
+    "maximum_ms": 0.49688
    }
   },
   {
    "allocated_bytes": 4240,
    "count": 256,
-   "first_invocation_ns": 6555100,
+   "first_invocation_ns": 6601624,
    "gradient_max_error": 5.011946803759604e-14,
    "loss": 0.0008173696019604817,
    "method": "central_difference",
@@ -214,16 +214,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 6.528711,
-    "median_ms": 6.561011,
-    "p95_nearest_rank_ms": 6.674665,
-    "maximum_ms": 6.6771
+    "minimum_ms": 6.533717,
+    "median_ms": 6.576688,
+    "p95_nearest_rank_ms": 7.128579,
+    "maximum_ms": 7.312225
    }
   },
   {
    "allocated_bytes": 4436808,
    "count": 1024,
-   "first_invocation_ns": 1331863,
+   "first_invocation_ns": 1340078,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554012,
    "method": "reverse_ad",
@@ -233,16 +233,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 1.241173,
-    "median_ms": 1.284184,
-    "p95_nearest_rank_ms": 1.748606,
-    "maximum_ms": 3.645231
+    "minimum_ms": 1.278973,
+    "median_ms": 1.312897,
+    "p95_nearest_rank_ms": 1.711443,
+    "maximum_ms": 4.042245
    }
   },
   {
    "allocated_bytes": 116352,
    "count": 1024,
-   "first_invocation_ns": 6784392,
+   "first_invocation_ns": 6192298,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554012,
    "method": "forward_ad",
@@ -252,16 +252,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 6.745027,
-    "median_ms": 6.763362,
-    "p95_nearest_rank_ms": 6.792546,
-    "maximum_ms": 6.802265
+    "minimum_ms": 6.139751,
+    "median_ms": 6.174646,
+    "p95_nearest_rank_ms": 6.207928,
+    "maximum_ms": 6.223367
    }
   },
   {
    "allocated_bytes": 16528,
    "count": 1024,
-   "first_invocation_ns": 105139751,
+   "first_invocation_ns": 105281442,
    "gradient_max_error": 1.4176126364364577e-14,
    "loss": 0.0007987839875554012,
    "method": "central_difference",
@@ -271,10 +271,10 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 104.812736,
-    "median_ms": 105.071774,
-    "p95_nearest_rank_ms": 106.520526,
-    "maximum_ms": 106.614963
+    "minimum_ms": 105.077861,
+    "median_ms": 105.275741,
+    "p95_nearest_rank_ms": 109.148979,
+    "maximum_ms": 110.45814
    }
   },
   {
@@ -284,21 +284,21 @@
    "gradient_max_error": 3.4723482769671854e-13,
    "timed_gradient_max_error": 3.4723482769671854e-13,
    "objective_evaluations": 32,
-   "first_invocation_ns": 614725,
+   "first_invocation_ns": 605052,
    "retained_heap_delta_bytes": 848,
-   "retained_array_buffer_delta_bytes": 128,
+   "retained_array_buffer_delta_bytes": -2432,
    "result_bytes": 128,
-   "rss_bytes": 64745472,
+   "rss_bytes": 65142784,
    "recovered_parameter_max_error": 4.99853491930935e-11,
    "fitted_loss": 4.848370907331693e-23,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.014197,
-    "median_ms": 0.02115,
-    "p95_nearest_rank_ms": 0.032231,
-    "maximum_ms": 0.038983
+    "minimum_ms": 0.014157,
+    "median_ms": 0.014577,
+    "p95_nearest_rank_ms": 0.030447,
+    "maximum_ms": 0.035025
    }
   },
   {
@@ -308,19 +308,19 @@
    "gradient_max_error": 1.3705096085780966e-13,
    "timed_gradient_max_error": 1.3705096085780966e-13,
    "objective_evaluations": 128,
-   "first_invocation_ns": 1810342,
+   "first_invocation_ns": 1790290,
    "retained_heap_delta_bytes": 904,
    "retained_array_buffer_delta_bytes": 512,
    "result_bytes": 512,
-   "rss_bytes": 73003008,
+   "rss_bytes": 73822208,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.066615,
-    "median_ms": 0.068108,
-    "p95_nearest_rank_ms": 0.096571,
-    "maximum_ms": 0.102793
+    "minimum_ms": 0.066825,
+    "median_ms": 0.068088,
+    "p95_nearest_rank_ms": 0.102582,
+    "maximum_ms": 0.113433
    }
   },
   {
@@ -330,19 +330,19 @@
    "gradient_max_error": 5.554047890002356e-14,
    "timed_gradient_max_error": 5.554047890002356e-14,
    "objective_evaluations": 512,
-   "first_invocation_ns": 1078938,
+   "first_invocation_ns": 1116419,
    "retained_heap_delta_bytes": 0,
    "retained_array_buffer_delta_bytes": 1536,
    "result_bytes": 2048,
-   "rss_bytes": 73003008,
+   "rss_bytes": 73822208,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 1.027361,
-    "median_ms": 1.046387,
-    "p95_nearest_rank_ms": 1.108003,
-    "maximum_ms": 1.155502
+    "minimum_ms": 1.027613,
+    "median_ms": 1.055475,
+    "p95_nearest_rank_ms": 1.059974,
+    "maximum_ms": 1.22893
    }
   },
   {
@@ -352,25 +352,25 @@
    "gradient_max_error": 1.5100700095742325e-14,
    "timed_gradient_max_error": 1.5100700095742325e-14,
    "objective_evaluations": 2048,
-   "first_invocation_ns": 16059865,
+   "first_invocation_ns": 16102576,
    "retained_heap_delta_bytes": 0,
    "retained_array_buffer_delta_bytes": 6144,
    "result_bytes": 8192,
-   "rss_bytes": 73003008,
+   "rss_bytes": 73822208,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 16.507225,
-    "median_ms": 16.617182,
-    "p95_nearest_rank_ms": 16.855991,
-    "maximum_ms": 17.144613
+    "minimum_ms": 16.39879,
+    "median_ms": 16.473109,
+    "p95_nearest_rank_ms": 16.648187,
+    "maximum_ms": 16.708179
    }
   },
   {
    "allocated_bytes": 73696,
    "count": 16,
-   "first_invocation_ns": 419520074,
+   "first_invocation_ns": 418345330,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 3.2526065174565133e-19,
    "loss": 0.0009130644269739578,
@@ -382,16 +382,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.020027,
-    "median_ms": 0.020408,
-    "p95_nearest_rank_ms": 0.02127,
-    "maximum_ms": 0.125356
+    "minimum_ms": 0.019246,
+    "median_ms": 0.019536,
+    "p95_nearest_rank_ms": 0.021059,
+    "maximum_ms": 0.165971
    }
   },
   {
    "allocated_bytes": 2368,
    "count": 16,
-   "first_invocation_ns": 515353710,
+   "first_invocation_ns": 510013902,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 2.168404344971009e-19,
    "loss": 0.0009130644269739578,
@@ -403,16 +403,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.002465,
-    "median_ms": 0.002565,
-    "p95_nearest_rank_ms": 0.002966,
-    "maximum_ms": 0.01072
+    "minimum_ms": 0.002524,
+    "median_ms": 0.002554,
+    "p95_nearest_rank_ms": 0.003266,
+    "maximum_ms": 0.011842
    }
   },
   {
    "allocated_bytes": 384,
    "count": 16,
-   "first_invocation_ns": 26009,
+   "first_invocation_ns": 31158,
    "fitted_loss": 4.8483652483741445e-23,
    "gradient_max_error": 3.4723482769671854e-13,
    "loss": 0.0009130644269739578,
@@ -424,16 +424,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.025688,
-    "median_ms": 0.025759,
-    "p95_nearest_rank_ms": 0.027071,
-    "maximum_ms": 0.044924
+    "minimum_ms": 0.025657,
+    "median_ms": 0.025728,
+    "p95_nearest_rank_ms": 0.033542,
+    "maximum_ms": 0.050715
    }
   },
   {
    "allocated_bytes": 267976,
    "count": 64,
-   "first_invocation_ns": 174638,
+   "first_invocation_ns": 196628,
    "gradient_max_error": 8.131516293641283e-20,
    "loss": 0.0008975323800219512,
    "method": "reverse_ad",
@@ -443,16 +443,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.077245,
-    "median_ms": 0.100859,
-    "p95_nearest_rank_ms": 0.153268,
-    "maximum_ms": 0.166383
+    "minimum_ms": 0.07483,
+    "median_ms": 0.106459,
+    "p95_nearest_rank_ms": 0.175207,
+    "maximum_ms": 0.181319
    }
   },
   {
    "allocated_bytes": 8152,
    "count": 64,
-   "first_invocation_ns": 204721037,
+   "first_invocation_ns": 206775114,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008975323800219512,
    "method": "forward_ad",
@@ -462,16 +462,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.025859,
-    "median_ms": 0.026259,
-    "p95_nearest_rank_ms": 0.033604,
-    "maximum_ms": 0.051427
+    "minimum_ms": 0.025698,
+    "median_ms": 0.025989,
+    "p95_nearest_rank_ms": 0.029135,
+    "maximum_ms": 0.099987
    }
   },
   {
    "allocated_bytes": 1152,
    "count": 64,
-   "first_invocation_ns": 425901,
+   "first_invocation_ns": 453649,
    "gradient_max_error": 1.3661543684512223e-13,
    "loss": 0.0008975323800219512,
    "method": "central_difference",
@@ -481,16 +481,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.406464,
-    "median_ms": 0.407095,
-    "p95_nearest_rank_ms": 0.418226,
-    "maximum_ms": 0.418767
+    "minimum_ms": 0.405779,
+    "median_ms": 0.407763,
+    "p95_nearest_rank_ms": 0.428693,
+    "maximum_ms": 0.44355
    }
   },
   {
    "allocated_bytes": 1109704,
    "count": 256,
-   "first_invocation_ns": 360868,
+   "first_invocation_ns": 389068,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604817,
    "method": "reverse_ad",
@@ -500,16 +500,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.319079,
-    "median_ms": 0.32985,
-    "p95_nearest_rank_ms": 0.4415,
-    "maximum_ms": 0.603204
+    "minimum_ms": 0.309339,
+    "median_ms": 0.319448,
+    "p95_nearest_rank_ms": 0.572722,
+    "maximum_ms": 0.602658
    }
   },
   {
    "allocated_bytes": 30336,
    "count": 256,
-   "first_invocation_ns": 209025727,
+   "first_invocation_ns": 210151493,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604817,
    "method": "forward_ad",
@@ -519,16 +519,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.43093,
-    "median_ms": 0.434777,
-    "p95_nearest_rank_ms": 0.454855,
-    "maximum_ms": 0.534414
+    "minimum_ms": 0.465441,
+    "median_ms": 0.478185,
+    "p95_nearest_rank_ms": 0.509763,
+    "maximum_ms": 0.586166
    }
   },
   {
    "allocated_bytes": 4240,
    "count": 256,
-   "first_invocation_ns": 6565711,
+   "first_invocation_ns": 6553856,
    "gradient_max_error": 5.011946803759604e-14,
    "loss": 0.0008173696019604817,
    "method": "central_difference",
@@ -538,16 +538,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 6.53328,
-    "median_ms": 6.544129,
-    "p95_nearest_rank_ms": 6.577713,
-    "maximum_ms": 6.581099
+    "minimum_ms": 6.525523,
+    "median_ms": 6.538377,
+    "p95_nearest_rank_ms": 6.618568,
+    "maximum_ms": 6.64127
    }
   },
   {
    "allocated_bytes": 4436808,
    "count": 1024,
-   "first_invocation_ns": 1339507,
+   "first_invocation_ns": 1429977,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554012,
    "method": "reverse_ad",
@@ -557,16 +557,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 1.289454,
-    "median_ms": 1.432553,
-    "p95_nearest_rank_ms": 1.652346,
-    "maximum_ms": 3.631325
+    "minimum_ms": 1.269686,
+    "median_ms": 1.316835,
+    "p95_nearest_rank_ms": 1.764643,
+    "maximum_ms": 3.664389
    }
   },
   {
    "allocated_bytes": 116352,
    "count": 1024,
-   "first_invocation_ns": 6767479,
+   "first_invocation_ns": 7356299,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554012,
    "method": "forward_ad",
@@ -576,16 +576,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 6.749044,
-    "median_ms": 6.758241,
-    "p95_nearest_rank_ms": 6.790512,
-    "maximum_ms": 6.798127
+    "minimum_ms": 7.305303,
+    "median_ms": 7.338645,
+    "p95_nearest_rank_ms": 7.392696,
+    "maximum_ms": 7.471895
    }
   },
   {
    "allocated_bytes": 16528,
    "count": 1024,
-   "first_invocation_ns": 104693759,
+   "first_invocation_ns": 104733481,
    "gradient_max_error": 1.4176126364364577e-14,
    "loss": 0.0007987839875554012,
    "method": "central_difference",
@@ -595,10 +595,10 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 104.663248,
-    "median_ms": 104.748999,
-    "p95_nearest_rank_ms": 106.626057,
-    "maximum_ms": 107.80009
+    "minimum_ms": 104.61565,
+    "median_ms": 104.704577,
+    "p95_nearest_rank_ms": 105.035476,
+    "maximum_ms": 105.49702
    }
   },
   {
@@ -608,21 +608,21 @@
    "gradient_max_error": 3.4723482769671854e-13,
    "timed_gradient_max_error": 3.4723482769671854e-13,
    "objective_evaluations": 32,
-   "first_invocation_ns": 608132,
+   "first_invocation_ns": 585296,
    "retained_heap_delta_bytes": 848,
    "retained_array_buffer_delta_bytes": 128,
    "result_bytes": 128,
-   "rss_bytes": 65306624,
+   "rss_bytes": 65216512,
    "recovered_parameter_max_error": 4.99853491930935e-11,
    "fitted_loss": 4.848370907331693e-23,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.014397,
-    "median_ms": 0.025908,
-    "p95_nearest_rank_ms": 0.029956,
-    "maximum_ms": 0.035617
+    "minimum_ms": 0.014387,
+    "median_ms": 0.02675,
+    "p95_nearest_rank_ms": 0.030016,
+    "maximum_ms": 0.035146
    }
   },
   {
@@ -632,19 +632,19 @@
    "gradient_max_error": 1.3705096085780966e-13,
    "timed_gradient_max_error": 1.3705096085780966e-13,
    "objective_evaluations": 128,
-   "first_invocation_ns": 1854395,
+   "first_invocation_ns": 3490212,
    "retained_heap_delta_bytes": 904,
    "retained_array_buffer_delta_bytes": 512,
    "result_bytes": 512,
-   "rss_bytes": 73957376,
+   "rss_bytes": 73474048,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.067506,
-    "median_ms": 0.068178,
-    "p95_nearest_rank_ms": 0.107401,
-    "maximum_ms": 0.120015
+    "minimum_ms": 0.067115,
+    "median_ms": 0.068208,
+    "p95_nearest_rank_ms": 0.104455,
+    "maximum_ms": 0.113001
    }
   },
   {
@@ -654,19 +654,19 @@
    "gradient_max_error": 5.554047890002356e-14,
    "timed_gradient_max_error": 5.554047890002356e-14,
    "objective_evaluations": 512,
-   "first_invocation_ns": 1088045,
+   "first_invocation_ns": 1077797,
    "retained_heap_delta_bytes": 0,
    "retained_array_buffer_delta_bytes": 1536,
    "result_bytes": 2048,
-   "rss_bytes": 73957376,
+   "rss_bytes": 73474048,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 1.040105,
-    "median_ms": 1.109676,
-    "p95_nearest_rank_ms": 1.119744,
-    "maximum_ms": 1.171401
+    "minimum_ms": 1.006894,
+    "median_ms": 1.036961,
+    "p95_nearest_rank_ms": 1.051899,
+    "maximum_ms": 1.180719
    }
   },
   {
@@ -676,19 +676,19 @@
    "gradient_max_error": 1.5100700095742325e-14,
    "timed_gradient_max_error": 1.5100700095742325e-14,
    "objective_evaluations": 2048,
-   "first_invocation_ns": 16535417,
+   "first_invocation_ns": 16496817,
    "retained_heap_delta_bytes": 0,
    "retained_array_buffer_delta_bytes": 6144,
    "result_bytes": 8192,
-   "rss_bytes": 74088448,
+   "rss_bytes": 73474048,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 16.292211,
-    "median_ms": 16.700568,
-    "p95_nearest_rank_ms": 17.006313,
-    "maximum_ms": 17.03683
+    "minimum_ms": 16.449448,
+    "median_ms": 16.606342,
+    "p95_nearest_rank_ms": 16.761542,
+    "maximum_ms": 16.761883
    }
   }
  ],
@@ -731,7 +731,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 37,
+      "milliseconds": 30.20000000001164,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -748,7 +748,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 466.70000000001164
+      "navigationToFirstFrameMs": 455.1000000000058
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -777,17 +777,1606 @@
       "edge_tie_pixels": 404,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 211003,
-     "gzip_bytes": 40671,
-     "html_sha256": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
+     "html_bytes": 212000,
+     "gzip_bytes": 41112,
+     "html_sha256": "6b8a27000ace5eec3f52e658d0f454608a28afaede214b5602c28e14df02e03c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.349999999998545,
-      "median_ms": 2.8875000000007276,
-      "p95_nearest_rank_ms": 24.037499999998545,
-      "maximum_ms": 25.625
+      "minimum_ms": 2.5625,
+      "median_ms": 4.025000000001455,
+      "p95_nearest_rank_ms": 23.9375,
+      "maximum_ms": 24.799999999999272
      }
     },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 14.400000000023283,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 65.5
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553258,
+     "gzip_bytes": 139139,
+     "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.2374999999992724,
+      "median_ms": 0.25,
+      "p95_nearest_rank_ms": 0.3374999999978172,
+      "maximum_ms": 0.3499999999985448
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-16",
+   "mode": "instanced",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 12.700000000011642,
+      "calls": 1,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 357.30000000001746
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 173032,
+     "gzip_bytes": 40428,
+     "html_sha256": "18f9d72b2090bd082ac800775d619356e6d46775c8ec75078dae1ef29966d05c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.4250000000029104,
+      "median_ms": 1.4375,
+      "p95_nearest_rank_ms": 22.5625,
+      "maximum_ms": 23.262500000000728
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 10.39999999999418,
+      "calls": 1,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 58.39999999999418
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553264,
+     "gzip_bytes": 139140,
+     "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.2000000000007276,
+      "median_ms": 0.25,
+      "p95_nearest_rank_ms": 0.3875000000007276,
+      "maximum_ms": 0.4000000000014552
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-16",
+   "mode": "dynamic",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 19.20000000001164,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 162,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 413.29999999998836
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 162,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
+      "colored_pixels": 13000,
+      "edge_tie_pixels": 242,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 215833,
+     "gzip_bytes": 41514,
+     "html_sha256": "0c867b13aeab78128700b66c91c6fd5302dca8c107f71578e05e33b417487b6e",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 2.837499999997817,
+      "median_ms": 4.162500000002183,
+      "p95_nearest_rank_ms": 21.162499999998545,
+      "maximum_ms": 21.6875
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 10.299999999988358,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 62.89999999999418
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
+      "colored_pixels": 13000,
+      "edge_tie_pixels": 242,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553260,
+     "gzip_bytes": 139142,
+     "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.2124999999978172,
+      "median_ms": 0.23750000000291038,
+      "p95_nearest_rank_ms": 0.3249999999970896,
+      "maximum_ms": 0.5499999999992724
+     }
+    }
+   }
+  },
+  {
+   "id": "static-128",
+   "mode": "static",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 344,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 1282,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 407
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 1282,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 529244,
+     "gzip_bytes": 46584,
+     "html_sha256": "d7d9f4bf4d68603ddf515bb0027677395c0a642bfd63516ba4bb1503056f9384",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 12.974999999998545,
+      "median_ms": 16.787499999998545,
+      "p95_nearest_rank_ms": 19.337500000001455,
+      "maximum_ms": 27.424999999999272
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 10.099999999976717,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 63.80000000001746
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557244,
+     "gzip_bytes": 139637,
+     "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.3875000000007276,
+      "median_ms": 0.5750000000007276,
+      "p95_nearest_rank_ms": 0.9375,
+      "maximum_ms": 1.0750000000007276
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-128",
+   "mode": "instanced",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 12.299999999988358,
+      "calls": 1,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 346.1000000000058
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 181610,
+     "gzip_bytes": 41000,
+     "html_sha256": "9b21970f21a07e661364d48c50022a21a0dee39cd31cc5732f91d9d1f1c1e444",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.7125000000014552,
+      "median_ms": 1.5374999999985448,
+      "p95_nearest_rank_ms": 29.012500000000728,
+      "maximum_ms": 29.262500000000728
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 9.800000000017462,
+      "calls": 1,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 62.30000000001746
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557250,
+     "gzip_bytes": 139638,
+     "html_sha256": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.2250000000021828,
+      "median_ms": 0.2999999999992724,
+      "p95_nearest_rank_ms": 0.4125000000021828,
+      "maximum_ms": 0.5625
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-128",
+   "mode": "dynamic",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 350.70000000001164,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 1282,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 417.6000000000058
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 1282,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "5257a603a459a988a316ea60d6e3f3c8a194e1b301a77e0b9c3144d9b5253e6f",
+      "colored_pixels": 11655,
+      "edge_tie_pixels": 1152,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 558788,
+     "gzip_bytes": 48710,
+     "html_sha256": "dddc99f854f70d88925691b420e17e1c5ca146749ea4d416a9e26f2c20452661",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 14.25,
+      "median_ms": 16.98750000000291,
+      "p95_nearest_rank_ms": 20.25,
+      "maximum_ms": 23.399999999997817
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 11.5,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 64.80000000001746
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
+      "colored_pixels": 11904,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "5257a603a459a988a316ea60d6e3f3c8a194e1b301a77e0b9c3144d9b5253e6f",
+      "colored_pixels": 11655,
+      "edge_tie_pixels": 1152,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557246,
+     "gzip_bytes": 139642,
+     "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.4624999999978172,
+      "median_ms": 0.6500000000014552,
+      "p95_nearest_rank_ms": 0.9249999999992724,
+      "maximum_ms": 1.0249999999978172
+     }
+    }
+   }
+  },
+  {
+   "id": "static-512",
+   "mode": "static",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 380.70000000001164,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 5122,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 507.1000000000058
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 5122,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 1612893,
+     "gzip_bytes": 61634,
+     "html_sha256": "8400228c96b9238aec3ba9c337d00af9224dda8c2a5c01120653b3ec663e4fa9",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 46.01249999999709,
+      "median_ms": 54.23749999999927,
+      "p95_nearest_rank_ms": 60.349999999998545,
+      "maximum_ms": 69.72500000000218
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 17.5,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 70.5
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573308,
+     "gzip_bytes": 141200,
+     "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.9124999999985448,
+      "median_ms": 1.3249999999970896,
+      "p95_nearest_rank_ms": 4.775000000001455,
+      "maximum_ms": 4.837500000001455
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-512",
+   "mode": "instanced",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 12.89999999999418,
+      "calls": 1,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 389.6000000000058
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 211474,
+     "gzip_bytes": 42879,
+     "html_sha256": "400fc8f1e376f75a8d3d6f2a3d161e37569b1b779874ef944352fd28c8f59165",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.5750000000007276,
+      "median_ms": 0.9750000000021828,
+      "p95_nearest_rank_ms": 46.20000000000073,
+      "maximum_ms": 92.86249999999927
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 10.39999999999418,
+      "calls": 1,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 66.19999999998254
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573314,
+     "gzip_bytes": 141202,
+     "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.2000000000007276,
+      "median_ms": 0.2874999999985448,
+      "p95_nearest_rank_ms": 0.3875000000007276,
+      "maximum_ms": 0.3999999999978172
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-512",
+   "mode": "dynamic",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 367.20000000001164,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 5122,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 499.1000000000058
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 5122,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "277984b639499ab4a44e5ec4a8d7110d0fa449a865467c19a6905daced5ee309",
+      "colored_pixels": 12696,
+      "edge_tie_pixels": 1364,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 1731103,
+     "gzip_bytes": 68826,
+     "html_sha256": "7094a11f32b3aaff1fa47a26db880dae3b85b44aaf707b984925282688a7e479",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 45.30000000000291,
+      "median_ms": 53.41250000000582,
+      "p95_nearest_rank_ms": 58.51249999999709,
+      "maximum_ms": 64.61249999999563
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "desynchronized": false,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false,
+       "xrCompatible": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 32,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 17.900000000023283,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 85.29999999998836
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
+      "colored_pixels": 12926,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "277984b639499ab4a44e5ec4a8d7110d0fa449a865467c19a6905daced5ee309",
+      "colored_pixels": 12696,
+      "edge_tie_pixels": 1364,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573310,
+     "gzip_bytes": 141206,
+     "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.8375000000014552,
+      "median_ms": 1.375,
+      "p95_nearest_rank_ms": 1.6500000000014552,
+      "maximum_ms": 1.9625000000014552
+     }
+    }
+   }
+  },
+  {
+   "id": "static-16",
+   "mode": "static",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
     "three": {
      "environment": {
       "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
@@ -835,7 +2424,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 89.19999999998254
+      "navigationToFirstFrameMs": 85.90000000002328
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -871,24 +2460,12 @@
      "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.2124999999978172,
-      "median_ms": 0.2749999999978172,
-      "p95_nearest_rank_ms": 0.3375000000014552,
-      "maximum_ms": 0.3500000000021828
+      "minimum_ms": 0.19999999999708962,
+      "median_ms": 0.2624999999970896,
+      "p95_nearest_rank_ms": 0.33749999999417923,
+      "maximum_ms": 0.3375000000014552
      }
-    }
-   }
-  },
-  {
-   "id": "instanced-16",
-   "mode": "instanced",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
+    },
     "diff3d": {
      "environment": {
       "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
@@ -914,14 +2491,14 @@
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
       "devicePixelRatio": 1,
       "animationTime": 0,
-      "objectCount": 1
+      "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 12.699999999982538,
-      "calls": 1,
+      "milliseconds": 28.70000000001164,
+      "calls": 16,
       "triangles": 16,
       "resources": {
-       "createBuffer": 14,
+       "createBuffer": 162,
        "deleteBuffer": 0,
        "createTexture": 1,
        "deleteTexture": 0,
@@ -934,11 +2511,11 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 386
+      "navigationToFirstFrameMs": 516.7000000000116
      },
      "frames_per_sample": 8,
      "final_resources": {
-      "createBuffer": 14,
+      "createBuffer": 162,
       "deleteBuffer": 0,
       "createTexture": 1,
       "deleteTexture": 0,
@@ -963,17 +2540,29 @@
       "edge_tie_pixels": 404,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 172035,
-     "gzip_bytes": 39987,
-     "html_sha256": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
+     "html_bytes": 212000,
+     "gzip_bytes": 41112,
+     "html_sha256": "6b8a27000ace5eec3f52e658d0f454608a28afaede214b5602c28e14df02e03c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.7249999999985448,
-      "median_ms": 1.3375000000014552,
-      "p95_nearest_rank_ms": 21.375,
-      "maximum_ms": 42.26250000000073
+      "minimum_ms": 2.1750000000029104,
+      "median_ms": 4.05000000000291,
+      "p95_nearest_rank_ms": 24.200000000004366,
+      "maximum_ms": 24.775000000001455
      }
-    },
+    }
+   }
+  },
+  {
+   "id": "instanced-16",
+   "mode": "instanced",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
     "three": {
      "environment": {
       "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
@@ -1021,7 +2610,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 59.89999999999418
+      "navigationToFirstFrameMs": 58.79999999998836
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1057,24 +2646,12 @@
      "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.1749999999992724,
-      "median_ms": 0.25,
-      "p95_nearest_rank_ms": 0.3250000000007276,
-      "maximum_ms": 0.3250000000007276
+      "minimum_ms": 0.17500000000291038,
+      "median_ms": 0.23750000000291038,
+      "p95_nearest_rank_ms": 0.375,
+      "maximum_ms": 0.4124999999985448
      }
-    }
-   }
-  },
-  {
-   "id": "dynamic-16",
-   "mode": "dynamic",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
+    },
     "diff3d": {
      "environment": {
       "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
@@ -1100,14 +2677,14 @@
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
       "devicePixelRatio": 1,
       "animationTime": 0,
-      "objectCount": 16
+      "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 19.5,
-      "calls": 16,
+      "milliseconds": 12.200000000011642,
+      "calls": 1,
       "triangles": 16,
       "resources": {
-       "createBuffer": 162,
+       "createBuffer": 14,
        "deleteBuffer": 0,
        "createTexture": 1,
        "deleteTexture": 0,
@@ -1120,11 +2697,11 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 364.6000000000058
+      "navigationToFirstFrameMs": 348.8999999999651
      },
      "frames_per_sample": 8,
      "final_resources": {
-      "createBuffer": 162,
+      "createBuffer": 14,
       "deleteBuffer": 0,
       "createTexture": 1,
       "deleteTexture": 0,
@@ -1144,22 +2721,34 @@
       "edge_tolerance_pixels": 0.09038834764831845
      },
      "final_pixels": {
-      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
-      "colored_pixels": 13000,
-      "edge_tie_pixels": 242,
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 214836,
-     "gzip_bytes": 41073,
-     "html_sha256": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
+     "html_bytes": 173032,
+     "gzip_bytes": 40428,
+     "html_sha256": "18f9d72b2090bd082ac800775d619356e6d46775c8ec75078dae1ef29966d05c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.6124999999992724,
-      "median_ms": 4.287499999998545,
-      "p95_nearest_rank_ms": 25.375,
-      "maximum_ms": 25.575000000000728
+      "minimum_ms": 0.5499999999956344,
+      "median_ms": 1.3250000000043656,
+      "p95_nearest_rank_ms": 22.5,
+      "maximum_ms": 44.9375
      }
-    },
+    }
+   }
+  },
+  {
+   "id": "dynamic-16",
+   "mode": "dynamic",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
     "three": {
      "environment": {
       "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
@@ -1188,7 +2777,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 9.700000000011642,
+      "milliseconds": 10.099999999976717,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -1207,7 +2796,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 59.5
+      "navigationToFirstFrameMs": 63.59999999997672
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1241,1601 +2830,12 @@
      "html_bytes": 553260,
      "gzip_bytes": 139142,
      "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.19999999999708962,
-      "median_ms": 0.23750000000291038,
-      "p95_nearest_rank_ms": 0.3249999999970896,
-      "maximum_ms": 0.4124999999985448
-     }
-    }
-   }
-  },
-  {
-   "id": "static-128",
-   "mode": "static",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 319.20000000001164,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 1282,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 379.5
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 1282,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 528247,
-     "gzip_bytes": 46142,
-     "html_sha256": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 11.80000000000291,
-      "median_ms": 16.362499999999272,
-      "p95_nearest_rank_ms": 18.137500000000728,
-      "maximum_ms": 18.6875
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 10.89999999999418,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 62
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557244,
-     "gzip_bytes": 139637,
-     "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.3499999999985448,
-      "median_ms": 0.5250000000014552,
-      "p95_nearest_rank_ms": 1.0999999999985448,
-      "maximum_ms": 1.25
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-128",
-   "mode": "instanced",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 12.099999999976717,
-      "calls": 1,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 349.8999999999942
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 180613,
-     "gzip_bytes": 40559,
-     "html_sha256": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.8875000000007276,
-      "median_ms": 1.5125000000007276,
-      "p95_nearest_rank_ms": 26.975000000002183,
-      "maximum_ms": 28.799999999999272
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 9.5,
-      "calls": 1,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 59.5
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557250,
-     "gzip_bytes": 139638,
-     "html_sha256": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.1875,
-      "median_ms": 0.25,
-      "p95_nearest_rank_ms": 0.375,
-      "maximum_ms": 0.375
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-128",
-   "mode": "dynamic",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 319.30000000001746,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 1282,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 386.6000000000058
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 1282,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "5257a603a459a988a316ea60d6e3f3c8a194e1b301a77e0b9c3144d9b5253e6f",
-      "colored_pixels": 11655,
-      "edge_tie_pixels": 1152,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557791,
-     "gzip_bytes": 48266,
-     "html_sha256": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 11.024999999997817,
-      "median_ms": 16.899999999997817,
-      "p95_nearest_rank_ms": 23.125,
-      "maximum_ms": 30.05000000000291
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 11.39999999999418,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 67.5
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "af50df1e886a9bafc593e899f791579fff604db257829cf0bf43141c63e965ad",
-      "colored_pixels": 11904,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "5257a603a459a988a316ea60d6e3f3c8a194e1b301a77e0b9c3144d9b5253e6f",
-      "colored_pixels": 11655,
-      "edge_tie_pixels": 1152,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557246,
-     "gzip_bytes": 139642,
-     "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.4375,
-      "median_ms": 0.6375000000007276,
-      "p95_nearest_rank_ms": 0.875,
-      "maximum_ms": 1.0124999999970896
-     }
-    }
-   }
-  },
-  {
-   "id": "static-512",
-   "mode": "static",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 341.8999999999942,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 5122,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 460.70000000001164
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 5122,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 1611896,
-     "gzip_bytes": 61199,
-     "html_sha256": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 41.1875,
-      "median_ms": 51.20000000000073,
-      "p95_nearest_rank_ms": 56.60000000000218,
-      "maximum_ms": 58.9375
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 17.800000000017462,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 68.5
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573308,
-     "gzip_bytes": 141200,
-     "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.8374999999978172,
-      "median_ms": 1.0875000000014552,
-      "p95_nearest_rank_ms": 1.3250000000007276,
-      "maximum_ms": 1.4625000000014552
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-512",
-   "mode": "instanced",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 12.10000000000582,
-      "calls": 1,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 338.19999999998254
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 210477,
-     "gzip_bytes": 42437,
-     "html_sha256": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.5875000000014552,
-      "median_ms": 0.8875000000007276,
-      "p95_nearest_rank_ms": 43.775000000001455,
-      "maximum_ms": 88.76250000000073
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 9.5,
-      "calls": 1,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 66.30000000001746
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573314,
-     "gzip_bytes": 141202,
-     "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.2000000000007276,
-      "median_ms": 0.25,
-      "p95_nearest_rank_ms": 0.3374999999978172,
-      "maximum_ms": 0.4375
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-512",
-   "mode": "dynamic",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 342.30000000001746,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 5122,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 471.6000000000058
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 5122,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "277984b639499ab4a44e5ec4a8d7110d0fa449a865467c19a6905daced5ee309",
-      "colored_pixels": 12696,
-      "edge_tie_pixels": 1364,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 1730106,
-     "gzip_bytes": 68388,
-     "html_sha256": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 45.07499999999709,
-      "median_ms": 54.162499999998545,
-      "p95_nearest_rank_ms": 61.76250000000073,
-      "maximum_ms": 63.76250000000073
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 18.099999999976717,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 82.20000000001164
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "2a554f7aa7376547f4f4f17011e9658c2a5ab88692a33f07786d323577e561d3",
-      "colored_pixels": 12926,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "277984b639499ab4a44e5ec4a8d7110d0fa449a865467c19a6905daced5ee309",
-      "colored_pixels": 12696,
-      "edge_tie_pixels": 1364,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573310,
-     "gzip_bytes": 141206,
-     "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.8499999999985448,
-      "median_ms": 1.3625000000029104,
-      "p95_nearest_rank_ms": 1.9499999999970896,
-      "maximum_ms": 2.1124999999956344
-     }
-    }
-   }
-  },
-  {
-   "id": "static-16",
-   "mode": "static",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 16.600000000034925,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 78.59999999997672
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553258,
-     "gzip_bytes": 139139,
-     "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.1875,
-      "median_ms": 0.23749999999563443,
-      "p95_nearest_rank_ms": 0.3250000000043656,
-      "maximum_ms": 0.3624999999956344
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 30.399999999965075,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 162,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 478.3999999999651
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 162,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 211003,
-     "gzip_bytes": 40671,
-     "html_sha256": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 2.4249999999956344,
-      "median_ms": 3.7375000000029104,
-      "p95_nearest_rank_ms": 24.08749999999418,
-      "maximum_ms": 45.924999999995634
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-16",
-   "mode": "instanced",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 13.400000000023283,
-      "calls": 1,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 61.20000000001164
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553264,
-     "gzip_bytes": 139140,
-     "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
      "timing": {
       "samples": 21,
       "minimum_ms": 0.20000000000436557,
-      "median_ms": 0.23750000000291038,
-      "p95_nearest_rank_ms": 0.3625000000029104,
-      "maximum_ms": 0.4124999999985448
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 12.199999999953434,
-      "calls": 1,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 365
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 172035,
-     "gzip_bytes": 39987,
-     "html_sha256": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.6000000000058208,
-      "median_ms": 1.3374999999941792,
-      "p95_nearest_rank_ms": 22.487499999995634,
-      "maximum_ms": 45.8125
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-16",
-   "mode": "dynamic",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
-      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
-      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
-      "vendor": "Google Inc. (Google)",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "desynchronized": false,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false,
-       "xrCompatible": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 32,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 13,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 64.69999999995343
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
-      "colored_pixels": 13000,
-      "edge_tie_pixels": 242,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553260,
-     "gzip_bytes": 139142,
-     "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.19999999999708962,
       "median_ms": 0.25,
-      "p95_nearest_rank_ms": 0.3375000000014552,
-      "maximum_ms": 0.3624999999956344
+      "p95_nearest_rank_ms": 0.5250000000014552,
+      "maximum_ms": 0.6375000000043656
      }
     },
     "diff3d": {
@@ -2866,7 +2866,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 17.70000000001164,
+      "milliseconds": 18.29999999998836,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -2883,7 +2883,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 373.20000000001164
+      "navigationToFirstFrameMs": 369.6000000000349
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -2912,15 +2912,15 @@
       "edge_tie_pixels": 242,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 214836,
-     "gzip_bytes": 41073,
-     "html_sha256": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
+     "html_bytes": 215833,
+     "gzip_bytes": 41514,
+     "html_sha256": "0c867b13aeab78128700b66c91c6fd5302dca8c107f71578e05e33b417487b6e",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.712500000001455,
-      "median_ms": 3.1875,
-      "p95_nearest_rank_ms": 25.11250000000291,
-      "maximum_ms": 40.8125
+      "minimum_ms": 2.9375,
+      "median_ms": 4.98750000000291,
+      "p95_nearest_rank_ms": 24.924999999995634,
+      "maximum_ms": 29.049999999995634
      }
     }
    }
@@ -2963,7 +2963,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 10.900000000023283,
+      "milliseconds": 11,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -2982,7 +2982,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 66.90000000002328
+      "navigationToFirstFrameMs": 64.70000000001164
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3018,10 +3018,10 @@
      "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.3249999999970896,
-      "median_ms": 0.5374999999985448,
-      "p95_nearest_rank_ms": 0.9000000000014552,
-      "maximum_ms": 2.037499999998545
+      "minimum_ms": 0.4000000000014552,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 0.9749999999985448,
+      "maximum_ms": 1.1000000000058208
      }
     },
     "diff3d": {
@@ -3052,7 +3052,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 351.3999999999651,
+      "milliseconds": 334.69999999995343,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -3069,7 +3069,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 431.5999999999767
+      "navigationToFirstFrameMs": 397.5
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3098,15 +3098,15 @@
       "edge_tie_pixels": 1220,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 528247,
-     "gzip_bytes": 46142,
-     "html_sha256": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
+     "html_bytes": 529244,
+     "gzip_bytes": 46584,
+     "html_sha256": "d7d9f4bf4d68603ddf515bb0027677395c0a642bfd63516ba4bb1503056f9384",
      "timing": {
       "samples": 21,
-      "minimum_ms": 15.849999999998545,
-      "median_ms": 18.462500000001455,
-      "p95_nearest_rank_ms": 19.86250000000291,
-      "maximum_ms": 20.012500000004366
+      "minimum_ms": 12.1875,
+      "median_ms": 17.19999999999709,
+      "p95_nearest_rank_ms": 19.5,
+      "maximum_ms": 29.14999999999418
      }
     }
    }
@@ -3149,7 +3149,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 9.399999999965075,
+      "milliseconds": 9.5,
       "calls": 1,
       "triangles": 128,
       "resources": {
@@ -3168,7 +3168,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 60.40000000002328
+      "navigationToFirstFrameMs": 60.90000000002328
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3205,9 +3205,9 @@
      "timing": {
       "samples": 21,
       "minimum_ms": 0.2249999999985448,
-      "median_ms": 0.28750000000582077,
-      "p95_nearest_rank_ms": 0.5625,
-      "maximum_ms": 0.6374999999970896
+      "median_ms": 0.2999999999956344,
+      "p95_nearest_rank_ms": 0.4375,
+      "maximum_ms": 0.4749999999985448
      }
     },
     "diff3d": {
@@ -3238,7 +3238,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 12,
+      "milliseconds": 12.5,
       "calls": 1,
       "triangles": 128,
       "resources": {
@@ -3255,7 +3255,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 345.29999999998836
+      "navigationToFirstFrameMs": 361.6000000000349
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3284,15 +3284,15 @@
       "edge_tie_pixels": 1220,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 180613,
-     "gzip_bytes": 40559,
-     "html_sha256": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
+     "html_bytes": 181610,
+     "gzip_bytes": 41000,
+     "html_sha256": "9b21970f21a07e661364d48c50022a21a0dee39cd31cc5732f91d9d1f1c1e444",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.7624999999970896,
-      "median_ms": 9.099999999998545,
-      "p95_nearest_rank_ms": 28.5,
-      "maximum_ms": 28.825000000004366
+      "minimum_ms": 0.5374999999985448,
+      "median_ms": 0.6500000000014552,
+      "p95_nearest_rank_ms": 0.7874999999985448,
+      "maximum_ms": 34.575000000004366
      }
     }
    }
@@ -3335,7 +3335,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 11.200000000011642,
+      "milliseconds": 11.599999999976717,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -3354,7 +3354,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 66.30000000004657
+      "navigationToFirstFrameMs": 70.19999999995343
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3390,10 +3390,10 @@
      "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.3499999999985448,
-      "median_ms": 0.5750000000043656,
-      "p95_nearest_rank_ms": 0.7625000000043656,
-      "maximum_ms": 1.0625
+      "minimum_ms": 0.35000000000582077,
+      "median_ms": 0.6000000000058208,
+      "p95_nearest_rank_ms": 1.0,
+      "maximum_ms": 1.1124999999956344
      }
     },
     "diff3d": {
@@ -3424,7 +3424,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 316.1000000000349,
+      "milliseconds": 337.4000000000233,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -3441,7 +3441,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 380.19999999995343
+      "navigationToFirstFrameMs": 402.5999999999767
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3470,15 +3470,15 @@
       "edge_tie_pixels": 1152,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 557791,
-     "gzip_bytes": 48266,
-     "html_sha256": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
+     "html_bytes": 558788,
+     "gzip_bytes": 48710,
+     "html_sha256": "dddc99f854f70d88925691b420e17e1c5ca146749ea4d416a9e26f2c20452661",
      "timing": {
       "samples": 21,
-      "minimum_ms": 12.837500000001455,
-      "median_ms": 16.412499999998545,
-      "p95_nearest_rank_ms": 19.825000000004366,
-      "maximum_ms": 20.487499999995634
+      "minimum_ms": 11.80000000000291,
+      "median_ms": 17.662499999998545,
+      "p95_nearest_rank_ms": 20.349999999998545,
+      "maximum_ms": 21.424999999995634
      }
     }
    }
@@ -3521,7 +3521,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 17.70000000001164,
+      "milliseconds": 17.400000000023283,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -3540,7 +3540,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 73.39999999996508
+      "navigationToFirstFrameMs": 74.70000000001164
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3576,10 +3576,10 @@
      "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.7999999999956344,
-      "median_ms": 1.1750000000029104,
-      "p95_nearest_rank_ms": 1.5999999999985448,
-      "maximum_ms": 1.8375000000014552
+      "minimum_ms": 0.875,
+      "median_ms": 1.2249999999985448,
+      "p95_nearest_rank_ms": 1.625,
+      "maximum_ms": 1.7125000000014552
      }
     },
     "diff3d": {
@@ -3610,7 +3610,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 367.5,
+      "milliseconds": 373.79999999998836,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -3627,7 +3627,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 487.70000000001164
+      "navigationToFirstFrameMs": 499.20000000001164
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3656,15 +3656,15 @@
       "edge_tie_pixels": 3428,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 1611896,
-     "gzip_bytes": 61199,
-     "html_sha256": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
+     "html_bytes": 1612893,
+     "gzip_bytes": 61634,
+     "html_sha256": "8400228c96b9238aec3ba9c337d00af9224dda8c2a5c01120653b3ec663e4fa9",
      "timing": {
       "samples": 21,
-      "minimum_ms": 44.162499999998545,
-      "median_ms": 53.099999999998545,
-      "p95_nearest_rank_ms": 58.599999999998545,
-      "maximum_ms": 63.674999999995634
+      "minimum_ms": 46.299999999995634,
+      "median_ms": 54.599999999998545,
+      "p95_nearest_rank_ms": 60.337500000001455,
+      "maximum_ms": 61.01249999999709
      }
     }
    }
@@ -3707,7 +3707,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 9.700000000011642,
+      "milliseconds": 12.599999999976717,
       "calls": 1,
       "triangles": 512,
       "resources": {
@@ -3726,7 +3726,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 64.29999999998836
+      "navigationToFirstFrameMs": 65.60000000003492
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3762,10 +3762,10 @@
      "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.19999999999708962,
-      "median_ms": 0.25,
-      "p95_nearest_rank_ms": 0.3000000000029104,
-      "maximum_ms": 0.3375000000014552
+      "minimum_ms": 0.21249999999417923,
+      "median_ms": 0.3125,
+      "p95_nearest_rank_ms": 0.4500000000043656,
+      "maximum_ms": 0.5250000000014552
      }
     },
     "diff3d": {
@@ -3796,7 +3796,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 12.400000000023283,
+      "milliseconds": 12.299999999988358,
       "calls": 1,
       "triangles": 512,
       "resources": {
@@ -3813,7 +3813,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 365.5
+      "navigationToFirstFrameMs": 358.0999999999767
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3842,15 +3842,15 @@
       "edge_tie_pixels": 3428,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 210477,
-     "gzip_bytes": 42437,
-     "html_sha256": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
+     "html_bytes": 211474,
+     "gzip_bytes": 42879,
+     "html_sha256": "400fc8f1e376f75a8d3d6f2a3d161e37569b1b779874ef944352fd28c8f59165",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.5499999999956344,
-      "median_ms": 0.6750000000029104,
-      "p95_nearest_rank_ms": 1.1875,
-      "maximum_ms": 22.5625
+      "minimum_ms": 0.5500000000029104,
+      "median_ms": 0.5999999999985448,
+      "p95_nearest_rank_ms": 1.4625000000014552,
+      "maximum_ms": 24.38749999999709
      }
     }
    }
@@ -3893,7 +3893,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 17.79999999998836,
+      "milliseconds": 18.29999999998836,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -3912,7 +3912,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 79.29999999998836
+      "navigationToFirstFrameMs": 80.29999999998836
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3948,10 +3948,10 @@
      "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
      "timing": {
       "samples": 21,
-      "minimum_ms": 1.1500000000014552,
-      "median_ms": 1.2625000000043656,
-      "p95_nearest_rank_ms": 3.025000000001455,
-      "maximum_ms": 4.850000000005821
+      "minimum_ms": 0.9750000000058208,
+      "median_ms": 1.3250000000043656,
+      "p95_nearest_rank_ms": 1.4250000000029104,
+      "maximum_ms": 1.4874999999956344
      }
     },
     "diff3d": {
@@ -3982,7 +3982,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 345.19999999995343,
+      "milliseconds": 346.8999999999651,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -3999,7 +3999,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 468.9000000000233
+      "navigationToFirstFrameMs": 471.69999999995343
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -4028,15 +4028,15 @@
       "edge_tie_pixels": 1364,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 1730106,
-     "gzip_bytes": 68388,
-     "html_sha256": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
+     "html_bytes": 1731103,
+     "gzip_bytes": 68826,
+     "html_sha256": "7094a11f32b3aaff1fa47a26db880dae3b85b44aaf707b984925282688a7e479",
      "timing": {
       "samples": 21,
-      "minimum_ms": 47.837500000001455,
-      "median_ms": 54.400000000001455,
-      "p95_nearest_rank_ms": 61.92500000000291,
-      "maximum_ms": 70.36249999999563
+      "minimum_ms": 45.887500000004366,
+      "median_ms": 52.08749999999418,
+      "p95_nearest_rank_ms": 61.087500000001455,
+      "maximum_ms": 61.69999999999709
      }
     }
    }

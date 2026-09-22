@@ -1,24 +1,24 @@
 {
- "revision": "8cec4f2a56460c122e157d16a82527c11b2e09c3",
+ "revision": "0dddaff19277998cb2e7202de9a9fa9971cdf54c",
  "status": "passed",
  "raw_files_verified": 42,
- "run_sha256": "b6d07b40a6291dae374d7f79839b442c3b537eaa849435ac6f758d61e5dd142b",
+ "run_sha256": "b3f33319e20095ac4fd56d55fe55d5d79a3f5576558c82d598db5119f6239493",
  "environment": {
   "os": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
   "arch": "arm64",
   "cpu_count": 10,
   "load_average_start": [
-   28.74951171875,
-   29.66015625,
-   31.46337890625
+   44.2880859375,
+   48.49169921875,
+   50.357421875
   ],
   "load_average_end": [
-   27.08056640625,
-   28.32373046875,
-   30.34765625
+   48.123046875,
+   48.591796875,
+   49.71923828125
   ],
-  "started_unix_seconds": 1789963930.118779,
-  "finished_unix_seconds": 1789965365.856523,
+  "started_unix_seconds": 1790044536.0628622,
+  "finished_unix_seconds": 1790045109.35032,
   "julia": {
    "julia": "1.13.0",
    "cpu": "apple-m1",
@@ -46,7 +46,7 @@
   {
    "allocated_bytes": 75536,
    "count": 16,
-   "first_invocation_ns": 5370638583,
+   "first_invocation_ns": 1430642458,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 3.2526065174565133e-19,
    "loss": 0.000913064426973958,
@@ -58,16 +58,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.025625,
-    "median_ms": 0.028667,
-    "p95_nearest_rank_ms": 0.307375,
-    "maximum_ms": 1.13275
+    "minimum_ms": 0.028666,
+    "median_ms": 0.029708,
+    "p95_nearest_rank_ms": 0.033583,
+    "maximum_ms": 0.050292
    }
   },
   {
    "allocated_bytes": 2368,
    "count": 16,
-   "first_invocation_ns": 6682210542,
+   "first_invocation_ns": 2006399083,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 2.168404344971009e-19,
    "loss": 0.000913064426973958,
@@ -79,16 +79,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.00275,
-    "median_ms": 0.002792,
-    "p95_nearest_rank_ms": 0.0035,
-    "maximum_ms": 0.018334
+    "minimum_ms": 0.003792,
+    "median_ms": 0.003875,
+    "p95_nearest_rank_ms": 0.006042,
+    "maximum_ms": 0.01775
    }
   },
   {
    "allocated_bytes": 384,
    "count": 16,
-   "first_invocation_ns": 32125,
+   "first_invocation_ns": 27125,
    "fitted_loss": 4.8483652483741445e-23,
    "gradient_max_error": 3.363928059718635e-13,
    "loss": 0.000913064426973958,
@@ -100,16 +100,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.017875,
-    "median_ms": 0.018292,
-    "p95_nearest_rank_ms": 0.1025,
-    "maximum_ms": 0.106208
+    "minimum_ms": 0.017833,
+    "median_ms": 0.017917,
+    "p95_nearest_rank_ms": 0.018042,
+    "maximum_ms": 0.021208
    }
   },
   {
    "allocated_bytes": 272368,
    "count": 64,
-   "first_invocation_ns": 589375,
+   "first_invocation_ns": 130750,
    "gradient_max_error": 8.131516293641283e-20,
    "loss": 0.0008975323800219512,
    "method": "reverse_ad",
@@ -119,16 +119,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.109083,
-    "median_ms": 0.166959,
-    "p95_nearest_rank_ms": 8.654416,
-    "maximum_ms": 8.812083
+    "minimum_ms": 0.102666,
+    "median_ms": 0.112667,
+    "p95_nearest_rank_ms": 1.054416,
+    "maximum_ms": 2.018042
    }
   },
   {
    "allocated_bytes": 8144,
    "count": 64,
-   "first_invocation_ns": 1351944083,
+   "first_invocation_ns": 886357833,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008975323800219512,
    "method": "forward_ad",
@@ -138,16 +138,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.030542,
-    "median_ms": 0.031542,
-    "p95_nearest_rank_ms": 0.041167,
-    "maximum_ms": 0.057375
+    "minimum_ms": 0.030167,
+    "median_ms": 0.030583,
+    "p95_nearest_rank_ms": 0.0435,
+    "maximum_ms": 0.044833
    }
   },
   {
    "allocated_bytes": 1152,
    "count": 64,
-   "first_invocation_ns": 1415750,
+   "first_invocation_ns": 277666,
    "gradient_max_error": 1.3661543684512223e-13,
    "loss": 0.0008975323800219512,
    "method": "central_difference",
@@ -157,16 +157,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.279666,
-    "median_ms": 0.330416,
-    "p95_nearest_rank_ms": 5.819375,
-    "maximum_ms": 16.706125
+    "minimum_ms": 0.276292,
+    "median_ms": 0.276792,
+    "p95_nearest_rank_ms": 2.333208,
+    "maximum_ms": 16.744375
    }
   },
   {
    "allocated_bytes": 1126864,
    "count": 256,
-   "first_invocation_ns": 5315500,
+   "first_invocation_ns": 421334,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604815,
    "method": "reverse_ad",
@@ -176,16 +176,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.418875,
-    "median_ms": 0.678333,
-    "p95_nearest_rank_ms": 0.88125,
-    "maximum_ms": 2.453792
+    "minimum_ms": 0.389125,
+    "median_ms": 0.459625,
+    "p95_nearest_rank_ms": 0.934333,
+    "maximum_ms": 27.400625
    }
   },
   {
    "allocated_bytes": 32368,
    "count": 256,
-   "first_invocation_ns": 1778425459,
+   "first_invocation_ns": 875269208,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604815,
    "method": "forward_ad",
@@ -195,16 +195,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.467875,
-    "median_ms": 0.554792,
-    "p95_nearest_rank_ms": 1.902333,
-    "maximum_ms": 3.671
+    "minimum_ms": 0.4605,
+    "median_ms": 0.674875,
+    "p95_nearest_rank_ms": 0.699208,
+    "maximum_ms": 4.455667
    }
   },
   {
    "allocated_bytes": 4224,
    "count": 256,
-   "first_invocation_ns": 4944125,
+   "first_invocation_ns": 4474541,
    "gradient_max_error": 5.0119576457813286e-14,
    "loss": 0.0008173696019604815,
    "method": "central_difference",
@@ -214,16 +214,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 4.487209,
-    "median_ms": 10.835416,
-    "p95_nearest_rank_ms": 63.463292,
-    "maximum_ms": 72.36025
+    "minimum_ms": 4.403292,
+    "median_ms": 10.108667,
+    "p95_nearest_rank_ms": 32.41775,
+    "maximum_ms": 38.495917
    }
   },
   {
    "allocated_bytes": 4481488,
    "count": 1024,
-   "first_invocation_ns": 7127292,
+   "first_invocation_ns": 1787667,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554011,
    "method": "reverse_ad",
@@ -233,16 +233,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 2.061625,
-    "median_ms": 9.013791,
-    "p95_nearest_rank_ms": 77.105667,
-    "maximum_ms": 109.577292
+    "minimum_ms": 1.616834,
+    "median_ms": 2.079583,
+    "p95_nearest_rank_ms": 26.171959,
+    "maximum_ms": 33.24775
    }
   },
   {
    "allocated_bytes": 124528,
    "count": 1024,
-   "first_invocation_ns": 12289625,
+   "first_invocation_ns": 7232125,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554011,
    "method": "forward_ad",
@@ -252,16 +252,16 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 8.488833,
-    "median_ms": 53.599792,
-    "p95_nearest_rank_ms": 111.565,
-    "maximum_ms": 138.789125
+    "minimum_ms": 7.27775,
+    "median_ms": 21.033041,
+    "p95_nearest_rank_ms": 62.360917,
+    "maximum_ms": 63.369958
    }
   },
   {
    "allocated_bytes": 16512,
    "count": 1024,
-   "first_invocation_ns": 419983667,
+   "first_invocation_ns": 229348417,
    "gradient_max_error": 1.4176126364364577e-14,
    "loss": 0.0007987839875554011,
    "method": "central_difference",
@@ -271,10 +271,10 @@
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 114.147916,
-    "median_ms": 305.152333,
-    "p95_nearest_rank_ms": 571.8335,
-    "maximum_ms": 625.053125
+    "minimum_ms": 194.1315,
+    "median_ms": 238.839167,
+    "p95_nearest_rank_ms": 274.413708,
+    "maximum_ms": 300.519041
    }
   },
   {
@@ -284,21 +284,21 @@
    "gradient_max_error": 3.4723482769671854e-13,
    "timed_gradient_max_error": 3.4723482769671854e-13,
    "objective_evaluations": 32,
-   "first_invocation_ns": 966333,
+   "first_invocation_ns": 554042,
    "retained_heap_delta_bytes": 848,
    "retained_array_buffer_delta_bytes": 128,
    "result_bytes": 128,
-   "rss_bytes": 64454656,
+   "rss_bytes": 64520192,
    "recovered_parameter_max_error": 4.99853491930935e-11,
    "fitted_loss": 4.848370907331693e-23,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.019083,
-    "median_ms": 0.020209,
-    "p95_nearest_rank_ms": 0.106708,
-    "maximum_ms": 0.172084
+    "minimum_ms": 0.018583,
+    "median_ms": 0.018875,
+    "p95_nearest_rank_ms": 0.022584,
+    "maximum_ms": 0.028375
    }
   },
   {
@@ -308,19 +308,19 @@
    "gradient_max_error": 1.3705096085780966e-13,
    "timed_gradient_max_error": 1.3705096085780966e-13,
    "objective_evaluations": 128,
-   "first_invocation_ns": 2004417,
+   "first_invocation_ns": 1755584,
    "retained_heap_delta_bytes": 904,
    "retained_array_buffer_delta_bytes": 512,
    "result_bytes": 512,
-   "rss_bytes": 70369280,
+   "rss_bytes": 70025216,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.0465,
-    "median_ms": 0.061125,
-    "p95_nearest_rank_ms": 3.130375,
-    "maximum_ms": 19.754916
+    "minimum_ms": 0.057042,
+    "median_ms": 0.057584,
+    "p95_nearest_rank_ms": 0.069458,
+    "maximum_ms": 0.101083
    }
   },
   {
@@ -330,19 +330,19 @@
    "gradient_max_error": 5.554058732024081e-14,
    "timed_gradient_max_error": 5.554058732024081e-14,
    "objective_evaluations": 512,
-   "first_invocation_ns": 7672750,
+   "first_invocation_ns": 835709,
    "retained_heap_delta_bytes": 0,
-   "retained_array_buffer_delta_bytes": 4096,
+   "retained_array_buffer_delta_bytes": 1536,
    "result_bytes": 2048,
-   "rss_bytes": 69861376,
+   "rss_bytes": 70107136,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.845291,
-    "median_ms": 1.036959,
-    "p95_nearest_rank_ms": 6.854167,
-    "maximum_ms": 13.832
+    "minimum_ms": 0.831875,
+    "median_ms": 0.835458,
+    "p95_nearest_rank_ms": 0.941292,
+    "maximum_ms": 28.499042
    }
   },
   {
@@ -352,25 +352,25 @@
    "gradient_max_error": 1.5100700095742325e-14,
    "timed_gradient_max_error": 1.5100700095742325e-14,
    "objective_evaluations": 2048,
-   "first_invocation_ns": 66049417,
+   "first_invocation_ns": 35169250,
    "retained_heap_delta_bytes": 0,
-   "retained_array_buffer_delta_bytes": 6144,
+   "retained_array_buffer_delta_bytes": 16384,
    "result_bytes": 8192,
-   "rss_bytes": 57212928,
+   "rss_bytes": 70418432,
    "engine": "three",
    "pass_number": 1,
    "timing": {
     "samples": 21,
-    "minimum_ms": 13.772333,
-    "median_ms": 44.634042,
-    "p95_nearest_rank_ms": 130.458083,
-    "maximum_ms": 163.4515
+    "minimum_ms": 17.165583,
+    "median_ms": 38.033834,
+    "p95_nearest_rank_ms": 61.990208,
+    "maximum_ms": 79.312083
    }
   },
   {
    "allocated_bytes": 75536,
    "count": 16,
-   "first_invocation_ns": 5643386250,
+   "first_invocation_ns": 1215274250,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 3.2526065174565133e-19,
    "loss": 0.000913064426973958,
@@ -382,16 +382,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.027417,
-    "median_ms": 0.030333,
-    "p95_nearest_rank_ms": 0.178209,
-    "maximum_ms": 0.45225
+    "minimum_ms": 0.025542,
+    "median_ms": 0.027708,
+    "p95_nearest_rank_ms": 0.030958,
+    "maximum_ms": 0.0495
    }
   },
   {
    "allocated_bytes": 2368,
    "count": 16,
-   "first_invocation_ns": 4084837333,
+   "first_invocation_ns": 1714662750,
    "fitted_loss": 7.174089042842454e-33,
    "gradient_max_error": 2.168404344971009e-19,
    "loss": 0.000913064426973958,
@@ -403,16 +403,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.002833,
-    "median_ms": 0.003,
-    "p95_nearest_rank_ms": 0.003708,
-    "maximum_ms": 0.019
+    "minimum_ms": 0.00375,
+    "median_ms": 0.003917,
+    "p95_nearest_rank_ms": 0.006084,
+    "maximum_ms": 0.021959
    }
   },
   {
    "allocated_bytes": 384,
    "count": 16,
-   "first_invocation_ns": 25041,
+   "first_invocation_ns": 26500,
    "fitted_loss": 4.8483652483741445e-23,
    "gradient_max_error": 3.363928059718635e-13,
    "loss": 0.000913064426973958,
@@ -426,14 +426,14 @@
     "samples": 21,
     "minimum_ms": 0.017666,
     "median_ms": 0.017875,
-    "p95_nearest_rank_ms": 1.667041,
-    "maximum_ms": 16.856167
+    "p95_nearest_rank_ms": 0.155875,
+    "maximum_ms": 0.51975
    }
   },
   {
    "allocated_bytes": 272368,
    "count": 64,
-   "first_invocation_ns": 454166,
+   "first_invocation_ns": 147583,
    "gradient_max_error": 8.131516293641283e-20,
    "loss": 0.0008975323800219512,
    "method": "reverse_ad",
@@ -443,16 +443,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.115709,
-    "median_ms": 0.139417,
-    "p95_nearest_rank_ms": 11.260542,
-    "maximum_ms": 18.323
+    "minimum_ms": 0.100083,
+    "median_ms": 0.103209,
+    "p95_nearest_rank_ms": 0.174583,
+    "maximum_ms": 36.993
    }
   },
   {
    "allocated_bytes": 8144,
    "count": 64,
-   "first_invocation_ns": 1925467875,
+   "first_invocation_ns": 853640791,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008975323800219512,
    "method": "forward_ad",
@@ -462,16 +462,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.03375,
-    "median_ms": 0.035459,
-    "p95_nearest_rank_ms": 0.164833,
-    "maximum_ms": 0.390042
+    "minimum_ms": 0.030417,
+    "median_ms": 0.031084,
+    "p95_nearest_rank_ms": 0.10875,
+    "maximum_ms": 0.159916
    }
   },
   {
    "allocated_bytes": 1152,
    "count": 64,
-   "first_invocation_ns": 280958,
+   "first_invocation_ns": 280250,
    "gradient_max_error": 1.3661543684512223e-13,
    "loss": 0.0008975323800219512,
    "method": "central_difference",
@@ -481,16 +481,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.276458,
-    "median_ms": 0.279458,
-    "p95_nearest_rank_ms": 6.811042,
-    "maximum_ms": 9.111042
+    "minimum_ms": 0.276583,
+    "median_ms": 0.276917,
+    "p95_nearest_rank_ms": 0.289291,
+    "maximum_ms": 30.128875
    }
   },
   {
    "allocated_bytes": 1126864,
    "count": 256,
-   "first_invocation_ns": 563542,
+   "first_invocation_ns": 521667,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604815,
    "method": "reverse_ad",
@@ -500,16 +500,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.426292,
-    "median_ms": 0.614625,
-    "p95_nearest_rank_ms": 10.893334,
-    "maximum_ms": 14.085167
+    "minimum_ms": 0.384084,
+    "median_ms": 0.413791,
+    "p95_nearest_rank_ms": 0.730667,
+    "maximum_ms": 3.125125
    }
   },
   {
    "allocated_bytes": 32368,
    "count": 256,
-   "first_invocation_ns": 1784423208,
+   "first_invocation_ns": 956479125,
    "gradient_max_error": 5.421010862427522e-20,
    "loss": 0.0008173696019604815,
    "method": "forward_ad",
@@ -519,16 +519,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.471208,
-    "median_ms": 0.486417,
-    "p95_nearest_rank_ms": 1.862917,
-    "maximum_ms": 4.081084
+    "minimum_ms": 0.461708,
+    "median_ms": 0.472333,
+    "p95_nearest_rank_ms": 1.693667,
+    "maximum_ms": 1.730459
    }
   },
   {
    "allocated_bytes": 4224,
    "count": 256,
-   "first_invocation_ns": 6214834,
+   "first_invocation_ns": 11914417,
    "gradient_max_error": 5.0119576457813286e-14,
    "loss": 0.0008173696019604815,
    "method": "central_difference",
@@ -538,16 +538,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 4.751041,
-    "median_ms": 17.255625,
-    "p95_nearest_rank_ms": 70.053375,
-    "maximum_ms": 114.870833
+    "minimum_ms": 4.403541,
+    "median_ms": 13.571625,
+    "p95_nearest_rank_ms": 27.135959,
+    "maximum_ms": 31.450041
    }
   },
   {
    "allocated_bytes": 4481488,
    "count": 1024,
-   "first_invocation_ns": 2812750,
+   "first_invocation_ns": 2032709,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554011,
    "method": "reverse_ad",
@@ -557,16 +557,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 1.630625,
-    "median_ms": 5.474792,
-    "p95_nearest_rank_ms": 53.399458,
-    "maximum_ms": 112.791375
+    "minimum_ms": 1.606083,
+    "median_ms": 2.00425,
+    "p95_nearest_rank_ms": 22.419625,
+    "maximum_ms": 50.070708
    }
   },
   {
    "allocated_bytes": 124528,
    "count": 1024,
-   "first_invocation_ns": 7788167,
+   "first_invocation_ns": 32465375,
    "gradient_max_error": 1.3552527156068805e-20,
    "loss": 0.0007987839875554011,
    "method": "forward_ad",
@@ -576,16 +576,16 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 9.498458,
-    "median_ms": 50.752542,
-    "p95_nearest_rank_ms": 107.477083,
-    "maximum_ms": 110.601
+    "minimum_ms": 7.209042,
+    "median_ms": 20.583875,
+    "p95_nearest_rank_ms": 45.208958,
+    "maximum_ms": 46.859416
    }
   },
   {
    "allocated_bytes": 16512,
    "count": 1024,
-   "first_invocation_ns": 336936209,
+   "first_invocation_ns": 239741084,
    "gradient_max_error": 1.4176126364364577e-14,
    "loss": 0.0007987839875554011,
    "method": "central_difference",
@@ -595,10 +595,10 @@
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 219.459417,
-    "median_ms": 325.2635,
-    "p95_nearest_rank_ms": 592.180958,
-    "maximum_ms": 742.007959
+    "minimum_ms": 177.798833,
+    "median_ms": 215.1775,
+    "p95_nearest_rank_ms": 242.080625,
+    "maximum_ms": 258.413416
    }
   },
   {
@@ -608,21 +608,21 @@
    "gradient_max_error": 3.4723482769671854e-13,
    "timed_gradient_max_error": 3.4723482769671854e-13,
    "objective_evaluations": 32,
-   "first_invocation_ns": 731833,
+   "first_invocation_ns": 574084,
    "retained_heap_delta_bytes": 848,
-   "retained_array_buffer_delta_bytes": 256,
+   "retained_array_buffer_delta_bytes": 128,
    "result_bytes": 128,
-   "rss_bytes": 64438272,
+   "rss_bytes": 64684032,
    "recovered_parameter_max_error": 4.99853491930935e-11,
    "fitted_loss": 4.848370907331693e-23,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.01925,
-    "median_ms": 0.020166,
-    "p95_nearest_rank_ms": 0.081583,
-    "maximum_ms": 0.154792
+    "minimum_ms": 0.018958,
+    "median_ms": 0.019208,
+    "p95_nearest_rank_ms": 0.03975,
+    "maximum_ms": 0.047042
    }
   },
   {
@@ -632,19 +632,19 @@
    "gradient_max_error": 1.3705096085780966e-13,
    "timed_gradient_max_error": 1.3705096085780966e-13,
    "objective_evaluations": 128,
-   "first_invocation_ns": 13268000,
+   "first_invocation_ns": 1749875,
    "retained_heap_delta_bytes": 904,
    "retained_array_buffer_delta_bytes": 512,
    "result_bytes": 512,
-   "rss_bytes": 68861952,
+   "rss_bytes": 70238208,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.055875,
-    "median_ms": 0.057542,
-    "p95_nearest_rank_ms": 6.464917,
-    "maximum_ms": 6.987125
+    "minimum_ms": 0.05525,
+    "median_ms": 0.055625,
+    "p95_nearest_rank_ms": 0.068958,
+    "maximum_ms": 0.090916
    }
   },
   {
@@ -654,19 +654,19 @@
    "gradient_max_error": 5.554058732024081e-14,
    "timed_gradient_max_error": 5.554058732024081e-14,
    "objective_evaluations": 512,
-   "first_invocation_ns": 935041,
+   "first_invocation_ns": 832333,
    "retained_heap_delta_bytes": 0,
-   "retained_array_buffer_delta_bytes": -87040,
+   "retained_array_buffer_delta_bytes": 1536,
    "result_bytes": 2048,
-   "rss_bytes": 68960256,
+   "rss_bytes": 70320128,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 0.838125,
-    "median_ms": 6.2565,
-    "p95_nearest_rank_ms": 48.591167,
-    "maximum_ms": 60.354792
+    "minimum_ms": 0.831584,
+    "median_ms": 0.846292,
+    "p95_nearest_rank_ms": 35.390625,
+    "maximum_ms": 37.062083
    }
   },
   {
@@ -676,19 +676,19 @@
    "gradient_max_error": 1.5100700095742325e-14,
    "timed_gradient_max_error": 1.5100700095742325e-14,
    "objective_evaluations": 2048,
-   "first_invocation_ns": 126536333,
+   "first_invocation_ns": 40105791,
    "retained_heap_delta_bytes": 0,
    "retained_array_buffer_delta_bytes": 6144,
    "result_bytes": 8192,
-   "rss_bytes": 57982976,
+   "rss_bytes": 70631424,
    "engine": "three",
    "pass_number": 2,
    "timing": {
     "samples": 21,
-    "minimum_ms": 20.231167,
-    "median_ms": 63.583083,
-    "p95_nearest_rank_ms": 142.6885,
-    "maximum_ms": 207.712667
+    "minimum_ms": 13.489416,
+    "median_ms": 38.69075,
+    "p95_nearest_rank_ms": 71.451208,
+    "maximum_ms": 77.527875
    }
   }
  ],
@@ -729,7 +729,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 61,
+      "milliseconds": 28,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -746,7 +746,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 2643
+      "navigationToFirstFrameMs": 821
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -775,15 +775,15 @@
       "edge_tie_pixels": 404,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 211003,
-     "gzip_bytes": 40671,
-     "html_sha256": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
+     "html_bytes": 212000,
+     "gzip_bytes": 41112,
+     "html_sha256": "6b8a27000ace5eec3f52e658d0f454608a28afaede214b5602c28e14df02e03c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 9.125,
-      "median_ms": 25.625,
-      "p95_nearest_rank_ms": 76.0,
-      "maximum_ms": 78.25
+      "minimum_ms": 2.125,
+      "median_ms": 2.5,
+      "p95_nearest_rank_ms": 7.875,
+      "maximum_ms": 8.5
      }
     },
     "three": {
@@ -812,7 +812,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 102,
+      "milliseconds": 17,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -831,7 +831,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1749
+      "navigationToFirstFrameMs": 321
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -867,10 +867,10 @@
      "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
      "timing": {
       "samples": 21,
-      "minimum_ms": 1.25,
-      "median_ms": 2.125,
-      "p95_nearest_rank_ms": 8.0,
-      "maximum_ms": 9.75
+      "minimum_ms": 0.5,
+      "median_ms": 0.75,
+      "p95_nearest_rank_ms": 1.0,
+      "maximum_ms": 1.25
      }
     }
    }
@@ -911,7 +911,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 106,
+      "milliseconds": 11,
       "calls": 1,
       "triangles": 16,
       "resources": {
@@ -928,7 +928,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 1928
+      "navigationToFirstFrameMs": 523
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -957,15 +957,15 @@
       "edge_tie_pixels": 404,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 172035,
-     "gzip_bytes": 39987,
-     "html_sha256": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
+     "html_bytes": 173032,
+     "gzip_bytes": 40428,
+     "html_sha256": "18f9d72b2090bd082ac800775d619356e6d46775c8ec75078dae1ef29966d05c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.625,
-      "median_ms": 7.375,
-      "p95_nearest_rank_ms": 14.625,
-      "maximum_ms": 17.0
+      "minimum_ms": 0.625,
+      "median_ms": 1.0,
+      "p95_nearest_rank_ms": 1.375,
+      "maximum_ms": 1.625
      }
     },
     "three": {
@@ -994,7 +994,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 69,
+      "milliseconds": 61,
       "calls": 1,
       "triangles": 16,
       "resources": {
@@ -1013,7 +1013,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1026
+      "navigationToFirstFrameMs": 451
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1049,10 +1049,10 @@
      "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
      "timing": {
       "samples": 21,
-      "minimum_ms": 1.625,
-      "median_ms": 2.375,
-      "p95_nearest_rank_ms": 8.875,
-      "maximum_ms": 19.75
+      "minimum_ms": 0.5,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 0.875,
+      "maximum_ms": 0.875
      }
     }
    }
@@ -1093,7 +1093,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 81,
+      "milliseconds": 145,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -1110,7 +1110,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 1864
+      "navigationToFirstFrameMs": 693
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1139,15 +1139,15 @@
       "edge_tie_pixels": 242,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 214836,
-     "gzip_bytes": 41073,
-     "html_sha256": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
+     "html_bytes": 215833,
+     "gzip_bytes": 41514,
+     "html_sha256": "0c867b13aeab78128700b66c91c6fd5302dca8c107f71578e05e33b417487b6e",
      "timing": {
       "samples": 21,
-      "minimum_ms": 3.875,
-      "median_ms": 11.5,
-      "p95_nearest_rank_ms": 36.125,
-      "maximum_ms": 51.0
+      "minimum_ms": 2.5,
+      "median_ms": 2.75,
+      "p95_nearest_rank_ms": 9.875,
+      "maximum_ms": 11.375
      }
     },
     "three": {
@@ -1176,7 +1176,7 @@
       "objectCount": 16
      },
      "first_frame": {
-      "milliseconds": 108,
+      "milliseconds": 14,
       "calls": 16,
       "triangles": 16,
       "resources": {
@@ -1195,7 +1195,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1070
+      "navigationToFirstFrameMs": 418
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1231,10 +1231,10 @@
      "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
      "timing": {
       "samples": 21,
-      "minimum_ms": 1.875,
-      "median_ms": 3.25,
-      "p95_nearest_rank_ms": 7.5,
-      "maximum_ms": 13.375
+      "minimum_ms": 0.625,
+      "median_ms": 0.875,
+      "p95_nearest_rank_ms": 1.625,
+      "maximum_ms": 1.75
      }
     }
    }
@@ -1275,7 +1275,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 269,
+      "milliseconds": 81,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -1292,7 +1292,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 2353
+      "navigationToFirstFrameMs": 818
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1321,15 +1321,15 @@
       "edge_tie_pixels": 1220,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 528247,
-     "gzip_bytes": 46142,
-     "html_sha256": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
+     "html_bytes": 529244,
+     "gzip_bytes": 46584,
+     "html_sha256": "d7d9f4bf4d68603ddf515bb0027677395c0a642bfd63516ba4bb1503056f9384",
      "timing": {
       "samples": 21,
-      "minimum_ms": 28.0,
-      "median_ms": 54.875,
-      "p95_nearest_rank_ms": 94.625,
-      "maximum_ms": 114.0
+      "minimum_ms": 9.375,
+      "median_ms": 26.75,
+      "p95_nearest_rank_ms": 32.25,
+      "maximum_ms": 36.75
      }
     },
     "three": {
@@ -1358,7 +1358,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 157,
+      "milliseconds": 61,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -1377,7 +1377,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1542
+      "navigationToFirstFrameMs": 419
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1413,10 +1413,10 @@
      "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.25,
-      "median_ms": 5.0,
-      "p95_nearest_rank_ms": 11.625,
-      "maximum_ms": 17.125
+      "minimum_ms": 1.0,
+      "median_ms": 1.25,
+      "p95_nearest_rank_ms": 1.625,
+      "maximum_ms": 1.625
      }
     }
    }
@@ -1457,7 +1457,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 133,
+      "milliseconds": 11,
       "calls": 1,
       "triangles": 128,
       "resources": {
@@ -1474,7 +1474,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 2683
+      "navigationToFirstFrameMs": 534
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1503,15 +1503,15 @@
       "edge_tie_pixels": 1220,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 180613,
-     "gzip_bytes": 40559,
-     "html_sha256": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
+     "html_bytes": 181610,
+     "gzip_bytes": 41000,
+     "html_sha256": "9b21970f21a07e661364d48c50022a21a0dee39cd31cc5732f91d9d1f1c1e444",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.375,
-      "median_ms": 4.625,
-      "p95_nearest_rank_ms": 44.375,
-      "maximum_ms": 50.5
+      "minimum_ms": 0.75,
+      "median_ms": 1.0,
+      "p95_nearest_rank_ms": 1.25,
+      "maximum_ms": 1.75
      }
     },
     "three": {
@@ -1540,7 +1540,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 78,
+      "milliseconds": 14,
       "calls": 1,
       "triangles": 128,
       "resources": {
@@ -1559,7 +1559,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1254
+      "navigationToFirstFrameMs": 284
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1595,10 +1595,10 @@
      "html_sha256": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
      "timing": {
       "samples": 21,
-      "minimum_ms": 1.125,
-      "median_ms": 2.125,
-      "p95_nearest_rank_ms": 18.125,
-      "maximum_ms": 25.125
+      "minimum_ms": 0.5,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 1.0,
+      "maximum_ms": 1.0
      }
     }
    }
@@ -1639,7 +1639,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 386,
+      "milliseconds": 112,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -1656,7 +1656,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 3215
+      "navigationToFirstFrameMs": 1508
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1685,15 +1685,15 @@
       "edge_tie_pixels": 1152,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 557791,
-     "gzip_bytes": 48266,
-     "html_sha256": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
+     "html_bytes": 558788,
+     "gzip_bytes": 48710,
+     "html_sha256": "dddc99f854f70d88925691b420e17e1c5ca146749ea4d416a9e26f2c20452661",
      "timing": {
       "samples": 21,
-      "minimum_ms": 72.0,
-      "median_ms": 137.25,
-      "p95_nearest_rank_ms": 205.375,
-      "maximum_ms": 216.625
+      "minimum_ms": 12.75,
+      "median_ms": 20.375,
+      "p95_nearest_rank_ms": 28.875,
+      "maximum_ms": 29.5
      }
     },
     "three": {
@@ -1722,7 +1722,7 @@
       "objectCount": 128
      },
      "first_frame": {
-      "milliseconds": 46,
+      "milliseconds": 18,
       "calls": 128,
       "triangles": 128,
       "resources": {
@@ -1741,7 +1741,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 2527
+      "navigationToFirstFrameMs": 425
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1777,10 +1777,10 @@
      "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
      "timing": {
       "samples": 21,
-      "minimum_ms": 3.125,
-      "median_ms": 11.125,
-      "p95_nearest_rank_ms": 28.375,
-      "maximum_ms": 29.75
+      "minimum_ms": 1.125,
+      "median_ms": 1.375,
+      "p95_nearest_rank_ms": 3.5,
+      "maximum_ms": 3.625
      }
     }
    }
@@ -1821,7 +1821,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 865,
+      "milliseconds": 203,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -1838,7 +1838,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 3868
+      "navigationToFirstFrameMs": 1041
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1867,17 +1867,1572 @@
       "edge_tie_pixels": 3428,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 1611896,
-     "gzip_bytes": 61199,
-     "html_sha256": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
+     "html_bytes": 1612893,
+     "gzip_bytes": 61634,
+     "html_sha256": "8400228c96b9238aec3ba9c337d00af9224dda8c2a5c01120653b3ec663e4fa9",
      "timing": {
       "samples": 21,
-      "minimum_ms": 144.375,
-      "median_ms": 227.75,
-      "p95_nearest_rank_ms": 291.0,
-      "maximum_ms": 335.75
+      "minimum_ms": 80.75,
+      "median_ms": 87.375,
+      "p95_nearest_rank_ms": 96.875,
+      "maximum_ms": 100.125
      }
     },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 25,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 1253
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573308,
+     "gzip_bytes": 141200,
+     "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 2.375,
+      "median_ms": 2.75,
+      "p95_nearest_rank_ms": 6.25,
+      "maximum_ms": 6.625
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-512",
+   "mode": "instanced",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 12,
+      "calls": 1,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 876
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 211474,
+     "gzip_bytes": 42879,
+     "html_sha256": "400fc8f1e376f75a8d3d6f2a3d161e37569b1b779874ef944352fd28c8f59165",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.875,
+      "median_ms": 1.25,
+      "p95_nearest_rank_ms": 1.875,
+      "maximum_ms": 2.125
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 16,
+      "calls": 1,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 365
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573314,
+     "gzip_bytes": 141202,
+     "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.5,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 0.875,
+      "maximum_ms": 1.0
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-512",
+   "mode": "dynamic",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 1,
+   "engines": {
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 212,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 5122,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 1385
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 5122,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "7977a018450daca322f2384d42066505cbaedba8508a192b663273962db15732",
+      "colored_pixels": 12648,
+      "edge_tie_pixels": 1364,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 1731103,
+     "gzip_bytes": 68826,
+     "html_sha256": "7094a11f32b3aaff1fa47a26db880dae3b85b44aaf707b984925282688a7e479",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 83.0,
+      "median_ms": 100.625,
+      "p95_nearest_rank_ms": 120.0,
+      "maximum_ms": 121.75
+     }
+    },
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 512
+     },
+     "first_frame": {
+      "milliseconds": 34,
+      "calls": 512,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 494
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "7977a018450daca322f2384d42066505cbaedba8508a192b663273962db15732",
+      "colored_pixels": 12648,
+      "edge_tie_pixels": 1364,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 573310,
+     "gzip_bytes": 141206,
+     "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 2.875,
+      "median_ms": 3.375,
+      "p95_nearest_rank_ms": 6.375,
+      "maximum_ms": 8.875
+     }
+    }
+   }
+  },
+  {
+   "id": "static-16",
+   "mode": "static",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 20,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 633
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553258,
+     "gzip_bytes": 139139,
+     "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.625,
+      "median_ms": 1.0,
+      "p95_nearest_rank_ms": 1.5,
+      "maximum_ms": 1.75
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 89,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 162,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 824
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 162,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 212000,
+     "gzip_bytes": 41112,
+     "html_sha256": "6b8a27000ace5eec3f52e658d0f454608a28afaede214b5602c28e14df02e03c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 2.0,
+      "median_ms": 2.625,
+      "p95_nearest_rank_ms": 11.25,
+      "maximum_ms": 13.125
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-16",
+   "mode": "instanced",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 15,
+      "calls": 1,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 790
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553264,
+     "gzip_bytes": 139140,
+     "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.375,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 0.875,
+      "maximum_ms": 1.0
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 111,
+      "calls": 1,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 1607
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 173032,
+     "gzip_bytes": 40428,
+     "html_sha256": "18f9d72b2090bd082ac800775d619356e6d46775c8ec75078dae1ef29966d05c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.625,
+      "median_ms": 1.0,
+      "p95_nearest_rank_ms": 1.875,
+      "maximum_ms": 2.0
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-16",
+   "mode": "dynamic",
+   "count": 16,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 15,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 543
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
+      "colored_pixels": 13000,
+      "edge_tie_pixels": 242,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 553260,
+     "gzip_bytes": 139142,
+     "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.5,
+      "median_ms": 0.75,
+      "p95_nearest_rank_ms": 1.0,
+      "maximum_ms": 1.375
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 16
+     },
+     "first_frame": {
+      "milliseconds": 47,
+      "calls": 16,
+      "triangles": 16,
+      "resources": {
+       "createBuffer": 162,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 549
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 162,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
+      "colored_pixels": 13082,
+      "edge_tie_pixels": 404,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
+      "colored_pixels": 13000,
+      "edge_tie_pixels": 242,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 215833,
+     "gzip_bytes": 41514,
+     "html_sha256": "0c867b13aeab78128700b66c91c6fd5302dca8c107f71578e05e33b417487b6e",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 2.125,
+      "median_ms": 2.75,
+      "p95_nearest_rank_ms": 12.625,
+      "maximum_ms": 14.75
+     }
+    }
+   }
+  },
+  {
+   "id": "static-128",
+   "mode": "static",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 22,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 337
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557244,
+     "gzip_bytes": 139637,
+     "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 1.0,
+      "median_ms": 1.25,
+      "p95_nearest_rank_ms": 1.75,
+      "maximum_ms": 1.75
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 108,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 1282,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 750
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 1282,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 529244,
+     "gzip_bytes": 46584,
+     "html_sha256": "d7d9f4bf4d68603ddf515bb0027677395c0a642bfd63516ba4bb1503056f9384",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 9.25,
+      "median_ms": 22.125,
+      "p95_nearest_rank_ms": 31.875,
+      "maximum_ms": 35.375
+     }
+    }
+   }
+  },
+  {
+   "id": "instanced-128",
+   "mode": "instanced",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 15,
+      "calls": 1,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 4,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 1246
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 4,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557250,
+     "gzip_bytes": 139638,
+     "html_sha256": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.375,
+      "median_ms": 0.75,
+      "p95_nearest_rank_ms": 1.25,
+      "maximum_ms": 1.375
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 11,
+      "calls": 1,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 611
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 181610,
+     "gzip_bytes": 41000,
+     "html_sha256": "9b21970f21a07e661364d48c50022a21a0dee39cd31cc5732f91d9d1f1c1e444",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.75,
+      "median_ms": 0.875,
+      "p95_nearest_rank_ms": 1.5,
+      "maximum_ms": 1.625
+     }
+    }
+   }
+  },
+  {
+   "id": "dynamic-128",
+   "mode": "dynamic",
+   "count": 128,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
+    "three": {
+     "environment": {
+      "version": "WebGL 2.0",
+      "shadingLanguage": "WebGL GLSL ES 3.00",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 90,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 3,
+       "deleteBuffer": 0,
+       "createTexture": 4,
+       "deleteTexture": 0,
+       "createProgram": 1,
+       "deleteProgram": 0,
+       "createShader": 2,
+       "deleteShader": 2,
+       "createFramebuffer": 3,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0,
+       "createVertexArray": 1,
+       "deleteVertexArray": 0
+      },
+      "navigationToFirstFrameMs": 1391
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 3,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createShader": 2,
+      "deleteShader": 2,
+      "createFramebuffer": 3,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "c0cdd2fbff2cfb689108e028f41989e55d13b5fa2e708bfb6f7c0ae71f0e69cf",
+      "colored_pixels": 11495,
+      "edge_tie_pixels": 1152,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 557246,
+     "gzip_bytes": 139642,
+     "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 1.0,
+      "median_ms": 1.25,
+      "p95_nearest_rank_ms": 1.375,
+      "maximum_ms": 1.625
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 128
+     },
+     "first_frame": {
+      "milliseconds": 140,
+      "calls": 128,
+      "triangles": 128,
+      "resources": {
+       "createBuffer": 1282,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 809
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 1282,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
+      "colored_pixels": 11913,
+      "edge_tie_pixels": 1220,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "c0cdd2fbff2cfb689108e028f41989e55d13b5fa2e708bfb6f7c0ae71f0e69cf",
+      "colored_pixels": 11495,
+      "edge_tie_pixels": 1152,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 558788,
+     "gzip_bytes": 48710,
+     "html_sha256": "dddc99f854f70d88925691b420e17e1c5ca146749ea4d416a9e26f2c20452661",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 9.375,
+      "median_ms": 27.5,
+      "p95_nearest_rank_ms": 37.625,
+      "maximum_ms": 44.625
+     }
+    }
+   }
+  },
+  {
+   "id": "static-512",
+   "mode": "static",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
     "three": {
      "environment": {
       "version": "WebGL 2.0",
@@ -1923,7 +3478,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1725
+      "navigationToFirstFrameMs": 392
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -1959,24 +3514,12 @@
      "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
      "timing": {
       "samples": 21,
-      "minimum_ms": 5.375,
-      "median_ms": 13.75,
-      "p95_nearest_rank_ms": 31.125,
-      "maximum_ms": 35.375
+      "minimum_ms": 2.875,
+      "median_ms": 3.0,
+      "p95_nearest_rank_ms": 3.625,
+      "maximum_ms": 5.625
      }
-    }
-   }
-  },
-  {
-   "id": "instanced-512",
-   "mode": "instanced",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
+    },
     "diff3d": {
      "environment": {
       "version": "WebGL 1.0",
@@ -2000,14 +3543,14 @@
       "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
       "devicePixelRatio": 1,
       "animationTime": 0,
-      "objectCount": 1
+      "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 52,
-      "calls": 1,
+      "milliseconds": 174,
+      "calls": 512,
       "triangles": 512,
       "resources": {
-       "createBuffer": 14,
+       "createBuffer": 5122,
        "deleteBuffer": 0,
        "createTexture": 1,
        "deleteTexture": 0,
@@ -2020,11 +3563,11 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 2216
+      "navigationToFirstFrameMs": 916
      },
      "frames_per_sample": 8,
      "final_resources": {
-      "createBuffer": 14,
+      "createBuffer": 5122,
       "deleteBuffer": 0,
       "createTexture": 1,
       "deleteTexture": 0,
@@ -2049,17 +3592,29 @@
       "edge_tie_pixels": 3428,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 210477,
-     "gzip_bytes": 42437,
-     "html_sha256": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
+     "html_bytes": 1612893,
+     "gzip_bytes": 61634,
+     "html_sha256": "8400228c96b9238aec3ba9c337d00af9224dda8c2a5c01120653b3ec663e4fa9",
      "timing": {
       "samples": 21,
-      "minimum_ms": 2.0,
-      "median_ms": 4.125,
-      "p95_nearest_rank_ms": 17.0,
-      "maximum_ms": 18.25
+      "minimum_ms": 94.75,
+      "median_ms": 104.5,
+      "p95_nearest_rank_ms": 112.0,
+      "maximum_ms": 114.75
      }
-    },
+    }
+   }
+  },
+  {
+   "id": "instanced-512",
+   "mode": "instanced",
+   "count": 512,
+   "pixel_mismatches_outside_edge_ties": [
+    0,
+    0
+   ],
+   "pass_number": 2,
+   "engines": {
     "three": {
      "environment": {
       "version": "WebGL 2.0",
@@ -2086,7 +3641,7 @@
       "objectCount": 1
      },
      "first_frame": {
-      "milliseconds": 57,
+      "milliseconds": 16,
       "calls": 1,
       "triangles": 512,
       "resources": {
@@ -2105,7 +3660,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1203
+      "navigationToFirstFrameMs": 431
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -2141,10 +3696,93 @@
      "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
      "timing": {
       "samples": 21,
-      "minimum_ms": 0.75,
-      "median_ms": 1.25,
-      "p95_nearest_rank_ms": 7.25,
-      "maximum_ms": 13.5
+      "minimum_ms": 0.5,
+      "median_ms": 0.625,
+      "p95_nearest_rank_ms": 1.0,
+      "maximum_ms": 1.0
+     }
+    },
+    "diff3d": {
+     "environment": {
+      "version": "WebGL 1.0",
+      "shadingLanguage": "WebGL GLSL ES 1.0",
+      "renderer": "Apple M1, or similar",
+      "vendor": "Apple",
+      "context": {
+       "alpha": false,
+       "antialias": false,
+       "depth": true,
+       "failIfMajorPerformanceCaveat": false,
+       "powerPreference": "default",
+       "premultipliedAlpha": true,
+       "preserveDrawingBuffer": true,
+       "stencil": false
+      },
+      "width": 256,
+      "height": 256,
+      "fragmentTextures": 16,
+      "subpixelBits": 4,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+      "devicePixelRatio": 1,
+      "animationTime": 0,
+      "objectCount": 1
+     },
+     "first_frame": {
+      "milliseconds": 15,
+      "calls": 1,
+      "triangles": 512,
+      "resources": {
+       "createBuffer": 14,
+       "deleteBuffer": 0,
+       "createTexture": 1,
+       "deleteTexture": 0,
+       "createProgram": 10,
+       "deleteProgram": 0,
+       "createShader": 20,
+       "deleteShader": 0,
+       "createFramebuffer": 0,
+       "deleteFramebuffer": 0,
+       "createRenderbuffer": 0,
+       "deleteRenderbuffer": 0
+      },
+      "navigationToFirstFrameMs": 1462
+     },
+     "frames_per_sample": 8,
+     "final_resources": {
+      "createBuffer": 14,
+      "deleteBuffer": 0,
+      "createTexture": 1,
+      "deleteTexture": 0,
+      "createProgram": 10,
+      "deleteProgram": 0,
+      "createShader": 20,
+      "deleteShader": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0
+     },
+     "first_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "final_pixels": {
+      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
+      "colored_pixels": 12624,
+      "edge_tie_pixels": 3428,
+      "edge_tolerance_pixels": 0.09038834764831845
+     },
+     "html_bytes": 211474,
+     "gzip_bytes": 42879,
+     "html_sha256": "400fc8f1e376f75a8d3d6f2a3d161e37569b1b779874ef944352fd28c8f59165",
+     "timing": {
+      "samples": 21,
+      "minimum_ms": 0.875,
+      "median_ms": 1.125,
+      "p95_nearest_rank_ms": 1.5,
+      "maximum_ms": 1.625
      }
     }
    }
@@ -2152,1280 +3790,6 @@
   {
    "id": "dynamic-512",
    "mode": "dynamic",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 1,
-   "engines": {
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 403,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 5122,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2169
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 5122,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "7977a018450daca322f2384d42066505cbaedba8508a192b663273962db15732",
-      "colored_pixels": 12648,
-      "edge_tie_pixels": 1364,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 1730106,
-     "gzip_bytes": 68388,
-     "html_sha256": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 150.375,
-      "median_ms": 248.375,
-      "p95_nearest_rank_ms": 427.375,
-      "maximum_ms": 511.375
-     }
-    },
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 112,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1174
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "7977a018450daca322f2384d42066505cbaedba8508a192b663273962db15732",
-      "colored_pixels": 12648,
-      "edge_tie_pixels": 1364,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573310,
-     "gzip_bytes": 141206,
-     "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 4.625,
-      "median_ms": 10.125,
-      "p95_nearest_rank_ms": 28.625,
-      "maximum_ms": 31.875
-     }
-    }
-   }
-  },
-  {
-   "id": "static-16",
-   "mode": "static",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 175,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 2118
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553258,
-     "gzip_bytes": 139139,
-     "html_sha256": "3db683ef35384052f7b8132e35b92770faabcabca5b126da933aeb96320d12cb",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.125,
-      "median_ms": 3.125,
-      "p95_nearest_rank_ms": 10.375,
-      "maximum_ms": 20.75
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 64,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 162,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2194
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 162,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 211003,
-     "gzip_bytes": 40671,
-     "html_sha256": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 3.625,
-      "median_ms": 11.875,
-      "p95_nearest_rank_ms": 38.375,
-      "maximum_ms": 52.5
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-16",
-   "mode": "instanced",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 120,
-      "calls": 1,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1703
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553264,
-     "gzip_bytes": 139140,
-     "html_sha256": "46bffdd52b0f6be44ba3be635ed9beccc721fcd9f19c861e5e790305e5fda1d8",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.875,
-      "median_ms": 1.875,
-      "p95_nearest_rank_ms": 13.125,
-      "maximum_ms": 17.125
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 118,
-      "calls": 1,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2988
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 172035,
-     "gzip_bytes": 39987,
-     "html_sha256": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.5,
-      "median_ms": 2.125,
-      "p95_nearest_rank_ms": 6.25,
-      "maximum_ms": 7.125
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-16",
-   "mode": "dynamic",
-   "count": 16,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 33,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1505
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
-      "colored_pixels": 13000,
-      "edge_tie_pixels": 242,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 553260,
-     "gzip_bytes": 139142,
-     "html_sha256": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.75,
-      "median_ms": 3.625,
-      "p95_nearest_rank_ms": 7.875,
-      "maximum_ms": 11.625
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 16
-     },
-     "first_frame": {
-      "milliseconds": 136,
-      "calls": 16,
-      "triangles": 16,
-      "resources": {
-       "createBuffer": 162,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2370
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 162,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b",
-      "colored_pixels": 13082,
-      "edge_tie_pixels": 404,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "4d064f2f1de74c9c76f4a6013fea681ddcc126ec20fbee852b6236a770a2cfc0",
-      "colored_pixels": 13000,
-      "edge_tie_pixels": 242,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 214836,
-     "gzip_bytes": 41073,
-     "html_sha256": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 3.875,
-      "median_ms": 15.375,
-      "p95_nearest_rank_ms": 29.5,
-      "maximum_ms": 31.875
-     }
-    }
-   }
-  },
-  {
-   "id": "static-128",
-   "mode": "static",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 30,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1804
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557244,
-     "gzip_bytes": 139637,
-     "html_sha256": "5a490ad76c8748a0e69c107e3a9400092b055134429d47808c9b97024ec7849c",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.375,
-      "median_ms": 2.625,
-      "p95_nearest_rank_ms": 15.5,
-      "maximum_ms": 18.125
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 500,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 1282,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2454
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 1282,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 528247,
-     "gzip_bytes": 46142,
-     "html_sha256": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 27.5,
-      "median_ms": 65.5,
-      "p95_nearest_rank_ms": 118.0,
-      "maximum_ms": 121.5
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-128",
-   "mode": "instanced",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 81,
-      "calls": 1,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1048
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557250,
-     "gzip_bytes": 139638,
-     "html_sha256": "c4796cb55b618d57780d8ce855ed7f6c2e64a830cf4fc00cd4af27692a0f1c1c",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.625,
-      "median_ms": 1.375,
-      "p95_nearest_rank_ms": 6.375,
-      "maximum_ms": 8.5
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 125,
-      "calls": 1,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 956
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 180613,
-     "gzip_bytes": 40559,
-     "html_sha256": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.125,
-      "median_ms": 1.5,
-      "p95_nearest_rank_ms": 3.875,
-      "maximum_ms": 4.625
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-128",
-   "mode": "dynamic",
-   "count": 128,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 46,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 671
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "c0cdd2fbff2cfb689108e028f41989e55d13b5fa2e708bfb6f7c0ae71f0e69cf",
-      "colored_pixels": 11495,
-      "edge_tie_pixels": 1152,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557246,
-     "gzip_bytes": 139642,
-     "html_sha256": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.25,
-      "median_ms": 2.25,
-      "p95_nearest_rank_ms": 5.75,
-      "maximum_ms": 13.0
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 128
-     },
-     "first_frame": {
-      "milliseconds": 159,
-      "calls": 128,
-      "triangles": 128,
-      "resources": {
-       "createBuffer": 1282,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 1879
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 1282,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "0ce7af7e0d8cbc2ba1556452e6f25922522a9e628c55e8a875a49b7d2ca27b8d",
-      "colored_pixels": 11913,
-      "edge_tie_pixels": 1220,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "c0cdd2fbff2cfb689108e028f41989e55d13b5fa2e708bfb6f7c0ae71f0e69cf",
-      "colored_pixels": 11495,
-      "edge_tie_pixels": 1152,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 557791,
-     "gzip_bytes": 48266,
-     "html_sha256": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 30.875,
-      "median_ms": 52.625,
-      "p95_nearest_rank_ms": 88.125,
-      "maximum_ms": 108.125
-     }
-    }
-   }
-  },
-  {
-   "id": "static-512",
-   "mode": "static",
    "count": 512,
    "pixel_mismatches_outside_edge_ties": [
     0,
@@ -3478,371 +3842,7 @@
        "createVertexArray": 1,
        "deleteVertexArray": 0
       },
-      "navigationToFirstFrameMs": 1008
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 3,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573308,
-     "gzip_bytes": 141200,
-     "html_sha256": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 3.375,
-      "median_ms": 8.25,
-      "p95_nearest_rank_ms": 12.125,
-      "maximum_ms": 15.5
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 391,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 5122,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2616
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 5122,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 1611896,
-     "gzip_bytes": 61199,
-     "html_sha256": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 140.0,
-      "median_ms": 198.25,
-      "p95_nearest_rank_ms": 303.0,
-      "maximum_ms": 315.625
-     }
-    }
-   }
-  },
-  {
-   "id": "instanced-512",
-   "mode": "instanced",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 27,
-      "calls": 1,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 4,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 931
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 4,
-      "deleteBuffer": 0,
-      "createTexture": 4,
-      "deleteTexture": 0,
-      "createProgram": 1,
-      "deleteProgram": 0,
-      "createShader": 2,
-      "deleteShader": 2,
-      "createFramebuffer": 3,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0,
-      "createVertexArray": 1,
-      "deleteVertexArray": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 573314,
-     "gzip_bytes": 141202,
-     "html_sha256": "e50a89a7440b38cc94d8cfb7efab2a9609d4606fc82b0c028266a06c2b87eabb",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 0.875,
-      "median_ms": 1.625,
-      "p95_nearest_rank_ms": 6.25,
-      "maximum_ms": 7.5
-     }
-    },
-    "diff3d": {
-     "environment": {
-      "version": "WebGL 1.0",
-      "shadingLanguage": "WebGL GLSL ES 1.0",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 1
-     },
-     "first_frame": {
-      "milliseconds": 51,
-      "calls": 1,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 14,
-       "deleteBuffer": 0,
-       "createTexture": 1,
-       "deleteTexture": 0,
-       "createProgram": 10,
-       "deleteProgram": 0,
-       "createShader": 20,
-       "deleteShader": 0,
-       "createFramebuffer": 0,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0
-      },
-      "navigationToFirstFrameMs": 2529
-     },
-     "frames_per_sample": 8,
-     "final_resources": {
-      "createBuffer": 14,
-      "deleteBuffer": 0,
-      "createTexture": 1,
-      "deleteTexture": 0,
-      "createProgram": 10,
-      "deleteProgram": 0,
-      "createShader": 20,
-      "deleteShader": 0,
-      "createFramebuffer": 0,
-      "deleteFramebuffer": 0,
-      "createRenderbuffer": 0,
-      "deleteRenderbuffer": 0
-     },
-     "first_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "final_pixels": {
-      "pixel_sha256": "9de95070b77b64c3821da5e8c1e86f80b71480529b4c6e0515c4039682a4112d",
-      "colored_pixels": 12624,
-      "edge_tie_pixels": 3428,
-      "edge_tolerance_pixels": 0.09038834764831845
-     },
-     "html_bytes": 210477,
-     "gzip_bytes": 42437,
-     "html_sha256": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
-     "timing": {
-      "samples": 21,
-      "minimum_ms": 1.5,
-      "median_ms": 3.375,
-      "p95_nearest_rank_ms": 22.875,
-      "maximum_ms": 24.0
-     }
-    }
-   }
-  },
-  {
-   "id": "dynamic-512",
-   "mode": "dynamic",
-   "count": 512,
-   "pixel_mismatches_outside_edge_ties": [
-    0,
-    0
-   ],
-   "pass_number": 2,
-   "engines": {
-    "three": {
-     "environment": {
-      "version": "WebGL 2.0",
-      "shadingLanguage": "WebGL GLSL ES 3.00",
-      "renderer": "Apple M1, or similar",
-      "vendor": "Apple",
-      "context": {
-       "alpha": false,
-       "antialias": false,
-       "depth": true,
-       "failIfMajorPerformanceCaveat": false,
-       "powerPreference": "default",
-       "premultipliedAlpha": true,
-       "preserveDrawingBuffer": true,
-       "stencil": false
-      },
-      "width": 256,
-      "height": 256,
-      "fragmentTextures": 16,
-      "subpixelBits": 4,
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
-      "devicePixelRatio": 1,
-      "animationTime": 0,
-      "objectCount": 512
-     },
-     "first_frame": {
-      "milliseconds": 241,
-      "calls": 512,
-      "triangles": 512,
-      "resources": {
-       "createBuffer": 3,
-       "deleteBuffer": 0,
-       "createTexture": 4,
-       "deleteTexture": 0,
-       "createProgram": 1,
-       "deleteProgram": 0,
-       "createShader": 2,
-       "deleteShader": 2,
-       "createFramebuffer": 3,
-       "deleteFramebuffer": 0,
-       "createRenderbuffer": 0,
-       "deleteRenderbuffer": 0,
-       "createVertexArray": 1,
-       "deleteVertexArray": 0
-      },
-      "navigationToFirstFrameMs": 1549
+      "navigationToFirstFrameMs": 520
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3878,10 +3878,10 @@
      "html_sha256": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
      "timing": {
       "samples": 21,
-      "minimum_ms": 3.75,
-      "median_ms": 9.375,
-      "p95_nearest_rank_ms": 13.5,
-      "maximum_ms": 23.25
+      "minimum_ms": 3.0,
+      "median_ms": 3.25,
+      "p95_nearest_rank_ms": 4.0,
+      "maximum_ms": 7.0
      }
     },
     "diff3d": {
@@ -3910,7 +3910,7 @@
       "objectCount": 512
      },
      "first_frame": {
-      "milliseconds": 483,
+      "milliseconds": 198,
       "calls": 512,
       "triangles": 512,
       "resources": {
@@ -3927,7 +3927,7 @@
        "createRenderbuffer": 0,
        "deleteRenderbuffer": 0
       },
-      "navigationToFirstFrameMs": 1790
+      "navigationToFirstFrameMs": 894
      },
      "frames_per_sample": 8,
      "final_resources": {
@@ -3956,15 +3956,15 @@
       "edge_tie_pixels": 1364,
       "edge_tolerance_pixels": 0.09038834764831845
      },
-     "html_bytes": 1730106,
-     "gzip_bytes": 68388,
-     "html_sha256": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
+     "html_bytes": 1731103,
+     "gzip_bytes": 68826,
+     "html_sha256": "7094a11f32b3aaff1fa47a26db880dae3b85b44aaf707b984925282688a7e479",
      "timing": {
       "samples": 21,
-      "minimum_ms": 134.5,
-      "median_ms": 175.625,
-      "p95_nearest_rank_ms": 263.375,
-      "maximum_ms": 265.375
+      "minimum_ms": 100.75,
+      "median_ms": 110.0,
+      "p95_nearest_rank_ms": 119.5,
+      "maximum_ms": 126.75
      }
     }
    }

@@ -1158,3 +1158,51 @@ Julia 1.13.0) and ran the AD, gradient and soft-differentiation units directly:
 All ten units passed, 372 assertions in total, with their allocation guards enabled.
 This is a focused dependency-compatibility result on the candidate, not a platform
 matrix: the declared floor is exercised by this recorded run rather than by CI.
+
+## R6 — both comparison passes re-run after the render-loop change
+
+The render-loop change rewrites every exported viewer, so under this plan's rule the
+published browser comparison stopped covering the candidate. Both passes were re-run
+and republished.
+
+**VERIFIED — the exported file changed and the rendered pixels did not.** The
+`static-16` Diff3D first-frame buffer still hashes to
+`482ffcd625d56300cc44b1ebb2e2ce3c5b8e4efcc781efc8982575172d54296b`, identical to the
+superseded run, while the artifact hash moved from `70a547da...` to `6b8a2700...` and
+its gzip size grew from 40,671 to 41,112 bytes. Three.js hashes to the same pixel
+value on that fixture in both runs, which is why the report describes the
+determinism as a property of the small fixtures rather than of either engine.
+
+**VERIFIED — every accuracy result reproduced exactly.** Across both new runs: 32
+numerical records and 18 browser pairs each, `status = passed`, 42 raw file hashes
+verified, zero cross-engine pixel mismatches outside edge ties, a largest
+timed-gradient absolute error of `3.47235e-13`, and all four methods recovering the
+known 16-parameter depths within `4.99853e-11`. Those are the same worst cases the
+superseded runs recorded. Warmed Julia allocation totals at 1,024 parameters are also
+unchanged: 4,436,808 / 116,352 / 16,528 bytes on Linux and 4,481,488 / 124,528 /
+16,512 on macOS.
+
+**VERIFIED — the qualitative conclusions are unchanged.** Three.js keeps the lower
+warmed frame median in all 18 measurements of each run, and Diff3D's gzip export is
+smaller in all 18, with its uncompressed `dynamic-128`, `static-512` and `dynamic-512`
+exports larger. Timings moved with host load, so the published ratios changed: at
+1,024 parameters the three.js central-difference baseline now takes 12.6x and 12.6x
+as long as Diff3D reverse AD on the Linux runner and 18.3x and 19.3x on the macOS
+host, which was more heavily loaded than before (one-minute load 44.29 rising to
+48.12 on 10 CPUs, against 1.26 rising to 3.99 on the Linux runner's 4). Two ordering
+claims moved with the numbers and were corrected: Diff3D reverse AD now has the
+lowest median at 256 parameters on both hosts rather than only on Linux, and three.js
+central differences also beat Diff3D reverse AD at 16 parameters in the Linux first
+pass.
+
+**VERIFIED — the published numbers are reproducible from the committed files.**
+Extracting each committed archive and re-running `benchmarks/threejs/summarize.py`
+over it reproduces the committed summary byte-for-byte, and all 52 table rows in the
+report are generated verbatim from those committed summaries. The superseded
+`017289a` and `8cec4f2` artifacts were removed, since nothing references them.
+
+- Linux/Chromium `3fee531`, from the `comparison / compare` job of Release validation
+  [35678519977](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35678519977),
+  archive SHA-256 `cacdf458e56f95dd8c7f0406482b0271412b41d8a945a6d3e77da3043c322f77`.
+- macOS/Firefox `0dddaff`, run locally on a clean checkout, archive SHA-256
+  `53d99d935d3c4008058d907484d66ebdb4c77751491fd6d965eb685d76af7042`.

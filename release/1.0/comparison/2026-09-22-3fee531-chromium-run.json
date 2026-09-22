@@ -1,16 +1,16 @@
 {
   "status": "passed",
-  "revision": "8cec4f2a56460c122e157d16a82527c11b2e09c3",
+  "revision": "3fee5313ea9103da48397b9517eebdab5b070695",
   "dirty": false,
-  "os": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
-  "arch": "arm64",
-  "cpu_count": 10,
+  "os": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "arch": "x86_64",
+  "cpu_count": 4,
   "load_average_start": [
-    28.74951171875,
-    29.66015625,
-    31.46337890625
+    1.2578125,
+    0.55712890625,
+    0.2080078125
   ],
-  "started_unix_seconds": 1789963930.118779,
+  "started_unix_seconds": 1790043673.1800282,
   "commands": [
     {
       "name": "fixtures",
@@ -21,7 +21,7 @@
       ],
       "exit_code": 0,
       "log": "fixtures.log",
-      "process_elapsed_seconds": 0.7529719169251621
+      "process_elapsed_seconds": 0.0758158099999946
     },
     {
       "name": "browser-build-diff3d",
@@ -35,7 +35,7 @@
       ],
       "exit_code": 0,
       "log": "browser-build-diff3d.log",
-      "process_elapsed_seconds": 100.7016891669482
+      "process_elapsed_seconds": 11.692500553000002
     },
     {
       "name": "browser-build-three",
@@ -47,7 +47,7 @@
       ],
       "exit_code": 0,
       "log": "browser-build-three.log",
-      "process_elapsed_seconds": 2.0067225840175524
+      "process_elapsed_seconds": 0.1769215819999772
     },
     {
       "name": "projection-diff3d-1",
@@ -61,7 +61,7 @@
       ],
       "exit_code": 0,
       "log": "projection-diff3d-1.log",
-      "process_elapsed_seconds": 109.76209933299106
+      "process_elapsed_seconds": 10.006988532000008
     },
     {
       "name": "projection-three-1",
@@ -74,7 +74,7 @@
       ],
       "exit_code": 0,
       "log": "projection-three-1.log",
-      "process_elapsed_seconds": 2.737397541059181
+      "process_elapsed_seconds": 0.6483141470000078
     },
     {
       "name": "browser-1",
@@ -85,13 +85,13 @@
         "<output>/html",
         "<output>/browser-1.json",
         "--browser",
-        "firefox",
+        "chromium",
         "--order",
         "diff3d-first"
       ],
       "exit_code": 0,
       "log": "browser-1.log",
-      "process_elapsed_seconds": 647.2583011660026
+      "process_elapsed_seconds": 134.80266285899998
     },
     {
       "name": "projection-three-2",
@@ -104,7 +104,7 @@
       ],
       "exit_code": 0,
       "log": "projection-three-2.log",
-      "process_elapsed_seconds": 3.5178156659239903
+      "process_elapsed_seconds": 0.6501333120000368
     },
     {
       "name": "projection-diff3d-2",
@@ -118,7 +118,7 @@
       ],
       "exit_code": 0,
       "log": "projection-diff3d-2.log",
-      "process_elapsed_seconds": 75.39052549994085
+      "process_elapsed_seconds": 9.898632141000007
     },
     {
       "name": "browser-2",
@@ -129,45 +129,45 @@
         "<output>/html",
         "<output>/browser-2.json",
         "--browser",
-        "firefox",
+        "chromium",
         "--order",
         "three-first"
       ],
       "exit_code": 0,
       "log": "browser-2.log",
-      "process_elapsed_seconds": 493.3857755829813
+      "process_elapsed_seconds": 133.50394601300002
     }
   ],
-  "finished_unix_seconds": 1789965365.856523,
+  "finished_unix_seconds": 1790043974.686238,
   "load_average_end": [
-    27.08056640625,
-    28.32373046875,
-    30.34765625
+    3.9853515625,
+    2.3232421875,
+    1.0478515625
   ],
   "files_sha256": {
-    "browser-1.json": "ec51798239dd62a88342157262d4972885737970eab4c819b0e6b3adde2673b3",
-    "browser-1.log": "d97d4a6baffc6efdfb4c5c8f5f799a327b3a45db186affb7a92e05c6cd93f0ac",
-    "browser-2.json": "910b7cfd4f5014cdae785d128137fa79aefe4c419e0db28a07b7727476b2d447",
-    "browser-2.log": "e51d6777ceda0d20b17a16725c6d48e36c8fe2d02fcbb810f6073886e75dc49c",
+    "browser-1.json": "f7a49302d99547934b87226df9919c880f3bce461ef30b5bfff7e469abdee04e",
+    "browser-1.log": "566c17f8de6fee1697526987cd3566513ca416a32e1e5e86f31565938f090ffa",
+    "browser-2.json": "e1da97c7aaa5fb1f46976168ac26c5569f987a705229f3ee43b315cc2999c430",
+    "browser-2.log": "22b2d14f57aae3270e2bc9988a607a43f578930cbe708774139853948683630d",
     "browser-build-diff3d.log": "d356bef41378da3ed165235e4ee4b341a2af6908a8a5a3dbb7e87d960eb541fd",
     "browser-build-three.log": "a0a82d2eb3028717ee59996e12ce0626046faace30bd6ed2c84105166738dc72",
     "fixtures/browser.json": "8cd892ee507518d1df300f9cae3be9d20cb42e53804bec1a5233e77bacc14b75",
     "fixtures/browser.toml": "f79c9d8320dff9745a32a5d322af6a97b0b4cc7571534392b5743fa0a0768471",
-    "fixtures/projection.json": "86fd54a1a89a71d297d472e117f18d1a7a49bd49681b3841314f98cb239a4c84",
-    "fixtures/projection.toml": "8ea38411c849d0c8afd1dae4fe1eeeb3b847e7de4a358e6c5b97cb51bfad703b",
+    "fixtures/projection.json": "809ab2993dd5b0bd773ee3af7a15f7c66d7a91e2266bb8db3b9045edc95ef858",
+    "fixtures/projection.toml": "15933efba0f099479aa7ae24ba823dd8bc69a1e4a2c93470b6792593e728c0ba",
     "fixtures.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "html/diff3d-build.toml": "720d5f67bf3c750dcf2fd96aa4c8456967aa142783f0eff80843d44adf887e61",
-    "html/diff3d-dynamic-128.html": "b80085aa0aae906c9dd04b49cc059364c1c87b63d12c86b8425d6c97fe018baf",
-    "html/diff3d-dynamic-16.html": "188eabfc511082f293b6e399ce8f5012715c4abdc1d2390d5cba32a0c7afe620",
-    "html/diff3d-dynamic-512.html": "a445a82bafcf7043d82001609d65e9894ad4b50987327a8f9834b8c33bcc2011",
-    "html/diff3d-instanced-128.html": "5f908db630f2bea0b44c5c402c79154df2c7e597bcd956fc36da286cf95f1ac3",
-    "html/diff3d-instanced-16.html": "1b33f6124b0bd98a9c0da1e7212da038319ec6319e5ef275a4741641ed1eed37",
-    "html/diff3d-instanced-512.html": "cdf7557bab2c56a9d47af0d46feb0c79413e6d882e5ecd450535567f9d2679c8",
-    "html/diff3d-static-128.html": "d28d812b0dc32ec5b8809e5aef4c246e204ea6793e2daaf7a4d1e2789ee9c359",
-    "html/diff3d-static-16.html": "70a547daf44987937a549267208b830e81fda3a9bebec4ae26396bfbcc657dbf",
-    "html/diff3d-static-512.html": "affcbea603267cf9f92024768bec059c57fe8197a501a588ba2eea1af30913b4",
+    "html/diff3d-build.toml": "49e3110e435ec675465df4d8381b4d09c799aa4ee0f8f2666c5a72c46d453cb5",
+    "html/diff3d-dynamic-128.html": "dddc99f854f70d88925691b420e17e1c5ca146749ea4d416a9e26f2c20452661",
+    "html/diff3d-dynamic-16.html": "0c867b13aeab78128700b66c91c6fd5302dca8c107f71578e05e33b417487b6e",
+    "html/diff3d-dynamic-512.html": "7094a11f32b3aaff1fa47a26db880dae3b85b44aaf707b984925282688a7e479",
+    "html/diff3d-instanced-128.html": "9b21970f21a07e661364d48c50022a21a0dee39cd31cc5732f91d9d1f1c1e444",
+    "html/diff3d-instanced-16.html": "18f9d72b2090bd082ac800775d619356e6d46775c8ec75078dae1ef29966d05c",
+    "html/diff3d-instanced-512.html": "400fc8f1e376f75a8d3d6f2a3d161e37569b1b779874ef944352fd28c8f59165",
+    "html/diff3d-static-128.html": "d7d9f4bf4d68603ddf515bb0027677395c0a642bfd63516ba4bb1503056f9384",
+    "html/diff3d-static-16.html": "6b8a27000ace5eec3f52e658d0f454608a28afaede214b5602c28e14df02e03c",
+    "html/diff3d-static-512.html": "8400228c96b9238aec3ba9c337d00af9224dda8c2a5c01120653b3ec663e4fa9",
     "html/three-LICENSE.txt": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
-    "html/three-build.json": "631e7f49d5be84399a44f5a659e1f4ab34af9a77a4b21a200633390a5645b6c6",
+    "html/three-build.json": "52336ab6606cc8784213327c182a147d8c9fa92d01cc02444483e4f2b8ce6f1c",
     "html/three-dynamic-128.html": "72f2855ceb1346d86776ddb088eb2a3852ff782ba1a37fc45970cbdaafedf3e2",
     "html/three-dynamic-16.html": "8c9f81dfbe641bfaa71149878252965d91e6ee9acdbb345b5fd41775080d4725",
     "html/three-dynamic-512.html": "7cf9d8ed6628679dba289db29ba4cdb17c7aa06db46bc7bdc49c4ee735ee6e5d",
@@ -179,13 +179,13 @@
     "html/three-static-512.html": "ebf2f18b51c66479c82f280cef582c5751df6cc682978baca2ff8a2d93c7d343",
     "julia-environment/Manifest.toml": "711b20ad80cd7e9fadf2923a96641247e734a15b1ad68df681f6cfcfe0e8edcd",
     "julia-environment/Project.toml": "83100053865b28a6ab396021e71a1b83edc71a59cfd930668a4629c2ae6843ff",
-    "projection-diff3d-1.log": "38af5086d03422675d35c0fb04161919b89a3912861b1d54695c88c7b8a5b0c8",
-    "projection-diff3d-1.toml": "3f52320cb247db8baa6c8a5c3e248cb44c8f60c4ab6b0e856ea40e629060749c",
-    "projection-diff3d-2.log": "ca5adc2d4d5b4adf0ad44f971b41f712efafa07b69c13b5517dff6d2423e3d21",
-    "projection-diff3d-2.toml": "90dd76f4fded1bb2f5468247d38a5d19314ca680f53747fc795f75ea5df5b98d",
-    "projection-three-1.json": "7b238f1535a2f8c9e152ad5d11d79ff5b73584c78b01fd711b972b7572f06ae6",
-    "projection-three-1.log": "c8beb75ad18a64879142d8e3141a3259bfccb8df136f6bc66d4f02c3dc9267d0",
-    "projection-three-2.json": "fadc99d2212ffdcae75723976a55ba4ef27d1ccffcb8bd7c3d9da5330ff8a253",
-    "projection-three-2.log": "f133f1ad28734820bbb6cdb13d1862d7d4c729f344c2e954dc85fa07fc029db5"
+    "projection-diff3d-1.log": "747af075c9e37dd3c0fc0a4a27a2fd372a8d837df40756d7350a3f653c4c283e",
+    "projection-diff3d-1.toml": "018afd72abd769d54371a7c888a1db148a3e26c2ac2d4579644931f7ce06ef08",
+    "projection-diff3d-2.log": "6a2205437bf4511b0f1cfe1e7469e474b91167c31b77738f957d16161f56c817",
+    "projection-diff3d-2.toml": "99e395bd0ec1861e2c6fbbb54b9cbae2effc4558b7bce53af0449b74f5f80d48",
+    "projection-three-1.json": "16d57cc2ed4e6c8533741a1731e81d27c759a5f7204a174c34c7a1ca7445d316",
+    "projection-three-1.log": "b5343093b27a526ebdfe98fd0cffa6acd9345d2c400d8dc16ae52e8d4e2f6b4c",
+    "projection-three-2.json": "1dec36db2fccb761655efead06f5ef64169065dee89fa3c7ff7eaf9fea13b15b",
+    "projection-three-2.log": "ed690efad060fd20eca56cccf9138e964fd517ed6f291cef662615580c3050c6"
   }
 }

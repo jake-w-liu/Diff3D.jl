@@ -55,7 +55,7 @@ both execution orders and raw accuracy, timing, memory and artifact-size
 measurements. Both runs report zero cross-engine pixel mismatches outside edge
 ties, a largest timed-gradient error of 3.47e-13, smaller compressed Diff3D
 exports in every fixture, and Diff3D reverse AD ahead of the three.js
-central-difference baseline by 12.9x and 11.7x at 1,024 parameters on the Linux
+central-difference baseline by 12.6x and 12.6x at 1,024 parameters on the Linux
 runner. Three.js has the lower browser-frame median in all 18 measurements of
 both runs, and is faster than Diff3D reverse AD at 64 parameters in every pass.
 The report qualifies each host and claims no general rendering parity or

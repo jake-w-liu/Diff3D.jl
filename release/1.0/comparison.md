@@ -6,16 +6,16 @@ their outputs before timing anything.
 
 The measured advantages are native Julia differentiation and smaller compressed
 standalone artifacts. At 1,024 depth parameters the three.js central-difference
-baseline took 12.9x and 11.7x as long as Diff3D reverse AD by median time on the
-Linux runner, and 5.0x and 11.6x on the macOS host. Three.js had the lower median
+baseline took 12.6x and 12.6x as long as Diff3D reverse AD by median time on the
+Linux runner, and 18.3x and 19.3x on the macOS host. Three.js had the lower median
 browser frame time in **all 18 measurements of both runs**. This evidence
 supports a Julia numerical-workflow use case; it does not establish overall
 rendering superiority or three.js parity.
 
 **Measurement qualification:** the Linux runner had a one-minute load average of
-1.63 at the start and 3.63 at the end on 4 logical CPUs, and is the more reliable
-timing environment. The macOS host was shared and busy, with load 28.75 falling
-to 27.08 on 10 logical CPUs; its percentiles are correspondingly wide and it is
+1.26 at the start and 3.99 at the end on 4 logical CPUs, and is the more reliable
+timing environment. The macOS host was shared and busy, with load 44.29 rising
+to 48.12 on 10 logical CPUs; its percentiles are correspondingly wide and it is
 published for its hardware renderer and for its second engine, not for precise
 timing. Reversing execution order exposes substantial variation on both. Treat
 the numbers as observations of these runs, not isolated-machine guarantees.
@@ -24,7 +24,7 @@ the numbers as observations of these runs, not isolated-machine guarantees.
 
 | | Linux / Chromium | macOS / Firefox |
 |---|---|---|
-| Diff3D revision | [`017289a`](https://github.com/jake-w-liu/Diff3D.jl/tree/017289a7bd30d062ebcba62ed3d471911598c00b) | [`8cec4f2`](https://github.com/jake-w-liu/Diff3D.jl/tree/8cec4f2a56460c122e157d16a82527c11b2e09c3) |
+| Diff3D revision | [`3fee531`](https://github.com/jake-w-liu/Diff3D.jl/tree/3fee5313ea9103da48397b9517eebdab5b070695) | [`0dddaff`](https://github.com/jake-w-liu/Diff3D.jl/tree/0dddaff19277998cb2e7202de9a9fa9971cdf54c) |
 | Package version | 1.0.0 | 1.0.0 |
 | Host | `Linux-6.17.0-1022-azure-x86_64`, 4 CPUs, AMD EPYC 7763 | `macOS-26.5.1-arm64`, 10 CPUs, Apple M5 |
 | Julia | 1.13.0, one thread, optimization level 2, CPU target `znver3` | 1.13.0, one thread, optimization level 2, CPU target `apple-m1` |
@@ -34,19 +34,19 @@ the numbers as observations of these runs, not isolated-machine guarantees.
 | Reported renderer | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)` — software | `Apple M1, or similar` — hardware |
 | Clean checkout | yes | yes |
 
-Both revisions contain the same measured `src/` and `benchmarks/` trees; `8cec4f2`
-only adds the summary derivation script and its tests on top of `017289a`. Exact
+Both revisions contain the same measured `src/` and `benchmarks/` trees; `0dddaff`
+only adds evidence prose on top of `3fee531`. Exact
 resolved Julia `Project.toml` and `Manifest.toml` files are archived inside each
 run and are required to stay unchanged for its duration.
 
-- Linux/Chromium: [run record and 42 file hashes](comparison/2026-09-21-017289a-chromium-run.json),
-  [derived statistics](comparison/2026-09-21-017289a-chromium-summary.json), and the
-  [complete raw archive](comparison/2026-09-21-017289a-chromium.tar.gz)
-  (43 files; SHA-256 `d8eb85eee5db739ad996bdb2f5f3e884743a89b89c903af7b9be49151842899a`).
-- macOS/Firefox: [run record and 42 file hashes](comparison/2026-09-21-8cec4f2-firefox-run.json),
-  [derived statistics](comparison/2026-09-21-8cec4f2-firefox-summary.json), and the
-  [complete raw archive](comparison/2026-09-21-8cec4f2-firefox.tar.gz)
-  (43 files; SHA-256 `92b99487afdd6c18585b57b1a41b56fc558374553373c1b5a4f0a22760db62f6`).
+- Linux/Chromium: [run record and 42 file hashes](comparison/2026-09-22-3fee531-chromium-run.json),
+  [derived statistics](comparison/2026-09-22-3fee531-chromium-summary.json), and the
+  [complete raw archive](comparison/2026-09-22-3fee531-chromium.tar.gz)
+  (43 files; SHA-256 `cacdf458e56f95dd8c7f0406482b0271412b41d8a945a6d3e77da3043c322f77`).
+- macOS/Firefox: [run record and 42 file hashes](comparison/2026-09-22-0dddaff-firefox-run.json),
+  [derived statistics](comparison/2026-09-22-0dddaff-firefox-summary.json), and the
+  [complete raw archive](comparison/2026-09-22-0dddaff-firefox.tar.gz)
+  (43 files; SHA-256 `53d99d935d3c4008058d907484d66ebdb4c77751491fd6d965eb685d76af7042`).
 
 Each archive holds the run record, raw samples, commands, logs, fixtures,
 dependency snapshots and 18 working HTML artifacts. Recorded commands use the
@@ -92,44 +92,44 @@ Node first.
 
 | Parameters | Pass | Diff3D reverse AD | Julia ForwardDiff | Julia central difference | three.js central difference |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 1 | 0.0194 [0.0425] | 0.0029 [0.0036] | 0.0258 [0.0258] | 0.0211 [0.0322] |
-| 16 | 2 | 0.0204 [0.0213] | 0.0026 [0.0030] | 0.0258 [0.0271] | 0.0259 [0.0300] |
-| 64 | 1 | 0.0883 [0.1674] | 0.0261 [0.0481] | 0.4146 [0.4265] | 0.0681 [0.0966] |
-| 64 | 2 | 0.1009 [0.1533] | 0.0263 [0.0336] | 0.4071 [0.4182] | 0.0682 [0.1074] |
-| 256 | 1 | 0.3174 [0.4930] | 0.4355 [0.4458] | 6.5610 [6.6747] | 1.0464 [1.1080] |
-| 256 | 2 | 0.3298 [0.4415] | 0.4348 [0.4549] | 6.5441 [6.5777] | 1.1097 [1.1197] |
-| 1,024 | 1 | 1.2842 [1.7486] | 6.7634 [6.7925] | 105.0718 [106.5205] | 16.6172 [16.8560] |
-| 1,024 | 2 | 1.4326 [1.6523] | 6.7582 [6.7905] | 104.7490 [106.6261] | 16.7006 [17.0063] |
+| 16 | 1 | 0.0196 [0.0210] | 0.0026 [0.0031] | 0.0258 [0.0281] | 0.0146 [0.0304] |
+| 16 | 2 | 0.0195 [0.0211] | 0.0026 [0.0033] | 0.0257 [0.0335] | 0.0267 [0.0300] |
+| 64 | 1 | 0.1062 [0.1663] | 0.0232 [0.0501] | 0.4086 [0.4308] | 0.0681 [0.1026] |
+| 64 | 2 | 0.1065 [0.1752] | 0.0260 [0.0291] | 0.4078 [0.4287] | 0.0682 [0.1045] |
+| 256 | 1 | 0.3223 [0.5558] | 0.4045 [0.4477] | 6.5767 [7.1286] | 1.0555 [1.0600] |
+| 256 | 2 | 0.3194 [0.5727] | 0.4782 [0.5098] | 6.5384 [6.6186] | 1.0370 [1.0519] |
+| 1,024 | 1 | 1.3129 [1.7114] | 6.1746 [6.2079] | 105.2757 [109.1490] | 16.4731 [16.6482] |
+| 1,024 | 2 | 1.3168 [1.7646] | 7.3386 [7.3927] | 104.7046 [105.0355] | 16.6063 [16.7615] |
 
 **macOS / Firefox host:**
 
 | Parameters | Pass | Diff3D reverse AD | Julia ForwardDiff | Julia central difference | three.js central difference |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 1 | 0.0287 [0.3074] | 0.0028 [0.0035] | 0.0183 [0.1025] | 0.0202 [0.1067] |
-| 16 | 2 | 0.0303 [0.1782] | 0.0030 [0.0037] | 0.0179 [1.6670] | 0.0202 [0.0816] |
-| 64 | 1 | 0.1670 [8.6544] | 0.0315 [0.0412] | 0.3304 [5.8194] | 0.0611 [3.1304] |
-| 64 | 2 | 0.1394 [11.2605] | 0.0355 [0.1648] | 0.2795 [6.8110] | 0.0575 [6.4649] |
-| 256 | 1 | 0.6783 [0.8812] | 0.5548 [1.9023] | 10.8354 [63.4633] | 1.0370 [6.8542] |
-| 256 | 2 | 0.6146 [10.8933] | 0.4864 [1.8629] | 17.2556 [70.0534] | 6.2565 [48.5912] |
-| 1,024 | 1 | 9.0138 [77.1057] | 53.5998 [111.5650] | 305.1523 [571.8335] | 44.6340 [130.4581] |
-| 1,024 | 2 | 5.4748 [53.3995] | 50.7525 [107.4771] | 325.2635 [592.1810] | 63.5831 [142.6885] |
+| 16 | 1 | 0.0297 [0.0336] | 0.0039 [0.0060] | 0.0179 [0.0180] | 0.0189 [0.0226] |
+| 16 | 2 | 0.0277 [0.0310] | 0.0039 [0.0061] | 0.0179 [0.1559] | 0.0192 [0.0398] |
+| 64 | 1 | 0.1127 [1.0544] | 0.0306 [0.0435] | 0.2768 [2.3332] | 0.0576 [0.0695] |
+| 64 | 2 | 0.1032 [0.1746] | 0.0311 [0.1087] | 0.2769 [0.2893] | 0.0556 [0.0690] |
+| 256 | 1 | 0.4596 [0.9343] | 0.6749 [0.6992] | 10.1087 [32.4177] | 0.8355 [0.9413] |
+| 256 | 2 | 0.4138 [0.7307] | 0.4723 [1.6937] | 13.5716 [27.1360] | 0.8463 [35.3906] |
+| 1,024 | 1 | 2.0796 [26.1720] | 21.0330 [62.3609] | 238.8392 [274.4137] | 38.0338 [61.9902] |
+| 1,024 | 2 | 2.0042 [22.4196] | 20.5839 [45.2090] | 215.1775 [242.0806] | 38.6908 [71.4512] |
 
 At 1,024 parameters, reverse AD used one objective evaluation, ForwardDiff used
 86, and each central-difference method used 2,048. The evaluated objective and
 AD work differ within those calls; these counts are not engine-speed ratios.
 ForwardDiff had the lowest median of the four methods at 16 and 64 parameters in
-every pass of both runs, and at 256 parameters on the macOS host; Diff3D reverse
-AD had the lowest median at 256 parameters on the Linux runner and at 1,024
-parameters in both runs. Three.js central differences were faster than Julia
-central differences at 64, 256 and 1,024 parameters in every pass of both runs.
-They were also faster than Diff3D reverse AD at 64 parameters in every pass of
-both runs, and at 16 parameters on the macOS host. Diff3D's reverse-AD advantage
-in this objective appears only as the parameter count grows.
+every pass of both runs; Diff3D reverse AD had the lowest median at 256 and 1,024
+parameters in every pass of both runs. Three.js central differences were faster
+than Julia central differences at 64, 256 and 1,024 parameters in every pass of
+both runs. They were also faster than Diff3D reverse AD at 64 parameters in every
+pass of both runs, at 16 parameters in both passes on the macOS host, and at 16
+parameters in the first pass on the Linux runner. Diff3D's reverse-AD advantage in
+this objective appears only as the parameter count grows.
 
 Julia's compilation cost matters for short jobs. At 16 parameters, first-call
-times were 0.425/0.420 seconds for reverse AD and 0.533/0.515 seconds for
-ForwardDiff on the Linux runner, versus 0.615/0.608 milliseconds for the three.js
-finite-difference call. The loaded macOS host needed 5.371/5.643 and 6.682/4.085
+times were 0.425/0.418 seconds for reverse AD and 0.528/0.510 seconds for
+ForwardDiff on the Linux runner, versus 0.605/0.585 milliseconds for the three.js
+finite-difference call. The loaded macOS host needed 1.431/1.215 and 2.006/1.715
 seconds for the same first calls. These clocks exclude process launch and package
 import; full command elapsed times are in each run record.
 
@@ -179,29 +179,29 @@ batches. These are synchronized frame costs, not monitor-refresh FPS.
 
 | Fixture | Diff3D pass 1 | three.js pass 1 | Diff3D pass 2 | three.js pass 2 |
 |---|---:|---:|---:|---:|
-| static-16 | 2.888 [24.037] | 0.275 [0.338] | 3.738 [24.087] | 0.237 [0.325] |
-| instanced-16 | 1.338 [21.375] | 0.250 [0.325] | 1.337 [22.487] | 0.238 [0.363] |
-| dynamic-16 | 4.287 [25.375] | 0.238 [0.325] | 3.188 [25.113] | 0.250 [0.338] |
-| static-128 | 16.362 [18.138] | 0.525 [1.100] | 18.463 [19.863] | 0.537 [0.900] |
-| instanced-128 | 1.513 [26.975] | 0.250 [0.375] | 9.100 [28.500] | 0.288 [0.562] |
-| dynamic-128 | 16.900 [23.125] | 0.638 [0.875] | 16.412 [19.825] | 0.575 [0.763] |
-| static-512 | 51.200 [56.600] | 1.088 [1.325] | 53.100 [58.600] | 1.175 [1.600] |
-| instanced-512 | 0.888 [43.775] | 0.250 [0.337] | 0.675 [1.188] | 0.250 [0.300] |
-| dynamic-512 | 54.162 [61.763] | 1.363 [1.950] | 54.400 [61.925] | 1.263 [3.025] |
+| static-16 | 4.025 [23.938] | 0.250 [0.337] | 4.050 [24.200] | 0.262 [0.337] |
+| instanced-16 | 1.438 [22.562] | 0.250 [0.388] | 1.325 [22.500] | 0.238 [0.375] |
+| dynamic-16 | 4.163 [21.162] | 0.238 [0.325] | 4.988 [24.925] | 0.250 [0.525] |
+| static-128 | 16.787 [19.338] | 0.575 [0.938] | 17.200 [19.500] | 0.625 [0.975] |
+| instanced-128 | 1.537 [29.013] | 0.300 [0.413] | 0.650 [0.787] | 0.300 [0.438] |
+| dynamic-128 | 16.988 [20.250] | 0.650 [0.925] | 17.662 [20.350] | 0.600 [1.000] |
+| static-512 | 54.237 [60.350] | 1.325 [4.775] | 54.600 [60.338] | 1.225 [1.625] |
+| instanced-512 | 0.975 [46.200] | 0.287 [0.388] | 0.600 [1.463] | 0.312 [0.450] |
+| dynamic-512 | 53.413 [58.512] | 1.375 [1.650] | 52.087 [61.088] | 1.325 [1.425] |
 
 **macOS / Firefox host (hardware renderer, busy machine):**
 
 | Fixture | Diff3D pass 1 | three.js pass 1 | Diff3D pass 2 | three.js pass 2 |
 |---|---:|---:|---:|---:|
-| static-16 | 25.625 [76.000] | 2.125 [8.000] | 11.875 [38.375] | 3.125 [10.375] |
-| instanced-16 | 7.375 [14.625] | 2.375 [8.875] | 2.125 [6.250] | 1.875 [13.125] |
-| dynamic-16 | 11.500 [36.125] | 3.250 [7.500] | 15.375 [29.500] | 3.625 [7.875] |
-| static-128 | 54.875 [94.625] | 5.000 [11.625] | 65.500 [118.000] | 2.625 [15.500] |
-| instanced-128 | 4.625 [44.375] | 2.125 [18.125] | 1.500 [3.875] | 1.375 [6.375] |
-| dynamic-128 | 137.250 [205.375] | 11.125 [28.375] | 52.625 [88.125] | 2.250 [5.750] |
-| static-512 | 227.750 [291.000] | 13.750 [31.125] | 198.250 [303.000] | 8.250 [12.125] |
-| instanced-512 | 4.125 [17.000] | 1.250 [7.250] | 3.375 [22.875] | 1.625 [6.250] |
-| dynamic-512 | 248.375 [427.375] | 10.125 [28.625] | 175.625 [263.375] | 9.375 [13.500] |
+| static-16 | 2.500 [7.875] | 0.750 [1.000] | 2.625 [11.250] | 1.000 [1.500] |
+| instanced-16 | 1.000 [1.375] | 0.625 [0.875] | 1.000 [1.875] | 0.625 [0.875] |
+| dynamic-16 | 2.750 [9.875] | 0.875 [1.625] | 2.750 [12.625] | 0.750 [1.000] |
+| static-128 | 26.750 [32.250] | 1.250 [1.625] | 22.125 [31.875] | 1.250 [1.750] |
+| instanced-128 | 1.000 [1.250] | 0.625 [1.000] | 0.875 [1.500] | 0.750 [1.250] |
+| dynamic-128 | 20.375 [28.875] | 1.375 [3.500] | 27.500 [37.625] | 1.250 [1.375] |
+| static-512 | 87.375 [96.875] | 2.750 [6.250] | 104.500 [112.000] | 3.000 [3.625] |
+| instanced-512 | 1.250 [1.875] | 0.625 [0.875] | 1.125 [1.500] | 0.625 [1.000] |
+| dynamic-512 | 100.625 [120.000] | 3.375 [6.375] | 110.000 [119.500] | 3.250 [4.000] |
 
 Three.js has the lower median in all nine fixtures of both passes of both runs.
 The data show no browser-rendering speed advantage for Diff3D in these fixtures;
@@ -216,29 +216,29 @@ initialization encountered by that page, with no network asset fetch.
 
 | Fixture | Diff3D pass 1 / 2 | three.js pass 1 / 2 | Diff3D HTML / gzip kB | three.js HTML / gzip kB |
 |---|---:|---:|---:|---:|
-| static-16 | 467 / 478 | 89 / 79 | 211.0 / 40.7 | 553.3 / 139.1 |
-| instanced-16 | 386 / 365 | 60 / 61 | 172.0 / 40.0 | 553.3 / 139.1 |
-| dynamic-16 | 365 / 373 | 60 / 65 | 214.8 / 41.1 | 553.3 / 139.1 |
-| static-128 | 380 / 432 | 62 / 67 | 528.2 / 46.1 | 557.2 / 139.6 |
-| instanced-128 | 350 / 345 | 60 / 60 | 180.6 / 40.6 | 557.2 / 139.6 |
-| dynamic-128 | 387 / 380 | 68 / 66 | 557.8 / 48.3 | 557.2 / 139.6 |
-| static-512 | 461 / 488 | 68 / 73 | 1611.9 / 61.2 | 573.3 / 141.2 |
-| instanced-512 | 338 / 366 | 66 / 64 | 210.5 / 42.4 | 573.3 / 141.2 |
-| dynamic-512 | 472 / 469 | 82 / 79 | 1730.1 / 68.4 | 573.3 / 141.2 |
+| static-16 | 455 / 517 | 66 / 86 | 212.0 / 41.1 | 553.3 / 139.1 |
+| instanced-16 | 357 / 349 | 58 / 59 | 173.0 / 40.4 | 553.3 / 139.1 |
+| dynamic-16 | 413 / 370 | 63 / 64 | 215.8 / 41.5 | 553.3 / 139.1 |
+| static-128 | 407 / 398 | 64 / 65 | 529.2 / 46.6 | 557.2 / 139.6 |
+| instanced-128 | 346 / 362 | 62 / 61 | 181.6 / 41.0 | 557.2 / 139.6 |
+| dynamic-128 | 418 / 403 | 65 / 70 | 558.8 / 48.7 | 557.2 / 139.6 |
+| static-512 | 507 / 499 | 70 / 75 | 1612.9 / 61.6 | 573.3 / 141.2 |
+| instanced-512 | 390 / 358 | 66 / 66 | 211.5 / 42.9 | 573.3 / 141.2 |
+| dynamic-512 | 499 / 472 | 85 / 80 | 1731.1 / 68.8 | 573.3 / 141.2 |
 
 **macOS / Firefox host:**
 
 | Fixture | Diff3D pass 1 / 2 | three.js pass 1 / 2 | Diff3D HTML / gzip kB | three.js HTML / gzip kB |
 |---|---:|---:|---:|---:|
-| static-16 | 2,643 / 2,194 | 1,749 / 2,118 | 211.0 / 40.7 | 553.3 / 139.1 |
-| instanced-16 | 1,928 / 2,988 | 1,026 / 1,703 | 172.0 / 40.0 | 553.3 / 139.1 |
-| dynamic-16 | 1,864 / 2,370 | 1,070 / 1,505 | 214.8 / 41.1 | 553.3 / 139.1 |
-| static-128 | 2,353 / 2,454 | 1,542 / 1,804 | 528.2 / 46.1 | 557.2 / 139.6 |
-| instanced-128 | 2,683 / 956 | 1,254 / 1,048 | 180.6 / 40.6 | 557.2 / 139.6 |
-| dynamic-128 | 3,215 / 1,879 | 2,527 / 671 | 557.8 / 48.3 | 557.2 / 139.6 |
-| static-512 | 3,868 / 2,616 | 1,725 / 1,008 | 1611.9 / 61.2 | 573.3 / 141.2 |
-| instanced-512 | 2,216 / 2,529 | 1,203 / 931 | 210.5 / 42.4 | 573.3 / 141.2 |
-| dynamic-512 | 2,169 / 1,790 | 1,174 / 1,549 | 1730.1 / 68.4 | 573.3 / 141.2 |
+| static-16 | 821 / 824 | 321 / 633 | 212.0 / 41.1 | 553.3 / 139.1 |
+| instanced-16 | 523 / 1,607 | 451 / 790 | 173.0 / 40.4 | 553.3 / 139.1 |
+| dynamic-16 | 693 / 549 | 418 / 543 | 215.8 / 41.5 | 553.3 / 139.1 |
+| static-128 | 818 / 750 | 419 / 337 | 529.2 / 46.6 | 557.2 / 139.6 |
+| instanced-128 | 534 / 611 | 284 / 1,246 | 181.6 / 41.0 | 557.2 / 139.6 |
+| dynamic-128 | 1,508 / 809 | 425 / 1,391 | 558.8 / 48.7 | 557.2 / 139.6 |
+| static-512 | 1,041 / 916 | 1,253 / 392 | 1612.9 / 61.6 | 573.3 / 141.2 |
+| instanced-512 | 876 / 1,462 | 365 / 431 | 211.5 / 42.9 | 573.3 / 141.2 |
+| dynamic-512 | 1,385 / 894 | 494 / 520 | 1731.1 / 68.8 | 573.3 / 141.2 |
 
 Sizes use decimal kB and are identical in both runs, as they are properties of
 the artifacts rather than of the host. Diff3D's artifact is the full standalone
