@@ -377,7 +377,6 @@ ORBIT_CENTRE_PROBE = """async () => {
     const glError=gl.getError();
     let census=null, diagnostics=null, composited=null;
     if(state.blue<block*block){
-        diagnostics=d.frameDiagnostics();
         // Read the canvas a second time through the compositor rather than through
         // readPixels. If this sees the scene while readPixels does not, the frame was
         // drawn and only the readback is wrong, which is a harness fault rather than a
@@ -398,6 +397,9 @@ ORBIT_CENTRE_PROBE = """async () => {
             composited={bluePixels:blue,centre:[all[mid],all[mid+1],all[mid+2]],
                         topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,3)};
         }catch(err){ composited={error:String(err)}; }
+        // Runs last: its control draw deliberately overwrites the canvas, so every
+        // other read of this frame must already have happened.
+        diagnostics=d.frameDiagnostics();
         const all=new Uint8Array(4*c.width*c.height); gl.finish();
         gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
         let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
