@@ -1050,3 +1050,83 @@ holds 86 members, half of them macOS AppleDouble `._*` sidecars. Direct
 inspection refutes it: `tar tzf` reports exactly 43 members for each of the two
 comparison archives and `grep -c '\._'` reports zero. The published "43 files"
 counts are correct.
+
+## R4/R8 — the intermittent macOS Firefox orbit failure, and what it does and does not establish
+
+Candidate `b002186` failed `platforms / Browser validation (firefox, examples 1/6)`
+in Release validation
+[35604405469](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35604405469)
+(job 106347900109) at the restored-after-zoom orbit check. The whole 678x424 frame
+read the scene background `[3, 3, 3]`, `gl.getError()` was 0, the camera state was
+correct, and the 120-frame poll bound was exhausted.
+
+**VERIFIED — the failure is intermittent at one revision, so no single green run can
+validate a fix for it.** The same source `b002186` passed that job in CI run
+[35595532823](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35595532823)
+(job 106319335965, `BROWSER_RENDERING_OK orbit_zoom_limits instancing=True`) and
+failed it in 35604405469 (job 106347900109).
+
+**Corrected — the dead-render-loop diagnosis was never established.** This file
+previously recorded that `render()` re-armed `requestAnimationFrame` only on its
+success path, so one uncaught exception ended rendering and left the canvas at the
+colour of the frame's opening `gl.clear()`. That defect is real and is now fixed,
+but it was never shown to be this failure's cause. No browser error was captured
+from any failing run, and an instrumented experiment reproduced the identical
+signature with the loop *alive*: forcing `drawSceneView`'s
+`vp[2]<=0||vp[3]<=0` early return returned `{'blue': 0, 'pixel': [3,3,3],
+'frames': 120, 'error': 0, 'canvas': [678,424], 'contextLost': false,
+'stats': '0 draw items', 'renderFrames': 200, 'rafErrors': 0,
+'dist': 2241.6131964122023, 'draws': 1, 'objects': 1}` — every field matching the
+recorded failure, including the orbit distance to thirteen significant figures,
+with no thrown frame at all.
+
+**VERIFIED — that early return cannot occur in this fixture.** `resize()` clamps the
+drawing buffer with `Math.max(1, Math.round(r.width*dpr))` on both axes, and
+`fillCameraViews` gives a single non-array camera the viewport
+`[0,0,canvas.width,canvas.height]`, so `vp[2]` and `vp[3]` are at least 1. The
+experiment therefore shows that this signature does not identify a mechanism; it
+does not show that this mechanism occurred.
+
+**VERIFIED — the fixture does not reproduce locally.** Sixty consecutive runs of
+`test/browser_rendering.py --browser firefox --only orbit_zoom_limits` against
+unmodified `b002186` on macOS 26.5 arm64 with Firefox 155 — the same platform class
+as the `macos-latest` runner — all exited 0. The local failure rate for this fixture
+in isolation is therefore below one in sixty.
+
+**Hypothesis (untested) — what remains.** With the degenerate-viewport return
+excluded and no exception captured, a background-only frame requires one of: a frame
+that threw, a frame whose visibility filter selected nothing, or a draw that
+rasterised nothing. `activeDrawItemCount()` reported 1, but it re-runs the filter at
+probe time instead of recording the frame, so it cannot separate them. **Decisive
+test:** the orbit probe now records the viewer's own completed-frame counter, its
+last frame error, whether the loop stopped, whether the context was lost, and the
+`stats` text `render()` last wrote. `renderedDelta == 0` with `lastRenderError` set
+is a thrown frame; `renderedDelta > 0` with `0 draw items` is a frame that drew
+nothing; `renderedDelta > 0` with `1 draw items` is a draw that rasterised nothing.
+The next occurrence records which, without another round trip.
+
+**The source change.** `render()` re-arms the loop from a `finally` block, bounded by
+`RENDER_FAILURE_LIMIT` consecutive failures so a viewer that fails every frame stops
+rather than rethrowing and rewriting the DOM at frame rate; one successful frame
+resets the count. Start-up wraps `setCase` so a throw there still starts the loop.
+`__diff3dDebug` gained `renderedFrames`, `lastRenderError`, `renderStopped` and
+`contextLost`.
+
+**VERIFIED — the regression fails without the fix and passes with it.**
+`verify_render_loop_recovery` injects one thrown frame through every draw entry
+point, including the cached `ANGLE_instanced_arrays` object, then requires the loop
+to advance at least three further frames, to report the error rather than swallow it,
+and to restore the same centre block; it then injects a permanently throwing frame
+and requires the loop to stop and stay stopped. Against a control viewer carrying the
+same instrumentation but the previous success-path-only re-arm, it fails with
+`Render loop did not survive one thrown frame: {'advanced': 0, 'stopped': False,
+'lastError': 'injected render fault', 'lost': False}, errors ['injected render
+fault']`. Against the candidate it prints `BROWSER_RENDER_RECOVERY_OK` in Firefox
+155, Chromium and WebKit, and the complete 72-configuration suite passes in Firefox
+and WebKit locally.
+
+The `statsAfterFrame` probe added while diagnosing this was removed. Its comment
+claimed that a change in the stats text across one frame proves the loop is alive;
+`render()` writes `${drawn} draw items`, a pure function of the draw count, so on
+this single-object fixture a healthy loop rewrites the identical string every frame
+and the field could never discriminate anything.
