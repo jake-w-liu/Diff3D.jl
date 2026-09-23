@@ -1,0 +1,89 @@
+name: Diagnose Firefox blank frame
+
+# Temporary: lives only on diag/** branches and is deleted with them. It samples the
+# intermittent blank orbit_zoom_limits frame on macos-latest Firefox, which has never
+# reproduced on real hardware, and records the redraw ladder when it happens.
+"on":
+  push:
+    branches:
+      - "diag/**"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  suite:
+    name: Firefox full suite (${{ matrix.rep }})
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1.13"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Instantiate package environment
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r test/requirements-browser.txt
+          python -m playwright install firefox
+      - name: Report the GPU
+        run: |
+          system_profiler SPDisplaysDataType
+          python .github/diag/gpu_report.py
+      - name: Verify browser rendering pixels
+        run: python test/browser_rendering.py --browser firefox
+
+  isolated:
+    name: Firefox isolated orbit fixture (${{ matrix.rep }})
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1.13"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Instantiate package environment
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r test/requirements-browser.txt
+          python -m playwright install firefox
+      - name: Report the GPU
+        run: |
+          system_profiler SPDisplaysDataType
+          python .github/diag/gpu_report.py
+      - name: Repeat the orbit fixture on its own
+        run: |
+          runs=12 failures=0
+          for i in $(seq 1 "$runs"); do
+            if ! python test/browser_rendering.py --browser firefox --only orbit_zoom_limits; then
+              failures=$((failures + 1))
+            fi
+          done
+          echo "ISOLATED_FAILURES $failures/$runs"
+          test "$failures" -eq 0

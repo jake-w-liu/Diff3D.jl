@@ -375,7 +375,7 @@ ORBIT_CENTRE_PROBE = """async () => {
         frames++; state=read();
     }
     const glError=gl.getError();
-    let census=null, diagnostics=null, composited=null;
+    let census=null, diagnostics=null, composited=null, ladder=null;
     if(state.blue<block*block){
         // Read the canvas a second time through the compositor rather than through
         // readPixels. If this sees the scene while readPixels does not, the frame was
@@ -397,9 +397,7 @@ ORBIT_CENTRE_PROBE = """async () => {
             composited={bluePixels:blue,centre:[all[mid],all[mid+1],all[mid+2]],
                         topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,3)};
         }catch(err){ composited={error:String(err)}; }
-        // Runs last: its control draw deliberately overwrites the canvas, so every
-        // other read of this frame must already have happened.
-        diagnostics=d.frameDiagnostics();
+        // Census the blank frame first: everything after it draws over the canvas.
         const all=new Uint8Array(4*c.width*c.height); gl.finish();
         gl.readPixels(0,0,c.width,c.height,gl.RGBA,gl.UNSIGNED_BYTE,all);
         let n=0,minX=c.width,maxX=-1,minY=c.height,maxY=-1,sx=0,sy=0;
@@ -419,8 +417,13 @@ ORBIT_CENTRE_PROBE = """async () => {
                 box:n?[minX,minY,maxX,maxY]:null,centroid:n?[Math.round(sx/n),Math.round(sy/n)]:null,
                 topColours:Object.entries(seen).sort((a,b)=>b[1]-a[1]).slice(0,4),
                 map:map.map(row=>row.map(v=>v?'#':'.').join(''))};
+        // The ladder replays the real frame with one factor changed per rung, then the
+        // diagnostics run their own control draws. Both overwrite the canvas, so they
+        // come after every read of the frame that failed.
+        try{ ladder=d.redrawLadder(); }catch(err){ ladder={threw:String(err)}; }
+        diagnostics=d.frameDiagnostics();
     }
-    return {pixel:state.sample,blue:state.blue,of:block*block,census,diagnostics,composited,
+    return {pixel:state.sample,blue:state.blue,of:block*block,census,ladder,diagnostics,composited,
             worstOther:state.worstOther,frames,error:glError,
             dist:d.orbitDistance(),angles:d.orbitAngles(),limits:d.orbitDistanceLimits(),
             clip:d.clipPlanes(),targetOffset:d.targetOffset(),

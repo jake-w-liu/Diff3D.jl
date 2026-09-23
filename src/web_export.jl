@@ -4892,12 +4892,16 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function textureColorSpace(t){ return t&&t.colorspace==="srgb"?1:0; }
   function texMatrix(t){ const tm=(t&&t.matrix)||[1,0,0,0,1,0,0,0,1]; return [tm[0],tm[3],tm[6],tm[1],tm[4],tm[7],tm[2],tm[5],tm[8]]; }
   function uniformTexMatrix(p,name,t){ const loc=uniformLocation(p,name); if(loc!==null) gl.uniformMatrix3fv(loc,false,new Float32Array(texMatrix(t))); }
+  // Diagnostics only: redrawLadder() swaps a program here to redraw the real frame with
+  // one factor changed. Always null during normal rendering.
+  let drawProgramSubstitutes=null;
   function draw(o,view,proj,eye,basis,light,clip,fg,tm){
     applySide(o);
     if(o.mode==="lines"||o.mode==="line_loop"||o.mode==="line_strip") gl.lineWidth(webLineWidth(o.linewidth)); else gl.lineWidth(1);
     if(o.depthTest===false) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
     gl.depthMask(o.depthWrite!==false);
-    const p=o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?(o.textureSkin?meshBoneProgram:meshProgram):(o.textureSkin?colorBoneProgram:colorProgram)));
+    let p=o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?(o.textureSkin?meshBoneProgram:meshProgram):(o.textureSkin?colorBoneProgram:colorProgram)));
+    if(drawProgramSubstitutes) p=drawProgramSubstitutes.get(p)||p;
     gl.useProgram(p);
     attrib(p,"aPosition",o.posBuf);
     attrib(p,"aColor",o.colorBuf);
@@ -5177,6 +5181,82 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     return {centre:Array.from(px), sceneWroteDepth:px[0]>200&&px[1]<20&&px[2]<20, error:gl.getError()};
   }catch(err){ return {threw:String(err)}; } })();
   out.selfTest=(()=>{ try{ const vs=gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs,'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}'); gl.compileShader(vs); const fs=gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs,'precision mediump float;void main(){gl_FragColor=vec4(0.0,1.0,0.0,1.0);}'); gl.compileShader(fs); const pr=gl.createProgram(); gl.attachShader(pr,vs); gl.attachShader(pr,fs); gl.linkProgram(pr); const linked=gl.getProgramParameter(pr,gl.LINK_STATUS); const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW); const bytes=gl.getBufferParameter(gl.ARRAY_BUFFER,gl.BUFFER_SIZE); gl.useProgram(pr); const loc=gl.getAttribLocation(pr,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0); gl.disable(gl.DEPTH_TEST); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.BLEND); gl.colorMask(true,true,true,true); gl.viewport(0,0,canvas.width,canvas.height); gl.drawArrays(gl.TRIANGLES,0,3); gl.finish(); const px=new Uint8Array(4); gl.readPixels(canvas.width>>1,canvas.height>>1,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px); return {linked,attribLocation:loc,bufferBytes:bytes,centre:Array.from(px), error:gl.getError()}; }catch(err){ return {threw:String(err)}; } })(); return out; }};
+  // Redraw ladder, diagnostics only. When a frame comes back blank the browser suite calls
+  // this before anything else touches the canvas. Every rung replays the real frame through
+  // renderFrame() with exactly one factor changed, then records what reached the colour
+  // buffer and how many pixels had their depth written, so the factor that restores the
+  // scene is named by measurement. The replay and non-instanced rungs also snapshot the
+  // complete vertex-attribute, uniform and fixed-function state at the moment of each draw.
+  // Every resource a rung creates is deleted and every attribute it enables is disabled.
+  window.__diff3dDebug.redrawLadder=()=>{
+    const W=canvas.width, H=canvas.height, bg=active.background.map(v=>Math.round(v*255));
+    const val=v=>(v&&v.length!==undefined)?Array.from(v):v;
+    const names=new Map(), nameBuf=(b,n)=>{ if(b&&!names.has(b)) names.set(b,n); };
+    nameBuf(identityInstanceBuf,"identityInstance"); nameBuf(identityInstanceColorBuf,"identityInstanceColor");
+    active.objects.forEach((o,i)=>{ for(const k of ["posBuf","nrmBuf","tanBuf","uvBuf","uv2Buf","colorBuf","lineDistanceBuf","skinIndexBuf","skinWeightBuf","idxBuf","instanceBuf","instanceColorBuf"]) nameBuf(o[k],"o"+i+"."+k); });
+    const bufName=b=>b?(names.get(b)||"unnamed"):null;
+    const programs={mesh:meshProgram,meshBone:meshBoneProgram,color:colorProgram,point:pointProgram,sprite:spriteProgram};
+    const progName=pr=>{ for(const k in programs) if(programs[k]===pr) return k; return pr?"substitute":null; };
+    const maxAttribs=gl.getParameter(gl.MAX_VERTEX_ATTRIBS);
+    const snapshot=(args,full)=>{
+      const pr=gl.getParameter(gl.CURRENT_PROGRAM), attribs=[], activeAttribs={}, uniforms={};
+      for(let i=0;i<maxAttribs;i++){
+        const a={loc:i,enabled:gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_ENABLED)};
+        if(a.enabled){ a.size=gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_SIZE); a.type=gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_TYPE); a.normalized=gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_NORMALIZED); a.stride=gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_STRIDE); a.offset=gl.getVertexAttribOffset(i,gl.VERTEX_ATTRIB_ARRAY_POINTER); a.buffer=bufName(gl.getVertexAttrib(i,gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING)); }
+        else a.current=val(gl.getVertexAttrib(i,gl.CURRENT_VERTEX_ATTRIB));
+        if(instancingExt) a.divisor=gl.getVertexAttrib(i,instancingExt.VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE);
+        attribs.push(a);
+      }
+      const na=pr?gl.getProgramParameter(pr,gl.ACTIVE_ATTRIBUTES):0;
+      for(let i=0;i<na;i++){ const info=gl.getActiveAttrib(pr,i); activeAttribs[info.name]=gl.getAttribLocation(pr,info.name); }
+      const nu=pr&&full?gl.getProgramParameter(pr,gl.ACTIVE_UNIFORMS):0;
+      for(let i=0;i<nu;i++){ const info=gl.getActiveUniform(pr,i), base=info.name.replace("[0]",""); for(let k=0;k<info.size;k++){ const nm=info.size>1?base+"["+k+"]":info.name, L=gl.getUniformLocation(pr,nm); uniforms[nm]=L===null?"no-location":val(gl.getUniform(pr,L)); } }
+      if(!full) return {args, program:progName(pr), elementBuffer:bufName(gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING)), attribs, activeAttribs, errorBeforeDraw:gl.getError()};
+      return {args, program:progName(pr), elementBuffer:bufName(gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING)), attribs, activeAttribs, uniforms,
+        state:{framebuffer:gl.getParameter(gl.FRAMEBUFFER_BINDING)===null?"default":"offscreen", viewport:val(gl.getParameter(gl.VIEWPORT)), scissor:gl.isEnabled(gl.SCISSOR_TEST), scissorBox:val(gl.getParameter(gl.SCISSOR_BOX)), depthTest:gl.isEnabled(gl.DEPTH_TEST), depthFunc:gl.getParameter(gl.DEPTH_FUNC), depthMask:gl.getParameter(gl.DEPTH_WRITEMASK), depthRange:val(gl.getParameter(gl.DEPTH_RANGE)), blend:gl.isEnabled(gl.BLEND), blendSrc:[gl.getParameter(gl.BLEND_SRC_RGB),gl.getParameter(gl.BLEND_SRC_ALPHA)], blendDst:[gl.getParameter(gl.BLEND_DST_RGB),gl.getParameter(gl.BLEND_DST_ALPHA)], blendEquation:[gl.getParameter(gl.BLEND_EQUATION_RGB),gl.getParameter(gl.BLEND_EQUATION_ALPHA)], colorMask:val(gl.getParameter(gl.COLOR_WRITEMASK)), cull:gl.isEnabled(gl.CULL_FACE), cullMode:gl.getParameter(gl.CULL_FACE_MODE), frontFace:gl.getParameter(gl.FRONT_FACE), stencil:gl.isEnabled(gl.STENCIL_TEST), polygonOffset:gl.isEnabled(gl.POLYGON_OFFSET_FILL), sampleCoverage:gl.isEnabled(gl.SAMPLE_COVERAGE), alphaToCoverage:gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE), lineWidth:gl.getParameter(gl.LINE_WIDTH)},
+        errorBeforeDraw:gl.getError()};
+    };
+    const calls=[]; let capture=0;
+    const ownInst=!!instancingExt&&Object.prototype.hasOwnProperty.call(instancingExt,"drawElementsInstancedANGLE"), ownElems=Object.prototype.hasOwnProperty.call(gl,"drawElements");
+    const origInst=instancingExt?instancingExt.drawElementsInstancedANGLE:null, origElems=gl.drawElements;
+    const record=args=>{ calls.push(capture?snapshot(args,capture>1):args); };
+    if(instancingExt) instancingExt.drawElementsInstancedANGLE=function(mode,count,type,offset,prim){ record({fn:"drawElementsInstancedANGLE",mode,count,type,offset,prim}); return origInst.call(instancingExt,mode,count,type,offset,prim); };
+    gl.drawElements=function(mode,count,type,offset){ record({fn:"drawElements",mode,count,type,offset}); return origElems.call(gl,mode,count,type,offset); };
+    const created={programs:[],buffers:[]};
+    const newProgram=(vs,fs,bind)=>{ const pr=gl.createProgram(), v=shader(gl.VERTEX_SHADER,vs), f=shader(gl.FRAGMENT_SHADER,fs); gl.attachShader(pr,v); gl.attachShader(pr,f); for(const [loc,nm] of (bind||[])) gl.bindAttribLocation(pr,loc,nm); gl.linkProgram(pr); gl.detachShader(pr,v); gl.detachShader(pr,f); gl.deleteShader(v); gl.deleteShader(f); if(!gl.getProgramParameter(pr,gl.LINK_STATUS)){ const log=gl.getProgramInfoLog(pr); gl.deleteProgram(pr); throw new Error("link: "+log); } created.programs.push(pr); return pr; };
+    const newBuf=(data,target,ctor)=>{ const b=buf(data,target,ctor); created.buffers.push(b); return b; };
+    const px=new Uint8Array(4*W*H), tri=newBuf([-1,-1,3,-1,-1,3]);
+    const probe=newProgram("attribute vec2 p;void main(){gl_Position=vec4(p,0.999,1.0);}","precision mediump float;void main(){gl_FragColor=vec4(1.0,0.0,0.0,1.0);}",[[0,"p"]]);
+    const readColour=()=>{ gl.finish(); gl.readPixels(0,0,W,H,gl.RGBA,gl.UNSIGNED_BYTE,px); let blue=0,green=0,other=0; for(let i=0;i<px.length;i+=4){ const r=px[i],g=px[i+1],b=px[i+2]; if(b>200&&r<20&&g<20) blue++; else if(g>200&&r<20&&b<20) green++; else if(Math.abs(r-bg[0])>2||Math.abs(g-bg[1])>2||Math.abs(b-bg[2])>2) other++; } const m=4*((H>>1)*W+(W>>1)); return {blue,green,other,centre:[px[m],px[m+1],px[m+2],px[m+3]],error:gl.getError()}; };
+    const depthWritten=()=>{ const func=gl.getParameter(gl.DEPTH_FUNC); gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.useProgram(probe); gl.bindBuffer(gl.ARRAY_BUFFER,tri); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0); if(instancingExt) instancingExt.vertexAttribDivisorANGLE(0,0); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.GREATER); gl.depthMask(false); gl.colorMask(true,true,true,true); gl.viewport(0,0,W,H); gl.drawArrays(gl.TRIANGLES,0,3); gl.finish(); gl.readPixels(0,0,W,H,gl.RGBA,gl.UNSIGNED_BYTE,px); gl.disableVertexAttribArray(0); gl.depthFunc(func); gl.depthMask(true); let n=0; for(let i=0;i<px.length;i+=4) if(px[i]>200&&px[i+1]<20&&px[i+2]<20) n++; const m=4*((H>>1)*W+(W>>1)); return {pixels:n,centre:px[m]>200&&px[m+1]<20&&px[m+2]<20,error:gl.getError()}; };
+    const savedTime={lastFrameTime,animTime};
+    const replay=()=>{ lastFrameTime=savedTime.lastFrameTime; animTime=savedTime.animTime; renderFrame(savedTime.lastFrameTime*1000); };
+    const rung=(name,setup,level)=>{ const r={name}; calls.length=0; capture=level||0; let undo=null; try{ gl.getError(); undo=setup?setup():null; replay(); Object.assign(r,readColour()); r.depth=depthWritten(); }catch(err){ r.threw=String((err&&err.message)||err); } finally{ capture=0; try{ if(undo) undo(); }catch(err){ r.undoThrew=String((err&&err.message)||err); } } r.draws=calls.slice(); return r; };
+    const swapObjects=(key,make)=>{ const prev=active.objects.map(o=>o[key]); active.objects.forEach(o=>{ const v=make(o); if(v!==undefined) o[key]=v; }); return ()=>active.objects.forEach((o,i)=>{ o[key]=prev[i]; }); };
+    const substitute=fs=>{ const pr=newProgram(VSH,fs); drawProgramSubstitutes=new Map([[meshProgram,pr]]); return ()=>{ drawProgramSubstitutes=null; }; };
+    const flatFragment="precision mediump float; void main(){ gl_FragColor=vec4(0.0,1.0,0.0,1.0); }";
+    const instancedControl=(instLoc,posLoc)=>{ const r={name:"instancedControl m@"+instLoc+" p@"+posLoc}; try{ const pr=newProgram("attribute vec2 p; attribute vec4 m; void main(){ gl_Position=vec4(p*m.x,0.0,1.0); }",flatFragment,[[instLoc,"m"],[posLoc,"p"]]), mb=newBuf([1,0,0,0]), ib=newBuf([0,1,2],gl.ELEMENT_ARRAY_BUFFER,Uint16Array); gl.getError(); gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,W,H); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.colorMask(true,true,true,true); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); gl.useProgram(pr); gl.bindBuffer(gl.ARRAY_BUFFER,tri); gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,0,0); gl.bindBuffer(gl.ARRAY_BUFFER,mb); gl.enableVertexAttribArray(instLoc); gl.vertexAttribPointer(instLoc,4,gl.FLOAT,false,0,0); if(instancingExt){ instancingExt.vertexAttribDivisorANGLE(posLoc,0); instancingExt.vertexAttribDivisorANGLE(instLoc,1); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib); origInst.call(instancingExt,gl.TRIANGLES,3,gl.UNSIGNED_SHORT,0,1); instancingExt.vertexAttribDivisorANGLE(instLoc,0); } else r.skipped="no ANGLE_instanced_arrays"; Object.assign(r,readColour()); gl.disableVertexAttribArray(posLoc); gl.disableVertexAttribArray(instLoc); gl.enable(gl.DEPTH_TEST); }catch(err){ r.threw=String((err&&err.message)||err); } return r; };
+    const rungs=[];
+    try{
+      rungs.push(rung("replay",null,2));
+      rungs.push(rung("nonInstanced",()=>swapObjects("instanceBuf",()=>null),2));
+      rungs.push(rung("freshIdentityInstanceBuffer",()=>{ const fresh=newBuf([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); return swapObjects("instanceBuf",o=>o.instanceBuf===identityInstanceBuf?fresh:undefined); }));
+      rungs.push(rung("freshGeometryBuffers",()=>{ const undo=[swapObjects("posBuf",o=>newBuf(o.positions)), swapObjects("nrmBuf",o=>newBuf(o.normals)), swapObjects("tanBuf",o=>newBuf(o.tangents)), swapObjects("uvBuf",o=>newBuf(o.uvs)), swapObjects("uv2Buf",o=>newBuf(o.uv2s||o.uvs)), swapObjects("colorBuf",o=>newBuf(o.colors)), swapObjects("idxBuf",o=>newBuf(o.indices,gl.ELEMENT_ARRAY_BUFFER,o.indexType===gl.UNSIGNED_INT?Uint32Array:Uint16Array))]; return ()=>undo.forEach(f=>f()); }));
+      rungs.push(rung("freshMeshProgram",()=>substitute(meshFragmentShaderRuntime),1));
+      rungs.push(rung("vertexStageOnly",()=>substitute(flatFragment),1));
+      rungs.push(rung("vertexStageOnlyNonInstanced",()=>{ const a=substitute(flatFragment), b=swapObjects("instanceBuf",()=>null); return ()=>{ b(); a(); }; }));
+      rungs.push(instancedControl(0,1));
+      rungs.push(instancedControl(5,0));
+      rungs.push(rung("replayAgain",null,1));
+    } finally {
+      drawProgramSubstitutes=null; lastFrameTime=savedTime.lastFrameTime; animTime=savedTime.animTime;
+      if(instancingExt){ if(ownInst) instancingExt.drawElementsInstancedANGLE=origInst; else delete instancingExt.drawElementsInstancedANGLE; }
+      if(ownElems) gl.drawElements=origElems; else delete gl.drawElements;
+      for(const pr of created.programs) gl.deleteProgram(pr);
+      for(const b of created.buffers) gl.deleteBuffer(b);
+    }
+    return rungs;
+  };
   const pointers=new Map();
   for(const c of DATA.cases){ const b=document.createElement("button"); b.dataset.case=c.id; const strong=document.createElement("strong"); strong.textContent=c.title; const span=document.createElement("span"); span.textContent=c.subtitle; b.append(strong,span); b.onclick=()=>setCase(c.id); nav.appendChild(b); }
   function orbitStateFromVector(v){ const d=Math.max(1e-6,Math.hypot(v[0],v[1],v[2])); return {dist:d,yaw:Math.atan2(v[2],v[0]),pitch:Math.asin(Math.max(-1,Math.min(1,v[1]/d)))}; }
@@ -5257,7 +5337,8 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   // transient glitch and small enough to stop promptly; one successful frame resets it.
   const RENDER_FAILURE_LIMIT=8;
   let renderedFrames=0, renderFailureCount=0, lastRenderError=null;
-  function render(nowMs){ let rendered=false; try { resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const orbitCam=primaryCamera(active.camera); if(orbitCam) applyCameraOrbit(orbitCam); const eye=cameraEye(orbitCam), clip=clipping(active), fg=fog(active), tm=tone(active); visibleScratch.length=0; for(const o of active.objects) if(objectVisibleInCase(o,null)) visibleScratch.push(o); for(const o of visibleScratch) refreshObjectTextures(o); gl.disable(gl.SCISSOR_TEST); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.depthMask(true); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; fillCameraViews(active.camera,viewScratch); for(const state of viewScratch){ const mask=cameraLayerMask(state.camera), lod=lodChoices(active,state.eye,state.camera,true); viewVisibleScratch.length=0; for(const o of visibleScratch) if(objectVisibleInCase(o,lod)&&layerMatches(o,mask)) viewVisibleScratch.push(o); gl.disable(gl.SCISSOR_TEST); updateDynamicShadows(active,viewVisibleScratch,clip,mask); const light=lighting(active,mask); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); drawn+=drawSceneView(state,viewVisibleScratch,light,clip,fg,tm); } currentDrawCamera=null; gl.disable(gl.SCISSOR_TEST); gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; rendered=true; } catch(err){ lastRenderError=(err&&err.message)?err.message:String(err); throw err; } finally { if(rendered){ renderFailureCount=0; renderedFrames++; requestAnimationFrame(render); } else if(++renderFailureCount<RENDER_FAILURE_LIMIT) requestAnimationFrame(render); } }
+  function renderFrame(nowMs){ resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const orbitCam=primaryCamera(active.camera); if(orbitCam) applyCameraOrbit(orbitCam); const eye=cameraEye(orbitCam), clip=clipping(active), fg=fog(active), tm=tone(active); visibleScratch.length=0; for(const o of active.objects) if(objectVisibleInCase(o,null)) visibleScratch.push(o); for(const o of visibleScratch) refreshObjectTextures(o); gl.disable(gl.SCISSOR_TEST); gl.viewport(0,0,canvas.width,canvas.height); gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.depthMask(true); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; fillCameraViews(active.camera,viewScratch); for(const state of viewScratch){ const mask=cameraLayerMask(state.camera), lod=lodChoices(active,state.eye,state.camera,true); viewVisibleScratch.length=0; for(const o of visibleScratch) if(objectVisibleInCase(o,lod)&&layerMatches(o,mask)) viewVisibleScratch.push(o); gl.disable(gl.SCISSOR_TEST); updateDynamicShadows(active,viewVisibleScratch,clip,mask); const light=lighting(active,mask); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(active.background[0],active.background[1],active.background[2],1); drawn+=drawSceneView(state,viewVisibleScratch,light,clip,fg,tm); } currentDrawCamera=null; gl.disable(gl.SCISSOR_TEST); gl.depthMask(true); gl.enable(gl.DEPTH_TEST); stats.textContent=`\${drawn} draw items`; }
+  function render(nowMs){ let rendered=false; try { renderFrame(nowMs); rendered=true; } catch(err){ lastRenderError=(err&&err.message)?err.message:String(err); throw err; } finally { if(rendered){ renderFailureCount=0; renderedFrames++; requestAnimationFrame(render); } else if(++renderFailureCount<RENDER_FAILURE_LIMIT) requestAnimationFrame(render); } }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; dollyMode=false; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; dollyMode=e.button===1; panMode=e.button===2||e.shiftKey||e.ctrlKey||e.metaKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=clampOrbitDistance(dist*(pinchDist/nd)); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); rememberCameraOrbitOffsets(); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(dollyMode) zoomBy(Math.exp(dy*.003)); else if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=wrapPi(pitch+dy*.006); rememberCameraOrbitOffsets(); } });
