@@ -65,7 +65,8 @@ libraries, use `python -m playwright install --with-deps chromium`.
 - `test/check_no_local_paths.py` rejects machine-specific filesystem paths in
   every tracked file and inside every tracked evidence archive, because a
   registered package ships all of them.
-- Browser validation runs Chromium and WebKit on Linux and Firefox on macOS;
-  headless Linux Firefox cannot reliably create a WebGL context. Every engine
-  runs `test/browser_rendering.py`; the registered-example sweep runs in
-  Chromium and WebKit, where a shard takes minutes rather than hours.
+- Browser validation runs Chromium, Firefox and WebKit on Linux, Firefox under
+  Xvfb with Mesa llvmpipe. Every engine runs `test/browser_rendering.py` and the
+  registered-example sweep. The hosted macOS runners have no GPU and give
+  Firefox Apple's software OpenGL renderer, which drops clipped triangles, so
+  the harness records the unsanitised renderer and refuses that one.

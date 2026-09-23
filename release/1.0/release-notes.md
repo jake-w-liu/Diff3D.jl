@@ -63,9 +63,9 @@ superiority.
 
 Julia 1.10 or later in the 1.x series is supported. Release validation runs the
 minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
-and Windows, with browser export checked in Chromium and WebKit on Linux and in
-Firefox on macOS. CPU rendering, soft differentiable rendering and browser
-export have distinct supported scopes.
+and Windows, with browser export checked in Chromium, Firefox and WebKit on Linux
+and in Firefox and WebKit on an Apple silicon GPU. CPU rendering, soft
+differentiable rendering and browser export have distinct supported scopes.
 Browser export uses WebGL 1 and built-in materials; it does not export Julia
 ShaderMaterial callbacks. The glTF loader rejects required Draco, Meshopt and
 Basis extensions.

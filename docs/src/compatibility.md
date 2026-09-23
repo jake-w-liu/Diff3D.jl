@@ -161,11 +161,14 @@ Julia 1.10, and the current stable release, Julia 1.13, on Linux, macOS, and
 Windows. Both versions are pinned in the workflows so recorded evidence names an
 exact runtime; a newer stable Julia is added to the matrix rather than replacing
 a supported version silently. Browser export is validated with Chromium, Firefox,
-and WebKit; a working WebGL context is required. Chromium and WebKit are
-exercised on Linux with software rendering and Firefox on macOS, because
-headless Linux Firefox cannot reliably obtain a WebGL context. All three engines
-run the full rendering-contract suite; the registered-example sweep runs in
-Chromium and WebKit, whose runners are fast enough for it.
+and WebKit; a working WebGL context is required. All three engines run on Linux
+with software rendering — Chromium through SwiftShader, Firefox and WebKit
+through Mesa — and each runs the full rendering-contract suite and the
+registered-example sweep. Firefox is not validated on the hosted macOS runners:
+they have no GPU, so Firefox falls back to Apple's software OpenGL renderer,
+which drops triangles that need clipping and loses geometry from correct WebGL
+content, three.js included. The validation harness refuses that renderer.
+Firefox on a Mac with a GPU was checked separately on Apple silicon.
 Browser engine tests do not certify every device, GPU driver, or vendor browser
 build. Release evidence records the exact environments exercised.
 

@@ -855,7 +855,9 @@ generation, not a dependency gap.
 
 Firefox browser validation and the installed-consumer Firefox export now run on
 `macos-latest`, where Firefox uses the host GPU and needs no display server, and
-the Xvfb workaround is removed. Chromium and WebKit keep their Linux headless
+the Xvfb workaround is removed. **Corrected:** the macOS runners have no GPU, and
+Firefox there renders with Apple's software OpenGL renderer; see "the macOS
+Firefox blank frame" below, which also moves Firefox back to Linux. Chromium and WebKit keep their Linux headless
 jobs. The complete 72-configuration local browser suite passes on macOS
 Firefox 155, so the engine is fully exercised; the compatibility contract and
 the publication audit now state which platform validates which engine.
@@ -1089,8 +1091,10 @@ does not show that this mechanism occurred.
 
 **VERIFIED — the fixture does not reproduce locally.** Sixty consecutive runs of
 `test/browser_rendering.py --browser firefox --only orbit_zoom_limits` against
-unmodified `b002186` on macOS 26.5 arm64 with Firefox 155 — the same platform class
-as the `macos-latest` runner — all exited 0. The local failure rate for this fixture
+unmodified `b002186` on macOS 26.5 arm64 with Firefox 155 all exited 0. **Corrected:**
+this was not the runner's platform class. This machine is an Apple M5 and Firefox
+drew on its GPU; the runner has no GPU and Firefox drew with Apple's software
+renderer. Both report the sanitised string "Apple M1, or similar". The local failure rate for this fixture
 in isolation is therefore below one in sixty.
 
 **Hypothesis (untested) — what remains.** With the degenerate-viewport return
@@ -1243,7 +1247,9 @@ that check and failed only after zooming. The common element is a blank frame fr
 healthy loop, not the wheel sequence.
 
 Seventy-one fixtures passed in the same browser process before this one, each on its
-own page, so the browser and driver were rendering correctly throughout. The fixture
+own page. **Corrected:** that does not show the driver rendered correctly; it
+drops clipped triangles, and this is the only fixture whose every triangle has a
+vertex behind the camera. The fixture
 is the only one whose scene is 2,200 units across, with clip planes derived as
 near 22 and far 143,000.
 
@@ -1262,3 +1268,83 @@ for this fixture, measured locally in Firefox 155, is `count` 6, `indexType` 512
 [0,1], viewport `[0,0,678,424]`, all matrices finite and `error` 0. The next
 occurrence reports the same fields, and any divergence from that baseline names the
 mechanism.
+
+## R4/R8 — the macOS Firefox blank frame: Apple's software rasteriser
+
+**VERIFIED — the macOS runners have no GPU, and Firefox renders there with Apple's
+software OpenGL renderer.** On the `macos-26-arm64` runner `system_profiler
+SPDisplaysDataType` prints nothing, and Firefox 155 with
+`webgl.sanitize-unmasked-renderer` off reports renderer `Apple Software Renderer`,
+vendor `Apple Inc.` Run [35814164935](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35814164935),
+branch `diag/blank-frame-ladder`. With sanitising left on, as in every earlier run,
+Firefox reports "Apple M1, or similar" there, and also on the Apple M5 used for the
+local runs, so the two environments were never shown to be the same.
+
+**VERIFIED — every triangle of this fixture needs clipping.** The plane's indices are
+`[0,3,1, 0,2,3]`, and corner 3 is behind the camera in both checked views: clip
+w = -398.02 at the fitted distance 2200 and -356.41 at the restored distance
+2241.613 (read back from the failing runs' uniforms).
+
+**VERIFIED — the draw is correct and the rasteriser drops it.** A diagnostic redraw
+ladder replayed the real frame at each CI failure with one factor changed per rung.
+It recorded nine failures, seven from twelve isolated runs of the fixture and two
+from full suites. In eight, every rung rasterised nothing: the replay, the
+non-instanced path, a fresh identity instance buffer, fresh vertex and index
+buffers, a freshly linked copy of the mesh program, and the real vertex shader with
+a flat fragment shader. Minimal instanced controls filled the canvas in all nine. In
+the ninth, the fresh-buffer rung and then the replay with the original buffers drew
+the whole plane after the earlier rungs had drawn nothing, so the same commands
+both fail and succeed in one context. The isolated runs fail 7 of 12,
+so suite order is not involved.
+
+**VERIFIED — Apple's renderer drops these triangles without any browser.** A C program
+drew the plane's clip-space corners through CGL into an offscreen framebuffer, 50
+times per case:
+
+| Case | Apple M5 (`2.1 Metal - 90.5`) | Apple Software Renderer (`2.1 APPLE-23.1.1`) |
+|---|---|---|
+| Triangle (0,3,1) | 106,169 px every draw | 106,170 px every draw |
+| Triangle (0,2,3) | 93,567 px every draw | 0 px every draw |
+| Both | 199,736 px every draw | 106,170 px every draw |
+| Control, all w > 0 | 56,000 px every draw | 0 to 19,727 px |
+
+Firefox with `webgl.forbid-hardware` on the M5 selects the same renderer and
+reproduces the losses with a minimal WebGL page.
+
+**VERIFIED — three.js loses the same scene.** Three.js 0.186.0 with the fixture's plane,
+material, 45° camera and exact eye `(1654.287, 840.605, 1257.596)` draws 199,481 blue
+pixels on the M5 and 85,138 on Apple's software renderer in each of ten runs. At the
+fitted distance both engines draw exactly 200,332 pixels on the M5.
+
+**VERIFIED — Mesa llvmpipe rasterises the same triangles correctly.** On
+`ubuntu-latest`, Firefox 155 under Xvfb reports `llvmpipe (LLVM 20.1.2, 256 bits)` and
+draws the failing plane, the fitted plane and the all-positive control at 199,479,
+200,074 and 55,484 pixels — the counts Firefox gives on the M5 — in each of 10 draws
+on each of five runners, and those five passed all 72 rendering configurations
+(run [35825717039](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35825717039)).
+The sixth runner's Firefox had no WebGL context.
+
+**VERIFIED — a Firefox launch under Xvfb occasionally has no WebGL context, and a
+relaunch recovers.** Across 323 measured launches
+([35825717039](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35825717039),
+[35826296834](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35826296834),
+[35826621965](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35826621965)), four
+instances could not create any context, reporting `Exhausted GL driver options
+(FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS)`; a second context in the same instance
+failed too, and each of the three relaunches that followed a failure succeeded. A
+24-bit screen did not prevent it; with a fresh server per launch, 1 of 90 immediate
+launches and 0 of 90 launches after a three-second wait failed, too few to separate
+the two. The earlier "four of six shards" failures had the same signature — no
+context on the first page opened — but recorded no reason.
+
+**The change.** Every engine now validates on Linux; Firefox runs under
+`xvfb-run --auto-servernum`, and the registered-example sweep runs in all three
+engines. `launch_browser` asks Firefox for its unsanitised renderer, creates a WebGL
+context in every new instance, and relaunches an instance that cannot, at most three
+times, printing the browser's reason each time. `report_browser_environment` refuses
+`Apple Software Renderer`. The viewer itself is unchanged by this: the fault was in
+the rasteriser, and three.js is affected the same way.
+
+The earlier sections of this file record the render-loop, GL-state, cache and
+uniform hypotheses that were eliminated on the way. The bounded frame re-arm stays:
+it fixes a real defect, but it was not this failure's cause.

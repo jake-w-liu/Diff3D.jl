@@ -46,16 +46,20 @@ Changes included in this release:
 - Add complete optimized test shards, release platform/browser matrices, fresh
   package-consumer checks, and pinned comparisons with three.js 0.186.0 on both
   a software-rendering Linux runner and a hardware-GPU macOS host.
+- Validate Firefox on Linux with Mesa's llvmpipe instead of on the hosted macOS
+  runners, which have no GPU and give Firefox Apple's software OpenGL renderer.
+  That renderer drops triangles that need clipping, so the browser harness now
+  records each engine's unsanitised renderer and refuses it.
 - Reject machine-specific filesystem paths anywhere in the published package
   tree, including inside the committed release evidence archives.
 
 Julia 1.10 or later in the 1.x series is supported. Release validation runs the
 minimum supported Julia 1.10 and the current stable Julia 1.13 on Linux, macOS
-and Windows, with browser export checked in Chromium and WebKit on Linux and in
-Firefox on macOS. CPU rendering, soft differentiable rendering and WebGL export
-have distinct contracts. Browser export uses WebGL 1 and built-in materials; it
-does not export `ShaderMaterial` callbacks. Required Draco, Meshopt and Basis
-glTF extensions remain unsupported.
+and Windows, with browser export checked in Chromium, Firefox and WebKit on Linux
+and in Firefox and WebKit on an Apple silicon GPU. CPU rendering, soft
+differentiable rendering and WebGL export have distinct contracts. Browser
+export uses WebGL 1 and built-in materials; it does not export `ShaderMaterial`
+callbacks. Required Draco, Meshopt and Basis glTF extensions remain unsupported.
 A matching three.js API name does not imply matching backend coverage or speed.
 
 The [release tracker](RELEASE_PLAN.md) records the candidate's validation status;
