@@ -1,6 +1,7 @@
 name: Diagnose Firefox blank frame
 
 # Temporary: lives only on diag/** branches and is deleted with them.
+# Round 3: why does a Firefox launch under Xvfb sometimes get no WebGL context?
 # Round 2: the macOS runner gives Firefox Apple's software OpenGL renderer, which drops
 # clipped triangles. This measures whether Linux Firefox (Mesa under Xvfb) gets a WebGL
 # context reliably and rasterises the same triangles correctly.
@@ -26,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        screen: ["default", "1280x1024x24"]
+        screen: ["default"]
         rep: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
@@ -48,9 +49,5 @@ jobs:
       - name: Choose the X server screen
         if: matrix.screen != 'default'
         run: echo "XVFB_SCREEN=${{ matrix.screen }}" >> "$GITHUB_ENV"
-      - name: Report the renderer
-        run: bash .github/diag/xv.sh python .github/diag/gpu_report.py
-      - name: Rasterise the failing triangles
-        run: bash .github/diag/xv.sh python .github/diag/run_clip.py hardware 10
-      - name: Verify browser rendering pixels
-        run: bash .github/diag/xv.sh python test/browser_rendering.py --browser firefox
+      - name: Launch Firefox repeatedly
+        run: bash .github/diag/xv.sh python .github/diag/launch_probe.py 20
