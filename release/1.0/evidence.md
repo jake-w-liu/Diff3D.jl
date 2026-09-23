@@ -1337,6 +1337,18 @@ launches and 0 of 90 launches after a three-second wait failed, too few to separ
 the two. The earlier "four of six shards" failures had the same signature — no
 context on the first page opened — but recorded no reason.
 
+**VERIFIED — the arrangement passes the full platform matrix.** CI run
+[35827796217](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35827796217) on
+`338771c` passed all 56 jobs. Linux Firefox (`llvmpipe (LLVM 20.1.2, 256 bits)`) passed
+all 72 rendering configurations, `orbit_zoom_limits` included, and smoked all 108
+registered examples across its six shards. Three of those six jobs relaunched Firefox
+once, each time on the first launch in the job with the same `Exhausted GL driver
+options` reason, and each relaunch created a context; over all measurements that is 7
+failed launches in 333, with all six relaunches that followed a failure recovering.
+**Hypothesis (untested):** the first GL use in a job is slow enough on a cold Mesa
+shader cache that Firefox's start-up GL probe gives up; timing Firefox's GL start-up
+with and without a warm cache would settle it.
+
 **The change.** Every engine now validates on Linux; Firefox runs under
 `xvfb-run --auto-servernum`, and the registered-example sweep runs in all three
 engines. `launch_browser` asks Firefox for its unsanitised renderer, creates a WebGL

@@ -15,9 +15,10 @@ BROWSERS = ("chromium", "firefox", "webkit")
 NONCONFORMANT_RENDERERS = ("Apple Software Renderer",)
 
 # A Firefox instance started under Xvfb occasionally comes up unable to create any WebGL
-# context ("Exhausted GL driver options"): 4 of 323 launches measured on the Linux
-# runners. Such an instance stays unusable (a second context fails too), and each of the
-# three relaunches that followed a failure worked, so the instance is replaced.
+# context ("Exhausted GL driver options"): 7 of 333 launches measured on the Linux
+# runners, most often the first launch in a job. Such an instance stays unusable (a
+# second context fails too), and all six relaunches that followed a failure worked, so
+# the instance is replaced.
 LAUNCH_ATTEMPTS = 3
 
 _WEBGL_PROBE = """() => {
