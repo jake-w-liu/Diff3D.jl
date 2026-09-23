@@ -9,8 +9,9 @@ PROBE = """() => { const c=document.getElementById('c'); let reason=null;
   const gl=c.getContext('webgl'); const i=gl&&gl.getExtension('WEBGL_debug_renderer_info');
   return {ok:!!gl, reason, renderer: gl ? gl.getParameter(i ? i.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : null}; }"""
 count = int(sys.argv[1])
+modes = sys.argv[2:] or ["headless", "headful"]
 with sync_playwright() as pw:
-    for mode in ("headless", "headful"):
+    for mode in modes:
         tally, reasons = collections.Counter(), collections.Counter()
         for i in range(count):
             browser = pw.firefox.launch(headless=(mode == "headless"),

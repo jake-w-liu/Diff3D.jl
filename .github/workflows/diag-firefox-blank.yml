@@ -1,6 +1,7 @@
 name: Diagnose Firefox blank frame
 
 # Temporary: lives only on diag/** branches and is deleted with them.
+# Round 4: is it the first launch on a freshly started X server?
 # Round 3: why does a Firefox launch under Xvfb sometimes get no WebGL context?
 # Round 2: the macOS runner gives Firefox Apple's software OpenGL renderer, which drops
 # clipped triangles. This measures whether Linux Firefox (Mesa under Xvfb) gets a WebGL
@@ -49,5 +50,13 @@ jobs:
       - name: Choose the X server screen
         if: matrix.screen != 'default'
         run: echo "XVFB_SCREEN=${{ matrix.screen }}" >> "$GITHUB_ENV"
-      - name: Launch Firefox repeatedly
-        run: bash .github/diag/xv.sh python .github/diag/launch_probe.py 20
+      - name: First launch on a fresh X server, no wait
+        run: |
+          for i in $(seq 1 30); do
+            xvfb-run --auto-servernum python .github/diag/launch_probe.py 1 headless 2>&1 | grep -E 'LAUNCH_FAIL|LAUNCH_TALLY' | sed "s/^/FRESH_NOWAIT $i /"
+          done
+      - name: First launch on a fresh X server, after 3 s
+        run: |
+          for i in $(seq 1 30); do
+            xvfb-run --auto-servernum bash -c 'sleep 3; python .github/diag/launch_probe.py 1 headless' 2>&1 | grep -E 'LAUNCH_FAIL|LAUNCH_TALLY' | sed "s/^/FRESH_WAIT $i /"
+          done
