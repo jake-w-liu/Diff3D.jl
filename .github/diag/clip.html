@@ -1,0 +1,22 @@
+<!doctype html><html><body><script>
+// Minimal, Diff3D-independent: draw given clip-space triangles in fresh WebGL contexts and
+// count the pixels each one produces. No matrices, no depth, no instancing.
+function draw(tris, w, h){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const gl=c.getContext('webgl',{antialias:true,preserveDrawingBuffer:true});
+  const sh=(t,s)=>{ const x=gl.createShader(t); gl.shaderSource(x,s); gl.compileShader(x); if(!gl.getShaderParameter(x,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,'attribute vec4 p; void main(){ gl_Position=p; }'));
+  gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,'precision mediump float; void main(){ gl_FragColor=vec4(0.0,0.0,1.0,1.0); }'));
+  gl.linkProgram(pr); gl.useProgram(pr);
+  const b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(tris.flat(2)),gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,4,gl.FLOAT,false,0,0);
+  gl.viewport(0,0,w,h); gl.clearColor(0.01,0.01,0.01,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES,0,3*tris.length); gl.finish();
+  const px=new Uint8Array(4*w*h); gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,px);
+  let blue=0; for(let i=0;i<px.length;i+=4) if(px[i+2]>200&&px[i]<20&&px[i+1]<20) blue++;
+  const m=4*((h>>1)*w+(w>>1)), err=gl.getError();
+  const lose=gl.getExtension('WEBGL_lose_context'); if(lose) lose.loseContext();
+  return {blue, centre:[px[m],px[m+1],px[m+2]], err};
+}
+window.runClip=(cases,trials,w,h)=>{ const out={}; for(const [name,tris] of Object.entries(cases)){ const r=[]; for(let t=0;t<trials;t++) r.push(draw(tris,w,h)); out[name]={blueCounts:[...new Set(r.map(x=>x.blue))], blank:r.filter(x=>x.blue===0).length, trials, errs:[...new Set(r.map(x=>x.err))]}; } return out; };
+</script></body></html>

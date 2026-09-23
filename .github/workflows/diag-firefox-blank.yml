@@ -1,8 +1,9 @@
 name: Diagnose Firefox blank frame
 
-# Temporary: lives only on diag/** branches and is deleted with them. It samples the
-# intermittent blank orbit_zoom_limits frame on macos-latest Firefox, which has never
-# reproduced on real hardware, and records the redraw ladder when it happens.
+# Temporary: lives only on diag/** branches and is deleted with them.
+# Round 2: the macOS runner gives Firefox Apple's software OpenGL renderer, which drops
+# clipped triangles. This measures whether Linux Firefox (Mesa under Xvfb) gets a WebGL
+# context reliably and rasterises the same triangles correctly.
 "on":
   push:
     branches:
@@ -16,15 +17,16 @@ defaults:
     shell: bash
 
 jobs:
-  suite:
-    name: Firefox full suite (${{ matrix.rep }})
-    runs-on: macos-latest
-    timeout-minutes: 120
+  linux-firefox:
+    name: Linux Firefox (${{ matrix.screen }}, ${{ matrix.rep }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
       PYTHONUNBUFFERED: "1"
     strategy:
       fail-fast: false
       matrix:
+        screen: ["default", "1280x1024x24"]
         rep: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
@@ -38,52 +40,17 @@ jobs:
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Install Playwright
         run: |
+          sudo grep -rl "packages.microsoft.com" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | xargs -r sudo rm -f
           python -m pip install --upgrade pip
           python -m pip install -r test/requirements-browser.txt
-          python -m playwright install firefox
-      - name: Report the GPU
-        run: |
-          system_profiler SPDisplaysDataType
-          python .github/diag/gpu_report.py
+          python -m playwright install --with-deps firefox
+          sudo apt-get install -y --no-install-recommends xvfb
+      - name: Choose the X server screen
+        if: matrix.screen != 'default'
+        run: echo "XVFB_SCREEN=${{ matrix.screen }}" >> "$GITHUB_ENV"
+      - name: Report the renderer
+        run: bash .github/diag/xv.sh python .github/diag/gpu_report.py
+      - name: Rasterise the failing triangles
+        run: bash .github/diag/xv.sh python .github/diag/run_clip.py hardware 10
       - name: Verify browser rendering pixels
-        run: python test/browser_rendering.py --browser firefox
-
-  isolated:
-    name: Firefox isolated orbit fixture (${{ matrix.rep }})
-    runs-on: macos-latest
-    timeout-minutes: 120
-    env:
-      PYTHONUNBUFFERED: "1"
-    strategy:
-      fail-fast: false
-      matrix:
-        rep: [1]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: "1.13"
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: Instantiate package environment
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
-      - name: Install Playwright
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r test/requirements-browser.txt
-          python -m playwright install firefox
-      - name: Report the GPU
-        run: |
-          system_profiler SPDisplaysDataType
-          python .github/diag/gpu_report.py
-      - name: Repeat the orbit fixture on its own
-        run: |
-          runs=12 failures=0
-          for i in $(seq 1 "$runs"); do
-            if ! python test/browser_rendering.py --browser firefox --only orbit_zoom_limits; then
-              failures=$((failures + 1))
-            fi
-          done
-          echo "ISOLATED_FAILURES $failures/$runs"
-          test "$failures" -eq 0
+        run: bash .github/diag/xv.sh python test/browser_rendering.py --browser firefox
