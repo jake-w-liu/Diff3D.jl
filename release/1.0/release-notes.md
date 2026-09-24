@@ -43,6 +43,11 @@ everything included in this release.
   wherever the browser reports it.
 - Keep the exported viewer's frame loop alive when a frame raises, bound that
   retry, and report completed frames, the last frame error and context loss.
+- Handle WebGL context loss the three.js way: the viewer prevents the default
+  so the browser restores the context, draws nothing while it is lost, and
+  rebuilds all GPU resources on restore. Uniform writes go through a typed
+  writer over each program's link-time table, draws re-declare their vertex
+  arrays and disable the rest, and errors stay on a persistent banner.
 - Reduce allocations in affine morph transforms, CSG clipping/inversion,
   integer serialization, and standard-material lighting with ambient occlusion.
 - Execute the documented tutorials and provide versioned documentation, complete

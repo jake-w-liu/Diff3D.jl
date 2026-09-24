@@ -4292,17 +4292,28 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   // three.js reads gl.getError() only in its failed-link report (WebGLProgram.js:895); its other
   // failures surface through checked link status and its own warnings. Nothing else here reports a
   // GL error, so the viewer drains the queue itself, never per draw: at start-up, and after a
-  // presented frame at most once per GL_ERROR_DRAIN_INTERVAL_MS. getError returns only after the
-  // GPU process has run every command queued before it, so a drain after every frame holds the
-  // page's main thread for as long as the GPU takes to catch up: Chromium on SwiftShader under
-  // heavy CPU load counted the first frames of a two-view fixture after about 190 s with one, and
-  // after 0.2 s without. An error flag stays set until it is read, so draining once a second still
-  // reports every error code raised, at the first frame drawn after the second is up, for at most
-  // one GPU wait per second.
+  // presented frame at most once per GL_ERROR_DRAIN_INTERVAL_MS, and then only when the pipeline
+  // is demonstrably shallow. getError returns only after the GPU process has run every command
+  // queued before it, so a drain after every frame holds the page's main thread for as long as
+  // the GPU takes to catch up: Chromium on SwiftShader under heavy CPU load counted the first
+  // frames of a two-view fixture after about 190 s with one, and after 0.2 s without. An error
+  // flag stays set until it is read, so draining once a second still reports every error code
+  // raised, at the first frame drawn after the second is up, for at most one GPU wait per second.
+  // A fixed interval is still not enough on a software rasterizer: when the GPU falls behind,
+  // the command queue holds every submitted frame until it is consumed, and a drain waits for
+  // all of it (a heavy instanced scene queued minutes of raster work, so one getError held the
+  // main thread for over four minutes). render() tells us when that is true: once the queue is
+  // full its GL calls block until slots free, so a slow render proves a drain would stall for
+  // the whole backlog. A drain therefore runs only after a frame that returned quickly — a
+  // queue that accepts commands without backpressure is shallow — and an expensive drain
+  // stretches the next interval by GL_ERROR_DRAIN_BACKOFF times its own cost, so cheap
+  // pipelines keep the one-second cadence while saturated ones drain rarely instead of
+  // starving the page.
   // The drain bound is only a guard: each error flag is returned once and then NO_ERROR.
   // CONTEXT_LOST_WEBGL belongs to the context-loss handlers, not to this report.
-  const GL_ERROR_NAMES={1280:"INVALID_ENUM",1281:"INVALID_VALUE",1282:"INVALID_OPERATION",1285:"OUT_OF_MEMORY",1286:"INVALID_FRAMEBUFFER_OPERATION"}, GL_ERROR_DRAIN_LIMIT=16, GL_ERROR_DRAIN_INTERVAL_MS=1000;
-  // glErrorFrames counts the drains that found an error; the first frame drain waits one interval.
+  const GL_ERROR_NAMES={1280:"INVALID_ENUM",1281:"INVALID_VALUE",1282:"INVALID_OPERATION",1285:"OUT_OF_MEMORY",1286:"INVALID_FRAMEBUFFER_OPERATION"}, GL_ERROR_DRAIN_LIMIT=16, GL_ERROR_DRAIN_INTERVAL_MS=1000, GL_ERROR_DRAIN_FRAME_BUDGET_MS=250, GL_ERROR_DRAIN_BACKOFF=20, GL_ERROR_DRAIN_START_DELAY_MS=4000;
+  // glErrorFrames counts the drains that found an error; the first frame drain waits out the
+  // start delay so a heavy scene is already in the backpressured regime and skips instead.
   let glErrorFrames=0, glErrorTotal=0, lastGlError=0, nextGlErrorDrainMs=0;
   function checkGlErrors(where){ let first=0; for(let i=0;i<GL_ERROR_DRAIN_LIMIT;i++){ const e=gl.getError(); if(e===gl.NO_ERROR) break; if(e===gl.CONTEXT_LOST_WEBGL) continue; glErrorTotal++; lastGlError=e; if(!first){ first=e; glErrorFrames++; } diagReport("gl:"+where+":"+e,(GL_ERROR_NAMES[e]||("0x"+e.toString(16)))+" reported after "+where+"; the view may be incomplete or blank."); } return first; }
   // Extension objects belong to one context; initGLResources fetches them again from a restored one.
@@ -5488,7 +5499,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   let renderedFrames=0, renderFailureCount=0, lastRenderError=null;
   let renderScheduled=false;
   function scheduleRender(){ if(renderScheduled) return; renderScheduled=true; requestAnimationFrame(render); }
-  function render(nowMs){ renderScheduled=false; if(contextLost||gl.isContextLost()){ contextLostFrames++; return; } let rendered=false, lost=false; try { if(needsGLRebuild){ initGLResources(); needsGLRebuild=false; } resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const orbitCam=primaryCamera(active.camera); if(orbitCam) applyCameraOrbit(orbitCam); const eye=cameraEye(orbitCam), clip=clipping(active), fg=fog(active), tm=tone(active); visibleScratch.length=0; for(const o of active.objects) if(objectVisibleInCase(o,null)) visibleScratch.push(o); for(const o of visibleScratch) refreshObjectTextures(o); resetGLState(); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; fillCameraViews(active.camera,viewScratch); for(const state of viewScratch){ const mask=cameraLayerMask(state.camera), lod=lodChoices(active,state.eye,state.camera,true); viewVisibleScratch.length=0; for(const o of visibleScratch) if(objectVisibleInCase(o,lod)&&layerMatches(o,mask)) viewVisibleScratch.push(o); resetGLState(); updateDynamicShadows(active,viewVisibleScratch,clip,mask); const light=lighting(active,mask); resetGLState(); gl.clearColor(active.background[0],active.background[1],active.background[2],1); drawn+=drawSceneView(state,viewVisibleScratch,light,clip,fg,tm); } currentDrawCamera=null; gl.disable(gl.SCISSOR_TEST); gl.depthMask(true); gl.enable(gl.DEPTH_TEST); if(gl.isContextLost()){ lost=true; return; } const drawnMs=performance.now(); if(drawnMs>=nextGlErrorDrainMs){ nextGlErrorDrainMs=drawnMs+GL_ERROR_DRAIN_INTERVAL_MS; checkGlErrors("frame"); } stats.textContent=`\${drawn} draw items`; rendered=true; } catch(err){ if(gl.isContextLost()||(err&&err.contextLost)){ lost=true; return; } lastRenderError=(err&&err.message)?err.message:String(err); reportStartupError(err); throw err; } finally { if(rendered){ renderFailureCount=0; renderedFrames++; scheduleRender(); } else if(!lost&&++renderFailureCount<RENDER_FAILURE_LIMIT) scheduleRender(); } }
+  function render(nowMs){ renderScheduled=false; if(contextLost||gl.isContextLost()){ contextLostFrames++; return; } let rendered=false, lost=false; const frameStartMs=performance.now(); try { if(needsGLRebuild){ initGLResources(); needsGLRebuild=false; } resize(); const now=(nowMs||performance.now())*.001, dt=Math.min(.08,Math.max(0,now-lastFrameTime)); lastFrameTime=now; if(!animPaused) animTime+=dt*animSpeed; applyAnimations(active,animTime); const orbitCam=primaryCamera(active.camera); if(orbitCam) applyCameraOrbit(orbitCam); const eye=cameraEye(orbitCam), clip=clipping(active), fg=fog(active), tm=tone(active); visibleScratch.length=0; for(const o of active.objects) if(objectVisibleInCase(o,null)) visibleScratch.push(o); for(const o of visibleScratch) refreshObjectTextures(o); resetGLState(); gl.clearColor(active.background[0],active.background[1],active.background[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); let drawn=0; fillCameraViews(active.camera,viewScratch); for(const state of viewScratch){ const mask=cameraLayerMask(state.camera), lod=lodChoices(active,state.eye,state.camera,true); viewVisibleScratch.length=0; for(const o of visibleScratch) if(objectVisibleInCase(o,lod)&&layerMatches(o,mask)) viewVisibleScratch.push(o); resetGLState(); updateDynamicShadows(active,viewVisibleScratch,clip,mask); const light=lighting(active,mask); resetGLState(); gl.clearColor(active.background[0],active.background[1],active.background[2],1); drawn+=drawSceneView(state,viewVisibleScratch,light,clip,fg,tm); } currentDrawCamera=null; gl.disable(gl.SCISSOR_TEST); gl.depthMask(true); gl.enable(gl.DEPTH_TEST); if(gl.isContextLost()){ lost=true; return; } const drawnMs=performance.now(); if(drawnMs>=nextGlErrorDrainMs){ if(drawnMs-frameStartMs<GL_ERROR_DRAIN_FRAME_BUDGET_MS){ checkGlErrors("frame"); const drainDoneMs=performance.now(); nextGlErrorDrainMs=drainDoneMs+Math.max(GL_ERROR_DRAIN_INTERVAL_MS,(drainDoneMs-drawnMs)*GL_ERROR_DRAIN_BACKOFF); } else nextGlErrorDrainMs=drawnMs+GL_ERROR_DRAIN_INTERVAL_MS; } stats.textContent=`\${drawn} draw items`; rendered=true; } catch(err){ if(gl.isContextLost()||(err&&err.contextLost)){ lost=true; return; } lastRenderError=(err&&err.message)?err.message:String(err); reportStartupError(err); throw err; } finally { if(rendered){ renderFailureCount=0; renderedFrames++; scheduleRender(); } else if(!lost&&++renderFailureCount<RENDER_FAILURE_LIMIT) scheduleRender(); } }
   canvas.addEventListener("contextmenu",e=>e.preventDefault());
   canvas.addEventListener("pointerdown",e=>{ canvas.focus(); dragging=true; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ pinchMode=true; dollyMode=false; pinchDist=pointerDistance(ps); pinchCenter=pointerCenter(ps); } else { pinchMode=false; dollyMode=e.button===1; panMode=e.button===2||e.shiftKey||e.ctrlKey||e.metaKey; lx=e.clientX; ly=e.clientY; } try{ canvas.setPointerCapture(e.pointerId); }catch(_){} });
   canvas.addEventListener("pointermove",e=>{ if(!dragging)return; if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const ps=pointerList(); if(ps.length>=2){ const nd=pointerDistance(ps), nc=pointerCenter(ps); dist=clampOrbitDistance(dist*(pinchDist/nd)); panBy(nc[0]-pinchCenter[0],nc[1]-pinchCenter[1]); rememberCameraOrbitOffsets(); pinchDist=nd; pinchCenter=nc; return; } const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; if(dollyMode) zoomBy(Math.exp(dy*.003)); else if(panMode) panBy(dx,dy); else { yaw+=dx*.008; pitch=wrapPi(pitch+dy*.006); rememberCameraOrbitOffsets(); } });
@@ -5503,8 +5514,9 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   canvas.addEventListener("touchstart",touchStart,{passive:false}); canvas.addEventListener("touchmove",touchMove,{passive:false}); canvas.addEventListener("touchend",touchEnd,{passive:false}); canvas.addEventListener("touchcancel",touchEnd,{passive:false});
   canvas.addEventListener("keydown",e=>{ const k=e.key; if(k==="ArrowLeft"){ panBy(-32,0); e.preventDefault(); } else if(k==="ArrowRight"){ panBy(32,0); e.preventDefault(); } else if(k==="ArrowUp"){ panBy(0,-32); e.preventDefault(); } else if(k==="ArrowDown"){ panBy(0,32); e.preventDefault(); } else if(k==="+"||k==="="){ zoomBy(.92); e.preventDefault(); } else if(k==="-"){ zoomBy(1.08); e.preventDefault(); } });
   canvas.addEventListener("wheel",e=>{ e.preventDefault(); zoomBy(1+Math.sign(e.deltaY)*.08); },{passive:false});
+  const startupDrainStartMs=performance.now();
   checkGlErrors("startup");
-  nextGlErrorDrainMs=performance.now()+GL_ERROR_DRAIN_INTERVAL_MS;
+  nextGlErrorDrainMs=performance.now()+Math.max(GL_ERROR_DRAIN_START_DELAY_MS,(performance.now()-startupDrainStartMs)*GL_ERROR_DRAIN_BACKOFF);
   viewerStarted=true;
   try { setCase(active.id); } finally { scheduleRender(); }
   </script>

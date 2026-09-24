@@ -39,6 +39,24 @@ Changes included in this release:
   context-loss state, so a canvas showing only its background can be told apart
   from a loop that died, a frame that drew nothing, and a draw that rasterised
   nothing without another validation round trip.
+- Recover a lost WebGL context the way three.js does: prevent its default so the
+  browser restores it, draw nothing while it is lost, and rebuild every buffer,
+  texture and program from the scene's CPU data through the same resource path
+  used at start-up.
+- Link viewer programs once and enumerate their active uniforms and attributes
+  into a link-time table, replacing the by-name cache that could keep a null
+  location forever. Write every uniform through one typed writer: an inactive
+  name stays a no-op, while a misspelt required name, a wrong component count
+  and a type the call cannot write throw instead of leaving a zero matrix or a
+  zero opacity behind.
+- Re-declare the vertex arrays a draw uses and disable every other one before
+  drawing, bind `aPosition` to attribute 0 in every program, and draw instanced
+  only for objects that own instance matrices instead of routing every object
+  through a shared identity buffer.
+- Establish the GL state a frame depends on at the top of the frame and around
+  each shadow pass, unbind the shadow framebuffer when a pass throws, and keep
+  a reported error on a persistent banner instead of letting the next frame
+  erase it.
 - Reduce allocations in affine morph transforms, exact integer serialization,
   CSG clipping/inversion, and standard-material lighting with ambient occlusion.
 - Execute all tutorials and publish versioned documentation. Main-branch docs
