@@ -1409,3 +1409,12 @@ passed. In the previously failing shard, `instancing_billboards` completed in
 robustness patch — the residual delta is the legitimate per-frame cost of the
 new state machinery on a software rasteriser, not starvation), and the shard
 finished ~72 min, inside the 90-min smoke cap.
+
+**VERIFIED — the same matrix re-passed on the release-record commit.** `f4b5730`
+adds only this log and the gate table on top of `3eb2300`; release-validation run
+[35953601217](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35953601217)
+passed 66/66, standard CI run
+[35953600834](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35953600834)
+passed 20/20 in 51 min — down from ~90 — and documentation run
+[35953600821](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35953600821)
+passed.
