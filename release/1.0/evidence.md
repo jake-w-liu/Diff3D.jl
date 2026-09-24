@@ -1360,3 +1360,52 @@ the rasteriser, and three.js is affected the same way.
 The earlier sections of this file record the render-loop, GL-state, cache and
 uniform hypotheses that were eliminated on the way. The bounded frame re-arm stays:
 it fixes a real defect, but it was not this failure's cause.
+
+## R4/R8 — chromium examples 4/6 starved by the periodic GL error drain; fixed on `3eb2300`
+
+The robustness adoption on `0eb886c` passed 65 of 66 release-validation jobs and
+19 of 20 standard-CI jobs; both runs failed only in `Browser validation
+(chromium, examples 4/6)`.
+
+**VERIFIED — the failure was main-thread starvation, not a rendering error.** The
+release-validation job
+([35937540492](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35937540492))
+died on `Locator.focus: Timeout 120000ms exceeded` while smoking
+`webgl_buffergeometry_instancing_billboards.html`; the standard-CI job
+([35937519319](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35937519319))
+hit the smoke's 5400 s cap with the same example still running at 42.7 min. The
+identical shard passed under Firefox on Mesa llvmpipe in ~5.5 min, and all
+517 optimised test units passed on every OS and Julia version.
+
+**VERIFIED — `gl.getError()` is a full pipeline synchronisation.** The viewer
+drains the GL error queue itself once per rendered-frame second
+(`checkGlErrors("frame")`). Measured locally under headless Chromium/SwiftShader
+via CDP on the failing example: a single `drainGlErrors()` call blocked the main
+thread for **266.8 s**, waiting for the entire queued command backlog. With
+frames longer than 1 s the once-per-second drain fires on every frame, so the
+main thread lived inside multi-minute stalls — matching the `focus()` starvation
+on CI. The same page without drains stayed responsive (~1 ms eval round-trips).
+
+**VERIFIED — the fix restores responsiveness while preserving error pickup.**
+`3eb2300` drains only after a `render()` call that returned within 250 ms — a
+command queue that accepts a frame without backpressure is shallow — and backs
+the next interval off by 20× the measured drain cost; explicit `drainGlErrors()`
+calls are unaffected. Measured on the same heavy fixture: 0 self-drains in a
+20 s window with a free main thread; on a light fixture the drain kept its ~1 s
+cadence (3 self-drains in 12 s), so the harness's ≤10 s error-pickup check is
+preserved.
+
+**VERIFIED — the candidate is green end to end.** On `3eb2300`: standard CI run
+[35947389004](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35947389004)
+passed 20/20 jobs; release-validation run
+[35947427671](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35947427671)
+passed 66/66 — 36 optimised test shards (Linux/macOS/Windows × Julia 1.10/1.13),
+18 browser shards (Chromium/Firefox/WebKit × 6), 6 installed-consumer jobs,
+3 installed-export browser jobs, the three.js comparison, and tree hygiene; the
+documentation run
+[35947389008](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35947389008)
+passed. In the previously failing shard, `instancing_billboards` completed in
+~28.6 min (vs 42.7 min and death on the failed candidate; 14.3 min before the
+robustness patch — the residual delta is the legitimate per-frame cost of the
+new state machinery on a software rasteriser, not starvation), and the shard
+finished ~72 min, inside the 90-min smoke cap.
