@@ -1418,3 +1418,43 @@ passed 66/66, standard CI run
 passed 20/20 in 51 min — down from ~90 — and documentation run
 [35953600821](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35953600821)
 passed.
+
+## Publication record — `v1.0.0`
+
+The release candidate is `7d8111ba8b48455e3e0df08f5248e981f2331def`, whose only
+delta on `3eb2300` is this log and the gate table; a clean checkout of it
+verifies tree `d13c55d8df8df9d83dd61eaa9373471b659d4e40`, version `1.0.0`, UUID
+`72681062-5925-4945-963f-74d9429756fe`, and the 453-name public inventory
+enforced by `test/public_api.txt`.
+
+**VERIFIED — the candidate passed every gate on its own revision.** Release
+validation run
+[35960703932](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35960703932)
+passed 66/66 on `7d8111b`; standard CI run
+[35960703465](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35960703465)
+passed 20/20; documentation run
+[35960703436](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35960703436)
+passed.
+
+**VERIFIED — publication artifacts.** The Registrator comment on the candidate
+(commitcomment 201795077, containing `release-notes.md` under `Release notes:`)
+produced [JuliaRegistries/General#169302](https://github.com/JuliaRegistries/General/pull/169302),
+whose diff records `git-tree-sha1 = "d13c55d8df8df9d83dd61eaa9373471b659d4e40"`
+for `["1.0.0"]` at the same commit; it merged at 2026-09-24T07:41:32Z after
+AutoMerge with the `BREAKING`/`major release` labels and the breaking-changes
+section AutoMerge requires. The annotated `v1.0.0` tag points at the same
+commit; its push ran documentation
+[35969894993](https://github.com/jake-w-liu/Diff3D.jl/actions/runs/35969894993)
+and `gh-pages` now serves `/v1.0.0/`, `/v1.0/`, `/v1/`, `/stable/` and `/dev/`
+(both `/v1.0.0/` and `/stable/` return HTTP 200). The GitHub release at
+`v1.0.0` carries the release notes and the comparison archives.
+
+**VERIFIED — the registry artifact works.** In a fresh environment,
+`Pkg.add("Diff3D")` resolved `Diff3D v1.0.0` from General with manifest
+`git-tree-sha1 = "d13c55d8df8df9d83dd61eaa9373471b659d4e40"` — the tagged
+commit's tree — and the independent consumer suite passed 32/32 assertions
+against the installed copy: glTF import, CPU render, PNG round-trip, standalone
+WebGL export, the identifiable inverse colour problem under both `:forward` and
+`:reverse` AD (gradient within 1e-10 of the algebraic expectation), and the
+documented rejection paths for required compression extensions and exported
+ShaderMaterial callbacks.
