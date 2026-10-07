@@ -38,5 +38,6 @@ if get(ENV, "DOCUMENTER_DEPLOY", "false") == "true"
         devbranch = "main",
         devurl = "dev",
         versions = ["stable" => "v^", "v#.#", "dev" => "dev"],
+        forcepush = true,
     )
 end

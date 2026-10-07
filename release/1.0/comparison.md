@@ -41,11 +41,11 @@ run and are required to stay unchanged for its duration.
 
 - Linux/Chromium: [run record and 42 file hashes](comparison/2026-09-22-3fee531-chromium-run.json),
   [derived statistics](comparison/2026-09-22-3fee531-chromium-summary.json), and the
-  [complete raw archive](comparison/2026-09-22-3fee531-chromium.tar.gz)
+  [complete raw archive](https://github.com/jake-w-liu/Diff3D.jl/raw/v1.0.0/release/1.0/comparison/2026-09-22-3fee531-chromium.tar.gz)
   (43 files; SHA-256 `cacdf458e56f95dd8c7f0406482b0271412b41d8a945a6d3e77da3043c322f77`).
 - macOS/Firefox: [run record and 42 file hashes](comparison/2026-09-22-0dddaff-firefox-run.json),
   [derived statistics](comparison/2026-09-22-0dddaff-firefox-summary.json), and the
-  [complete raw archive](comparison/2026-09-22-0dddaff-firefox.tar.gz)
+  [complete raw archive](https://github.com/jake-w-liu/Diff3D.jl/raw/v1.0.0/release/1.0/comparison/2026-09-22-0dddaff-firefox.tar.gz)
   (43 files; SHA-256 `53d99d935d3c4008058d907484d66ebdb4c77751491fd6d965eb685d76af7042`).
 
 Each archive holds the run record, raw samples, commands, logs, fixtures,
