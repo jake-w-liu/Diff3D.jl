@@ -61,6 +61,25 @@ end
     @test_opt_alloc 16_384 reverse_gradient(squares, params)
 end
 
+@testset "adscene: ADVar min/max keep Base primal semantics" begin
+    cases = ((NaN, 1.0), (1.0, NaN), (NaN, NaN), (-0.0, 0.0), (0.0, -0.0),
+             (2.0, 1.0), (1.0, 2.0), (1.5, 1.5))
+    for op in (max, min), (x, y) in cases
+        expected = op(x, y)
+        @test isequal(reverse_value_gradient(p -> op(p[1], p[2]), [x, y])[1], expected)
+        @test isequal(reverse_value_gradient(p -> op(p[1], y), [x])[1], expected)
+        @test isequal(reverse_value_gradient(p -> op(x, p[1]), [y])[1], expected)
+    end
+    relu = reverse_value_gradient(p -> max(p[1], 0.0), [NaN])
+    @test isnan(relu[1])
+    @test isnan(reverse_value_gradient(p -> 2 * min(0.5, p[1]), [NaN])[1])
+    @test reverse_gradient(p -> max(p[1], p[2]), [2.0, 1.0]) == [1.0, 0.0]
+    @test reverse_gradient(p -> max(p[1], p[2]), [1.0, 2.0]) == [0.0, 1.0]
+    @test reverse_gradient(p -> min(p[1], p[2]), [2.0, 1.0]) == [0.0, 1.0]
+    @test reverse_gradient(p -> min(p[1], 3.0) + max(-1.0, p[1]), [2.0]) == [2.0]
+    @test reverse_gradient(p -> min(p[1], 1.0) + max(5.0, p[1]), [2.0]) == [0.0]
+end
+
 @testset "adscene: soft_render reverse gradients match ForwardDiff" begin
     for (faces, width, gamma) in ((2, 12, 0.3), (20, 20, 0.3), (3, 10, 1.0e-310))
         objective, params = adscene_soft_objective(faces, width; gamma=gamma)

@@ -392,14 +392,24 @@ function Base.hypot(a::Real, b::ADVar)
 end
 
 # ---- min/max (gradient flows to the selected argument) ----
-Base.max(a::ADVar, b::ADVar) = a.val >= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
-                                                _ad_record(b.val, (a, b), (0.0, 1.0))
-Base.min(a::ADVar, b::ADVar) = a.val <= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
-                                                _ad_record(b.val, (a, b), (0.0, 1.0))
-Base.max(a::ADVar, b::Real) = (bf = Float64(b); a.val >= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
-Base.max(a::Real, b::ADVar) = (af = Float64(a); af >= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
-Base.min(a::ADVar, b::Real) = (bf = Float64(b); a.val <= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
-Base.min(a::Real, b::ADVar) = (af = Float64(a); af <= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
+# Values follow Base (NaN propagates, max(-0.0, 0.0) == 0.0); ties and NaN
+# operands select the first argument.
+@inline _ad_max_first(a::Float64, b::Float64) = a >= b || isnan(a)
+@inline _ad_min_first(a::Float64, b::Float64) = a <= b || isnan(a)
+Base.max(a::ADVar, b::ADVar) = _ad_max_first(a.val, b.val) ?
+    _ad_record(max(a.val, b.val), (a, b), (1.0, 0.0)) :
+    _ad_record(max(a.val, b.val), (a, b), (0.0, 1.0))
+Base.min(a::ADVar, b::ADVar) = _ad_min_first(a.val, b.val) ?
+    _ad_record(min(a.val, b.val), (a, b), (1.0, 0.0)) :
+    _ad_record(min(a.val, b.val), (a, b), (0.0, 1.0))
+Base.max(a::ADVar, b::Real) = (bf = Float64(b); _ad_max_first(a.val, bf) ?
+    _ad_record(max(a.val, bf), (a,), (1.0,)) : _ad_constant(max(a.val, bf)))
+Base.max(a::Real, b::ADVar) = (af = Float64(a); _ad_max_first(af, b.val) ?
+    _ad_constant(max(af, b.val)) : _ad_record(max(af, b.val), (b,), (1.0,)))
+Base.min(a::ADVar, b::Real) = (bf = Float64(b); _ad_min_first(a.val, bf) ?
+    _ad_record(min(a.val, bf), (a,), (1.0,)) : _ad_constant(min(a.val, bf)))
+Base.min(a::Real, b::ADVar) = (af = Float64(a); _ad_min_first(af, b.val) ?
+    _ad_constant(min(af, b.val)) : _ad_record(min(af, b.val), (b,), (1.0,)))
 
 # ---- comparisons (decided by the value; no gradient) ----
 Base.:<(a::ADVar, b::ADVar)  = a.val < b.val
