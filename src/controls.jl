@@ -202,10 +202,10 @@ _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position 
 # ends up above the normalized max) keeps any angle on either arc instead of
 # snapping it to a boundary — without this, a back-facing range such as
 # [π/2, 3π/2] is unusable because cartesian_to_spherical can never return a
-# value above π. A non-finite (default unbounded / one-sided) limit takes the
-# plain clamp, which already does the right thing with ±Inf.
+# value above π. As in three.js, the window only applies when both limits are
+# finite; a one-sided limit leaves the azimuth unrestricted.
 @inline function _clamp_azimuth(theta, min_az, max_az)
-    (isfinite(min_az) && isfinite(max_az)) || return clamp(theta, min_az, max_az)
+    (isfinite(min_az) && isfinite(max_az)) || return theta
     mn = min_az < -π ? min_az + 2π : (min_az > π ? min_az - 2π : min_az)
     mx = max_az < -π ? max_az + 2π : (max_az > π ? max_az - 2π : max_az)
     if mn <= mx
