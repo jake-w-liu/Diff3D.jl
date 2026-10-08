@@ -1933,3 +1933,105 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
 
     return merged
 end
+
+@inline _merge_vertices_hash(value::Float64, multiplier::Float64, additive::Float64) =
+    trunc(value * multiplier + additive) + 0.0
+
+function _merge_vertices_attribute_data(data::AbstractVector, item_size::Int,
+                                        n_vertices::Int, label)
+    length(data) >= n_vertices * item_size ||
+        throw(ArgumentError("merge_vertices $label must cover n_vertices"))
+    return data
+end
+
+"""
+    merge_vertices(geo; tolerance=1e-4)
+
+Return a new indexed geometry in which vertices whose positions, normals, UVs,
+and named attributes all agree within `tolerance` share one index (three.js
+`BufferGeometryUtils.mergeVertices`). Morph-target attributes are carried along
+from the first merged vertex but do not participate in the comparison. Faces,
+draw groups, and the draw range are preserved; normals and UVs are kept only
+when they cover every vertex.
+"""
+function merge_vertices(geo::BufferGeometry; tolerance::Real=1e-4)
+    _validate_geometry_vertices(geo, "merge_vertices")
+    _validate_geometry_index_values(geo, "merge_vertices", "indices")
+    tol = _geometry_finite_float(tolerance, "merge_vertices tolerance")
+    tol = max(tol, eps(Float64))
+    n = geo.n_vertices
+    use_normals = !isempty(geo.normals)
+    use_uvs = !isempty(geo.uvs)
+    use_normals && _merge_vertices_attribute_data(geo.normals, 3, n, "normals")
+    use_uvs && _merge_vertices_attribute_data(geo.uvs, 2, n, "uvs")
+    names = sort!(collect(keys(geo.attributes)))
+    hashed = Symbol[]
+    for name in names
+        attr = geo.attributes[name]
+        _merge_vertices_attribute_data(attr.data, attr.item_size, n, "attribute $name")
+        startswith(String(name), "morph") || push!(hashed, name)
+    end
+
+    half_tolerance = tol * 0.5
+    multiplier = 10.0^log10(1 / tol)
+    additive = half_tolerance * multiplier
+    key_length = 3 + (use_normals ? 3 : 0) + (use_uvs ? 2 : 0) +
+                 sum((geo.attributes[name].item_size for name in hashed); init=0)
+    key = Vector{Float64}(undef, key_length)
+    lookup = Dict{Vector{Float64},Int}()
+    entries = isempty(geo.indices) ? n : length(geo.indices)
+    sources = Int[]
+    sizehint!(sources, n)
+    new_indices = Vector{Int}(undef, entries)
+    for entry in 1:entries
+        src = isempty(geo.indices) ? entry : geo.indices[entry]
+        k = 0
+        for c in 1:3
+            key[k += 1] = _merge_vertices_hash(geo.positions[3src - 3 + c], multiplier, additive)
+        end
+        if use_normals
+            for c in 1:3
+                key[k += 1] = _merge_vertices_hash(geo.normals[3src - 3 + c], multiplier, additive)
+            end
+        end
+        if use_uvs
+            for c in 1:2
+                key[k += 1] = _merge_vertices_hash(geo.uvs[2src - 2 + c], multiplier, additive)
+            end
+        end
+        for name in hashed
+            attr = geo.attributes[name]
+            base = (src - 1) * attr.item_size
+            for c in 1:attr.item_size
+                key[k += 1] = _merge_vertices_hash(Float64(attr.data[base + c]),
+                                                   multiplier, additive)
+            end
+        end
+        id = get(lookup, key, 0)
+        if id == 0
+            push!(sources, src)
+            id = length(sources)
+            lookup[copy(key)] = id
+        end
+        new_indices[entry] = id
+    end
+
+    m = length(sources)
+    gather(data, item_size) = begin
+        out = similar(data, m * item_size)
+        for (dst, src) in enumerate(sources)
+            copyto!(out, (dst - 1) * item_size + 1, data, (src - 1) * item_size + 1, item_size)
+        end
+        out
+    end
+    attributes = Dict{Symbol,BufferAttribute}()
+    for name in names
+        attr = geo.attributes[name]
+        attributes[name] = BufferAttribute(gather(attr.data, attr.item_size), attr.item_size)
+    end
+    return BufferGeometry(gather(geo.positions, 3),
+                          use_normals ? gather(geo.normals, 3) : Float64[],
+                          use_uvs ? gather(geo.uvs, 2) : Float64[],
+                          new_indices, m, geo.n_faces, attributes,
+                          copy(geo.groups), geo.draw_range)
+end

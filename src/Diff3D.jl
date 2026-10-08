@@ -160,7 +160,7 @@ export
     CapsuleGeometry,
     wireframe_geometry, edges_geometry,
     get_vertex, get_normal, get_face, compute_face_normal,
-    count_triangles, merge_geometries,
+    count_triangles, merge_geometries, merge_vertices,
     set_attribute!, get_attribute, has_attribute,
     compute_line_distances!,
     compute_bounding_box, compute_bounding_sphere,

@@ -165,3 +165,50 @@ end
     @test all(isfinite, OctahedronGeometry(radius=0.0).normals)
     @test all(isfinite, TetrahedronGeometry(radius=-1.0).uvs)
 end
+
+@testset "geometry audit: merge_vertices" begin
+    box = BoxGeometry()
+    @test merge_vertices(box).n_vertices == 24
+    bare = BufferGeometry(copy(box.positions), Float64[], Float64[], copy(box.indices),
+                          box.n_vertices, box.n_faces)
+    welded = merge_vertices(bare)
+    @test welded.n_vertices == 8
+    @test welded.n_faces == 12
+    @test isempty(welded.normals) && isempty(welded.uvs)
+    for f in 1:box.n_faces
+        a = get_face(bare, f); b = get_face(welded, f)
+        for k in 1:3
+            @test get_vertex(bare, a[k]) == get_vertex(welded, b[k])
+        end
+    end
+
+    tet = TetrahedronGeometry()
+    soup = BufferGeometry(copy(tet.positions), Float64[], Float64[], Int[],
+                          tet.n_vertices, 0)
+    tet_welded = merge_vertices(soup)
+    @test tet_welded.n_vertices == 4
+    @test length(tet_welded.indices) == 12
+
+    near = BufferGeometry([0.0, 0, 0, 1e-6, 0, 0, 1, 0, 0], Float64[], Float64[],
+                          [1, 2, 3], 3, 1)
+    @test merge_vertices(near).n_vertices == 2
+    @test merge_vertices(near; tolerance=1e-8).n_vertices == 3
+    @test_throws ArgumentError merge_vertices(near; tolerance=NaN)
+
+    colored = BufferGeometry(copy(bare.positions), Float64[], Float64[],
+                             copy(bare.indices), bare.n_vertices, bare.n_faces)
+    colors = repeat([1.0, 0.0, 0.0], bare.n_vertices)
+    colors[1:12] .= 0.5                                  # first face's 4 vertices differ
+    set_attribute!(colored, :color, colors, 3)
+    set_attribute!(colored, :morphPosition0, collect(1.0:3 * bare.n_vertices), 3)
+    add_group!(colored, 1, 6, 0)
+    set_draw_range!(colored, 1, 30)
+    cw = merge_vertices(colored)
+    @test cw.n_vertices == 12
+    @test get_attribute(cw, :color).item_size == 3
+    @test length(get_attribute(cw, :morphPosition0).data) == 3 * cw.n_vertices
+    @test get_groups(cw) == [(1, 6, 0)]
+    @test get_draw_range(cw) == (1, 30)
+    @test_throws ArgumentError merge_vertices(BufferGeometry([0.0, 0, 0], [0.0], Float64[],
+                                                             Int[], 1, 0))
+end
