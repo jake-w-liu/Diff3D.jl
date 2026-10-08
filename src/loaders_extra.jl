@@ -9497,7 +9497,7 @@ function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
                                         "glTF image bufferView")
         return bytes, declared_mime
     end
-    return nothing, ""
+    error("glTF image is missing uri and bufferView")
 end
 
 function _gltf_decode_image(bytes::AbstractVector{UInt8}, mime::AbstractString)
@@ -9536,14 +9536,13 @@ end
 function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb,
                        texture_cache=nothing)
     texinfo === nothing && return nothing
-    haskey(gltf, "textures") || return nothing
-    textures = gltf["textures"]
+    textures = get(gltf, "textures", Any[])
     ti = _gltf_checked_index(texinfo["index"], length(textures), "texture")
     texdef = textures[ti + 1]
     if !haskey(texdef, "source")
         basisu = get(get(texdef, "extensions", Dict{String,Any}()),
                      "KHR_texture_basisu", nothing)
-        basisu === nothing && return nothing
+        basisu === nothing && error("glTF texture $ti has no supported image source")
         haskey(basisu, "source") ||
             error("glTF KHR_texture_basisu texture requires a source image index")
         error("glTF KHR_texture_basisu textures are not supported; KTX2/Basis texture loading is not implemented")
@@ -9562,13 +9561,9 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
     raw_mag_filter = get(sampler, "magFilter", 9729.0)
     mag_filter = _gltf_mag_filter_mode(raw_mag_filter)
-    raw_min_filter = haskey(sampler, "minFilter") ? sampler["minFilter"] : raw_mag_filter
+    raw_min_filter = get(sampler, "minFilter", 9987.0)
     min_filter = _gltf_min_filter_mode(raw_min_filter)
-    filter = if haskey(sampler, "magFilter")
-        _gltf_filter_mode(raw_mag_filter, _GLTF_MAG_FILTERS, "magFilter")
-    else
-        _gltf_filter_mode(raw_min_filter, _GLTF_MIN_FILTERS, "minFilter")
-    end
+    filter = _gltf_filter_mode(raw_mag_filter, _GLTF_MAG_FILTERS, "magFilter")
     wrap_s = _gltf_wrap_mode(get(sampler, "wrapS", 10497.0), "wrapS")
     wrap_t = _gltf_wrap_mode(get(sampler, "wrapT", 10497.0), "wrapT")
     cache_key = texture_cache === nothing ? nothing :
@@ -9578,7 +9573,6 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
         return texture_cache[cache_key]
     end
     bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
-    bytes === nothing && return nothing
     data = _gltf_decode_image(bytes, mime)
     # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
     # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
@@ -9628,7 +9622,9 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                     4, "baseColorFactor")
     emissive = _gltf_checked_number_tuple(get(m, "emissiveFactor", [0.0,0.0,0.0]),
                                           3, "emissiveFactor")
-    alpha_mode = String(get(m, "alphaMode", "OPAQUE"))
+    alpha_mode = get(m, "alphaMode", "OPAQUE")
+    alpha_mode in ("OPAQUE", "MASK", "BLEND") ||
+        error("glTF material alphaMode must be OPAQUE, MASK, or BLEND")
     alpha_test = alpha_mode == "MASK" ?
                  _gltf_checked_finite_number(get(m, "alphaCutoff", 0.5),
                                              "alphaCutoff") : 0.0
@@ -10954,7 +10950,8 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
                                                            "animation output")
             _gltf_validate_attribute_format(
-                gltf, output_accessor, "animation output", (5126,), ())
+                gltf, output_accessor, "animation output", (5126,),
+                path in ("rotation", "weights") ? (5120, 5121, 5122, 5123) : ())
             out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"
