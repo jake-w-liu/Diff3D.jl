@@ -103,3 +103,15 @@ end
     layers_enable!(rc.layers, 4)
     @test !isempty(raycast(rc, box))
 end
+
+@testset "mathapi: quat_slerp switches to nlerp at dot == 0.9995" begin
+    # three.js Quaternion.slerp: `if ( dot < 0.9995 )` slerps, otherwise nlerp.
+    a = Quaternion(0.0, 0.0, 0.0, 1.0)
+    b = Quaternion(sqrt(1 - 0.9995^2), 0.0, 0.0, 0.9995)
+    @test quat_dot(a, b) == 0.9995
+    t = 0.5
+    expected = quat_normalize(Quaternion(a.x * (1 - t) + b.x * t, a.y * (1 - t) + b.y * t,
+                                         a.z * (1 - t) + b.z * t, a.w * (1 - t) + b.w * t))
+    q = quat_slerp(a, b, t)
+    @test abs(q.x - expected.x) <= eps() / 8 && abs(q.w - expected.w) <= eps() / 8
+end

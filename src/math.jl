@@ -985,7 +985,7 @@ function quat_slerp(a::Quaternion, b::Quaternion, t)
     if d < 0                       # take the shorter arc
         b = Quaternion(-b.x, -b.y, -b.z, -b.w); d = -d
     end
-    if d > 0.9995                  # nearly parallel: nlerp to avoid division by ~0
+    if d >= 0.9995                 # nearly parallel: nlerp to avoid division by ~0
         q = Quaternion(a.x + t*(b.x-a.x), a.y + t*(b.y-a.y),
                        a.z + t*(b.z-a.z), a.w + t*(b.w-a.w))
         return quat_normalize(q)
