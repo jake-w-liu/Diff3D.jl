@@ -613,8 +613,9 @@ end
 
 function HemisphereLight(; color=Color3(1.0, 1.0, 1.0),
                           ground_color=Color3(0.0, 0.0, 0.0),
-                          intensity=1.0, name="HemisphereLight")
-    HemisphereLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
+                          intensity=1.0, position=Vec3(0.0, 1.0, 0.0),
+                          name="HemisphereLight")
+    HemisphereLight(_validated_light_vec3(position, :position), Euler(), Vec3(1.0,1.0,1.0),
                     nothing, AbstractObject3D[], true, name, _next_id(),
                     _validated_light_color(color, :color),
                     _validated_light_color(ground_color, :ground_color),
@@ -746,6 +747,7 @@ end
     _validated_light_color(light.color, :color)
     _validated_light_color(light.ground_color, :ground_color)
     _validated_light_intensity(light.intensity)
+    _validated_light_vec3(light.position, :position)
     return nothing
 end
 
@@ -770,7 +772,7 @@ end
 @inline _validate_light_object_spatial_parameters(::AbstractLight) = nothing
 
 @inline function _validate_light_object_spatial_parameters(
-        light::Union{AmbientLight, HemisphereLight, LightProbe})
+        light::Union{AmbientLight, LightProbe})
     _validated_light_vec3(light.position, :position)
     return nothing
 end

@@ -34,3 +34,25 @@ end
         @test li ≈ t * t * (3 - 2t) atol=1e-9
     end
 end
+
+@testset "HemisphereLight aims along its world position" begin
+    hemi = HemisphereLight(color=Color3(1.0, 1.0, 1.0), ground_color=Color3(0.0, 0.0, 0.0))
+    @test hemi.position == Vec3(0.0, 1.0, 0.0)
+    @test Diff3D._fill_color(Vec3(0.0, 1.0, 0.0), hemi) == Color3(1.0, 1.0, 1.0)
+    hemi.position = Vec3(0.0, -2.0, 0.0)
+    @test Diff3D._fill_color(Vec3(0.0, -1.0, 0.0), hemi) == Color3(1.0, 1.0, 1.0)
+    @test Diff3D._fill_color(Vec3(0.0, 1.0, 0.0), hemi) == Color3(0.0, 0.0, 0.0)
+    # Own rotation does not move the light's world position.
+    hemi.position = Vec3(1.0, 0.0, 0.0)
+    hemi.rotation = Euler(0.0, 0.0, pi / 2)
+    @test Diff3D._fill_color(Vec3(1.0, 0.0, 0.0), hemi) == Color3(1.0, 1.0, 1.0)
+    # A light at the origin has no direction: both hemispheres weigh 0.5.
+    origin = HemisphereLight(position=Vec3(), color=Color3(1.0, 1.0, 1.0),
+                             ground_color=Color3(0.0, 0.0, 0.0))
+    @test Diff3D._fill_color(Vec3(0.0, 1.0, 0.0), origin) == Color3(0.5, 0.5, 0.5)
+    parent = Group(); parent.position = Vec3(0.0, -5.0, 0.0)
+    child = HemisphereLight(color=Color3(1.0, 1.0, 1.0), ground_color=Color3(0.0, 0.0, 0.0))
+    add!(parent, child)
+    @test Diff3D._fill_color(Vec3(0.0, -1.0, 0.0), child) == Color3(1.0, 1.0, 1.0)
+    @test_throws ArgumentError HemisphereLight(position=Vec3(NaN, 0.0, 0.0))
+end

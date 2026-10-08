@@ -1482,9 +1482,13 @@ function _fill_color(normal::Vec3, light::AmbientLight)
     _validate_light_parameters(light)
     return light.color * light.intensity
 end
+# three.js aims the sky hemisphere along the light's normalized world position.
+@inline _hemisphere_direction(light::HemisphereLight) =
+    normalize(_light_world_position(light))
+
 function _fill_color(normal::Vec3, light::HemisphereLight)
     _validate_light_parameters(light)
-    up = _light_world_direction(light, Vec3(0.0, 1.0, 0.0))
+    up = _hemisphere_direction(light)
     normal_up = dot(normal, up)
     w = clamp(normal_up * 0.5 + 0.5, zero(normal_up), one(normal_up))
     blended = Color3(light.color.r * w + light.ground_color.r * (1 - w),
@@ -2770,7 +2774,7 @@ function shade_face_with_ambient(normal, view_dir, position, material, lights)
             result = result + mc * light.color * light.intensity
         elseif light isa HemisphereLight
             mc = _material_color(material)
-            weight = dot(normal, Vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5
+            weight = dot(normal, _hemisphere_direction(light)) * 0.5 + 0.5
             blended = Color3(
                 light.color.r * weight + light.ground_color.r * (1 - weight),
                 light.color.g * weight + light.ground_color.g * (1 - weight),

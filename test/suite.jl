@@ -26271,6 +26271,7 @@ end
         (PointLight, :position),
         (SpotLight, :position),
         (SpotLight, :target),
+        (HemisphereLight, :position),
         (RectAreaLight, :position),
     )
     for (light_type, field) in constructor_vector_cases
@@ -26304,7 +26305,7 @@ end
         (PointLight(), :position, true, true),
         (SpotLight(), :position, true, true),
         (SpotLight(), :target, true, true),
-        (HemisphereLight(), :position, false, false),
+        (HemisphereLight(), :position, true, false),
         (RectAreaLight(), :position, true, false),
         (RectAreaLight(), :target, true, false),
         (LightProbe(), :position, false, false),
@@ -29894,7 +29895,7 @@ end
     world_hemisphere = HemisphereLight(
         color=Color3(1.0, 0.0, 0.0),
         ground_color=Color3(0.0, 0.0, 1.0))
-    world_hemisphere.rotation = Euler(0.0, 0.0, pi / 2)
+    world_hemisphere.position = Vec3(-1.0, 0.0, 0.0)
     add!(hemisphere_parent, parented_hemisphere)
     for normal in (Vec3(-1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
         @test color_close(
