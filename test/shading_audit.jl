@@ -56,3 +56,28 @@ end
     @test Diff3D._fill_color(Vec3(0.0, -1.0, 0.0), child) == Color3(1.0, 1.0, 1.0)
     @test_throws ArgumentError HemisphereLight(position=Vec3(NaN, 0.0, 0.0))
 end
+
+@testset "MeshToonMaterial honours vertex colors" begin
+    geo = PlaneGeometry(width=2.0, height=2.0)
+    set_attribute!(geo, :color, repeat([1.0, 0.0, 0.0], geo.n_vertices), 3)
+    light = DirectionalLight(position=Vec3(0.0, 0.0, 1.0), intensity=1.0)
+    tinted = shade_mesh_faces(geo, Mat4(), MeshToonMaterial(vertex_colors=true),
+                              AbstractLight[light], Vec3(0.0, 0.0, 5.0))
+    plain = shade_mesh_faces(geo, Mat4(), MeshToonMaterial(),
+                             AbstractLight[light], Vec3(0.0, 0.0, 5.0))
+    @test all(c -> c.r > 0.0 && c.g == 0.0 && c.b == 0.0, tinted)
+    @test all(c -> c.g > 0.0, plain)
+    @test [c.r for c in tinted] == [c.r for c in plain]
+    @test MeshToonMaterial().vertex_colors == false
+    scene = Scene(background=Color3(0.0, 0.0, 0.0))
+    add!(scene, light)
+    add!(scene, Mesh(geo, MeshToonMaterial(vertex_colors=true)))
+    cam = PerspectiveCamera(fov=π / 4, aspect=1.0, near=0.1, far=100.0)
+    cam.position = Vec3(0.0, 0.0, 3.0)
+    for shading in (:flat, :smooth)
+        rt = RenderTarget(16, 16)
+        render!(rt, scene, cam; shading=shading)
+        @test rt.color[8, 8, 1] > 0.0 && rt.color[8, 8, 2] == 0.0 &&
+              rt.color[8, 8, 3] == 0.0
+    end
+end

@@ -2566,13 +2566,6 @@ end
 
 @inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
                                           position::Vec3,
-                                          material::MeshToonMaterial, lights,
-                                          vertex_color::Color3; shadow_fn=nothing)
-    shade_face(normal, view_dir, position, material, lights; shadow_fn=shadow_fn)
-end
-
-@inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
-                                          position::Vec3,
                                           material::AbstractMaterial, lights,
                                           vertex_color::Color3; shadow_fn=nothing)
     shade_face(normal, view_dir, position, _with_vertex_color(material, vertex_color),

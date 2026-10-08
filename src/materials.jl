@@ -1091,6 +1091,7 @@ struct MeshToonMaterial <: AbstractMaterial
     depth_test::Bool
     depth_write::Bool
     clipping_planes::Vector{Plane{Float64}}
+    vertex_colors::Bool   # modulate by geometry :color attribute when true
 
     function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
                               gradient_map, map, normal_map, normal_scale,
@@ -1098,7 +1099,8 @@ struct MeshToonMaterial <: AbstractMaterial
                               emissive_intensity, ao_map_intensity,
                               light_map_intensity, alpha_test, opacity,
                               transparent::Bool, side::Symbol, depth_test::Bool,
-                              depth_write::Bool, clipping_planes)
+                              depth_write::Bool, clipping_planes,
+                              vertex_colors::Bool=false)
         new(_validated_material_color(color, :color),
             _validated_material_color(emissive, :emissive),
             _toon_gradient_steps(gradient_steps), _toon_gradient_map(gradient_map),
@@ -1110,7 +1112,7 @@ struct MeshToonMaterial <: AbstractMaterial
             _validated_material_alpha_test(alpha_test),
             _validated_material_opacity(opacity),
             transparent, _validated_material_side(side), depth_test, depth_write,
-            _material_clipping_planes(clipping_planes))
+            _material_clipping_planes(clipping_planes), vertex_colors)
     end
 end
 
@@ -1123,12 +1125,12 @@ function MeshToonMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0.0,0
                            alpha_test=0.0, opacity=1.0,
                            transparent=false, side=:front,
                            depth_test=true, depth_write=true,
-                           clipping_planes=Plane{Float64}[])
+                           clipping_planes=Plane{Float64}[], vertex_colors=false)
     MeshToonMaterial(color, emissive, gradient_steps, gradient_map, map, normal_map,
                      normal_scale, alpha_map, ao_map, light_map, emissive_map,
                      emissive_intensity, ao_map_intensity, light_map_intensity,
                      alpha_test, opacity, transparent, side, depth_test, depth_write,
-                     clipping_planes)
+                     clipping_planes, vertex_colors)
 end
 
 function MeshToonMaterial(color::Color3, emissive::Color3, gradient_steps,
