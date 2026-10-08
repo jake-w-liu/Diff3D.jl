@@ -207,7 +207,7 @@ export
     loss_mse, loss_l1, loss_ssim, loss_silhouette_iou,
 
     # Controls / Animation / Helpers
-    OrbitControls, orbit_set!, orbit_save_state!, orbit_reset!,
+    OrbitControls, MapControls, orbit_set!, orbit_save_state!, orbit_reset!,
     orbit_rotate!, orbit_zoom!, orbit_pan!,
     TrackballControls, trackball_save_state!, trackball_reset!,
     trackball_rotate!, trackball_zoom!, trackball_pan!,

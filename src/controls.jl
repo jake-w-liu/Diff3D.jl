@@ -51,6 +51,9 @@ mutable struct OrbitControls
     v_pan::Vec3{Float64}     # pending world-space pan offset
     position0::Vec3{Float64}
     target0::Vec3{Float64}
+    # three.js OrbitControls.screenSpacePanning: vertical pan follows the
+    # camera up (true) or moves across the plane orthogonal to `camera.up`.
+    screen_space_panning::Bool
 end
 
 # Damping is a decay factor. Non-finite or >1 values either poison camera state
@@ -134,7 +137,8 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                        enable_damping::Bool=false, damping_factor::Real=0.05,
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
-                       min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf)
+                       min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
+                       screen_space_panning::Bool=true)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
@@ -152,7 +156,7 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                   minimum_polar, maximum_polar,
                   minimum_azimuth, maximum_azimuth,
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
-                  checked_target)
+                  checked_target, screen_space_panning)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -187,11 +191,26 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                   _checked_control_vec3(position0,
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
-                                        "OrbitControls saved target"))
+                                        "OrbitControls saved target"),
+                  true)
 end
 
 OrbitControls(cam::PerspectiveCamera; kwargs...) =
     OrbitControls(cam, _camera_control_target(cam); kwargs...)
+
+"""
+    MapControls(camera[, target]; screen_space_panning=false, kwargs...)
+
+`OrbitControls` configured like three.js `MapControls`: vertical pan deltas
+move the target across the plane orthogonal to `camera.up` (the ground for a
+y-up scene) instead of along the screen's up axis. All other keywords are the
+`OrbitControls` ones.
+"""
+MapControls(cam::PerspectiveCamera, target::Vec3{Float64};
+            screen_space_panning::Bool=false, kwargs...) =
+    OrbitControls(cam, target; screen_space_panning=screen_space_panning, kwargs...)
+MapControls(cam::PerspectiveCamera; kwargs...) =
+    MapControls(cam, _camera_control_target(cam); kwargs...)
 
 # Current spherical (radius, polar from +y, azimuth) of the camera about target.
 _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
@@ -288,7 +307,11 @@ function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
     up = normalize(cross(right, fwd))
     return right, up
 end
-_orbit_pan_basis(oc::OrbitControls) = _camera_pan_basis(oc.camera, oc.target)
+function _orbit_pan_basis(oc::OrbitControls)
+    right, up = _camera_pan_basis(oc.camera, oc.target)
+    oc.screen_space_panning && return right, up
+    return right, normalize(cross(oc.camera.up, right))
+end
 function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     right, up = _orbit_pan_basis(oc)
     shift = right * dx + up * dy

@@ -175,3 +175,38 @@ end
     mixer_set_time!(AnimationMixer(AnimationClip("qy", [ny])), 0.5)
     @test h.rotation.order === :ZXY
 end
+
+_anim_v3(v) = [v.x, v.y, v.z]
+
+@testset "anim audit: MapControls pans across the ground plane" begin
+    function tilted_camera()
+        cam = PerspectiveCamera()
+        cam.position = Vec3(0.0, 10.0, 10.0)
+        cam.target = Vec3(0.0, 0.0, 0.0)
+        return cam
+    end
+    # three.js MapControls sets screenSpacePanning=false: panUp moves along
+    # cross(camera.up, cameraRight), keeping the target height.
+    mc = MapControls(tilted_camera())
+    @test mc isa OrbitControls
+    @test !mc.screen_space_panning
+    orbit_pan!(mc, 0.0, 2.0)
+    @test _anim_v3(mc.target) ≈ [0.0, 0.0, -2.0]
+    @test _anim_v3(mc.camera.position) ≈ [0.0, 10.0, 8.0]
+    orbit_pan!(mc, 3.0, 0.0)
+    @test _anim_v3(mc.target) ≈ [3.0, 0.0, -2.0]
+
+    oc = OrbitControls(tilted_camera())
+    @test oc.screen_space_panning
+    orbit_pan!(oc, 0.0, 2.0)
+    @test _anim_v3(oc.target) ≈ [0.0, sqrt(2.0), -sqrt(2.0)]
+
+    damped = MapControls(tilted_camera(), Vec3(0.0, 0.0, 0.0);
+                         enable_damping=true, damping_factor=0.5)
+    orbit_pan!(damped, 0.0, 2.0)
+    for _ in 1:80
+        orbit_update!(damped)
+    end
+    @test _anim_v3(damped.target) ≈ [0.0, 0.0, -2.0] atol=1e-8
+    @test MapControls(tilted_camera(); screen_space_panning=true).screen_space_panning
+end
