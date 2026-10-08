@@ -215,8 +215,10 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     end
     vp = _promote_mat4(view_proj, T)
 
-    σ = T(config.sigma)
-    γ = T(config.gamma)
+    # Dividing by a promoted constant Dual forms 0 * Inf partials once its
+    # square underflows; keep the configured scalars as the divisors.
+    σ = config.sigma
+    γ = config.gamma
     bg = Color3(T(config.bg_color.r), T(config.bg_color.g), T(config.bg_color.b))
     eps = T(config.eps)
     workspace = _soft_checked_workspace(workspace, T)

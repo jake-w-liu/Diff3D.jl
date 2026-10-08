@@ -86,10 +86,49 @@ end
         reverse = reverse_gradient(objective, params)
         forward = ForwardDiff.gradient(objective, params)
         @test all(isfinite, reverse)
-        if gamma > 1.0e-100
-            @test isapprox(reverse, forward; rtol=1.0e-12)
-        end
+        @test all(isfinite, forward)
+        @test isapprox(reverse, forward; rtol=1.0e-12)
     end
+    for gamma in (1.0e-200, 1.0e-310), faces in (3, 12)
+        objective, params = adscene_soft_objective(faces, 10; gamma=gamma)
+        forward = ForwardDiff.gradient(objective, params)
+        @test all(isfinite, forward)
+        @test isapprox(forward, reverse_gradient(objective, params);
+                       rtol=1.0e-10, atol=1.0e-12)
+    end
+    tiny_sigma = SoftRasterizerConfig(sigma=1.0e-200, gamma=0.3)
+    sigma_objective = function (p)
+        T = eltype(p)
+        vertices = [Vec3(p[1], T(-0.5), T(0.0)), Vec3(T(0.5), T(-0.4), T(0.0)),
+                    Vec3(T(0.1), T(0.6), T(0.0))]
+        return sum(soft_render(vertices, [(1, 2, 3)], [Color3(0.8, 0.2, 0.1)],
+                               Mat4(), 6, 6, tiny_sigma))
+    end
+    @test all(isfinite, ForwardDiff.gradient(sigma_objective, [-0.6]))
+
+    faces = [(1, 2, 3), (2, 4, 3)]
+    view_proj = mat4_perspective(0.9, 1.0, 0.1, 10.0) *
+                mat4_look_at(Vec3(0.0, 0.0, 3.0), Vec3(), Vec3(0.0, 1.0, 0.0))
+    corners = [-0.5, -0.5, 0.0, 0.45, -0.5, 0.0, -0.5, 0.45, 0.1, 0.5, 0.5, 0.1]
+    colors = [Color3(0.8, 0.2, 0.2), Color3(0.2, 0.8, 0.2)]
+    for gamma in (0.3, 1.0e-200)
+        vertex_fn = vertex_render_fn(faces, colors, view_proj, 10, 10;
+                                     sigma=0.8, gamma=gamma)
+        vertex_loss = p -> sum(abs2, vertex_fn(p))
+        forward = ForwardDiff.gradient(vertex_loss, corners)
+        @test all(isfinite, forward)
+        @test isapprox(forward, reverse_gradient(vertex_loss, corners); rtol=1.0e-10)
+        vertices = [Vec3(corners[3i - 2], corners[3i - 1], corners[3i]) for i in 1:4]
+        color_fn = color_render_fn(vertices, faces, view_proj, 10, 10;
+                                   sigma=0.8, gamma=gamma)
+        color_loss = p -> sum(abs2, color_fn(p))
+        color_params = [0.8, 0.2, 0.2, 0.2, 0.8, 0.2]
+        forward = ForwardDiff.gradient(color_loss, color_params)
+        @test all(isfinite, forward)
+        @test isapprox(forward, reverse_gradient(color_loss, color_params); rtol=1.0e-10)
+        @test eltype(vertex_fn(Float32.(corners))) == Float64
+    end
+
     objective, params = adscene_soft_objective(2, 16)
     reverse_gradient(objective, params)
     # Pixel centres and per-pixel seeds stay off the tape.
