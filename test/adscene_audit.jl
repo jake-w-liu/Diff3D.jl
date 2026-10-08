@@ -80,6 +80,15 @@ end
     @test reverse_gradient(p -> min(p[1], 1.0) + max(5.0, p[1]), [2.0]) == [0.0]
 end
 
+@testset "adscene: numerical_gradient divides by the realized step" begin
+    @test numerical_gradient(p -> p[1], [1.0e8]) == [1.0]
+    @test numerical_gradient(p -> 0.25 * p[1], [123456.789]) == [0.25]
+    @test numerical_gradient(p -> -2.0 * p[2], [0.5, -9.87e7]) == [0.0, -2.0]
+    @test isapprox(numerical_gradient(p -> (p[1] - 1.0e8)^2, [1.0e8 + 3.0])[1], 6.0;
+                   rtol=1.0e-9)
+    @test numerical_gradient(p -> p[1], [1.0e8]; δ=-1.0e-5) == [1.0]
+end
+
 @testset "adscene: soft_render reverse gradients match ForwardDiff" begin
     for (faces, width, gamma) in ((2, 12, 0.3), (20, 20, 0.3), (3, 10, 1.0e-310))
         objective, params = adscene_soft_objective(faces, width; gamma=gamma)
