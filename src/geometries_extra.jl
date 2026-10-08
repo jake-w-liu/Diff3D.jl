@@ -488,21 +488,40 @@ end
     )
 end
 
-@inline function _tube_tangent(path::Vector{<:Vec3}, i::Int, n::Int)
-    prev = path[max(i - 1, 1)]
-    next = path[min(i + 1, n)]
+@inline function _tube_tangent(path::AbstractVector{<:Vec3}, i::Int, n::Int,
+                               closed::Bool=false)
+    prev = closed ? path[mod1(i - 1, n)] : path[max(i - 1, 1)]
+    next = closed ? path[mod1(i + 1, n)] : path[min(i + 1, n)]
     tangent = _tube_unit_delta(prev, next)
     norm(tangent) > 0.0 && return tangent
     # A 180-degree reversal can make the centered difference zero despite both
     # adjacent segments being valid. Prefer the forward segment at the cusp.
-    i < n && return _tube_unit_delta(path[i], path[i + 1])
+    (closed || i < n) && return _tube_unit_delta(path[i], path[mod1(i + 1, n)])
     return _tube_unit_delta(path[i - 1], path[i])
 end
 
-function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
-    n = length(path)
+# Rotate `v` about the unit `axis` by `angle` (three.js Matrix4.makeRotationAxis).
+@inline _tube_rotate(v::Vec3, axis::Vec3, angle::Float64) =
+    v * cos(angle) + cross(axis, v) * sin(angle) + axis * (dot(axis, v) * (1 - cos(angle)))
+
+@inline function _tube_transport(N::Vec3, B::Vec3, T::Vec3)
+    Np = N - T*dot(N, T)               # project previous N off the new tangent
+    N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))
+    return N, cross(T, N)
+end
+
+"""
+    TubeGeometry(path; radius=1.0, radial_segments=8, closed=false)
+
+Sweep a circle of `radius` along the polyline `path` with parallel-transported
+frames (three.js `TubeGeometry`). With `closed=true` the path wraps from its last
+point back to the first, frames are twisted so the seam matches
+(three.js `computeFrenetFrames(segments, true)`), and the final ring duplicates
+the first one with `u = 1`.
+"""
+function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8, closed::Bool=false)
     _validate_tube_path(path)
-    @inbounds for i in 2:n
+    @inbounds for i in 2:length(path)
         _geometry_delta_norm3(
             Float64(path[i - 1].x), Float64(path[i - 1].y),
             Float64(path[i - 1].z), Float64(path[i].x),
@@ -510,13 +529,20 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             throw(ArgumentError(
                 "TubeGeometry path needs consecutive distinct points"))
     end
+    if closed && path[end] == path[1]
+        path = path[1:end-1]
+    end
+    n = length(path)
+    closed && n < 3 &&
+        throw(ArgumentError("closed TubeGeometry needs at least three distinct points"))
     radius = _geometry_finite_float(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     rs1 = radial_segments + 1
-    n_verts = _geometry_checked_mul(n, rs1, "TubeGeometry vertex count")
+    rings = closed ? n + 1 : n
+    n_verts = _geometry_checked_mul(rings, rs1, "TubeGeometry vertex count")
     n_faces = _geometry_checked_mul(
-        2 * (n - 1), radial_segments, "TubeGeometry face count")
+        2 * (rings - 1), radial_segments, "TubeGeometry face count")
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "TubeGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -526,24 +552,41 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
 
     # Initial frame from the first tangent, parallel-transported along the path
     # (as in three.js computeFrenetFrames) so the frame never flips between rings.
-    T1 = _tube_tangent(path, 1, n)
+    T1 = _tube_tangent(path, 1, n, closed)
     refv = abs(T1.y) < 0.99 ? Vec3(0.0,1.0,0.0) : Vec3(1.0,0.0,0.0)
-    N = normalize(cross(refv, T1)); B = cross(T1, N)
-    for i in 1:n
-        T = i == 1 ? T1 : _tube_tangent(path, i, n)
-        if i > 1
-            Np = N - T*dot(N, T)               # project previous N off the new tangent
-            N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))
-            B = cross(T, N)
+    N1 = normalize(cross(refv, T1))
+    twist = 0.0
+    if closed
+        N = N1; B = cross(T1, N1)
+        for i in 2:n
+            N, B = _tube_transport(N, B, _tube_tangent(path, i, n, closed))
+        end
+        N_end, _ = _tube_transport(N, B, T1)
+        twist = acos(clamp(dot(N1, N_end), -1.0, 1.0)) / n
+        dot(T1, cross(N1, N_end)) > 0 && (twist = -twist)
+    end
+    N = N1; B = cross(T1, N1)
+    for ring in 1:rings
+        i = ring > n ? 1 : ring
+        T = i == 1 ? T1 : _tube_tangent(path, i, n, closed)
+        if ring > n
+            N = N1; B = cross(T1, N1)
+        elseif i > 1
+            N, B = _tube_transport(N, B, T)
+        end
+        Nr, Br = N, B
+        if closed && 1 < ring <= n
+            Nr = _tube_rotate(N, T, twist * (ring - 1))
+            Br = cross(T, Nr)
         end
         for j in 0:radial_segments
             vj = j / radial_segments
             v = vj * 2π
-            normal = N * cos(v) + B * sin(v)
+            normal = Nr * cos(v) + Br * sin(v)
             p = path[i] + normal * radius
             _geometry_check_position(
                 Float64(p.x), Float64(p.y), Float64(p.z), "TubeGeometry")
-            vi = (i - 1) * rs1 + j + 1
+            vi = (ring - 1) * rs1 + j + 1
             pbase = 3vi - 2
             ubase = 2vi - 1
             positions[pbase] = p.x
@@ -552,13 +595,13 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             normals[pbase] = normal.x
             normals[pbase + 1] = normal.y
             normals[pbase + 2] = normal.z
-            uvs[ubase] = (i - 1) / (n - 1)
+            uvs[ubase] = (ring - 1) / (rings - 1)
             uvs[ubase + 1] = vj
         end
     end
 
     out = 1
-    for i in 0:n-2, j in 0:radial_segments-1
+    for i in 0:rings-2, j in 0:radial_segments-1
         a = i*rs1 + j + 1; b = (i+1)*rs1 + j + 1
         c = (i+1)*rs1 + j + 2; d = i*rs1 + j + 2
         indices[out] = a

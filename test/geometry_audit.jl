@@ -212,3 +212,45 @@ end
     @test_throws ArgumentError merge_vertices(BufferGeometry([0.0, 0, 0], [0.0], Float64[],
                                                              Int[], 1, 0))
 end
+
+@testset "geometry audit: closed TubeGeometry" begin
+    square = [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(1.0, 1, 0), Vec3(0.0, 1, 0)]
+    open_tube = TubeGeometry(square; radius=0.1, radial_segments=6)
+    tube = TubeGeometry(square; radius=0.1, radial_segments=6, closed=true)
+    rs1 = 7
+    @test open_tube.n_faces == 2 * 3 * 6
+    @test tube.n_vertices == 5 * rs1
+    @test tube.n_faces == 2 * 4 * 6
+    @test TubeGeometry([square; square[1:1]]; radius=0.1, radial_segments=6,
+                       closed=true).n_vertices == tube.n_vertices
+    @test_throws ArgumentError TubeGeometry(square[1:2]; closed=true)
+    # three.js TubeGeometry.js:114 duplicates the first ring with u = 1.
+    for j in 1:rs1
+        @test get_vertex(tube, j) == get_vertex(tube, 4 * rs1 + j)
+        @test get_normal(tube, j) == get_normal(tube, 4 * rs1 + j)
+        @test tube.uvs[2(4 * rs1 + j) - 1] == 1.0
+    end
+    # The closed path uses wrap-around tangents: the first ring is perpendicular to
+    # the chord from the last point to the second one.
+    t1 = normalize(square[2] - square[4])
+    for j in 1:rs1
+        @test abs(dot(get_vertex(tube, j) - square[1], t1)) < 1e-12
+    end
+
+    # Non-planar loop: twist correction keeps the seam continuous.
+    m = 48
+    knot = [Vec3((2 + cos(3t)) * cos(2t), (2 + cos(3t)) * sin(2t), sin(3t))
+            for t in range(0, 2π; length=m + 1)[1:m]]
+    kt = TubeGeometry(knot; radius=0.2, radial_segments=8, closed=true)
+    row = 9
+    jumps = [acos(clamp(dot(get_normal(kt, (r - 1) * row + 1),
+                            get_normal(kt, r * row + 1)), -1.0, 1.0)) for r in 1:m]
+    @test maximum(jumps) < 0.6
+    @test maximum(jumps) - minimum(jumps) < 0.5
+    for f in 1:kt.n_faces
+        i1, i2, i3 = get_face(kt, f)
+        a, b, c = get_vertex(kt, i1), get_vertex(kt, i2), get_vertex(kt, i3)
+        @test dot(cross(b - a, c - a), get_normal(kt, i1) + get_normal(kt, i2) +
+                                       get_normal(kt, i3)) > 0
+    end
+end
