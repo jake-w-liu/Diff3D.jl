@@ -180,3 +180,45 @@ end
     @test_throws "glTF animation output accessor componentType/normalized combination is invalid" load_gltf_asset(
         _loaders_audit_file(replace(doc, "CHANNELS" => bad), ".gltf"))
 end
+
+@testset "MTL and OBJ material statements follow three.js" begin
+    mktempdir() do dir
+        save_png(joinpath(dir, "d.png"), fill(0.25, 1, 1, 3))
+        save_png(joinpath(dir, "e.png"), fill(0.75, 1, 1, 3))
+        write(joinpath(dir, "m m.mtl"),
+              "# comment\nNEWMTL a b\nKD 1 0 0\nmap_kd -s 2 3 -o 0.5 0.25 d.png\n" *
+              "map_Kd e.png\nMap_Ke e.png\nnorm e.png\nmap_Ks d.png\nmap_d d.png\n" *
+              "newmtl plain\n")
+        mats = load_mtl(joinpath(dir, "m m.mtl"))
+        @test sort!(collect(keys(mats))) == ["a b", "plain"]
+        a = mats["a b"]
+        @test a.color == Color3(1.0, 0.0, 0.0)
+        @test sample_texture(a.map, 0.5, 0.5).r ≈ 0.25 atol=1/255
+        @test a.map.repeat == Vec2(2.0, 3.0) && a.map.offset == Vec2(0.5, 0.25)
+        @test a.map.colorspace === :srgb
+        @test a.emissive_map.colorspace === :srgb
+        @test a.normal_map.colorspace === :linear
+        @test a.specular_map.colorspace === :linear
+        @test a.alpha_map.colorspace === :linear && a.transparent
+        plain = mats["plain"]
+        @test plain.map === nothing && !plain.transparent
+        @test plain.specular == MeshPhongMaterial().specular
+        @test_throws "MTL map_Kd -s requires a number" load_mtl(
+            _loaders_audit_file("newmtl x\nmap_Kd -s big.png\n", ".mtl"))
+
+        write(joinpath(dir, "t.obj"),
+              "mtllib m m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl a b\nf 1 2 3\n")
+        geo, face_mtl, m2 = load_obj_groups(joinpath(dir, "t.obj"))
+        @test face_mtl == ["a b"]
+        @test haskey(m2, "a b")
+        write(joinpath(dir, "x.mtl"), "newmtl x\n")
+        write(joinpath(dir, "y.mtl"), "newmtl y\n")
+        write(joinpath(dir, "list.obj"),
+              "mtllib x.mtl y.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl y\nf 1 2 3\n")
+        @test sort!(collect(keys(load_obj_groups(joinpath(dir, "list.obj"))[3]))) ==
+              ["x", "y"]
+        write(joinpath(dir, "missing.obj"),
+              "mtllib nowhere.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+        @test_throws "OBJ mtllib file" load_obj_groups(joinpath(dir, "missing.obj"))
+    end
+end
