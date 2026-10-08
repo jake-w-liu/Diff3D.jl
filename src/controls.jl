@@ -497,27 +497,50 @@ function trackball_reset!(tc::TrackballControls)
     return tc
 end
 
-function _trackball_apply!(tc::TrackballControls, s::Spherical)
-    radius = max(s.radius, 0.0)
-    phi = clamp(s.phi, 1e-4, π - 1e-4)
-    position = tc.target + spherical_to_cartesian(
-        Spherical(radius, phi, s.theta))
+function _trackball_set_eye!(tc::TrackballControls, eye::Vec3)
     tc.camera.position = _checked_control_vec3(
-        position, "TrackballControls camera position")
+        tc.target + eye, "TrackballControls camera position")
     tc.camera.target = tc.target
     _sync_camera_rotation_from_view!(tc.camera)
     return tc
 end
 
+@inline _rotate_about_unit_axis(v::Vec3, k::Vec3, c, s) =
+    v * c + cross(k, v) * s + k * (dot(k, v) * (1 - c))
+
+"""
+    trackball_rotate!(tc, dx, dy)
+
+Rotate the camera about the target like three.js `TrackballControls` for a
+screen-space drag of `(dx, dy)` radians: the eye turns by `hypot(dx, dy)` about
+the axis perpendicular to the drag direction and the eye, and `camera.up` turns
+with it, so the camera can roll over the poles.
+"""
 function trackball_rotate!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
-    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
-    _checked_control_vec3(tc.target, "TrackballControls target")
+    cam = tc.camera
+    _, _, up = _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    target = _checked_control_vec3(tc.target, "TrackballControls target")
     checked_dx = _checked_control_scalar(dx, "TrackballControls x delta")
     checked_dy = _checked_control_scalar(dy, "TrackballControls y delta")
-    s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(
-        tc, Spherical(s.radius, s.phi + checked_dy, s.theta + checked_dx))
+    angle = hypot(checked_dx, checked_dy)
+    eye = cam.position - target
+    (angle > 0.0 && norm(eye) > 0.0) || return tc
+    eye_direction = normalize(eye)
+    up_direction = normalize(up)
+    sideways = cross(up_direction, eye_direction)
+    if norm(sideways) <= 1e-12
+        sideways, up_direction = _perp_basis(eye_direction)
+    end
+    move = up_direction * checked_dy + normalize(sideways) * checked_dx
+    axis = normalize(cross(move, eye_direction))
+    c, s = cos(angle), sin(angle)
+    new_up = _checked_control_vec3(
+        _rotate_about_unit_axis(up, axis, c, s), "TrackballControls camera up")
+    new_eye = _rotate_about_unit_axis(eye, axis, c, s)
+    _checked_control_vec3(target + new_eye, "TrackballControls camera position")
+    cam.up = new_up
+    return _trackball_set_eye!(tc, new_eye)
 end
 
 """Scale the camera distance from the trackball target. `factor < 1` zooms in."""
@@ -527,9 +550,8 @@ function trackball_zoom!(tc::TrackballControls, factor)
     _checked_control_vec3(tc.target, "TrackballControls target")
     checked_factor = _checked_control_scalar(
         factor, "TrackballControls zoom factor")
-    s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(
-        tc, Spherical(s.radius * checked_factor, s.phi, s.theta))
+    eye = tc.camera.position - tc.target
+    return _trackball_set_eye!(tc, eye * max(checked_factor, 0.0))
 end
 
 """Pan the trackball target and camera in the view plane."""

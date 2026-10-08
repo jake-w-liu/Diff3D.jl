@@ -315,3 +315,49 @@ end
     @test_throws ArgumentError ArrowHelper(Vec3(0.0, 0.0, 0.0))
     @test_throws ArgumentError ArrowHelper(Vec3(NaN, 0.0, 1.0))
 end
+
+@testset "anim audit: TrackballControls rotates freely like three.js" begin
+    # Port of TrackballControls.rotateCamera (staticMoving, rotateSpeed = 1).
+    function reference(position, target, up, dx, dy)
+        eye = position - target
+        angle = hypot(dx, dy)
+        eye_dir = normalize(eye)
+        up_dir = normalize(up)
+        side = normalize(cross(up_dir, eye_dir))
+        move = up_dir * dy + side * dx
+        axis = normalize(cross(move, eye))
+        q = Quaternion(axis.x * sin(angle / 2), axis.y * sin(angle / 2),
+                       axis.z * sin(angle / 2), cos(angle / 2))
+        m = quat_to_mat4(q)
+        return target + mat4_transform_direction(m, eye), mat4_transform_direction(m, up)
+    end
+    cam = PerspectiveCamera()
+    cam.position = Vec3(1.0, 2.0, 5.0)
+    cam.target = Vec3(0.5, 0.0, -1.0)
+    tc = TrackballControls(cam)
+    for (dx, dy) in ((0.3, 0.0), (0.0, -0.4), (0.25, 0.6), (-1.1, 0.2))
+        expected_position, expected_up = reference(cam.position, tc.target, cam.up, dx, dy)
+        trackball_rotate!(tc, dx, dy)
+        @test _anim_v3(cam.position) ≈ _anim_v3(expected_position) atol=1e-12
+        @test _anim_v3(cam.up) ≈ _anim_v3(expected_up) atol=1e-12
+        @test cam.target == tc.target
+    end
+
+    # Dragging past the pole carries the camera over it with a rotated up.
+    over = PerspectiveCamera()
+    over.position = Vec3(0.0, 0.0, 5.0)
+    over.target = Vec3(0.0, 0.0, 0.0)
+    otc = TrackballControls(over)
+    trackball_rotate!(otc, 0.0, pi / 2 + 0.3)
+    @test _anim_v3(over.position) ≈ [0.0, -5cos(0.3), -5sin(0.3)] atol=1e-12
+    @test _anim_v3(over.up) ≈ [0.0, -sin(0.3), cos(0.3)] atol=1e-12
+    trackball_zoom!(otc, 0.5)
+    @test _anim_v3(over.position) ≈ [0.0, -2.5cos(0.3), -2.5sin(0.3)] atol=1e-12
+    view = view_matrix(over)
+    @test all(isfinite, collect(view.e))
+
+    # Rejected input leaves the camera untouched.
+    snapshot = (over.position, over.up, otc.target)
+    @test_throws ArgumentError trackball_rotate!(otc, NaN, 0.0)
+    @test (over.position, over.up, otc.target) == snapshot
+end

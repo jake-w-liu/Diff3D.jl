@@ -18,8 +18,11 @@
   `loop=:once, clamp_when_finished=true`). Quaternion tracks keep the target's
   Euler order.
 - `OrbitControls` applies azimuth limits only when both are finite and clamps
-  the polar angle with three.js's `1e-6` pole margin. Fly and pointer-lock
-  controls now steer rotation-driven (glTF) cameras.
+  the polar angle with three.js's `1e-6` pole margin. `trackball_rotate!`
+  follows three.js `TrackballControls`: it turns the eye and `camera.up` about
+  the axis perpendicular to the drag, so the camera can pass over the poles
+  (a positive `dx` now orbits the camera to its left, like dragging right).
+  Fly and pointer-lock controls now steer rotation-driven (glTF) cameras.
 - `BoxHelper` bounds the object and its descendants in world space and
   `HemisphereLightHelper` sits at the light's world position, as in three.js;
   `CameraHelper` reports unbounded frusta explicitly.
