@@ -26,6 +26,8 @@ mutable struct ADVar <: Real
 end
 
 @inline _primal_value(value::ADVar) = value.val
+# Pixel centres are constants; keep them off the reverse tape.
+@inline _soft_pixel_center(::Type{ADVar}, index::Int) = Float64(index) - 0.5
 
 # Per-task stack of active tapes (operations recorded in creation = topological
 # order). Task-local so concurrent reverse_gradient calls (e.g. Threads.@threads

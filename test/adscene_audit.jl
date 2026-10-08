@@ -73,5 +73,6 @@ end
     end
     objective, params = adscene_soft_objective(2, 16)
     reverse_gradient(objective, params)
-    @test_opt_alloc 4_000_000 reverse_gradient(objective, params)
+    # Pixel centres and per-pixel seeds stay off the tape.
+    @test_opt_alloc 3_300_000 reverse_gradient(objective, params)
 end
