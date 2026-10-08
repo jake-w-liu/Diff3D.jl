@@ -91,3 +91,38 @@ end
                       LineBasicMaterial(color=red, linewidth=3.0, opacity=0.5))
     @test renderer_audit_center(line) ≈ [0.5, 0.0, 0.5]
 end
+
+@testset "Opaque mesh alphaTest uses material opacity" begin
+    red = Color3(1.0, 0.0, 0.0)
+    blue = [0.0, 0.0, 1.0]
+    rgba = ones(1, 1, 4); rgba[:, :, 2:3] .= 0.0; rgba[:, :, 4] .= 0.5
+    half_alpha = Texture(rgba; filter=:nearest, colorspace=:linear)
+    function center_with(material; mode=:flat, instanced=false)
+        geometry = PlaneGeometry(width=1.5, height=1.5)
+        object = instanced ? InstancedMesh(geometry, material, 1) : Mesh(geometry, material)
+        scene = Scene(background=Color3(0.0, 0.0, 1.0)); add!(scene, object)
+        target = RenderTarget(32, 32)
+        camera = renderer_audit_ortho()
+        if mode === :pooled
+            render_pooled!(target, scene, camera, RenderCache())
+        elseif mode === :tiled
+            render_tiled!(target, scene, camera; tiles=2)
+        else
+            render!(target, scene, camera; shading=mode)
+        end
+        return target.color[16, 16, :]
+    end
+    # three.js: diffuseColor.a = opacity · map.a · alphaMap; discard if below alphaTest.
+    for mode in (:flat, :smooth, :pooled, :tiled), instanced in (false, true)
+        @test center_with(MeshBasicMaterial(color=red, opacity=0.3, alpha_test=0.5);
+                          mode, instanced) == blue
+        @test center_with(MeshBasicMaterial(color=red, opacity=0.6, alpha_test=0.5);
+                          mode, instanced) == [1.0, 0.0, 0.0]
+        @test center_with(MeshBasicMaterial(map=half_alpha, opacity=0.9);
+                          mode, instanced) == [1.0, 0.0, 0.0]
+        @test center_with(MeshBasicMaterial(map=half_alpha, opacity=0.9, alpha_test=0.5);
+                          mode, instanced) == blue
+        @test center_with(MeshBasicMaterial(map=half_alpha, alpha_test=0.4);
+                          mode, instanced) == [1.0, 0.0, 0.0]
+    end
+end

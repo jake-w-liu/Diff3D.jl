@@ -658,8 +658,11 @@ end
                 v = a0*uv1.y + a1*uv2.y + a2*uv3.y
                 u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
                 v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
-                frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2)
-                frag_alpha >= alpha_test || continue
+                if blend || alpha_test > 0.0
+                    frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map,
+                                                 u, v, u2, v2)
+                    frag_alpha >= alpha_test || continue
+                end
                 base_albedo_map = has_albedo &&
                                   _albedo_map_before_lighting(material)
                 surface_color = vc
@@ -2514,8 +2517,11 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing
     alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
     alpha_test = material_alpha_test(mat)
-    alpha_base = Float64(alpha)
-    use_fragment_alpha = _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
+    # alphaTest compares opacity × texture alpha even when the mesh is opaque.
+    alpha_base = blend ? Float64(alpha) : Float64(material_opacity(mat))
+    use_fragment_alpha = (blend || alpha_test > 0.0) &&
+                         (_has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map))
+    use_fragment_alpha || alpha_base >= alpha_test || return nothing
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
     attr_tri = use_fragment_alpha ?
         (flat_attr_tri === nothing ? Vector{ShadeVtx}(undef, 3) :
@@ -2710,15 +2716,13 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                 xlo=xlo, xhi=xhi,
                                 clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
                                 iw1=iw1, iw2=iw2, iw3=iw3,
-                                depth_test=depth_test, depth_write=depth_write,
-                                alpha_test=alpha_test, alpha_base=alpha_base)
+                                depth_test=depth_test, depth_write=depth_write)
             else
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
                                 xlo=xlo, xhi=xhi,
-                                depth_test=depth_test, depth_write=depth_write,
-                                alpha_test=alpha_test, alpha_base=alpha_base)
+                                depth_test=depth_test, depth_write=depth_write)
             end
         end
     end

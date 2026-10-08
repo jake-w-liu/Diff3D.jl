@@ -1040,9 +1040,9 @@ end
 function _render_pooled_uses_fragment_alpha(geo::BufferGeometry, mat)
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     has_uvs || return false
-    albedo_map = _material_field(mat, :map)
-    alpha_map = _material_field(mat, :alpha_map)
-    _needs_fragment_alpha(material_alpha_test(mat), 1.0, albedo_map, alpha_map)
+    material_alpha_test(mat) > 0.0 || return false
+    return _has_texture_alpha(_material_field(mat, :map)) ||
+           _has_alpha_map(_material_field(mat, :alpha_map))
 end
 
 function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, world_mat::Mat4, mat,
@@ -1078,6 +1078,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                       colorbuf, geo, world_mat, mat, lights, cam_pos;
                       camera_view=view,
                       ortho_dir=ortho_dir)
+    Float64(material_opacity(mat)) >= material_alpha_test(mat) || return nothing
 
     @inbounds for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
