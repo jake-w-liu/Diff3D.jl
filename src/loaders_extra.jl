@@ -808,9 +808,8 @@ function load_png(path::String)
 end
 
 @inline function _is_jpeg_bytes(bytes::AbstractVector{UInt8})
-    length(bytes) >= 4 &&
-        bytes[1] == 0xff && bytes[2] == 0xd8 &&
-        bytes[end - 1] == 0xff && bytes[end] == 0xd9
+    length(bytes) >= 3 &&
+        bytes[1] == 0xff && bytes[2] == 0xd8 && bytes[3] == 0xff
 end
 
 """Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""

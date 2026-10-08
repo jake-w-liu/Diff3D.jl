@@ -55,3 +55,16 @@ end
     end
     @test load_ply(path).positions == [10.0, 0, 0, 0, 1, 0, 0, 0, 1]
 end
+
+const _LOADERS_AUDIT_JPEG = base64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/wAALCAAMABABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/ADSPEtt9iHzjpWFrPiW2+0/fHWuG0h3+xD526etYWsu/2n77dfWv/9k=")
+
+@testset "JPEG sniffing tolerates bytes after EOI" begin
+    clean = load_image(_loaders_audit_file(_LOADERS_AUDIT_JPEG, ".jpg"))
+    padded = vcat(_LOADERS_AUDIT_JPEG, UInt8[0x00, 0x00, 0x0a])
+    @test load_image(_loaders_audit_file(padded, ".jpg")) == clean
+    tex = TextureLoader(_loaders_audit_file(padded, ".jpg"))
+    @test size(tex.data) == size(clean)
+    @test_throws "unsupported image format" load_image(
+        _loaders_audit_file(UInt8[0xff, 0xd8, 0x00, 0x00], ".jpg"))
+end
