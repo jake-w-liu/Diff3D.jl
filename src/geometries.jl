@@ -1092,14 +1092,24 @@ _clamp_seg(s, lo::Int, label::String) = throw(ArgumentError("$label must be nume
 
 # ========================== Sphere Geometry ==========================
 
-function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
+function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
+                        phi_start=0.0, phi_length=2π, theta_start=0.0, theta_length=π)
     radius = _geometry_finite_float(radius, "SphereGeometry radius")
+    phi_start = _geometry_finite_float(phi_start, "SphereGeometry phi_start")
+    phi_length = _geometry_finite_float(phi_length, "SphereGeometry phi_length")
+    theta_start = _geometry_finite_float(theta_start, "SphereGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "SphereGeometry theta_length")
+    theta_end = min(theta_start + theta_length, Float64(π))
+    # three.js only collapses (skips) the pole triangles of a sweep reaching a pole.
+    top_pole = theta_start <= 0
+    bottom_pole = theta_end == Float64(π)
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
     width_segments = _clamp_seg(width_segments, 3, "SphereGeometry width_segments")
     height_segments = _clamp_seg(height_segments, 2, "SphereGeometry height_segments")
     n_verts = (height_segments + 1) * (width_segments + 1)
-    n_faces = 2 * width_segments * (height_segments - 1)
+    n_faces = 2 * width_segments * height_segments -
+              ((top_pole ? 1 : 0) + (bottom_pole ? 1 : 0)) * width_segments
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "SphereGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -1109,15 +1119,15 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
 
     for j in 0:height_segments
         v = j / height_segments
-        θ = v * π
+        θ = theta_start + v * theta_length
         sinθ = sin(θ)
         cosθ = cos(θ)
         # three.js centers each pole vertex's u between its ring neighbours.
-        u_offset = j == 0 ? 0.5 / width_segments :
-                   j == height_segments ? -0.5 / width_segments : 0.0
+        u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
+                   j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
         for i in 0:width_segments
             u = i / width_segments
-            ϕ = u * 2π
+            ϕ = phi_start + u * phi_length
             sinϕ = sin(ϕ)
             cosϕ = cos(ϕ)
 
@@ -1153,13 +1163,13 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             c = a + (width_segments + 1)
             d = c + 1
 
-            if j != 0
+            if j != 0 || !top_pole
                 indices[out] = a
                 indices[out + 1] = d
                 indices[out + 2] = b
                 out += 3
             end
-            if j != height_segments - 1
+            if j != height_segments - 1 || !bottom_pole
                 indices[out] = a
                 indices[out + 1] = c
                 indices[out + 2] = d
@@ -1233,7 +1243,10 @@ end
 # ========================== Cylinder Geometry ==========================
 
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
-                           radial_segments=32, height_segments=1, open_ended=false)
+                           radial_segments=32, height_segments=1, open_ended=false,
+                           theta_start=0.0, theta_length=2π)
+    theta_start = _geometry_finite_float(theta_start, "CylinderGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "CylinderGeometry theta_length")
     radius_top = _geometry_finite_float(radius_top, "CylinderGeometry radius_top")
     radius_bottom = _geometry_finite_float(radius_bottom, "CylinderGeometry radius_bottom")
     height = _geometry_finite_float(height, "CylinderGeometry height")
@@ -1279,7 +1292,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
 
         for x_seg in 0:radial_segments
             u = x_seg / radial_segments
-            θ = u * 2π
+            θ = u * theta_length + theta_start
             sinθ = sin(θ)
             cosθ = cos(θ)
 
@@ -1350,7 +1363,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
 
             for x_seg in 0:radial_segments
                 u = x_seg / radial_segments
-                θ = u * 2π
+                θ = u * theta_length + theta_start
                 sinθ = sin(θ)
                 cosθ = cos(θ)
                 x = cap_r * sinθ
@@ -1392,19 +1405,24 @@ end
 # ========================== Cone Geometry ==========================
 
 function ConeGeometry(; radius=1.0, height=1.0, radial_segments=32, height_segments=1,
-                       open_ended=false)
+                       open_ended=false, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "ConeGeometry radius")
     height = _geometry_finite_float(height, "ConeGeometry height")
     CylinderGeometry(; radius_top=0.0, radius_bottom=radius, height=height,
                       radial_segments=radial_segments, height_segments=height_segments,
-                      open_ended=open_ended)
+                      open_ended=open_ended, theta_start=theta_start,
+                      theta_length=theta_length)
 end
 
 # ========================== Torus Geometry ==========================
 
-function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
+function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segments=48,
+                       arc=2π, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "TorusGeometry radius")
     tube = _geometry_finite_float(tube, "TorusGeometry tube")
+    arc = _geometry_finite_float(arc, "TorusGeometry arc")
+    theta_start = _geometry_finite_float(theta_start, "TorusGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "TorusGeometry theta_length")
     _geometry_check_abs_sum(radius, tube, "TorusGeometry")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
@@ -1421,13 +1439,13 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
 
     for j in 0:radial_segments
         vj = j / radial_segments
-        v = vj * 2π
+        v = theta_start + vj * theta_length
         cosv = cos(v)
         sinv = sin(v)
         r_tube = radius + tube * cosv
         for i in 0:tubular_segments
             ui = i / tubular_segments
-            u = ui * 2π
+            u = ui * arc
             cosu = cos(u)
             sinu = sin(u)
             vi = j * (tubular_segments + 1) + i + 1
@@ -1590,7 +1608,7 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
         for j in 0:radial_segments
             vj = j / radial_segments
             v = vj * 2π
-            cx = tube * cos(v)
+            cx = -tube * cos(v)          # three.js TorusKnotGeometry.js phase
             cy = tube * sin(v)
             px = p1.x + cx * N_vec.x + cy * B_vec.x
             py = p1.y + cx * N_vec.y + cy * B_vec.y
@@ -1630,15 +1648,15 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     for i in 1:tubular_segments
         for j in 1:radial_segments
             a = (i - 1) * (radial_segments + 1) + j
-            b = a + 1
-            c = i * (radial_segments + 1) + j
-            d = c + 1
+            b = i * (radial_segments + 1) + j
+            c = b + 1
+            d = a + 1
             indices[out] = a
             indices[out + 1] = b
             indices[out + 2] = d
-            indices[out + 3] = a
-            indices[out + 4] = d
-            indices[out + 5] = c
+            indices[out + 3] = b
+            indices[out + 4] = c
+            indices[out + 5] = d
             out += 6
         end
     end
@@ -1648,9 +1666,12 @@ end
 
 # ========================== Ring Geometry ==========================
 
-function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
+function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1,
+                      theta_start=0.0, theta_length=2π)
     inner_radius = _geometry_finite_float(inner_radius, "RingGeometry inner_radius")
     outer_radius = _geometry_finite_float(outer_radius, "RingGeometry outer_radius")
+    theta_start = _geometry_finite_float(theta_start, "RingGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "RingGeometry theta_length")
     if !iszero(outer_radius)
         isfinite(inner_radius / outer_radius) ||
             throw(ArgumentError(
@@ -1674,7 +1695,7 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
         r = (1.0 - v) * inner_radius + v * outer_radius
         for i in 0:theta_segments
             u = i / theta_segments
-            θ = u * 2π
+            θ = theta_start + u * theta_length
             x = r * cos(θ)
             y = r * sin(θ)
             vi = j * (theta_segments + 1) + i + 1
@@ -1714,8 +1735,10 @@ end
 
 # ========================== Circle Geometry ==========================
 
-function CircleGeometry(; radius=1.0, segments=32)
+function CircleGeometry(; radius=1.0, segments=32, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "CircleGeometry radius")
+    theta_start = _geometry_finite_float(theta_start, "CircleGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "CircleGeometry theta_length")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
     segments = _clamp_seg(segments, 3, "CircleGeometry segments")
     n_verts = segments + 2
@@ -1736,7 +1759,7 @@ function CircleGeometry(; radius=1.0, segments=32)
     uvs_arr[2] = 0.5
 
     for i in 0:segments
-        θ = i / segments * 2π
+        θ = theta_start + i / segments * theta_length
         cosθ = cos(θ)
         sinθ = sin(θ)
         vi = i + 2

@@ -407,3 +407,58 @@ end
         @test dot(cross(b - a, c - a), get_normal(g, i1) + get_normal(g, i2) + get_normal(g, i3)) > 0
     end
 end
+
+@testset "geometry audit: three.js angular sweep parameters" begin
+    # SphereGeometry.js: phi/theta start+length; poles only when the sweep reaches them.
+    ws, hs = 6, 3
+    s = SphereGeometry(radius=2.0, width_segments=ws, height_segments=hs,
+                       phi_start=0.5, phi_length=π, theta_start=0.3, theta_length=1.2)
+    @test s.n_faces == 2 * ws * hs
+    for j in 0:hs, i in 0:ws
+        vi = j * (ws + 1) + i + 1
+        θ = 0.3 + j / hs * 1.2; ϕ = 0.5 + i / ws * π
+        @test _geometry_audit_close(get_vertex(s, vi),
+                                    Vec3(-2sin(θ) * cos(ϕ), 2cos(θ), 2sin(θ) * sin(ϕ)))
+        @test s.uvs[2vi - 1] ≈ i / ws                # no pole offset
+    end
+    @test SphereGeometry(width_segments=ws, height_segments=hs, theta_length=π / 2).n_faces ==
+          2 * ws * hs - ws
+    @test _geometry_audit_degenerate_faces(
+        SphereGeometry(width_segments=ws, height_segments=hs, theta_length=π / 2)) == 0
+
+    c = CylinderGeometry(radial_segments=4, theta_start=0.25, theta_length=π)
+    for x in 0:4
+        θ = 0.25 + x / 4 * π
+        @test _geometry_audit_close(get_vertex(c, x + 1), Vec3(sin(θ), 0.5, cos(θ)))
+    end
+    cone = ConeGeometry(radial_segments=4, theta_length=π / 2)
+    @test get_vertex(cone, 2 * 5).x ≈ 1.0 atol=1e-12
+
+    t = TorusGeometry(radius=2.0, tube=0.5, radial_segments=3, tubular_segments=4,
+                      arc=π, theta_start=0.2, theta_length=π / 2)
+    for j in 0:3, i in 0:4
+        v = 0.2 + j / 3 * π / 2; u = i / 4 * π
+        @test _geometry_audit_close(get_vertex(t, j * 5 + i + 1),
+            Vec3((2 + 0.5cos(v)) * cos(u), (2 + 0.5cos(v)) * sin(u), 0.5sin(v)))
+    end
+    @test TorusGeometry().n_vertices == (12 + 1) * (48 + 1)      # three.js defaults
+
+    r = RingGeometry(theta_segments=4, theta_start=0.5, theta_length=π)
+    @test _geometry_audit_close(get_vertex(r, 1), Vec3(0.5cos(0.5), 0.5sin(0.5), 0.0))
+    ci = CircleGeometry(segments=4, theta_start=0.5, theta_length=π)
+    @test _geometry_audit_close(get_vertex(ci, 6), Vec3(cos(0.5 + π), sin(0.5 + π), 0.0))
+    @test_throws ArgumentError SphereGeometry(phi_length=NaN)
+    @test_throws ArgumentError TorusGeometry(arc=Inf)
+end
+
+@testset "geometry audit: torus knot tube phase" begin
+    # TorusKnotGeometry.js: cx = -tube*cos(v), so the v = 0 seam faces the knot's inside.
+    k = TorusKnotGeometry(radius=1.0, tube=0.4, tubular_segments=32, radial_segments=6)
+    @test _geometry_audit_close(get_vertex(k, 1), Vec3(1.1, 0.0, 0.0))
+    @test _geometry_audit_degenerate_faces(k) == 0
+    for f in 1:k.n_faces
+        i1, i2, i3 = get_face(k, f)
+        a, b, c = get_vertex(k, i1), get_vertex(k, i2), get_vertex(k, i3)
+        @test dot(cross(b - a, c - a), get_normal(k, i1) + get_normal(k, i2) + get_normal(k, i3)) > 0
+    end
+end
