@@ -222,3 +222,17 @@ end
         @test_throws "OBJ mtllib file" load_obj_groups(joinpath(dir, "missing.obj"))
     end
 end
+
+@testset "ASCII STL keywords and empty input" begin
+    facet = "facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\n" *
+            "vertex 0 1 0\nendloop\nendfacet\n"
+    geo = load_stl(_loaders_audit_file(
+        "solid x\n" * replace(facet, "outer loop\n" => "outer loop\nvertexnormals 9 9 9\n") *
+        "endsolid x\n", ".stl"))
+    @test geo.n_faces == 1
+    @test geo.positions == [0.0, 0, 0, 1, 0, 0, 0, 1, 0]
+    @test load_stl(_loaders_audit_file("solid empty\nendsolid empty\n", ".stl")).n_faces == 0
+    @test load_stl(_loaders_audit_file("\ufeffsolid empty\nendsolid empty\n", ".stl")).n_faces == 0
+    @test_throws "is not an STL file" load_stl(_loaders_audit_file("hello world\n", ".stl"))
+    @test_throws "is not an STL file" load_stl(_loaders_audit_file("", ".stl"))
+end

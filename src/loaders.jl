@@ -290,12 +290,17 @@ for smooth shading.
 function load_stl(path::String)
     _looks_binary_stl(path) && return _load_stl_binary(path)
     geo = _load_stl_ascii(path)
-    # Defense in depth: a non-empty file yielding zero faces was almost
-    # certainly misdetected as ASCII (or is corrupt) — warn instead of
-    # silently returning an empty mesh.
-    geo.n_faces == 0 && filesize(path) > 0 &&
-        @warn "load_stl: parsed zero faces from non-empty file" path
+    # Only an ASCII solid may legitimately contain no facets.
+    geo.n_faces == 0 &&
+        !_stl_keyword(lstrip(c -> isspace(c) || c == '\ufeff', read(path, String)), "solid") &&
+        error("$path is not an STL file: no binary layout, solid header, or facets")
     return geo
+end
+
+@inline function _stl_keyword(line::AbstractString, word::String)
+    startswith(line, word) || return false
+    n = ncodeunits(word)
+    return ncodeunits(line) == n || isspace(line[nextind(line, n)])
 end
 
 function _load_stl_binary(path::String)
@@ -370,7 +375,7 @@ function _load_stl_ascii(path::String)
     open(path, "r") do io
     for raw in eachline(io)
         line = strip(raw)
-        if startswith(line, "facet normal")
+        if _stl_keyword(line, "facet normal")
             !in_facet || error("ASCII STL nested facet is invalid")
             first_state = _stl_required_token_bounds(
                 line, firstindex(line), "ASCII STL facet normal requires 3 components")
@@ -392,7 +397,7 @@ function _load_stl_ascii(path::String)
             )
             in_facet = true
             vertices_in_facet = 0
-        elseif startswith(line, "vertex")
+        elseif _stl_keyword(line, "vertex")
             in_facet || error("ASCII STL vertex appears outside a facet")
             first_state = _stl_required_token_bounds(
                 line, firstindex(line), "ASCII STL vertex requires 3 coordinates")
@@ -410,7 +415,7 @@ function _load_stl_ascii(path::String)
             push!(normals, cur_n[1], cur_n[2], cur_n[3])
             vi += 1; push!(indices, vi)
             vertices_in_facet += 1
-        elseif startswith(line, "endfacet")
+        elseif _stl_keyword(line, "endfacet")
             in_facet || error("ASCII STL endfacet appears outside a facet")
             vertices_in_facet == 3 ||
                 error("ASCII STL facet has $vertices_in_facet vertices; expected 3")
