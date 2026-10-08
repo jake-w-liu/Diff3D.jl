@@ -210,3 +210,9 @@ _anim_v3(v) = [v.x, v.y, v.z]
     @test _anim_v3(damped.target) ≈ [0.0, 0.0, -2.0] atol=1e-8
     @test MapControls(tilted_camera(); screen_space_panning=true).screen_space_panning
 end
+
+@testset "anim audit: CameraHelper rejects an unbounded frustum clearly" begin
+    @test CameraHelper(PerspectiveCamera(far=100.0)).geometry.n_vertices == 24
+    @test_throws "CameraHelper requires a camera with a finite, invertible frustum" CameraHelper(
+        PerspectiveCamera(far=Inf))
+end

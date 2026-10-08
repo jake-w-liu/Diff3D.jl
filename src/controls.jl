@@ -2683,6 +2683,8 @@ function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
         corner(-1,-1, 1), corner(1,-1, 1),
         corner(1,1, 1), corner(-1,1, 1),
     )
+    all(isfinite, pos) || throw(ArgumentError(
+        "CameraHelper requires a camera with a finite, invertible frustum"))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
 end
 
