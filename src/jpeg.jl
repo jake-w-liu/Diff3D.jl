@@ -585,6 +585,33 @@ function _jpeg_initial_setup!(st::_JpegState)
         total_blocks = _checked_add_int(total_blocks,
                                         _checked_mul_int(wb, hb, "JPEG image"),
                                         "JPEG image")
+    end
+    # Fail fast on declared-giant frames before allocating the coefficient
+    # planes: the first scan must carry at least one bit of entropy data per
+    # block it covers (two bits for sequential scans, where each block at
+    # minimum encodes a DC size code and an EOB).  Byte stuffing and markers
+    # can only inflate that bound, so fewer remaining bytes than the bound
+    # guarantees a truncated stream.
+    if length(st.scan_comps) == 1
+        comp0 = st.comps[st.scan_comps[1]]
+        scan_blocks = comp0.width_in_blocks * comp0.height_in_blocks
+    else
+        mcus = cld(st.W, Int(maxh) * 8) * cld(st.H, Int(maxv) * 8)
+        per_mcu = 0
+        for cidx in st.scan_comps
+            per_mcu += Int(st.comps[cidx].h) * Int(st.comps[cidx].v)
+        end
+        scan_blocks = mcus * per_mcu
+    end
+    minbits = st.progressive ? 1 : 2
+    scan_blocks = _checked_mul_int(scan_blocks, minbits, "JPEG image")
+    (length(st.data) - st.pos + 1) * 8 < scan_blocks &&
+        error("JPEG entropy-coded data is truncated or corrupt")
+    for comp in st.comps
+        wb = comp.width_in_blocks +
+             mod(comp.h - comp.width_in_blocks % comp.h, comp.h)
+        hb = comp.height_in_blocks +
+             mod(comp.v - comp.height_in_blocks % comp.v, comp.v)
         comp.coefs = zeros(Int16, 64, wb, hb)
     end
     st.total_imcu_rows = cld(st.H, Int(maxv) * 8)
