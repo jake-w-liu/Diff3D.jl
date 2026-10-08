@@ -72,7 +72,7 @@ struct _JpegHuffTbl
     maxcode::Vector{Int32}         # [l] largest code of length l, -1 if none
     valoffset::Vector{Int32}
     huffval::Vector{UInt8}
-    lookup::Vector{Int32}          # 256-entry lookahead: (len << 8) | symbol
+    lookup::Vector{Int32}          # 512-entry lookahead: (len << 8) | symbol
 end
 
 mutable struct _JpegState
@@ -225,6 +225,16 @@ end
     return Int32(c)
 end
 
+# Load 8 bytes from data starting at p (1-based) as a big-endian UInt64 when
+# none of them is 0xFF; returns (chunk, true) or (0, false).
+@inline function _jpeg_clean8(data::Vector{UInt8}, p::Int)
+    v = unsafe_load(Ptr{UInt64}(pointer(data, p)))
+    x = v ⊻ 0xFFFFFFFFFFFFFFFF
+    (x - 0x0101010101010101) & ~x & 0x8080808080808080 != 0 &&
+        return UInt64(0), false
+    return ntoh(v), true
+end
+
 # Ensure at least n bits (n <= 57) are buffered.  libjpeg-turbo stuffs zero
 # bits when the terminating marker is reached; this decoder treats running out
 # of entropy data as corruption instead.
@@ -234,7 +244,26 @@ end
         error("JPEG entropy-coded data is truncated or corrupt")
     buf = st.bitbuf
     left = st.nbits
+    data = st.data
     while left < n
+        p = st.epos
+        if p + 7 <= length(data)
+            chunk, clean = _jpeg_clean8(data, p)
+            if clean
+                # stuffing-free run: take as many whole bytes as fit
+                k = min(8, (64 - left) >> 3)
+                if k == 8
+                    buf = chunk
+                    left = 64
+                    st.epos = p + 8
+                else
+                    buf = (buf << (8 * k)) | (chunk >> (64 - 8 * k))
+                    left += 8 * k
+                    st.epos = p + k
+                end
+                continue
+            end
+        end
         b = _jpeg_entropy_byte(st)
         b >= 0 || error("JPEG entropy-coded data is truncated or corrupt")
         buf = (buf << 8) | UInt64(b % UInt8)
@@ -296,12 +325,12 @@ function _jpeg_make_hufftbl(bits::Vector{UInt8}, huffval::Vector{UInt8},
     end
     valoffset[17] = 0
     maxcode[17] = Int32(0x000FFFFF)
-    lookup = fill(Int32(9) << 8, 256)
+    lookup = fill(Int32(10) << 8, 512)
     p = 1
-    @inbounds for l in 1:8
+    @inbounds for l in 1:9
         for _ in 1:bits[l + 1]
-            lb = Int32(huffcode[p]) << (8 - l)
-            for _ in 1:(1 << (8 - l))
+            lb = Int32(huffcode[p]) << (9 - l)
+            for _ in 1:(1 << (9 - l))
                 lookup[lb + 1] = (Int32(l) << 8) | Int32(huffval[p])
                 lb += 1
             end
@@ -321,7 +350,25 @@ end
 @inline function _jpeg_fill_soft(st::_JpegState, n::Int)
     left = st.nbits
     buf = st.bitbuf
+    data = st.data
     while left < n && st.unread_marker == 0
+        p = st.epos
+        if p + 7 <= length(data)
+            chunk, clean = _jpeg_clean8(data, p)
+            if clean
+                k = min(8, (64 - left) >> 3)
+                if k == 8
+                    buf = chunk
+                    left = 64
+                    st.epos = p + 8
+                else
+                    buf = (buf << (8 * k)) | (chunk >> (64 - 8 * k))
+                    left += 8 * k
+                    st.epos = p + k
+                end
+                continue
+            end
+        end
         b = _jpeg_entropy_byte(st)
         b < 0 && break
         buf = (buf << 8) | UInt64(b % UInt8)
@@ -353,13 +400,13 @@ end
 end
 
 @inline function _jpeg_huff_decode(st::_JpegState, tbl::_JpegHuffTbl)
-    if st.nbits < 8
-        _jpeg_fill_soft(st, 8)
-        st.nbits < 8 && return _jpeg_huff_slow(st, tbl, 1)
+    if st.nbits < 9
+        _jpeg_fill_soft(st, 9)
+        st.nbits < 9 && return _jpeg_huff_slow(st, tbl, 1)
     end
-    look = Int32((st.bitbuf >> (st.nbits - 8)) & 0xFF)
+    look = Int32((st.bitbuf >> (st.nbits - 9)) & 0x1FF)
     @inbounds nb = tbl.lookup[look + 1]
-    nb < (Int32(9) << 8) || return _jpeg_huff_slow(st, tbl, 9)
+    nb < (Int32(10) << 8) || return _jpeg_huff_slow(st, tbl, 10)
     st.nbits -= Int(nb >> 8)
     return nb % Int32(256)
 end
