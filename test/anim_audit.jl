@@ -115,3 +115,43 @@ end
     mixer_set_time!(AnimationMixer(AnimationClip("zero", [tr]; repetitions=0)), 0.5)
     @test mesh.position.x ≈ 2.5
 end
+
+@testset "anim audit: first-person controls drive rotation-driven cameras" begin
+    function camera_pair()
+        rc = PerspectiveCamera(rotation_driven=true)
+        rc.position = Vec3(1.0, 2.0, 5.0)
+        rc.rotation = Euler(0.2, 0.4, 0.0, :YXZ)
+        plain = PerspectiveCamera()
+        plain.position = rc.position
+        plain.target = Diff3D._camera_control_target(rc)
+        plain.up = Vec3(0.0, 1.0, 0.0)
+        @test collect(view_matrix(rc).e) ≈ collect(view_matrix(plain).e) atol=1e-9
+        return rc, plain
+    end
+    rc, plain = camera_pair()
+    before = view_matrix(rc)
+    fly_rotate!(FlyControls(rc), 0.5, 0.1)
+    fly_rotate!(FlyControls(plain), 0.5, 0.1)
+    @test view_matrix(rc) != before
+    @test collect(view_matrix(rc).e) ≈ collect(view_matrix(plain).e) atol=1e-9
+    fly_translate!(FlyControls(rc), 1.0, 0.5, 0.25)
+    fly_translate!(FlyControls(plain), 1.0, 0.5, 0.25)
+    @test collect(view_matrix(rc).e) ≈ collect(view_matrix(plain).e) atol=1e-9
+
+    rc, plain = camera_pair()
+    before = view_matrix(rc)
+    for cam in (rc, plain)
+        pc = PointerLockControls(cam)
+        pointerlock_lock!(pc)
+        pointerlock_move!(pc, 120.0, -40.0)
+    end
+    @test view_matrix(rc) != before
+    @test collect(view_matrix(rc).e) ≈ collect(view_matrix(plain).e) atol=1e-9
+
+    # Rejected input leaves a rotation-driven camera untouched.
+    rc, _ = camera_pair()
+    snapshot = (rc.position, rc.target, rc.up, rc.rotation)
+    @test_throws ArgumentError fly_rotate!(FlyControls(rc), NaN, 0.0)
+    @test_throws ArgumentError fly_translate!(FlyControls(rc), Inf, 0.0, 0.0)
+    @test (rc.position, rc.target, rc.up, rc.rotation) == snapshot
+end

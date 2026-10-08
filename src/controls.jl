@@ -533,6 +533,15 @@ mutable struct FlyControls
     camera::PerspectiveCamera
 end
 
+# A rotation-driven camera renders from `rotation`, so first-person controls
+# derive their look target from it before moving (keeping `up` as the world-up
+# hint, like a target-driven camera), and write the result back to `rotation`.
+function _first_person_view_from_rotation!(cam::PerspectiveCamera)
+    cam.rotation_driven || return cam
+    cam.target = _camera_control_target(cam)
+    return cam
+end
+
 """Translate the camera (and its target) along forward/right/up axes."""
 function fly_translate!(fc::FlyControls, forward, right, up)
     cam = fc.camera
@@ -541,6 +550,7 @@ function fly_translate!(fc::FlyControls, forward, right, up)
         forward, "FlyControls forward delta")
     checked_right = _checked_control_scalar(right, "FlyControls right delta")
     checked_up = _checked_control_scalar(up, "FlyControls up delta")
+    _first_person_view_from_rotation!(cam)
     f = _direction_between(cam.position, cam.target)
     r, u = _camera_pan_basis(cam, cam.target)
     shift = f * checked_forward + r * checked_right + u * checked_up
@@ -559,6 +569,7 @@ function fly_rotate!(fc::FlyControls, yaw, pitch)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_yaw = _checked_control_scalar(yaw, "FlyControls yaw")
     checked_pitch = _checked_control_scalar(pitch, "FlyControls pitch")
+    _first_person_view_from_rotation!(cam)
     dist = norm(cam.target - cam.position)
     dir = normalize(cam.target - cam.position)
     s = cartesian_to_spherical(dir)
@@ -567,6 +578,7 @@ function fly_rotate!(fc::FlyControls, yaw, pitch)
     target = cam.position + spherical_to_cartesian(s2) * dist
     cam.target = _checked_control_vec3(
         target, "FlyControls camera target")
+    _sync_camera_rotation_from_view!(cam)
     return fc
 end
 
@@ -615,6 +627,7 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     checked_y = _checked_control_scalar(
         movement_y, "PointerLockControls movement_y")
     cam = pc.camera
+    _first_person_view_from_rotation!(cam)
     dir, dist = _pointerlock_direction_distance(cam)
     s = cartesian_to_spherical(dir)
     yaw = -checked_x * 0.002 * speed
@@ -625,6 +638,7 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     target = cam.position + spherical_to_cartesian(s2) * dist
     cam.target = _checked_control_vec3(
         target, "PointerLockControls camera target")
+    _sync_camera_rotation_from_view!(cam)
     return pc
 end
 
