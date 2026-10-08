@@ -198,7 +198,7 @@ function _validate_raycaster!(rc::Raycaster)
 end
 
 Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
-          layers::Layers=layers_enable_all!(Layers()),
+          layers::Layers=Layers(),
           point_threshold=1.0, line_threshold=1.0,
           camera::Union{Nothing,AbstractCamera}=nothing) = begin
     n, f = _raycaster_range(near, far)
@@ -484,8 +484,9 @@ function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
         t, dist = _ray_point_distance(o, d, p)
         if dist < thr && rc.near <= t <= rc.far
-            # Report the point itself as the hit location; face_index = vertex index.
-            push!(hits, Intersection(t, p, obj, vi, instance_id))
+            # Hit location is the closest ray point (three.js Points testPoint);
+            # face_index = vertex index.
+            push!(hits, Intersection(t, o + d * t, obj, vi, instance_id))
         end
     end
     return hits
@@ -508,7 +509,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
-        if dist < thr && rc.near <= t <= rc.far
+        if dist <= thr && rc.near <= t <= rc.far
             # face_index = the segment's start vertex index (three.js index).
             push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
         end
@@ -519,7 +520,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
-        if dist < thr && rc.near <= t <= rc.far
+        if dist <= thr && rc.near <= t <= rc.far
             push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
         end
     end
@@ -630,8 +631,19 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         _raycast_lines!(hits,rc,obj,geo,wm,morphed_positions,mode)
     elseif obj isa Sprite
         _raycast_sprite!(hits,rc,obj,wm)
+    elseif obj isa LOD
+        _raycast_lod!(hits,rc,obj,wm)
     end
     return hits
+end
+
+# three.js LOD.raycast: test only the level chosen for the ray-origin distance.
+function _raycast_lod!(hits::Vector{Intersection}, rc::Raycaster, lod::LOD,
+                       wm::Mat4{Float64})
+    isempty(lod.levels) && return hits
+    origin = Vec3(wm.e[13], wm.e[14], wm.e[15])
+    level = lod_select(lod, min(distance(rc.ray.origin, origin), floatmax(Float64)))
+    return _raycast_object!(hits, rc, level, wm * compute_local_matrix(level))
 end
 
 _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D) =
@@ -677,7 +689,9 @@ configure their camera with `set_from_camera!` or `Raycaster(...; camera=camera)
 Objects whose layer mask shares no channel with `rc.layers` are skipped (their
 children are still traversed when `recursive`). Invisible objects are skipped
 hierarchically, matching the renderer: an object inside a `visible = false`
-ancestor is not pickable.
+ancestor is not pickable. Like three.js `LOD.raycast`, an `LOD` itself tests the
+level `lod_select` picks for the ray-origin distance; a recursive cast then also
+visits the LOD's visible children, so that level can be reported twice.
 """
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     _validate_raycaster!(rc)
