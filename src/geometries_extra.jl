@@ -12,39 +12,48 @@
 _polyhedron_bary(A::Vec3, B::Vec3, C::Vec3, cols::Int, p::Int, q::Int) =
     A * ((cols - p - q) / cols) + B * (p / cols) + C * (q / cols)
 
-function _polyhedron_emit_vertex!(positions::Vector{Float64}, normals::Vector{Float64},
-                                  uvs::Vector{Float64}, vi::Int, v::Vec3,
-                                  radius)
-    d = normalize(v)                  # unit direction, independent of radius
-    p = d * radius
-    next_vi = vi + 1
-    pbase = 3next_vi - 2
-    ubase = 2next_vi - 1
-    positions[pbase] = p.x
-    positions[pbase + 1] = p.y
-    positions[pbase + 2] = p.z
-    normals[pbase] = d.x
-    normals[pbase + 1] = d.y
-    normals[pbase + 2] = d.z
-    # Derive the spherical UV from the unit direction, not p.y/radius:
-    # at radius=0 the latter is 0/0 = NaN, while asin(d.y) stays finite.
-    uvs[ubase] = atan(d.z, d.x) / (2π) + 0.5
-    uvs[ubase + 1] = asin(clamp(d.y, -1.0, 1.0)) / π + 0.5
-    return next_vi
+# three.js PolyhedronGeometry `azimuth`: angle about +y measured from -x.
+@inline _polyhedron_azimuth(v::Vec3) = atan(v.z, -v.x)
+
+@inline function _polyhedron_write!(data::Vector{Float64}, vi::Int, v::Vec3)
+    base = 3vi - 2
+    data[base] = v.x
+    data[base + 1] = v.y
+    data[base + 2] = v.z
+    return nothing
 end
 
 function _polyhedron_emit_triangle!(positions::Vector{Float64}, normals::Vector{Float64},
                                     uvs::Vector{Float64}, indices::Vector{Int},
                                     vi::Int, out::Int, a::Vec3, b::Vec3,
-                                    c::Vec3, radius)
-    start = vi + 1
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, a, radius)
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, b, radius)
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, c, radius)
-    indices[out] = start
-    indices[out + 1] = start + 1
-    indices[out + 2] = start + 2
-    return vi, out + 3
+                                    c::Vec3, radius::Float64, flat::Bool)
+    # Unit directions are radius independent; `w` follows the sign of the
+    # radius like three.js's projected positions, but stays finite at zero.
+    da = normalize(a); db = normalize(b); dc = normalize(c)
+    s = radius < 0 ? -1.0 : 1.0
+    wa = da * s; wb = db * s; wc = dc * s
+    face_normal = flat ? normalize(cross(db - da, dc - da)) : Vec3(0.0, 0.0, 0.0)
+    centroid_azimuth = _polyhedron_azimuth(wa + wb + wc)
+    us = (0.0, 0.0, 0.0)
+    for (k, (d, w)) in enumerate(((da, wa), (db, wb), (dc, wc)))
+        dst = vi + k
+        _polyhedron_write!(positions, dst, d * radius)
+        _polyhedron_write!(normals, dst, flat ? face_normal : w)
+        u = _polyhedron_azimuth(w) / 2 / π + 0.5
+        (centroid_azimuth < 0 && u == 1) && (u -= 1)
+        (w.x == 0 && w.z == 0) && (u = centroid_azimuth / 2 / π + 0.5)
+        us = Base.setindex(us, u, k)
+        uvs[2dst] = asin(clamp(w.y, -1.0, 1.0)) / π + 0.5
+    end
+    # Faces straddling the azimuth seam (three.js `correctSeam`).
+    if maximum(us) > 0.9 && minimum(us) < 0.1
+        us = map(u -> u < 0.2 ? u + 1 : u, us)
+    end
+    for k in 1:3
+        uvs[2(vi + k) - 1] = us[k]
+        indices[out + k - 1] = vi + k
+    end
+    return vi + 3, out + 3
 end
 
 function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTuple{3,Int}};
@@ -77,6 +86,8 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
     indices = Vector{Int}(undef, index_len)
     vi = 0
     out = 1
+    # three.js shades detail 0 flat (computeVertexNormals) and smooth otherwise.
+    flat = detail == 0
     for (i1, i2, i3) in base_faces
         A = verts[i1]; B = verts[i2]; C = verts[i3]
         for i in 0:cols-1, j in 0:(cols-1-i)
@@ -85,14 +96,14 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
                 _polyhedron_bary(A, B, C, cols, i, j),
                 _polyhedron_bary(A, B, C, cols, i + 1, j),
                 _polyhedron_bary(A, B, C, cols, i, j + 1),
-                radius)
+                radius, flat)
             if j < cols - 1 - i
                 vi, out = _polyhedron_emit_triangle!(
                     positions, normals, uvs, indices, vi, out,
                     _polyhedron_bary(A, B, C, cols, i + 1, j),
                     _polyhedron_bary(A, B, C, cols, i + 1, j + 1),
                     _polyhedron_bary(A, B, C, cols, i, j + 1),
-                    radius)
+                    radius, flat)
             end
         end
     end
@@ -2065,74 +2076,91 @@ end
 # ========================== CapsuleGeometry ==========================
 # Cylinder of `length` capped by two hemispheres of `radius`, revolved about y.
 
-function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
+function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=4, radial_segments=8,
+                         height_segments=1)
     radius = _geometry_finite_float(radius, "CapsuleGeometry radius")
-    length = _geometry_finite_float(length, "CapsuleGeometry length")
+    length = max(0.0, _geometry_finite_float(length, "CapsuleGeometry length"))
     _geometry_check_abs_sum(length * 0.5, radius, "CapsuleGeometry")
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
     cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
+    height_segments = _clamp_seg(height_segments, 1, "CapsuleGeometry height_segments")
     half = length / 2
-    np = _geometry_checked_mul(
-        2, cap_segments + 1, "CapsuleGeometry profile point count")
-    n_verts = _geometry_checked_mul(
-        radial_segments + 1, np, "CapsuleGeometry vertex count")
+    rows = _geometry_checked_add(
+        _geometry_checked_mul(2, cap_segments, "CapsuleGeometry row count"),
+        height_segments, "CapsuleGeometry row count")
+    row = radial_segments + 1
+    n_verts = _geometry_checked_mul(row, rows + 1, "CapsuleGeometry vertex count")
     n_faces = _geometry_checked_mul(
-        2 * radial_segments, np - 1, "CapsuleGeometry face count")
+        2 * radial_segments, rows, "CapsuleGeometry face count")
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "CapsuleGeometry")
-    profile_r = Vector{Float64}(undef, np)
-    profile_y = Vector{Float64}(undef, np)
-    for i in 0:cap_segments                          # top hemisphere: pole → equator
-        a = i/cap_segments * (π/2)
-        idx = i + 1
-        profile_r[idx] = radius * sin(a)
-        profile_y[idx] = half + radius * cos(a)
-    end
-    for i in 0:cap_segments                          # bottom hemisphere: equator → pole
-        a = i/cap_segments * (π/2)
-        idx = cap_segments + i + 2
-        profile_r[idx] = radius * cos(a)
-        profile_y[idx] = -half - radius * sin(a)
-    end
     positions = Vector{Float64}(undef, position_len)
     normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    @inbounds for s in 0:radial_segments
-        u = s / radial_segments
-        phi = u * 2π
-        c = cos(phi); sn = sin(phi)
-        for j in 1:np
-            r = profile_r[j]
-            y = profile_y[j]
-            x = r*c; z = -r*sn
-            cy = clamp(y, -half, half)               # nearest point on the spine
-            nx = x; ny = y - cy; nz = z
+    # three.js measures v by arc length; scale first so huge capsules stay finite.
+    scale = max(abs(radius), length)
+    cap_arc = scale > 0 ? (π / 2) * (radius / scale) : 0.0
+    body_arc = scale > 0 ? length / scale : 0.0
+    total_arc = 2cap_arc + body_arc
+    @inbounds for iy in 0:rows
+        if iy <= cap_segments
+            t = iy / cap_segments
+            angle = t * (π / 2)
+            profile_y = -half - radius * cos(angle)
+            profile_r = radius * sin(angle)
+            normal_y = -radius * cos(angle)
+            arc = t * cap_arc
+        elseif iy <= cap_segments + height_segments
+            t = (iy - cap_segments) / height_segments
+            profile_y = -half + t * length
+            profile_r = radius
+            normal_y = 0.0
+            arc = cap_arc + t * body_arc
+        else
+            t = (iy - cap_segments - height_segments) / cap_segments
+            angle = t * (π / 2)
+            profile_y = half + radius * sin(angle)
+            profile_r = radius * cos(angle)
+            normal_y = radius * sin(angle)
+            arc = cap_arc + body_arc + t * cap_arc
+        end
+        v = total_arc != 0 ? clamp(arc / total_arc, 0.0, 1.0) : iy / rows
+        u_offset = iy == 0 ? 0.5 / radial_segments :
+                   iy == rows ? -0.5 / radial_segments : 0.0
+        for ix in 0:radial_segments
+            u = ix / radial_segments
+            theta = u * 2π
+            x = -profile_r * cos(theta)
+            z = profile_r * sin(theta)
+            nx = x; ny = normal_y; nz = z
             nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
-            vi = s * np + j
+            vi = iy * row + ix + 1
             pbase = 3vi - 2
             positions[pbase] = x
-            positions[pbase + 1] = y
+            positions[pbase + 1] = profile_y
             positions[pbase + 2] = z
             normals[pbase] = nx
             normals[pbase + 1] = ny
             normals[pbase + 2] = nz
             ubase = 2vi - 1
-            uvs[ubase] = u
-            uvs[ubase + 1] = (j - 1) / (np - 1)
+            uvs[ubase] = u + u_offset
+            uvs[ubase + 1] = v
         end
     end
     out = 1
-    @inbounds for s in 0:radial_segments-1, j in 0:np-2
-        a = s*np + j + 1; b = (s+1)*np + j + 1
-        c = (s+1)*np + j + 2; d = s*np + j + 2
-        indices[out] = a
-        indices[out + 1] = d
-        indices[out + 2] = b
-        indices[out + 3] = b
-        indices[out + 4] = d
-        indices[out + 5] = c
+    @inbounds for iy in 1:rows, ix in 0:radial_segments-1
+        i1 = (iy - 1) * row + ix + 1
+        i2 = i1 + 1
+        i3 = iy * row + ix + 1
+        i4 = i3 + 1
+        indices[out] = i1
+        indices[out + 1] = i2
+        indices[out + 2] = i3
+        indices[out + 3] = i2
+        indices[out + 4] = i4
+        indices[out + 5] = i3
         out += 6
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
