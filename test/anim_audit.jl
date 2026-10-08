@@ -235,3 +235,43 @@ end
     @test Diff3D._orbit_spherical(pinned).phi ≈ 1e-6 rtol=1e-3
     @test all(isfinite, collect(view_matrix(pinned.camera).e))
 end
+
+@testset "anim audit: BoxHelper and HemisphereLightHelper use world space" begin
+    _corners(h) = (p = h.geometry.positions;
+                   ([minimum(p[1:3:end]), minimum(p[2:3:end]), minimum(p[3:3:end])],
+                    [maximum(p[1:3:end]), maximum(p[2:3:end]), maximum(p[3:3:end])]))
+    # three.js BoxHelper: Box3.setFromObject (world transforms, descendants).
+    root = Group()
+    root.position = Vec3(10.0, 0.0, 0.0)
+    root.scale = Vec3(2.0, 2.0, 2.0)
+    mesh = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshBasicMaterial())
+    mesh.position = Vec3(0.0, 1.0, 0.0)
+    mesh.rotation = Euler(0.0, pi / 4, 0.0)
+    add!(root, mesh)
+    lo, hi = _corners(BoxHelper(mesh))
+    r = sqrt(2.0) / 2 * 2
+    @test lo ≈ [10.0 - r, 1.0, -r] atol=1e-12
+    @test hi ≈ [10.0 + r, 3.0, r] atol=1e-12
+    other = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshBasicMaterial())
+    other.position = Vec3(0.0, -3.0, 0.0)
+    add!(root, other)
+    lo, hi = _corners(BoxHelper(root))
+    @test lo ≈ [10.0 - r, -7.0, -r] atol=1e-12
+    @test hi ≈ [10.0 + r, 3.0, r] atol=1e-12
+    inst = InstancedMesh(BoxGeometry(width=1.0, height=1.0, depth=1.0),
+                         MeshBasicMaterial(), 2)
+    set_instance_matrix!(inst, 1, mat4_translation(-4.0, 0.0, 0.0))
+    set_instance_matrix!(inst, 2, mat4_translation(5.0, 0.0, 0.0))
+    lo, hi = _corners(BoxHelper(inst))
+    @test lo ≈ [-4.5, -0.5, -0.5]
+    @test hi ≈ [5.5, 0.5, 0.5]
+    @test_throws ArgumentError BoxHelper(Group())
+
+    rig = Group()
+    rig.position = Vec3(0.0, 5.0, 0.0)
+    hemi = HemisphereLight()
+    hemi.position = Vec3(1.0, 0.0, 0.0)
+    add!(rig, hemi)
+    lo, hi = _corners(HemisphereLightHelper(hemi, 1.0))
+    @test (lo .+ hi) ./ 2 ≈ [1.0, 5.0, 0.0]
+end

@@ -2668,9 +2668,45 @@ function _box_edges(mn::Vec3, mx::Vec3)
     )
 end
 
-"""Wireframe of a mesh's (local) bounding box."""
-function BoxHelper(obj; color=Color3(1.0,1.0,0.0))
-    box = compute_bounding_box(obj.geometry)
+function _box_expand_by_transformed_box(box::Box3, local_box::Box3, m::Mat4)
+    mn = local_box.min
+    mx = local_box.max
+    for x in (mn.x, mx.x), y in (mn.y, mx.y), z in (mn.z, mx.z)
+        box = box3_expand_by_point(box, mat4_transform_point(m, Vec3(x, y, z)))
+    end
+    return box
+end
+
+# three.js Box3.expandByObject (precise = false): geometry bounds of the object
+# and its descendants, each transformed by its world matrix; instanced meshes
+# use the union of their instance bounds.
+function _box_expand_by_object(box::Box3, obj::AbstractObject3D)
+    geometry = hasproperty(obj, :geometry) ? getproperty(obj, :geometry) : nothing
+    if geometry isa BufferGeometry && geometry.n_vertices > 0
+        local_box = compute_bounding_box(geometry)
+        world = compute_world_matrix(obj)::Mat4{Float64}
+        if obj isa InstancedMesh
+            for m in obj.instance_matrices
+                box = _box_expand_by_transformed_box(box, local_box, world * m)
+            end
+        else
+            box = _box_expand_by_transformed_box(box, local_box, world)
+        end
+    end
+    for child in get_children(obj)
+        box = _box_expand_by_object(box, child)
+    end
+    return box
+end
+
+"""
+Wireframe of the world-space axis-aligned bounding box of `obj` and its
+descendants (three.js `BoxHelper`); the helper itself needs no transform.
+"""
+function BoxHelper(obj::AbstractObject3D; color=Color3(1.0,1.0,0.0))
+    box = _box_expand_by_object(Box3(), obj)
+    box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z ||
+        throw(ArgumentError("BoxHelper object has no geometry to bound"))
     LineSegments(_line_geo(_box_edges(box.min, box.max)), LineBasicMaterial(color=color); name="BoxHelper")
 end
 
@@ -2757,7 +2793,7 @@ takes the sky colour, the lower apex the ground colour, stored as a per-vertex
 """
 function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.color)
     size = _geometry_finite_float(size, "HemisphereLightHelper size")
-    p = light.position; s = size
+    p = _light_world_position(light); s = size
     top = Vec3(p.x, p.y+s, p.z); bot = Vec3(p.x, p.y-s, p.z)
     px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
     pz = Vec3(p.x, p.y, p.z+s); nz = Vec3(p.x, p.y, p.z-s)
