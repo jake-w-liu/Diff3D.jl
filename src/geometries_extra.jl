@@ -416,6 +416,7 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     phi_start = _geometry_finite_scalar(phi_start, "LatheGeometry phi_start")
     phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
     segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
+    phi_length = clamp(phi_length, zero(phi_length), 2π)          # three.js clamps the sweep
 
     n_verts = _geometry_checked_mul(
         segments + 1, np, "LatheGeometry vertex count")
@@ -436,15 +437,16 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
             vi = i * np + j
             pbase = 3vi - 2
             ubase = 2vi - 1
-            positions[pbase] = pt.x * c
+            # three.js phase: phi = 0 lies on +z, sweeping towards +x.
+            positions[pbase] = pt.x * s
             positions[pbase + 1] = pt.y
-            positions[pbase + 2] = -pt.x * s
+            positions[pbase + 2] = pt.x * c
             jm = max(j-1, 1); jp = min(j+1, np)
             dx, dy = _geometry_unit_delta2(
                 Float64(points[jm].x), Float64(points[jm].y),
                 Float64(points[jp].x), Float64(points[jp].y))
             nr = dy; nh = -dx                      # outward profile normal
-            nx = nr*c; ny = nh; nz = -nr*s
+            nx = nr*s; ny = nh; nz = nr*c
             nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
             normals[pbase] = nx
             normals[pbase + 1] = ny

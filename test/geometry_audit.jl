@@ -385,3 +385,25 @@ end
     inner = maximum(step(i, i + 1) for i in 1:m-1)
     @test step(m, 1) <= 1.5 * inner
 end
+
+@testset "geometry audit: lathe phase matches three.js" begin
+    profile = [Vec2(1.0, 0.0), Vec2(2.0, 1.0)]
+    g = LatheGeometry(profile; segments=4)
+    # LatheGeometry.js: x = r sin(phi), z = r cos(phi)
+    for i in 0:4, j in 1:2
+        vi = i * 2 + j
+        phi = i / 4 * 2π
+        p = get_vertex(g, vi)
+        @test p.x ≈ profile[j].x * sin(phi) atol=1e-12
+        @test p.z ≈ profile[j].x * cos(phi) atol=1e-12
+    end
+    half = LatheGeometry(profile; segments=4, phi_start=0.0, phi_length=π)
+    @test all(vi -> get_vertex(half, vi).x >= -1e-12, 1:half.n_vertices)
+    clamped = LatheGeometry(profile; segments=4, phi_length=10.0)
+    @test _geometry_audit_close(get_vertex(clamped, 1), get_vertex(clamped, clamped.n_vertices - 1))
+    for f in 1:g.n_faces
+        i1, i2, i3 = get_face(g, f)
+        a, b, c = get_vertex(g, i1), get_vertex(g, i2), get_vertex(g, i3)
+        @test dot(cross(b - a, c - a), get_normal(g, i1) + get_normal(g, i2) + get_normal(g, i3)) > 0
+    end
+end
