@@ -34100,3 +34100,5 @@ include("standard_direct_lights.jl")
 include("web_uniform_writes.jl")
 
 include("jpeg_decoder.jl")
+
+include("mathapi_audit.jl")

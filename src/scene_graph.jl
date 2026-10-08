@@ -42,9 +42,14 @@ function add!(parent::AbstractObject3D, child::AbstractObject3D)
     _is_ancestor(child, parent) &&
         throw(ArgumentError("Object3D cannot be added to one of its descendants"))
     old_parent = get_parent(child)
-    old_parent === parent && return parent
-    old_parent !== nothing && remove!(old_parent, child)
-    push!(get_children(parent), child)
+    children = get_children(parent)
+    if old_parent === parent
+        index = findfirst(candidate -> candidate === child, children)
+        index === nothing || deleteat!(children, index)
+    elseif old_parent !== nothing
+        remove!(old_parent, child)
+    end
+    push!(children, child)
     set_parent!(child, parent)
     return parent
 end
