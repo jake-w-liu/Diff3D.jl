@@ -11,6 +11,7 @@ AmbientLight
 AnimationClip
 AnimationMixer
 ArrayCamera
+ArrowHelper
 AudioBufferData
 AudioLoader
 AxesHelper
@@ -18,6 +19,7 @@ BenchResult
 Bone
 BoundingSphere
 Box3
+Box3Helper
 BoxGeometry
 BoxHelper
 BufferAttribute

@@ -275,3 +275,43 @@ end
     lo, hi = _corners(HemisphereLightHelper(hemi, 1.0))
     @test (lo .+ hi) ./ 2 ≈ [1.0, 5.0, 0.0]
 end
+
+@testset "anim audit: Box3Helper and ArrowHelper" begin
+    bh = Box3Helper(Box3(Vec3(-1.0, 0.0, 2.0), Vec3(3.0, 1.0, 4.0)))
+    @test bh isa LineSegments
+    @test bh.geometry.n_vertices == 24
+    p = bh.geometry.positions
+    @test (minimum(p[1:3:end]), maximum(p[1:3:end])) == (-1.0, 3.0)
+    @test (minimum(p[3:3:end]), maximum(p[3:3:end])) == (2.0, 4.0)
+    @test_throws ArgumentError Box3Helper(Box3())
+
+    function tip(arrow)
+        line, cone = get_children(arrow)
+        world = compute_world_matrix(cone)
+        apex = maximum(get_vertex(cone.geometry, i).y for i in 1:cone.geometry.n_vertices)
+        return mat4_transform_point(world, Vec3(0.0, apex, 0.0))
+    end
+    for dir in (Vec3(0.0, 0.0, 1.0), Vec3(1.0, 2.0, -2.0), Vec3(0.0, 1.0, 0.0),
+                Vec3(0.0, -3.0, 0.0))
+        arrow = ArrowHelper(dir, Vec3(1.0, 2.0, 3.0), 2.0)
+        @test arrow isa Group
+        line, cone = get_children(arrow)
+        @test line isa LineObject && cone isa Mesh
+        t = tip(arrow)
+        expected = Vec3(1.0, 2.0, 3.0) + normalize(dir) * 2.0
+        @test [t.x, t.y, t.z] ≈ [expected.x, expected.y, expected.z] atol=1e-12
+        shaft_end = mat4_transform_point(compute_world_matrix(line), get_vertex(line.geometry, 2))
+        shaft_expected = Vec3(1.0, 2.0, 3.0) + normalize(dir) * 1.6
+        @test [shaft_end.x, shaft_end.y, shaft_end.z] ≈
+              [shaft_expected.x, shaft_expected.y, shaft_expected.z] atol=1e-12
+    end
+    # head_width is the cone diameter (three.js scales a radius-0.5 cone).
+    arrow = ArrowHelper(Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 0.0), 1.0;
+                        head_length=0.5, head_width=0.4)
+    cone = get_children(arrow)[2]
+    radii = [hypot(get_vertex(cone.geometry, i).x, get_vertex(cone.geometry, i).z)
+             for i in 1:cone.geometry.n_vertices]
+    @test maximum(radii) ≈ 0.2
+    @test_throws ArgumentError ArrowHelper(Vec3(0.0, 0.0, 0.0))
+    @test_throws ArgumentError ArrowHelper(Vec3(NaN, 0.0, 1.0))
+end

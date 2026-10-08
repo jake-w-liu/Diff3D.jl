@@ -2977,3 +2977,62 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
 end
+
+"""
+    Box3Helper(box::Box3; color=Color3(1.0, 1.0, 0.0))
+
+Wireframe (12 edges) of an axis-aligned `Box3` in world space (three.js
+`Box3Helper`). An empty box raises an `ArgumentError`.
+"""
+function Box3Helper(box::Box3; color=Color3(1.0, 1.0, 0.0))
+    mn = box.min
+    mx = box.max
+    mn.x <= mx.x && mn.y <= mx.y && mn.z <= mx.z ||
+        throw(ArgumentError("Box3Helper box must not be empty"))
+    LineSegments(_line_geo(_box_edges(mn, mx)), LineBasicMaterial(color=color);
+                 name="Box3Helper")
+end
+
+"""
+    ArrowHelper(dir=Vec3(0,0,1), origin=Vec3(0,0,0), length=1.0;
+                color=Color3(1,1,0), head_length=0.2length,
+                head_width=0.2head_length)
+
+Arrow from `origin` along `dir` (three.js `ArrowHelper`): a `Group` placed at
+`origin` and rotated so its +y axis follows `dir`, holding a shaft `LineObject`
+and a five-sided cone `Mesh` whose tip sits at distance `length`.
+"""
+function ArrowHelper(dir::Vec3=Vec3(0.0, 0.0, 1.0),
+                     origin::Vec3=Vec3(0.0, 0.0, 0.0), length::Real=1.0;
+                     color=Color3(1.0, 1.0, 0.0),
+                     head_length::Real=0.2 * length,
+                     head_width::Real=0.2 * head_length)
+    d = _checked_control_vec3(dir, "ArrowHelper dir")
+    scale = max(abs(d.x), abs(d.y), abs(d.z))
+    scale > 0.0 || throw(ArgumentError("ArrowHelper dir must be non-zero"))
+    d = normalize(d / scale)
+    o = _checked_control_vec3(origin, "ArrowHelper origin")
+    len = _geometry_finite_float(length, "ArrowHelper length")
+    head = _geometry_finite_float(head_length, "ArrowHelper head_length")
+    width = _geometry_finite_float(head_width, "ArrowHelper head_width")
+    q = if d.y > 0.99999
+        Quaternion(0.0, 0.0, 0.0, 1.0)
+    elseif d.y < -0.99999
+        Quaternion(1.0, 0.0, 0.0, 0.0)
+    else
+        axis = normalize(Vec3(d.z, 0.0, -d.x))
+        half = acos(d.y) / 2
+        Quaternion(axis.x * sin(half), axis.y * sin(half), axis.z * sin(half), cos(half))
+    end
+    arrow = Group(name="ArrowHelper")
+    arrow.position = o
+    arrow.rotation = _transform_quaternion_to_euler(q, :XYZ)
+    shaft = _line_geo(Float64[0.0, 0.0, 0.0, 0.0, max(0.0001, len - head), 0.0])
+    add!(arrow, LineObject(shaft, LineBasicMaterial(color=color); name="ArrowHelperLine"))
+    cone = Mesh(ConeGeometry(radius=width / 2, height=head, radial_segments=5,
+                             height_segments=1),
+                MeshBasicMaterial(color=color); name="ArrowHelperCone")
+    cone.position = Vec3(0.0, len - head / 2, 0.0)
+    add!(arrow, cone)
+    return arrow
+end

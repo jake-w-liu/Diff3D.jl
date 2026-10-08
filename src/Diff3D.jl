@@ -222,7 +222,7 @@ export
     KeyframeTrack, NumberKeyframeTrack, MorphWeightsKeyframeTrack, AnimationClip, AnimationMixer, mixer_set_time!, mixer_update!,
     CubicSplineKeyframeTrack, CubicSplineQuaternionKeyframeTrack,
     CubicSplineMorphWeightsKeyframeTrack,
-    AxesHelper, GridHelper, BoxHelper, CameraHelper,
+    AxesHelper, GridHelper, BoxHelper, Box3Helper, ArrowHelper, CameraHelper,
     DirectionalLightHelper, PointLightHelper,
 
     # Inverse rendering
