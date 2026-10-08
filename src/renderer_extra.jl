@@ -1672,7 +1672,7 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
     col = _point_material_color(material, instance_color)
     linewidth = hasfield(typeof(material), :linewidth) ?
         _line_material_width(getfield(material, :linewidth)) : 1.0
-    alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    alpha = _primitive_blend_alpha(material)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
     stride = line_mode === :lines ? 2 : 1
@@ -2043,7 +2043,7 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
                                         cache::Union{Nothing,RenderCache})
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     col = hasfield(typeof(mat), :color) ? mat.color : Color3(1.0, 1.0, 1.0)
-    alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
+    alpha = _primitive_blend_alpha(mat)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
@@ -2148,7 +2148,7 @@ end
         alpha::Float64=1.0,
         alpha_test::Float64=0.0,
         alpha_map=nothing,
-        stamp=nothing, stamp_id::Int=0)
+        stamp=nothing, stamp_id::Int=0, blend::Bool=true)
     W, H = rt.width, rt.height
     # Reject non-finite projected corners (no well-defined raster footprint).
     (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
@@ -2168,7 +2168,8 @@ end
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
     has_fog = _has_render_fog(rt.view_state)
-    has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
+    has_alpha = (blend || alpha_test > 0.0) &&
+                _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
     needs_uv = has_tex || has_alpha
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
@@ -2206,6 +2207,7 @@ end
             col = clamp_color(col)
             has_fog && (col = _render_fog_color(rt.view_state,col,wp))
             depth_write && (rt.depth[py, px] = z)
+            blend || (frag_alpha = 1.0)
             if frag_alpha >= 1.0
                 rt.color[py, px, 1] = col.r; rt.color[py, px, 2] = col.g; rt.color[py, px, 3] = col.b
             elseif frag_alpha > 0.0
@@ -2252,6 +2254,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
     tint = _material_field(mat, :color)
     tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
+    blend = _primitive_transparent(mat)
     tex = _material_field(mat, :map)
     alpha_test = material_alpha_test(mat)
     alpha_map = _material_field(mat, :alpha_map)
@@ -2276,7 +2279,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, nothing, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex === nothing && alpha_map isa Texture
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2284,7 +2287,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, nothing, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex isa Texture && alpha_map isa Texture
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2292,7 +2295,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex === nothing && alpha_map === nothing
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2300,7 +2303,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, nothing, nothing, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     else
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2308,7 +2311,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     end
     return nothing
 end
@@ -2322,21 +2325,21 @@ end
         xlo::Int, xhi::Int, ylo::Int, yhi::Int,
         depth_test::Bool, depth_write::Bool,
         alpha::Float64, alpha_test::Float64,
-        stamp::Matrix{Int}, stamp_id::Int)
+        stamp::Matrix{Int}, stamp_id::Int, blend::Bool)
     # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
         tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
-        alpha, alpha_test, alpha_map, stamp, stamp_id)
+        alpha, alpha_test, alpha_map, stamp, stamp_id, blend)
     # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
         s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
         tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
-        alpha, alpha_test, alpha_map, stamp, stamp_id)
+        alpha, alpha_test, alpha_map, stamp, stamp_id, blend)
     return nothing
 end
 
@@ -2499,13 +2502,15 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
     _validate_material_parameters(material)
     base_color = _point_material_color(material, instance_color)
     alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    blend = _primitive_transparent(material)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
     alpha_test = material_alpha_test(material)
     albedo_map = _material_field(material, :map)
     alpha_map = _material_field(material, :alpha_map)
     use_color_map = albedo_map isa Texture
-    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
+    use_fragment_alpha = (blend || alpha_test > 0.0) &&
+                         (_has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map))
     base_size = hasfield(typeof(material), :size) ?
         _point_material_size(getfield(material, :size)) : 1.0
     size_attenuation = _material_field(material, :size_attenuation)
@@ -2555,7 +2560,7 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
             end
             point_col = _render_fog_color(rt.view_state,point_col,-pv.z)
             _put_pixel!(rt, x, y, pz, point_col, xlo, xhi, ylo, yhi,
-                        depth_test, depth_write, frag_alpha)
+                        depth_test, depth_write, blend ? frag_alpha : 1.0)
         end
     end
     return nothing

@@ -1787,7 +1787,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
-        (material_wireframe(mat) ? _primitive_blends(mat) :
+        (material_wireframe(mat) ? _primitive_transparent(mat) :
          is_transparent_material(mat)) && continue
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         instance_materials = cache === nothing ? nothing :
@@ -1845,7 +1845,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # before any transparent object is blended.
     for i in eachindex(wireframe_meshes)
         mesh = wireframe_meshes[i]
-        _primitive_blends(_mesh_material(mesh)) && continue
+        _primitive_transparent(_mesh_material(mesh)) && continue
         _render_wireframe_mesh_from_mesh!(
             rt, mesh, wireframe_worlds[i], proj, view, near,
             xlo, xhi, ylo, yhi, cache)
@@ -1912,7 +1912,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         mat = _instanced_material(im)
-        (material_wireframe(mat) ? _primitive_blends(mat) :
+        (material_wireframe(mat) ? _primitive_transparent(mat) :
          is_transparent_material(mat)) || continue
         cache === nothing || _instanced_materials!(
             cache.instanced_materials, instanced_slot, im, mat,
@@ -1935,7 +1935,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         end
     end
     @inbounds for index in eachindex(wireframe_meshes)
-        _primitive_blends(
+        _primitive_transparent(
             _mesh_material(wireframe_meshes[index])) || continue
         push!(transparent_items, _TransparentRenderItem(
             _mesh_view_depth_world(wireframe_worlds[index], view),
@@ -2395,20 +2395,17 @@ function is_transparent_material(m::AbstractMaterial)
     material_opacity(m)
     return material_transparent(m)
 end
-function _primitive_blends(m::AbstractMaterial)
+# three.js blends only `transparent` materials. Line materials have no such
+# flag, so their opacity alone selects blending.
+function _primitive_transparent(m::AbstractMaterial)
     _validate_material_parameters(m)
-    return material_transparent(m) || material_opacity(m) < 1.0
+    opacity = material_opacity(m)
+    return hasfield(typeof(m), :transparent) ? getfield(m, :transparent) : opacity < 1.0
 end
-@inline function _render_primitive_blends(object::AbstractObject3D)
-    material = _render_primitive_material(object)
-    _primitive_blends(material) && return true
-    point_or_sprite = object isa Sprite || object isa PointsObject ||
-                      (object isa InstancedMesh &&
-                       _instanced_point_drawable(object))
-    point_or_sprite || return false
-    return _has_texture_alpha(_material_field(material, :map)) ||
-           _has_alpha_map(_material_field(material, :alpha_map))
-end
+@inline _render_primitive_blends(object::AbstractObject3D) =
+    _primitive_transparent(_render_primitive_material(object))
+@inline _primitive_blend_alpha(material::AbstractMaterial) =
+    _primitive_transparent(material) ? clamp(Float64(material_opacity(material)), 0.0, 1.0) : 1.0
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
 material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ?
