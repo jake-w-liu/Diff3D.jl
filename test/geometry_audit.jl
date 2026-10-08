@@ -254,3 +254,134 @@ end
                                        get_normal(kt, i3)) > 0
     end
 end
+
+function _geometry_audit_area_xy(geo, faces=1:geo.n_faces)
+    area = 0.0
+    for f in faces
+        i1, i2, i3 = get_face(geo, f)
+        a, b, c = get_vertex(geo, i1), get_vertex(geo, i2), get_vertex(geo, i3)
+        area += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) / 2
+    end
+    return area
+end
+
+@testset "geometry audit: shape holes" begin
+    square = [Vec2(0.0, 0.0), Vec2(4.0, 0.0), Vec2(4.0, 4.0), Vec2(0.0, 4.0)]
+    hole_a = [Vec2(1.0, 1.0), Vec2(1.0, 2.0), Vec2(2.0, 2.0), Vec2(2.0, 1.0)]   # CW
+    hole_b = reverse([Vec2(2.5, 2.5), Vec2(3.5, 2.5), Vec2(3.0, 3.5)])          # CCW given
+    g = ShapeGeometry(square; holes=[hole_a, hole_b])
+    @test g.n_vertices == 4 + 4 + 3          # three.js: contour + holes vertices
+    @test g.n_faces == g.n_vertices + 2 * 2 - 2
+    @test _geometry_audit_area_xy(g) ≈ 16.0 - 1.0 - 0.5 atol=1e-12
+    for f in 1:g.n_faces                      # all CCW (+z facing)
+        @test _geometry_audit_area_xy(g, f:f) > 0
+    end
+    mesh = Mesh(g, MeshBasicMaterial(side=:double))
+    hit(x, y) = !isempty(raycast(Raycaster(Vec3(x, y, 1.0), Vec3(0.0, 0.0, -1.0)), mesh;
+                                 recursive=false))
+    @test !hit(1.5, 1.5) && !hit(3.0, 2.9)
+    @test hit(0.5, 0.5) && hit(3.5, 1.5) && hit(1.5, 3.5)
+    @test g.uvs[1:2] == [0.0, 0.0] && g.uvs[2 * 5 - 1] == 1.0   # world uvs
+    @test ShapeGeometry(square).n_faces == ShapeGeometry(square; holes=Vector{Vec2{Float64}}[]).n_faces
+
+    # Several holes sharing the bridge direction, and a concave outline.
+    comb = [Vec2(0.0, 0.0), Vec2(10.0, 0.0), Vec2(10.0, 3.0), Vec2(6.0, 3.0), Vec2(6.0, 1.5),
+            Vec2(4.0, 1.5), Vec2(4.0, 3.0), Vec2(0.0, 3.0)]
+    holes = [[Vec2(x, 0.5), Vec2(x + 0.5, 0.5), Vec2(x + 0.5, 1.0), Vec2(x, 1.0)]
+             for x in (0.5, 2.0, 4.5, 7.0, 8.5)]
+    cg = ShapeGeometry(comb; holes=holes)
+    @test _geometry_audit_area_xy(cg) ≈ 30.0 - 3.0 - 5 * 0.25 atol=1e-9
+    @test all(f -> _geometry_audit_area_xy(cg, f:f) > 0, 1:cg.n_faces)
+
+    @test_throws ArgumentError ShapeGeometry(square; holes=[[Vec2(3.0, 3.0), Vec2(5.0, 3.0),
+                                                             Vec2(5.0, 5.0)]])
+    @test_throws ArgumentError ShapeGeometry(square; holes=[[Vec2(5.0, 5.0), Vec2(6.0, 5.0),
+                                                             Vec2(6.0, 6.0)]])
+    @test_throws ArgumentError ShapeGeometry(square; holes=[hole_a, hole_a .+ Ref(Vec2(0.5, 0.0))])
+    @test_throws ArgumentError ShapeGeometry(square; holes=[[Vec2(1.0, 1.0), Vec2(NaN, 1.0),
+                                                             Vec2(2.0, 2.0)]])
+end
+
+@testset "geometry audit: extrude holes, uvs, steps and bevel" begin
+    square = [Vec2(0.0, 0.0), Vec2(2.0, 0.0), Vec2(2.0, 1.0), Vec2(0.0, 1.0)]
+    ex = ExtrudeGeometry(square; depth=3.0)
+    @test ex.n_faces == 12
+    # Caps: world (x, y) UVs (three.js WorldUVGenerator.generateTopUV).
+    for vi in 1:8
+        p = get_vertex(ex, vi)
+        @test ex.uvs[2vi - 1] == p.x && ex.uvs[2vi] == p.y
+    end
+    # Sides: (x or y, 1 - z) chosen per wall (generateSideWallUV).
+    for vi in 9:ex.n_vertices
+        p = get_vertex(ex, vi)
+        n = get_normal(ex, vi)
+        @test ex.uvs[2vi] ≈ 1 - p.z
+        @test ex.uvs[2vi - 1] ≈ (abs(n.y) > 0.5 ? p.x : p.y)
+    end
+
+    stepped = ExtrudeGeometry(square; depth=3.0, steps=3)
+    @test stepped.n_faces == 4 + 2 * 4 * 3
+    zs = sort(unique(round(get_vertex(stepped, vi).z; digits=12) for vi in 1:stepped.n_vertices))
+    @test zs == [0.0, 1.0, 2.0, 3.0]
+    @test_throws ArgumentError ExtrudeGeometry(square; steps=0)
+
+    hole = [Vec2(0.5, 0.25), Vec2(1.5, 0.25), Vec2(1.5, 0.75), Vec2(0.5, 0.75)]
+    hx = ExtrudeGeometry(square; depth=1.0, holes=[hole])
+    ncap = 8 + 2 * 1 - 2
+    @test hx.n_faces == 2 * ncap + 2 * 8
+    @test _geometry_audit_area_xy(hx, 2:2:2ncap) ≈ 2.0 - 0.5 atol=1e-12
+    @test _geometry_audit_area_xy(hx, 1:2:2ncap) ≈ -(2.0 - 0.5) atol=1e-12
+    volume = 0.0                                   # divergence theorem: closed solid
+    for f in 1:hx.n_faces
+        i1, i2, i3 = get_face(hx, f)
+        a, b, c = get_vertex(hx, i1), get_vertex(hx, i2), get_vertex(hx, i3)
+        volume += dot(a, cross(b, c)) / 6
+        fn = cross(b - a, c - a)
+        @test dot(fn, get_normal(hx, i1)) > 0
+    end
+    @test volume ≈ 1.5 atol=1e-12
+    px = ExtrudeGeometry(square; holes=[hole],
+                         extrude_path=[Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0)])
+    @test px.n_faces == 2 * 8 + 2 * ncap
+
+    # three.js default-style bevel: thickness 0.2, size 0.1, 3 segments.
+    bv = ExtrudeGeometry(square; depth=1.0, bevel_enabled=true)
+    layers = 1 + 2 * 3 + 1
+    @test bv.n_faces == 2 * 2 + 2 * 4 * (layers - 1)
+    box = compute_bounding_box(bv)
+    @test box.min.z ≈ -0.2 && box.max.z ≈ 1.2
+    @test box.min.x ≈ -0.1 && box.max.x ≈ 2.1
+    @test box.min.y ≈ -0.1 && box.max.y ≈ 1.1
+    # Outermost cap rings keep the original outline (bevel_offset = 0).
+    for vi in 1:4
+        p = get_vertex(bv, vi)
+        @test p.z ≈ -0.2
+        @test any(q -> abs(q.x - p.x) < 1e-12 && abs(q.y - p.y) < 1e-12, square)
+    end
+    vol = 0.0
+    for f in 1:bv.n_faces
+        i1, i2, i3 = get_face(bv, f)
+        a, b, c = get_vertex(bv, i1), get_vertex(bv, i2), get_vertex(bv, i3)
+        vol += dot(a, cross(b, c)) / 6
+        fn = cross(b - a, c - a)
+        norm(fn) > 1e-12 && @test dot(normalize(fn), get_normal(bv, i1)) > 1 - 1e-9
+    end
+    @test vol > 2.0
+    # The bevel vector of a right-angle corner is the diagonal (three.js getBevelVec).
+    v = Diff3D._extrude_bevel_vec(Vec2(0.0, 0.0), Vec2(1.0, 0.0), Vec2(0.0, 1.0))
+    @test v.x ≈ -1.0 && v.y ≈ -1.0
+    @test_throws ArgumentError ExtrudeGeometry(square; bevel_enabled=true, bevel_size=NaN)
+end
+
+@testset "geometry audit: closed path extrusion seam" begin
+    m = 200
+    knot = [Vec3((2 + cos(3t)) * cos(2t), (2 + cos(3t)) * sin(2t), sin(3t))
+            for t in range(0, 2π; length=m + 1)]          # last point closes the loop
+    tri = [Vec2(0.0, 0.5), Vec2(-0.45, -0.25), Vec2(0.45, -0.25)]
+    g = ExtrudeGeometry(tri; extrude_path=knot)
+    np = 3
+    step(i, i2) = maximum(norm(get_vertex(g, (i2 - 1) * np + j) - get_vertex(g, (i - 1) * np + j))
+                          for j in 1:np)
+    inner = maximum(step(i, i + 1) for i in 1:m-1)
+    @test step(m, 1) <= 1.5 * inner
+end
