@@ -96,6 +96,43 @@ end
     @test occursin("mylabel could not be decoded", sprint(showerror, err))
 end
 
+@testset "JPEG giant declared dimensions fail fast" begin
+    # Forging a 65500x65500 SOF must error before the decoder allocates
+    # image-sized buffers: the first scan's blocks cannot fit in the bytes
+    # that follow the SOS header.
+    forged = copy(_jpeg_fixture("base_2x2"))
+    sof = findfirst(i -> forged[i] == 0xFF && forged[i + 1] == 0xC0,
+                    1:(length(forged) - 1))
+    forged[sof + 5] = 0xFF; forged[sof + 6] = 0xDC   # H = 65500
+    forged[sof + 7] = 0xFF; forged[sof + 8] = 0xDC   # W = 65500
+    Diff3D._jpeg_decode_rgb8(_jpeg_fixture("base_2x2"))  # warm the code path
+    t = @elapsed begin
+        err = try
+            Diff3D._jpeg_decode_rgb8(forged)
+            nothing
+        catch e
+            e
+        end
+    end
+    @test err isa ErrorException
+    @test occursin("truncated or corrupt", sprint(showerror, err))
+    @test t < 1.0
+    alloc = @allocated try
+        Diff3D._jpeg_decode_rgb8(forged)
+    catch
+    end
+    @test alloc < 1_000_000
+end
+
+@testset "JPEG decode allocation is output-bound" begin
+    bytes = _jpeg_fixture("base_2x2")
+    Diff3D._decode_jpeg(bytes; label="warmup")  # warm the code path
+    out = Diff3D._decode_jpeg(bytes; label="warmup")
+    # ~12x16x3 Float64 output plus the decoder's small band buffers.
+    @test (@allocated(Diff3D._decode_jpeg(bytes; label="pin")) <=
+           sizeof(out) + 65536)
+end
+
 @testset "JPEG N0f8 conversion table is exact" begin
     # Float64(N0f8(v)) reduces to v/255 exactly for all 256 byte values; the
     # loader must keep that identity so decoded pixels are bit-identical to the
