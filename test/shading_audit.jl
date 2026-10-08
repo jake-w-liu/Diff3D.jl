@@ -81,3 +81,40 @@ end
               rt.color[8, 8, 3] == 0.0
     end
 end
+
+@testset "MeshNormalMaterial encodes view-space normals" begin
+    geo = PlaneGeometry(width=2.0, height=2.0)
+    function center_color(cam_pos)
+        scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene, Mesh(geo, MeshNormalMaterial(side=:double)))
+        cam = PerspectiveCamera(fov=π / 4, aspect=1.0, near=0.1, far=100.0)
+        cam.position = cam_pos
+        cam.target = Vec3()
+        colors = Vector{Float64}[]
+        for shading in (:flat, :smooth)
+            rt = RenderTarget(16, 16)
+            render!(rt, scene, cam; shading=shading)
+            push!(colors, rt.color[8, 8, :])
+        end
+        return colors
+    end
+    # Facing the camera, the view-space normal is +Z regardless of the orbit.
+    for cam_pos in (Vec3(0.0, 0.0, 3.0), Vec3(2.0, 0.0, 2.0), Vec3(0.0, 2.0, 2.5))
+        for c in center_color(cam_pos)
+            @test c[3] > 0.6
+        end
+    end
+    head_on = center_color(Vec3(0.0, 0.0, 3.0))
+    @test head_on[1] ≈ [0.5, 0.5, 1.0] atol=1e-9
+    @test head_on[2] ≈ [0.5, 0.5, 1.0] atol=1e-9
+    # Orbiting to 45 degrees tilts the view-space normal toward screen left.
+    for c in center_color(Vec3(2.0, 0.0, 2.0))
+        @test c[1] ≈ 0.5 - 0.5 * sqrt(0.5) atol=1e-9
+    end
+    view = mat4_rotation_y(-π / 2)
+    c = shade_face(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(), MeshNormalMaterial(),
+                   AbstractLight[]; camera_view=view)
+    @test [c.r, c.g, c.b] ≈ [0.0, 0.5, 0.5] atol=1e-12
+    @test shade_face(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(), MeshNormalMaterial(),
+                     AbstractLight[]) == Color3(0.5, 0.5, 1.0)
+end

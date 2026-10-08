@@ -2572,10 +2572,33 @@ end
                lights; shadow_fn=shadow_fn)
 end
 
-function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
-                    material::MeshNormalMaterial, lights; shadow_fn=nothing)
-    Color3((normal.x + 1) / 2, (normal.y + 1) / 2, (normal.z + 1) / 2)
+# three.js encodes the view-space normal; without a camera view the world-space
+# normal is used.
+@inline _normal_material_normal(normal::Vec3, ::Nothing) = normal
+@inline _normal_material_normal(normal::Vec3, camera_view::Mat4) =
+    normalize(mat4_transform_direction(camera_view, normal))
+
+@inline function _shade_normal_face(normal::Vec3, camera_view)
+    n = _normal_material_normal(normal, camera_view)
+    Color3((n.x + 1) / 2, (n.y + 1) / 2, (n.z + 1) / 2)
 end
+
+function shade_face(normal::Vec3, view_dir::Vec3, position::Vec3,
+                    material::MeshNormalMaterial, lights; shadow_fn=nothing,
+                    camera_view::Union{Nothing,Mat4}=nothing)
+    return _shade_normal_face(normal, camera_view)
+end
+
+@inline _shade_face_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshNormalMaterial, lights, camera_view, shadow_fn) =
+    _shade_normal_face(normal, camera_view)
+
+@inline _shade_face_vertex_color_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshNormalMaterial, lights, vertex_color::Color3,
+        camera_view, shadow_fn) =
+    _shade_normal_face(normal, camera_view)
 
 @inline _matcap_view_vectors(normal::Vec3, view_dir::Vec3, ::Nothing) =
     (normal, view_dir)
