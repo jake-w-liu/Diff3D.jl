@@ -706,6 +706,37 @@ get_parent(o::LightProbe) = o.parent
 is_visible(o::LightProbe) = o.visible
 set_parent!(o::LightProbe, p) = (o.parent = p)
 
+# ========================== Luminous power ==========================
+# three.js `power` accessors: lumens derived from intensity (candela for
+# point/spot, nits for rect-area lights). Setting `power` rewrites `intensity`.
+
+const _PowerLight = Union{PointLight, SpotLight, RectAreaLight}
+
+@inline _light_power_scale(::PointLight) = 4π
+@inline _light_power_scale(::SpotLight) = Float64(π)
+@inline _light_power_scale(light::RectAreaLight) =
+    getfield(light, :width) * getfield(light, :height) * π
+
+@inline function Base.getproperty(light::_PowerLight, name::Symbol)
+    name === :power &&
+        return getfield(light, :intensity) * _light_power_scale(light)
+    return getfield(light, name)
+end
+
+function Base.setproperty!(light::_PowerLight, name::Symbol, value)
+    if name === :power
+        power = _validated_light_finite(value, :power)
+        scale = _light_power_scale(light)
+        isfinite(scale) && scale != 0.0 ||
+            throw(ArgumentError("light power requires a finite, nonzero emitter area"))
+        return setfield!(light, :intensity, _validated_light_intensity(power / scale))
+    end
+    return setfield!(light, name, convert(fieldtype(typeof(light), name), value))
+end
+
+Base.propertynames(light::_PowerLight, private::Bool=false) =
+    (fieldnames(typeof(light))..., :power)
+
 @inline function _validate_light_parameters(light::AmbientLight)
     _validated_light_color(light.color, :color)
     _validated_light_intensity(light.intensity)

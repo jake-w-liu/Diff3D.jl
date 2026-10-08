@@ -118,3 +118,32 @@ end
     @test shade_face(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(), MeshNormalMaterial(),
                      AbstractLight[]) == Color3(0.5, 0.5, 1.0)
 end
+
+@testset "Light power follows three.js lumen conversions" begin
+    point = PointLight(intensity=2.0)
+    @test point.power ≈ 8π
+    point.power = 100.0
+    @test point.intensity ≈ 100 / (4π)
+    spot = SpotLight(intensity=3.0)
+    @test spot.power ≈ 3π
+    spot.power = 10.0
+    @test spot.intensity ≈ 10 / π
+    rect = RectAreaLight(intensity=2.0, width=2.0, height=3.0)
+    @test rect.power ≈ 2.0 * 6.0 * π
+    rect.power = 6π
+    @test rect.intensity ≈ 1.0
+    for light in (point, spot, rect)
+        @test :power in propertynames(light)
+        @test hasproperty(light, :power)
+        @test_throws ArgumentError (light.power = NaN)
+        @test_throws ArgumentError (light.power = Inf)
+    end
+    zero_area = RectAreaLight(width=0.0, height=1.0)
+    @test zero_area.power == 0.0
+    @test_throws ArgumentError (zero_area.power = 1.0)
+    @test zero_area.intensity == 1.0
+    @test !hasproperty(DirectionalLight(), :power)
+    @test_throws MethodError (point.ies_profile = 42)
+    point.intensity = 1.5
+    @test point.intensity == 1.5
+end
