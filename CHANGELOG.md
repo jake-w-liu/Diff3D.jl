@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Replace the native JpegTurbo/libjpeg-turbo dependency with a pure-Julia JPEG
+  decoder covering baseline, extended-sequential, and progressive Huffman JPEG
+  (restart intervals, non-interleaved scans, table redefinition, 1–4
+  components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
+  CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
+  package no longer ships or loads any non-Julia binary image codec.
+
 ## 1.0.0
 
 The first 1.x compatibility contract covers documented public calls, properties,

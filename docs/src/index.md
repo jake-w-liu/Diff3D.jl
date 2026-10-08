@@ -883,7 +883,7 @@ println("inverse  adam ", round(hist[1]; sigdigits=3), " -> ", round(hist[end]; 
 Diff3D exports image buffers to PNG, PPM, and PDF, writes and reads STL meshes,
 and loads OBJ/MTL, PLY, and XYZ data. The example creates small input files for
 these loaders. HDR, EXR, JPEG, KTX2, and glTF/GLB loaders accept file paths; JPEG
-decoding uses the package's JpegTurbo dependency. Supported format subsets are
+decoding is implemented in pure Julia (baseline, extended, and progressive JPEG are supported). Supported format subsets are
 described in the [compatibility contract](compatibility.md).
 
 ```@example io

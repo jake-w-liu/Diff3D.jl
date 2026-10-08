@@ -22,8 +22,6 @@ using LinearAlgebra: norm as la_norm, dot as la_dot, cross as la_cross,
                      pinv as la_pinv
 using Printf
 using ForwardDiff
-using ColorTypes: RGB, red, green, blue
-using JpegTurbo: jpeg_decode
 
 # ========================== Math ==========================
 include("math.jl")
@@ -90,6 +88,7 @@ include("web_export.jl")
 
 # ========================== Loaders ==========================
 include("loaders.jl")
+include("jpeg.jl")
 include("loaders_extra.jl")
 
 # ========================== API documentation ==========================

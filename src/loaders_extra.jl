@@ -9517,39 +9517,16 @@ function _gltf_decode_image(bytes::AbstractVector{UInt8}, mime::AbstractString)
     error("glTF image MIME $image_mime is not supported; image/png and image/jpeg are supported")
 end
 
-function _jpeg_bytes_for_jpegturbo(bytes::Vector{UInt8})
-    length(bytes) > 623 && return bytes
-    length(bytes) >= 4 &&
-        bytes[1] == 0xff && bytes[2] == 0xd8 &&
-        bytes[end - 1] == 0xff && bytes[end] == 0xd9 ||
-        return bytes
-    # JpegTurbo rejects some tiny valid JPEG payloads; a COM segment before EOI
-    # preserves the image stream while meeting the decoder's input-size floor.
-    payload_len = max(0, 624 - length(bytes) - 4)
-    segment_len = payload_len + 2
-    segment_len <= typemax(UInt16) ||
-        error("JPEG compatibility comment segment is too large")
-    padded = UInt8[]
-    sizehint!(padded, length(bytes) + payload_len + 4)
-    append!(padded, @view bytes[1:end - 2])
-    push!(padded, UInt8(0xff), UInt8(0xfe),
-          UInt8(segment_len >>> 8), UInt8(segment_len & 0xff))
-    append!(padded, zeros(UInt8, payload_len))
-    append!(padded, @view bytes[end - 1:end])
-    return padded
-end
-
 function _decode_jpeg(bytes::AbstractVector{UInt8}; label::AbstractString="glTF image MIME image/jpeg")
     try
-        dense = bytes isa Vector{UInt8} ? bytes : collect(bytes)
-        img = jpeg_decode(RGB, _jpeg_bytes_for_jpegturbo(dense))
-        H, W = size(img)
+        img = _jpeg_decode_rgb8(bytes)
+        H, W = size(img, 1), size(img, 2)
         out = Array{Float64}(undef, H, W, 3)
+        lut = _JPEG_N0F8_TO_FLOAT64
         @inbounds for y in 1:H, x in 1:W
-            px = img[y, x]
-            out[y, x, 1] = Float64(red(px))
-            out[y, x, 2] = Float64(green(px))
-            out[y, x, 3] = Float64(blue(px))
+            out[y, x, 1] = lut[Int(img[y, x, 1]) + 1]
+            out[y, x, 2] = lut[Int(img[y, x, 2]) + 1]
+            out[y, x, 3] = lut[Int(img[y, x, 3]) + 1]
         end
         return out
     catch err
