@@ -540,16 +540,16 @@ function remove!(lod::LOD, child::AbstractObject3D)
     return lod
 end
 
-"""Highest-distance LOD level whose threshold ≤ `distance` (three.js `getObjectForDistance`)."""
+"""
+Highest-distance LOD level whose threshold ≤ `distance` (three.js
+`getObjectForDistance`). A currently visible level's threshold is reduced by its
+hysteresis fraction.
+"""
 function lod_select(lod::LOD, distance)
     query_distance = _validated_lod_distance(distance, "LOD query distance")
     _validate_lod_levels(lod, "LOD")
     isempty(lod.levels) && return nothing
-    chosen = lod.levels[1].object
-    for level in lod.levels
-        query_distance >= level.distance ? (chosen = level.object) : break
-    end
-    return chosen
+    return lod.levels[_lod_level_index(lod, query_distance, nothing)].object
 end
 
 function _lod_level_index(lod::LOD, d::Float64, current::Union{Nothing,Int})
@@ -572,6 +572,8 @@ end
 
 function _set_lod_level!(lod::LOD, chosen_index::Int)
     chosen_index == 0 && return nothing
+    # three.js LOD.update leaves a single level's visibility untouched.
+    length(lod.levels) == 1 && return lod.levels[1].object
     # Compare by object identity, not index: if the same object is registered at
     # several levels, it must stay visible whenever any of its entries is chosen
     # (an index test would let a later non-chosen entry hide the chosen object).

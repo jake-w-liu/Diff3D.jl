@@ -26739,7 +26739,12 @@ end
     far = Object3D(name="far")
     add_lod_level!(lod, 0, near; hysteresis=0)
     add_lod_level!(lod, Float32(10), far; hysteresis=1 // 4)
+    # three.js getObjectForDistance lowers a visible level's threshold by its
+    # hysteresis (LOD.js:198-204): far is visible, so 10 * (1 - 1/4) = 7.5 <= 9.
+    @test lod_select(lod, 9.0) === far
+    far.visible = false
     @test lod_select(lod, 9.0) === near
+    far.visible = true
     @test lod_update!(lod, 10.0) === far
     @test Diff3D._validate_lod_levels(lod, "LOD") === nothing
 
