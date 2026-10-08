@@ -2060,22 +2060,25 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
         x >= d && return clamp_when_finished ? d : 0.0
         return x
     end
-    reps = repetitions < 0 ? typemax(Int) : max(repetitions, 0)
-    if reps == 0
-        return clamp_when_finished ? 0.0 : 0.0
-    end
-    if repetitions >= 0 && x >= d * reps
-        if !clamp_when_finished
-            return 0.0
+    # three.js AnimationAction._updateTime: playing forward finishes on reaching
+    # max(repetitions, 1) loops; playing backward from zero the first wrap below
+    # zero is free (it enters an unmirrored loop), so it finishes only past
+    # -repetitions loops. A clamped finished action holds the pose of its last
+    # running loop.
+    if repetitions >= 0
+        if x >= d * max(repetitions, 1)
+            clamp_when_finished || return 0.0
+            return loop === :pingpong && iseven(max(repetitions, 1)) ? 0.0 : d
+        elseif x < -d * repetitions
+            clamp_when_finished || return 0.0
+            return loop === :pingpong && repetitions > 0 && iseven(repetitions) ? d : 0.0
         end
-        return loop === :pingpong && iseven(reps) ? 0.0 : d
     end
     if loop === :pingpong
-        y = mod(x, 2d)
+        y = mod(x < 0.0 ? x + d : x, 2d)
         return y <= d ? y : 2d - y
     end
-    y = mod(x, d)
-    return x > 0.0 && isapprox(y, 0.0; atol=eps(Float64) * max(1.0, abs(x))) ? d : y
+    return mod(x, d)
 end
 
 # Write an interpolated value to a track target. Quaternion samples targeting the

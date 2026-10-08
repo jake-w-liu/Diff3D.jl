@@ -11223,12 +11223,14 @@ end
                                  interpolation=:step)
         mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy])), 0.5)
         @test mesh.scale.y ≈ 1.0
-        mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy])), 1.0)
+        mixer_set_time!(AnimationMixer(AnimationClip("scale_y", [sy]; loop=:once,
+                                             clamp_when_finished=true)), 1.0)
         @test mesh.scale.y ≈ 5.0
         quat_component = Group()
         qy = NumberKeyframeTrack(quat_component, "quaternion.y",
                                  [0.0, 1.0], [0.0, sin(pi / 4)])
-        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_y", [qy])), 1.0)
+        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_y", [qy]; loop=:once,
+                                             clamp_when_finished=true)), 1.0)
         qy_actual = quat_from_euler(quat_component.rotation.x,
                                     quat_component.rotation.y,
                                     quat_component.rotation.z;
@@ -11244,7 +11246,8 @@ end
                                 order=quat_w_component.rotation.order)
         qw = NumberKeyframeTrack(quat_w_component, "quaternion.w",
                                  [0.0, 1.0], [qbase.w, 0.5])
-        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_w", [qw])), 1.0)
+        mixer_set_time!(AnimationMixer(AnimationClip("quaternion_w", [qw]; loop=:once,
+                                             clamp_when_finished=true)), 1.0)
         qw_actual = quat_from_euler(quat_w_component.rotation.x,
                                     quat_w_component.rotation.y,
                                     quat_w_component.rotation.z;
@@ -15934,7 +15937,8 @@ end
             @test tr isa QuaternionKeyframeTrack
             @test tr.interpolation === :step
             target = get_children(asset.scene)[1]
-            mixer = AnimationMixer(asset.animations[1])
+            mixer = AnimationMixer(asset.animations[1]; loop=:once,
+                                   clamp_when_finished=true)
             mixer_set_time!(mixer, 0.5)
             @test isapprox(target.rotation.y, 0.0; atol=1e-9)
             mixer_set_time!(mixer, 1.0)
@@ -18300,12 +18304,14 @@ end
             asset = load_gltf_asset(morph_path)         # old code: "keyframe counts differ" error
             @test length(asset.animations) == 2
             morph_mesh = get_children(get_children(asset.scene)[1])[1]
-            lin_mixer = AnimationMixer(asset.animations[1])
+            lin_mixer = AnimationMixer(asset.animations[1]; loop=:once,
+                                       clamp_when_finished=true)
             mixer_set_time!(lin_mixer, 0.5)
             @test morph_mesh.morph_target_influences ≈ [0.5, 0.25]
             mixer_set_time!(lin_mixer, 1.0)
             @test morph_mesh.morph_target_influences ≈ [1.0, 0.5]
-            cub_mixer = AnimationMixer(asset.animations[2])
+            cub_mixer = AnimationMixer(asset.animations[2]; loop=:once,
+                                       clamp_when_finished=true)
             mixer_set_time!(cub_mixer, 1.0)
             @test morph_mesh.morph_target_influences ≈ [1.0, 0.5]
 
@@ -23789,7 +23795,8 @@ end
     canonical_texture_track = NumberKeyframeTrack(
         textured_mesh, "map_offset.y", [0.0, 1.0], [0.0, 0.25])
     mixer_set_time!(AnimationMixer(AnimationClip(
-        "resolved_texture", [texture_track, canonical_texture_track])), 1.0)
+        "resolved_texture", [texture_track, canonical_texture_track];
+        loop=:once, clamp_when_finished=true)), 1.0)
     @test texture.offset.x == 0.5
     @test texture.offset.y == 0.25
 
