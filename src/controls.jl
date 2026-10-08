@@ -1957,12 +1957,6 @@ function sample_track(track::AbstractKeyframeTrack, t)
     return _track_value(track, t)
 end
 
-# Quaternion → Euler (intrinsic XYZ order, matching the default `Euler`).
-# Mirrors three.js `Euler.setFromQuaternion` for order XYZ.
-function _quat_to_euler_xyz(q::Quaternion)
-    return _transform_quaternion_to_euler(q, :XYZ)
-end
-
 struct AnimationClip
     name::String
     duration::Float64
@@ -2366,7 +2360,9 @@ _write_track!(tr::NumberKeyframeTrack, v) = _write_track_value!(tr.target, tr.pr
 
 function _write_track_value!(target, property::Symbol, v::Quaternion)
     if property === :rotation || property === :quaternion
-        setproperty!(target, :rotation, _quat_to_euler_xyz(v))
+        order = hasproperty(target, :rotation) ?
+            getproperty(target, :rotation).order : :XYZ
+        setproperty!(target, :rotation, _transform_quaternion_to_euler(v, order))
     else
         setproperty!(target, property, v)
     end

@@ -155,3 +155,23 @@ end
     @test_throws ArgumentError fly_translate!(FlyControls(rc), Inf, 0.0, 0.0)
     @test (rc.position, rc.target, rc.up, rc.rotation) == snapshot
 end
+
+@testset "anim audit: quaternion tracks keep the target Euler order" begin
+    # three.js Object3D: quaternion changes update rotation via
+    # rotation.setFromQuaternion(quaternion, undefined), i.e. the current order.
+    g = Group()
+    g.rotation = Euler(0.1, 0.2, 0.3, :YXZ)
+    q1 = quat_from_euler(0.4, -0.7, 0.2; order=:ZYX)
+    qt = QuaternionKeyframeTrack(g, :quaternion, [0.0, 1.0], [Quaternion(), q1])
+    mixer_set_time!(AnimationMixer(AnimationClip("q", [qt])), 0.5)
+    @test g.rotation.order === :YXZ
+    expected = sample_track(qt, 0.5)
+    actual = quat_from_euler(g.rotation.x, g.rotation.y, g.rotation.z; order=:YXZ)
+    @test abs(quat_dot(actual, expected)) ≈ 1.0 atol=1e-12
+
+    h = Group()
+    h.rotation = Euler(0.0, 0.0, 0.0, :ZXY)
+    ny = NumberKeyframeTrack(h, "quaternion.y", [0.0, 1.0], [0.0, sin(pi / 8)])
+    mixer_set_time!(AnimationMixer(AnimationClip("qy", [ny])), 0.5)
+    @test h.rotation.order === :ZXY
+end
