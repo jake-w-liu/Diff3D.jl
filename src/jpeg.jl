@@ -86,6 +86,8 @@ mutable struct _JpegState
     H::Int
     ncomp::Int
     progressive::Bool
+    streaming::Bool                # sequential single-scan band pipeline
+    nscans::Int
     comps::Vector{_JpegComponent}
     max_h::Int32
     max_v::Int32
@@ -122,7 +124,7 @@ end
 
 function _JpegState(data::Vector{UInt8})
     _JpegState(data, 1, 1, UInt64(0), 0, Int32(0),
-               0, 0, 0, false, _JpegComponent[], Int32(1), Int32(1), 0, 0,
+               0, 0, 0, false, false, 0, _JpegComponent[], Int32(1), Int32(1), 0, 0,
                Union{Nothing,Vector{Int32}}[nothing, nothing, nothing, nothing],
                Union{Nothing,_JpegHuffTbl}[nothing, nothing, nothing, nothing],
                Union{Nothing,_JpegHuffTbl}[nothing, nothing, nothing, nothing],
@@ -586,6 +588,7 @@ function _jpeg_initial_setup!(st::_JpegState)
                                         _checked_mul_int(wb, hb, "JPEG image"),
                                         "JPEG image")
     end
+    st.streaming = !st.progressive && st.nscans == 1
     # Fail fast on declared-giant frames before allocating the coefficient
     # planes: the first scan must carry at least one bit of entropy data per
     # block it covers (two bits for sequential scans, where each block at
@@ -607,7 +610,7 @@ function _jpeg_initial_setup!(st::_JpegState)
     scan_blocks = _checked_mul_int(scan_blocks, minbits, "JPEG image")
     (length(st.data) - st.pos + 1) * 8 < scan_blocks &&
         error("JPEG entropy-coded data is truncated or corrupt")
-    for comp in st.comps
+    st.streaming || for comp in st.comps
         wb = comp.width_in_blocks +
              mod(comp.h - comp.width_in_blocks % comp.h, comp.h)
         hb = comp.height_in_blocks +
@@ -819,7 +822,12 @@ function _jpeg_mcu_sequential!(st::_JpegState, imcu::Int, yoff::Int,
         end
         s = (st.last_dc[scanidx] + s) % Int32   # C int32 wraparound
         st.last_dc[scanidx] = s
-        coefs[1, bcol + 1, brow + 1] = s % Int16
+        # In streaming mode comp.coefs is a one-band buffer; the row index is
+        # local to the current iMCU row and the block must be zeroed first so
+        # coefficients not written this band do not leak in from the last.
+        brw = st.streaming ? brow - imcu * Int(comp.v) : brow
+        st.streaming && fill!(@view(coefs[:, bcol + 1, brw + 1]), Int16(0))
+        coefs[1, bcol + 1, brw + 1] = s % Int16
         k = 1
         while k < 64
             rs = _jpeg_huff_decode(st, actbl)
@@ -828,7 +836,7 @@ function _jpeg_mcu_sequential!(st::_JpegState, imcu::Int, yoff::Int,
             if s != 0
                 k += r
                 v = _jpeg_extend(_jpeg_take_bits(st, Int(s)), s)
-                coefs[_JPEG_NATURAL_ORDER[k + 1] + 1, bcol + 1, brow + 1] =
+                coefs[_JPEG_NATURAL_ORDER[k + 1] + 1, bcol + 1, brw + 1] =
                     v % Int16
             else
                 r != 15 && break
@@ -1541,35 +1549,48 @@ end
 @inline _jpeg_ck(c::UInt8, k::UInt8) =
     UInt8((Int32(c) * Int32(k) * 2 + 255) ÷ 510)
 
+# UInt8 sample -> output element.  For Float64 output the lookup table keeps
+# the values identical to Float64(reinterpret(N0f8, v)) at zero extra cost.
+@inline _jpeg_outval(::Type{UInt8}, v::UInt8) = v
+@inline _jpeg_outval(::Type{Float64}, v::UInt8) =
+    _JPEG_N0F8_TO_FLOAT64[Int(v) + 1]
+
+# Color-convert nr consecutive output rows starting at absolute row y0
+# (1-based).  Row y0 + j reads uplines[ci][j + 1, x]: for whole-image calls
+# (y0 == 1) the row index equals the image row; for band emission it is the
+# row within the staging band.
 function _jpeg_color_convert!(st::_JpegState, uplines::Vector{Matrix{UInt8}},
-                              out::Array{UInt8,3})
+                              out::Array{T,3}, y0::Int, nr::Int) where T
     cs = _jpeg_colorspace(st)
-    H = st.H; W = st.W
+    W = st.W
     if cs === :gray
         p = uplines[1]
-        @inbounds for x in 1:W, y in 1:H
-            v = p[y, x]
-            out[y, x, 1] = v
-            out[y, x, 2] = v
-            out[y, x, 3] = v
+        @inbounds for x in 1:W, j in 0:(nr - 1)
+            v = p[j + 1, x]
+            y = y0 + j
+            out[y, x, 1] = _jpeg_outval(T, v)
+            out[y, x, 2] = _jpeg_outval(T, v)
+            out[y, x, 3] = _jpeg_outval(T, v)
         end
     elseif cs === :ycbcr
         p0 = uplines[1]; p1 = uplines[2]; p2 = uplines[3]
-        @inbounds for x in 1:W, y in 1:H
-            yv = Int32(p0[y, x])
-            cb = Int(p1[y, x]) + 1
-            cr = Int(p2[y, x]) + 1
-            out[y, x, 1] = _jpeg_clamp8(yv + _JPEG_CR_R[cr])
-            out[y, x, 2] =
-                _jpeg_clamp8(yv + ((_JPEG_CB_G[cb] + _JPEG_CR_G[cr]) >> 16))
-            out[y, x, 3] = _jpeg_clamp8(yv + _JPEG_CB_B[cb])
+        @inbounds for x in 1:W, j in 0:(nr - 1)
+            yv = Int32(p0[j + 1, x])
+            cb = Int(p1[j + 1, x]) + 1
+            cr = Int(p2[j + 1, x]) + 1
+            y = y0 + j
+            out[y, x, 1] = _jpeg_outval(T, _jpeg_clamp8(yv + _JPEG_CR_R[cr]))
+            out[y, x, 2] = _jpeg_outval(T,
+                _jpeg_clamp8(yv + ((_JPEG_CB_G[cb] + _JPEG_CR_G[cr]) >> 16)))
+            out[y, x, 3] = _jpeg_outval(T, _jpeg_clamp8(yv + _JPEG_CB_B[cb]))
         end
     elseif cs === :rgb
         p0 = uplines[1]; p1 = uplines[2]; p2 = uplines[3]
-        @inbounds for x in 1:W, y in 1:H
-            out[y, x, 1] = p0[y, x]
-            out[y, x, 2] = p1[y, x]
-            out[y, x, 3] = p2[y, x]
+        @inbounds for x in 1:W, j in 0:(nr - 1)
+            y = y0 + j
+            out[y, x, 1] = _jpeg_outval(T, p0[j + 1, x])
+            out[y, x, 2] = _jpeg_outval(T, p1[j + 1, x])
+            out[y, x, 3] = _jpeg_outval(T, p2[j + 1, x])
         end
     else
         # Four components.  Adobe data is stored inverted (value = 255 -
@@ -1578,11 +1599,11 @@ function _jpeg_color_convert!(st::_JpegState, uplines::Vector{Matrix{UInt8}},
         # as straight CMYK: R = (255-C)*(255-K)/255, rounded.
         p3 = uplines[4]
         adobe = cs !== :cmyk
-        @inbounds for x in 1:W, y in 1:H
-            k = p3[y, x]
-            c = uplines[1][y, x]
-            m = uplines[2][y, x]
-            yy = uplines[3][y, x]
+        @inbounds for x in 1:W, j in 0:(nr - 1)
+            k = p3[j + 1, x]
+            c = uplines[1][j + 1, x]
+            m = uplines[2][j + 1, x]
+            yy = uplines[3][j + 1, x]
             if cs === :ycck
                 # ycck_cmyk_convert (jdcolor.c): inverted CMY from YCbCr.
                 yv = Int32(c)
@@ -1593,31 +1614,254 @@ function _jpeg_color_convert!(st::_JpegState, uplines::Vector{Matrix{UInt8}},
                           ((_JPEG_CB_G[cb] + _JPEG_CR_G[cr]) >> 16)), 0, 255))
                 yy = UInt8(clamp(255 - Int(yv + _JPEG_CB_B[cb]), 0, 255))
             end
+            y = y0 + j
             if adobe
-                out[y, x, 1] = _jpeg_ck(c, k)
-                out[y, x, 2] = _jpeg_ck(m, k)
-                out[y, x, 3] = _jpeg_ck(yy, k)
+                out[y, x, 1] = _jpeg_outval(T, _jpeg_ck(c, k))
+                out[y, x, 2] = _jpeg_outval(T, _jpeg_ck(m, k))
+                out[y, x, 3] = _jpeg_outval(T, _jpeg_ck(yy, k))
             else
-                out[y, x, 1] = _jpeg_ck(255 - c, 255 - k)
-                out[y, x, 2] = _jpeg_ck(255 - m, 255 - k)
-                out[y, x, 3] = _jpeg_ck(255 - yy, 255 - k)
+                out[y, x, 1] = _jpeg_outval(T, _jpeg_ck(255 - c, 255 - k))
+                out[y, x, 2] = _jpeg_outval(T, _jpeg_ck(255 - m, 255 - k))
+                out[y, x, 3] = _jpeg_outval(T, _jpeg_ck(255 - yy, 255 - k))
             end
         end
     end
     return nothing
 end
 
+# ------------------------ sequential band streaming -------------------------
+#
+# A single-scan sequential (SOF0/SOF1) file does not need whole-image
+# coefficient planes: MCU rows decode in order, so each iMCU row of blocks can
+# be IDCT'd into a small per-component ring of input rows, upsampled, and
+# color-converted a band at a time.  Fancy vertical upsampling needs one input
+# row of context on each side, so output for band b is emitted once band b + 1
+# is decoded (the last band's context clamps at the image edge, matching the
+# whole-plane path which renders and clamps identically).
+
+mutable struct _JpegBands
+    bandcoefs::Vector{Array{Int16,3}}  # per comp: (64, padded wb, v) band coefs
+    ring::Vector{Matrix{UInt8}}        # per comp: ((2v+1)*8, wib*8) input rows
+    ringn::Vector{Int}                 # ring row count (multiple of 8)
+    ustage::Vector{Matrix{UInt8}}      # per comp: (maxv*8, W) upsampled band
+    methods::Vector{Symbol}            # per comp upsampling method
+    ws32::Vector{Int32}
+    scratch::Vector{UInt8}
+end
+
+function _jpeg_band_setup!(st::_JpegState)
+    bo = Int(st.max_v) * 8
+    bandcoefs = Array{Int16,3}[]
+    ring = Matrix{UInt8}[]
+    ringn = Int[]
+    ustage = Matrix{UInt8}[]
+    for comp in st.comps
+        v = Int(comp.v)
+        wb = comp.width_in_blocks +
+             mod(comp.h - comp.width_in_blocks % comp.h, comp.h)
+        b = zeros(Int16, 64, wb, v)
+        comp.coefs = b
+        push!(bandcoefs, b)
+        N = (2 * v + 1) * 8
+        push!(ring, zeros(UInt8, N, comp.width_in_blocks * 8))
+        push!(ringn, N)
+        push!(ustage, Matrix{UInt8}(undef, bo, st.W))
+    end
+    methods = Symbol[
+        _jpeg_upselect(comp, Int(st.max_h), Int(st.max_v)) for comp in st.comps]
+    return _JpegBands(bandcoefs, ring, ringn, ustage, methods,
+                      Vector{Int32}(undef, 64),
+                      Vector{UInt8}(undef, st.W * Int(st.max_h) + 16))
+end
+
+# IDCT one iMCU row of blocks into each component's input-row ring.
+function _jpeg_render_band!(st::_JpegState, bands::_JpegBands, imcu::Int)
+    for ci in 1:st.ncomp
+        comp = st.comps[ci]
+        v = Int(comp.v)
+        coefs = bands.bandcoefs[ci]
+        wb = comp.width_in_blocks
+        wbp = size(coefs, 2)
+        ring = bands.ring[ci]
+        N = bands.ringn[ci]
+        q = comp.quant_table === nothing ? zeros(Int32, 64) : comp.quant_table
+        hib = comp.height_in_blocks
+        base = imcu * v
+        for r in 0:(v - 1)
+            br = base + r + 1
+            br > hib && continue
+            brow0 = mod((base + r) * 8, N)
+            for bcol in 1:wb
+                _jpeg_idct_block!(ring, brow0, (bcol - 1) * 8, coefs,
+                                  r * wbp * 64 + (bcol - 1) * 64, q,
+                                  bands.ws32)
+            end
+        end
+    end
+    return nothing
+end
+
+# Upsample one output row of component ci into ustage row or (1-based).  Input
+# row indices are absolute (1-based), clamped to real rows exactly like the
+# whole-plane path; the ring holds every row the emit schedule can reference.
+function _jpeg_upsample_outrow!(st::_JpegState, bands::_JpegBands, ci::Int,
+                                orow::Int, or_::Int)
+    comp = st.comps[ci]
+    ring = bands.ring[ci]
+    N = bands.ringn[ci]
+    u = bands.ustage[ci]
+    W = st.W
+    dh = comp.downsampled_height
+    dw = comp.downsampled_width
+    method = bands.methods[ci]
+    if method === :fullsize
+        l0 = mod(_jpeg_prow(orow, dh) - 1, N) + 1
+        @inbounds for x in 1:W
+            u[or_, x] = ring[l0, x]
+        end
+        return nothing
+    end
+    hex = Int(st.max_h) ÷ Int(comp.h)
+    vex = Int(st.max_v) ÷ Int(comp.v)
+    scratch = bands.scratch
+    if method === :h2v1_fancy
+        l0 = mod(_jpeg_prow(min(orow ÷ vex, dh - 1), dh) - 1, N) + 1
+        _jpeg_h2v1_fancy_row!(scratch, ring, l0, dw)
+        @inbounds for x in 1:W
+            u[or_, x] = scratch[x]
+        end
+    elseif method === :h2v1_box
+        l0 = mod(_jpeg_prow(min(orow, dh - 1), dh) - 1, N) + 1
+        @inbounds for x in 1:W
+            u[or_, x] = ring[l0, ((x - 1) >> 1) + 1]
+        end
+    elseif method === :h1v2_fancy
+        inrow = orow >> 1
+        l0 = mod(_jpeg_prow(inrow, dh) - 1, N) + 1
+        l1 = mod(_jpeg_prow(inrow + (orow & 1 == 0 ? -1 : 1), dh) - 1, N) + 1
+        bias = orow & 1 == 0 ? 1 : 2
+        @inbounds for x in 1:dw
+            u[or_, x] = UInt8((Int32(ring[l0, x]) * 3 +
+                               Int32(ring[l1, x]) + bias) >> 2)
+        end
+    elseif method === :h2v2_fancy
+        inrow = orow >> 1
+        l0 = mod(_jpeg_prow(inrow, dh) - 1, N) + 1
+        l1 = mod(_jpeg_prow(inrow + (orow & 1 == 0 ? -1 : 1), dh) - 1, N) + 1
+        _jpeg_h2v2_fancy_row!(scratch, ring, l0, l1, dw)
+        @inbounds for x in 1:W
+            u[or_, x] = scratch[x]
+        end
+    elseif method === :h2v2_box
+        l0 = mod(_jpeg_prow(orow >> 1, dh) - 1, N) + 1
+        @inbounds for x in 1:W
+            u[or_, x] = ring[l0, ((x - 1) >> 1) + 1]
+        end
+    else                                       # :int box upsample
+        l0 = mod(_jpeg_prow(min(orow ÷ vex, dh - 1), dh) - 1, N) + 1
+        @inbounds for x in 1:W
+            u[or_, x] = ring[l0, min((x - 1) ÷ hex, dw - 1) + 1]
+        end
+    end
+    return nothing
+end
+
+# Upsample + color-convert output rows [b*bo, min((b+1)*bo, H)) of band b.
+function _jpeg_emit_band!(st::_JpegState, bands::_JpegBands, out, b::Int)
+    bo = Int(st.max_v) * 8
+    y0 = b * bo
+    y1 = min((b + 1) * bo, st.H)
+    nr = y1 - y0
+    for ci in 1:st.ncomp
+        for j in 1:nr
+            _jpeg_upsample_outrow!(st, bands, ci, y0 + j - 1, j)
+        end
+    end
+    _jpeg_color_convert!(st, bands.ustage, out, y0 + 1, nr)
+    return nothing
+end
+
+function _jpeg_decode_scan_streamed!(st::_JpegState, bands::_JpegBands, out)
+    _jpeg_per_scan_setup!(st)
+    _jpeg_latch_quant!(st)
+    _jpeg_start_scan!(st)
+    single = length(st.scan_comps) == 1
+    v = single ? Int(st.comps[st.scan_comps[1]].v) : 1
+    lastrow = single ? Int(st.comps[st.scan_comps[1]].last_row_height) : 1
+    last_imcu = st.total_imcu_rows - 1
+    for imcu in 0:last_imcu
+        rows_this = single ? (imcu < last_imcu ? v : lastrow) : 1
+        for yoff in 0:(rows_this - 1)
+            for mcu_col in 0:(st.MCUs_per_row - 1)
+                _jpeg_decode_mcu!(st, imcu, yoff, mcu_col)
+            end
+        end
+        _jpeg_render_band!(st, bands, imcu)
+        imcu > 0 && _jpeg_emit_band!(st, bands, out, imcu - 1)
+    end
+    _jpeg_emit_band!(st, bands, out, last_imcu)
+    st.pos = st.epos
+    return nothing
+end
+
 # ------------------------------ top-level driver ----------------------------
 
-# Decode `bytes` to an H x W x 3 UInt8 RGB array (or throw on any stream the
-# decoder does not support or that is corrupt).
-function _jpeg_decode_rgb8(bytes::AbstractVector{UInt8})
+# Count SOS markers by walking the segment structure (entropy data is
+# guaranteed marker-clean by 0xFF00 stuffing).  Used only to decide whether
+# the single-scan band-streaming path applies; a corrupt file that fools the
+# count still errors out through the normal checks.
+function _jpeg_count_scans(data::Vector{UInt8})
+    len = length(data)
+    p = 3
+    ns = 0
+    entropy = false
+    while p <= len
+        while p <= len && data[p] != 0xFF
+            p += 1
+        end
+        p > len && break
+        while p + 1 <= len && data[p + 1] == 0xFF
+            p += 1
+        end
+        p + 1 > len && break
+        m = data[p + 1]
+        p += 2
+        if entropy
+            m == 0x00 && continue
+            0xD0 <= m <= 0xD7 && continue
+            entropy = false
+        else
+            m == 0x00 && continue
+        end
+        if m == 0xD8 || m == 0xD9 || m == 0x01 || (0xD0 <= m <= 0xD7)
+            continue
+        end
+        p + 1 > len && break
+        slen = (Int(data[p]) << 8) | Int(data[p + 1])
+        slen < 2 && break
+        p += slen
+        if m == 0xDA
+            ns += 1
+            entropy = true
+        end
+    end
+    return ns
+end
+
+# Decode `bytes` to an H x W x 3 RGB array of element type T (UInt8 or
+# Float64; Float64 entries are the exact Float64(N0f8) values), or throw on
+# any stream the decoder does not support or that is corrupt.
+function _jpeg_decode_impl(bytes::AbstractVector{UInt8},
+                           ::Type{T}) where {T<:Union{UInt8,Float64}}
     data = bytes isa Vector{UInt8} ? bytes : Vector{UInt8}(bytes)
     length(data) >= 4 || error("not a JPEG file")
     (data[1] == 0xFF && data[2] == 0xD8) || error("not a JPEG file")
     st = _JpegState(data)
+    st.nscans = _jpeg_count_scans(data)
     st.pos = 3
     saw_scan = false
+    out = Array{T,3}(undef, 0, 0, 0)
+    local bands::_JpegBands
     while true
         m = if st.unread_marker != 0
             marker = st.unread_marker
@@ -1643,7 +1887,18 @@ function _jpeg_decode_rgb8(bytes::AbstractVector{UInt8})
             if st.input_scan_number == 1
                 _jpeg_initial_setup!(st)
             end
-            _jpeg_decode_scan!(st)
+            if st.streaming
+                if st.input_scan_number > 1
+                    error("JPEG contains more scan data than declared")
+                end
+                if st.input_scan_number == 1
+                    out = Array{T,3}(undef, st.H, st.W, 3)
+                    bands = _jpeg_band_setup!(st)
+                end
+                _jpeg_decode_scan_streamed!(st, bands, out)
+            else
+                _jpeg_decode_scan!(st)
+            end
             saw_scan = true
         elseif m == _JPEG_EOI
             break
@@ -1667,6 +1922,7 @@ function _jpeg_decode_rgb8(bytes::AbstractVector{UInt8})
     end
     st.saw_SOF || error("JPEG has no image (no SOF marker)")
     saw_scan || error("JPEG has no scan data (no SOS marker)")
+    st.streaming && return out
     # Render planes, upsample, convert color.
     ws32 = Vector{Int32}(undef, 64)
     planes = Vector{Matrix{UInt8}}(undef, st.ncomp)
@@ -1681,7 +1937,15 @@ function _jpeg_decode_rgb8(bytes::AbstractVector{UInt8})
     for ci in 1:st.ncomp
         _jpeg_upsample!(st, st.comps[ci], planes[ci], uplines[ci], scratch)
     end
-    out = Array{UInt8,3}(undef, st.H, st.W, 3)
-    _jpeg_color_convert!(st, uplines, out)
+    out = Array{T,3}(undef, st.H, st.W, 3)
+    _jpeg_color_convert!(st, uplines, out, 1, st.H)
     return out
 end
+
+_jpeg_decode_rgb8(bytes::AbstractVector{UInt8}) =
+    _jpeg_decode_impl(bytes, UInt8)
+
+# Decode to Float64 [0, 1] samples identical to Float64(reinterpret(N0f8, v))
+# on the UInt8 path, without materializing the H x W x 3 UInt8 intermediate.
+_jpeg_decode_float64(bytes::AbstractVector{UInt8}) =
+    _jpeg_decode_impl(bytes, Float64)

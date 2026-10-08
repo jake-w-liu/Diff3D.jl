@@ -9519,16 +9519,7 @@ end
 
 function _decode_jpeg(bytes::AbstractVector{UInt8}; label::AbstractString="glTF image MIME image/jpeg")
     try
-        img = _jpeg_decode_rgb8(bytes)
-        H, W = size(img, 1), size(img, 2)
-        out = Array{Float64}(undef, H, W, 3)
-        lut = _JPEG_N0F8_TO_FLOAT64
-        @inbounds for y in 1:H, x in 1:W
-            out[y, x, 1] = lut[Int(img[y, x, 1]) + 1]
-            out[y, x, 2] = lut[Int(img[y, x, 2]) + 1]
-            out[y, x, 3] = lut[Int(img[y, x, 3]) + 1]
-        end
-        return out
+        return _jpeg_decode_float64(bytes)
     catch err
         error("$label could not be decoded: $(sprint(showerror, err))")
     end
