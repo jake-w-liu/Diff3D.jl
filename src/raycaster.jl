@@ -475,10 +475,48 @@ function set_from_camera!(rc::Raycaster, camera::AbstractCamera, ndc_x, ndc_y)
     return rc
 end
 
+# Conservative bounding-sphere rejection (three.js tests geometry.boundingSphere
+# before any primitive). The sphere encloses the vertex AABB; any non-finite or
+# non-affine quantity disables the shortcut instead of risking a missed hit.
+function _raycast_local_bounds(geo::BufferGeometry, morphed_positions)
+    n = geo.n_vertices
+    n > 0 || return Vec3(NaN, NaN, NaN), Vec3(NaN, NaN, NaN)
+    lo = hi = _geometry_vertex(geo, morphed_positions, 1)
+    @inbounds for i in 2:n
+        p = _geometry_vertex(geo, morphed_positions, i)
+        lo = Vec3(min(lo.x, p.x), min(lo.y, p.y), min(lo.z, p.z))
+        hi = Vec3(max(hi.x, p.x), max(hi.y, p.y), max(hi.z, p.z))
+    end
+    half = (hi - lo) * 0.5
+    return lo + half, half
+end
+
+_raycast_bounds_miss(rc::Raycaster, geo::BufferGeometry, morphed_positions,
+                     wm::Mat4, pad::Float64) =
+    _raycast_bounds_miss(rc, _raycast_local_bounds(geo, morphed_positions), wm, pad)
+
+function _raycast_bounds_miss(rc::Raycaster, bounds::NTuple{2,Vec3{Float64}},
+                              wm::Mat4, pad::Float64)
+    e = wm.e
+    (e[4] == 0.0 && e[8] == 0.0 && e[12] == 0.0 && e[16] == 1.0) || return false
+    local_center, half = bounds
+    _finite_vec3(local_center) && _finite_vec3(half) || return false
+    scale = _mat4_linear_max_scale(wm)
+    center = mat4_transform_point(wm, local_center)
+    radius = norm(half) * scale + pad
+    origin = rc.ray.origin
+    magnitude = norm(center) + norm(local_center) * scale + hypot(e[13], e[14], e[15])
+    reach = radius + 1.0e-9 * (radius + norm(center - origin) + magnitude)
+    isfinite(reach) && _finite_vec3(center) || return false
+    _, gap = _ray_point_distance(origin, rc.ray.direction, center)
+    return isfinite(gap) && gap > reach
+end
+
 function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
                             morphed_positions,instance_id=nothing)
     o,d = rc.ray.origin,rc.ray.direction
     thr = rc.point_threshold
+    _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
     @inbounds for entry in _draw_entry_range(geo)
         vi = _draw_vertex_index(geo, entry)
         p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
@@ -501,6 +539,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     step = mode === :lines ? 2 : 1
     entries = _draw_entry_range(geo)
     isempty(entries) && return hits
+    _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
     first_entry = first(entries)
     last_entry = last(entries)
     @inbounds for entry in first_entry:step:(last_entry - 1)
@@ -561,6 +600,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = material_side(_mesh_material(obj))
+        _raycast_bounds_miss(rc, geo, morphed_positions, wm, 0.0) && return hits
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
@@ -580,9 +620,11 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             _validate_indexed_geometry(geo,"raycast")
         end
         side = triangle_mode ? material_side(_instanced_material(obj)) : :double
+        bounds = _raycast_local_bounds(geo, nothing)
         @inbounds for (instance_index,im) in pairs(obj.instance_matrices)
             m = wm*im
             if triangle_mode
+                _raycast_bounds_miss(rc, bounds, m, 0.0) && continue
                 for fi in _draw_face_range(geo)
                     i1, i2, i3 = get_face(geo, fi)
                     a = mat4_transform_point(m, get_vertex(geo, i1))
@@ -649,20 +691,28 @@ end
 _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D) =
     _raycast_object!(hits, rc, obj, compute_world_matrix(obj))
 
-@inline function _raycast_recursive_child!(hits::Vector{Intersection}, rc::Raycaster,
-                                           child::T,
-                                           parent_world::Mat4{Float64}) where {T<:AbstractObject3D}
-    child_world = parent_world * compute_local_matrix(child)
-    return _raycast_recursive!(hits, rc, child, child_world)
+# Parent world matrices live in a per-depth stack: passing an isbits Mat4
+# through the dynamically dispatched child call would box it per object.
+function _raycast_recursive_child!(hits::Vector{Intersection}, rc::Raycaster,
+                                   child::AbstractObject3D,
+                                   worlds::Vector{Mat4{Float64}}, depth::Int)
+    child_world = @inbounds(worlds[depth]) * compute_local_matrix(child)
+    return _raycast_recursive!(hits, rc, child, child_world, worlds, depth + 1)
 end
 
 function _raycast_recursive!(hits::Vector{Intersection}, rc::Raycaster,
-                             obj::AbstractObject3D, world::Mat4{Float64})
+                             obj::AbstractObject3D, world::Mat4{Float64},
+                             worlds::Vector{Mat4{Float64}}=Mat4{Float64}[],
+                             depth::Int=1)
     is_visible(obj) || return hits
     _layers_test_object(obj, rc.layers) && _raycast_object!(hits, rc, obj, world)
-    for child in get_children(obj)
+    children = get_children(obj)
+    isempty(children) && return hits
+    length(worlds) < depth && resize!(worlds, depth)
+    @inbounds worlds[depth] = world
+    for child in children
         is_visible(child) || continue
-        _raycast_recursive_child!(hits, rc, child, world)
+        _raycast_recursive_child!(hits, rc, child, worlds, depth)
     end
     return hits
 end

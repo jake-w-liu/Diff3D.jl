@@ -115,3 +115,44 @@ end
     q = quat_slerp(a, b, t)
     @test abs(q.x - expected.x) <= eps() / 8 && abs(q.w - expected.w) <= eps() / 8
 end
+
+function _mathapi_raycast_allocations(rc, scene)
+    raycast(rc, scene)
+    return @allocated raycast(rc, scene)
+end
+
+@testset "mathapi: raycast traversal and bounding-sphere rejection" begin
+    scene = Scene()
+    geometry = BoxGeometry()
+    for i in 1:200
+        group = Group(); group.position = Vec3(0.1i, 0.0, -0.3)
+        mesh = Mesh(geometry, MeshBasicMaterial())
+        mesh.position = Vec3(0.5i, 0.0, -5.0); mesh.scale = Vec3(1.0, 2.0, 0.5)
+        add!(group, mesh); add!(scene, group)
+    end
+    rc = Raycaster(Vec3(0.6, 0.3, 10.0), Vec3(0.0, 0.0, -1.0))
+    hits = raycast(rc, scene)
+    @test length(hits) == 1 && hits[1].distance ≈ 15.05
+    if Base.JLOptions().opt_level > 0
+        # One traversal stack and the result vector; no per-object boxing.
+        @test _mathapi_raycast_allocations(rc, scene) <= 1024
+    end
+    # A grazing ray through a box corner stays a hit after the sphere test.
+    corner = Mesh(BoxGeometry(), MeshBasicMaterial(side=:double))
+    corner.position = Vec3(1.0e6, -2.0e6, 3.0)
+    corner_point = Vec3(1.0e6 + 0.5, -2.0e6 + 0.5, 3.5)
+    graze = Raycaster(corner_point + Vec3(-3.0, 0.0, 4.0), Vec3(3.0, 0.0, -4.0))
+    @test !isempty(raycast(graze, corner))
+    # Projective instance matrices bypass the affine-only shortcut.
+    projective = InstancedMesh(PlaneGeometry(width=2.0, height=2.0),
+                               MeshBasicMaterial(side=:double),
+                               [Mat4((1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                                      0.0, 0.0, 1.0, 0.25, 0.0, 0.0, 0.0, 1.0))])
+    @test length(raycast(Raycaster(Vec3(0.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0)), projective)) == 1
+    # Morphed positions feed the bounds, so a morph-moved mesh is still found.
+    plane = PlaneGeometry(width=1.0, height=1.0)
+    set_attribute!(plane, :morphPosition0, repeat([10.0, 0.0, 0.0], plane.n_vertices), 3)
+    morphed = Mesh(plane, MeshBasicMaterial(); morph_target_influences=[1.0])
+    @test length(raycast(Raycaster(Vec3(10.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0)), morphed)) == 1
+    @test isempty(raycast(Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)), morphed))
+end
