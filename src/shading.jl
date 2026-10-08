@@ -2685,16 +2685,21 @@ function light_contribution(light::DirectionalLight, position::Vec3)
     (light.color, light.intensity, dir)
 end
 
+# three.js `getDistanceAttenuation`: inverse power falloff capped at 100x, with
+# the Frostbite window `(1 - (d/cutoff)^4)^2` when a finite cutoff is set.
+@inline function _distance_attenuation(dist, cutoff::Float64, decay::Float64)
+    falloff = one(dist) / max(dist^decay, 0.01)
+    cutoff > 0 || return falloff
+    ratio = dist / cutoff
+    window = clamp(1 - ratio^4, zero(ratio), one(ratio))
+    return falloff * window * window
+end
+
 function light_contribution(light::PointLight, position::Vec3)
     _validate_light_parameters(light)
     dir, dist =
         _light_direction_and_distance(position, _light_world_position(light))
-    attenuation = if light.distance > 0
-        factor = max(1.0 - (dist / light.distance)^2, 0.0)
-        factor / max(dist^light.decay, 1e-10)
-    else
-        1.0 / max(dist^light.decay, 1e-10)
-    end
+    attenuation = _distance_attenuation(dist, light.distance, light.decay)
 
     # IES photometric distribution (mirrors the SpotLight branch). A PointLight
     # has no target, so the vertical angle θ is measured from the luminaire aim
@@ -2722,12 +2727,11 @@ function light_contribution(light::SpotLight, position::Vec3)
     cos_outer = cos(light.angle)
     cos_inner = cos(light.angle * (1 - light.penumbra))
 
-    spot_effect = clamp((cos_angle - cos_outer) / max(cos_inner - cos_outer, 1e-10), 0.0, 1.0)
+    # three.js `getSpotAttenuation` = smoothstep(coneCos, penumbraCos, angleCos).
+    t = clamp((cos_angle - cos_outer) / max(cos_inner - cos_outer, 1e-10), 0.0, 1.0)
+    spot_effect = t * t * (3 - 2t)
 
-    # Range cutoff (mirrors PointLight): a finite `distance` applies a smooth
-    # window that vanishes at the range limit; `distance <= 0` means unbounded.
-    dwin = light.distance > 0 ? max(1.0 - (dist / light.distance)^2, 0.0) : 1.0
-    attenuation = spot_effect * dwin / max(dist^light.decay, 1e-10)
+    attenuation = spot_effect * _distance_attenuation(dist, light.distance, light.decay)
 
     # IES photometric distribution: when a measured profile is attached, modulate
     # the intensity by the profile's normalized candela at the vertical angle θ

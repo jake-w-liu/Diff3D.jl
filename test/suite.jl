@@ -12843,8 +12843,8 @@ end
             sl_fin.target = Diff3D.Vec3(0.0, 0.0, -1.0)
             _, li_inf, _ = Diff3D.light_contribution(sl_inf, pos)
             _, li_fin, _ = Diff3D.light_contribution(sl_fin, pos)
-            # dwin = 1 - (3/5)^2 = 0.64; OLD ignored distance so li_fin == li_inf
-            @test isapprox(li_fin, li_inf * 0.64; rtol=1e-9)
+            # three.js window (1 - (3/5)^4)^2; OLD ignored distance so li_fin == li_inf
+            @test isapprox(li_fin, li_inf * (1 - (3 / 5)^4)^2; rtol=1e-9)
             @test li_fin < li_inf * 0.99
         end
 
@@ -34100,3 +34100,5 @@ include("standard_direct_lights.jl")
 include("web_uniform_writes.jl")
 
 include("jpeg_decoder.jl")
+
+include("shading_audit.jl")
