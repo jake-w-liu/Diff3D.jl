@@ -12752,13 +12752,11 @@ end
         end
 
         # [B:geometries] #26 ConeGeometry: redundant zero-radius apex cap (32 degenerate + NaN-normal
-        # faces) removed. The cone's side ring still collapses one zero-area triangle per radial
-        # segment at the apex — that is inherent to a cone-as-collapsed-cylinder and matches three.js
-        # (those triangles have no raster footprint), so we assert the cap is gone, not that every
-        # face is non-degenerate.
+        # faces) removed. Like three.js (CylinderGeometry.js:169/176), the side ring also omits the
+        # triangles that would collapse onto the zero-radius apex.
         @testset "#26 cone redundant apex cap removed" begin
             geo = ConeGeometry(radius=1.0, height=1.0, radial_segments=32, height_segments=1)
-            @test geo.n_faces == 96                                   # FAILS on old (was 128: extra apex cap)
+            @test geo.n_faces == 64                                   # FAILS on old (was 128: extra apex cap)
             degenerate = 0
             for fi in 1:geo.n_faces
                 i1,i2,i3 = get_face(geo, fi)
@@ -12767,7 +12765,7 @@ end
                 @test !isnan(fn.x) && !isnan(fn.y) && !isnan(fn.z)    # FAILS on old (NaN apex-cap faces)
                 (fn.x^2 + fn.y^2 + fn.z^2) < 1e-18 && (degenerate += 1)
             end
-            @test degenerate == 32                                    # FAILS on old (was 64: cap + side collapse)
+            @test degenerate == 0                                     # FAILS on old (was 64: cap + side collapse)
         end
 
         # [B:geometries] #9 IcosahedronGeometry ignores 'detail' (always 12 verts/20 faces) and writes all-zero UVs
@@ -34100,3 +34098,4 @@ include("standard_direct_lights.jl")
 include("web_uniform_writes.jl")
 
 include("jpeg_decoder.jl")
+include("geometry_audit.jl")

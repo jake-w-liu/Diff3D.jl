@@ -1112,6 +1112,9 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
         θ = v * π
         sinθ = sin(θ)
         cosθ = cos(θ)
+        # three.js centers each pole vertex's u between its ring neighbours.
+        u_offset = j == 0 ? 0.5 / width_segments :
+                   j == height_segments ? -0.5 / width_segments : 0.0
         for i in 0:width_segments
             u = i / width_segments
             ϕ = u * 2π
@@ -1137,7 +1140,7 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             normals_arr[pbase] = nx
             normals_arr[pbase + 1] = ny
             normals_arr[pbase + 2] = nz
-            uvs_arr[ubase] = u
+            uvs_arr[ubase] = u + u_offset
             uvs_arr[ubase + 1] = 1.0 - v
         end
     end
@@ -1241,8 +1244,12 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     top_cap = !open_ended && radius_top > 0
     bottom_cap = !open_ended && radius_bottom > 0
     cap_count = (top_cap ? 1 : 0) + (bottom_cap ? 1 : 0)
+    # three.js omits the side triangles that collapse onto a zero-radius pole.
+    top_side = radius_top > 0
+    bottom_side = radius_bottom > 0
     n_verts = side_vertices + cap_count * (radial_segments + 2)
-    n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments
+    n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments -
+              ((top_side ? 0 : 1) + (bottom_side ? 0 : 1)) * radial_segments
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "CylinderGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -1306,13 +1313,18 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
             b = a + 1
             c = a + (radial_segments + 1)
             d = c + 1
-            indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
-            indices[out + 4] = c
-            indices[out + 5] = d
-            out += 6
+            if top_side || y_seg != 0
+                indices[out] = a
+                indices[out + 1] = d
+                indices[out + 2] = b
+                out += 3
+            end
+            if bottom_side || y_seg != height_segments - 1
+                indices[out] = a
+                indices[out + 1] = c
+                indices[out + 2] = d
+                out += 3
+            end
         end
     end
 
@@ -1353,8 +1365,8 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                 normals_arr[pbase] = 0.0
                 normals_arr[pbase + 1] = cap_ny
                 normals_arr[pbase + 2] = 0.0
-                uvs_arr[ubase] = sinθ * 0.5 + 0.5
-                uvs_arr[ubase + 1] = cosθ * 0.5 + 0.5
+                uvs_arr[ubase] = cosθ * 0.5 + 0.5
+                uvs_arr[ubase + 1] = sinθ * 0.5 * cap_ny + 0.5
             end
 
             for x_seg in 0:radial_segments-1
