@@ -1145,7 +1145,8 @@ end
 
 function _ply_preflight_element(ecount::Int, props, format::Symbol,
                                 remaining::Int, ename::String)
-    min_row_bytes = format === :ascii ? 1 : _ply_binary_min_row_bytes(props)
+    min_row_bytes = format === :ascii ? (isempty(props) ? 0 : 1) :
+                    _ply_binary_min_row_bytes(props)
     required = _ply_checked_mul(ecount, min_row_bytes, "element byte count")
     required <= remaining ||
         error("PLY $format element $ename declares $ecount rows, but the file " *
@@ -1174,7 +1175,8 @@ function _ply_parse_ascii_float(tok, context::String)
 end
 
 @inline _ply_ascii_space(b::UInt8) =
-    b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') || b == UInt8('\n')
+    b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') || b == UInt8('\n') ||
+    b == UInt8('\v') || b == UInt8('\f')
 @inline _ply_ascii_digit(b::UInt8) = UInt8('0') <= b <= UInt8('9')
 @inline _ply_ascii_lower(b::UInt8) =
     UInt8('A') <= b <= UInt8('Z') ? UInt8(b + 0x20) : b
@@ -1450,9 +1452,13 @@ function load_ply(path::String)
     # property is stored as (:list, name, count_type, index_type).
     elements = Tuple{String,Int,Vector{Any}}[]
     i = 1
+    # Classic Mac headers end lines with a bare CR, as three.js PLYLoader accepts.
+    cr = findfirst(b -> b == UInt8('\r') || b == UInt8('\n'), bytes)
+    eol = cr !== nothing && bytes[cr] == UInt8('\r') &&
+          (cr == n || bytes[cr + 1] != UInt8('\n')) ? UInt8('\r') : UInt8('\n')
     function next_line()
         j = i
-        while j <= n && bytes[j] != UInt8('\n'); j += 1; end
+        while j <= n && bytes[j] != eol; j += 1; end
         e = j - 1
         e >= i && bytes[e] == UInt8('\r') && (e -= 1)   # strip CRLF
         line = e >= i ? String(bytes[i:e]) : ""
@@ -1572,12 +1578,11 @@ function load_ply(path::String)
             have_color && (colors = Vector{Float64}(undef, coord_count))
 
             if format == :ascii
+                p = i
                 for v in 0:ecount-1
-                    line_start, line_stop, i = _ply_line_bounds(body, i, n)
                     b3 = v * 3
-                    p = line_start
                     for (c, prop) in enumerate(props)
-                        first, last, p = _ply_next_ascii_token(body, p, line_stop)
+                        first, last, p = _ply_next_ascii_token(body, p, n)
                         first != 0 ||
                             _ply_ascii_missing_property_error("vertex", v + 1, prop[2])
                         val = _ply_parse_ascii_vertex_float(body, first, last,
@@ -1588,7 +1593,7 @@ function load_ply(path::String)
                             nitems = checked_list_count(count_value)
                             for item in 1:nitems
                                 first, last, p = _ply_next_ascii_token(
-                                    body, p, line_stop)
+                                    body, p, n)
                                 first != 0 ||
                                     _ply_ascii_missing_property_error(
                                         "vertex", v + 1, prop[2])
@@ -1624,6 +1629,7 @@ function load_ply(path::String)
                         end
                     end
                 end
+                i = p
             else
                 # Binary: read every property in declared order; keep the roles.
                 for v in 0:ecount-1
@@ -1677,11 +1683,10 @@ function load_ply(path::String)
                 length(indices), face_hint, "face index hint"))
             if format == :ascii
                 nverts = length(positions) ÷ 3
+                p = i
                 for face_row in 1:ecount
-                    line_start, line_stop, i = _ply_line_bounds(body, i, n)
-                    p = line_start
                     for (prop_col, prop) in enumerate(props)
-                        first, last, p = _ply_next_ascii_token(body, p, line_stop)
+                        first, last, p = _ply_next_ascii_token(body, p, n)
                         first != 0 ||
                             _ply_ascii_missing_property_error(
                                 "face", face_row, prop[2])
@@ -1699,8 +1704,7 @@ function load_ply(path::String)
                         first_idx = 0
                         prev_idx = 0
                         for k in 1:nitems
-                            first, last, p = _ply_next_ascii_token(
-                                body, p, line_stop)
+                            first, last, p = _ply_next_ascii_token(body, p, n)
                             first != 0 ||
                                 _ply_ascii_missing_property_error(
                                     "face", face_row, prop[2])
@@ -1728,6 +1732,7 @@ function load_ply(path::String)
                         end
                     end
                 end
+                i = p
             else
                 nverts = length(positions) ÷ 3
                 for face_row in 1:ecount
@@ -1767,8 +1772,26 @@ function load_ply(path::String)
         else
             # Unknown element: skip its rows so the byte cursor stays aligned.
             if format == :ascii
-                for _ in 0:ecount-1
-                    _, _, i = _ply_line_bounds(body, i, n)
+                for row in 1:ecount
+                    for prop in props
+                        first, last, i = _ply_next_ascii_token(body, i, n)
+                        first != 0 ||
+                            _ply_ascii_missing_property_error(ename, row, prop[2])
+                        if prop[1] === :scalar
+                            _ply_validate_ascii_property_value(
+                                body, first, last, ename, row, prop[2], prop[3])
+                            continue
+                        end
+                        nitems = checked_list_count(_ply_validate_ascii_property_value(
+                            body, first, last, ename, row, prop[2], prop[3]))
+                        for item in 1:nitems
+                            first, last, i = _ply_next_ascii_token(body, i, n)
+                            first != 0 ||
+                                _ply_ascii_missing_property_error(ename, row, prop[2])
+                            _ply_validate_ascii_property_value(
+                                body, first, last, ename, row, prop[2], prop[4], item)
+                        end
+                    end
                 end
             else
                 isempty(props) && continue
