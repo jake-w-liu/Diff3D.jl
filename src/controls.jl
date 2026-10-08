@@ -236,7 +236,8 @@ end
 
 function _orbit_constrained(oc::OrbitControls, s::Spherical)
     radius = clamp(s.radius, oc.min_distance, oc.max_distance)
-    phi = clamp(s.phi, max(oc.min_polar_angle, 1e-4), min(oc.max_polar_angle, π - 1e-4))
+    # three.js clamps to the polar window, then Spherical.makeSafe (EPS = 1e-6).
+    phi = clamp(clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle), 1e-6, π - 1e-6)
     theta = _clamp_azimuth(s.theta, oc.min_azimuth_angle, oc.max_azimuth_angle)
     return Spherical(radius, phi, theta)
 end

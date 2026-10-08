@@ -216,3 +216,22 @@ end
     @test_throws "CameraHelper requires a camera with a finite, invertible frustum" CameraHelper(
         PerspectiveCamera(far=Inf))
 end
+
+@testset "anim audit: OrbitControls polar clamp follows Spherical.makeSafe" begin
+    function orbit_cam()
+        cam = PerspectiveCamera()
+        cam.position = Vec3(0.0, 0.0, 5.0)
+        cam.target = Vec3(0.0, 0.0, 0.0)
+        return cam
+    end
+    oc = OrbitControls(orbit_cam())
+    orbit_set!(oc; azimuth=0.0, polar=0.0, radius=5.0)
+    @test Diff3D._orbit_spherical(oc).phi ≈ 1e-6 rtol=1e-3
+    orbit_set!(oc; azimuth=0.0, polar=pi, radius=5.0)
+    @test Diff3D._orbit_spherical(oc).phi ≈ pi - 1e-6 atol=1e-9
+    # A zero-width window at the pole still keeps the camera off the axis.
+    pinned = OrbitControls(orbit_cam(); min_polar_angle=0.0, max_polar_angle=0.0)
+    orbit_rotate!(pinned, 0.0, 0.3)
+    @test Diff3D._orbit_spherical(pinned).phi ≈ 1e-6 rtol=1e-3
+    @test all(isfinite, collect(view_matrix(pinned.camera).e))
+end
