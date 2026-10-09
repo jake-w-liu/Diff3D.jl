@@ -77,6 +77,24 @@
 - Reverse-mode gradients allocate one object per recorded operation, reuse
   task-local tapes, and keep per-pixel soft-render constants off the tape
   (a 24-face 32x32 soft-render gradient: ~65 ms / 101 MB to ~25 ms / 56 MB).
+- Add `MapControls` (an `OrbitControls` with the new `screen_space_panning=false`
+  keyword, panning across the plane orthogonal to `camera.up`), `Box3Helper`,
+  and `ArrowHelper`, following three.js.
+- Animation loop timing follows three.js `AnimationAction`: finite
+  `repetitions` also finish when playing backward, backward ping-pong starts
+  unmirrored, `repetitions=0` plays one loop, and a repeating clip samples its
+  first frame at exact loop multiples (sample the end pose with
+  `loop=:once, clamp_when_finished=true`). Quaternion tracks keep the target's
+  Euler order.
+- `OrbitControls` applies azimuth limits only when both are finite and clamps
+  the polar angle with three.js's `1e-6` pole margin. `trackball_rotate!`
+  follows three.js `TrackballControls`: it turns the eye and `camera.up` about
+  the axis perpendicular to the drag, so the camera can pass over the poles
+  (a positive `dx` now orbits the camera to its left, like dragging right).
+  Fly and pointer-lock controls now steer rotation-driven (glTF) cameras.
+- `BoxHelper` bounds the object and its descendants in world space and
+  `HemisphereLightHelper` sits at the light's world position, as in three.js;
+  `CameraHelper` reports unbounded frusta explicitly.
 
 ## 1.0.0
 

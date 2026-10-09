@@ -51,6 +51,9 @@ mutable struct OrbitControls
     v_pan::Vec3{Float64}     # pending world-space pan offset
     position0::Vec3{Float64}
     target0::Vec3{Float64}
+    # three.js OrbitControls.screenSpacePanning: vertical pan follows the
+    # camera up (true) or moves across the plane orthogonal to `camera.up`.
+    screen_space_panning::Bool
 end
 
 # Damping is a decay factor. Non-finite or >1 values either poison camera state
@@ -134,7 +137,8 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                        enable_damping::Bool=false, damping_factor::Real=0.05,
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
-                       min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf)
+                       min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
+                       screen_space_panning::Bool=true)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
@@ -152,7 +156,7 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                   minimum_polar, maximum_polar,
                   minimum_azimuth, maximum_azimuth,
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
-                  checked_target)
+                  checked_target, screen_space_panning)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -187,11 +191,26 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                   _checked_control_vec3(position0,
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
-                                        "OrbitControls saved target"))
+                                        "OrbitControls saved target"),
+                  true)
 end
 
 OrbitControls(cam::PerspectiveCamera; kwargs...) =
     OrbitControls(cam, _camera_control_target(cam); kwargs...)
+
+"""
+    MapControls(camera[, target]; screen_space_panning=false, kwargs...)
+
+`OrbitControls` configured like three.js `MapControls`: vertical pan deltas
+move the target across the plane orthogonal to `camera.up` (the ground for a
+y-up scene) instead of along the screen's up axis. All other keywords are the
+`OrbitControls` ones.
+"""
+MapControls(cam::PerspectiveCamera, target::Vec3{Float64};
+            screen_space_panning::Bool=false, kwargs...) =
+    OrbitControls(cam, target; screen_space_panning=screen_space_panning, kwargs...)
+MapControls(cam::PerspectiveCamera; kwargs...) =
+    MapControls(cam, _camera_control_target(cam); kwargs...)
 
 # Current spherical (radius, polar from +y, azimuth) of the camera about target.
 _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
@@ -202,10 +221,10 @@ _orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position 
 # ends up above the normalized max) keeps any angle on either arc instead of
 # snapping it to a boundary — without this, a back-facing range such as
 # [π/2, 3π/2] is unusable because cartesian_to_spherical can never return a
-# value above π. A non-finite (default unbounded / one-sided) limit takes the
-# plain clamp, which already does the right thing with ±Inf.
+# value above π. As in three.js, the window only applies when both limits are
+# finite; a one-sided limit leaves the azimuth unrestricted.
 @inline function _clamp_azimuth(theta, min_az, max_az)
-    (isfinite(min_az) && isfinite(max_az)) || return clamp(theta, min_az, max_az)
+    (isfinite(min_az) && isfinite(max_az)) || return theta
     mn = min_az < -π ? min_az + 2π : (min_az > π ? min_az - 2π : min_az)
     mx = max_az < -π ? max_az + 2π : (max_az > π ? max_az - 2π : max_az)
     if mn <= mx
@@ -217,7 +236,8 @@ end
 
 function _orbit_constrained(oc::OrbitControls, s::Spherical)
     radius = clamp(s.radius, oc.min_distance, oc.max_distance)
-    phi = clamp(s.phi, max(oc.min_polar_angle, 1e-4), min(oc.max_polar_angle, π - 1e-4))
+    # three.js clamps to the polar window, then Spherical.makeSafe (EPS = 1e-6).
+    phi = clamp(clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle), 1e-6, π - 1e-6)
     theta = _clamp_azimuth(s.theta, oc.min_azimuth_angle, oc.max_azimuth_angle)
     return Spherical(radius, phi, theta)
 end
@@ -288,7 +308,11 @@ function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
     up = normalize(cross(right, fwd))
     return right, up
 end
-_orbit_pan_basis(oc::OrbitControls) = _camera_pan_basis(oc.camera, oc.target)
+function _orbit_pan_basis(oc::OrbitControls)
+    right, up = _camera_pan_basis(oc.camera, oc.target)
+    oc.screen_space_panning && return right, up
+    return right, normalize(cross(oc.camera.up, right))
+end
 function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     right, up = _orbit_pan_basis(oc)
     shift = right * dx + up * dy
@@ -473,27 +497,50 @@ function trackball_reset!(tc::TrackballControls)
     return tc
 end
 
-function _trackball_apply!(tc::TrackballControls, s::Spherical)
-    radius = max(s.radius, 0.0)
-    phi = clamp(s.phi, 1e-4, π - 1e-4)
-    position = tc.target + spherical_to_cartesian(
-        Spherical(radius, phi, s.theta))
+function _trackball_set_eye!(tc::TrackballControls, eye::Vec3)
     tc.camera.position = _checked_control_vec3(
-        position, "TrackballControls camera position")
+        tc.target + eye, "TrackballControls camera position")
     tc.camera.target = tc.target
     _sync_camera_rotation_from_view!(tc.camera)
     return tc
 end
 
+@inline _rotate_about_unit_axis(v::Vec3, k::Vec3, c, s) =
+    v * c + cross(k, v) * s + k * (dot(k, v) * (1 - c))
+
+"""
+    trackball_rotate!(tc, dx, dy)
+
+Rotate the camera about the target like three.js `TrackballControls` for a
+screen-space drag of `(dx, dy)` radians: the eye turns by `hypot(dx, dy)` about
+the axis perpendicular to the drag direction and the eye, and `camera.up` turns
+with it, so the camera can roll over the poles.
+"""
 function trackball_rotate!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
-    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
-    _checked_control_vec3(tc.target, "TrackballControls target")
+    cam = tc.camera
+    _, _, up = _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    target = _checked_control_vec3(tc.target, "TrackballControls target")
     checked_dx = _checked_control_scalar(dx, "TrackballControls x delta")
     checked_dy = _checked_control_scalar(dy, "TrackballControls y delta")
-    s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(
-        tc, Spherical(s.radius, s.phi + checked_dy, s.theta + checked_dx))
+    angle = hypot(checked_dx, checked_dy)
+    eye = cam.position - target
+    (angle > 0.0 && norm(eye) > 0.0) || return tc
+    eye_direction = normalize(eye)
+    up_direction = normalize(up)
+    sideways = cross(up_direction, eye_direction)
+    if norm(sideways) <= 1e-12
+        sideways, up_direction = _perp_basis(eye_direction)
+    end
+    move = up_direction * checked_dy + normalize(sideways) * checked_dx
+    axis = normalize(cross(move, eye_direction))
+    c, s = cos(angle), sin(angle)
+    new_up = _checked_control_vec3(
+        _rotate_about_unit_axis(up, axis, c, s), "TrackballControls camera up")
+    new_eye = _rotate_about_unit_axis(eye, axis, c, s)
+    _checked_control_vec3(target + new_eye, "TrackballControls camera position")
+    cam.up = new_up
+    return _trackball_set_eye!(tc, new_eye)
 end
 
 """Scale the camera distance from the trackball target. `factor < 1` zooms in."""
@@ -503,9 +550,8 @@ function trackball_zoom!(tc::TrackballControls, factor)
     _checked_control_vec3(tc.target, "TrackballControls target")
     checked_factor = _checked_control_scalar(
         factor, "TrackballControls zoom factor")
-    s = cartesian_to_spherical(tc.camera.position - tc.target)
-    return _trackball_apply!(
-        tc, Spherical(s.radius * checked_factor, s.phi, s.theta))
+    eye = tc.camera.position - tc.target
+    return _trackball_set_eye!(tc, eye * max(checked_factor, 0.0))
 end
 
 """Pan the trackball target and camera in the view plane."""
@@ -533,6 +579,15 @@ mutable struct FlyControls
     camera::PerspectiveCamera
 end
 
+# A rotation-driven camera renders from `rotation`, so first-person controls
+# derive their look target from it before moving (keeping `up` as the world-up
+# hint, like a target-driven camera), and write the result back to `rotation`.
+function _first_person_view_from_rotation!(cam::PerspectiveCamera)
+    cam.rotation_driven || return cam
+    cam.target = _camera_control_target(cam)
+    return cam
+end
+
 """Translate the camera (and its target) along forward/right/up axes."""
 function fly_translate!(fc::FlyControls, forward, right, up)
     cam = fc.camera
@@ -541,6 +596,7 @@ function fly_translate!(fc::FlyControls, forward, right, up)
         forward, "FlyControls forward delta")
     checked_right = _checked_control_scalar(right, "FlyControls right delta")
     checked_up = _checked_control_scalar(up, "FlyControls up delta")
+    _first_person_view_from_rotation!(cam)
     f = _direction_between(cam.position, cam.target)
     r, u = _camera_pan_basis(cam, cam.target)
     shift = f * checked_forward + r * checked_right + u * checked_up
@@ -559,6 +615,7 @@ function fly_rotate!(fc::FlyControls, yaw, pitch)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_yaw = _checked_control_scalar(yaw, "FlyControls yaw")
     checked_pitch = _checked_control_scalar(pitch, "FlyControls pitch")
+    _first_person_view_from_rotation!(cam)
     dist = norm(cam.target - cam.position)
     dir = normalize(cam.target - cam.position)
     s = cartesian_to_spherical(dir)
@@ -567,6 +624,7 @@ function fly_rotate!(fc::FlyControls, yaw, pitch)
     target = cam.position + spherical_to_cartesian(s2) * dist
     cam.target = _checked_control_vec3(
         target, "FlyControls camera target")
+    _sync_camera_rotation_from_view!(cam)
     return fc
 end
 
@@ -615,6 +673,7 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     checked_y = _checked_control_scalar(
         movement_y, "PointerLockControls movement_y")
     cam = pc.camera
+    _first_person_view_from_rotation!(cam)
     dir, dist = _pointerlock_direction_distance(cam)
     s = cartesian_to_spherical(dir)
     yaw = -checked_x * 0.002 * speed
@@ -625,6 +684,7 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     target = cam.position + spherical_to_cartesian(s2) * dist
     cam.target = _checked_control_vec3(
         target, "PointerLockControls camera target")
+    _sync_camera_rotation_from_view!(cam)
     return pc
 end
 
@@ -1943,12 +2003,6 @@ function sample_track(track::AbstractKeyframeTrack, t)
     return _track_value(track, t)
 end
 
-# Quaternion → Euler (intrinsic XYZ order, matching the default `Euler`).
-# Mirrors three.js `Euler.setFromQuaternion` for order XYZ.
-function _quat_to_euler_xyz(q::Quaternion)
-    return _transform_quaternion_to_euler(q, :XYZ)
-end
-
 struct AnimationClip
     name::String
     duration::Float64
@@ -2060,22 +2114,25 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
         x >= d && return clamp_when_finished ? d : 0.0
         return x
     end
-    reps = repetitions < 0 ? typemax(Int) : max(repetitions, 0)
-    if reps == 0
-        return clamp_when_finished ? 0.0 : 0.0
-    end
-    if repetitions >= 0 && x >= d * reps
-        if !clamp_when_finished
-            return 0.0
+    # three.js AnimationAction._updateTime: playing forward finishes on reaching
+    # max(repetitions, 1) loops; playing backward from zero the first wrap below
+    # zero is free (it enters an unmirrored loop), so it finishes only past
+    # -repetitions loops. A clamped finished action holds the pose of its last
+    # running loop.
+    if repetitions >= 0
+        if x >= d * max(repetitions, 1)
+            clamp_when_finished || return 0.0
+            return loop === :pingpong && iseven(max(repetitions, 1)) ? 0.0 : d
+        elseif x < -d * repetitions
+            clamp_when_finished || return 0.0
+            return loop === :pingpong && repetitions > 0 && iseven(repetitions) ? d : 0.0
         end
-        return loop === :pingpong && iseven(reps) ? 0.0 : d
     end
     if loop === :pingpong
-        y = mod(x, 2d)
+        y = mod(x < 0.0 ? x + d : x, 2d)
         return y <= d ? y : 2d - y
     end
-    y = mod(x, d)
-    return x > 0.0 && isapprox(y, 0.0; atol=eps(Float64) * max(1.0, abs(x))) ? d : y
+    return mod(x, d)
 end
 
 # Write an interpolated value to a track target. Quaternion samples targeting the
@@ -2349,7 +2406,9 @@ _write_track!(tr::NumberKeyframeTrack, v) = _write_track_value!(tr.target, tr.pr
 
 function _write_track_value!(target, property::Symbol, v::Quaternion)
     if property === :rotation || property === :quaternion
-        setproperty!(target, :rotation, _quat_to_euler_xyz(v))
+        order = hasproperty(target, :rotation) ?
+            getproperty(target, :rotation).order : :XYZ
+        setproperty!(target, :rotation, _transform_quaternion_to_euler(v, order))
     else
         setproperty!(target, property, v)
     end
@@ -2631,9 +2690,45 @@ function _box_edges(mn::Vec3, mx::Vec3)
     )
 end
 
-"""Wireframe of a mesh's (local) bounding box."""
-function BoxHelper(obj; color=Color3(1.0,1.0,0.0))
-    box = compute_bounding_box(obj.geometry)
+function _box_expand_by_transformed_box(box::Box3, local_box::Box3, m::Mat4)
+    mn = local_box.min
+    mx = local_box.max
+    for x in (mn.x, mx.x), y in (mn.y, mx.y), z in (mn.z, mx.z)
+        box = box3_expand_by_point(box, mat4_transform_point(m, Vec3(x, y, z)))
+    end
+    return box
+end
+
+# three.js Box3.expandByObject (precise = false): geometry bounds of the object
+# and its descendants, each transformed by its world matrix; instanced meshes
+# use the union of their instance bounds.
+function _box_expand_by_object(box::Box3, obj::AbstractObject3D)
+    geometry = hasproperty(obj, :geometry) ? getproperty(obj, :geometry) : nothing
+    if geometry isa BufferGeometry && geometry.n_vertices > 0
+        local_box = compute_bounding_box(geometry)
+        world = compute_world_matrix(obj)::Mat4{Float64}
+        if obj isa InstancedMesh
+            for m in obj.instance_matrices
+                box = _box_expand_by_transformed_box(box, local_box, world * m)
+            end
+        else
+            box = _box_expand_by_transformed_box(box, local_box, world)
+        end
+    end
+    for child in get_children(obj)
+        box = _box_expand_by_object(box, child)
+    end
+    return box
+end
+
+"""
+Wireframe of the world-space axis-aligned bounding box of `obj` and its
+descendants (three.js `BoxHelper`); the helper itself needs no transform.
+"""
+function BoxHelper(obj::AbstractObject3D; color=Color3(1.0,1.0,0.0))
+    box = _box_expand_by_object(Box3(), obj)
+    box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z ||
+        throw(ArgumentError("BoxHelper object has no geometry to bound"))
     LineSegments(_line_geo(_box_edges(box.min, box.max)), LineBasicMaterial(color=color); name="BoxHelper")
 end
 
@@ -2647,6 +2742,8 @@ function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
         corner(-1,-1, 1), corner(1,-1, 1),
         corner(1,1, 1), corner(-1,1, 1),
     )
+    all(isfinite, pos) || throw(ArgumentError(
+        "CameraHelper requires a camera with a finite, invertible frustum"))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
 end
 
@@ -2718,7 +2815,7 @@ takes the sky colour, the lower apex the ground colour, stored as a per-vertex
 """
 function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.color)
     size = _geometry_finite_float(size, "HemisphereLightHelper size")
-    p = light.position; s = size
+    p = _light_world_position(light); s = size
     top = Vec3(p.x, p.y+s, p.z); bot = Vec3(p.x, p.y-s, p.z)
     px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
     pz = Vec3(p.x, p.y, p.z+s); nz = Vec3(p.x, p.y, p.z-s)
@@ -2901,4 +2998,63 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
         end
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
+end
+
+"""
+    Box3Helper(box::Box3; color=Color3(1.0, 1.0, 0.0))
+
+Wireframe (12 edges) of an axis-aligned `Box3` in world space (three.js
+`Box3Helper`). An empty box raises an `ArgumentError`.
+"""
+function Box3Helper(box::Box3; color=Color3(1.0, 1.0, 0.0))
+    mn = box.min
+    mx = box.max
+    mn.x <= mx.x && mn.y <= mx.y && mn.z <= mx.z ||
+        throw(ArgumentError("Box3Helper box must not be empty"))
+    LineSegments(_line_geo(_box_edges(mn, mx)), LineBasicMaterial(color=color);
+                 name="Box3Helper")
+end
+
+"""
+    ArrowHelper(dir=Vec3(0,0,1), origin=Vec3(0,0,0), length=1.0;
+                color=Color3(1,1,0), head_length=0.2length,
+                head_width=0.2head_length)
+
+Arrow from `origin` along `dir` (three.js `ArrowHelper`): a `Group` placed at
+`origin` and rotated so its +y axis follows `dir`, holding a shaft `LineObject`
+and a five-sided cone `Mesh` whose tip sits at distance `length`.
+"""
+function ArrowHelper(dir::Vec3=Vec3(0.0, 0.0, 1.0),
+                     origin::Vec3=Vec3(0.0, 0.0, 0.0), length::Real=1.0;
+                     color=Color3(1.0, 1.0, 0.0),
+                     head_length::Real=0.2 * length,
+                     head_width::Real=0.2 * head_length)
+    d = _checked_control_vec3(dir, "ArrowHelper dir")
+    scale = max(abs(d.x), abs(d.y), abs(d.z))
+    scale > 0.0 || throw(ArgumentError("ArrowHelper dir must be non-zero"))
+    d = normalize(d / scale)
+    o = _checked_control_vec3(origin, "ArrowHelper origin")
+    len = _geometry_finite_float(length, "ArrowHelper length")
+    head = _geometry_finite_float(head_length, "ArrowHelper head_length")
+    width = _geometry_finite_float(head_width, "ArrowHelper head_width")
+    q = if d.y > 0.99999
+        Quaternion(0.0, 0.0, 0.0, 1.0)
+    elseif d.y < -0.99999
+        Quaternion(1.0, 0.0, 0.0, 0.0)
+    else
+        axis = normalize(Vec3(d.z, 0.0, -d.x))
+        half = acos(d.y) / 2
+        Quaternion(axis.x * sin(half), axis.y * sin(half), axis.z * sin(half), cos(half))
+    end
+    arrow = Group(name="ArrowHelper")
+    arrow.position = o
+    arrow.rotation = _transform_quaternion_to_euler(q, :XYZ)
+    shaft = _line_geo(Float64[0.0, 0.0, 0.0, 0.0, max(0.0001, len - head), 0.0])
+    add!(arrow, LineObject(shaft, LineBasicMaterial(color=color); name="ArrowHelperLine"))
+    cone = Mesh(ConeGeometry(radius=width / 2, height=head, radial_segments=5,
+                             height_segments=1),
+                MeshBasicMaterial(color=color); name="ArrowHelperCone")
+    cone.position = Vec3(0.0, len - head / 2, 0.0)
+    add!(arrow, cone)
+    return arrow
 end
