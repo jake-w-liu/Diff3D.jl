@@ -8,6 +8,22 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- `add!` moves an already-present child to the end like three.js
+  `Object3D.add`, preserving the child's LOD registrations.
+- `lod_select` and `lod_update!` follow three.js LOD hysteresis, and a
+  single-level LOD update leaves its visibility alone.
+- Raycasts align with three.js `Raycaster`: an LOD reports hits for the
+  level its ray-origin distance selects, point hits report the closest
+  point on the ray, line hits accept distance equal to the threshold, the
+  default layer channel is 0, and meshes, instances, points and lines skip
+  their primitive loop when the ray misses a conservative bounding sphere.
+- `quat_slerp` normalizes a linear blend at dot 0.9995 and above, matching
+  three.js.
+- Add `mat4_compose`, `mat4_decompose`, `mat4_determinant` and
+  `quat_from_rotation_matrix` mirroring three.js `Matrix4`/`Quaternion`.
+  `compute_local_matrix` composes translation, rotation and scale directly,
+  and recursive raycasts no longer box each object's world matrix (a
+  400-object single-ray cast: ~1.37 ms/115 KB to ~0.26 ms/736 B).
 
 ## 1.0.0
 
