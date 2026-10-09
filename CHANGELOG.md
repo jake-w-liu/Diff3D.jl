@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
+
+A compatible minor release under the 1.x contract: it closes the remaining
+three.js r186 parity items, replaces the bundled native JPEG codec with a
+pure-Julia decoder, adds compatible public API (`mat4_compose`,
+`mat4_decompose`, `mat4_determinant`, `quat_from_rotation_matrix`,
+`MapControls`, `Box3Helper`, `ArrowHelper`, `merge_vertices`, geometry
+options, and a `vertex_colors` field on `MeshToonMaterial`), and reduces
+allocations on documented hot paths. Diffuse light responses now use three.js
+`BRDF_Lambert` (albedo/π), so lit pixels and their derivatives change where
+the previous un-normalized form was incorrect — a documented correctness fix
+under the compatibility contract.
 
 - Replace the native JpegTurbo/libjpeg-turbo dependency with a pure-Julia JPEG
   decoder covering baseline, extended-sequential, and progressive Huffman JPEG
