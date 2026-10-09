@@ -8,6 +8,12 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- Decode single-scan sequential JPEGs through per-band coefficient buffers
+  instead of whole-image planes and emit Float64 pixels directly, so
+  `_decode_jpeg` allocates approximately the output array and runs at
+  ~1.3–1.75x libjpeg-turbo wall time. Declared frames too large for the
+  source to fill fail before allocating coefficient planes, and the entropy
+  reader widens the Huffman lookahead to 9 bits.
 
 ## 1.0.0
 
