@@ -42,9 +42,14 @@ function add!(parent::AbstractObject3D, child::AbstractObject3D)
     _is_ancestor(child, parent) &&
         throw(ArgumentError("Object3D cannot be added to one of its descendants"))
     old_parent = get_parent(child)
-    old_parent === parent && return parent
-    old_parent !== nothing && remove!(old_parent, child)
-    push!(get_children(parent), child)
+    children = get_children(parent)
+    if old_parent === parent
+        index = findfirst(candidate -> candidate === child, children)
+        index === nothing || deleteat!(children, index)
+    elseif old_parent !== nothing
+        remove!(old_parent, child)
+    end
+    push!(children, child)
     set_parent!(child, parent)
     return parent
 end
@@ -101,10 +106,25 @@ function compute_local_matrix(obj::AbstractObject3D)
     rot = get_rotation(obj)
     scl = get_scale(obj)
     q = quat_from_euler(rot.x, rot.y, rot.z; order=rot.order)
+    composed = mat4_compose(pos, q, scl)
+    _compose_matches_product(composed, quat_to_mat4(q), scl) && return composed
     T = mat4_translation(pos.x, pos.y, pos.z)
     R = quat_to_mat4(q)
     S = mat4_scaling(scl.x, scl.y, scl.z)
     T * R * S
+end
+
+# The direct composition equals T * R * S bit for bit unless a scaled rotation
+# entry overflows or underflows; those rare inputs keep the product's rounding.
+@inline function _compose_matches_product(composed::Mat4, rotation::Mat4, scale::Vec3)
+    @inbounds for column in 1:3, row in 1:3
+        index = (column - 1) * 4 + row
+        value = composed.e[index]
+        factor = column == 1 ? scale.x : column == 2 ? scale.y : scale.z
+        isfinite(value) && !issubnormal(value) || return false
+        iszero(value) && !iszero(rotation.e[index]) && !iszero(factor) && return false
+    end
+    return true
 end
 
 function compute_world_matrix(obj::AbstractObject3D)
