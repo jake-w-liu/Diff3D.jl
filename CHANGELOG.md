@@ -8,6 +8,22 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- Parse PLY ASCII bodies as one whitespace-separated token stream so rows
+  may share or span lines, headers using bare CR load, and unknown or
+  property-less elements consume their token counts, as three.js does.
+- Detect JPEG images by the leading start-of-image marker alone, so files
+  with trailing padding or appended data load instead of being rejected.
+- Align glTF loading with three.js GLTFLoader: an omitted sampler minFilter
+  defaults to LinearMipmapLinear, normalized integer encodings are accepted
+  for rotation and weights animation outputs, an unknown alphaMode is an
+  error, and images or textures without a source raise errors.
+- Read OBJ/MTL material statements as three.js does: keywords match
+  case-insensitively, `newmtl`/`usemtl`/`mtllib` take the rest of the line,
+  an mtllib list falls back to space-separated names and missing libraries
+  raise errors, and `map_Ks`/`map_Ke`/`norm`/`map_d` apply `-s`/`-o` as
+  texture repeat/offset.
+- Match ASCII STL keywords as whole tokens and reject text files that are
+  not STL.
 
 ## 1.0.0
 
