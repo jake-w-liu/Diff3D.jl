@@ -12843,8 +12843,8 @@ end
             sl_fin.target = Diff3D.Vec3(0.0, 0.0, -1.0)
             _, li_inf, _ = Diff3D.light_contribution(sl_inf, pos)
             _, li_fin, _ = Diff3D.light_contribution(sl_fin, pos)
-            # dwin = 1 - (3/5)^2 = 0.64; OLD ignored distance so li_fin == li_inf
-            @test isapprox(li_fin, li_inf * 0.64; rtol=1e-9)
+            # three.js window (1 - (3/5)^4)^2; OLD ignored distance so li_fin == li_inf
+            @test isapprox(li_fin, li_inf * (1 - (3 / 5)^4)^2; rtol=1e-9)
             @test li_fin < li_inf * 0.99
         end
 
@@ -26271,6 +26271,7 @@ end
         (PointLight, :position),
         (SpotLight, :position),
         (SpotLight, :target),
+        (HemisphereLight, :position),
         (RectAreaLight, :position),
     )
     for (light_type, field) in constructor_vector_cases
@@ -26304,7 +26305,7 @@ end
         (PointLight(), :position, true, true),
         (SpotLight(), :position, true, true),
         (SpotLight(), :target, true, true),
-        (HemisphereLight(), :position, false, false),
+        (HemisphereLight(), :position, true, false),
         (RectAreaLight(), :position, true, false),
         (RectAreaLight(), :target, true, false),
         (LightProbe(), :position, false, false),
@@ -29899,7 +29900,7 @@ end
     world_hemisphere = HemisphereLight(
         color=Color3(1.0, 0.0, 0.0),
         ground_color=Color3(0.0, 0.0, 1.0))
-    world_hemisphere.rotation = Euler(0.0, 0.0, pi / 2)
+    world_hemisphere.position = Vec3(-1.0, 0.0, 0.0)
     add!(hemisphere_parent, parented_hemisphere)
     for normal in (Vec3(-1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
         @test color_close(
@@ -34110,3 +34111,4 @@ include("jpeg_decoder.jl")
 include("loaders_audit.jl")
 include("mathapi_audit.jl")
 include("renderer_audit.jl")
+include("shading_audit.jl")

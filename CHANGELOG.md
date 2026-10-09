@@ -51,6 +51,16 @@
   alpha on the opaque flat and pooled mesh paths.
 - `render_pooled!` and `render_tiled!` honour a mesh's
   `flat_shading=false` with per-pixel shading, matching `render!`.
+- Match three.js punctual-light attenuation —
+  `pow2(saturate(1-pow4(d/cutoff)))` with a 0.01 floor — and smoothstep spot
+  penumbra.
+- `HemisphereLight` aims along its normalized world position like three.js
+  (new `position` keyword), `MeshNormalMaterial` encodes view-space
+  normals, `MeshToonMaterial` supports vertex colors, and point, spot and
+  rect-area lights expose the three.js `power` property in lumens.
+- Diffuse responses use three.js `BRDF_Lambert` (albedo/π), and the Phong
+  specular uses the normalized `BRDF_BlinnPhong` distribution with Schlick
+  fresnel.
 
 ## 1.0.0
 
