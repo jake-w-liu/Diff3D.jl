@@ -8,6 +8,16 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- Match three.js punctual-light attenuation —
+  `pow2(saturate(1-pow4(d/cutoff)))` with a 0.01 floor — and smoothstep spot
+  penumbra.
+- `HemisphereLight` aims along its normalized world position like three.js
+  (new `position` keyword), `MeshNormalMaterial` encodes view-space
+  normals, `MeshToonMaterial` supports vertex colors, and point, spot and
+  rect-area lights expose the three.js `power` property in lumens.
+- Diffuse responses use three.js `BRDF_Lambert` (albedo/π), and the Phong
+  specular uses the normalized `BRDF_BlinnPhong` distribution with Schlick
+  fresnel.
 
 ## 1.0.0
 
