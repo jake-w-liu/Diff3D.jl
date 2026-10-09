@@ -200,6 +200,14 @@ function _geometry_finite_float(value, label::String)
     return out
 end
 
+# Julia ≤ 1.10 boxes `out` where it crosses the try/catch above, so every call
+# through the generic method allocates there. The concrete method keeps the
+# common Float64 path allocation-free on every supported release.
+@inline function _geometry_finite_float(value::Float64, label::String)
+    isfinite(value) || throw(ArgumentError("$label must be finite"))
+    return value
+end
+
 @inline function _geometry_check_abs_sum(a::Float64, b::Float64,
                                          label::String)
     abs(a) <= floatmax(Float64) - abs(b) ||

@@ -1931,7 +1931,7 @@ function _extrude_clean_shape(shape::AbstractVector{<:Vec2})
     length(shape) >= 3 || throw(ArgumentError("ExtrudeGeometry shape needs at least three points"))
     raw = Vector{Vec2{Float64}}(undef, length(shape))
     for (index, point) in pairs(shape)
-        raw[index] = Vec2(
+        raw[index] = Vec2{Float64}(
             _geometry_finite_float(
                 point.x, "ExtrudeGeometry shape points"),
             _geometry_finite_float(
@@ -1976,19 +1976,20 @@ end
 
 function _extrude_clean_path(path::AbstractVector{<:Vec3})
     length(path) >= 2 || throw(ArgumentError("ExtrudeGeometry extrude_path needs at least two points"))
-    raw = Vec3{Float64}[]
-    for p in path
-        q = Vec3(_geometry_finite_float(p.x, "ExtrudeGeometry extrude_path points"),
-                 _geometry_finite_float(p.y, "ExtrudeGeometry extrude_path points"),
-                 _geometry_finite_float(p.z, "ExtrudeGeometry extrude_path points"))
-        push!(raw, q)
+    raw = Vector{Vec3{Float64}}(undef, length(path))
+    for (i, p) in enumerate(path)
+        raw[i] = Vec3{Float64}(
+            _geometry_finite_float(p.x, "ExtrudeGeometry extrude_path points"),
+            _geometry_finite_float(p.y, "ExtrudeGeometry extrude_path points"),
+            _geometry_finite_float(p.z, "ExtrudeGeometry extrude_path points"))
     end
-    xmin = minimum(point -> point.x, raw)
-    xmax = maximum(point -> point.x, raw)
-    ymin = minimum(point -> point.y, raw)
-    ymax = maximum(point -> point.y, raw)
-    zmin = minimum(point -> point.z, raw)
-    zmax = maximum(point -> point.z, raw)
+    xmin = ymin = zmin = Inf
+    xmax = ymax = zmax = -Inf
+    @inbounds for q in raw
+        xmin = min(xmin, q.x); xmax = max(xmax, q.x)
+        ymin = min(ymin, q.y); ymax = max(ymax, q.y)
+        zmin = min(zmin, q.z); zmax = max(zmax, q.z)
+    end
     cx = _geometry_midpoint(xmin, xmax)
     cy = _geometry_midpoint(ymin, ymax)
     cz = _geometry_midpoint(zmin, zmax)
@@ -1997,7 +1998,7 @@ function _extrude_clean_path(path::AbstractVector{<:Vec3})
                  max(abs(zmin - cz), abs(zmax - cz)))
     closed = _extrude_path_points_close(raw[end], raw[1], scale)
     clean_last = closed ? length(raw) - 1 : length(raw)
-    filtered = Vec3{Float64}[]
+    filtered = sizehint!(Vec3{Float64}[], clean_last)
     for i in 1:clean_last
         p = raw[i]
         if isempty(filtered) ||
@@ -2067,6 +2068,32 @@ end
 
 @inline _extrude_next(ranges::Vector{UnitRange{Int}}, k::Int, j::Int) =
     j == last(ranges[k]) ? first(ranges[k]) : j + 1
+
+# Top-level rather than a closure over `moves`/`offsets`/`base`: Julia ≤ 1.10
+# cannot infer captured variables, so each closure call boxed its Vec2 result
+# (~4 KiB per extrusion). The same is true of `_extrude_write_vertex!`.
+@inline function _extrude_layer_point(moves::Union{Nothing,Vector{Vec2{Float64}}},
+                                      base::Vector{Vec2{Float64}},
+                                      offsets::Vector{Float64}, l::Int, j::Int)
+    return moves === nothing ? base[j] : base[j] + moves[j] * offsets[l]
+end
+
+@inline function _extrude_write_vertex!(positions::Vector{Float64},
+                                        normals::Vector{Float64},
+                                        uvs::Vector{Float64}, vi::Int,
+                                        p::Vec2{Float64}, z::Float64,
+                                        n::Vec3{Float64}, u::Float64, v::Float64)
+    pbase = 3vi - 2
+    positions[pbase] = p.x
+    positions[pbase + 1] = p.y
+    positions[pbase + 2] = z
+    normals[pbase] = n.x
+    normals[pbase + 1] = n.y
+    normals[pbase + 2] = n.z
+    uvs[2vi - 1] = u
+    uvs[2vi] = v
+    return nothing
+end
 
 function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
                                 path_in::AbstractVector{<:Vec3}, holes_in)
@@ -2371,12 +2398,10 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
         zs[nb + s + 1] = depth / steps * s
         offsets[nb + s + 1] = size + offset
     end
-    layer_point(l, j) = moves === nothing ? base[j] : base[j] + moves[j] * offsets[l]
-
     cap_triangles = if moves === nothing || iszero(offsets[1])
         _shape_triangulate(outer, hole_loops)
     else
-        cap = [layer_point(1, j) for j in 1:np]
+        cap = [_extrude_layer_point(moves, base, offsets, 1, j) for j in 1:np]
         _shape_triangulate(cap[ranges[1]], [cap[r] for r in ranges[2:end]])
     end
     n_side_quads = _geometry_checked_mul(np, layers - 1, "ExtrudeGeometry face count")
@@ -2394,24 +2419,13 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
     normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    write_vertex(vi, p, z, n, u, v) = begin
-        pbase = 3vi - 2
-        positions[pbase] = p.x
-        positions[pbase + 1] = p.y
-        positions[pbase + 2] = z
-        normals[pbase] = n.x
-        normals[pbase + 1] = n.y
-        normals[pbase + 2] = n.z
-        uvs[2vi - 1] = u
-        uvs[2vi] = v
-        nothing
-    end
-
     @inbounds for j in 1:np
-        front = layer_point(1, j)
-        back = layer_point(layers, j)
-        write_vertex(j, front, zs[1], Vec3(0.0, 0.0, -1.0), front.x, front.y)
-        write_vertex(np + j, back, zs[layers], Vec3(0.0, 0.0, 1.0), back.x, back.y)
+        front = _extrude_layer_point(moves, base, offsets, 1, j)
+        back = _extrude_layer_point(moves, base, offsets, layers, j)
+        _extrude_write_vertex!(positions, normals, uvs, j, front, zs[1],
+                               Vec3(0.0, 0.0, -1.0), front.x, front.y)
+        _extrude_write_vertex!(positions, normals, uvs, np + j, back, zs[layers],
+                               Vec3(0.0, 0.0, 1.0), back.x, back.y)
     end
 
     out = 1
@@ -2428,8 +2442,10 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
     @inbounds for k in eachindex(ranges), i in ranges[k]
         i2 = _extrude_next(ranges, k, i)
         for l in 1:layers-1
-            p1 = layer_point(l, i); p2 = layer_point(l, i2)
-            q1 = layer_point(l + 1, i); q2 = layer_point(l + 1, i2)
+            p1 = _extrude_layer_point(moves, base, offsets, l, i)
+            p2 = _extrude_layer_point(moves, base, offsets, l, i2)
+            q1 = _extrude_layer_point(moves, base, offsets, l + 1, i)
+            q2 = _extrude_layer_point(moves, base, offsets, l + 1, i2)
             z1 = zs[l]; z2 = zs[l + 1]
             n = if offsets[l] == offsets[l + 1]
                 ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
@@ -2441,10 +2457,14 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
             end
             # three.js WorldUVGenerator.generateSideWallUV
             use_x = abs(p1.y - p2.y) < abs(p1.x - p2.x)
-            write_vertex(vi + 1, p1, z1, n, use_x ? p1.x : p1.y, 1 - z1)
-            write_vertex(vi + 2, p2, z1, n, use_x ? p2.x : p2.y, 1 - z1)
-            write_vertex(vi + 3, q2, z2, n, use_x ? q2.x : q2.y, 1 - z2)
-            write_vertex(vi + 4, q1, z2, n, use_x ? q1.x : q1.y, 1 - z2)
+            _extrude_write_vertex!(positions, normals, uvs, vi + 1, p1, z1, n,
+                                   use_x ? p1.x : p1.y, 1 - z1)
+            _extrude_write_vertex!(positions, normals, uvs, vi + 2, p2, z1, n,
+                                   use_x ? p2.x : p2.y, 1 - z1)
+            _extrude_write_vertex!(positions, normals, uvs, vi + 3, q2, z2, n,
+                                   use_x ? q2.x : q2.y, 1 - z2)
+            _extrude_write_vertex!(positions, normals, uvs, vi + 4, q1, z2, n,
+                                   use_x ? q1.x : q1.y, 1 - z2)
             indices[out] = vi + 1
             indices[out + 1] = vi + 2
             indices[out + 2] = vi + 3

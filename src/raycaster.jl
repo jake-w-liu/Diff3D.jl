@@ -119,13 +119,14 @@ mutable struct Raycaster
     line_threshold::Float64  # world-space pick radius for Line/LineSegments segments (three.js params.Line.threshold)
     skinning_matrices::Vector{Mat4{Float64}}
     morph_positions::Vector{Vec3{Float64}}
+    worlds::Vector{Mat4{Float64}}  # per-depth world-matrix traversal stack
     camera::Union{Nothing,AbstractCamera}
 end
 
 Raycaster(ray,near,far,layers,point_threshold,line_threshold,
           skinning_matrices,morph_positions) =
     Raycaster(ray,near,far,layers,point_threshold,line_threshold,
-              skinning_matrices,morph_positions,nothing)
+              skinning_matrices,morph_positions,Mat4{Float64}[],nothing)
 
 function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
                    layers::Layers, point_threshold::Float64,
@@ -136,7 +137,7 @@ function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
     return Raycaster(normalized_ray, n, f, layers,
                      _raycaster_threshold(point_threshold, "point_threshold"),
                      _raycaster_threshold(line_threshold, "line_threshold"),
-                     Mat4{Float64}[], Vec3{Float64}[])
+                     Mat4{Float64}[], Vec3{Float64}[], Mat4{Float64}[], nothing)
 end
 
 _finite_vec3(v::Vec3) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
@@ -206,7 +207,7 @@ Raycaster(origin::Vec3, dir::Vec3; near=0.0, far=Inf,
               n, f, layers,
               _raycaster_threshold(point_threshold, "point_threshold"),
               _raycaster_threshold(line_threshold, "line_threshold"),
-              Mat4{Float64}[],Vec3{Float64}[],camera)
+              Mat4{Float64}[],Vec3{Float64}[],Mat4{Float64}[],camera)
 end
 
 const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
@@ -748,7 +749,8 @@ function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     hits = Intersection[]
     if recursive
         _visible_in_tree(root) &&
-            _raycast_recursive!(hits, rc, root, compute_world_matrix(root))
+            _raycast_recursive!(hits, rc, root, compute_world_matrix(root),
+                                rc.worlds)
     else
         if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
             _raycast_object!(hits, rc, root, compute_world_matrix(root))

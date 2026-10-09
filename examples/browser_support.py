@@ -96,8 +96,15 @@ def report_browser_environment(browser, page) -> dict:
                      combinedTextures: gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)},
         };
     }""")
+    # platform.platform() can fail where uname data is unavailable (a flaky WMI
+    # query on Windows); the environment report is informational, so fall back
+    # rather than aborting the smoke run.
+    try:
+        os_name = platform.platform()
+    except Exception:
+        os_name = platform.system() or "unknown"
     result = {"browser": browser.browser_type.name, "browser_version": browser.version,
-              "os": platform.platform(), "arch": platform.machine(), "graphics": graphics}
+              "os": os_name, "arch": platform.machine(), "graphics": graphics}
     print("BROWSER_ENVIRONMENT " + json.dumps(result, sort_keys=True), flush=True)
     renderer = str(graphics.get("renderer") or "")
     if any(renderer.startswith(known) for known in NONCONFORMANT_RENDERERS):
