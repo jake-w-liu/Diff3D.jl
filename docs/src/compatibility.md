@@ -34,8 +34,8 @@ support.
 | Entry point | Supported role | Boundaries |
 |---|---|---|
 | `render!`, `render_msaa!` | CPU rendering of scenes, including mesh, instance, skin, line, point, and sprite paths | Hard visibility and depth decisions are discrete. Use the documented options of each entry point. |
-| `render_pooled!` | CPU rendering of flat opaque triangle meshes, posed skins, and instances | Skips transparent and wireframe meshes and standalone line/point/sprite primitives. |
-| `render_tiled!` | CPU rendering of flat opaque triangle meshes, posed skins, and instances, including mesh wireframes | Standalone line/point/sprite objects are not drawn. Use `render!` for scenes requiring general transparency. |
+| `render_pooled!` | CPU rendering of opaque triangle meshes, posed skins, and instances; flat shading unless a mesh sets `flat_shading=false` | Skips transparent and wireframe meshes and standalone line/point/sprite primitives. |
+| `render_tiled!` | CPU rendering of opaque triangle meshes, posed skins, and instances, including mesh wireframes; flat shading unless a mesh sets `flat_shading=false` | Standalone line/point/sprite objects are not drawn. Use `render!` for scenes requiring general transparency. |
 | `soft_render` | Soft triangle rasterization from explicit vertices, faces, face colors, and a view-projection matrix | Soft coverage and depth blending define a different image model from hard rasterization. |
 | `differentiable_render` | Build explicit soft-render inputs from a parameter vector | `setup_fn(params)` must return the documented five values and preserve differentiated scalar types. |
 | `soft_render_scene` | Extract and soft-render visible triangle meshes, posed skins, and triangle instances | Scene extraction stores `Float64` geometry/colors; use explicit inputs for geometry/camera derivatives. |

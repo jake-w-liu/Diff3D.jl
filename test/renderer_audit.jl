@@ -126,3 +126,39 @@ end
                           mode, instanced) == [1.0, 0.0, 0.0]
     end
 end
+
+function renderer_audit_pooled_allocations(target, scene, camera, cache; kwargs...)
+    render_pooled!(target, scene, camera, cache; kwargs...)
+    return @allocated render_pooled!(target, scene, camera, cache; kwargs...)
+end
+
+@testset "Pooled and tiled renders honor per-mesh smooth shading" begin
+    scene = Scene(background=Color3(0.0, 0.0, 0.0))
+    smooth = Mesh(SphereGeometry(radius=0.6, width_segments=12, height_segments=8),
+                  MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0)))
+    smooth.flat_shading = false
+    smooth.position = Vec3(-0.6, 0.0, 0.0)
+    flat = Mesh(SphereGeometry(radius=0.6, width_segments=12, height_segments=8),
+                MeshLambertMaterial(color=Color3(0.8, 0.6, 0.2)))
+    flat.position = Vec3(0.6, 0.0, 0.0)
+    add!(scene, smooth); add!(scene, flat)
+    add!(scene, DirectionalLight(intensity=1.0, position=Vec3(1.0, 1.0, 1.0)))
+    camera = PerspectiveCamera(fov=pi / 3, aspect=1.0, near=0.1, far=10.0)
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    for logarithmic_depth in (false, true)
+        expected = RenderTarget(48, 48)
+        render!(expected, scene, camera; logarithmic_depth)
+        pooled = RenderTarget(48, 48)
+        cache = RenderCache()
+        render_pooled!(pooled, scene, camera, cache; logarithmic_depth)
+        @test pooled.color == expected.color
+        @test pooled.depth == expected.depth
+        for tiles in (1, 5)
+            tiled = RenderTarget(48, 48)
+            render_tiled!(tiled, scene, camera; tiles, logarithmic_depth)
+            @test tiled.color == expected.color
+        end
+        @test renderer_audit_pooled_allocations(pooled, scene, camera, cache;
+                                                logarithmic_depth) <= 512
+    end
+end

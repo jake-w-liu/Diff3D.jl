@@ -1342,12 +1342,37 @@ function _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
     return nothing
 end
 
+# Opaque meshes whose `flat_shading = false` override selects per-pixel shading,
+# drawn after the flat pass as `render!` does.
+function _render_pooled_smooth_meshes!(rt::RenderTarget, meshes::Vector{Mesh},
+                                       worlds::Vector{Mat4{Float64}}, lights,
+                                       proj::Mat4, view::Mat4, near, cam_pos::Vec3,
+                                       ortho_dir, scratch::RenderCache,
+                                       ylo::Int, yhi::Int)
+    inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        mat = _mesh_material(mesh)
+        (_mesh_is_flat(mesh, :flat) || is_transparent_material(mat) ||
+         material_wireframe(mat)) && continue
+        _render_smooth_mesh_from_mesh!(rt, mesh, worlds[i], lights, proj, view, near,
+                                       cam_pos, nothing, scratch.smooth_tri,
+                                       scratch.smooth_clipped, scratch.sx, scratch.sy,
+                                       scratch.sz, scratch.smooth_iw, _NO_PLANES,
+                                       1, rt.width, ylo, yhi, !iszero(inv_log_far),
+                                       inv_log_far, ortho_dir, nothing, 0)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
 Flat opaque meshes/instances are rasterized reusing `cache`'s buffers — the same
-image as `render!` for opaque flat scenes, but with bounded per-frame allocation
-across repeated calls. Transparent meshes, lines and points are skipped here.
+image as `render!` for opaque scenes, but with bounded per-frame allocation
+across repeated calls. A mesh whose `flat_shading` is `false` is shaded per
+pixel, as in `render!`. Transparent and wireframe meshes, lines, points and
+sprites are skipped here.
 """
 function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                         cache::RenderCache; shading::Symbol=:flat,
@@ -1382,6 +1407,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         mesh = cache.meshes[i]
         mat = _mesh_material(mesh)
         (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
+        _mesh_is_flat(mesh, :flat) || continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
                                                cache.lights, proj, view, near,
                                                camera_position, cache.tri, cache.clipped,
@@ -1400,6 +1426,9 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
             ortho_dir)
     end
+    _render_pooled_smooth_meshes!(rt, cache.meshes, cache.mesh_worlds, cache.lights,
+                                  proj, view, near, camera_position, ortho_dir, cache,
+                                  1, rt.height)
     return original_target
 end
 
@@ -3275,7 +3304,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                                               ylo, yhi, thread_cache)
             continue
         end
-        is_transparent_material(mat) && continue
+        (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera_position,
                                                tri, clipped, sx, sy, sz, colorbuf,
@@ -3308,15 +3337,18 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
             ortho_dir, ylo, yhi, thread_cache.smooth_tri,
             thread_cache.smooth_clipped, thread_cache.smooth_iw)
     end
+    _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
+                                  camera_position, ortho_dir, thread_cache, ylo, yhi)
     return nothing
 end
 
 """
     render_tiled!(rt, scene, camera; tiles=Threads.nthreads(), shading=:flat, cache=nothing)
 
-Flat-rasterize the scene in horizontal row bands. Bands write disjoint rows, so
+Rasterize the scene in horizontal row bands. Bands write disjoint rows, so
 they can run on separate threads (used when Julia is started with > 1 thread).
-Produces the same image as [`render!`] for opaque flat scenes.
+Produces the same image as [`render!`] for opaque scenes: meshes default to
+flat shading, and a mesh whose `flat_shading` is `false` is shaded per pixel.
 
 Passing a `cache` vector reuses scratch buffers across repeated calls. The vector
 must have at least `min(tiles, target.height, Threads.nthreads())` entries.
