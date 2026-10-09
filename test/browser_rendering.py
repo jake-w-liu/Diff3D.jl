@@ -362,7 +362,7 @@ def verify_fragment_precision(page) -> None:
                 formats[kind]=format?format.precision:0;
             }
             const declarations={};
-            for(const [name,source] of Object.entries({DFSH,PDFSH,FSH,FSH_EMISSIVE,CFSH,PFSH,SFSH}))
+            for(const [name,source] of Object.entries({DFSH,PDFSH,FSH_EMISSIVE,CFSH,PFSH,SFSH}))
                 declarations[name]=source.match(/precision\\s+(?:lowp|mediump|highp)\\s+float\\s*;/g)||[];
             gl.bindTexture(gl.TEXTURE_2D,output);
             gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
@@ -1074,6 +1074,34 @@ def select_render_case(page, case_id: str) -> None:
     }""", case_id)
 
 
+def verify_opaque_output_and_uniform_reuse(page) -> None:
+    """Opaque draws keep the canvas opaque, and a warmed frame re-sends almost no uniforms.
+
+    three.js disables blending for opaque materials and writes their alpha as 1 (WebGLState.js
+    setMaterial, opaque_fragment.glsl.js), so a texture alpha of 0.5 on an opaque quad leaves an
+    alpha of 255. Its uniform cache skips writes of unchanged values (WebGLUniforms.js), so a
+    frame of an unchanged scene sends only the per-object matrices and what differs between
+    consecutive objects, not every uniform of every draw.
+    """
+    result = page.evaluate("""() => {
+        const c=document.querySelector('canvas'), gl=c.getContext('webgl');
+        window.__diff3dTestRenderFrame(); window.__diff3dTestRenderFrame();
+        const names=Object.getOwnPropertyNames(WebGLRenderingContext.prototype).filter(n=>/^uniform/.test(n));
+        const saved={}; let uniformCalls=0, draws=0;
+        for(const n of names){ saved[n]=gl[n]; gl[n]=function(...args){ uniformCalls++; return saved[n].apply(this,args); }; }
+        const drawElements=gl.drawElements; gl.drawElements=function(...args){ draws++; return drawElements.apply(this,args); };
+        try{ window.__diff3dTestRenderFrame(); }
+        finally{ for(const n of names) gl[n]=saved[n]; gl.drawElements=drawElements; }
+        const px=new Uint8Array(4);
+        gl.readPixels(Math.floor(c.width*(-2.5+4)/8),Math.floor(c.height*(1.5+3)/6),1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);
+        return {uniformCalls,draws,texturedAlphaPixel:Array.from(px),error:gl.getError()};
+    }""")
+    if (result["error"] or not result["draws"] or result["uniformCalls"] > 8 * result["draws"]
+            or result["texturedAlphaPixel"] != [255, 0, 0, 255]):
+        raise AssertionError(f"Opaque output and uniform reuse: {result}")
+    print("BROWSER_OPAQUE_OUTPUT_UNIFORM_REUSE_OK", result, flush=True)
+
+
 def compare_baked_geometry(page, name: str, width: int, height: int) -> None:
     wireframe = "wireframe" in name
     modes = page.evaluate("""() => active.objects.filter(o=>o.skin)
@@ -1141,7 +1169,7 @@ def main() -> None:
                 "skin_tangent_uniform", "skin_tangent_texture", "skin_tangent_cpu", "instanced_tangent", "model_tangent",
                 "skin_wireframe_uniform", "skin_wireframe_texture", "skin_wireframe_cpu", "skin_wireframe_animated",
                 "skin_wireframe_detached", "wireframe_morph", "instanced_wireframe",
-                "sprite_orthographic", "sprite_perspective", "unlit_colors", "point_texture", "point_attenuation",
+                "sprite_orthographic", "sprite_perspective", "blend_order", "unlit_colors", "point_texture", "point_attenuation",
                 "gltf_texture_uv0", "gltf_texture_uv1", "gltf_texture_mirrored",
                 "fog_linear", "fog_exponential", "fog_transparent", "lighting_energy",
                 "iridescence_range_ascending", "iridescence_range_descending",
@@ -1154,7 +1182,7 @@ def main() -> None:
                       "skin_tangent_uniform", "skin_tangent_texture", "skin_tangent_cpu", "instanced_tangent", "model_tangent",
                       "skin_wireframe_uniform", "skin_wireframe_texture", "skin_wireframe_cpu", "skin_wireframe_animated",
                       "skin_wireframe_detached", "wireframe_morph", "instanced_wireframe",
-                      "sprite_orthographic", "sprite_perspective",
+                      "sprite_orthographic", "sprite_perspective", "blend_order",
                       "gltf_texture_uv0", "gltf_texture_uv1", "gltf_texture_mirrored",
                       "fog_linear", "fog_exponential", "fog_transparent",
                       "iridescence_range_ascending", "iridescence_range_descending",
@@ -1399,6 +1427,8 @@ def main() -> None:
                                         raise AssertionError(f"{name}: camera orbit changed the authored eye by {pose_error}")
                                 if name.startswith("instanced_") and pixels["instancing"] != instancing_enabled:
                                     raise AssertionError(f"{name}: instancing capability mismatch")
+                                if name == "blend_order":
+                                    verify_opaque_output_and_uniform_reuse(page)
                                 compare_baked_geometry(page, name, width, height)
                                 correct = True
                             elif name == "layered_shadows":

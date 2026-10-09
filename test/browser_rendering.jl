@@ -261,6 +261,47 @@ for (file,perspective) in (("sprite_orthographic",false),("sprite_perspective",t
     save_webgl_html(joinpath(output,"$file.html"),sprite_camera_cases(perspective))
 end
 
+# three.js blending and draw order (WebGLState.setMaterial, opaque_fragment, WebGLRenderLists.sort):
+# an opaque material neither blends nor keeps alpha below one, however its texture alpha or
+# opacity is set; transparent items draw back to front by their bounding-sphere centre; opaque
+# items draw front to back, which decides the visible one when depth testing is off.
+function blend_order_cases()
+    quad(x0,x1,y0,y1,z)=BufferGeometry([x0,y0,z, x1,y0,z, x1,y1,z, x0,y1,z],repeat([0.0,0.0,1.0],4),
+        [0.0,0.0, 1.0,0.0, 1.0,1.0, 0.0,1.0],[1,2,3,1,3,4],4,2)
+    function placed(root,geometry,material,z=0.0)
+        mesh=Mesh(geometry,material);mesh.position=Vec3(0.0,0.0,z);add!(root,mesh);return mesh
+    end
+    half_red=Texture(reshape([1.0,0.0,0.0,0.5],1,1,4);filter=:nearest,colorspace=:linear)
+    actual=Scene(background=Color3(0.0,0.0,0.0));reference=Scene(background=Color3(0.0,0.0,0.0))
+    green=MeshBasicMaterial(color=Color3(0.0,1.0,0.0))
+    for root in (actual,reference)
+        placed(root,quad(-3.5,-1.5,0.5,2.5,-1.0),green)
+        placed(root,quad(1.5,3.5,0.5,2.5,-1.0),green)
+    end
+    placed(actual,quad(-3.0,-2.0,1.0,2.0,0.0),MeshBasicMaterial(map=half_red))
+    placed(actual,quad(2.0,3.0,1.0,2.0,0.0),MeshBasicMaterial(color=Color3(0.0,0.0,1.0),opacity=0.5))
+    placed(reference,quad(-3.0,-2.0,1.0,2.0,0.0),MeshBasicMaterial(color=Color3(1.0,0.0,0.0)))
+    placed(reference,quad(2.0,3.0,1.0,2.0,0.0),MeshBasicMaterial(color=Color3(0.0,0.0,1.0)))
+    # The red quad's origin is farther than the cyan one's, its geometry nearer.
+    placed(actual,quad(-3.5,-1.0,-2.5,-0.5,3.0),MeshBasicMaterial(color=Color3(1.0,0.0,0.0),opacity=0.5,transparent=true,depth_write=false),-2.0)
+    placed(actual,quad(-2.0,0.0,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(0.0,0.8,0.8),opacity=0.5,transparent=true,depth_write=false))
+    placed(reference,quad(-3.5,-2.0,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(0.5,0.0,0.0)))
+    placed(reference,quad(-2.0,-1.0,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(0.5,0.2,0.2)))
+    placed(reference,quad(-1.0,0.0,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(0.0,0.4,0.4)))
+    # Scene order puts the far magenta quad first; front-to-back order draws it last.
+    placed(actual,quad(0.5,2.5,-2.5,-0.5,-1.0),MeshBasicMaterial(color=Color3(1.0,0.0,1.0),depth_test=false))
+    placed(actual,quad(1.5,3.5,-2.5,-0.5,1.0),MeshBasicMaterial(color=Color3(1.0,1.0,0.0),depth_test=false))
+    placed(reference,quad(0.5,2.5,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(1.0,0.0,1.0)))
+    placed(reference,quad(2.5,3.5,-2.5,-0.5,0.0),MeshBasicMaterial(color=Color3(1.0,1.0,0.0)))
+    camera=OrthographicCamera(left=-4.0,right=4.0,bottom=-3.0,top=3.0,near=0.1,far=20.0)
+    camera.position=Vec3(0.0,0.0,6.0)
+    return [WebGLExportCase("normal-actual","Blending and draw order","three.js opaque and transparent passes",actual;
+                camera,tone_mapping=:none,output_color_space=:linear),
+            WebGLExportCase("normal-reference","Baked blending","Expected composited colors",reference;
+                camera,tone_mapping=:none,output_color_space=:linear)]
+end
+save_webgl_html(joinpath(output,"blend_order.html"),blend_order_cases())
+
 unlit_scene=Scene()
 unlit_color=Color3(0.2,0.4,0.6)
 unlit_mesh=Mesh(PlaneGeometry(width=0.3,height=0.3),MeshBasicMaterial(color=unlit_color))
