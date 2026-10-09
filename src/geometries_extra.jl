@@ -12,39 +12,48 @@
 _polyhedron_bary(A::Vec3, B::Vec3, C::Vec3, cols::Int, p::Int, q::Int) =
     A * ((cols - p - q) / cols) + B * (p / cols) + C * (q / cols)
 
-function _polyhedron_emit_vertex!(positions::Vector{Float64}, normals::Vector{Float64},
-                                  uvs::Vector{Float64}, vi::Int, v::Vec3,
-                                  radius)
-    d = normalize(v)                  # unit direction, independent of radius
-    p = d * radius
-    next_vi = vi + 1
-    pbase = 3next_vi - 2
-    ubase = 2next_vi - 1
-    positions[pbase] = p.x
-    positions[pbase + 1] = p.y
-    positions[pbase + 2] = p.z
-    normals[pbase] = d.x
-    normals[pbase + 1] = d.y
-    normals[pbase + 2] = d.z
-    # Derive the spherical UV from the unit direction, not p.y/radius:
-    # at radius=0 the latter is 0/0 = NaN, while asin(d.y) stays finite.
-    uvs[ubase] = atan(d.z, d.x) / (2π) + 0.5
-    uvs[ubase + 1] = asin(clamp(d.y, -1.0, 1.0)) / π + 0.5
-    return next_vi
+# three.js PolyhedronGeometry `azimuth`: angle about +y measured from -x.
+@inline _polyhedron_azimuth(v::Vec3) = atan(v.z, -v.x)
+
+@inline function _polyhedron_write!(data::Vector{Float64}, vi::Int, v::Vec3)
+    base = 3vi - 2
+    data[base] = v.x
+    data[base + 1] = v.y
+    data[base + 2] = v.z
+    return nothing
 end
 
 function _polyhedron_emit_triangle!(positions::Vector{Float64}, normals::Vector{Float64},
                                     uvs::Vector{Float64}, indices::Vector{Int},
                                     vi::Int, out::Int, a::Vec3, b::Vec3,
-                                    c::Vec3, radius)
-    start = vi + 1
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, a, radius)
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, b, radius)
-    vi = _polyhedron_emit_vertex!(positions, normals, uvs, vi, c, radius)
-    indices[out] = start
-    indices[out + 1] = start + 1
-    indices[out + 2] = start + 2
-    return vi, out + 3
+                                    c::Vec3, radius::Float64, flat::Bool)
+    # Unit directions are radius independent; `w` follows the sign of the
+    # radius like three.js's projected positions, but stays finite at zero.
+    da = normalize(a); db = normalize(b); dc = normalize(c)
+    s = radius < 0 ? -1.0 : 1.0
+    wa = da * s; wb = db * s; wc = dc * s
+    face_normal = flat ? normalize(cross(db - da, dc - da)) : Vec3(0.0, 0.0, 0.0)
+    centroid_azimuth = _polyhedron_azimuth(wa + wb + wc)
+    us = (0.0, 0.0, 0.0)
+    for (k, (d, w)) in enumerate(((da, wa), (db, wb), (dc, wc)))
+        dst = vi + k
+        _polyhedron_write!(positions, dst, d * radius)
+        _polyhedron_write!(normals, dst, flat ? face_normal : w)
+        u = _polyhedron_azimuth(w) / 2 / π + 0.5
+        (centroid_azimuth < 0 && u == 1) && (u -= 1)
+        (w.x == 0 && w.z == 0) && (u = centroid_azimuth / 2 / π + 0.5)
+        us = Base.setindex(us, u, k)
+        uvs[2dst] = asin(clamp(w.y, -1.0, 1.0)) / π + 0.5
+    end
+    # Faces straddling the azimuth seam (three.js `correctSeam`).
+    if maximum(us) > 0.9 && minimum(us) < 0.1
+        us = map(u -> u < 0.2 ? u + 1 : u, us)
+    end
+    for k in 1:3
+        uvs[2(vi + k) - 1] = us[k]
+        indices[out + k - 1] = vi + k
+    end
+    return vi + 3, out + 3
 end
 
 function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTuple{3,Int}};
@@ -77,6 +86,8 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
     indices = Vector{Int}(undef, index_len)
     vi = 0
     out = 1
+    # three.js shades detail 0 flat (computeVertexNormals) and smooth otherwise.
+    flat = detail == 0
     for (i1, i2, i3) in base_faces
         A = verts[i1]; B = verts[i2]; C = verts[i3]
         for i in 0:cols-1, j in 0:(cols-1-i)
@@ -85,14 +96,14 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
                 _polyhedron_bary(A, B, C, cols, i, j),
                 _polyhedron_bary(A, B, C, cols, i + 1, j),
                 _polyhedron_bary(A, B, C, cols, i, j + 1),
-                radius)
+                radius, flat)
             if j < cols - 1 - i
                 vi, out = _polyhedron_emit_triangle!(
                     positions, normals, uvs, indices, vi, out,
                     _polyhedron_bary(A, B, C, cols, i + 1, j),
                     _polyhedron_bary(A, B, C, cols, i + 1, j + 1),
                     _polyhedron_bary(A, B, C, cols, i, j + 1),
-                    radius)
+                    radius, flat)
             end
         end
     end
@@ -405,6 +416,7 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     phi_start = _geometry_finite_scalar(phi_start, "LatheGeometry phi_start")
     phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
     segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
+    phi_length = clamp(phi_length, zero(phi_length), 2π)          # three.js clamps the sweep
 
     n_verts = _geometry_checked_mul(
         segments + 1, np, "LatheGeometry vertex count")
@@ -425,15 +437,16 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
             vi = i * np + j
             pbase = 3vi - 2
             ubase = 2vi - 1
-            positions[pbase] = pt.x * c
+            # three.js phase: phi = 0 lies on +z, sweeping towards +x.
+            positions[pbase] = pt.x * s
             positions[pbase + 1] = pt.y
-            positions[pbase + 2] = -pt.x * s
+            positions[pbase + 2] = pt.x * c
             jm = max(j-1, 1); jp = min(j+1, np)
             dx, dy = _geometry_unit_delta2(
                 Float64(points[jm].x), Float64(points[jm].y),
                 Float64(points[jp].x), Float64(points[jp].y))
             nr = dy; nh = -dx                      # outward profile normal
-            nx = nr*c; ny = nh; nz = -nr*s
+            nx = nr*s; ny = nh; nz = nr*c
             nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
             normals[pbase] = nx
             normals[pbase + 1] = ny
@@ -477,21 +490,40 @@ end
     )
 end
 
-@inline function _tube_tangent(path::Vector{<:Vec3}, i::Int, n::Int)
-    prev = path[max(i - 1, 1)]
-    next = path[min(i + 1, n)]
+@inline function _tube_tangent(path::AbstractVector{<:Vec3}, i::Int, n::Int,
+                               closed::Bool=false)
+    prev = closed ? path[mod1(i - 1, n)] : path[max(i - 1, 1)]
+    next = closed ? path[mod1(i + 1, n)] : path[min(i + 1, n)]
     tangent = _tube_unit_delta(prev, next)
     norm(tangent) > 0.0 && return tangent
     # A 180-degree reversal can make the centered difference zero despite both
     # adjacent segments being valid. Prefer the forward segment at the cusp.
-    i < n && return _tube_unit_delta(path[i], path[i + 1])
+    (closed || i < n) && return _tube_unit_delta(path[i], path[mod1(i + 1, n)])
     return _tube_unit_delta(path[i - 1], path[i])
 end
 
-function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
-    n = length(path)
+# Rotate `v` about the unit `axis` by `angle` (three.js Matrix4.makeRotationAxis).
+@inline _tube_rotate(v::Vec3, axis::Vec3, angle::Float64) =
+    v * cos(angle) + cross(axis, v) * sin(angle) + axis * (dot(axis, v) * (1 - cos(angle)))
+
+@inline function _tube_transport(N::Vec3, B::Vec3, T::Vec3)
+    Np = N - T*dot(N, T)               # project previous N off the new tangent
+    N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))
+    return N, cross(T, N)
+end
+
+"""
+    TubeGeometry(path; radius=1.0, radial_segments=8, closed=false)
+
+Sweep a circle of `radius` along the polyline `path` with parallel-transported
+frames (three.js `TubeGeometry`). With `closed=true` the path wraps from its last
+point back to the first, frames are twisted so the seam matches
+(three.js `computeFrenetFrames(segments, true)`), and the final ring duplicates
+the first one with `u = 1`.
+"""
+function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8, closed::Bool=false)
     _validate_tube_path(path)
-    @inbounds for i in 2:n
+    @inbounds for i in 2:length(path)
         _geometry_delta_norm3(
             Float64(path[i - 1].x), Float64(path[i - 1].y),
             Float64(path[i - 1].z), Float64(path[i].x),
@@ -499,13 +531,20 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             throw(ArgumentError(
                 "TubeGeometry path needs consecutive distinct points"))
     end
+    if closed && path[end] == path[1]
+        path = path[1:end-1]
+    end
+    n = length(path)
+    closed && n < 3 &&
+        throw(ArgumentError("closed TubeGeometry needs at least three distinct points"))
     radius = _geometry_finite_float(radius, "TubeGeometry radius")
     radial_segments = _clamp_seg(radial_segments, 3, "TubeGeometry radial_segments")   # clamp so 0 can't make j/radial_segments NaN
 
     rs1 = radial_segments + 1
-    n_verts = _geometry_checked_mul(n, rs1, "TubeGeometry vertex count")
+    rings = closed ? n + 1 : n
+    n_verts = _geometry_checked_mul(rings, rs1, "TubeGeometry vertex count")
     n_faces = _geometry_checked_mul(
-        2 * (n - 1), radial_segments, "TubeGeometry face count")
+        2 * (rings - 1), radial_segments, "TubeGeometry face count")
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "TubeGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -515,24 +554,41 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
 
     # Initial frame from the first tangent, parallel-transported along the path
     # (as in three.js computeFrenetFrames) so the frame never flips between rings.
-    T1 = _tube_tangent(path, 1, n)
+    T1 = _tube_tangent(path, 1, n, closed)
     refv = abs(T1.y) < 0.99 ? Vec3(0.0,1.0,0.0) : Vec3(1.0,0.0,0.0)
-    N = normalize(cross(refv, T1)); B = cross(T1, N)
-    for i in 1:n
-        T = i == 1 ? T1 : _tube_tangent(path, i, n)
-        if i > 1
-            Np = N - T*dot(N, T)               # project previous N off the new tangent
-            N = norm(Np) > 1e-9 ? normalize(Np) : normalize(cross(B, T))
-            B = cross(T, N)
+    N1 = normalize(cross(refv, T1))
+    twist = 0.0
+    if closed
+        N = N1; B = cross(T1, N1)
+        for i in 2:n
+            N, B = _tube_transport(N, B, _tube_tangent(path, i, n, closed))
+        end
+        N_end, _ = _tube_transport(N, B, T1)
+        twist = acos(clamp(dot(N1, N_end), -1.0, 1.0)) / n
+        dot(T1, cross(N1, N_end)) > 0 && (twist = -twist)
+    end
+    N = N1; B = cross(T1, N1)
+    for ring in 1:rings
+        i = ring > n ? 1 : ring
+        T = i == 1 ? T1 : _tube_tangent(path, i, n, closed)
+        if ring > n
+            N = N1; B = cross(T1, N1)
+        elseif i > 1
+            N, B = _tube_transport(N, B, T)
+        end
+        Nr, Br = N, B
+        if closed && 1 < ring <= n
+            Nr = _tube_rotate(N, T, twist * (ring - 1))
+            Br = cross(T, Nr)
         end
         for j in 0:radial_segments
             vj = j / radial_segments
             v = vj * 2π
-            normal = N * cos(v) + B * sin(v)
+            normal = Nr * cos(v) + Br * sin(v)
             p = path[i] + normal * radius
             _geometry_check_position(
                 Float64(p.x), Float64(p.y), Float64(p.z), "TubeGeometry")
-            vi = (i - 1) * rs1 + j + 1
+            vi = (ring - 1) * rs1 + j + 1
             pbase = 3vi - 2
             ubase = 2vi - 1
             positions[pbase] = p.x
@@ -541,13 +597,13 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8)
             normals[pbase] = normal.x
             normals[pbase + 1] = normal.y
             normals[pbase + 2] = normal.z
-            uvs[ubase] = (i - 1) / (n - 1)
+            uvs[ubase] = (ring - 1) / (rings - 1)
             uvs[ubase + 1] = vj
         end
     end
 
     out = 1
-    for i in 0:n-2, j in 0:radial_segments-1
+    for i in 0:rings-2, j in 0:radial_segments-1
         a = i*rs1 + j + 1; b = (i+1)*rs1 + j + 1
         c = (i+1)*rs1 + j + 2; d = i*rs1 + j + 2
         indices[out] = a
@@ -1645,6 +1701,214 @@ function _shape_triangulate(shape::Vector{Vec2{Float64}})
     return triangles
 end
 
+# ---- Shapes with holes (three.js ShapeUtils.triangulateShape) ----
+# Loops are stored back to back in one point list: loop k is `ranges[k]`, the
+# CCW outer contour first and the CW holes after it.
+
+function _shape_point_in_loop(p::Vec2, points::Vector{Vec2{Float64}}, range::UnitRange{Int})
+    inside = false
+    j = last(range)
+    @inbounds for i in range
+        a = points[i]; b = points[j]
+        if (a.y > p.y) != (b.y > p.y)
+            x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x)
+            x > p.x && (inside = !inside)
+        end
+        j = i
+    end
+    return inside
+end
+
+function _shape_validate_loops(points::Vector{Vec2{Float64}}, ranges::Vector{UnitRange{Int}},
+                               tolerance::Float64)
+    next_in(range, i) = i == last(range) ? first(range) : i + 1
+    for la in eachindex(ranges), ea in ranges[la]
+        na = next_in(ranges[la], ea)
+        for lb in la:length(ranges)
+            for eb in (lb == la ? (ea + 1:last(ranges[lb])) : ranges[lb])
+                nb = next_in(ranges[lb], eb)
+                (lb == la && (na == eb || nb == ea)) && continue
+                _shape_segments_intersect(points[ea], points[na], points[eb], points[nb],
+                                          tolerance) &&
+                    throw(ArgumentError("ExtrudeGeometry shape and holes must be simple " *
+                                        "and must not intersect"))
+            end
+        end
+    end
+    for k in 2:length(ranges)
+        p = points[first(ranges[k])]
+        _shape_point_in_loop(p, points, ranges[1]) ||
+            throw(ArgumentError("ExtrudeGeometry holes must lie inside the shape"))
+        for j in 2:length(ranges)
+            j != k && _shape_point_in_loop(p, points, ranges[j]) &&
+                throw(ArgumentError("ExtrudeGeometry holes must not be nested"))
+        end
+    end
+    return nothing
+end
+
+# Is the direction from poly vertex `slot` towards `b` inside the polygon there?
+function _shape_locally_inside(points::Vector{Vec2{Float64}}, poly::Vector{Int},
+                               slot::Int, b::Vec2)
+    n = length(poly)
+    prev = points[poly[mod1(slot - 1, n)]]
+    a = points[poly[slot]]
+    next = points[poly[mod1(slot + 1, n)]]
+    left_of_next = _shape_turn(a, next, b) >= 0
+    left_of_prev = _shape_turn(prev, a, b) >= 0
+    return _shape_turn(prev, a, next) >= 0 ? (left_of_next && left_of_prev) :
+                                             (left_of_next || left_of_prev)
+end
+
+# Eberly/earcut hole elimination with a +x ray from the hole's rightmost vertex.
+function _shape_bridge_hole!(poly::Vector{Int}, points::Vector{Vec2{Float64}},
+                             hole::UnitRange{Int}, tolerance::Float64)
+    hp = first(hole)
+    for id in hole
+        q = points[id]; h = points[hp]
+        (q.x > h.x || (q.x == h.x && q.y < h.y)) && (hp = id)
+    end
+    H = points[hp]
+    n = length(poly)
+    best_x = Inf
+    best_slot = 0
+    for slot in 1:n
+        a = points[poly[slot]]
+        b = points[poly[mod1(slot + 1, n)]]
+        a.y <= H.y <= b.y && a.y < b.y || continue
+        x = a.x + (H.y - a.y) / (b.y - a.y) * (b.x - a.x)
+        if x >= H.x && x < best_x
+            best_x = x
+            best_slot = slot
+        end
+    end
+    best_slot == 0 &&
+        throw(ArgumentError("ExtrudeGeometry shape could not be triangulated"))
+    a_slot = best_slot
+    b_slot = mod1(best_slot + 1, n)
+    m_slot = points[poly[b_slot]].x > points[poly[a_slot]].x ? b_slot : a_slot
+    if best_x > H.x
+        I = Vec2(best_x, H.y)
+        M = points[poly[m_slot]]
+        tri = H.y < M.y ? (H, I, M) : (H, M, I)
+        best_tan = abs(H.y - M.y) / (M.x - H.x)
+        for slot in 1:n
+            p = points[poly[slot]]
+            H.x < p.x <= M.x || continue
+            slot == m_slot && continue
+            _shape_point_in_triangle(p, tri..., tolerance) || continue
+            _shape_locally_inside(points, poly, slot, H) || continue
+            tan = abs(H.y - p.y) / (p.x - H.x)
+            if tan < best_tan || (tan == best_tan && p.x < points[poly[m_slot]].x)
+                best_tan = tan
+                m_slot = slot
+            end
+        end
+    end
+    m = poly[m_slot]
+    ring = Int[]
+    sizehint!(ring, length(hole) + 2)
+    offset = hp - first(hole)
+    for k in 0:length(hole)
+        push!(ring, first(hole) + mod(offset + k, length(hole)))
+    end
+    push!(ring, m)
+    for (k, id) in enumerate(ring)
+        insert!(poly, m_slot + k, id)
+    end
+    return poly
+end
+
+function _shape_ear_clip(points::Vector{Vec2{Float64}}, poly::Vector{Int},
+                         tolerance::Float64)
+    remaining = poly
+    triangles = Vector{NTuple{3,Int}}()
+    sizehint!(triangles, length(remaining) - 2)
+    while length(remaining) > 3
+        m = length(remaining)
+        found = false
+        @inbounds for slot in 1:m
+            ip = remaining[mod1(slot - 1, m)]
+            ic = remaining[slot]
+            inext = remaining[mod1(slot + 1, m)]
+            a, b, c = points[ip], points[ic], points[inext]
+            _shape_turn(a, b, c) > tolerance || continue
+            blocked = false
+            for other in remaining
+                (other == ip || other == ic || other == inext) && continue
+                q = points[other]
+                (q == a || q == b || q == c) && continue
+                if _shape_point_in_triangle(q, a, b, c, tolerance)
+                    blocked = true
+                    break
+                end
+            end
+            blocked && continue
+            push!(triangles, (ip, ic, inext))
+            deleteat!(remaining, slot)
+            found = true
+            break
+        end
+        if !found
+            # Drop a vertex that encloses no area (collinear run or bridge spike).
+            @inbounds for slot in 1:m
+                a = points[remaining[mod1(slot - 1, m)]]
+                b = points[remaining[slot]]
+                c = points[remaining[mod1(slot + 1, m)]]
+                if abs(_shape_turn(a, b, c)) <= tolerance
+                    deleteat!(remaining, slot)
+                    found = true
+                    break
+                end
+            end
+        end
+        found || throw(ArgumentError("ExtrudeGeometry shape could not be triangulated"))
+    end
+    if length(remaining) == 3
+        a, b, c = remaining
+        _shape_turn(points[a], points[b], points[c]) > tolerance &&
+            push!(triangles, (a, b, c))
+    end
+    isempty(triangles) &&
+        throw(ArgumentError("ExtrudeGeometry shape could not be triangulated"))
+    return triangles
+end
+
+# Triangulate a CCW outer contour with CW holes. Triangle indices refer to the
+# concatenation `[outer; holes...]`, like three.js ShapeUtils.triangulateShape.
+function _shape_triangulate(outer::Vector{Vec2{Float64}},
+                            holes::Vector{Vector{Vec2{Float64}}})
+    isempty(holes) && return _shape_triangulate(outer)
+    all_points = reduce(vcat, holes; init=copy(outer))
+    points = _shape_normalized_points(all_points)
+    tolerance = 64 * eps(Float64)
+    ranges = UnitRange{Int}[1:length(outer)]
+    start = length(outer)
+    for hole in holes
+        push!(ranges, (start + 1):(start + length(hole)))
+        start += length(hole)
+    end
+    _shape_validate_loops(points, ranges, tolerance)
+    poly = collect(ranges[1])
+    order = sort(2:length(ranges); by=k -> -maximum(points[i].x for i in ranges[k]))
+    for k in order
+        _shape_bridge_hole!(poly, points, ranges[k], tolerance)
+    end
+    return _shape_ear_clip(points, poly, tolerance)
+end
+
+const _NO_SHAPE_HOLES = Vector{Vec2{Float64}}[]
+
+function _shape_clean_holes(holes)
+    isempty(holes) && return _NO_SHAPE_HOLES
+    out = Vector{Vec2{Float64}}[]
+    for hole in holes
+        clean = _extrude_clean_shape(hole)
+        push!(out, reverse!(clean))
+    end
+    return out
+end
+
 _shape_len(v::Vec2) = hypot(v.x, v.y)
 _shape_normalize(v::Vec2) = v * (1 / _shape_len(v))
 
@@ -1791,13 +2055,29 @@ function _extrude_shape_vertex_normals(shape::Vector{Vec2{Float64}})
     return normals
 end
 
+function _extrude_loops(outer::Vector{Vec2{Float64}}, holes::Vector{Vector{Vec2{Float64}}})
+    isempty(holes) && return outer, UnitRange{Int}[1:length(outer)]
+    shape = reduce(vcat, holes; init=copy(outer))
+    ranges = UnitRange{Int}[1:length(outer)]
+    for hole in holes
+        push!(ranges, (last(ranges[end]) + 1):(last(ranges[end]) + length(hole)))
+    end
+    return shape, ranges
+end
+
+@inline _extrude_next(ranges::Vector{UnitRange{Int}}, k::Int, j::Int) =
+    j == last(ranges[k]) ? first(ranges[k]) : j + 1
+
 function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
-                                path_in::AbstractVector{<:Vec3})
-    shape = _extrude_clean_shape(shape_in)
+                                path_in::AbstractVector{<:Vec3}, holes_in)
+    outer = _extrude_clean_shape(shape_in)
+    holes = _shape_clean_holes(holes_in)
+    shape, ranges = _extrude_loops(outer, holes)
     path, closed, eps = _extrude_clean_path(path_in)
     tangents = _extrude_path_tangents(path, closed, eps)
-    shape_normals = _extrude_shape_vertex_normals(shape)
-    cap_triangles = closed ? NTuple{3,Int}[] : _shape_triangulate(shape)
+    shape_normals = isempty(holes) ? _extrude_shape_vertex_normals(shape) :
+        reduce(vcat, (_extrude_shape_vertex_normals(shape[r]) for r in ranges))
+    cap_triangles = closed ? NTuple{3,Int}[] : _shape_triangulate(outer, holes)
     np = length(shape)
     nr = length(path)
     segments = closed ? nr : nr - 1
@@ -1830,6 +2110,18 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     first_B = B
     last_N = N
     last_B = B
+    twist = 0.0
+    if closed
+        # Like three.js computeFrenetFrames(…, closed=true), spread the
+        # transport holonomy over the loop so the wrap-around ring matches.
+        Nt, Bt = N, B
+        for i in 2:nr
+            Nt, Bt = _tube_transport(Nt, Bt, tangents[i])
+        end
+        N_end, _ = _tube_transport(Nt, Bt, tangents[1])
+        twist = acos(clamp(dot(N, N_end), -1.0, 1.0)) / nr
+        dot(tangents[1], cross(N, N_end)) > 0 && (twist = -twist)
+    end
     @inbounds for i in 1:nr
         T = tangents[i]
         if i > 1
@@ -1839,11 +2131,16 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         end
         i == 1 && (first_N = N; first_B = B)
         i == nr && (last_N = N; last_B = B)
+        Nr, Br = N, B
+        if twist != 0.0
+            Nr = _tube_rotate(N, T, twist * (i - 1))
+            Br = cross(T, Nr)
+        end
         for j in 1:np
             pt = shape[j]
             normal2 = shape_normals[j]
-            p = path[i] + N * pt.x + B * pt.y
-            n = normalize(N * normal2.x + B * normal2.y)
+            p = path[i] + Nr * pt.x + Br * pt.y
+            n = normalize(Nr * normal2.x + Br * normal2.y)
             _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = (i - 1) * np + j
             pbase = 3vi - 2
@@ -1862,8 +2159,8 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     out = 1
     @inbounds for i in 1:segments
         i2 = i == nr ? 1 : i + 1
-        for j in 1:np
-            j2 = mod1(j + 1, np)
+        for k in eachindex(ranges), j in ranges[k]
+            j2 = _extrude_next(ranges, k, j)
             a = (i - 1) * np + j
             b = (i - 1) * np + j2
             c = (i2 - 1) * np + j2
@@ -1933,11 +2230,20 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     return BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
-"""Filled planar polygon (z = 0), normal +z."""
-function ShapeGeometry(shape::Vector{<:Vec2})
-    shape = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
-    np = length(shape)
-    triangles = _shape_triangulate(shape)
+"""
+    ShapeGeometry(shape; holes=Vector{Vec2{Float64}}[])
+
+Filled planar polygon at z = 0 with +z normals and world-space `(x, y)` UVs
+(three.js `ShapeGeometry`). `holes` are polygons cut out of `shape`; they must
+lie inside it without touching it or each other. Either winding is accepted for
+the outline and the holes.
+"""
+function ShapeGeometry(shape::Vector{<:Vec2}; holes=Vector{Vec2{Float64}}[])
+    outer = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
+    hole_loops = _shape_clean_holes(holes)
+    points, _ = _extrude_loops(outer, hole_loops)
+    np = length(points)
+    triangles = _shape_triangulate(outer, hole_loops)
     n_faces = length(triangles)
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(np, n_faces, "ShapeGeometry")
@@ -1946,7 +2252,7 @@ function ShapeGeometry(shape::Vector{<:Vec2})
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
     @inbounds for i in 1:np
-        pt = shape[i]
+        pt = points[i]
         pbase = 3i - 2
         positions[pbase] = pt.x
         positions[pbase + 1] = pt.y
@@ -1968,48 +2274,144 @@ function ShapeGeometry(shape::Vector{<:Vec2})
     BufferGeometry(positions, normals, uvs, indices, np, n_faces)
 end
 
-"""Extrude a planar polygon `shape` to `depth` along +z, or along `extrude_path`."""
-function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
-    extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path)
+# three.js ExtrudeGeometry `getBevelVec`: the unnormalized move of `pt` onto
+# the contour shifted one unit to the left when walking prev -> pt -> next.
+function _extrude_bevel_vec(pt::Vec2{Float64}, prev::Vec2{Float64}, next::Vec2{Float64})
+    vpx = pt.x - prev.x; vpy = pt.y - prev.y
+    vnx = next.x - pt.x; vny = next.y - pt.y
+    vp_lensq = vpx * vpx + vpy * vpy
+    if abs(vpx * vny - vpy * vnx) > eps(Float64)
+        vp_len = sqrt(vp_lensq)
+        vn_len = sqrt(vnx * vnx + vny * vny)
+        psx = prev.x - vpy / vp_len; psy = prev.y + vpx / vp_len
+        nsx = next.x - vny / vn_len; nsy = next.y + vnx / vn_len
+        sf = ((nsx - psx) * vny - (nsy - psy) * vnx) / (vpx * vny - vpy * vnx)
+        tx = psx + vpx * sf - pt.x
+        ty = psy + vpy * sf - pt.y
+        tl = tx * tx + ty * ty
+        tl <= 2 && return Vec2(tx, ty)
+        shrink = sqrt(tl / 2)
+    else
+        same_direction = vpx > eps(Float64) ? vnx > eps(Float64) :
+                         vpx < -eps(Float64) ? vnx < -eps(Float64) :
+                         sign(vpy) == sign(vny)
+        if same_direction
+            tx = -vpy; ty = vpx; shrink = sqrt(vp_lensq)
+        else
+            tx = vpx; ty = vpy; shrink = sqrt(vp_lensq / 2)
+        end
+    end
+    return Vec2(tx / shrink, ty / shrink)
+end
+
+# Our loops are stored reversed relative to three.js (CCW outer, CW holes), so
+# its `prev`/`next` swap; the moves still point out of the solid.
+function _extrude_bevel_vectors(points::Vector{Vec2{Float64}}, ranges::Vector{UnitRange{Int}})
+    moves = Vector{Vec2{Float64}}(undef, length(points))
+    for k in eachindex(ranges), j in ranges[k]
+        prev = j == first(ranges[k]) ? last(ranges[k]) : j - 1
+        moves[j] = _extrude_bevel_vec(points[j], points[_extrude_next(ranges, k, j)],
+                                      points[prev])
+    end
+    return moves
+end
+
+"""
+    ExtrudeGeometry(shape; depth=1.0, holes=Vector{Vec2{Float64}}[], steps=1,
+                    bevel_enabled=false, bevel_thickness=0.2,
+                    bevel_size=bevel_thickness - 0.1, bevel_offset=0.0,
+                    bevel_segments=3, extrude_path=nothing)
+
+Extrude the planar polygon `shape`, minus optional `holes`, along +z from
+`z = 0` to `depth` in `steps` slices (three.js `ExtrudeGeometry`). With
+`bevel_enabled=true` both caps are beveled: `bevel_segments` layers spread over
+`bevel_thickness` beyond each cap grow the outline by up to `bevel_size`,
+starting `bevel_offset` from it (three.js `getBevelVec` offsets). Caps use
+world `(x, y)` UVs and side walls three.js `WorldUVGenerator` UVs. With
+`extrude_path` the profile is swept along that polyline instead; as in three.js
+path extrusion, bevels are not applied there and every path point is a step.
+
+Unlike three.js, `bevel_enabled` defaults to `false`.
+"""
+function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
+                         holes=Vector{Vec2{Float64}}[], steps=1,
+                         bevel_enabled::Bool=false, bevel_thickness=0.2,
+                         bevel_size=nothing, bevel_offset=0.0, bevel_segments=3)
+    extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path, holes)
     depth = _geometry_finite_float(depth, "ExtrudeGeometry depth")
+    steps = _geometry_positive_int(steps, "ExtrudeGeometry steps")
+    thickness = _geometry_finite_float(bevel_thickness, "ExtrudeGeometry bevel_thickness")
+    size = bevel_size === nothing ? thickness - 0.1 :
+           _geometry_finite_float(bevel_size, "ExtrudeGeometry bevel_size")
+    offset = _geometry_finite_float(bevel_offset, "ExtrudeGeometry bevel_offset")
+    nb = _geometry_nonnegative_int(bevel_segments, "ExtrudeGeometry bevel_segments")
+    if !bevel_enabled
+        nb = 0; thickness = 0.0; size = 0.0; offset = 0.0
+    end
     # Normalize to CCW (like the extrude_path branch) so the hard-coded cap and
     # side-wall normals stay consistent with the winding for any input orientation.
-    shape = _extrude_clean_shape(shape)
-    np = length(shape)
-    cap_triangles = _shape_triangulate(shape)
-    n_verts = _geometry_checked_mul(6, np, "ExtrudeGeometry vertex count")
+    outer = _extrude_clean_shape(shape)
+    hole_loops = _shape_clean_holes(holes)
+    base, ranges = _extrude_loops(outer, hole_loops)
+    np = length(base)
+    moves = bevel_enabled ? _extrude_bevel_vectors(base, ranges) : nothing
+
+    # Vertex layers bottom to top: bevel rings, `steps + 1` body rings, bevel rings.
+    layers = steps + 2nb + 1
+    zs = Vector{Float64}(undef, layers)
+    offsets = Vector{Float64}(undef, layers)
+    for b in 0:nb-1
+        t = b / nb
+        zs[b + 1] = -thickness * cos(t * π / 2)
+        offsets[b + 1] = size * sin(t * π / 2) + offset
+        zs[layers - b] = depth + thickness * cos(t * π / 2)
+        offsets[layers - b] = offsets[b + 1]
+    end
+    for s in 0:steps
+        zs[nb + s + 1] = depth / steps * s
+        offsets[nb + s + 1] = size + offset
+    end
+    layer_point(l, j) = moves === nothing ? base[j] : base[j] + moves[j] * offsets[l]
+
+    cap_triangles = if moves === nothing || iszero(offsets[1])
+        _shape_triangulate(outer, hole_loops)
+    else
+        cap = [layer_point(1, j) for j in 1:np]
+        _shape_triangulate(cap[ranges[1]], [cap[r] for r in ranges[2:end]])
+    end
+    n_side_quads = _geometry_checked_mul(np, layers - 1, "ExtrudeGeometry face count")
+    n_verts = _geometry_checked_add(
+        _geometry_checked_mul(2, np, "ExtrudeGeometry vertex count"),
+        _geometry_checked_mul(4, n_side_quads, "ExtrudeGeometry vertex count"),
+        "ExtrudeGeometry vertex count")
     n_faces = _geometry_checked_add(
-        _geometry_checked_mul(4, np, "ExtrudeGeometry face count"),
-        -4, "ExtrudeGeometry face count")
+        _geometry_checked_mul(2, length(cap_triangles), "ExtrudeGeometry face count"),
+        _geometry_checked_mul(2, n_side_quads, "ExtrudeGeometry face count"),
+        "ExtrudeGeometry face count")
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "ExtrudeGeometry")
     positions = Vector{Float64}(undef, position_len)
     normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
+    write_vertex(vi, p, z, n, u, v) = begin
+        pbase = 3vi - 2
+        positions[pbase] = p.x
+        positions[pbase + 1] = p.y
+        positions[pbase + 2] = z
+        normals[pbase] = n.x
+        normals[pbase + 1] = n.y
+        normals[pbase + 2] = n.z
+        uvs[2vi - 1] = u
+        uvs[2vi] = v
+        nothing
+    end
 
-    @inbounds for i in 1:np
-        pt = shape[i]
-        front_base = 3i - 2
-        back = np + i
-        back_base = 3back - 2
-        positions[front_base] = pt.x
-        positions[front_base + 1] = pt.y
-        positions[front_base + 2] = 0.0
-        normals[front_base] = 0.0
-        normals[front_base + 1] = 0.0
-        normals[front_base + 2] = -1.0
-        uvs[2i - 1] = 0.0
-        uvs[2i] = 0.0
-
-        positions[back_base] = pt.x
-        positions[back_base + 1] = pt.y
-        positions[back_base + 2] = depth
-        normals[back_base] = 0.0
-        normals[back_base + 1] = 0.0
-        normals[back_base + 2] = 1.0
-        uvs[2back - 1] = 1.0
-        uvs[2back] = 1.0
+    @inbounds for j in 1:np
+        front = layer_point(1, j)
+        back = layer_point(layers, j)
+        write_vertex(j, front, zs[1], Vec3(0.0, 0.0, -1.0), front.x, front.y)
+        write_vertex(np + j, back, zs[layers], Vec3(0.0, 0.0, 1.0), back.x, back.y)
     end
 
     out = 1
@@ -2023,41 +2425,35 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing)
         out += 6
     end
     vi = 2 * np
-    @inbounds for i in 1:np
-        i2 = i % np + 1
-        p1 = shape[i]; p2 = shape[i2]
-        ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
-        nx = ey; ny = -ex
-        a = vi + 1
-        b = vi + 2
-        c = vi + 3
-        d = vi + 4
-        vals = ((p1.x, p1.y, 0.0,   0.0, 0.0),
-                (p2.x, p2.y, 0.0,   1.0, 0.0),
-                (p2.x, p2.y, depth, 1.0, 1.0),
-                (p1.x, p1.y, depth, 0.0, 1.0))
-        for (offset, val) in enumerate(vals)
-            x, y, z, u, v = val
-            dst = vi + offset
-            pbase = 3dst - 2
-            positions[pbase] = x
-            positions[pbase + 1] = y
-            positions[pbase + 2] = z
-            normals[pbase] = nx
-            normals[pbase + 1] = ny
-            normals[pbase + 2] = 0.0
-            ubase = 2dst - 1
-            uvs[ubase] = u
-            uvs[ubase + 1] = v
+    @inbounds for k in eachindex(ranges), i in ranges[k]
+        i2 = _extrude_next(ranges, k, i)
+        for l in 1:layers-1
+            p1 = layer_point(l, i); p2 = layer_point(l, i2)
+            q1 = layer_point(l + 1, i); q2 = layer_point(l + 1, i2)
+            z1 = zs[l]; z2 = zs[l + 1]
+            n = if offsets[l] == offsets[l + 1]
+                ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
+                Vec3(ey, -ex, 0.0)
+            else
+                # Planar bevel trapezoid: its diagonals span the face plane.
+                normalize(cross(Vec3(q2.x - p1.x, q2.y - p1.y, z2 - z1),
+                                Vec3(q1.x - p2.x, q1.y - p2.y, z2 - z1)))
+            end
+            # three.js WorldUVGenerator.generateSideWallUV
+            use_x = abs(p1.y - p2.y) < abs(p1.x - p2.x)
+            write_vertex(vi + 1, p1, z1, n, use_x ? p1.x : p1.y, 1 - z1)
+            write_vertex(vi + 2, p2, z1, n, use_x ? p2.x : p2.y, 1 - z1)
+            write_vertex(vi + 3, q2, z2, n, use_x ? q2.x : q2.y, 1 - z2)
+            write_vertex(vi + 4, q1, z2, n, use_x ? q1.x : q1.y, 1 - z2)
+            indices[out] = vi + 1
+            indices[out + 1] = vi + 2
+            indices[out + 2] = vi + 3
+            indices[out + 3] = vi + 1
+            indices[out + 4] = vi + 3
+            indices[out + 5] = vi + 4
+            out += 6
+            vi += 4
         end
-        vi += 4
-        indices[out] = a
-        indices[out + 1] = b
-        indices[out + 2] = c
-        indices[out + 3] = a
-        indices[out + 4] = c
-        indices[out + 5] = d
-        out += 6
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
@@ -2065,74 +2461,91 @@ end
 # ========================== CapsuleGeometry ==========================
 # Cylinder of `length` capped by two hemispheres of `radius`, revolved about y.
 
-function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=8, radial_segments=16)
+function CapsuleGeometry(; radius=1.0, length=1.0, cap_segments=4, radial_segments=8,
+                         height_segments=1)
     radius = _geometry_finite_float(radius, "CapsuleGeometry radius")
-    length = _geometry_finite_float(length, "CapsuleGeometry length")
+    length = max(0.0, _geometry_finite_float(length, "CapsuleGeometry length"))
     _geometry_check_abs_sum(length * 0.5, radius, "CapsuleGeometry")
     # clamp so 0 can't make i/cap_segments or s/radial_segments a 0/0 = NaN
     cap_segments = _clamp_seg(cap_segments, 1, "CapsuleGeometry cap_segments")
     radial_segments = _clamp_seg(radial_segments, 3, "CapsuleGeometry radial_segments")
+    height_segments = _clamp_seg(height_segments, 1, "CapsuleGeometry height_segments")
     half = length / 2
-    np = _geometry_checked_mul(
-        2, cap_segments + 1, "CapsuleGeometry profile point count")
-    n_verts = _geometry_checked_mul(
-        radial_segments + 1, np, "CapsuleGeometry vertex count")
+    rows = _geometry_checked_add(
+        _geometry_checked_mul(2, cap_segments, "CapsuleGeometry row count"),
+        height_segments, "CapsuleGeometry row count")
+    row = radial_segments + 1
+    n_verts = _geometry_checked_mul(row, rows + 1, "CapsuleGeometry vertex count")
     n_faces = _geometry_checked_mul(
-        2 * radial_segments, np - 1, "CapsuleGeometry face count")
+        2 * radial_segments, rows, "CapsuleGeometry face count")
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "CapsuleGeometry")
-    profile_r = Vector{Float64}(undef, np)
-    profile_y = Vector{Float64}(undef, np)
-    for i in 0:cap_segments                          # top hemisphere: pole → equator
-        a = i/cap_segments * (π/2)
-        idx = i + 1
-        profile_r[idx] = radius * sin(a)
-        profile_y[idx] = half + radius * cos(a)
-    end
-    for i in 0:cap_segments                          # bottom hemisphere: equator → pole
-        a = i/cap_segments * (π/2)
-        idx = cap_segments + i + 2
-        profile_r[idx] = radius * cos(a)
-        profile_y[idx] = -half - radius * sin(a)
-    end
     positions = Vector{Float64}(undef, position_len)
     normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    @inbounds for s in 0:radial_segments
-        u = s / radial_segments
-        phi = u * 2π
-        c = cos(phi); sn = sin(phi)
-        for j in 1:np
-            r = profile_r[j]
-            y = profile_y[j]
-            x = r*c; z = -r*sn
-            cy = clamp(y, -half, half)               # nearest point on the spine
-            nx = x; ny = y - cy; nz = z
+    # three.js measures v by arc length; scale first so huge capsules stay finite.
+    scale = max(abs(radius), length)
+    cap_arc = scale > 0 ? (π / 2) * (radius / scale) : 0.0
+    body_arc = scale > 0 ? length / scale : 0.0
+    total_arc = 2cap_arc + body_arc
+    @inbounds for iy in 0:rows
+        if iy <= cap_segments
+            t = iy / cap_segments
+            angle = t * (π / 2)
+            profile_y = -half - radius * cos(angle)
+            profile_r = radius * sin(angle)
+            normal_y = -radius * cos(angle)
+            arc = t * cap_arc
+        elseif iy <= cap_segments + height_segments
+            t = (iy - cap_segments) / height_segments
+            profile_y = -half + t * length
+            profile_r = radius
+            normal_y = 0.0
+            arc = cap_arc + t * body_arc
+        else
+            t = (iy - cap_segments - height_segments) / cap_segments
+            angle = t * (π / 2)
+            profile_y = half + radius * sin(angle)
+            profile_r = radius * cos(angle)
+            normal_y = radius * sin(angle)
+            arc = cap_arc + body_arc + t * cap_arc
+        end
+        v = total_arc != 0 ? clamp(arc / total_arc, 0.0, 1.0) : iy / rows
+        u_offset = iy == 0 ? 0.5 / radial_segments :
+                   iy == rows ? -0.5 / radial_segments : 0.0
+        for ix in 0:radial_segments
+            u = ix / radial_segments
+            theta = u * 2π
+            x = -profile_r * cos(theta)
+            z = profile_r * sin(theta)
+            nx = x; ny = normal_y; nz = z
             nl = hypot(nx, ny, nz); nl > 0 && (nx/=nl; ny/=nl; nz/=nl)
-            vi = s * np + j
+            vi = iy * row + ix + 1
             pbase = 3vi - 2
             positions[pbase] = x
-            positions[pbase + 1] = y
+            positions[pbase + 1] = profile_y
             positions[pbase + 2] = z
             normals[pbase] = nx
             normals[pbase + 1] = ny
             normals[pbase + 2] = nz
             ubase = 2vi - 1
-            uvs[ubase] = u
-            uvs[ubase + 1] = (j - 1) / (np - 1)
+            uvs[ubase] = u + u_offset
+            uvs[ubase + 1] = v
         end
     end
     out = 1
-    @inbounds for s in 0:radial_segments-1, j in 0:np-2
-        a = s*np + j + 1; b = (s+1)*np + j + 1
-        c = (s+1)*np + j + 2; d = s*np + j + 2
-        indices[out] = a
-        indices[out + 1] = d
-        indices[out + 2] = b
-        indices[out + 3] = b
-        indices[out + 4] = d
-        indices[out + 5] = c
+    @inbounds for iy in 1:rows, ix in 0:radial_segments-1
+        i1 = (iy - 1) * row + ix + 1
+        i2 = i1 + 1
+        i3 = iy * row + ix + 1
+        i4 = i3 + 1
+        indices[out] = i1
+        indices[out + 1] = i2
+        indices[out + 2] = i3
+        indices[out + 3] = i2
+        indices[out + 4] = i4
+        indices[out + 5] = i3
         out += 6
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)

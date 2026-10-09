@@ -29,6 +29,15 @@ The [API reference](api.md) is the entry point for supported calls. A matching
 three.js name does not imply identical arguments, implementation, or backend
 support.
 
+Geometry generators follow three.js r186 vertex placement, UVs, normals, and
+defaults, with these deliberate differences: `ExtrudeGeometry` defaults to
+`bevel_enabled=false` (three.js enables a bevel by default); extrusion along a
+polyline `extrude_path` keeps smooth shared side normals and per-ring UVs rather
+than three.js's flat faces and world-space UVs; generators do not add
+three.js's per-part draw groups, because the renderers draw a mesh with one
+material; and `CylinderGeometry` caps share one center vertex instead of one per
+segment.
+
 ## Rendering backends
 
 | Entry point | Supported role | Boundaries |

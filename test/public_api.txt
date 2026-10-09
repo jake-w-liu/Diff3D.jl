@@ -327,6 +327,7 @@ material_side
 material_transparent
 material_wireframe
 merge_geometries
+merge_vertices
 mixer_set_time!
 mixer_update!
 norm

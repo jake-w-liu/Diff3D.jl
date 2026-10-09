@@ -1092,14 +1092,24 @@ _clamp_seg(s, lo::Int, label::String) = throw(ArgumentError("$label must be nume
 
 # ========================== Sphere Geometry ==========================
 
-function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
+function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
+                        phi_start=0.0, phi_length=2π, theta_start=0.0, theta_length=π)
     radius = _geometry_finite_float(radius, "SphereGeometry radius")
+    phi_start = _geometry_finite_float(phi_start, "SphereGeometry phi_start")
+    phi_length = _geometry_finite_float(phi_length, "SphereGeometry phi_length")
+    theta_start = _geometry_finite_float(theta_start, "SphereGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "SphereGeometry theta_length")
+    theta_end = min(theta_start + theta_length, Float64(π))
+    # three.js only collapses (skips) the pole triangles of a sweep reaching a pole.
+    top_pole = theta_start <= 0
+    bottom_pole = theta_end == Float64(π)
     # Clamp to a valid minimum (matching three.js), else degenerate counts produce
     # an empty/NaN sphere from a plausible call.
     width_segments = _clamp_seg(width_segments, 3, "SphereGeometry width_segments")
     height_segments = _clamp_seg(height_segments, 2, "SphereGeometry height_segments")
     n_verts = (height_segments + 1) * (width_segments + 1)
-    n_faces = 2 * width_segments * (height_segments - 1)
+    n_faces = 2 * width_segments * height_segments -
+              ((top_pole ? 1 : 0) + (bottom_pole ? 1 : 0)) * width_segments
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "SphereGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -1109,12 +1119,15 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
 
     for j in 0:height_segments
         v = j / height_segments
-        θ = v * π
+        θ = theta_start + v * theta_length
         sinθ = sin(θ)
         cosθ = cos(θ)
+        # three.js centers each pole vertex's u between its ring neighbours.
+        u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
+                   j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
         for i in 0:width_segments
             u = i / width_segments
-            ϕ = u * 2π
+            ϕ = phi_start + u * phi_length
             sinϕ = sin(ϕ)
             cosϕ = cos(ϕ)
 
@@ -1137,7 +1150,7 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             normals_arr[pbase] = nx
             normals_arr[pbase + 1] = ny
             normals_arr[pbase + 2] = nz
-            uvs_arr[ubase] = u
+            uvs_arr[ubase] = u + u_offset
             uvs_arr[ubase + 1] = 1.0 - v
         end
     end
@@ -1150,13 +1163,13 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16)
             c = a + (width_segments + 1)
             d = c + 1
 
-            if j != 0
+            if j != 0 || !top_pole
                 indices[out] = a
                 indices[out + 1] = d
                 indices[out + 2] = b
                 out += 3
             end
-            if j != height_segments - 1
+            if j != height_segments - 1 || !bottom_pole
                 indices[out] = a
                 indices[out + 1] = c
                 indices[out + 2] = d
@@ -1230,7 +1243,10 @@ end
 # ========================== Cylinder Geometry ==========================
 
 function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
-                           radial_segments=32, height_segments=1, open_ended=false)
+                           radial_segments=32, height_segments=1, open_ended=false,
+                           theta_start=0.0, theta_length=2π)
+    theta_start = _geometry_finite_float(theta_start, "CylinderGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "CylinderGeometry theta_length")
     radius_top = _geometry_finite_float(radius_top, "CylinderGeometry radius_top")
     radius_bottom = _geometry_finite_float(radius_bottom, "CylinderGeometry radius_bottom")
     height = _geometry_finite_float(height, "CylinderGeometry height")
@@ -1241,8 +1257,12 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     top_cap = !open_ended && radius_top > 0
     bottom_cap = !open_ended && radius_bottom > 0
     cap_count = (top_cap ? 1 : 0) + (bottom_cap ? 1 : 0)
+    # three.js omits the side triangles that collapse onto a zero-radius pole.
+    top_side = radius_top > 0
+    bottom_side = radius_bottom > 0
     n_verts = side_vertices + cap_count * (radial_segments + 2)
-    n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments
+    n_faces = 2 * radial_segments * height_segments + cap_count * radial_segments -
+              ((top_side ? 0 : 1) + (bottom_side ? 0 : 1)) * radial_segments
     position_len, uv_len, index_len =
         _geometry_mesh_buffer_lengths(n_verts, n_faces, "CylinderGeometry")
     positions = Vector{Float64}(undef, position_len)
@@ -1272,7 +1292,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
 
         for x_seg in 0:radial_segments
             u = x_seg / radial_segments
-            θ = u * 2π
+            θ = u * theta_length + theta_start
             sinθ = sin(θ)
             cosθ = cos(θ)
 
@@ -1306,13 +1326,18 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
             b = a + 1
             c = a + (radial_segments + 1)
             d = c + 1
-            indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
-            indices[out + 4] = c
-            indices[out + 5] = d
-            out += 6
+            if top_side || y_seg != 0
+                indices[out] = a
+                indices[out + 1] = d
+                indices[out + 2] = b
+                out += 3
+            end
+            if bottom_side || y_seg != height_segments - 1
+                indices[out] = a
+                indices[out + 1] = c
+                indices[out + 2] = d
+                out += 3
+            end
         end
     end
 
@@ -1338,7 +1363,7 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
 
             for x_seg in 0:radial_segments
                 u = x_seg / radial_segments
-                θ = u * 2π
+                θ = u * theta_length + theta_start
                 sinθ = sin(θ)
                 cosθ = cos(θ)
                 x = cap_r * sinθ
@@ -1353,8 +1378,8 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                 normals_arr[pbase] = 0.0
                 normals_arr[pbase + 1] = cap_ny
                 normals_arr[pbase + 2] = 0.0
-                uvs_arr[ubase] = sinθ * 0.5 + 0.5
-                uvs_arr[ubase + 1] = cosθ * 0.5 + 0.5
+                uvs_arr[ubase] = cosθ * 0.5 + 0.5
+                uvs_arr[ubase + 1] = sinθ * 0.5 * cap_ny + 0.5
             end
 
             for x_seg in 0:radial_segments-1
@@ -1380,19 +1405,24 @@ end
 # ========================== Cone Geometry ==========================
 
 function ConeGeometry(; radius=1.0, height=1.0, radial_segments=32, height_segments=1,
-                       open_ended=false)
+                       open_ended=false, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "ConeGeometry radius")
     height = _geometry_finite_float(height, "ConeGeometry height")
     CylinderGeometry(; radius_top=0.0, radius_bottom=radius, height=height,
                       radial_segments=radial_segments, height_segments=height_segments,
-                      open_ended=open_ended)
+                      open_ended=open_ended, theta_start=theta_start,
+                      theta_length=theta_length)
 end
 
 # ========================== Torus Geometry ==========================
 
-function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segments=48)
+function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segments=48,
+                       arc=2π, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "TorusGeometry radius")
     tube = _geometry_finite_float(tube, "TorusGeometry tube")
+    arc = _geometry_finite_float(arc, "TorusGeometry arc")
+    theta_start = _geometry_finite_float(theta_start, "TorusGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "TorusGeometry theta_length")
     _geometry_check_abs_sum(radius, tube, "TorusGeometry")
     # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
     radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
@@ -1409,13 +1439,13 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=16, tubular_segme
 
     for j in 0:radial_segments
         vj = j / radial_segments
-        v = vj * 2π
+        v = theta_start + vj * theta_length
         cosv = cos(v)
         sinv = sin(v)
         r_tube = radius + tube * cosv
         for i in 0:tubular_segments
             ui = i / tubular_segments
-            u = ui * 2π
+            u = ui * arc
             cosu = cos(u)
             sinu = sin(u)
             vi = j * (tubular_segments + 1) + i + 1
@@ -1578,7 +1608,7 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
         for j in 0:radial_segments
             vj = j / radial_segments
             v = vj * 2π
-            cx = tube * cos(v)
+            cx = -tube * cos(v)          # three.js TorusKnotGeometry.js phase
             cy = tube * sin(v)
             px = p1.x + cx * N_vec.x + cy * B_vec.x
             py = p1.y + cx * N_vec.y + cy * B_vec.y
@@ -1618,15 +1648,15 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     for i in 1:tubular_segments
         for j in 1:radial_segments
             a = (i - 1) * (radial_segments + 1) + j
-            b = a + 1
-            c = i * (radial_segments + 1) + j
-            d = c + 1
+            b = i * (radial_segments + 1) + j
+            c = b + 1
+            d = a + 1
             indices[out] = a
             indices[out + 1] = b
             indices[out + 2] = d
-            indices[out + 3] = a
-            indices[out + 4] = d
-            indices[out + 5] = c
+            indices[out + 3] = b
+            indices[out + 4] = c
+            indices[out + 5] = d
             out += 6
         end
     end
@@ -1636,9 +1666,12 @@ end
 
 # ========================== Ring Geometry ==========================
 
-function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1)
+function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, phi_segments=1,
+                      theta_start=0.0, theta_length=2π)
     inner_radius = _geometry_finite_float(inner_radius, "RingGeometry inner_radius")
     outer_radius = _geometry_finite_float(outer_radius, "RingGeometry outer_radius")
+    theta_start = _geometry_finite_float(theta_start, "RingGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "RingGeometry theta_length")
     if !iszero(outer_radius)
         isfinite(inner_radius / outer_radius) ||
             throw(ArgumentError(
@@ -1662,7 +1695,7 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
         r = (1.0 - v) * inner_radius + v * outer_radius
         for i in 0:theta_segments
             u = i / theta_segments
-            θ = u * 2π
+            θ = theta_start + u * theta_length
             x = r * cos(θ)
             y = r * sin(θ)
             vi = j * (theta_segments + 1) + i + 1
@@ -1702,8 +1735,10 @@ end
 
 # ========================== Circle Geometry ==========================
 
-function CircleGeometry(; radius=1.0, segments=32)
+function CircleGeometry(; radius=1.0, segments=32, theta_start=0.0, theta_length=2π)
     radius = _geometry_finite_float(radius, "CircleGeometry radius")
+    theta_start = _geometry_finite_float(theta_start, "CircleGeometry theta_start")
+    theta_length = _geometry_finite_float(theta_length, "CircleGeometry theta_length")
     # Clamp segments so a 0 cannot make the angular step a 0/0 = NaN (see PlaneGeometry).
     segments = _clamp_seg(segments, 3, "CircleGeometry segments")
     n_verts = segments + 2
@@ -1724,7 +1759,7 @@ function CircleGeometry(; radius=1.0, segments=32)
     uvs_arr[2] = 0.5
 
     for i in 0:segments
-        θ = i / segments * 2π
+        θ = theta_start + i / segments * theta_length
         cosθ = cos(θ)
         sinθ = sin(θ)
         vi = i + 2
@@ -1920,4 +1955,106 @@ function merge_geometries(geos::Vector{BufferGeometry}; with_groups::Bool=true)
     end
 
     return merged
+end
+
+@inline _merge_vertices_hash(value::Float64, multiplier::Float64, additive::Float64) =
+    trunc(value * multiplier + additive) + 0.0
+
+function _merge_vertices_attribute_data(data::AbstractVector, item_size::Int,
+                                        n_vertices::Int, label)
+    length(data) >= n_vertices * item_size ||
+        throw(ArgumentError("merge_vertices $label must cover n_vertices"))
+    return data
+end
+
+"""
+    merge_vertices(geo; tolerance=1e-4)
+
+Return a new indexed geometry in which vertices whose positions, normals, UVs,
+and named attributes all agree within `tolerance` share one index (three.js
+`BufferGeometryUtils.mergeVertices`). Morph-target attributes are carried along
+from the first merged vertex but do not participate in the comparison. Faces,
+draw groups, and the draw range are preserved; normals and UVs are kept only
+when they cover every vertex.
+"""
+function merge_vertices(geo::BufferGeometry; tolerance::Real=1e-4)
+    _validate_geometry_vertices(geo, "merge_vertices")
+    _validate_geometry_index_values(geo, "merge_vertices", "indices")
+    tol = _geometry_finite_float(tolerance, "merge_vertices tolerance")
+    tol = max(tol, eps(Float64))
+    n = geo.n_vertices
+    use_normals = !isempty(geo.normals)
+    use_uvs = !isempty(geo.uvs)
+    use_normals && _merge_vertices_attribute_data(geo.normals, 3, n, "normals")
+    use_uvs && _merge_vertices_attribute_data(geo.uvs, 2, n, "uvs")
+    names = sort!(collect(keys(geo.attributes)))
+    hashed = Symbol[]
+    for name in names
+        attr = geo.attributes[name]
+        _merge_vertices_attribute_data(attr.data, attr.item_size, n, "attribute $name")
+        startswith(String(name), "morph") || push!(hashed, name)
+    end
+
+    half_tolerance = tol * 0.5
+    multiplier = 10.0^log10(1 / tol)
+    additive = half_tolerance * multiplier
+    key_length = 3 + (use_normals ? 3 : 0) + (use_uvs ? 2 : 0) +
+                 sum((geo.attributes[name].item_size for name in hashed); init=0)
+    key = Vector{Float64}(undef, key_length)
+    lookup = Dict{Vector{Float64},Int}()
+    entries = isempty(geo.indices) ? n : length(geo.indices)
+    sources = Int[]
+    sizehint!(sources, n)
+    new_indices = Vector{Int}(undef, entries)
+    for entry in 1:entries
+        src = isempty(geo.indices) ? entry : geo.indices[entry]
+        k = 0
+        for c in 1:3
+            key[k += 1] = _merge_vertices_hash(geo.positions[3src - 3 + c], multiplier, additive)
+        end
+        if use_normals
+            for c in 1:3
+                key[k += 1] = _merge_vertices_hash(geo.normals[3src - 3 + c], multiplier, additive)
+            end
+        end
+        if use_uvs
+            for c in 1:2
+                key[k += 1] = _merge_vertices_hash(geo.uvs[2src - 2 + c], multiplier, additive)
+            end
+        end
+        for name in hashed
+            attr = geo.attributes[name]
+            base = (src - 1) * attr.item_size
+            for c in 1:attr.item_size
+                key[k += 1] = _merge_vertices_hash(Float64(attr.data[base + c]),
+                                                   multiplier, additive)
+            end
+        end
+        id = get(lookup, key, 0)
+        if id == 0
+            push!(sources, src)
+            id = length(sources)
+            lookup[copy(key)] = id
+        end
+        new_indices[entry] = id
+    end
+
+    m = length(sources)
+    gather(data, item_size) = begin
+        out = similar(data, m * item_size)
+        for (dst, src) in enumerate(sources)
+            copyto!(out, (dst - 1) * item_size + 1, data, (src - 1) * item_size + 1, item_size)
+        end
+        out
+    end
+    attributes = Dict{Symbol,BufferAttribute}()
+    for name in names
+        attr = geo.attributes[name]
+        attributes[name] = BufferAttribute(gather(attr.data, attr.item_size), attr.item_size)
+    end
+    return BufferGeometry(gather(geo.positions, 3),
+                          use_normals ? gather(geo.normals, 3) : Float64[],
+                          use_uvs ? gather(geo.uvs, 2) : Float64[],
+                          new_indices, m, geo.n_faces, attributes,
+                          copy(geo.groups), geo.draw_range)
 end

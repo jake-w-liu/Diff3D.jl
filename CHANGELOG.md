@@ -95,6 +95,21 @@
 - `BoxHelper` bounds the object and its descendants in world space and
   `HemisphereLightHelper` sits at the light's world position, as in three.js;
   `CameraHelper` reports unbounded frusta explicitly.
+- Align geometry generators with three.js r186: cones and other zero-radius
+  cylinder poles no longer carry degenerate side triangles; cylinder cap,
+  sphere pole, capsule (arc-length v, pole offsets, r186 row layout and
+  defaults), torus knot, polyhedron (atan2(z, -x) azimuth with pole/seam
+  correction) and extrusion cap/side UVs match three.js; polyhedra are flat
+  shaded at `detail=0`; `LatheGeometry` uses the three.js phase and clamps
+  `phi_length`; `TorusGeometry` defaults to 12 radial segments.
+- Add `merge_vertices` (BufferGeometryUtils.mergeVertices), `holes` for
+  `ShapeGeometry`/`ExtrudeGeometry`, `steps` and opt-in bevels for
+  `ExtrudeGeometry`, `closed` tubes, `height_segments` for `CapsuleGeometry`,
+  and three.js angular sweep options (`phi_start`/`phi_length`/
+  `theta_start`/`theta_length`/`arc`) for sphere, cylinder, cone, circle, ring
+  and torus geometry.
+- Closed-path extrusions distribute the frame twist around the loop so
+  non-planar loops no longer show a twisted seam.
 
 ## 1.0.0
 
