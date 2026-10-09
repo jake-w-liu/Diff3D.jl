@@ -46,6 +46,8 @@ end
     return isfinite(scaled_delta) ? exp(-scaled_delta) : zero(scaled_delta)
 end
 
+@inline _soft_pixel_center(::Type{T}, index::Int) where {T} = T(index) - T(0.5)
+
 function SoftRasterizerConfig(; sigma=1.0, gamma=1.0,
                                bg_color=Color3(0.0, 0.0, 0.0),
                                eps=1e-8)
@@ -213,8 +215,10 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     end
     vp = _promote_mat4(view_proj, T)
 
-    σ = T(config.sigma)
-    γ = T(config.gamma)
+    # Dividing by a promoted constant Dual forms 0 * Inf partials once its
+    # square underflows; keep the configured scalars as the divisors.
+    σ = config.sigma
+    γ = config.gamma
     bg = Color3(T(config.bg_color.r), T(config.bg_color.g), T(config.bg_color.b))
     eps = T(config.eps)
     workspace = _soft_checked_workspace(workspace, T)
@@ -230,7 +234,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     _soft_positive_finite(γ, "SoftRasterizerConfig gamma")
     _soft_positive_finite(eps, "SoftRasterizerConfig eps")
     _soft_finite_color(bg, "SoftRasterizerConfig bg_color")
-    use_relative_depth = !isfinite(one(T) / γ)
+    γ_value = _primal_value(γ)
+    use_relative_depth = !isfinite(one(γ_value) / γ_value)
     n_faces == 0 && return _soft_background_image(T, H, W, bg, workspace)
     n_vertices = length(verts)
     for face in faces
@@ -283,6 +288,11 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
         resize!(screen_tris, n_screen_tris)
     end
     n_screen_tris == 0 && return _soft_background_image(T, H, W, bg, workspace)
+    # Pixel-independent scalars are formed once, so heap-backed AD types do not
+    # record or allocate them per pixel.
+    background_logit = use_relative_depth ? one(T) : -one(T) / γ
+    zero_weight = zero(T)
+    zero_color = Color3(zero_weight, zero_weight, zero_weight)
 
     if n_screen_tris <= 8
         # Tiny face sets need no spatial index: scanning directly avoids the CSR
@@ -291,12 +301,12 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             _soft_image_buffer!(workspace, H, W)
         for py in 1:H
             for px in 1:W
-                cx = T(px) - T(0.5)
-                cy = T(py) - T(0.5)
+                cx = _soft_pixel_center(T, px)
+                cy = _soft_pixel_center(T, py)
 
                 # Preserve the legacy logit max when representable. Otherwise
                 # `m` is the minimum depth, seeded by the z=+1 background.
-                m = use_relative_depth ? one(T) : -one(T) / γ
+                m = background_logit
                 any_face = false
                 for fi in 1:n_screen_tris
                     tri = screen_tris[fi]
@@ -313,8 +323,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     any_face = true
                 end
 
-                total_weight = zero(T)
-                average_color = Color3(zero(T), zero(T), zero(T))
+                total_weight = zero_weight
+                average_color = zero_color
                 if any_face
                     for fi in 1:n_screen_tris
                         tri = screen_tris[fi]
@@ -342,7 +352,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
 
                 w_bg = (use_relative_depth ?
                     _soft_relative_depth_weight(m, one(T), γ) :
-                    exp(-one(T) / γ - m)) + eps
+                    exp(background_logit - m)) + eps
                 denom = total_weight + w_bg
                 color = iszero(total_weight) ? bg :
                     _stable_color_lerp(
@@ -427,8 +437,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     for py in 1:H
         ty = tile_y_of(py)
         for px in 1:W
-            cx = T(px) - T(0.5)
-            cy = T(py) - T(0.5)
+            cx = _soft_pixel_center(T, px)
+            cy = _soft_pixel_center(T, py)
 
             t = tile_index(tile_x_of(px), ty)
             face_lo = tile_offsets[t]
@@ -439,7 +449,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             # minimum depth directly and pass 2 exponentiates only non-positive
             # relative depth deltas. Both forms include the z=+1 background and
             # are mathematically equivalent; the relative form avoids Inf-Inf.
-            m = use_relative_depth ? one(T) : -one(T) / γ
+            m = background_logit
             any_face = false
             for k in face_lo:face_hi
                 fi = tile_faces[k]
@@ -457,8 +467,8 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             end
 
             # Pass 2: stabilized weights weight_f = coverage_f * exp(e_f - m).
-            total_weight = zero(T)
-            average_color = Color3(zero(T), zero(T), zero(T))
+            total_weight = zero_weight
+            average_color = zero_color
             if any_face
                 for k in face_lo:face_hi
                     fi = tile_faces[k]
@@ -501,7 +511,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
             # floor keeps the denominator strictly positive without a discrete branch.
             w_bg = (use_relative_depth ?
                 _soft_relative_depth_weight(m, one(T), γ) :
-                exp(-one(T) / γ - m)) + eps
+                exp(background_logit - m)) + eps
             denom = total_weight + w_bg
             color = iszero(total_weight) ? bg :
                 _stable_color_lerp(

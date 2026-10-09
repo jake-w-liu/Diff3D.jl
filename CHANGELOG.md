@@ -68,6 +68,15 @@
 - WebGL export escapes U+2028/U+2029 in strings and raises errors for
   non-finite numbers and invalid UTF-8 instead of serializing `0` or a
   script-breaking character.
+- ForwardDiff gradients of `soft_render`, `vertex_render_fn` and
+  `color_render_fn` are finite for `sigma`/`gamma` below ~1e-154 (they were
+  NaN because the configured constants were promoted to Duals).
+- `ADVar` `min`/`max` propagate NaN and signed zeros like Base.
+- `numerical_gradient` divides by the step actually taken, removing an
+  `ulp(x)/δ` error for parameters far from zero.
+- Reverse-mode gradients allocate one object per recorded operation, reuse
+  task-local tapes, and keep per-pixel soft-render constants off the tape
+  (a 24-face 32x32 soft-render gradient: ~65 ms / 101 MB to ~25 ms / 56 MB).
 
 ## 1.0.0
 

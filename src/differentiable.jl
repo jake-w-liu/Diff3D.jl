@@ -113,8 +113,7 @@ function vertex_render_fn(faces, face_colors, vp::Mat4, W::Int, H::Int;
         T = eltype(p)
         verts = _FlatVec3Params{T,typeof(p)}(p, expected_vertices)
         cols = _promote_color_source(face_colors, T)
-        cfg = SoftRasterizerConfig(sigma=T(sigma), gamma=T(gamma),
-                                   bg_color=Color3(T(bg.r), T(bg.g), T(bg.b)))
+        cfg = SoftRasterizerConfig(sigma=sigma, gamma=gamma, bg_color=bg)
         soft_render(verts, faces, cols, _promote_mat4(vp, T), W, H, cfg;
                     workspace=_render_workspace_for_type(workspace, workspace_cache, T))
     end
@@ -142,8 +141,7 @@ function color_render_fn(vertices, faces, vp::Mat4, W::Int, H::Int;
         T = eltype(p)
         cols = _FlatColorParams{T,typeof(p)}(p, length(faces))
         verts = _promote_vec3_source(vertices, T)
-        cfg = SoftRasterizerConfig(sigma=T(sigma), gamma=T(gamma),
-                                   bg_color=Color3(T(bg.r), T(bg.g), T(bg.b)))
+        cfg = SoftRasterizerConfig(sigma=sigma, gamma=gamma, bg_color=bg)
         soft_render(verts, faces, cols, _promote_mat4(vp, T), W, H, cfg;
                     workspace=_render_workspace_for_type(workspace, workspace_cache, T))
     end

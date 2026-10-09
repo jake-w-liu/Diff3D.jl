@@ -321,9 +321,11 @@ function numerical_gradient(f, params::Vector{Float64}; δ=1e-5)
     for i in 1:n
         copyto!(work, params)
         work[i] += δ
+        x_plus = work[i]
         f_plus = f(work)
         copyto!(work, params)
         work[i] -= δ
+        x_minus = work[i]
         f_minus = f(work)
         # Preserve exact offset cancellation without wrapping integer outputs.
         difference = if f_plus isa Signed && f_minus isa Signed
@@ -333,12 +335,16 @@ function numerical_gradient(f, params::Vector{Float64}; δ=1e-5)
         else
             f_plus - f_minus
         end
-        # The output is Float64; widen integer/narrow steps before doubling.
-        denominator = 2.0 * δ
+        # Divide by the step actually taken: `x ± δ` rounds to the parameter's
+        # spacing. A step below that spacing keeps the nominal width.
+        denominator = x_plus - x_minus
+        iszero(denominator) && (denominator = 2.0 * δ)
+        half_step = 0.5 * x_plus - 0.5 * x_minus
         if !isfinite(difference) && isfinite(f_plus) && isfinite(f_minus)
-            grad[i] = (0.5 * f_plus - 0.5 * f_minus) / δ
+            grad[i] = (0.5 * f_plus - 0.5 * f_minus) /
+                      (isfinite(denominator) ? 0.5 * denominator : half_step)
         elseif isfinite(difference) && !isfinite(denominator)
-            grad[i] = 0.5 * (difference / δ)
+            grad[i] = 0.5 * (difference / half_step)
         else
             grad[i] = difference / denominator
         end

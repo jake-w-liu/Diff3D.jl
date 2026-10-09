@@ -9,39 +9,76 @@
 # ForwardDiff and independent derivative oracles in the test suite.
 # --------------------------------------------------------------------------
 
+# Parents and partials are stored inline (unset parent fields mark leaves and
+# unary nodes), so recording an operation allocates one fixed-size object.
 mutable struct ADVar <: Real
     val::Float64
     adj::Float64                 # accumulated adjoint (∂output/∂this)
-    args::Union{Tuple{},Tuple{ADVar},Tuple{ADVar,ADVar}}
-    partials::Union{Tuple{},Tuple{Float64},Tuple{Float64,Float64}}
+    p1::Float64
+    p2::Float64
+    a1::ADVar
+    a2::ADVar
+    ADVar(val::Float64, ::Tuple{}, ::Tuple{}) = new(val, 0.0, 0.0, 0.0)
+    ADVar(val::Float64, a::Tuple{ADVar}, p::Tuple{Any}) =
+        new(val, 0.0, p[1], 0.0, a[1])
+    ADVar(val::Float64, a::Tuple{ADVar,ADVar}, p::Tuple{Any,Any}) =
+        new(val, 0.0, p[1], p[2], a[1], a[2])
 end
 
 @inline _primal_value(value::ADVar) = value.val
+# Pixel centres are constants; keep them off the reverse tape.
+@inline _soft_pixel_center(::Type{ADVar}, index::Int) = Float64(index) - 0.5
 
 # Per-task stack of active tapes (operations recorded in creation = topological
 # order). Task-local so concurrent reverse_gradient calls (e.g. Threads.@threads
 # over independent gradients) never corrupt each other's tape, and a STACK so a
 # nested reverse_gradient records onto its own tape without wiping the enclosing
-# pass's graph. ADVars reference their parents directly via `args`, so the tape
-# is only an ordering for the backward pass — a fresh per-call tape is sufficient.
-function _ad_tape_stack()
-    tls = task_local_storage()
-    stack = get(tls, :diff3d_ad_tape_stack, nothing)
-    if stack === nothing
-        stack = Vector{ADVar}[]
-        tls[:diff3d_ad_tape_stack] = stack
-    end
-    return stack::Vector{Vector{ADVar}}
+# pass's graph. ADVars reference their parents directly, so the tape is only an
+# ordering for the backward pass. Emptied tapes keep their capacity for the next
+# pass on the same task; emptying releases every recorded node.
+struct _ADTapeState
+    stack::Vector{Vector{ADVar}}
+    spare::Vector{Vector{ADVar}}
 end
 
-function _ad_record(val::Float64, args::Tuple, partials::Tuple)
-    v = ADVar(val, 0.0, args, partials)
+const _AD_SPARE_TAPES = 2
+const _AD_SPARE_TAPE_CAPACITY = 1 << 20
+
+function _ad_tape_state()
+    tls = task_local_storage()
+    state = get(tls, :diff3d_ad_tape_state, nothing)
+    if state === nothing
+        state = _ADTapeState(Vector{ADVar}[], Vector{ADVar}[])
+        tls[:diff3d_ad_tape_state] = state
+    end
+    return state::_ADTapeState
+end
+
+@inline _ad_tape_stack() = _ad_tape_state().stack
+
+function _ad_acquire_tape!(state::_ADTapeState, n::Int)
+    isempty(state.spare) || return pop!(state.spare)
+    tape = ADVar[]
+    sizehint!(tape, n <= typemax(Int) ÷ 3 ? max(16, 3n) : n)
+    return tape
+end
+
+function _ad_release_tape!(state::_ADTapeState, tape::Vector{ADVar})
+    retain = length(tape) <= _AD_SPARE_TAPE_CAPACITY &&
+             length(state.spare) < _AD_SPARE_TAPES
+    empty!(tape)
+    retain && push!(state.spare, tape)
+    return nothing
+end
+
+@inline function _ad_record(val::Float64, args::Tuple, partials::Tuple)
+    v = ADVar(val, args, partials)
     stack = _ad_tape_stack()
-    isempty(stack) || push!(stack[end], v)   # record only while a gradient pass is active
+    isempty(stack) || push!(@inbounds(stack[end]), v)   # record only while a gradient pass is active
     return v
 end
 
-_ad_constant(x::Real) = ADVar(Float64(x), 0.0, (), ())
+_ad_constant(x::Real) = ADVar(Float64(x), (), ())
 
 ADVar(x::Real) = _ad_record(Float64(x), (), ())     # leaf / constant
 ADVar(x::ADVar) = x
@@ -355,14 +392,24 @@ function Base.hypot(a::Real, b::ADVar)
 end
 
 # ---- min/max (gradient flows to the selected argument) ----
-Base.max(a::ADVar, b::ADVar) = a.val >= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
-                                                _ad_record(b.val, (a, b), (0.0, 1.0))
-Base.min(a::ADVar, b::ADVar) = a.val <= b.val ? _ad_record(a.val, (a, b), (1.0, 0.0)) :
-                                                _ad_record(b.val, (a, b), (0.0, 1.0))
-Base.max(a::ADVar, b::Real) = (bf = Float64(b); a.val >= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
-Base.max(a::Real, b::ADVar) = (af = Float64(a); af >= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
-Base.min(a::ADVar, b::Real) = (bf = Float64(b); a.val <= bf ? _ad_record(a.val, (a,), (1.0,)) : _ad_constant(bf))
-Base.min(a::Real, b::ADVar) = (af = Float64(a); af <= b.val ? _ad_constant(af) : _ad_record(b.val, (b,), (1.0,)))
+# Values follow Base (NaN propagates, max(-0.0, 0.0) == 0.0); ties and NaN
+# operands select the first argument.
+@inline _ad_max_first(a::Float64, b::Float64) = a >= b || isnan(a)
+@inline _ad_min_first(a::Float64, b::Float64) = a <= b || isnan(a)
+Base.max(a::ADVar, b::ADVar) = _ad_max_first(a.val, b.val) ?
+    _ad_record(max(a.val, b.val), (a, b), (1.0, 0.0)) :
+    _ad_record(max(a.val, b.val), (a, b), (0.0, 1.0))
+Base.min(a::ADVar, b::ADVar) = _ad_min_first(a.val, b.val) ?
+    _ad_record(min(a.val, b.val), (a, b), (1.0, 0.0)) :
+    _ad_record(min(a.val, b.val), (a, b), (0.0, 1.0))
+Base.max(a::ADVar, b::Real) = (bf = Float64(b); _ad_max_first(a.val, bf) ?
+    _ad_record(max(a.val, bf), (a,), (1.0,)) : _ad_constant(max(a.val, bf)))
+Base.max(a::Real, b::ADVar) = (af = Float64(a); _ad_max_first(af, b.val) ?
+    _ad_constant(max(af, b.val)) : _ad_record(max(af, b.val), (b,), (1.0,)))
+Base.min(a::ADVar, b::Real) = (bf = Float64(b); _ad_min_first(a.val, bf) ?
+    _ad_record(min(a.val, bf), (a,), (1.0,)) : _ad_constant(min(a.val, bf)))
+Base.min(a::Real, b::ADVar) = (af = Float64(a); _ad_min_first(af, b.val) ?
+    _ad_constant(min(af, b.val)) : _ad_record(min(af, b.val), (b,), (1.0,)))
 
 # ---- comparisons (decided by the value; no gradient) ----
 Base.:<(a::ADVar, b::ADVar)  = a.val < b.val
@@ -453,10 +500,10 @@ Base.cosd(x::ADVar) = cos(deg2rad(x))
 Base.tand(x::ADVar) = tan(deg2rad(x))
 
 function _reverse_value_gradient(f, x::AbstractVector{<:Real})
-    stack = _ad_tape_stack()
+    state = _ad_tape_state()
+    stack = state.stack
     n = length(x)
-    tape = ADVar[]
-    sizehint!(tape, n <= typemax(Int) ÷ 3 ? max(16, 3n) : n)
+    tape = _ad_acquire_tape!(state, n)
     push!(stack, tape)                    # this pass records onto its own tape
     try
         inputs = Vector{ADVar}(undef, n)
@@ -475,9 +522,12 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
         @inbounds for k in length(tape):-1:1
             v = tape[k]
             a = v.adj
-            a == 0.0 && continue
-            for i in 1:length(v.args)
-                v.args[i].adj += a * v.partials[i]
+            (a == 0.0 || !isdefined(v, :a1)) && continue
+            first_parent = v.a1
+            first_parent.adj += a * v.p1
+            if isdefined(v, :a2)
+                second_parent = v.a2
+                second_parent.adj += a * v.p2
             end
         end
         grad = Vector{Float64}(undef, n)
@@ -487,6 +537,7 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
         return (Float64(y.val), grad)
     finally
         pop!(stack)                       # always release this pass's tape
+        _ad_release_tape!(state, tape)
     end
 end
 
