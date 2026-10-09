@@ -836,6 +836,124 @@ function quat_to_mat4(q::Quaternion)
              zero(T), zero(T), zero(T), one(T)))
 end
 
+"""
+    mat4_compose(position, quaternion, scale)
+
+Affine matrix `translation * rotation * scale` (three.js `Matrix4.compose`).
+"""
+function mat4_compose(position::Vec3, quaternion::Quaternion, scale::Vec3)
+    r = quat_to_mat4(quaternion).e
+    T = promote_type(eltype(r), typeof(position.x), typeof(scale.x), Float64)
+    z, o = zero(T), one(T)
+    t = (T(position.x), T(position.y), T(position.z))
+    s = (T(scale.x), T(scale.y), T(scale.z))
+    # Evaluate (translation * rotation) * scale with the products and sums the
+    # dense multiply performs, so finite results match it bit for bit,
+    # including signed zeros, while skipping the structurally zero work.
+    tx, ty, tz = t
+    sx, sy, sz = s
+    q = ntuple(Val(3)) do column
+        r1, r2, r3 = T(r[4column - 3]), T(r[4column - 2]), T(r[4column - 1])
+        (((o * r1 + z * r2) + z * r3) + tx * z,
+         ((z * r1 + o * r2) + z * r3) + ty * z,
+         ((z * r1 + z * r2) + o * r3) + tz * z,
+         ((z * r1 + z * r2) + z * r3) + o * z)
+    end
+    zero_sum = (z * z + z * z) + z * z
+    q14, q24, q34 = zero_sum + tx * o, zero_sum + ty * o, zero_sum + tz * o
+    (q11, q21, q31, q41), (q12, q22, q32, q42), (q13, q23, q33, q43) = q
+    scaled(a1, a2, a3, a4, j) =
+        ((a1 * (j == 1 ? sx : z) + a2 * (j == 2 ? sy : z)) +
+         a3 * (j == 3 ? sz : z)) + a4 * z
+    shifted(a1, a2, a3, a4) = ((a1 * z + a2 * z) + a3 * z) + a4 * o
+    return Mat4{T}((
+        scaled(q11, q12, q13, q14, 1), scaled(q21, q22, q23, q24, 1),
+        scaled(q31, q32, q33, q34, 1), scaled(q41, q42, q43, o, 1),
+        scaled(q11, q12, q13, q14, 2), scaled(q21, q22, q23, q24, 2),
+        scaled(q31, q32, q33, q34, 2), scaled(q41, q42, q43, o, 2),
+        scaled(q11, q12, q13, q14, 3), scaled(q21, q22, q23, q24, 3),
+        scaled(q31, q32, q33, q34, 3), scaled(q41, q42, q43, o, 3),
+        shifted(q11, q12, q13, q14), shifted(q21, q22, q23, q24),
+        shifted(q31, q32, q33, q34), shifted(q41, q42, q43, o)))
+end
+
+"""
+    mat4_determinant(m)
+
+Determinant of a 4×4 matrix (three.js `Matrix4.determinant`).
+"""
+function mat4_determinant(m::Mat4)
+    e = m.e
+    n11, n21, n31, n41 = e[1], e[2], e[3], e[4]
+    n12, n22, n32, n42 = e[5], e[6], e[7], e[8]
+    n13, n23, n33, n43 = e[9], e[10], e[11], e[12]
+    n14, n24, n34, n44 = e[13], e[14], e[15], e[16]
+    t11 = n23 * n34 - n24 * n33
+    t12 = n22 * n34 - n24 * n32
+    t13 = n22 * n33 - n23 * n32
+    t21 = n21 * n34 - n24 * n31
+    t22 = n21 * n33 - n23 * n31
+    t23 = n21 * n32 - n22 * n31
+    return n11 * (n42 * t11 - n43 * t12 + n44 * t13) -
+           n12 * (n41 * t11 - n43 * t21 + n44 * t22) +
+           n13 * (n41 * t12 - n42 * t21 + n44 * t23) -
+           n14 * (n41 * t13 - n42 * t22 + n43 * t23)
+end
+
+"""
+    quat_from_rotation_matrix(m)
+
+Quaternion of the pure rotation in the upper 3×3 block of `m` (three.js
+`Quaternion.setFromRotationMatrix`).
+"""
+function quat_from_rotation_matrix(m::Mat4)
+    m11, m12, m13 = mat4_get(m, 1, 1), mat4_get(m, 1, 2), mat4_get(m, 1, 3)
+    m21, m22, m23 = mat4_get(m, 2, 1), mat4_get(m, 2, 2), mat4_get(m, 2, 3)
+    m31, m32, m33 = mat4_get(m, 3, 1), mat4_get(m, 3, 2), mat4_get(m, 3, 3)
+    trace = m11 + m22 + m33
+    if trace > 0
+        s = 0.5 / sqrt(trace + 1)
+        return Quaternion((m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, 0.25 / s)
+    elseif m11 > m22 && m11 > m33
+        s = 2 * sqrt(1 + m11 - m22 - m33)
+        return Quaternion(0.25 * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s)
+    elseif m22 > m33
+        s = 2 * sqrt(1 + m22 - m11 - m33)
+        return Quaternion((m12 + m21) / s, 0.25 * s, (m23 + m32) / s, (m13 - m31) / s)
+    end
+    s = 2 * sqrt(1 + m33 - m11 - m22)
+    return Quaternion((m13 + m31) / s, (m23 + m32) / s, 0.25 * s, (m21 - m12) / s)
+end
+
+"""
+    mat4_decompose(m) -> (position, quaternion, scale)
+
+Split an affine matrix into translation, rotation, and scale (three.js
+`Matrix4.decompose`). A negative determinant negates the x scale; a singular
+linear part yields an identity rotation and unit scale.
+"""
+function mat4_decompose(m::Mat4)
+    e = m.e
+    position = Vec3(e[13], e[14], e[15])
+    det = e[1] * (e[6] * e[11] - e[10] * e[7]) -
+          e[5] * (e[2] * e[11] - e[10] * e[3]) +
+          e[9] * (e[2] * e[7] - e[6] * e[3])
+    if iszero(det)
+        o, z = one(det), zero(det)
+        return position, Quaternion(z, z, z, o), Vec3(o, o, o)
+    end
+    sx = _norm3(e[1], e[2], e[3])
+    sy = _norm3(e[5], e[6], e[7])
+    sz = _norm3(e[9], e[10], e[11])
+    det < 0 && (sx = -sx)
+    ix, iy, iz = 1 / sx, 1 / sy, 1 / sz
+    rotation = Mat4((e[1] * ix, e[2] * ix, e[3] * ix, zero(ix),
+                     e[5] * iy, e[6] * iy, e[7] * iy, zero(ix),
+                     e[9] * iz, e[10] * iz, e[11] * iz, zero(ix),
+                     zero(ix), zero(ix), zero(ix), one(ix)))
+    return position, quat_from_rotation_matrix(rotation), Vec3(sx, sy, sz)
+end
+
 function quat_normalize(q::Quaternion)
     # Check component primals: hypot(::Dual...) at zero yields NaN value for
     # 4 args, so length primal cannot be trusted (VERIFIED: hypot 4xDual(0,1)
@@ -868,6 +986,7 @@ struct Euler{T<:Real}
 end
 Euler() = Euler(0.0, 0.0, 0.0, :XYZ)
 Euler(x, y, z) = Euler(promote(x, y, z)..., :XYZ)
+Euler(x::Real, y::Real, z::Real, order::Symbol) = Euler(promote(x, y, z)..., order)
 Base.convert(::Type{Euler{T}}, e::Euler) where {T<:Real} =
     Euler{T}(convert(T, e.x), convert(T, e.y), convert(T, e.z), e.order)
 
