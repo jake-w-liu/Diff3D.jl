@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.1
+
+A compatible patch release under the 1.x contract: it fixes the Julia 1.10
+allocation regressions and the exported-viewer shadow pass that the 1.1.0
+release CI caught.
+
+- `ExtrudeGeometry` meets its documented allocation budgets on Julia 1.10
+  again: shape and path cleanup construct `Vec2{Float64}`/`Vec3{Float64}`
+  directly instead of splatting `promote` tuples, vertex emission uses typed
+  top-level helpers instead of closures the 1.10 compiler cannot infer, and
+  `_geometry_finite_float` gains an allocation-free Float64 path.
+- `raycast` keeps its per-depth world-matrix stack as scratch storage on the
+  `Raycaster` instead of resizing a fresh vector per call, restoring the
+  documented 1024-byte allocation bound on Julia 1.10.
+- Dynamic shadow-map passes in the WebGL export unbind the shadow sampler
+  units before rendering into the shadow framebuffer. Sampling the texture
+  being written formed a feedback loop that made every `drawElements` raise
+  `INVALID_OPERATION` and blanked shadowed views on all WebGL engines.
+- The browser-validation harness tolerates `platform.platform()` failing
+  where OS release data is unavailable instead of aborting the run.
+
 ## 1.1.0
 
 A compatible minor release under the 1.x contract: it closes the remaining
