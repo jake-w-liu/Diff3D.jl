@@ -8,6 +8,11 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- Blend points, sprites and wireframes only for `transparent` materials, as
+  three.js does, and apply `alphaTest` to material opacity times texture
+  alpha on the opaque flat and pooled mesh paths.
+- `render_pooled!` and `render_tiled!` honour a mesh's
+  `flat_shading=false` with per-pixel shading, matching `render!`.
 
 ## 1.0.0
 
