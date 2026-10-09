@@ -88,10 +88,10 @@ end
             color, intensity, direction = light_contribution(light, origin)
             @test direction == normal
             @test intensity == 1.0
-            @test shade_lambert(normal, direction, color, intensity, Color3()) == Color3()
+            @test shade_lambert(normal, direction, color, intensity, Color3()) == Color3(1/π, 1/π, 1/π)
         end
         for light in lights[1:2]
-            @test shade_face(normal, normal, origin, MeshLambertMaterial(), [light]) == Color3()
+            @test shade_face(normal, normal, origin, MeshLambertMaterial(), [light]) == Color3(1/π, 1/π, 1/π)
         end
     end
 

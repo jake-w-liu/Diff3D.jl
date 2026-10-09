@@ -304,6 +304,9 @@ loss_l1
 loss_mse
 loss_silhouette_iou
 loss_ssim
+mat4_compose
+mat4_decompose
+mat4_determinant
 mat4_get
 mat4_inverse
 mat4_look_at
@@ -358,6 +361,7 @@ projection_matrix
 projection_matrix_from_params
 quat_dot
 quat_from_euler
+quat_from_rotation_matrix
 quat_from_unit_vectors
 quat_multiply
 quat_normalize

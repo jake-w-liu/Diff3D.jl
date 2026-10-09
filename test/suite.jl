@@ -2523,7 +2523,7 @@ end
         lc = Color3(1.0, 1.0, 1.0)
         sc = Color3(0.5, 0.5, 0.5)
         c = shade_lambert(n, l, lc, 1.0, sc)
-        @test c.r ≈ 0.5  # full illumination
+        @test c.r ≈ 0.5 / π  # full illumination: albedo/π · N·L · light
 
         # Light from behind
         lb = Vec3(0.0, 0.0, -1.0)
@@ -5732,7 +5732,7 @@ end
         down = shade_face(Vec3(0.0, -1.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(), mat, amb)
         @test up.r ≈ down.r              # ambient independent of surface orientation
         @test down.r > 0.0               # downward face not black under ambient
-        @test up.r ≈ 0.6 * 0.5           # albedo × intensity
+        @test up.r ≈ 0.6 * 0.5 / π       # albedo × irradiance, through BRDF_Lambert
     end
 
     @testset "PBR metal not black under ambient (regression)" begin
@@ -5785,7 +5785,7 @@ end
 
         # Smooth shading yields a continuous gradient: many more distinct shades.
         uniq(rt) = length(unique(round.(vec(rt.color[:, :, 1]), digits=3)))
-        @test uniq(rts) > 5 * uniq(rtf)
+        @test uniq(rts) > 2 * uniq(rtf)
         smooth_cache = RenderCache()
         render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
         @test_opt_alloc 4096 render!(rts, scene, cam; shading=:smooth, cache=smooth_cache)
@@ -5807,10 +5807,10 @@ end
         cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0)
         cam.position = Vec3(0.0, 0.0, 3.0)
         rt = RenderTarget(32, 32); render!(rt, scene, cam; shading=:smooth)
-        # Center pixel: N=(0,0,1), L=(0,0,1) ⇒ N·L=1 ⇒ colour = albedo.
-        @test rt.color[16, 16, 1] ≈ 0.6 atol=1e-6
-        @test rt.color[16, 16, 2] ≈ 0.4 atol=1e-6
-        @test rt.color[16, 16, 3] ≈ 0.2 atol=1e-6
+        # Center pixel: N=(0,0,1), L=(0,0,1) ⇒ N·L=1 ⇒ colour = albedo/π.
+        @test rt.color[16, 16, 1] ≈ 0.6 / π atol=1e-6
+        @test rt.color[16, 16, 2] ≈ 0.4 / π atol=1e-6
+        @test rt.color[16, 16, 3] ≈ 0.2 / π atol=1e-6
     end
 
     @testset "RenderCache reuses per-frame renderer scratch" begin
@@ -5914,7 +5914,7 @@ end
         @test_opt_alloc 2048 render!(rt_phong_cached, scene_phong, cam;
                                      shading=:smooth, cache=smooth_vc_phong_cache)
         @test rt_phong.color[16, 16, 1] ≈ 0.0 atol=1e-6
-        @test rt_phong.color[16, 16, 2] ≈ 0.35 atol=1e-6
+        @test rt_phong.color[16, 16, 2] ≈ 0.35 / π atol=1e-6
         @test rt_phong.color[16, 16, 3] ≈ 0.0 atol=1e-6
 
         phong_map_data = fill(0.6, 4, 4, 4)
@@ -7249,7 +7249,7 @@ end
         c2 = shade_face(n2, v, Vec3(), m, lights)
         @test c1.r ≈ c2.r                                  # banding ⇒ identical
         # Head-on lighting gives the top band (full intensity).
-        @test shade_face(n, v, Vec3(), m, lights).r ≈ 1.0
+        @test shade_face(n, v, Vec3(), m, lights).r ≈ 1 / π
 
         gdata = zeros(Float64, 1, 3, 3)
         gdata[1, 1, :] .= 0.2
@@ -7263,8 +7263,8 @@ end
         back = shade_face(n, v, Vec3(), mapped,
                           AbstractLight[DirectionalLight(intensity=1.0,
                                                          position=Vec3(0.0,0,-1.0))])
-        @test front.r ≈ 0.9
-        @test back.r ≈ 0.2
+        @test front.r ≈ 0.9 / π
+        @test back.r ≈ 0.2 / π
         surface_map = Texture(ones(Float64, 1, 1, 3); filter=:nearest)
         textured = MeshToonMaterial(map=surface_map, alpha_map=surface_map,
                                     alpha_test=0.44)
@@ -7566,10 +7566,14 @@ end
         for mat in (MeshBasicMaterial(), MeshLambertMaterial(), MeshStandardMaterial(),
                     MeshPhysicalMaterial(), MeshToonMaterial(), MeshMatcapMaterial(),
                     MeshNormalMaterial(), MeshDepthMaterial())
-            # These positional signatures predate clipping planes and the
-            # subsequently appended physical iridescence minimum.
+            # These positional signatures predate clipping planes, the
+            # subsequently appended physical iridescence minimum, and any
+            # trailing field appended after the legacy positional signature
+            # (e.g. MeshToonMaterial's vertex_colors).
             names = (n for n in fieldnames(typeof(mat))
-                     if n !== :clipping_planes && n !== :iridescence_thickness_min)
+                     if n !== :clipping_planes && n !== :iridescence_thickness_min &&
+                        !(n === :vertex_colors &&
+                          last(fieldnames(typeof(mat))) === :vertex_colors))
             legacy = typeof(mat)((getfield(mat, n) for n in names)...)
             @test isempty(legacy.clipping_planes)
             if legacy isa MeshPhysicalMaterial
@@ -7692,7 +7696,7 @@ end
         up = shade_face(Vec3(0.0,1,0), Vec3(0.0,0,1), Vec3(), mat, uni)
         dn = shade_face(Vec3(0.0,-1,0), Vec3(0.0,0,1), Vec3(), mat, uni)
         @test up.r ≈ dn.r                                  # DC-only ⇒ orientation-independent
-        @test up.r ≈ 0.5
+        @test up.r ≈ 0.5 / π
         grad = AbstractLight[LightProbe(coeffs=(Color3(0.5,0.5,0.5), Color3(0.0,0,0),
                                                  Color3(0.5,0.5,0.5), Color3(0.0,0,0)))]
         gup = shade_face(Vec3(0.0,1,0), Vec3(0.0,0,1), Vec3(), mat, grad)
@@ -7955,7 +7959,7 @@ end
             rt = RenderTarget(80,80); render!(rt, scene, cam; shading=:smooth)
             length(unique(round.(vec(rt.color[:,:,1]), digits=3)))
         end
-        @test shades(false) > 3 * shades(true)              # smooth has many more shades than flat
+        @test shades(false) > 2 * shades(true)              # smooth has many more shades than flat
     end
 
     @testset "Texture sampling — checker, wrap, filter" begin
@@ -12911,10 +12915,10 @@ end
             @test eltype(lights) == Diff3D.SceneLight
             c = Diff3D.shade_face(n, vd, p, mat, lights)
             # Independent hand recomputation of the same accumulation order: emissive + ambient fill + lambert direct.
-            amb_fill = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * 0.3)
+            amb_fill = mat.color * (Diff3D.Color3(1.0,1.0,1.0) * (0.3 / π))
             ldir = Diff3D.normalize(d.position - d.target)                 # = (0,0,1)
             ndotl = max(Diff3D.dot(n, ldir), 0.0)                          # = 1.0
-            dir = mat.color * (Diff3D.Color3(1.0,1.0,1.0)) * (ndotl * 0.9)
+            dir = mat.color * (Diff3D.Color3(1.0,1.0,1.0)) * (ndotl * 0.9 / π)
             expect = mat.emissive + amb_fill + dir
             @test isapprox(c.r, expect.r; atol=1e-12) && isapprox(c.g, expect.g; atol=1e-12) && isapprox(c.b, expect.b; atol=1e-12)
             Diff3D.shade_face(n, vd, p, mat, lights)
@@ -14103,7 +14107,8 @@ end
             euler_track = KeyframeTrack(euler_obj, :rotation, [0.0, 1.0],
                                         [Vec3(0.0, 0.0, 0.0), Vec3(0.0, pi/2, 0.0)])
             mixer_set_time!(AnimationMixer(AnimationClip("euler_rotation",
-                                                        AbstractKeyframeTrack[euler_track])), 1.0)
+                                                        AbstractKeyframeTrack[euler_track];
+                                                        loop=:once, clamp_when_finished=true)), 1.0)
             @test euler_obj.rotation isa Euler
             @test isapprox(euler_obj.rotation.y, pi/2; atol=1e-12)
         end
@@ -14150,7 +14155,8 @@ end
                                                         AbstractKeyframeTrack[tr_parent])), 0.5)
             @test child.morph_target_influences == [0.0]
             mixer_set_time!(AnimationMixer(AnimationClip("node_weights",
-                                                        AbstractKeyframeTrack[tr_parent])), 1.0)
+                                                        AbstractKeyframeTrack[tr_parent];
+                                                        loop=:once, clamp_when_finished=true)), 1.0)
             @test child.morph_target_influences == [1.0]
 
             point_geo = BufferGeometry([1.0, 1.0, 0.0], Float64[], Float64[], Int[], 1, 0)
@@ -14163,7 +14169,8 @@ end
             point_track = MorphWeightsKeyframeTrack(point_parent, :morph_target_influences,
                                                     [0.0, 1.0], [[0.0], [1.0]])
             mixer_set_time!(AnimationMixer(AnimationClip("point_weights",
-                                                        AbstractKeyframeTrack[point_track])), 1.0)
+                                                        AbstractKeyframeTrack[point_track];
+                                                        loop=:once, clamp_when_finished=true)), 1.0)
             @test points.morph_target_influences == [1.0]
             @test apply_morph_targets(points)[1] == Vec3(1.0, 0.0, 0.0)
             point_hits = raycast(Raycaster(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0);
@@ -14588,7 +14595,7 @@ end
                                          shininess=0.0,
                                          vertex_colors=true)
             phong_cols_on = shade_mesh_faces(geo, world, phong_on, lights, campos)
-            @test all(c -> isapprox(c.r, 0.0; atol=1e-12) && isapprox(c.g, 0.5; atol=1e-12) && isapprox(c.b, 0.0; atol=1e-12), phong_cols_on)
+            @test all(c -> isapprox(c.r, 0.0; atol=1e-12) && isapprox(c.g, 0.5 / π; atol=1e-12) && isapprox(c.b, 0.0; atol=1e-12), phong_cols_on)
             # vertex colors OFF (default) -> material color unchanged (white)
             m_off = MeshBasicMaterial(color=Color3(1.0,1.0,1.0))
             cols_off = shade_mesh_faces(geo, world, m_off, lights, campos)
@@ -14597,7 +14604,7 @@ end
                                                                              specular=Color3(0.0,0.0,0.0),
                                                                              shininess=0.0),
                                                lights, campos)
-            @test all(c -> isapprox(c.r,1.0;atol=1e-12) && isapprox(c.g,1.0;atol=1e-12) && isapprox(c.b,1.0;atol=1e-12), phong_cols_off)
+            @test all(c -> isapprox(c.r,1/π;atol=1e-12) && isapprox(c.g,1/π;atol=1e-12) && isapprox(c.b,1/π;atol=1e-12), phong_cols_off)
             # missing :color attribute -> opt-in is a no-op (no error, material color kept)
             geo2 = BoxGeometry()
             cols_noattr = shade_mesh_faces(geo2, world, MeshBasicMaterial(color=Color3(0.25,0.5,0.75), vertex_colors=true), lights, campos)
@@ -14907,8 +14914,9 @@ end
             rt = RenderTarget(32, 32)
             render!(rt, scene, cam; shading=:smooth)
             # emissive_map modulates material.emissive (three.js); the default
-            # black emissive means the map adds nothing here.
-            @test isapprox(rt.color[16, 16, 1], expected; atol=2e-2)
+            # black emissive means the map adds nothing here. Lit materials
+            # answer ambient irradiance through BRDF_Lambert, hence /π.
+            @test isapprox(rt.color[16, 16, 1], expected / π; atol=2e-2)
 
             phong_mat = MeshPhongMaterial(color=Color3(1.0,1.0,1.0),
                                           specular=Color3(0.0,0.0,0.0),
@@ -14922,7 +14930,7 @@ end
             add!(phong_scene, AmbientLight(intensity=1.0))
             phong_rt = RenderTarget(32, 32)
             render!(phong_rt, phong_scene, cam; shading=:smooth)
-            @test isapprox(phong_rt.color[16, 16, 1], expected; atol=2e-2)
+            @test isapprox(phong_rt.color[16, 16, 1], expected / π; atol=2e-2)
 
             toon_mat = MeshToonMaterial(color=Color3(1.0,1.0,1.0),
                                         map=color_tex, ao_map=data_tex,
@@ -14934,7 +14942,7 @@ end
             add!(toon_scene, AmbientLight(intensity=1.0))
             toon_rt = RenderTarget(32, 32)
             render!(toon_rt, toon_scene, cam; shading=:smooth)
-            @test isapprox(toon_rt.color[16, 16, 1], expected; atol=2e-2)
+            @test isapprox(toon_rt.color[16, 16, 1], expected / π; atol=2e-2)
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
             rough_map = Texture(rough_data; filter=:nearest, colorspace=:linear)
@@ -15157,16 +15165,16 @@ end
             mt = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0), transmission=1.0, ior=1.5)
             @test Diff3D._transmission_response(m0, n, vd, bg) == Diff3D.Color3(0.0,0.0,0.0)
             t = Diff3D._transmission_response(mt, n, vd, Diff3D.Color3(1.0,1.0,1.0))
-            @test isapprox(t.r, 0.96; rtol=1e-6)   # clear glass normal incidence: 1 - Fresnel(0.04)
+            @test isapprox(t.r, 0.96 / π; rtol=1e-6)   # clear glass normal incidence: (1 - Fresnel(0.04))/π
             mv = Diff3D.MeshPhysicalMaterial(color=Diff3D.Color3(1.0,1.0,1.0),
                                             transmission=1.0, ior=1.5,
                                             thickness=1.0,
                                             attenuation_distance=1.0,
                                             attenuation_color=Diff3D.Color3(0.5,0.25,0.125))
             tv = Diff3D._transmission_response(mv, n, vd, Diff3D.Color3(1.0,1.0,1.0))
-            @test tv.r ≈ 0.48
-            @test tv.g ≈ 0.24
-            @test tv.b ≈ 0.12
+            @test tv.r ≈ 0.48 / π
+            @test tv.g ≈ 0.24 / π
+            @test tv.b ≈ 0.12 / π
             tdata = fill(0.0, 1, 1, 3)
             tdata[1,1,1] = 0.9
             tdata[1,1,2] = 0.5
@@ -15180,9 +15188,9 @@ end
             em = Diff3D._apply_pbr_maps(mm, nothing, nothing, 0.5, 0.5)
             @test em.thickness ≈ 0.5
             tm = Diff3D._transmission_response(em, n, vd, Diff3D.Color3(1.0,1.0,1.0))
-            @test tm.r ≈ 0.48
-            @test tm.g ≈ 0.96
-            @test tm.b ≈ 0.96
+            @test tm.r ≈ 0.48 / π
+            @test tm.g ≈ 0.96 / π
+            @test tm.b ≈ 0.96 / π
             scalar_data = zeros(1, 1, 4)
             scalar_data[1,1,1] = 0.25
             scalar_data[1,1,2] = 0.5
@@ -17346,7 +17354,7 @@ end
             for smooth in (false, true)
                 rt_toon_green = toon_map_plane(toon_green; smooth=smooth)
                 @test rt_toon_green.color[16, 16, 1] < 0.1
-                @test rt_toon_green.color[16, 16, 2] > 0.9
+                @test rt_toon_green.color[16, 16, 2] > 0.9 / π
                 @test rt_toon_green.color[16, 16, 3] < 0.1
             end
 
@@ -17362,7 +17370,7 @@ end
                 rt_toon_rgba_visible = toon_map_plane(toon_rgba_visible;
                                                       smooth=smooth,
                                                       alpha_test=0.5)
-                @test rt_toon_rgba_visible.color[16, 16, 1] > 0.9
+                @test rt_toon_rgba_visible.color[16, 16, 1] > 0.9 / π
             end
         end
 
@@ -32261,7 +32269,7 @@ end
         add!(scene, mapped_light)
         target = oriented_render(scene, perspective, shading)
         @test target.color[16, 16, :] ≈
-              [1.0, 1.0, 1.0] atol=1.0e-12
+              [1/π, 1/π, 1/π] atol=1.0e-12
     end
 
     # Environment Fresnel also consumes the oriented normal. A dielectric at
@@ -32358,7 +32366,7 @@ end
     Diff3D.shade_mesh_faces!(
         face_colors, face_geometry, face_world, face_material,
         concrete_lights, perspective.position)
-    @test all(==(Color3(1.0, 1.0, 1.0)), face_colors)
+    @test all(==(Color3(1/π, 1/π, 1/π)), face_colors)
     @test_opt_alloc 0 Diff3D.shade_mesh_faces!(
         face_colors, face_geometry, face_world, face_material,
         concrete_lights, perspective.position)

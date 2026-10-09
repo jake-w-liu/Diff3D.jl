@@ -156,3 +156,36 @@ end
     @test length(raycast(Raycaster(Vec3(10.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0)), morphed)) == 1
     @test isempty(raycast(Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0)), morphed))
 end
+
+@testset "mathapi: mat4 compose/decompose/determinant round-trip" begin
+    pos = Vec3(1.5, -2.0, 3.25)
+    q = quat_normalize(Quaternion(0.3, -0.4, 0.5, 0.7))
+    scl = Vec3(2.0, 0.5, 3.0)
+    m = mat4_compose(pos, q, scl)
+    @test m == mat4_translation(pos.x, pos.y, pos.z) * quat_to_mat4(q) *
+              mat4_scaling(scl.x, scl.y, scl.z)
+    @test mat4_determinant(m) ≈ scl.x * scl.y * scl.z
+    @test mat4_determinant(Mat4{Float64}()) == 1.0
+    @test mat4_determinant(mat4_inverse(m)) ≈ 1 / mat4_determinant(m)
+
+    p2, q2, s2 = mat4_decompose(m)
+    @test p2 == pos
+    @test s2.x ≈ scl.x && s2.y ≈ scl.y && s2.z ≈ scl.z
+    same_rotation(a, b) = all(getfield(a, f) ≈ getfield(b, f) for f in (:x, :y, :z, :w))
+    @test same_rotation(q2, q) ||
+          same_rotation(q2, Quaternion(-q.x, -q.y, -q.z, -q.w))
+    @test all(quat_to_mat4(q2).e .≈ quat_to_mat4(q).e)
+    @test quat_from_rotation_matrix(quat_to_mat4(q)) |> r ->
+        same_rotation(r, q) || same_rotation(r, Quaternion(-q.x, -q.y, -q.z, -q.w))
+
+    # A negative determinant negates the x scale, matching three.js, and the
+    # decompose -> compose round-trip rebuilds the matrix.
+    neg = mat4_compose(pos, q, Vec3(-scl.x, scl.y, scl.z))
+    pn, qn, sn = mat4_decompose(neg)
+    @test sn.x ≈ -scl.x && sn.y ≈ scl.y && sn.z ≈ scl.z
+    @test all(mat4_compose(pn, qn, sn).e .≈ neg.e)
+
+    # Singular linear parts degrade to identity rotation and unit scale.
+    sing = mat4_compose(pos, q, Vec3(0.0, 1.0, 1.0))
+    @test mat4_decompose(sing) == (pos, Quaternion(), Vec3(1.0, 1.0, 1.0))
+end

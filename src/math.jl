@@ -935,9 +935,7 @@ linear part yields an identity rotation and unit scale.
 function mat4_decompose(m::Mat4)
     e = m.e
     position = Vec3(e[13], e[14], e[15])
-    det = e[1] * (e[6] * e[11] - e[10] * e[7]) -
-          e[5] * (e[2] * e[11] - e[10] * e[3]) +
-          e[9] * (e[2] * e[7] - e[6] * e[3])
+    det = mat4_determinant(m)
     if iszero(det)
         o, z = one(det), zero(det)
         return position, Quaternion(z, z, z, o), Vec3(o, o, o)
