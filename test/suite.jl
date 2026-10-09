@@ -17138,7 +17138,7 @@ end
             alpha_point_geo.n_vertices = 1
             alpha_point = primitive_alpha_center(PointsObject(alpha_point_geo,
                 PointsMaterial(color=Color3(1.0, 0.0, 0.0), opacity=0.25,
-                               size=5.0, depth_write=false)))
+                               transparent=true, size=5.0, depth_write=false)))
             @test alpha_point.x ≈ 0.25 atol=1e-12
             @test alpha_point.y ≈ 0.0 atol=1e-12
             @test alpha_point.z ≈ 0.75 atol=1e-12
@@ -31521,7 +31521,7 @@ end
         point = PointsObject(
             geometry, PointsMaterial(
                 color=Color3(0.0, 0.0, 1.0), size=7.0,
-                opacity=0.5, depth_write=false))
+                opacity=0.5, transparent=true, depth_write=false))
         point.position = Vec3(0.0, 0.0, -1.0)
         return point
     end
@@ -31552,7 +31552,7 @@ end
                 opacity=0.5, depth_write=false) :
             PointsMaterial(
                 color=Color3(0.0, 0.0, 1.0), size=7.0,
-                opacity=0.5, depth_write=false)
+                opacity=0.5, transparent=true, depth_write=false)
         instance = InstancedMesh(
             geometry, material, 1; draw_mode=draw_mode)
         set_instance_matrix!(
@@ -31623,7 +31623,7 @@ end
     function texture_alpha_sprite()
         return Sprite(SpriteMaterial(
             color=Color3(0.0, 0.0, 1.0), map=rgba_half_texture,
-            depth_write=false))
+            transparent=true, depth_write=false))
     end
     function texture_alpha_point()
         geometry = BufferGeometry(
@@ -31632,7 +31632,7 @@ end
             geometry, PointsMaterial(
                 color=Color3(0.0, 0.0, 1.0), size=7.0,
                 map=rgb_texture, alpha_map=alpha_half_texture,
-                depth_write=false))
+                transparent=true, depth_write=false))
     end
     function texture_alpha_instanced_point()
         geometry = BufferGeometry(
@@ -31641,7 +31641,8 @@ end
             geometry,
             PointsMaterial(
                 color=Color3(0.0, 0.0, 1.0), size=7.0,
-                map=rgba_half_texture, depth_write=false),
+                map=rgba_half_texture, transparent=true,
+                depth_write=false),
             1; draw_mode=:points)
     end
     function texture_alpha_center(make_primitive; reverse=false)
@@ -31690,9 +31691,9 @@ end
     @test cached_target.color[8, 7, :] ≈ expected atol=1.0e-12
     @test_opt_alloc 4096 render!(
         cached_target, cached_scene, camera; cache=cached)
-    @test Diff3D._primitive_blends(LineBasicMaterial(opacity=0.5))
-    @test !Diff3D._primitive_blends(LineBasicMaterial(opacity=1.0))
-    @test_opt_alloc 0 Diff3D._primitive_blends(
+    @test Diff3D._primitive_transparent(LineBasicMaterial(opacity=0.5))
+    @test !Diff3D._primitive_transparent(LineBasicMaterial(opacity=1.0))
+    @test_opt_alloc 0 Diff3D._primitive_transparent(
         LineBasicMaterial(opacity=0.5))
 end
 
@@ -34108,3 +34109,4 @@ include("jpeg_decoder.jl")
 
 include("loaders_audit.jl")
 include("mathapi_audit.jl")
+include("renderer_audit.jl")

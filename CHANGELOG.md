@@ -46,6 +46,11 @@
   `compute_local_matrix` composes translation, rotation and scale directly,
   and recursive raycasts no longer box each object's world matrix (a
   400-object single-ray cast: ~1.37 ms/115 KB to ~0.26 ms/736 B).
+- Blend points, sprites and wireframes only for `transparent` materials, as
+  three.js does, and apply `alphaTest` to material opacity times texture
+  alpha on the opaque flat and pooled mesh paths.
+- `render_pooled!` and `render_tiled!` honour a mesh's
+  `flat_shading=false` with per-pixel shading, matching `render!`.
 
 ## 1.0.0
 

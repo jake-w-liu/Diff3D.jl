@@ -1040,9 +1040,9 @@ end
 function _render_pooled_uses_fragment_alpha(geo::BufferGeometry, mat)
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     has_uvs || return false
-    albedo_map = _material_field(mat, :map)
-    alpha_map = _material_field(mat, :alpha_map)
-    _needs_fragment_alpha(material_alpha_test(mat), 1.0, albedo_map, alpha_map)
+    material_alpha_test(mat) > 0.0 || return false
+    return _has_texture_alpha(_material_field(mat, :map)) ||
+           _has_alpha_map(_material_field(mat, :alpha_map))
 end
 
 function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, world_mat::Mat4, mat,
@@ -1078,6 +1078,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                       colorbuf, geo, world_mat, mat, lights, cam_pos;
                       camera_view=view,
                       ortho_dir=ortho_dir)
+    Float64(material_opacity(mat)) >= material_alpha_test(mat) || return nothing
 
     @inbounds for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
@@ -1341,12 +1342,37 @@ function _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
     return nothing
 end
 
+# Opaque meshes whose `flat_shading = false` override selects per-pixel shading,
+# drawn after the flat pass as `render!` does.
+function _render_pooled_smooth_meshes!(rt::RenderTarget, meshes::Vector{Mesh},
+                                       worlds::Vector{Mat4{Float64}}, lights,
+                                       proj::Mat4, view::Mat4, near, cam_pos::Vec3,
+                                       ortho_dir, scratch::RenderCache,
+                                       ylo::Int, yhi::Int)
+    inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        mat = _mesh_material(mesh)
+        (_mesh_is_flat(mesh, :flat) || is_transparent_material(mat) ||
+         material_wireframe(mat)) && continue
+        _render_smooth_mesh_from_mesh!(rt, mesh, worlds[i], lights, proj, view, near,
+                                       cam_pos, nothing, scratch.smooth_tri,
+                                       scratch.smooth_clipped, scratch.sx, scratch.sy,
+                                       scratch.sz, scratch.smooth_iw, _NO_PLANES,
+                                       1, rt.width, ylo, yhi, !iszero(inv_log_far),
+                                       inv_log_far, ortho_dir, nothing, 0)
+    end
+    return nothing
+end
+
 """
     render_pooled!(rt, scene, camera, cache; shading=:flat)
 
 Flat opaque meshes/instances are rasterized reusing `cache`'s buffers — the same
-image as `render!` for opaque flat scenes, but with bounded per-frame allocation
-across repeated calls. Transparent meshes, lines and points are skipped here.
+image as `render!` for opaque scenes, but with bounded per-frame allocation
+across repeated calls. A mesh whose `flat_shading` is `false` is shaded per
+pixel, as in `render!`. Transparent and wireframe meshes, lines, points and
+sprites are skipped here.
 """
 function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                         cache::RenderCache; shading::Symbol=:flat,
@@ -1381,6 +1407,7 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         mesh = cache.meshes[i]
         mat = _mesh_material(mesh)
         (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
+        _mesh_is_flat(mesh, :flat) || continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
                                                cache.lights, proj, view, near,
                                                camera_position, cache.tri, cache.clipped,
@@ -1399,6 +1426,9 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
             ortho_dir)
     end
+    _render_pooled_smooth_meshes!(rt, cache.meshes, cache.mesh_worlds, cache.lights,
+                                  proj, view, near, camera_position, ortho_dir, cache,
+                                  1, rt.height)
     return original_target
 end
 
@@ -1672,7 +1702,7 @@ function _draw_line_geometry_stamped!(rt::RenderTarget, geo, material, wm::Mat4,
     col = _point_material_color(material, instance_color)
     linewidth = hasfield(typeof(material), :linewidth) ?
         _line_material_width(getfield(material, :linewidth)) : 1.0
-    alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    alpha = _primitive_blend_alpha(material)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
     stride = line_mode === :lines ? 2 : 1
@@ -2043,7 +2073,7 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
                                         cache::Union{Nothing,RenderCache})
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
     col = hasfield(typeof(mat), :color) ? mat.color : Color3(1.0, 1.0, 1.0)
-    alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
+    alpha = _primitive_blend_alpha(mat)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
@@ -2148,7 +2178,7 @@ end
         alpha::Float64=1.0,
         alpha_test::Float64=0.0,
         alpha_map=nothing,
-        stamp=nothing, stamp_id::Int=0)
+        stamp=nothing, stamp_id::Int=0, blend::Bool=true)
     W, H = rt.width, rt.height
     # Reject non-finite projected corners (no well-defined raster footprint).
     (isfinite(s1x) && isfinite(s1y) && isfinite(s2x) && isfinite(s2y) &&
@@ -2168,7 +2198,8 @@ end
     has_tex = tex !== nothing
     has_clip = !isempty(clipping_planes)
     has_fog = _has_render_fog(rt.view_state)
-    has_alpha = _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
+    has_alpha = (blend || alpha_test > 0.0) &&
+                _needs_fragment_alpha(alpha_test, Float64(alpha), tex, alpha_map)
     needs_uv = has_tex || has_alpha
     @inbounds for py in min_y:max_y
         for px in min_x:max_x
@@ -2206,6 +2237,7 @@ end
             col = clamp_color(col)
             has_fog && (col = _render_fog_color(rt.view_state,col,wp))
             depth_write && (rt.depth[py, px] = z)
+            blend || (frag_alpha = 1.0)
             if frag_alpha >= 1.0
                 rt.color[py, px, 1] = col.r; rt.color[py, px, 2] = col.g; rt.color[py, px, 3] = col.b
             elseif frag_alpha > 0.0
@@ -2252,6 +2284,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
     tint = _material_field(mat, :color)
     tint === nothing && (tint = Color3(1.0, 1.0, 1.0))
     alpha = clamp(Float64(material_opacity(mat)), 0.0, 1.0)
+    blend = _primitive_transparent(mat)
     tex = _material_field(mat, :map)
     alpha_test = material_alpha_test(mat)
     alpha_map = _material_field(mat, :alpha_map)
@@ -2276,7 +2309,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, nothing, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex === nothing && alpha_map isa Texture
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2284,7 +2317,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, nothing, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex isa Texture && alpha_map isa Texture
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2292,7 +2325,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     elseif tex === nothing && alpha_map === nothing
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2300,7 +2333,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, nothing, nothing, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     else
         _draw_sprite_triangles!(rt, s0x, s0y, z0, iw0, wp0,
                                 s1x, s1y, z1, iw1, wp1,
@@ -2308,7 +2341,7 @@ function _draw_sprite_object_material!(rt::RenderTarget, obj::Sprite, mat,
                                 s3x, s3y, z3, iw3, wp3,
                                 tint, tex, alpha_map, clipping_planes,
                                 xlo, xhi, ylo, yhi, depth_test, depth_write,
-                                alpha, alpha_test, stamp_matrix, stamp_id)
+                                alpha, alpha_test, stamp_matrix, stamp_id, blend)
     end
     return nothing
 end
@@ -2322,21 +2355,21 @@ end
         xlo::Int, xhi::Int, ylo::Int, yhi::Int,
         depth_test::Bool, depth_write::Bool,
         alpha::Float64, alpha_test::Float64,
-        stamp::Matrix{Int}, stamp_id::Int)
+        stamp::Matrix{Int}, stamp_id::Int, blend::Bool)
     # Triangle (0,1,2): UVs (0,0),(1,0),(1,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s1x, s1y, z1, iw1, 1.0, 0.0, wp1,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
         tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
-        alpha, alpha_test, alpha_map, stamp, stamp_id)
+        alpha, alpha_test, alpha_map, stamp, stamp_id, blend)
     # Triangle (0,2,3): UVs (0,0),(1,1),(0,1).
     _rasterize_sprite_tri!(rt,
         s0x, s0y, z0, iw0, 0.0, 0.0, wp0,
         s2x, s2y, z2, iw2, 1.0, 1.0, wp2,
         s3x, s3y, z3, iw3, 0.0, 1.0, wp3,
         tint, tex, clipping_planes, xlo, xhi, ylo, yhi, depth_test, depth_write,
-        alpha, alpha_test, alpha_map, stamp, stamp_id)
+        alpha, alpha_test, alpha_map, stamp, stamp_id, blend)
     return nothing
 end
 
@@ -2499,13 +2532,15 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
     _validate_material_parameters(material)
     base_color = _point_material_color(material, instance_color)
     alpha = clamp(Float64(material_opacity(material)), 0.0, 1.0)
+    blend = _primitive_transparent(material)
     depth_test = material_depth_test(material)
     depth_write = material_depth_write(material)
     alpha_test = material_alpha_test(material)
     albedo_map = _material_field(material, :map)
     alpha_map = _material_field(material, :alpha_map)
     use_color_map = albedo_map isa Texture
-    use_fragment_alpha = _needs_fragment_alpha(alpha_test, alpha, albedo_map, alpha_map)
+    use_fragment_alpha = (blend || alpha_test > 0.0) &&
+                         (_has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map))
     base_size = hasfield(typeof(material), :size) ?
         _point_material_size(getfield(material, :size)) : 1.0
     size_attenuation = _material_field(material, :size_attenuation)
@@ -2555,7 +2590,7 @@ function _draw_points_geometry!(rt::RenderTarget, geo, material, wm::Mat4,
             end
             point_col = _render_fog_color(rt.view_state,point_col,-pv.z)
             _put_pixel!(rt, x, y, pz, point_col, xlo, xhi, ylo, yhi,
-                        depth_test, depth_write, frag_alpha)
+                        depth_test, depth_write, blend ? frag_alpha : 1.0)
         end
     end
     return nothing
@@ -3269,7 +3304,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                                               ylo, yhi, thread_cache)
             continue
         end
-        is_transparent_material(mat) && continue
+        (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera_position,
                                                tri, clipped, sx, sy, sz, colorbuf,
@@ -3302,15 +3337,18 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
             ortho_dir, ylo, yhi, thread_cache.smooth_tri,
             thread_cache.smooth_clipped, thread_cache.smooth_iw)
     end
+    _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
+                                  camera_position, ortho_dir, thread_cache, ylo, yhi)
     return nothing
 end
 
 """
     render_tiled!(rt, scene, camera; tiles=Threads.nthreads(), shading=:flat, cache=nothing)
 
-Flat-rasterize the scene in horizontal row bands. Bands write disjoint rows, so
+Rasterize the scene in horizontal row bands. Bands write disjoint rows, so
 they can run on separate threads (used when Julia is started with > 1 thread).
-Produces the same image as [`render!`] for opaque flat scenes.
+Produces the same image as [`render!`] for opaque scenes: meshes default to
+flat shading, and a mesh whose `flat_shading` is `false` is shaded per pixel.
 
 Passing a `cache` vector reuses scratch buffers across repeated calls. The vector
 must have at least `min(tiles, target.height, Threads.nthreads())` entries.

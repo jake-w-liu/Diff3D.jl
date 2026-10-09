@@ -658,8 +658,11 @@ end
                 v = a0*uv1.y + a1*uv2.y + a2*uv3.y
                 u2 = a0*uv2_1.x + a1*uv2_2.x + a2*uv2_3.x
                 v2 = a0*uv2_1.y + a1*uv2_2.y + a2*uv2_3.y
-                frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map, u, v, u2, v2)
-                frag_alpha >= alpha_test || continue
+                if blend || alpha_test > 0.0
+                    frag_alpha = _fragment_alpha(alpha_base, albedo_map, alpha_map,
+                                                 u, v, u2, v2)
+                    frag_alpha >= alpha_test || continue
+                end
                 base_albedo_map = has_albedo &&
                                   _albedo_map_before_lighting(material)
                 surface_color = vc
@@ -1787,7 +1790,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
         mat = _instanced_material(im)
-        (material_wireframe(mat) ? _primitive_blends(mat) :
+        (material_wireframe(mat) ? _primitive_transparent(mat) :
          is_transparent_material(mat)) && continue
         mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
         instance_materials = cache === nothing ? nothing :
@@ -1845,7 +1848,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # before any transparent object is blended.
     for i in eachindex(wireframe_meshes)
         mesh = wireframe_meshes[i]
-        _primitive_blends(_mesh_material(mesh)) && continue
+        _primitive_transparent(_mesh_material(mesh)) && continue
         _render_wireframe_mesh_from_mesh!(
             rt, mesh, wireframe_worlds[i], proj, view, near,
             xlo, xhi, ylo, yhi, cache)
@@ -1912,7 +1915,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         mat = _instanced_material(im)
-        (material_wireframe(mat) ? _primitive_blends(mat) :
+        (material_wireframe(mat) ? _primitive_transparent(mat) :
          is_transparent_material(mat)) || continue
         cache === nothing || _instanced_materials!(
             cache.instanced_materials, instanced_slot, im, mat,
@@ -1935,7 +1938,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         end
     end
     @inbounds for index in eachindex(wireframe_meshes)
-        _primitive_blends(
+        _primitive_transparent(
             _mesh_material(wireframe_meshes[index])) || continue
         push!(transparent_items, _TransparentRenderItem(
             _mesh_view_depth_world(wireframe_worlds[index], view),
@@ -2395,20 +2398,17 @@ function is_transparent_material(m::AbstractMaterial)
     material_opacity(m)
     return material_transparent(m)
 end
-function _primitive_blends(m::AbstractMaterial)
+# three.js blends only `transparent` materials. Line materials have no such
+# flag, so their opacity alone selects blending.
+function _primitive_transparent(m::AbstractMaterial)
     _validate_material_parameters(m)
-    return material_transparent(m) || material_opacity(m) < 1.0
+    opacity = material_opacity(m)
+    return hasfield(typeof(m), :transparent) ? getfield(m, :transparent) : opacity < 1.0
 end
-@inline function _render_primitive_blends(object::AbstractObject3D)
-    material = _render_primitive_material(object)
-    _primitive_blends(material) && return true
-    point_or_sprite = object isa Sprite || object isa PointsObject ||
-                      (object isa InstancedMesh &&
-                       _instanced_point_drawable(object))
-    point_or_sprite || return false
-    return _has_texture_alpha(_material_field(material, :map)) ||
-           _has_alpha_map(_material_field(material, :alpha_map))
-end
+@inline _render_primitive_blends(object::AbstractObject3D) =
+    _primitive_transparent(_render_primitive_material(object))
+@inline _primitive_blend_alpha(material::AbstractMaterial) =
+    _primitive_transparent(material) ? clamp(Float64(material_opacity(material)), 0.0, 1.0) : 1.0
 material_depth_test(m::AbstractMaterial) = hasfield(typeof(m), :depth_test) ? getfield(m, :depth_test) : true
 material_depth_write(m::AbstractMaterial) = hasfield(typeof(m), :depth_write) ? getfield(m, :depth_write) : true
 material_alpha_test(m::AbstractMaterial) = hasfield(typeof(m), :alpha_test) ?
@@ -2517,8 +2517,11 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing
     alpha_map = has_uvs ? _material_field(mat, :alpha_map) : nothing
     alpha_test = material_alpha_test(mat)
-    alpha_base = Float64(alpha)
-    use_fragment_alpha = _has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map)
+    # alphaTest compares opacity × texture alpha even when the mesh is opaque.
+    alpha_base = blend ? Float64(alpha) : Float64(material_opacity(mat))
+    use_fragment_alpha = (blend || alpha_test > 0.0) &&
+                         (_has_texture_alpha(albedo_map) || _has_alpha_map(alpha_map))
+    use_fragment_alpha || alpha_base >= alpha_test || return nothing
     uv2_attr = use_fragment_alpha ? _uv2_attribute(geo) : nothing
     attr_tri = use_fragment_alpha ?
         (flat_attr_tri === nothing ? Vector{ShadeVtx}(undef, 3) :
@@ -2713,15 +2716,13 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                 xlo=xlo, xhi=xhi,
                                 clipping_planes=clipping_planes, wp1=wp1, wp2=wp2, wp3=wp3,
                                 iw1=iw1, iw2=iw2, iw3=iw3,
-                                depth_test=depth_test, depth_write=depth_write,
-                                alpha_test=alpha_test, alpha_base=alpha_base)
+                                depth_test=depth_test, depth_write=depth_write)
             else
                 _rasterize_tri!(rt, sx[1], sy[1], sz[1],
                                 sx[k], sy[k], sz[k],
                                 sx[k+1], sy[k+1], sz[k+1], fc, ylo, yhi;
                                 xlo=xlo, xhi=xhi,
-                                depth_test=depth_test, depth_write=depth_write,
-                                alpha_test=alpha_test, alpha_base=alpha_base)
+                                depth_test=depth_test, depth_write=depth_write)
             end
         end
     end
