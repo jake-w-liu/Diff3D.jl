@@ -48,7 +48,7 @@ end
 
     writers = "uniform1f|uniform1i|uniform1fv|uniform1iv|uniform2v|uniform3v|uniform4v|uniformMat3|uniformMat4|uniformTexMatrix"
     name_literal = r"\"(\w+)(?:\[0\])?\""
-    required = Set(["uModel", "uView", "uProj", "uColor", "uOpacity", "uViewProj", "uPointShadowPos", "uPointShadowFar"])
+    required = Set(["uModel", "uView", "uProj", "uColor", "uOpacity", "uOpaque", "uViewProj", "uPointShadowPos", "uPointShadowFar"])
     written = Set{String}()
     required_writes = 0
     unflagged = String[]

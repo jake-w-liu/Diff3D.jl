@@ -61,6 +61,13 @@
 - Diffuse responses use three.js `BRDF_Lambert` (albedo/π), and the Phong
   specular uses the normalized `BRDF_BlinnPhong` distribution with Schlick
   fresnel.
+- Exported WebGL viewers follow three.js render-list semantics: only
+  `transparent` materials blend, opaque draws write alpha 1 regardless of
+  texture or opacity alpha, and opaque items draw front-to-back while
+  transparent items draw back-to-front by bounding-sphere centre.
+- WebGL export escapes U+2028/U+2029 in strings and raises errors for
+  non-finite numbers and invalid UTF-8 instead of serializing `0` or a
+  script-breaking character.
 
 ## 1.0.0
 
