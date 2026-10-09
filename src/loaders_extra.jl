@@ -808,9 +808,8 @@ function load_png(path::String)
 end
 
 @inline function _is_jpeg_bytes(bytes::AbstractVector{UInt8})
-    length(bytes) >= 4 &&
-        bytes[1] == 0xff && bytes[2] == 0xd8 &&
-        bytes[end - 1] == 0xff && bytes[end] == 0xd9
+    length(bytes) >= 3 &&
+        bytes[1] == 0xff && bytes[2] == 0xd8 && bytes[3] == 0xff
 end
 
 """Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""
@@ -2372,13 +2371,6 @@ EXRLoader(path::String; colorspace::Symbol=:linear, kwargs...) =
 
 # ========================== OBJ .mtl materials ==========================
 
-"""
-    load_mtl(path) -> Dict{String, MeshPhongMaterial}
-
-Parse a Wavefront .mtl file: `newmtl`, `Kd` (diffuse), `Ks` (specular),
-`Ns` (shininess), `Ke` (emissive), `d`/`Tr` (opacity), and `map_Kd`
-(diffuse texture).
-"""
 function _mtl_texture_path(tokens::Vector{SubString{String}})
     numeric_option_max = Dict("-boost"=>1, "-mm"=>2, "-o"=>3, "-s"=>3,
                               "-t"=>3, "-texres"=>1, "-bm"=>1)
@@ -2461,53 +2453,115 @@ end
     return token_state
 end
 
+function _mtl_key_is(tag::AbstractString, key::String)
+    ncodeunits(tag) == ncodeunits(key) || return false
+    @inbounds for j in 1:ncodeunits(key)
+        b = codeunit(tag, j)
+        UInt8('A') <= b <= UInt8('Z') && (b += 0x20)
+        b == codeunit(key, j) || return false
+    end
+    return true
+end
+
+# Statement value after the keyword, as three.js MTLLoader/OBJLoader read it.
+_mtl_rest_of_line(line::AbstractString, tag::AbstractString) =
+    strip(SubString(line, ncodeunits(tag) + 1))
+
+function _mtl_texture(dir::String, line::AbstractString, label::String,
+                      colorspace::Symbol)
+    tokens = split(line)
+    texpath = _mtl_texture_path(tokens)
+    isempty(texpath) && error("MTL $label requires a texture path")
+    scale = _mtl_texture_option(tokens, "-s", 1.0, label)
+    offset = _mtl_texture_option(tokens, "-o", 0.0, label)
+    return TextureLoader(isabspath(texpath) ? texpath : joinpath(dir, texpath);
+                         colorspace=colorspace, repeat=scale, offset=offset)
+end
+
+function _mtl_texture_option(tokens, option::String, default::Float64, label::String)
+    i = findfirst(==(option), tokens)
+    i === nothing && return Vec2(default, default)
+    u = i + 1 <= length(tokens) ? tryparse(Float64, tokens[i + 1]) : nothing
+    u === nothing && error("MTL $label $option requires a number")
+    v = i + 2 <= length(tokens) ? tryparse(Float64, tokens[i + 2]) : nothing
+    return Vec2(u, v === nothing ? default : v)
+end
+
+"""
+    load_mtl(path) -> Dict{String, MeshPhongMaterial}
+
+Parse a Wavefront .mtl file like three.js `MTLLoader`: keywords are
+case-insensitive and `newmtl` names are the rest of the line. Reads `Kd`
+(diffuse), `Ks` (specular), `Ns` (shininess), `Ke` (emissive), `d`/`Tr`
+(opacity), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
+`map_Ke` (`emissive_map`), `norm` (`normal_map`), and `map_d` (`alpha_map`,
+which also makes the material transparent). The first map of each kind wins;
+texture `-s` and `-o` options set the texture `repeat` and `offset`. Other
+statements, such as `Ka`, `illum`, `bump`, and `disp`, are ignored.
+"""
 function load_mtl(path::String)
     mats = Dict{String, MeshPhongMaterial}()
     sizehint!(mats, max(0, filesize(path) ÷ 80))
+    default_specular = MeshPhongMaterial().specular
     name = ""
-    kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0); ke = Color3(0.0,0.0,0.0)
-    ns = 30.0; d = 1.0; diffuse_map = nothing
+    kd = Color3(1.0,1.0,1.0); ks = default_specular; ke = Color3(0.0,0.0,0.0)
+    ns = 30.0; d = 1.0
+    diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
     dir = dirname(path)
     function flush!()
         isempty(name) && return
         mats[name] = MeshPhongMaterial(color=kd, specular=ks, emissive=ke, shininess=ns,
-                                       opacity=d, transparent=(d < 1.0),
-                                       map=diffuse_map)
+                                       opacity=d,
+                                       transparent=(d < 1.0 || alpha_map !== nothing),
+                                       map=diffuse_map, specular_map=specular_map,
+                                       emissive_map=emissive_map, normal_map=normal_map,
+                                       alpha_map=alpha_map)
     end
     open(path, "r") do io
     for raw in eachline(io)
         line = strip(raw)
+        (isempty(line) || startswith(line, "#")) && continue
         parts = eachsplit(line)
         tag_state = iterate(parts)
         tag_state === nothing && continue
         tag = tag_state[1]
-        if tag == "newmtl"
-            name_state = _mtl_required_arg(parts, tag_state[2],
-                                           "MTL newmtl requires a material name")
+        if _mtl_key_is(tag, "newmtl")
             flush!()
-            name = String(name_state[1])
-            kd = Color3(1.0,1.0,1.0); ks = Color3(0.0,0.0,0.0)
-            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0; diffuse_map = nothing
-        elseif tag == "Kd"
+            name = String(_mtl_rest_of_line(line, tag))
+            isempty(name) && error("MTL newmtl requires a material name")
+            kd = Color3(1.0,1.0,1.0); ks = default_specular
+            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0
+            diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
+        elseif _mtl_key_is(tag, "kd")
             kd = _mtl_parse_color_tokens(parts, tag_state[2],
                                          "Kd", "Kd red", "Kd green", "Kd blue")
-        elseif tag == "Ks"
+        elseif _mtl_key_is(tag, "ks")
             ks = _mtl_parse_color_tokens(parts, tag_state[2],
                                          "Ks", "Ks red", "Ks green", "Ks blue")
-        elseif tag == "Ke"
+        elseif _mtl_key_is(tag, "ke")
             ke = _mtl_parse_color_tokens(parts, tag_state[2],
                                          "Ke", "Ke red", "Ke green", "Ke blue")
-        elseif tag == "Ns"
+        elseif _mtl_key_is(tag, "ns")
             ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
-        elseif tag == "d"
+        elseif _mtl_key_is(tag, "d")
             d = _mtl_parse_scalar_token(parts, tag_state[2], "d")
-        elseif tag == "Tr"
+        elseif _mtl_key_is(tag, "tr")
             d = 1.0 - _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
-        elseif tag == "map_Kd"
-            t = split(line)
-            texpath = _mtl_texture_path(t)
-            isempty(texpath) && error("MTL map_Kd requires a texture path")
-            diffuse_map = TextureLoader(isabspath(texpath) ? texpath : joinpath(dir, texpath))
+        elseif _mtl_key_is(tag, "map_kd")
+            diffuse_map === nothing &&
+                (diffuse_map = _mtl_texture(dir, line, "map_Kd", :srgb))
+        elseif _mtl_key_is(tag, "map_ks")
+            specular_map === nothing &&
+                (specular_map = _mtl_texture(dir, line, "map_Ks", :linear))
+        elseif _mtl_key_is(tag, "map_ke")
+            emissive_map === nothing &&
+                (emissive_map = _mtl_texture(dir, line, "map_Ke", :srgb))
+        elseif _mtl_key_is(tag, "norm")
+            normal_map === nothing &&
+                (normal_map = _mtl_texture(dir, line, "norm", :linear))
+        elseif _mtl_key_is(tag, "map_d")
+            alpha_map === nothing &&
+                (alpha_map = _mtl_texture(dir, line, "map_d", :linear))
         end
     end
     end
@@ -2515,11 +2569,26 @@ function load_mtl(path::String)
     return mats
 end
 
+# three.js reads the whole statement value as one library name; the OBJ format
+# also allows a space-separated list, used when no single file matches.
+function _obj_load_mtllib!(materials, dir::String, value::AbstractString)
+    whole = joinpath(dir, value)
+    paths = isfile(whole) ? [whole] : [joinpath(dir, name) for name in split(value)]
+    for mp in paths
+        isfile(mp) || error("OBJ mtllib file $mp does not exist")
+        merge!(materials, load_mtl(mp))
+    end
+    return materials
+end
+
 """
     load_obj_groups(path) -> (geometry, face_material_names, materials)
 
 Like [`load_obj`](@ref) but also returns, per triangle, the active `usemtl`
-name and the material dictionary parsed from any referenced `mtllib`.
+name and the material dictionary parsed from any referenced `mtllib`. As in
+three.js `OBJLoader`, `usemtl` and `mtllib` values are the rest of the line; an
+`mtllib` value naming no file is read as a space-separated library list. A
+referenced library that does not exist is an error.
 """
 function load_obj_groups(path::String)
     verts = Float64[]; file_uvs = Float64[]; file_normals = Float64[]
@@ -2574,13 +2643,12 @@ function load_obj_groups(path::String)
                                              "vn", "vn x", "vn y", "vn z")
             push!(file_normals, x, y, z)
         elseif tag == "mtllib"
-            lib_state = _obj_required_arg(parts, tag_state[2],
-                                          "OBJ mtllib requires a material library path")
-            mp = joinpath(dir, lib_state[1]); isfile(mp) && merge!(materials, load_mtl(mp))
+            _obj_required_arg(parts, tag_state[2],
+                              "OBJ mtllib requires a material library path")
+            _obj_load_mtllib!(materials, dir, _mtl_rest_of_line(line, tag))
         elseif tag == "usemtl"
-            mtl_state = _obj_required_arg(parts, tag_state[2],
-                                          "OBJ usemtl requires a material name")
-            cur_mtl = String(mtl_state[1])
+            _obj_required_arg(parts, tag_state[2], "OBJ usemtl requires a material name")
+            cur_mtl = String(_mtl_rest_of_line(line, tag))
         elseif tag == "f"
             nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
             first_state = iterate(parts, tag_state[2])
@@ -9498,7 +9566,7 @@ function _gltf_image_bytes_and_mime(gltf, buffers, dir::String, imgdef)
                                         "glTF image bufferView")
         return bytes, declared_mime
     end
-    return nothing, ""
+    error("glTF image is missing uri and bufferView")
 end
 
 function _gltf_decode_image(bytes::AbstractVector{UInt8}, mime::AbstractString)
@@ -9528,14 +9596,13 @@ end
 function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:srgb,
                        texture_cache=nothing)
     texinfo === nothing && return nothing
-    haskey(gltf, "textures") || return nothing
-    textures = gltf["textures"]
+    textures = get(gltf, "textures", Any[])
     ti = _gltf_checked_index(texinfo["index"], length(textures), "texture")
     texdef = textures[ti + 1]
     if !haskey(texdef, "source")
         basisu = get(get(texdef, "extensions", Dict{String,Any}()),
                      "KHR_texture_basisu", nothing)
-        basisu === nothing && return nothing
+        basisu === nothing && error("glTF texture $ti has no supported image source")
         haskey(basisu, "source") ||
             error("glTF KHR_texture_basisu texture requires a source image index")
         error("glTF KHR_texture_basisu textures are not supported; KTX2/Basis texture loading is not implemented")
@@ -9554,13 +9621,9 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     offset, scale, rotation, tex_coord = _gltf_texture_transform(texinfo)
     raw_mag_filter = get(sampler, "magFilter", 9729.0)
     mag_filter = _gltf_mag_filter_mode(raw_mag_filter)
-    raw_min_filter = haskey(sampler, "minFilter") ? sampler["minFilter"] : raw_mag_filter
+    raw_min_filter = get(sampler, "minFilter", 9987.0)
     min_filter = _gltf_min_filter_mode(raw_min_filter)
-    filter = if haskey(sampler, "magFilter")
-        _gltf_filter_mode(raw_mag_filter, _GLTF_MAG_FILTERS, "magFilter")
-    else
-        _gltf_filter_mode(raw_min_filter, _GLTF_MIN_FILTERS, "minFilter")
-    end
+    filter = _gltf_filter_mode(raw_mag_filter, _GLTF_MAG_FILTERS, "magFilter")
     wrap_s = _gltf_wrap_mode(get(sampler, "wrapS", 10497.0), "wrapS")
     wrap_t = _gltf_wrap_mode(get(sampler, "wrapT", 10497.0), "wrapT")
     cache_key = texture_cache === nothing ? nothing :
@@ -9570,7 +9633,6 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
         return texture_cache[cache_key]
     end
     bytes, mime = _gltf_image_bytes_and_mime(gltf, buffers, dir, imgdef)
-    bytes === nothing && return nothing
     data = _gltf_decode_image(bytes, mime)
     # glTF UV (0,0) is the TOP-left corner, but the engine samples with a
     # bottom-left origin (the 1-v flip in `sample_texture`). Reverse the rows so
@@ -9620,7 +9682,9 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                     4, "baseColorFactor")
     emissive = _gltf_checked_number_tuple(get(m, "emissiveFactor", [0.0,0.0,0.0]),
                                           3, "emissiveFactor")
-    alpha_mode = String(get(m, "alphaMode", "OPAQUE"))
+    alpha_mode = get(m, "alphaMode", "OPAQUE")
+    alpha_mode in ("OPAQUE", "MASK", "BLEND") ||
+        error("glTF material alphaMode must be OPAQUE, MASK, or BLEND")
     alpha_test = alpha_mode == "MASK" ?
                  _gltf_checked_finite_number(get(m, "alphaCutoff", 0.5),
                                              "alphaCutoff") : 0.0
@@ -10946,7 +11010,8 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
                                                            "animation output")
             _gltf_validate_attribute_format(
-                gltf, output_accessor, "animation output", (5126,), ())
+                gltf, output_accessor, "animation output", (5126,),
+                path in ("rotation", "weights") ? (5120, 5121, 5122, 5123) : ())
             out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"
