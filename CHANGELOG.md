@@ -8,6 +8,13 @@
   components, arbitrary sampling factors, YCbCr/RGB/grayscale and Adobe
   CMYK/YCCK data). ColorTypes and JpegTurbo are no longer dependencies, so the
   package no longer ships or loads any non-Julia binary image codec.
+- Exported WebGL viewers follow three.js render-list semantics: only
+  `transparent` materials blend, opaque draws write alpha 1 regardless of
+  texture or opacity alpha, and opaque items draw front-to-back while
+  transparent items draw back-to-front by bounding-sphere centre.
+- WebGL export escapes U+2028/U+2029 in strings and raises errors for
+  non-finite numbers and invalid UTF-8 instead of serializing `0` or a
+  script-breaking character.
 
 ## 1.0.0
 
