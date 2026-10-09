@@ -13,34 +13,42 @@
     n > 1e-12 ? s / n : view_dir
 end
 
+# three.js `BRDF_Lambert`: every diffuse response is albedo / π times irradiance.
+@inline _brdf_lambert(c::Color3) = Color3(c.r / π, c.g / π, c.b / π)
+
 """
 Compute Lambertian diffuse contribution for one light.
-Returns Color3 — the diffuse color modulated by light.
+Returns Color3 — the three.js `BRDF_Lambert` response `albedo/π · N·L · light`.
 """
 function shade_lambert(normal::Vec3, light_dir::Vec3, light_color::Color3,
                        light_intensity, surface_color::Color3)
     ndotl = max(dot(normal, light_dir), zero(light_intensity))
-    surface_color * light_color * (ndotl * light_intensity)
+    surface_color * light_color * (ndotl * light_intensity / π)
 end
 
 """
-Blinn-Phong shading: diffuse + specular.
+Blinn-Phong shading: diffuse + specular, following three.js
+`RE_Direct_BlinnPhong` (`BRDF_Lambert` diffuse and normalized `BRDF_BlinnPhong`
+specular, both scaled by the irradiance `N·L · light`).
 `view_dir` points from surface toward camera.
 """
 function shade_phong(normal::Vec3, light_dir::Vec3, view_dir::Vec3,
                      light_color::Color3, light_intensity,
                      diffuse_color::Color3, specular_color::Color3,
                      shininess)
-    # Diffuse
     ndotl = max(dot(normal, light_dir), zero(light_intensity))
-    diffuse = diffuse_color * light_color * (ndotl * light_intensity)
+    irradiance = ndotl * light_intensity
+    diffuse = diffuse_color * light_color * (irradiance / π)
 
-    # Specular (Blinn-Phong half-vector). Mask the lobe by N·L so a light behind
-    # the surface (N·L≤0, but N·H can still be >0) produces no specular leak.
     half_vec = _half_vec(light_dir, view_dir)
     ndoth = max(dot(normal, half_vec), zero(shininess))
-    spec_mask = ndotl > zero(ndotl) ? one(light_intensity) : zero(light_intensity)
-    spec = specular_color * light_color * (ndoth^shininess * light_intensity * spec_mask)
+    vdoth = max(dot(view_dir, half_vec), zero(shininess))
+    fresnel = exp2((-5.55473 * vdoth - 6.98316) * vdoth)
+    F = Color3(specular_color.r * (1 - fresnel) + fresnel,
+               specular_color.g * (1 - fresnel) + fresnel,
+               specular_color.b * (1 - fresnel) + fresnel)
+    D = (shininess * 0.5 + 1) / π * ndoth^shininess
+    spec = F * light_color * (irradiance * 0.25 * D)
 
     diffuse + spec
 end
@@ -1550,16 +1558,17 @@ end
 # Environment (ambient/IBL) response of a metallic-roughness surface. Without
 # this term metals (low diffuse, narrow specular) render black under directional
 # light alone. Diffuse scales by (1-metalness); specular uses Schlick F0 (≈albedo
-# for metals) attenuated by roughness.
+# for metals) attenuated by roughness. Fill irradiance is reflected through the
+# same 1/π (`BRDF_Lambert`/cosine-weighted irradiance) as three.js.
 function _pbr_ambient(normal::Vec3, albedo::Color3, metalness, roughness, fill::Color3)
     kd = one(metalness) - metalness
     F0r = lerp_scalar(0.04, albedo.r, metalness)
     F0g = lerp_scalar(0.04, albedo.g, metalness)
     F0b = lerp_scalar(0.04, albedo.b, metalness)
     spec_scale = one(roughness) - roughness * 0.7
-    Color3((albedo.r * kd + F0r * spec_scale) * fill.r,
-           (albedo.g * kd + F0g * spec_scale) * fill.g,
-           (albedo.b * kd + F0b * spec_scale) * fill.b)
+    Color3((albedo.r * kd + F0r * spec_scale) * fill.r / π,
+           (albedo.g * kd + F0g * spec_scale) * fill.g / π,
+           (albedo.b * kd + F0b * spec_scale) * fill.b / π)
 end
 
 # Environment-map (basic IBL) specular reflection. Reflect the view direction
@@ -1695,7 +1704,7 @@ end
 # a tinted background. The transmitted radiance is attenuated by the material
 # colour (a single-sample Beer-Lambert-style tint, treating `color` as the per-
 # unit transmittance) and weighted by transmission·(1-Fresnel). `background` is
-# the ambient/environment fill colour the ray would see behind the surface.
+# the ambient/environment fill irradiance; the ray sees its radiance, `background/π`.
 @inline function _transmission_fill(m::MeshPhysicalMaterial, normal::Vec3, view_dir::Vec3,
                                     background::Color3)
     m.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
@@ -1713,9 +1722,9 @@ end
                            m.attenuation_color.g^volume_path,
                            m.attenuation_color.b^volume_path)
     end
-    Color3(background.r * att.r * transmit,
-           background.g * att.g * transmit,
-           background.b * att.b * transmit)
+    Color3(background.r * att.r * transmit / π,
+           background.g * att.g * transmit / π,
+           background.b * att.b * transmit / π)
 end
 
 # Lit materials share one accumulation loop so direct lighting can be modulated
@@ -1724,9 +1733,9 @@ end
 const LitMaterial = Union{MeshLambertMaterial, MeshPhongMaterial, MeshStandardMaterial,
                           MeshPhysicalMaterial, MeshToonMaterial}
 
-_fill_response(m::MeshLambertMaterial,  n, fc) = m.color * fc
-_fill_response(m::MeshPhongMaterial,    n, fc) = m.color * fc
-_fill_response(m::MeshToonMaterial,     n, fc) = m.color * fc
+_fill_response(m::MeshLambertMaterial,  n, fc) = _brdf_lambert(m.color * fc)
+_fill_response(m::MeshPhongMaterial,    n, fc) = _brdf_lambert(m.color * fc)
+_fill_response(m::MeshToonMaterial,     n, fc) = _brdf_lambert(m.color * fc)
 _fill_response(m::MeshStandardMaterial, n, fc) = _pbr_ambient(n, m.color, m.metalness, m.roughness, fc)
 @inline function _anisotropic_effective_roughness(roughness, anisotropy)
     strength = clamp(anisotropy, 0.0, 1.0)
@@ -1772,12 +1781,15 @@ function _direct_response(m::MeshToonMaterial, n, v, lc, li, ldir)
         ndotl = max(dotnl, 0.0)
         ceil(ndotl * m.gradient_steps) / m.gradient_steps
     end
-    m.color * lc * (irradiance * li)
+    m.color * lc * (irradiance * li / π)
 end
 
-_fill_response_vertex_color(m::MeshLambertMaterial,  n, fc, albedo::Color3) = albedo * fc
-_fill_response_vertex_color(m::MeshPhongMaterial,    n, fc, albedo::Color3) = albedo * fc
-_fill_response_vertex_color(m::MeshToonMaterial,     n, fc, albedo::Color3) = albedo * fc
+_fill_response_vertex_color(m::MeshLambertMaterial,  n, fc, albedo::Color3) =
+    _brdf_lambert(albedo * fc)
+_fill_response_vertex_color(m::MeshPhongMaterial,    n, fc, albedo::Color3) =
+    _brdf_lambert(albedo * fc)
+_fill_response_vertex_color(m::MeshToonMaterial,     n, fc, albedo::Color3) =
+    _brdf_lambert(albedo * fc)
 _fill_response_vertex_color(m::MeshStandardMaterial, n, fc, albedo::Color3) =
     _pbr_ambient(n, albedo, m.metalness, m.roughness, fc)
 _fill_response_vertex_color(m::MeshPhysicalMaterial, n, fc, albedo::Color3) =
@@ -1817,7 +1829,7 @@ function _direct_response_vertex_color(m::MeshToonMaterial, n, v, lc, li, ldir,
         ndotl = max(dotnl, 0.0)
         ceil(ndotl * m.gradient_steps) / m.gradient_steps
     end
-    albedo * lc * (irradiance * li)
+    albedo * lc * (irradiance * li / π)
 end
 
 # Per-light accumulation, factored into a function barrier so that once a light
@@ -1852,9 +1864,9 @@ end
                            m.attenuation_color.g^volume_path,
                            m.attenuation_color.b^volume_path)
     end
-    Color3(background.r * att.r * transmit,
-           background.g * att.g * transmit,
-           background.b * att.b * transmit)
+    Color3(background.r * att.r * transmit / π,
+           background.g * att.g * transmit / π,
+           background.b * att.b * transmit / π)
 end
 
 @inline _transmission_response_vertex_color(m, n::Vec3, v::Vec3, fc::Color3,
@@ -1886,9 +1898,9 @@ end
                            m.attenuation_color.g^volume_path,
                            m.attenuation_color.b^volume_path)
     end
-    Color3(background.r * att.r * transmit,
-           background.g * att.g * transmit,
-           background.b * att.b * transmit)
+    Color3(background.r * att.r * transmit / π,
+           background.g * att.g * transmit / π,
+           background.b * att.b * transmit / π)
 end
 
 @inline function _sheen_lobe_terms(m::MeshPhysicalMaterial,
@@ -2147,7 +2159,7 @@ function _accumulate_phong_mapped_color(result::Color3, normal::Vec3,
                                         shadow_fn, specular::Color3,
                                         shininess::Float64, albedo::Color3)
     if _is_fill_light(light)
-        return result + albedo * _fill_color(normal, light)
+        return result + _brdf_lambert(albedo * _fill_color(normal, light))
     end
     lc, li, ldir = light_contribution(light, position)
     vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)

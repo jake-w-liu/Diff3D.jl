@@ -147,3 +147,53 @@ end
     point.intensity = 1.5
     @test point.intensity == 1.5
 end
+
+@testset "Diffuse responses use three.js BRDF_Lambert (1/pi)" begin
+    n = Vec3(0.0, 0.0, 1.0)
+    v = Vec3(0.0, 0.0, 1.0)
+    dir = DirectionalLight(position=Vec3(0.0, 0.0, 1.0), intensity=2.0)
+    amb = AmbientLight(intensity=0.5)
+    hemi = HemisphereLight(color=Color3(1.0, 1.0, 1.0), ground_color=Color3(0.0, 0.0, 0.0),
+                           position=Vec3(0.0, 0.0, 1.0))
+    rgb(c) = [c.r, c.g, c.b]
+    albedo = Color3(0.4, 0.6, 0.8)
+    for m in (MeshLambertMaterial(color=albedo), MeshToonMaterial(color=albedo),
+              MeshPhongMaterial(color=albedo, specular=Color3(0.0, 0.0, 0.0)))
+        # Phong keeps a tiny Schlick f90 highlight even with a black specular colour.
+        atol = m isa MeshPhongMaterial ? 1e-3 : 1e-12
+        @test rgb(shade_face(n, v, Vec3(), m, [dir])) ≈ rgb(albedo) .* (2 / π) atol=atol
+        @test rgb(shade_face(n, v, Vec3(), m, [amb])) ≈ rgb(albedo) .* (0.5 / π) atol=1e-12
+        @test rgb(shade_face(n, v, Vec3(), m, [hemi])) ≈ rgb(albedo) ./ π atol=1e-12
+    end
+    # Lambert and a rough dielectric Standard surface share the same radiometric
+    # units (they previously differed by a factor of π).
+    lambert = shade_face(n, v, Vec3(), MeshLambertMaterial(color=albedo), [dir])
+    standard = shade_face(n, v, Vec3(), MeshStandardMaterial(color=albedo, roughness=1.0), [dir])
+    @test 0.9 < standard.r / lambert.r < 1.1
+    # A vertex-coloured face follows the same 1/π scaling.
+    geo = PlaneGeometry(width=1.0, height=1.0)
+    set_attribute!(geo, :color, repeat([0.5, 1.0, 1.0], geo.n_vertices), 3)
+    colors = shade_mesh_faces(geo, Mat4(), MeshLambertMaterial(vertex_colors=true),
+                              AbstractLight[amb], Vec3(0.0, 0.0, 5.0))
+    @test all(c -> isapprox(c.r, 0.5 * 0.5 / π; atol=1e-12), colors)
+end
+
+@testset "Phong specular follows three.js BRDF_BlinnPhong" begin
+    n = Vec3(0.0, 0.0, 1.0)
+    l = normalize(Vec3(0.3, 0.0, 1.0))
+    v = normalize(Vec3(-0.2, 0.1, 1.0))
+    spec = Color3(0.2, 0.3, 0.4)
+    shininess = 40.0
+    c = shade_phong(n, l, v, Color3(1.0, 1.0, 1.0), 1.5, Color3(0.0, 0.0, 0.0), spec, shininess)
+    h = normalize(l + v)
+    dotnl = dot(n, l); dotnh = dot(n, h); dotvh = dot(v, h)
+    fresnel = exp2((-5.55473 * dotvh - 6.98316) * dotvh)
+    expected(f0) = 1.5 * dotnl * (f0 * (1 - fresnel) + fresnel) * 0.25 *
+                   (shininess / 2 + 1) / π * dotnh^shininess
+    @test [c.r, c.g, c.b] ≈ expected.([spec.r, spec.g, spec.b]) rtol=1e-12
+    # Specular rolls off with N·L instead of switching off at the terminator.
+    grazing = normalize(Vec3(1.0, 0.0, 1e-3))
+    g = shade_phong(n, grazing, grazing, Color3(1.0, 1.0, 1.0), 1.0,
+                    Color3(0.0, 0.0, 0.0), Color3(1.0, 1.0, 1.0), 1.0)
+    @test 0.0 < g.r < 1e-3
+end
