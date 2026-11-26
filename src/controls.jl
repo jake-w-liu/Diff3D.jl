@@ -2084,8 +2084,12 @@ function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTr
                        repetitions::Integer=-1,
                        clamp_when_finished::Bool=false,
                        time_scale::Real=1.0)
-    duration = isempty(tracks) ? 0.0 :
-        maximum(isempty(t.times) ? 0.0 : maximum(t.times) for t in tracks)
+    # three.js AnimationClip.resetDuration starts from 0, so tracks that end
+    # before time zero give a zero-length clip instead of a negative one.
+    duration = 0.0
+    for track in tracks
+        isempty(track.times) || (duration = max(duration, last(track.times)))
+    end
     AnimationClip(name, duration, tracks; loop=loop, repetitions=repetitions,
                   clamp_when_finished=clamp_when_finished, time_scale=time_scale)
 end

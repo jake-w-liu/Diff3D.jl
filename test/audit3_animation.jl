@@ -76,3 +76,17 @@ end
     @test _audit3_q(sample_track(track, 1.0)) == [0.0, 0.0, 1.2, 1.6]
     @test _audit3_q(sample_track(track, 2.0)) == [0.0, 0.0, 1.2, 1.6]
 end
+
+@testset "audit3 animation: clip duration from keys starts at zero" begin
+    # three.js AnimationClip.resetDuration (AnimationClip.js:302) starts from
+    # duration = 0, so keys that all lie before zero give a zero-length clip;
+    # node: duration 0, and mixer.update(0.5) leaves position.x = 5.
+    obj = Group()
+    track = NumberKeyframeTrack(obj, "position[x]", [-2.0, -1.0], [3.0, 5.0])
+    clip = AnimationClip("negative", AbstractKeyframeTrack[track])
+    @test clip.duration == 0.0
+    mixer_update!(AnimationMixer(clip), 0.5)
+    @test obj.position.x == 5.0
+    @test AnimationClip("partial", AbstractKeyframeTrack[
+        NumberKeyframeTrack(obj, "position[y]", [-1.0, 0.75], [0.0, 1.0])]).duration == 0.75
+end
