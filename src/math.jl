@@ -925,17 +925,32 @@ function quat_from_rotation_matrix(m::Mat4)
     return Quaternion((m13 + m31) / s, (m23 + m32) / s, 0.25 * s, (m21 - m12) / s)
 end
 
+# Determinant of the upper-left 3×3 block (three.js `Matrix4.determinantAffine`,
+# src/math/Matrix4.js:661-673), evaluated with the same products and order.
+function _mat4_determinant_affine(m::Mat4)
+    e = m.e
+    n11, n21, n31 = e[1], e[2], e[3]
+    n12, n22, n32 = e[5], e[6], e[7]
+    n13, n23, n33 = e[9], e[10], e[11]
+    return n11 * (n22 * n33 - n23 * n32) -
+           n12 * (n21 * n33 - n23 * n31) +
+           n13 * (n21 * n32 - n22 * n31)
+end
+
 """
     mat4_decompose(m) -> (position, quaternion, scale)
 
 Split an affine matrix into translation, rotation, and scale (three.js
-`Matrix4.decompose`). A negative determinant negates the x scale; a singular
-linear part yields an identity rotation and unit scale.
+`Matrix4.decompose`). The bottom row is ignored. A negative determinant of the
+upper-left 3×3 block negates the x scale; a singular 3×3 block yields an
+identity rotation and unit scale.
 """
 function mat4_decompose(m::Mat4)
     e = m.e
     position = Vec3(e[13], e[14], e[15])
-    det = mat4_determinant(m)
+    # three.js r186 Matrix4.decompose (src/math/Matrix4.js:1079) tests the
+    # affine 3×3 determinant, so a projective bottom row cannot flip or zero it.
+    det = _mat4_determinant_affine(m)
     if iszero(det)
         o, z = one(det), zero(det)
         return position, Quaternion(z, z, z, o), Vec3(o, o, o)
