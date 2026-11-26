@@ -326,7 +326,8 @@ function _ies_skip_tilt_data!(scanner::_IESNumericScanner)
         throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
     count = _ies_next_number!(scanner)
     count === nothing && throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
-    (count >= 0.0 && count == floor(count) && count <= Float64(typemax(Int) ÷ 2)) ||
+    # Below 2^62 so that the 2N values to skip still fit in Int.
+    (count >= 0.0 && count == floor(count) && count < 0x1p62) ||
         throw(ArgumentError("parse_ies: tilt-angle count must be a non-negative integer"))
     for _ in 1:(2 * Int(count))
         _ies_next_number!(scanner) === nothing &&

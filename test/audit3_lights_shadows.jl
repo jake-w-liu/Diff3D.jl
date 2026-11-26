@@ -55,6 +55,9 @@ end
     @test_throws "tilt-angle count must be a non-negative integer" parse_ies(
         "TILT=INCLUDE\n1\n2.5\n0 90\n1 1\n1 1000 1 1 1 1 2 0 0 0\n1 1 1\n0\n0\n1\n")
     @test_throws "truncated TILT=INCLUDE data" parse_ies("TILT=INCLUDE\n1\n3\n0 45\n")
+    # 2^62 angles would overflow the 2N skipped values.
+    @test_throws "tilt-angle count must be a non-negative integer" parse_ies(
+        "TILT=INCLUDE\n1\n4611686018427387904\n0 1\n")
     # The detailed docstring documents the public function itself.
     @test occursin("TILT=INCLUDE", string(@doc parse_ies))
 end
