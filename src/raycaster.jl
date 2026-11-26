@@ -522,6 +522,15 @@ end
         Float64(data[b1 + 2]) * w.x + Float64(data[b2 + 2]) * w.y + Float64(data[b3 + 2]) * w.z)
 end
 
+@inline function _hit_interpolate_attribute2(attribute::BufferAttribute, i1::Int, i2::Int,
+                                             i3::Int, w::Vec3{Float64})
+    data = attribute.data
+    stride = attribute.item_size
+    data isa Vector{Float64} && return _hit_interpolate2(data, stride, i1, i2, i3, w)
+    data isa Vector{Float32} && return _hit_interpolate2(data, stride, i1, i2, i3, w)
+    return _hit_interpolate2(data, stride, i1, i2, i3, w)
+end
+
 @inline function _hit_interpolate3(data::AbstractVector, i1::Int, i2::Int,
                                    i3::Int, w::Vec3{Float64})
     b1 = 3i1 - 3
@@ -561,8 +570,10 @@ function _triangle_intersection(obj, distance::Float64, rc::Raycaster,
     n = geo.n_vertices
     uv = length(geo.uvs) >= 2n ? _hit_interpolate2(geo.uvs, 2, i1, i2, i3, weights) : nothing
     uv1_attribute = _uv2_attribute(geo)
+    # Attributes are stored with an abstract element type; the barrier keeps
+    # the interpolated value concrete instead of boxing it.
     uv1 = uv1_attribute === nothing ? nothing :
-          _hit_interpolate2(uv1_attribute.data, uv1_attribute.item_size, i1, i2, i3, weights)
+          _hit_interpolate_attribute2(uv1_attribute, i1, i2, i3, weights)::Vec2{Float64}
     if local_triangle === nothing
         e = m.e
         world_normal = cross(c - b, a - b)
