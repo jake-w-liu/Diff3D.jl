@@ -91,3 +91,33 @@ end
     @test_throws "SVG use references unknown id" _audit3_svg_document(
         """<svg><use href="#missing"/></svg>""")
 end
+
+@testset "SVG stroke lengths follow the element transform" begin
+    # three.js SVGLoader.js:254: strokeWidth * getTransformScale(m), with
+    # getTransformScale = sqrt(|det m|) (SVGLoader.js:2040-2046). Oracle:
+    # scale(2) -> 6 for stroke-width 3; translate/rotate/skewX(20)/scale(1.5,0.5)
+    # -> 0.8660254037844386 for the default width 1.
+    doc = _audit3_svg_document("""
+        <svg width="100" height="100">
+          <g transform="scale(2)">
+            <path d="M10 10 L 30 10" stroke="red" stroke-width="3"
+                  stroke-dasharray="4 2" stroke-dashoffset="1" fill="none"/>
+          </g>
+          <g transform="translate(5,6) rotate(30 10 10) skewX(20) scale(1.5,0.5)">
+            <rect x="1" y="2" width="10" height="5" stroke="red"/>
+          </g>
+          <path d="M0 0 L 1 0" stroke="red" transform="scale(-4, 1)"/>
+        </svg>
+        """)
+    @test doc.paths[1].style.stroke_width == 6.0
+    @test doc.paths[1].style.stroke_dasharray == [8.0, 4.0]
+    @test doc.paths[1].style.stroke_dashoffset == 2.0
+    @test doc.paths[2].style.stroke_width ≈ 0.8660254037844386 rtol=1e-15
+    @test doc.paths[3].style.stroke_width == 2.0
+    # The stroke mesh of the scaled line spans the scaled width: the 40-unit
+    # line from (20,20) to (60,20) is offset by +-3 in y.
+    meshes = svg_stroke_meshes(doc)
+    ys = [get_vertex(meshes[1].geometry, i).y for i in 1:meshes[1].geometry.n_vertices]
+    @test minimum(ys) == 17.0
+    @test maximum(ys) == 23.0
+end

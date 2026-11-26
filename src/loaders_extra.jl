@@ -5223,8 +5223,23 @@ end
 
 function _svg_transform_path(path::SVGPath, t)
     t == _svg_identity_transform() && return path
+    # Stroke lengths are user-space lengths, while the points move to the root
+    # frame. three.js SVGLoader.js:254 scales strokeWidth by
+    # getTransformScale (sqrt|det|, SVGLoader.js:2040-2046); dash lengths
+    # scale the same way.
+    a, b, c, d = t
+    scale = sqrt(abs(a * d - b * c))
+    style = path.style
+    if scale != 1.0
+        style = SVGStyle(style.fill, style.stroke, style.stroke_width * scale,
+                         style.opacity, style.fill_opacity, style.stroke_opacity,
+                         style.stroke_dasharray .* scale,
+                         style.stroke_dashoffset * scale, style.stroke_linecap,
+                         style.stroke_linejoin, style.stroke_miterlimit,
+                         style.fill_rule)
+    end
     return SVGPath(path.tag, [_svg_apply_transform(t, p) for p in path.points],
-                   path.closed, path.style, path.element_id)
+                   path.closed, style, path.element_id)
 end
 
 _svg_style_path(path::SVGPath, style::SVGStyle) =
