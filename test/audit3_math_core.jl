@@ -151,3 +151,33 @@ end
     @test Box3(Vec3(0, 0, 0), Vec3(1, 1, 1)) isa Box3{Int}
     @test Plane(Vec3(0f0, 1f0, 0f0), 2f0) isa Plane{Float32}
 end
+
+@testset "audit3 math-core: degenerate branches keep the general result type" begin
+    # Float32 rotations stay Float32 (1/2 and 1/4 are exact in every format).
+    rotation32 = quat_to_mat4(Quaternion(0.1f0, 0.2f0, 0.3f0, 0.9f0))
+    @test (@inferred quat_from_rotation_matrix(rotation32)) isa Quaternion{Float32}
+    position32, quaternion32, scale32 = @inferred mat4_decompose(rotation32)
+    @test quaternion32 isa Quaternion{Float32} && scale32 isa Vec3{Float32}
+    singular32 = Mat4(ntuple(i -> i in (6, 11, 16) ? 1f0 : 0f0, 16))
+    @test (@inferred mat4_decompose(singular32))[2] ===
+          Quaternion(0f0, 0f0, 0f0, 1f0)
+    # Integer inputs return the floating type on singular and endpoint branches.
+    @test (@inferred mat4_decompose(Mat4{Int}()))[2] === Quaternion(0.0, 0.0, 0.0, 1.0)
+    @test (@inferred mat4_inverse(Mat4(ntuple(_ -> 0, 16)))) ===
+          Mat4(ntuple(_ -> 0.0, 16))
+    @test (@inferred quat_normalize(Quaternion(0, 0, 0, 0))) ===
+          Quaternion(0.0, 0.0, 0.0, 1.0)
+    @test (@inferred lerp(Vec3(1, 2, 3), Vec3(4, 5, 6), 0.0)) === Vec3(1.0, 2.0, 3.0)
+    @test (@inferred lerp(Vec3(1, 2, 3), Vec3(4, 5, 6), 1.0)) === Vec3(4.0, 5.0, 6.0)
+    segment = Line3(Vec3(0, 0, 0), Vec3(2, 0, 0))
+    @test (@inferred line3_closest_point(segment, Vec3(-1, 1, 0))) === Vec3(0.0, 0.0, 0.0)
+    @test (@inferred line3_closest_point_parameter(Line3(Vec3(1, 1, 1), Vec3(1, 1, 1)),
+                                                   Vec3(0, 0, 0))) === 0.0
+    triangle = Triangle(Vec3(0, 0, 0), Vec3(2, 0, 0), Vec3(0, 2, 0))
+    @test (@inferred triangle_normal(triangle)) === Vec3(0.0, 0.0, 1.0)
+    @test (@inferred triangle_area(triangle)) === 2.0
+    @test (@inferred triangle_centroid(Triangle(Vec3(0, 0, 0), Vec3(0, 0, 0),
+                                               Vec3(0, 0, 0)))) === Vec3(0.0, 0.0, 0.0)
+    @test (@inferred triangle_barycentric(triangle, Vec3(1, 1, 0))) ===
+          Vec3(0.0, 0.5, 0.5)
+end

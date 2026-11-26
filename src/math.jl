@@ -105,8 +105,11 @@ end
     # derivative is retained.
     constant_parameter =
         t isa AbstractFloat || t isa Integer || t isa Rational
-    constant_parameter && iszero(t) && return a
-    constant_parameter && t == one(t) && return b
+    # Endpoints convert to the interpolated type so integer endpoints with a
+    # floating parameter do not return a value-dependent type.
+    R = promote_type(typeof(a), typeof(b), typeof(t))
+    constant_parameter && iszero(t) && return convert(R, a)
+    constant_parameter && t == one(t) && return convert(R, b)
     same_sign = (a >= zero(a) && b >= zero(b)) ||
                 (a <= zero(a) && b <= zero(b))
     result = if same_sign
@@ -581,7 +584,8 @@ end
     _primal_value(ForwardDiff.value(value))
 
 @inline function _mat4_zero_like(value)
-    z = zero(value)
+    # Divide so integer input yields the floating type of the general path.
+    z = zero(value) / one(value)
     return Mat4((z, z, z, z,
                  z, z, z, z,
                  z, z, z, z,
@@ -931,18 +935,22 @@ function quat_from_rotation_matrix(m::Mat4)
     m21, m22, m23 = mat4_get(m, 2, 1), mat4_get(m, 2, 2), mat4_get(m, 2, 3)
     m31, m32, m33 = mat4_get(m, 3, 1), mat4_get(m, 3, 2), mat4_get(m, 3, 3)
     trace = m11 + m22 + m33
+    # 1/2 and 1/4 in the element type (exact in every binary float) keep a
+    # Float32 matrix from producing a Float64 quaternion.
+    half = one(trace) / 2
+    quarter = one(trace) / 4
     if trace > 0
-        s = 0.5 / sqrt(trace + 1)
-        return Quaternion((m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, 0.25 / s)
+        s = half / sqrt(trace + 1)
+        return Quaternion((m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, quarter / s)
     elseif m11 > m22 && m11 > m33
         s = 2 * sqrt(1 + m11 - m22 - m33)
-        return Quaternion(0.25 * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s)
+        return Quaternion(quarter * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s)
     elseif m22 > m33
         s = 2 * sqrt(1 + m22 - m11 - m33)
-        return Quaternion((m12 + m21) / s, 0.25 * s, (m23 + m32) / s, (m13 - m31) / s)
+        return Quaternion((m12 + m21) / s, quarter * s, (m23 + m32) / s, (m13 - m31) / s)
     end
     s = 2 * sqrt(1 + m33 - m11 - m22)
-    return Quaternion((m13 + m31) / s, (m23 + m32) / s, 0.25 * s, (m21 - m12) / s)
+    return Quaternion((m13 + m31) / s, (m23 + m32) / s, quarter * s, (m21 - m12) / s)
 end
 
 # Determinant of the upper-left 3×3 block (three.js `Matrix4.determinantAffine`,
@@ -972,7 +980,9 @@ function mat4_decompose(m::Mat4)
     # affine 3×3 determinant, so a projective bottom row cannot flip or zero it.
     det = _mat4_determinant_affine(m)
     if iszero(det)
-        o, z = one(det), zero(det)
+        # Divide so integer input yields the floating type of the general path.
+        o = one(det) / one(det)
+        z = zero(det) / one(det)
         return position, Quaternion(z, z, z, o), Vec3(o, o, o)
     end
     sx = _norm3(e[1], e[2], e[3])
@@ -993,7 +1003,9 @@ function quat_normalize(q::Quaternion)
     # -> Dual(NaN,NaN) while 3-arg preserves 0). Matches normalize() intent.
     if iszero(_primal_value(q.x)) && iszero(_primal_value(q.y)) &&
        iszero(_primal_value(q.z)) && iszero(_primal_value(q.w))
-        return Quaternion(zero(q.x), zero(q.y), zero(q.z), one(q.w))
+        # Divide so integer input yields the floating type of the general path.
+        z = zero(q.x) / one(q.x)
+        return Quaternion(z, z, z, one(q.w) / one(q.w))
     end
     l = _norm4(q.x, q.y, q.z, q.w)
     !_normal_length_needs_scaling(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
@@ -1197,7 +1209,7 @@ Triangle(a::Vec3, b::Vec3, c::Vec3) = Triangle(_promote_vec3s(a, b, c)...)
 @inline function _triangle_axis_edges(a, b, c)
     scale = max(abs(_primal_value(a)), abs(_primal_value(b)), abs(_primal_value(c)))
     # A zero coordinate axis still has edge derivatives when vertices move.
-    iszero(scale) && return b - a, c - a, one(scale)
+    iszero(scale) && return (b - a) / one(scale), (c - a) / one(scale), one(scale)
     ab, ac = b - a, c - a
     return (isfinite(_primal_value(ab)) ? ab / scale : b / scale - a / scale),
            (isfinite(_primal_value(ac)) ? ac / scale : c / scale - a / scale), scale
@@ -1668,7 +1680,7 @@ end
         return (a + b + c) / 3
     end
     scale = max(max(abs(a), abs(b)), abs(c))
-    iszero(scale) && return zero(a)
+    iszero(scale) && return zero(a) / one(a)
     return ((a / scale + b / scale + c / scale) / 3) * scale
 end
 
@@ -1688,7 +1700,7 @@ function triangle_barycentric(tri::Triangle, p::Vec3)
         _vec3_max_abs(tri.c),
     )
     if iszero(scale)
-        z = zero(tri.a.x + p.x)
+        z = zero(tri.a.x + p.x) / one(tri.a.x + p.x)
         return Vec3(z, z, z)
     end
     a = tri.a / scale
@@ -1842,7 +1854,7 @@ end
 function line3_closest_point_parameter(l::Line3, p::Vec3; clamp_to_segment=true)
     direction, direction_scale, nondegenerate =
         _difference_direction_and_scale(l.start, l.finish)
-    nondegenerate || return zero(l.start.x + l.finish.x + p.x)
+    nondegenerate || return zero(p.x) / one(l.start.x + l.finish.x + p.x)
     denominator = dot(direction, direction)
     # A common scale evaluates the projection directly, including its AD
     # derivative at coincident or perpendicular query points.
