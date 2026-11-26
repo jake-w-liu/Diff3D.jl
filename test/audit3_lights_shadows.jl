@@ -257,3 +257,11 @@ end
         "TILT=NONE\n1 1000 1 1 1e5 1 2 0 0 0\n1 1 1\n0\n0\n1\n")
     @test parse_ies(header("1")).candela == [1.0]
 end
+
+@testset "Shadow-map docstrings document the public names" begin
+    # The detailed compute_shadow_map docstring was attached to an internal
+    # helper, so `?compute_shadow_map` showed only the generic one-liner.
+    @test occursin("pcf_radius", string(@doc compute_shadow_map))
+    @test occursin("PointLight", string(@doc compute_shadow_map))
+    @test occursin("cube map", string(@doc ShadowMap))
+end
