@@ -1,4 +1,4 @@
-using Test, Diff3D
+using Test, Diff3D, ForwardDiff
 
 # Reference NEAREST texel lookup from GLES 3.0 §3.8.10 (the sampling rule of
 # WebGL 2, which three.js r186 targets): i = wrap(floor(s * W)),
@@ -113,6 +113,49 @@ end
     @test CanvasTexture(reshape([0.0, 1.0], 1, 2, 1)).filter === :bilinear
 end
 
+@testset "Samplers return one concrete type for Dual coordinates" begin
+    bilinear = Texture(reshape(collect(range(0.0, 1.0; length=48)), 4, 4, 3))
+    nearest = Texture(copy(bilinear.data); filter=:nearest)
+    mipmapped = Texture(rand(8, 8, 3); min_filter=:linear_mipmap_linear)
+    generate_mipmaps!(mipmapped)
+    cube = CubeTexture(ntuple(_ -> mipmapped, 6))
+    dual = ForwardDiff.Dual(0.3, 1.0)
+    D = typeof(dual)
+    for texture in (bilinear, nearest)
+        @test @inferred(sample_texture(texture, dual, 0.4)) isa Color3{D}
+        @test @inferred(sample_texture_linear(texture, 0.6, dual)) isa Color3{D}
+        @test @inferred(Diff3D.sample_texture_channel(texture, dual, dual, 2)) isa D
+        @test @inferred(Diff3D._sample_texture_unit_channel(texture, dual, 0.4, 4)) isa D
+    end
+    # Nearest samples are constants: zero derivative, unchanged value.
+    nearest_sample = sample_texture(nearest, dual, 0.4)
+    @test ForwardDiff.value(nearest_sample.r) == sample_texture(nearest, 0.3, 0.4).r
+    @test ForwardDiff.partials(nearest_sample.r)[1] == 0.0
+    # Magnified, minified, and nearest-mip footprints share one return type.
+    for duv in (0.01, 0.3, 0.9)
+        @test @inferred(sample_texture_auto(mipmapped, 0.3, 0.4,
+                                            ForwardDiff.Dual(duv, 1.0))) isa Color3{D}
+    end
+    nearest_mip = Texture(rand(8, 8, 3); min_filter=:nearest_mipmap_nearest)
+    generate_mipmaps!(nearest_mip)
+    @test @inferred(sample_texture_auto(nearest_mip, 0.3, 0.4, dual)) isa Color3{D}
+    for texture in (mipmapped, bilinear)
+        @test @inferred(sample_texture_aniso(texture, 0.3, 0.4, dual, 0.01)) isa Color3{D}
+        @test @inferred(sample_texture_aniso(texture, 0.3, 0.4, 0.01, dual)) isa Color3{D}
+    end
+    # The zero-direction fallback keeps the direction's scalar type.
+    zero_dual = ForwardDiff.Dual(0.0, 1.0)
+    zero_sample = @inferred(sample_cube(cube, Vec3(zero_dual, zero_dual, zero_dual)))
+    @test zero_sample isa Color3{D}
+    # A zero Dual direction (value 0, nonzero partials) uses the face-center
+    # fallback instead of dividing 0/0 into NaN coordinates.
+    @test ForwardDiff.value(zero_sample.g) == sample_cube(cube, Vec3(0.0, 0.0, 0.0)).g
+    @test ForwardDiff.partials(zero_sample.g)[1] == 0.0
+    @test @inferred(sample_cube(cube, Vec3(dual, 0.2, -0.1))) isa Color3{D}
+    @test sample_cube(cube, Vec3(0.0, 0.0, 0.0)) ==
+          sample_texture(cube.faces[1], 0.5, 0.5)
+end
+
 function _audit3_sampler_allocations(texture, mipmapped, cube)
     sample_texture(texture, 0.3, 0.7)
     sample_texture_linear(texture, 0.3, 0.7)
@@ -156,4 +199,30 @@ end
     end
     @test getfield.(Ref(infinite), fieldnames(MeshPhysicalMaterial)) ==
           getfield.(Ref(off), fieldnames(MeshPhysicalMaterial))
+end
+
+@testset "AD footprints select the same samples as Float64 footprints" begin
+    # ForwardDiff orders tied values by their partials (Dual(0, 1) <= 0 is
+    # false), so discrete choices must use primal values or the primal result
+    # changes with the number type. sample_texture_aniso documents that its
+    # discrete decisions use the Float64 magnitudes.
+    mipmapped = Texture(reshape(collect(range(0.0, 1.0; length=768)), 16, 16, 3);
+                        min_filter=:linear_mipmap_linear)
+    generate_mipmaps!(mipmapped)
+    for (du, dv) in ((0.0, 0.3), (0.3, 0.0), (0.2, 0.2), (0.0, 0.0), (0.05, 0.3))
+        expected = sample_texture_aniso(mipmapped, 0.3, 0.6, du, dv)
+        for (ddu, ddv) in ((ForwardDiff.Dual(du, 1.0), dv), (du, ForwardDiff.Dual(dv, 1.0)),
+                           (ForwardDiff.Dual(du, -1.0), ForwardDiff.Dual(dv, 1.0)))
+            actual = sample_texture_aniso(mipmapped, 0.3, 0.6, ddu, ddv)
+            @test ForwardDiff.value(actual.r) == expected.r
+            @test ForwardDiff.value(actual.g) == expected.g
+            @test ForwardDiff.value(actual.b) == expected.b
+        end
+    end
+    # A footprint exactly one texel wide magnifies for every number type.
+    for duv in (1 / 16, 0.25)
+        expected = sample_texture_auto(mipmapped, 0.3, 0.6, duv)
+        actual = sample_texture_auto(mipmapped, 0.3, 0.6, ForwardDiff.Dual(duv, 1.0))
+        @test ForwardDiff.value(actual.r) == expected.r
+    end
 end

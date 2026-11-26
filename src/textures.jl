@@ -460,6 +460,20 @@ end
 @inline _nearest_texel_column(u, W::Int) = floor(Int, u * W)
 @inline _nearest_texel_row(v, H::Int) = H - 1 - floor(Int, v * H)
 
+# Nearest filtering returns stored constants. Give them the scalar type that
+# linear filtering returns for the same coordinate so a sampler call has one
+# concrete return type for isbits AD numbers such as ForwardDiff.Dual (the
+# constants carry zero partials). Mutable reverse-mode scalars are left as
+# Float64: converting them would record a tape node for every texel read.
+@inline function _texture_filtered_scalar(value, ::Type{T}) where {T}
+    (T === Float64 || !isbitstype(T)) && return value
+    return convert(promote_type(typeof(value), T), value)
+end
+@inline _texture_filtered_color(color::Color3, ::Type{T}) where {T} =
+    Color3(_texture_filtered_scalar(color.r, T),
+           _texture_filtered_scalar(color.g, T),
+           _texture_filtered_scalar(color.b, T))
+
 @inline function _texture_sample_uv(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
     return _sanitize_uv(u), _sanitize_uv(v)
@@ -484,8 +498,10 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
     if filter === :nearest
-        return _texel_data(data, wrap_s, wrap_t, _nearest_texel_column(u, W),
-                           _nearest_texel_row(v, H))
+        return _texture_filtered_color(
+            _texel_data(data, wrap_s, wrap_t, _nearest_texel_column(u, W),
+                        _nearest_texel_row(v, H)),
+            promote_type(typeof(fx), typeof(fy)))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
@@ -545,9 +561,10 @@ function _sample_texture_channel(tex::Texture, u, v, channel::Int, default,
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
     if filter === :nearest
-        return transform(
+        return _texture_filtered_scalar(transform(
             _texel_channel(tex, _nearest_texel_column(u, W),
-                           _nearest_texel_row(v, H), channel, default))
+                           _nearest_texel_row(v, H), channel, default)),
+            promote_type(typeof(fx), typeof(fy)))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
@@ -745,15 +762,22 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     H, W, _ = _checked_texture_data_size(tex, "sample_texture_auto")
     min_filter = _texture_min_filter_symbol(tex.min_filter)
     mag_filter = _texture_mag_filter_symbol(tex.mag_filter)
+    # Only the trilinear blend weight depends on `duv`; every branch returns
+    # the blended element type so the call has one concrete return type.
+    weight_type = typeof(float(duv))
     sz = max(W, H)
     span_raw = abs(duv) * sz
-    if span_raw <= 1.0
-        return _sample_texture_filtered(tex, u, v,
-                                        _texture_mag_filter_texel_filter(mag_filter))
+    # Filter and level choices compare primal values (see sample_texture_aniso).
+    if _primal_value(span_raw) <= 1.0
+        return _texture_filtered_color(
+            _sample_texture_filtered(tex, u, v,
+                                     _texture_mag_filter_texel_filter(mag_filter)),
+            weight_type)
     end
     filter = _texture_min_filter_texel_filter(min_filter)
     (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(min_filter)) &&
-        return _sample_texture_filtered(tex, u, v, filter)
+        return _texture_filtered_color(_sample_texture_filtered(tex, u, v, filter),
+                                       weight_type)
     nlevels = length(tex.mipmaps)
     # Continuous LOD; clamp to [0, nlevels]. Keep AD type for the blend weight.
     # Use log(x)/log(2) rather than log2 so the reverse-mode `ADVar` path (which
@@ -766,13 +790,16 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     # the differentiable path); the AD type stays in `lod`/`frac` for the blend.
     if !_texture_min_filter_blends_mipmaps(min_filter)
         nearest_level = clamp(floor(Int, lod + 0.5), 0, nlevels)
-        return _sample_texture_lod_filtered(tex, u, v, nearest_level, filter)
+        return _texture_filtered_color(
+            _sample_texture_lod_filtered(tex, u, v, nearest_level, filter),
+            weight_type)
     end
     l0 = floor(Int, lod)
     frac = lod - l0                            # fractional blend weight (AD-stable)
     l1 = min(l0 + 1, nlevels)
     c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
-    frac <= 0 && return c0                      # exactly on a level
+    _primal_value(frac) <= 0 &&
+        return _texture_filtered_color(c0, weight_type)  # exactly on a level
     c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter)
     return _stable_color_lerp(c0, c1, frac)
 end
@@ -809,26 +836,32 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
     (isfinite(du) && isfinite(dv)) ||
         throw(ArgumentError("texture anisotropic footprint (du, dv) must be finite"))
     # Footprint extents along each UV axis (keep AD type for the live path).
-    adu = abs(du)
-    adv = abs(dv)
+    adu, adv = promote(abs(du), abs(dv))
+    # Discrete decisions use primal magnitudes: ForwardDiff orders tied values
+    # by their partials (`Dual(0, 1) <= 0` is false), which would otherwise make
+    # the selected probes, and so the primal result, depend on the AD type.
+    primal_u = _primal_value(adu)
+    primal_v = _primal_value(adv)
     # Major/minor extents and the axis the major one lies on.
-    major = max(adu, adv)
-    minor = min(adu, adv)
-    major_is_u = adu >= adv
+    major_is_u = primal_u >= primal_v
+    major = major_is_u ? adu : adv
+    minor = major_is_u ? adv : adu
+    primal_major = major_is_u ? primal_u : primal_v
+    primal_minor = major_is_u ? primal_v : primal_u
 
-    # Discrete decisions below use comparisons / ceil(Int,·), which work directly
-    # on Float64, ForwardDiff.Dual, and ADVar — do NOT do Float64(major) (undefined
-    # for Dual, crashes the differentiable footprint path).
-
-    # No mipmaps: anisotropic LOD selection is meaningless, fall back to bilinear.
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
+    # No mipmaps: anisotropic LOD selection is meaningless, fall back to bilinear
+    # (in the footprint's element type, which the mipmapped branches return).
+    isempty(tex.mipmaps) &&
+        return _texture_filtered_color(
+            sample_texture(tex, u, v),
+            promote_type(typeof(float(du)), typeof(float(dv))))
 
     # Near-isotropic footprint, degenerate footprint, or anisotropy disabled:
     # a single isotropic auto-LOD sample is correct and cheapest.
-    if max_aniso <= 1 || minor <= 0 || major <= 0
+    if max_aniso <= 1 || primal_minor <= 0 || primal_major <= 0
         return sample_texture_auto(tex, u, v, major)
     end
-    ratio = major / minor
+    ratio = primal_major / primal_minor
     if ratio < 1.5
         return sample_texture_auto(tex, u, v, major)
     end
@@ -875,7 +908,15 @@ end
 
 function _cube_face_uv(dir::Vec3)
     ax, ay, az = abs(dir.x), abs(dir.y), abs(dir.z)
-    ax == 0 && ay == 0 && az == 0 && return 1, 0.5, 0.5
+    # Test the primal values: ForwardDiff comparisons also order the partials,
+    # so `Dual(0, 1) == 0` is false and a zero direction would reach the 0/0
+    # face division below.
+    if iszero(_primal_value(ax)) && iszero(_primal_value(ay)) &&
+       iszero(_primal_value(az))
+        # Face center as a constant of the direction's scalar type.
+        center = zero(ax / one(ax)) + 0.5
+        return 1, center, center
+    end
     if ax >= ay && ax >= az
         if dir.x > 0; return 1, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2
         else;         return 2, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2; end
