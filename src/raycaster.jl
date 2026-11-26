@@ -3,9 +3,26 @@
 # Uses the Möller–Trumbore algorithm against world-space triangles.
 # --------------------------------------------------------------------------
 
-"""A picking result. `instance_id` is 1-based for instances and `nothing` otherwise.
-`face_index` identifies a mesh face, point vertex, or line segment's start vertex;
-it is zero for a sprite.
+"""
+A picking result, the counterpart of a three.js `Raycaster` intersection.
+
+- `distance`, `point`: world-space distance from the ray origin and hit point.
+- `object`: the object that was hit.
+- `face_index`: mesh face, point vertex, or line segment's start vertex (all
+  1-based); zero for a sprite.
+- `instance_id`: 1-based instance for an `InstancedMesh`, otherwise `nothing`.
+- `face`: 1-based vertex indices `(a, b, c)` of the hit triangle (three.js
+  `face.a/b/c`); `nothing` for points, lines and sprites.
+- `face_normal`: unit normal of the hit triangle in the object's local space
+  (three.js `face.normal`), from its morphed or posed vertices.
+- `normal`: the geometry's vertex normals interpolated at the hit, in local
+  space and flipped to face the ray origin (three.js `normal`); `nothing` when
+  the geometry has no normals.
+- `uv`, `uv1`: first and second (`:uv2` attribute) texture coordinates
+  interpolated at the hit; a sprite reports its quad `uv`.
+- `barycoord`: barycentric weights of the hit for `face`'s three vertices.
+- `distance_to_ray`: for points, the world-space distance from the vertex to
+  the ray.
 """
 struct Intersection
     distance::Float64
@@ -13,10 +30,21 @@ struct Intersection
     object::AbstractObject3D
     face_index::Int
     instance_id::Union{Nothing,Int}
+    face::Union{Nothing,NTuple{3,Int}}
+    face_normal::Union{Nothing,Vec3{Float64}}
+    normal::Union{Nothing,Vec3{Float64}}
+    uv::Union{Nothing,Vec2{Float64}}
+    uv1::Union{Nothing,Vec2{Float64}}
+    barycoord::Union{Nothing,Vec3{Float64}}
+    distance_to_ray::Union{Nothing,Float64}
 end
 
 Intersection(distance,point,object,face_index) =
     Intersection(distance,point,object,face_index,nothing)
+
+Intersection(distance,point,object,face_index,instance_id) =
+    Intersection(distance,point,object,face_index,instance_id,
+                 nothing,nothing,nothing,nothing,nothing,nothing,nothing)
 
 """
 Möller–Trumbore ray/triangle test. Returns the ray parameter `t > 0` at the
@@ -456,6 +484,107 @@ end
     return side === :front ? :back : :front
 end
 
+# three.js Triangle.getBarycoord: weights of `p` for (a, b, c), zero for a
+# degenerate triangle. Offsets are scaled by an exact power of two first so
+# extreme world coordinates neither overflow nor underflow the dot products.
+function _hit_barycoord(p::Vec3{Float64}, a::Vec3{Float64}, b::Vec3{Float64},
+                        c::Vec3{Float64})
+    v0 = c - a
+    v1 = b - a
+    v2 = p - a
+    magnitude = max(abs(v0.x), abs(v0.y), abs(v0.z), abs(v1.x), abs(v1.y), abs(v1.z))
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    scale = ldexp(1.0, -exponent(magnitude))
+    v0 = v0 * scale
+    v1 = v1 * scale
+    v2 = v2 * scale
+    dot00 = dot(v0, v0)
+    dot01 = dot(v0, v1)
+    dot02 = dot(v0, v2)
+    dot11 = dot(v1, v1)
+    dot12 = dot(v1, v2)
+    denominator = dot00 * dot11 - dot01 * dot01
+    denominator == 0.0 && return Vec3(0.0, 0.0, 0.0)
+    inverse = 1.0 / denominator
+    u = (dot11 * dot02 - dot01 * dot12) * inverse
+    v = (dot00 * dot12 - dot01 * dot02) * inverse
+    return Vec3(1.0 - u - v, v, u)
+end
+
+# three.js Triangle.getInterpolatedAttribute for flat attribute storage.
+@inline function _hit_interpolate2(data::AbstractVector, stride::Int, i1::Int,
+                                   i2::Int, i3::Int, w::Vec3{Float64})
+    b1 = (i1 - 1) * stride
+    b2 = (i2 - 1) * stride
+    b3 = (i3 - 1) * stride
+    return @inbounds Vec2(
+        Float64(data[b1 + 1]) * w.x + Float64(data[b2 + 1]) * w.y + Float64(data[b3 + 1]) * w.z,
+        Float64(data[b1 + 2]) * w.x + Float64(data[b2 + 2]) * w.y + Float64(data[b3 + 2]) * w.z)
+end
+
+@inline function _hit_interpolate3(data::AbstractVector, i1::Int, i2::Int,
+                                   i3::Int, w::Vec3{Float64})
+    b1 = 3i1 - 3
+    b2 = 3i2 - 3
+    b3 = 3i3 - 3
+    return @inbounds Vec3(
+        Float64(data[b1 + 1]) * w.x + Float64(data[b2 + 1]) * w.y + Float64(data[b3 + 1]) * w.z,
+        Float64(data[b1 + 2]) * w.x + Float64(data[b2 + 2]) * w.y + Float64(data[b3 + 2]) * w.z,
+        Float64(data[b1 + 3]) * w.x + Float64(data[b2 + 3]) * w.y + Float64(data[b3 + 3]) * w.z)
+end
+
+# three.js Triangle.getNormal: normalize((c - b) × (a - b)), zero if degenerate.
+@inline _hit_triangle_normal(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64}) =
+    _hit_unit(cross(c - b, a - b))
+
+@inline function _hit_unit(v::Vec3{Float64})
+    length_squared = dot(v, v)
+    length_squared > 0.0 || return Vec3(0.0, 0.0, 0.0)
+    return isfinite(length_squared) ? v / sqrt(length_squared) : normalize(v)
+end
+
+# Hit record for triangle `face` of `geo` (vertices i1, i2, i3), mirroring
+# three.js checkGeometryIntersection (src/objects/Mesh.js). `a, b, c` are the
+# world-space vertices that were intersected and `m` maps the object's local
+# space to world. `local_triangle` holds the local vertices when known;
+# otherwise (posed skins) the local face normal is pulled back from world
+# space through `m`, since (M e₁) × (M e₂) = det(M) M⁻ᵀ (e₁ × e₂).
+function _triangle_intersection(obj, distance::Float64, rc::Raycaster,
+                                face::Int, instance_id, geo::BufferGeometry,
+                                i1::Int, i2::Int, i3::Int, a::Vec3{Float64},
+                                b::Vec3{Float64}, c::Vec3{Float64},
+                                local_triangle, m::Mat4{Float64})
+    o = rc.ray.origin
+    d = rc.ray.direction
+    point = o + d * distance
+    weights = _hit_barycoord(point, a, b, c)
+    n = geo.n_vertices
+    uv = length(geo.uvs) >= 2n ? _hit_interpolate2(geo.uvs, 2, i1, i2, i3, weights) : nothing
+    uv1_attribute = _uv2_attribute(geo)
+    uv1 = uv1_attribute === nothing ? nothing :
+          _hit_interpolate2(uv1_attribute.data, uv1_attribute.item_size, i1, i2, i3, weights)
+    if local_triangle === nothing
+        e = m.e
+        world_normal = cross(c - b, a - b)
+        pulled = Vec3(e[1] * world_normal.x + e[2] * world_normal.y + e[3] * world_normal.z,
+                      e[5] * world_normal.x + e[6] * world_normal.y + e[7] * world_normal.z,
+                      e[9] * world_normal.x + e[10] * world_normal.y + e[11] * world_normal.z)
+        pulled = _mat4_linear_orientation_sign(m) < 0 ? -pulled : pulled
+        face_normal = _hit_unit(pulled)
+    else
+        la, lb, lc = local_triangle
+        face_normal = _hit_triangle_normal(la, lb, lc)
+    end
+    normal = nothing
+    if length(geo.normals) >= 3n
+        interpolated = _hit_interpolate3(geo.normals, i1, i2, i3, weights)
+        local_direction = mat4_transform_direction(mat4_inverse(m), d)
+        normal = dot(interpolated, local_direction) > 0.0 ? -interpolated : interpolated
+    end
+    return Intersection(distance, point, obj, face, instance_id, (i1, i2, i3),
+                        face_normal, normal, uv, uv1, weights, nothing)
+end
+
 @inline function _raycast_morph_positions(rc::Raycaster, obj, geo::BufferGeometry)
     return _object_morph_positions(obj, geo, rc.morph_positions)
 end
@@ -629,7 +758,9 @@ function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         if dist < thr && rc.near <= t <= rc.far
             # Hit location is the closest ray point (three.js Points testPoint);
             # face_index = vertex index.
-            push!(hits, Intersection(t, o + d * t, obj, vi, instance_id))
+            push!(hits, Intersection(t, o + d * t, obj, vi, instance_id,
+                                     nothing, nothing, nothing, nothing, nothing,
+                                     nothing, dist))
         end
     end
     return hits
@@ -687,7 +818,18 @@ function _raycast_sprite!(hits,rc::Raycaster,obj::Sprite,wm::Mat4)
     distance = first_hit === nothing ? second_hit :
                second_hit === nothing ? first_hit : min(first_hit,second_hit)
     if distance !== nothing && rc.near <= distance <= rc.far
-        push!(hits,Intersection(distance,origin+direction*distance,obj,0))
+        point = origin + direction * distance
+        # three.js Sprite.raycast interpolates the corner UVs (0,0), (1,0),
+        # (1,1) over the first triangle, or (0,0), (0,1), (1,1) over (a, d, c).
+        uv = if distance === first_hit
+            w = _hit_barycoord(point, a, b, c)
+            Vec2(w.y + w.z, w.z)
+        else
+            w = _hit_barycoord(point, a, d, c)
+            Vec2(w.z, w.y + w.z)
+        end
+        push!(hits, Intersection(distance, point, obj, 0, nothing, nothing, nothing,
+                                 nothing, uv, nothing, nothing, nothing))
     end
     return hits
 end
@@ -718,7 +860,12 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             c = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i3))
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, o + d * t, obj, fi))
+                local_triangle = (_geometry_vertex(geo, morphed_positions, i1),
+                                  _geometry_vertex(geo, morphed_positions, i2),
+                                  _geometry_vertex(geo, morphed_positions, i3))
+                push!(hits, _triangle_intersection(obj, t, rc, fi, nothing, geo,
+                                                   i1, i2, i3, a, b, c,
+                                                   local_triangle, wm))
             end
         end
     elseif obj isa InstancedMesh
@@ -745,7 +892,12 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
                     c = mat4_transform_point(m, get_vertex(geo, i3))
                     t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, instance_side)
                     if t !== nothing && rc.near <= t <= rc.far
-                        push!(hits, Intersection(t, o + d * t, obj, fi, instance_index))
+                        local_triangle = (get_vertex(geo, i1), get_vertex(geo, i2),
+                                          get_vertex(geo, i3))
+                        push!(hits, _triangle_intersection(obj, t, rc, fi,
+                                                           instance_index, geo,
+                                                           i1, i2, i3, a, b, c,
+                                                           local_triangle, m))
                     end
                 end
             elseif _instanced_point_drawable(obj)
@@ -779,7 +931,9 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             c = posed[i3]
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, o + d * t, obj, fi))
+                push!(hits, _triangle_intersection(obj, t, rc, fi, nothing, geo,
+                                                   i1, i2, i3, a, b, c,
+                                                   nothing, wm))
             end
         end
     elseif obj isa PointsObject

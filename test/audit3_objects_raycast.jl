@@ -154,14 +154,14 @@ end
 end
 
 @testset "Raycast scratch buffers are reused across casts" begin
-    geometry = SphereGeometry(radius=1.0, width_segments=64, height_segments=32)
+    geometry = SphereGeometry(radius=1.0, width_segments=128, height_segments=64)
     mesh = Mesh(geometry, MeshBasicMaterial())
     rc = Raycaster(Vec3(0.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0))
     raycast(rc, mesh)
     if Base.JLOptions().opt_level > 0
-        # Only the returned hit vector is allocated; the per-vertex pruning
-        # codes live in the raycaster (2145 vertices would need >2 KB).
-        @test (@allocated raycast(rc, mesh)) < 1024
+        # Only the returned single-hit vector is allocated; the per-vertex
+        # pruning codes live in the raycaster (8385 vertices would need 8 KB).
+        @test (@allocated raycast(rc, mesh)) < 4096
     end
     @test length(rc.vertex_codes) >= geometry.n_vertices
 end
@@ -184,4 +184,86 @@ end
     rc.ray = Ray(Vec3(0.1, 0.3, 3.0), Vec3(0.0, 0.0, -2.0))
     @test only(raycast(rc, Mesh(PlaneGeometry(), MeshBasicMaterial()))).distance == 3.0
     @test rc.ray.direction == Vec3(0.0, 0.0, -1.0)
+end
+
+audit3_close(a::Vec3, b) = maximum(abs, (a.x - b[1], a.y - b[2], a.z - b[3]))
+audit3_close(a::Vec2, b) = maximum(abs, (a.x - b[1], a.y - b[2]))
+
+@testset "Intersections carry three.js face, normal, uv and barycoord data" begin
+    # three.js checkGeometryIntersection (src/objects/Mesh.js:452-506):
+    # face a/b/c, local face normal, local interpolated normal flipped toward
+    # the ray, uv/uv1 and barycoord. Oracle: the scene below in three.js r186.
+    geometry = BufferGeometry([0.0, 0, 0, 2, 0, 0.5, 0, 1.5, 0, 2, 1.5, 1],
+                              [0.0, 0, 1, 0.2, 0, 1, 0, 0.3, 1, 0.1, 0.1, 0.9],
+                              [0.0, 0, 1, 0, 0, 1, 1, 1], [1, 2, 3, 3, 2, 4], 4, 2)
+    set_attribute!(geometry, :uv2, [0.5, 0.5, 0.75, 0.5, 0.5, 0.25, 0.25, 0.25], 2)
+    mesh = Mesh(geometry, MeshBasicMaterial(side=:double))
+    parent = Group()
+    parent.position = Vec3(0.3, -0.2, 0.1)
+    parent.rotation = Euler(0.2, -0.3, 0.4)
+    parent.scale = Vec3(-1.5, 0.8, 1.2)
+    mesh.position = Vec3(0.1, 0.2, -0.4)
+    mesh.rotation = Euler(-0.1, 0.25, 0.05)
+    mesh.scale = Vec3(1.0, 1.3, 0.7)
+    add!(parent, mesh)
+    rc = Raycaster(Vec3(-0.8, 0.9, 4.0), Vec3(0.05, -0.08, -1.0))
+    hit = only(raycast(rc, parent))
+    @test hit.distance ≈ 4.716591363596191 rtol = 1e-12
+    @test audit3_close(hit.point, (-0.5652129199285951, 0.5243406718857528, -0.695741601428093)) < 1e-12
+    @test hit.face_index == 1 && hit.face == (1, 2, 3)
+    @test audit3_close(hit.face_normal, (-0.24253562503633297, 0.0, 0.9701425001453319)) < 1e-12
+    @test audit3_close(hit.normal, (0.04729889621441521, 0.14699650078531093, 1.0)) < 1e-12
+    @test audit3_close(hit.uv, (0.23649448107207602, 0.4899883359510364)) < 1e-12
+    @test audit3_close(hit.uv1, (0.559123620268019, 0.3775029160122409)) < 1e-12
+    @test audit3_close(hit.barycoord, (0.27351718297688754, 0.23649448107207602, 0.4899883359510364)) < 1e-12
+    @test hit.distance_to_ray === nothing
+
+    # The same data through an instance matrix and a posed skin (identity
+    # bone) equals the plain mesh's.
+    instances = InstancedMesh(geometry, MeshBasicMaterial(side=:double),
+                              [compute_world_matrix(mesh)])
+    instance_hit = only(raycast(rc, instances))
+    @test instance_hit.face == hit.face && instance_hit.instance_id == 1
+    @test audit3_close(instance_hit.face_normal, (-0.24253562503633297, 0.0, 0.9701425001453319)) < 1e-12
+    @test audit3_close(instance_hit.normal, (0.04729889621441521, 0.14699650078531093, 1.0)) < 1e-12
+    @test audit3_close(instance_hit.uv, (0.23649448107207602, 0.4899883359510364)) < 1e-12
+    bone = Bone()
+    skin = SkinnedMesh(geometry, MeshBasicMaterial(side=:double), Skeleton([bone]),
+                       fill((1, 1, 1, 1), 4), fill((1.0, 0.0, 0.0, 0.0), 4))
+    skin.position, skin.rotation, skin.scale = mesh.position, mesh.rotation, mesh.scale
+    remove!(parent, mesh)
+    add!(parent, skin)
+    add!(skin, bone)
+    bind_skeleton!(skin, skin.skeleton)
+    skin_hit = only(raycast(rc, parent))
+    @test skin_hit.distance ≈ 4.716591363596191 rtol = 1e-12
+    @test skin_hit.face == (1, 2, 3)
+    @test audit3_close(skin_hit.face_normal, (-0.24253562503633297, 0.0, 0.9701425001453319)) < 1e-12
+    @test audit3_close(skin_hit.normal, (0.04729889621441521, 0.14699650078531093, 1.0)) < 1e-12
+    @test audit3_close(skin_hit.barycoord, (0.27351718297688754, 0.23649448107207602, 0.4899883359510364)) < 1e-12
+
+    # Points report distanceToRay (src/objects/Points.js:208-238).
+    points = PointsObject(BufferGeometry([0.0, 0, 0, 0.05, 0.02, -1], Float64[],
+                                         Float64[], Int[], 2, 0), PointsMaterial())
+    points.position = Vec3(0.01, 0.0, 0.0)
+    point_hits = raycast(Raycaster(Vec3(0.0, 0.0, 5.0), Vec3(0.0, 0.0, -1.0);
+                                   point_threshold=0.1), points)
+    @test [hit.distance for hit in point_hits] ≈ [5.0, 6.0] atol = 1e-12
+    @test [hit.distance_to_ray for hit in point_hits] ≈ [0.01, 0.0632455532033676] atol = 1e-12
+    @test all(hit -> hit.face === nothing && hit.uv === nothing, point_hits)
+
+    # Sprites report their quad uv (src/objects/Sprite.js:141-213).
+    camera = PerspectiveCamera(fov=pi / 3, aspect=1.0, near=0.1, far=50.0)
+    camera.position = Vec3()
+    camera.target = Vec3(0.0, 0.0, -1.0)
+    sprite = Sprite(SpriteMaterial(rotation=0.3); center=Vec2(0.3, 0.6))
+    sprite.scale = Vec3(1.2, 0.7, 1.0)
+    sprite.position = Vec3(0.1, -0.1, -3.0)
+    for (x, y, distance, uv) in ((0.2, 0.1, 3.0083217912982647, (0.4288647418706904, 0.8307361102271247)),
+                                 (-0.2, -0.2, 3.013303834663873, (0.036539193830153575, 0.5901748758369159)),
+                                 (0.4, -0.3, 3.0413812651491106, (0.4895807545045115, 0.20039520025210983)))
+        sprite_hit = only(raycast(Raycaster(Vec3(), Vec3(x, y, -3.0); camera=camera), sprite))
+        @test sprite_hit.distance ≈ distance rtol = 1e-12
+        @test audit3_close(sprite_hit.uv, uv) < 1e-12
+    end
 end
