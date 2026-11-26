@@ -1674,29 +1674,76 @@ end
 # roughness and texel ranges [0, 1].
 @inline _sheen_roughness(product) = max(product, 1e-4)
 
-# iridescence_fragment.glsl.js evalSensitivity: Fourier-space XYZ response of
-# the optical path difference `opd` (nm) and phase `shift`, in linear sRGB.
-@inline function _eval_sensitivity(opd, shift_r, shift_g, shift_b)
+# iridescence_fragment.glsl.js evalSensitivity with a zero phase shift: the
+# Fourier-space XYZ response of the optical path difference `opd` (nm).
+@inline function _iridescence_sensitivity_xyz(opd)
     phase = 2 * π * opd * 1.0e-9
     p2 = phase * phase
-    x = 5.4856e-13 * sqrt(2 * π * 4.3278e9) * cos(1.6810e6 * phase + shift_r) *
-        exp(-p2 * 4.3278e9)
-    y = 4.4201e-13 * sqrt(2 * π * 9.3046e9) * cos(1.7953e6 * phase + shift_g) *
+    x = 5.4856e-13 * sqrt(2 * π * 4.3278e9) * cos(1.6810e6 * phase) *
+        exp(-p2 * 4.3278e9) +
+        9.7470e-14 * sqrt(2 * π * 4.5282e9) * cos(2.2399e6 * phase) *
+        exp(-4.5282e9 * p2)
+    y = 4.4201e-13 * sqrt(2 * π * 9.3046e9) * cos(1.7953e6 * phase) *
         exp(-p2 * 9.3046e9)
-    z = 5.2481e-13 * sqrt(2 * π * 6.6121e9) * cos(2.2084e6 * phase + shift_b) *
+    z = 5.2481e-13 * sqrt(2 * π * 6.6121e9) * cos(2.2084e6 * phase) *
         exp(-p2 * 6.6121e9)
-    x += 9.7470e-14 * sqrt(2 * π * 4.5282e9) * cos(2.2399e6 * phase + shift_r) *
-         exp(-4.5282e9 * p2)
-    x /= 1.0685e-7
-    y /= 1.0685e-7
-    z /= 1.0685e-7
+    return x / 1.0685e-7, y / 1.0685e-7, z / 1.0685e-7
+end
+
+# evalSensitivity(opd, shift) for shifts that are whole multiples of π, which
+# are the only ones evalIridescence produces (φ12, φ21 and φ23 are each 0 or
+# π): `cos(a + kπ) = ±cos(a)`, so each XYZ component of the unshifted response
+# flips sign with its channel's shift (x, y, z take the r, g, b shifts as in
+# three.js). The result is XYZ_TO_REC709 · xyz.
+@inline function _iridescence_sensitivity(xyz, flip_r::Bool, flip_g::Bool,
+                                          flip_b::Bool)
+    x, y, z = xyz
+    x = flip_r ? -x : x
+    y = flip_g ? -y : y
+    z = flip_b ? -z : z
     return Color3(3.2404542 * x - 1.5371385 * y - 0.4985314 * z,
                   -0.9692660 * x + 1.8760108 * y + 0.0415560 * z,
                   0.0556434 * x - 0.2040259 * y + 1.0572252 * z)
 end
 
+# The base-independent part of evalIridescence(outsideIOR = 1): the film's
+# index, refraction cosine and first-interface reflectance, and the sensitivity
+# at one and two optical path differences. `tir` marks total internal
+# reflection inside the film, where three.js returns a reflectance of 1.
+struct _IridescenceFilm{T<:Real}
+    tir::Bool
+    film_ior::T
+    cos_theta2::T
+    r12::T
+    t121::T
+    phi21_is_pi::Bool
+    s1::NTuple{3,T}
+    s2::NTuple{3,T}
+end
+
+@inline function _iridescence_film(eta2, cos_theta1, thickness)
+    outside_ior = 1.0
+    t = clamp(thickness / 0.03, zero(thickness), one(thickness))
+    film_ior = outside_ior * (1 - t * t * (3 - 2 * t)) + eta2 * (t * t * (3 - 2 * t))
+    sin_theta2_sq = (outside_ior / film_ior)^2 * (1 - cos_theta1 * cos_theta1)
+    cos_theta2_sq = 1 - sin_theta2_sq
+    tir = cos_theta2_sq < 0
+    cos_theta2 = sqrt(max(cos_theta2_sq, zero(cos_theta2_sq)))
+    r0 = ((film_ior - outside_ior) / (film_ior + outside_ior))^2
+    w1 = _schlick_weight(cos_theta1)
+    r12 = r0 * (1 - w1) + w1
+    # φ12 = π for film_ior < outsideIOR, and φ21 = π - φ12.
+    phi21_is_pi = !(film_ior < outside_ior)
+    opd = 2 * film_ior * thickness * cos_theta2
+    s1 = _iridescence_sensitivity_xyz(opd)
+    s2 = _iridescence_sensitivity_xyz(2 * opd)
+    T = promote_type(typeof(film_ior), typeof(cos_theta2), typeof(r12), typeof(s1[1]))
+    return _IridescenceFilm{T}(tir, film_ior, cos_theta2, r12, 1 - r12, phi21_is_pi,
+                               map(x -> convert(T, x), s1), map(x -> convert(T, x), s2))
+end
+
 # Second-interface reflectance of one base-layer channel (iridescence_fragment
-# Fresnel0ToIor / IorToFresnel0 / F_Schlick, with the phase flip φ23).
+# Fresnel0ToIor / IorToFresnel0 / F_Schlick) and whether its phase φ23 is π.
 @inline function _iridescence_base_channel(base_f0, film_ior, cos_theta2)
     f0 = clamp(base_f0, zero(base_f0), 0.9999 * one(base_f0))
     s = sqrt(f0)
@@ -1704,37 +1751,19 @@ end
     r1 = ((base_ior - film_ior) / (base_ior + film_ior))^2
     w = _schlick_weight(cos_theta2)
     r23 = r1 * (1 - w) + w
-    phi23 = base_ior < film_ior ? float(π) : 0.0
-    return r23, phi23
+    return r23, base_ior < film_ior
 end
 
-# evalIridescence(outsideIOR = 1): Belcour-Barla thin-film Airy reflectance of
-# a film of index `eta2` and thickness `thickness` (nm) over a base with
-# Fresnel reflectance `base_f0`, seen at `cos_theta1 = N·V`.
-function _eval_iridescence(eta2, cos_theta1, thickness, base_f0::Color3)
-    outside_ior = 1.0
-    t = clamp(thickness / 0.03, zero(thickness), one(thickness))
-    film_ior = outside_ior * (1 - t * t * (3 - 2 * t)) + eta2 * (t * t * (3 - 2 * t))
-    sin_theta2_sq = (outside_ior / film_ior)^2 * (1 - cos_theta1 * cos_theta1)
-    cos_theta2_sq = 1 - sin_theta2_sq
-    if cos_theta2_sq < 0
-        o = one(cos_theta2_sq)
+# Airy reflectance of the film over a base of Fresnel reflectance `base_f0`.
+@inline function _iridescence_reflectance(film::_IridescenceFilm, base_f0::Color3)
+    if film.tir
+        o = one(film.r12)
         return Color3(o, o, o)
     end
-    cos_theta2 = sqrt(cos_theta2_sq)
-    r0 = ((film_ior - outside_ior) / (film_ior + outside_ior))^2
-    w1 = _schlick_weight(cos_theta1)
-    r12 = r0 * (1 - w1) + w1
-    t121 = 1 - r12
-    phi12 = film_ior < outside_ior ? float(π) : 0.0
-    phi21 = π - phi12
-    r23r, p23r = _iridescence_base_channel(base_f0.r, film_ior, cos_theta2)
-    r23g, p23g = _iridescence_base_channel(base_f0.g, film_ior, cos_theta2)
-    r23b, p23b = _iridescence_base_channel(base_f0.b, film_ior, cos_theta2)
-    opd = 2 * film_ior * thickness * cos_theta2
-    phir = phi21 + p23r
-    phig = phi21 + p23g
-    phib = phi21 + p23b
+    r12, t121 = film.r12, film.t121
+    r23r, p23r = _iridescence_base_channel(base_f0.r, film.film_ior, film.cos_theta2)
+    r23g, p23g = _iridescence_base_channel(base_f0.g, film.film_ior, film.cos_theta2)
+    r23b, p23b = _iridescence_base_channel(base_f0.b, film.film_ior, film.cos_theta2)
     r123r = clamp(r12 * r23r, 1e-5, 0.9999)
     r123g = clamp(r12 * r23g, 1e-5, 0.9999)
     r123b = clamp(r12 * r23b, 1e-5, 0.9999)
@@ -1744,15 +1773,23 @@ function _eval_iridescence(eta2, cos_theta1, thickness, base_f0::Color3)
     rsb = t121 * t121 * r23b / (1 - r123b)
     ir, ig, ib = r12 + rsr, r12 + rsg, r12 + rsb
     cr, cg, cb = rsr - t121, rsg - t121, rsb - t121
-    # Reflectance terms m = 1, 2 (pairs of Diracs).
+    # Reflectance terms m = 1, 2 (pairs of Diracs). The phase φ = φ21 + φ23 is
+    # 0, π or 2π; the second order's 2φ is a multiple of 2π.
     cr *= sr; cg *= sg; cb *= sb
-    s1 = _eval_sensitivity(opd, phir, phig, phib)
+    s1 = _iridescence_sensitivity(film.s1, film.phi21_is_pi ⊻ p23r,
+                                  film.phi21_is_pi ⊻ p23g, film.phi21_is_pi ⊻ p23b)
     ir += cr * 2 * s1.r; ig += cg * 2 * s1.g; ib += cb * 2 * s1.b
     cr *= sr; cg *= sg; cb *= sb
-    s2 = _eval_sensitivity(2 * opd, 2 * phir, 2 * phig, 2 * phib)
+    s2 = _iridescence_sensitivity(film.s2, false, false, false)
     ir += cr * 2 * s2.r; ig += cg * 2 * s2.g; ib += cb * 2 * s2.b
     return Color3(max(ir, zero(ir)), max(ig, zero(ig)), max(ib, zero(ib)))
 end
+
+# evalIridescence(outsideIOR = 1): Belcour-Barla thin-film Airy reflectance of
+# a film of index `eta2` and thickness `thickness` (nm) over a base with
+# Fresnel reflectance `base_f0`, seen at `cos_theta1 = N·V`.
+@inline _eval_iridescence(eta2, cos_theta1, thickness, base_f0::Color3) =
+    _iridescence_reflectance(_iridescence_film(eta2, cos_theta1, thickness), base_f0)
 
 # Lit materials share one accumulation loop so direct lighting can be modulated
 # by a per-light shadow visibility (`shadow_fn(light, position) ∈ [0,1]`). Each
@@ -1945,8 +1982,9 @@ function _physical_surface(m::MeshPhysicalMaterial, t::_PhysicalMappedTerms,
     # the Fresnel term mixes the dielectric and metallic film responses.
     iridescence = t.iridescence_thickness == 0 ? 0.0 : _saturate(t.iridescence)
     irid_fresnel = if iridescence > 0
-        d = _eval_iridescence(m.iridescence_ior, dot_nv, t.iridescence_thickness, f0)
-        mm = _eval_iridescence(m.iridescence_ior, dot_nv, t.iridescence_thickness, albedo)
+        film = _iridescence_film(m.iridescence_ior, dot_nv, t.iridescence_thickness)
+        d = _iridescence_reflectance(film, f0)
+        mm = _iridescence_reflectance(film, albedo)
         Color3(d.r + (mm.r - d.r) * metalness, d.g + (mm.g - d.g) * metalness,
                d.b + (mm.b - d.b) * metalness)
     else
