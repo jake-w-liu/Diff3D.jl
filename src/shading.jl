@@ -81,10 +81,6 @@ end
 
 lerp_scalar(a, b, t) = a + (b - a) * t
 
-"""
-Compute per-face shading for a mesh given scene lights and camera.
-Returns Vector{Color3} with one color per face.
-"""
 # Flat-shading face normal: average of the authored per-vertex normals
 # transformed to world space, so orientation follows the geometry's normals
 # rather than its (possibly inconsistent) triangle winding. Falls back to the
