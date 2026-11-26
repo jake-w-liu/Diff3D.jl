@@ -30,10 +30,6 @@ function _checked_positive_finite_number(value, label::String)
     return x
 end
 
-"""
-Save image as PPM (Portable Pixmap) — no dependencies needed.
-`image` is Array{T, 3} of size (H, W, 3), values in [0,1].
-"""
 @inline function _write_ppm_u8_ascii(io::IO, value::Int)
     if value >= 100
         h = value ÷ 100
@@ -50,6 +46,10 @@ Save image as PPM (Portable Pixmap) — no dependencies needed.
     return nothing
 end
 
+"""
+Save image as PPM (Portable Pixmap) — no dependencies needed.
+`image` is Array{T, 3} of size (H, W, 3), values in [0,1].
+"""
 function save_ppm(filename::String, image::Array{T, 3}) where T
     H, W, C = _image_size_and_channels(image, "PPM image")
     gi = C >= 3 ? 2 : 1   # broadcast channel 1 across RGB for a <3-channel (grayscale) image
