@@ -98,3 +98,100 @@ end
     end
     @test count(isfinite, sm.depth) > 0
 end
+
+# Ray/axis-aligned-box occlusion between a light and a receiver point (slab test).
+function _audit3_ray_hits_box(o::Vec3, p::Vec3, bmin::Vec3, bmax::Vec3)
+    d = p - o
+    t0, t1 = 0.0, 1.0
+    for (oa, da, lo, hi) in ((o.x, d.x, bmin.x, bmax.x), (o.y, d.y, bmin.y, bmax.y),
+                             (o.z, d.z, bmin.z, bmax.z))
+        if abs(da) < 1e-15
+            (oa < lo || oa > hi) && return false
+        else
+            ta = (lo - oa) / da
+            tb = (hi - oa) / da
+            ta > tb && ((ta, tb) = (tb, ta))
+            t0 = max(t0, ta)
+            t1 = min(t1, tb)
+            t0 > t1 && return false
+        end
+    end
+    return t0 < 0.999
+end
+
+function _audit3_point_shadow_scene()
+    scene = Scene()
+    ground = Mesh(PlaneGeometry(width=12.0, height=12.0), MeshStandardMaterial();
+                  receive_shadow=true)
+    ground.rotation = Euler(-π / 2, 0.0, 0.0)
+    add!(scene, ground)
+    boxes = Tuple{Vec3{Float64},Vec3{Float64}}[]
+    for (x, z, s, h) in ((2.0, 0.3, 0.8, 1.5), (-2.2, -0.5, 0.6, 2.5),
+                         (0.4, 2.5, 1.0, 1.0), (-0.7, -2.4, 0.5, 3.0))
+        box = Mesh(BoxGeometry(width=s, height=h, depth=s), MeshStandardMaterial();
+                   cast_shadow=true)
+        box.position = Vec3(x, h / 2, z)
+        add!(scene, box)
+        push!(boxes, (Vec3(x - s / 2, 0.0, z - s / 2), Vec3(x + s / 2, h, z + s / 2)))
+    end
+    return scene, boxes
+end
+
+@testset "Point-light shadows cover every direction (cube map)" begin
+    # three.js renders point-light shadows into a six-face cube
+    # (WebGLShadowMap.js:246-249 WebGLCubeRenderTarget, faces from
+    # `_cubeDirections`/`_cubeUps` at :21-29). A single 90-degree frustum aimed
+    # at the scene centre left casters on the other sides unshadowed: with the
+    # light at the centre, every ray-cast shadowed ground point read as lit.
+    scene, boxes = _audit3_point_shadow_scene()
+    for light_position in (Vec3(0.0, 1.2, 0.0), Vec3(1.0, 0.6, 1.0))
+        light = PointLight(position=light_position, cast_shadow=true)
+        sm = compute_shadow_map(scene, light; resolution=512)
+        @test size(sm.depth) == (512, 6 * 512)
+        shadowed = 0
+        mismatches = 0
+        total = 0
+        for i in 0:59, j in 0:59
+            p = Vec3(-5.95 + 0.2 * i, 0.0, -5.95 + 0.2 * j)
+            any(b -> b[1].x <= p.x <= b[2].x && b[1].z <= p.z <= b[2].z, boxes) &&
+                continue
+            truth = any(b -> _audit3_ray_hits_box(light_position, p, b[1], b[2]),
+                        boxes) ? 0.0 : 1.0
+            total += 1
+            shadowed += truth == 0.0
+            mismatches += shadow_visibility(sm, p) != truth
+        end
+        @test shadowed > total ÷ 10
+        # Only texels straddling a shadow edge may disagree with the ray cast.
+        @test mismatches <= total ÷ 200
+    end
+
+    # The renderer's shadow query (render!(...; shadows=true)) builds the same
+    # cube, sizing reused cache scratch to res × 6res for a point light.
+    point = PointLight(position=Vec3(0.0, 1.2, 0.0), cast_shadow=true)
+    directional = DirectionalLight(position=Vec3(1.0, 4.0, 2.0), cast_shadow=true)
+    meshes = collect_meshes(scene)
+    maps = IdDict{Diff3D.AbstractLight,ShadowMap}()
+    depths = Matrix{Float64}[]
+    for lights in ([directional], [point], [point])
+        query = Diff3D._build_shadow_query_from_drawables!(
+            maps, depths, lights, meshes, InstancedMesh[]; resolution=64)
+        light = only(lights)
+        @test size(only(depths)) == (64, light isa PointLight ? 6 * 64 : 64)
+        @test query(light, Vec3(5.5, 0.0, 5.5)) ==
+              shadow_visibility(compute_shadow_map(scene, light; resolution=64),
+                                Vec3(5.5, 0.0, 5.5))
+    end
+    query = Diff3D._build_shadow_query_from_drawables!(
+        maps, depths, [point], meshes, InstancedMesh[]; resolution=128)
+    # Ground behind the +x and -x boxes (opposite cube faces) is shadowed.
+    for p in (Vec3(3.5, 0.0, 0.3), Vec3(-3.5, 0.0, -0.6))
+        @test _audit3_ray_hits_box(point.position, p, boxes[p.x > 0 ? 1 : 2]...)
+        @test query(point, p) == 0.0
+    end
+    @test query(point, Vec3(0.0, 0.0, -4.5)) == 1.0
+
+    # The WebGL static export still uploads one square texture per light.
+    json = Diff3D._web_shadow_json(scene, point)
+    @test occursin("\"type\":\"pointStatic\",\"size\":64,", json)
+end
