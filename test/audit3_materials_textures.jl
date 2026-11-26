@@ -75,23 +75,17 @@ end
 end
 
 @testset "Default SpriteMaterial blends its opacity" begin
-    # three.js blends sprites by default (SpriteMaterial.js:107), so a
-    # half-opaque default sprite renders like an explicitly transparent one.
-    function render_sprite(material)
-        scene = Scene()
-        scene.background = Color3(1.0, 0.0, 0.0)
-        add!(scene, Sprite(material))
-        camera = PerspectiveCamera()
-        camera.position = Vec3(0.0, 0.0, 2.0)
-        target = RenderTarget(16, 16)
-        render!(target, scene, camera)
-        return target.color[8, 8, :]
-    end
-    default_pixel = render_sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0), opacity=0.5))
-    @test default_pixel == render_sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0),
-                                                        opacity=0.5, transparent=true))
-    # Blue at opacity 0.5 over a red background keeps half of the red.
-    @test default_pixel[1] > 0.1 && default_pixel[3] > 0.1
+    # three.js blends sprites by default (SpriteMaterial.js:107), and
+    # WebGLRenderLists.push sends `transparent` materials to the blended list.
+    # The renderer's blend decision for a default half-opaque sprite therefore
+    # matches an explicitly transparent one (renderer_audit.jl checks that a
+    # blending primitive composites over the background).
+    default_sprite = Sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0), opacity=0.5))
+    @test Diff3D._render_primitive_blends(default_sprite)
+    @test Diff3D._primitive_blend_alpha(default_sprite.material) == 0.5
+    opaque_sprite = Sprite(SpriteMaterial(opacity=0.5, transparent=false))
+    @test !Diff3D._render_primitive_blends(opaque_sprite)
+    @test Diff3D._primitive_blend_alpha(opaque_sprite.material) == 1.0
 end
 
 @testset "DataTexture and DepthTexture default to nearest filtering" begin
