@@ -198,3 +198,90 @@ end
     @test_throws "ASCII STL vertex requires 3 coordinates" load_stl(
         _audit3_file(replace(base, "vertex 0 1 0" => "vertex 0 1"), ".stl"))
 end
+
+@testset "OBJ vertex colours follow three.js OBJLoader" begin
+    # OBJLoader.js parse, case 'v': data.length >= 7 gives
+    # _color.setRGB(r, g, b, SRGBColorSpace). Expected values: three.js r186
+    # OBJLoader.parse color attribute (Float32) for this text.
+    text = "v 0 0 0 1 0.5 0\nv 1 0 0 0.2 1 0\nv 0 1 0 0 0 1\nf 1 2 3\n"
+    geo = load_obj(_audit3_file(text, ".obj"))
+    @test has_attribute(geo, :color)
+    @test isapprox(get_attribute(geo, :color).data,
+                   [1, 0.21404114365577698, 0, 0.03310476616024971, 1, 0, 0, 0, 1];
+                   atol=1e-7)
+    # Corners take the colour of the vertex they reference.
+    geo = load_obj(_audit3_file(replace(text, "f 1 2 3" => "f 3 1 2"), ".obj"))
+    @test isapprox(get_attribute(geo, :color).data,
+                   [0, 0, 1, 1, 0.21404114365577698, 0, 0.03310476616024971, 1, 0];
+                   atol=1e-7)
+    # `v x y z w` is a weight, not a colour; and colours are dropped unless
+    # every vertex has one.
+    @test !has_attribute(load_obj(_audit3_file(
+        "v 0 0 0 1\nv 1 0 0 1\nv 0 1 0 1\nf 1 2 3\n", ".obj")), :color)
+    @test !has_attribute(load_obj(_audit3_file(
+        replace(text, "v 0 1 0 0 0 1" => "v 0 1 0"), ".obj")), :color)
+end
+
+@testset "OBJ backslash continues a line" begin
+    # OBJLoader.js parse: CRLF -> LF, then text.replace(/\\\n/g, '').
+    # three.js r186 positions for this text: one quad fanned into 2 faces.
+    text = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nf 1 2 \\\n3 \\\r\n 4\n"
+    geo = load_obj(_audit3_file(text, ".obj"))
+    @test geo.n_faces == 2
+    @test geo.positions == [0.0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0]
+    # A continuation on the last line joins with nothing.
+    geo = load_obj(_audit3_file("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 \\\n3 \\", ".obj"))
+    @test geo.n_faces == 1
+end
+
+@testset "OBJ keeps file normals when another face lacks vn" begin
+    # OBJLoader.js addFace: a face with vn indices uses addNormal; one without
+    # uses addFaceNormal (cross(C - B, A - B), normalized). Expected values:
+    # three.js r186 normal attribute for this text; face 2 spans (0,0,0),
+    # (1,1,0), (0,0,1), whose normal is (1,-1,0)/sqrt(2).
+    text = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nvn 0 1 0\n" *
+           "f 1//1 2//1 3//1\nf 1 3 5\n"
+    geo = load_obj(_audit3_file(text, ".obj"))
+    s = 0.7071067690849304
+    @test isapprox(geo.normals, [0, 1, 0, 0, 1, 0, 0, 1, 0, s, -s, 0, s, -s, 0, s, -s, 0];
+                   atol=1e-7)
+    # A zero vn is replaced by the face normal only at that corner.
+    geo = load_obj(_audit3_file(replace(text, "f 1 3 5" => "vn 0 0 0\nf 1//2 3//2 5//1"), ".obj"))
+    @test isapprox(geo.normals, [0, 1, 0, 0, 1, 0, 0, 1, 0, s, -s, 0, s, -s, 0, 0, 1, 0];
+                   atol=1e-7)
+end
+
+@testset "PLY property names, uvs and quads follow three.js PLYLoader" begin
+    # PLYLoader.js getAttributeDescriptor: x <- x|px|posx, s <- s|u|texture_u|tx,
+    # t <- t|v|texture_v|ty, red <- red|diffuse_red|r|diffuse_r. handleElement
+    # splits a 4-index face as (0,1,3), (1,2,3). Expected values: three.js r186
+    # PLYLoader.parse of this text (position, uv, index + 1).
+    header = "ply\nformat ascii 1.0\nelement vertex 4\nproperty float px\n" *
+             "property float py\nproperty float pz\nproperty float texture_u\n" *
+             "property float texture_v\nproperty uchar diffuse_red\n" *
+             "property uchar diffuse_green\nproperty uchar diffuse_blue\n" *
+             "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+    rows = "0 0 0 0 0 255 0 0\n1 0 0 1 0 0 255 0\n1 1 1 0.75 1 0 0 255\n" *
+           "0 1 0 0 0.5 255 255 255\n4 0 1 2 3\n"
+    geo = load_ply(_audit3_file(header * rows, ".ply"))
+    @test geo.positions == [0.0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0]
+    @test geo.uvs == [0.0, 0, 1, 0, 0.75, 1, 0, 0.5]
+    @test geo.indices == [1, 2, 4, 2, 3, 4]
+    # Channels of 0 and 255 are unchanged by any sRGB transfer.
+    @test get_attribute(geo, :color).data == [1.0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1]
+
+    # The same rows as binary_little_endian.
+    io = IOBuffer()
+    write(io, replace(header, "ascii" => "binary_little_endian"))
+    for r in ((0, 0, 0, 0, 0, 255, 0, 0), (1, 0, 0, 1, 0, 0, 255, 0),
+              (1, 1, 1, 0.75, 1, 0, 0, 255), (0, 1, 0, 0, 0.5, 255, 255, 255))
+        foreach(x -> write(io, htol(Float32(x))), r[1:5])
+        foreach(x -> write(io, UInt8(x)), r[6:8])
+    end
+    write(io, UInt8(4), htol.(Int32[0, 1, 2, 3])...)
+    bin = load_ply(_audit3_file(take!(io), ".ply"))
+    @test bin.positions == geo.positions
+    @test bin.uvs == geo.uvs
+    @test bin.indices == geo.indices
+    @test get_attribute(bin, :color).data == get_attribute(geo, :color).data
+end
