@@ -119,14 +119,18 @@ function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
     return lp * lv
 end
 
-# Fit the perspective near/far planes to the slab [d-radius, d+radius] actually
-# containing casters/receivers, so NDC depth precision (and the fixed bias)
-# stays meaningful at any light distance. The floor keeps `near` positive (and
-# the near/far ratio bounded) when the light sits inside the bounding sphere.
-function _perspective_shadow_planes(light_pos::Vec3, center::Vec3, radius)
+# Fit the perspective near/far planes to the view-depth slab [zc-radius,
+# zc+radius] of the bounding sphere along the camera `axis` (zc = view depth of
+# the sphere centre), so NDC depth precision (and the fixed bias) stays
+# meaningful at any light distance without clipping casters: every scene point p
+# has view depth dot(p - light, axis) within that slab, even when the camera is
+# not aimed at the centre. The floor keeps `near` positive (and the near/far
+# ratio bounded) when the light sits inside the bounding sphere.
+function _perspective_shadow_planes(light_pos::Vec3, axis::Vec3, center::Vec3, radius)
     d = norm(light_pos - center)
-    near = max(d - radius, max(radius, d) * 1e-2)
-    far = max(d + radius, near * (1 + 1e-6))
+    zc = dot(center - light_pos, axis)
+    near = max(zc - radius, max(radius, d) * 1e-2)
+    far = max(zc + radius, near * (1 + 1e-6))
     return (near, far)
 end
 
@@ -136,7 +140,7 @@ function _light_view_proj(light::SpotLight, center::Vec3, radius)
                 _shadow_direction(light_position, light.target)
     lv = light.rotation_driven ? _view_from_direction(light_position, direction, _safe_up(direction)) :
          mat4_look_at(light_position, light.target, _safe_up(direction))
-    near, far = _perspective_shadow_planes(light_position, center, radius)
+    near, far = _perspective_shadow_planes(light_position, direction, center, radius)
     lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
     return lp * lv
 end
@@ -145,7 +149,7 @@ function _light_view_proj(light::PointLight, center::Vec3, radius)
     light_position = _light_world_position(light)
     dir = _shadow_direction(light_position, center)
     lv = mat4_look_at(light_position, center, _safe_up(dir))
-    near, far = _perspective_shadow_planes(light_position, center, radius)
+    near, far = _perspective_shadow_planes(light_position, dir, center, radius)
     lp = mat4_perspective(π/2, 1.0, near, far)
     return lp * lv
 end

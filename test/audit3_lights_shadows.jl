@@ -58,3 +58,43 @@ end
     # The detailed docstring documents the public function itself.
     @test occursin("TILT=INCLUDE", string(@doc parse_ies))
 end
+
+# A light-space ray test for an axis-aligned square occluder in the plane x = x0
+# (centre (x0, cy, cz), half-size h): the analytic truth for the shadow tests.
+function _audit3_square_occludes(light::Vec3, p::Vec3, x0, cy, cz, h)
+    (p.x - light.x) == 0 && return false
+    t = (x0 - light.x) / (p.x - light.x)
+    0 < t < 1 || return false
+    y = light.y + t * (p.y - light.y)
+    z = light.z + t * (p.z - light.z)
+    return abs(y - cy) <= h && abs(z - cz) <= h
+end
+
+@testset "Spot shadow planes keep off-axis casters near the light" begin
+    # The spot aims along +x while the scene's bounding sphere lies along the
+    # 42 degree diagonal, so the nearest caster has view depth 1.0 but radial
+    # distance 1.35. Fitting near = |centre - light| - radius (1.26) clipped
+    # it away; the view-depth slab keeps it. three.js renders every caster in
+    # the shadow camera frustum (WebGLShadowMap.js renderObject).
+    scene = Scene()
+    occluder = Mesh(PlaneGeometry(width=0.1, height=0.1), MeshStandardMaterial();
+                    cast_shadow=true)
+    occluder.position = Vec3(1.0, 0.9, 0.0)
+    occluder.rotation = Euler(0.0, -π / 2, 0.0)
+    add!(scene, occluder)
+    receiver = Mesh(BoxGeometry(width=2.0, height=2.0, depth=2.0),
+                    MeshStandardMaterial(); receive_shadow=true)
+    receiver.position = Vec3(14.87, 13.38, 0.0)
+    add!(scene, receiver)
+    spot = SpotLight(position=Vec3(0.0, 0.0, 0.0), target=Vec3(10.0, 0.0, 0.0),
+                     angle=π / 3, cast_shadow=true)
+    add!(scene, spot)
+    sm = compute_shadow_map(scene, spot; resolution=512)
+    light = Vec3(0.0, 0.0, 0.0)
+    for p in (Vec3(13.87, 12.483, 0.0), Vec3(13.87, 12.2, 0.3),
+              Vec3(13.87, 13.9, 0.0), Vec3(13.87, 12.483, 0.9))
+        expected = _audit3_square_occludes(light, p, 1.0, 0.9, 0.0, 0.05) ? 0.0 : 1.0
+        @test shadow_visibility(sm, p) == expected
+    end
+    @test count(isfinite, sm.depth) > 0
+end
