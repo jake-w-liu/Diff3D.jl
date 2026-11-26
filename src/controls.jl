@@ -933,17 +933,18 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     return pc
 end
 
-# DragControls: programmatic object selection and world-space drag movement.
+# DragControls: programmatic object selection and world-space drag movement,
+# with a perspective or orthographic camera like three.js.
 mutable struct DragControls
     objects::Vector{AbstractObject3D}
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     selected::Union{Nothing, AbstractObject3D}
     recursive::Bool
     transform_group::Bool
     raycaster::Raycaster
 end
 
-function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::PerspectiveCamera;
+function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::_OrbitCamera;
                       recursive::Bool=true, transform_group::Bool=false,
                       raycaster::Union{Nothing,Raycaster}=nothing)
     rc = raycaster === nothing ?
@@ -1008,9 +1009,10 @@ end
 
 drag_end!(dc::DragControls) = (dc.selected = nothing; dc)
 
-# TransformControls: attach one object and apply translate/rotate/scale deltas.
+# TransformControls: attach one object and apply translate/rotate/scale deltas;
+# like three.js it accepts a perspective or orthographic camera.
 mutable struct TransformControls
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     object::Union{Nothing, AbstractObject3D}
     mode::Symbol
     space::Symbol
@@ -1060,7 +1062,7 @@ function _validate_transform_runtime(tc::TransformControls)
     return nothing
 end
 
-function TransformControls(camera::PerspectiveCamera;
+function TransformControls(camera::_OrbitCamera;
                            mode::Symbol=:translate,
                            space::Symbol=:world,
                            enabled::Bool=true,
@@ -1078,7 +1080,7 @@ function TransformControls(camera::PerspectiveCamera;
                              _transform_validate_snap(scale_snap, "scale"))
 end
 
-TransformControls(camera::PerspectiveCamera,
+TransformControls(camera::_OrbitCamera,
                   object::Union{Nothing, AbstractObject3D},
                   mode::Symbol,
                   space::Symbol) =

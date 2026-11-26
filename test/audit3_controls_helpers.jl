@@ -359,3 +359,26 @@ end
         end
     end
 end
+
+@testset "audit3 DragControls and TransformControls accept orthographic cameras" begin
+    # three.js DragControls/TransformControls take any camera; picking goes
+    # through Raycaster.setFromCamera, which casts parallel rays for an
+    # orthographic camera: NDC x = 0.9 maps to world x = 0.9 * right = 1.8.
+    camera = OrthographicCamera(left=-2.0, right=2.0, top=2.0, bottom=-2.0,
+                                near=0.1, far=100.0)
+    camera.position = Vec3(0.0, 0.0, 5.0)
+    camera.target = Vec3(0.0, 0.0, 0.0)
+    box = Mesh(BoxGeometry(width=0.2, height=0.2, depth=0.2), MeshBasicMaterial())
+    box.position = Vec3(1.8, 0.0, 0.0)
+    dc = DragControls([box], camera)
+    @test dc.camera === camera
+    drag_pick_start!(dc, 0.9, 0.0)
+    @test dc.selected === box
+    drag_pick_start!(dc, 0.5, 0.0)
+    @test dc.selected === nothing
+    tc = TransformControls(camera; mode=:translate)
+    transform_attach!(tc, box)
+    transform_apply!(tc, Vec3(0.5, 0.0, 0.0))
+    @test box.position == Vec3(2.3, 0.0, 0.0)
+    @test TransformControls(camera, box, :rotate, :local).camera === camera
+end
