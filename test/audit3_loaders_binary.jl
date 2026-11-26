@@ -210,6 +210,9 @@ end
     end
     apply!(expected, items1); apply!(expected, items2)
     @test inflate(raw) == expected
+    # Contiguous views take the 8-byte refill; other vectors read bytewise.
+    @test inflate(view(vcat(UInt8[0xaa], raw), 2:(length(raw) + 1))) == expected
+    @test inflate(view(raw, collect(1:length(raw)))) == expected
     @test zlib_inflate(audit3_zlib_wrap(raw, expected)) == expected
     # max_output bounds the result exactly.
     @test inflate(raw; max_output=length(expected)) == expected

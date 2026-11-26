@@ -17,9 +17,11 @@ end
 _BitReader(d::AbstractVector{UInt8}) =
     _BitReader{typeof(d)}(d, firstindex(d), UInt64(0), 0)
 
-# Top up the bit buffer to at least 57 bits, or with all remaining input.
-@inline function _inflate_refill(data::AbstractVector{UInt8}, pos::Int, stop::Int,
-                                 bitbuf::UInt64, bitcnt::Int)
+# Top up the bit buffer to at least 56 bits, or with all remaining input.
+# Bits at and above `bitcnt` are either zero or the low bits of the next
+# unread bytes, so OR-ing those bytes in again is harmless.
+@inline function _inflate_refill_bytes(data::AbstractVector{UInt8}, pos::Int, stop::Int,
+                                       bitbuf::UInt64, bitcnt::Int)
     while bitcnt <= 56 && pos <= stop
         @inbounds bitbuf |= UInt64(data[pos]) << bitcnt
         pos += 1
@@ -27,6 +29,27 @@ _BitReader(d::AbstractVector{UInt8}) =
     end
     return pos, bitbuf, bitcnt
 end
+
+const _InflateDenseBytes =
+    Union{Vector{UInt8},Base.FastContiguousSubArray{UInt8,1,Vector{UInt8}}}
+
+# Contiguous input: one unaligned 8-byte load (inside the input, as
+# pos + 7 <= stop is tested first) claims the whole bytes that fit.
+@inline function _inflate_refill(data::_InflateDenseBytes, pos::Int, stop::Int,
+                                 bitbuf::UInt64, bitcnt::Int)
+    if pos + 7 <= stop && bitcnt <= 56
+        word = GC.@preserve data ltoh(unsafe_load(Ptr{UInt64}(pointer(data, pos))))
+        bitbuf |= word << bitcnt
+        pos += (63 - bitcnt) >> 3
+        bitcnt |= 56
+        return pos, bitbuf, bitcnt
+    end
+    return _inflate_refill_bytes(data, pos, stop, bitbuf, bitcnt)
+end
+
+@inline _inflate_refill(data::AbstractVector{UInt8}, pos::Int, stop::Int,
+                        bitbuf::UInt64, bitcnt::Int) =
+    _inflate_refill_bytes(data, pos, stop, bitbuf, bitcnt)
 
 @noinline _inflate_truncated() = error("DEFLATE stream is truncated")
 
@@ -523,11 +546,49 @@ end
 @inline _png_chunk_is_critical(bytes::AbstractVector{UInt8}, start::Int) =
     @inbounds (bytes[start] & 0x20) == 0
 
+# CRC-32 (PNG Annex D, polynomial 0xedb88320) eight bytes per step
+# ("slicing-by-8"): column k+1 advances a byte through k further zero bytes.
+const _CRC32_SLICE8 = let
+    table = Matrix{UInt32}(undef, 256, 8)
+    for n in 0:255
+        c = UInt32(n)
+        for _ in 1:8
+            c = (c & 0x00000001) != 0 ? 0xedb88320 ⊻ (c >> 1) : c >> 1
+        end
+        table[n + 1, 1] = c
+    end
+    for k in 2:8, n in 1:256
+        prev = table[n, k - 1]
+        table[n, k] = (prev >> 8) ⊻ table[(prev & 0xff) + 1, 1]
+    end
+    table
+end
+
+function _crc32_update_range(crc::UInt32, data::AbstractVector{UInt8},
+                             first::Int, last::Int)
+    checkbounds(data, first:last)
+    t = _CRC32_SLICE8
+    i = first
+    @inbounds while i + 7 <= last
+        lo = crc ⊻ (UInt32(data[i]) | (UInt32(data[i + 1]) << 8) |
+                    (UInt32(data[i + 2]) << 16) | (UInt32(data[i + 3]) << 24))
+        crc = t[(lo & 0xff) + 1, 8] ⊻ t[((lo >> 8) & 0xff) + 1, 7] ⊻
+              t[((lo >> 16) & 0xff) + 1, 6] ⊻ t[(lo >> 24) + 1, 5] ⊻
+              t[Int(data[i + 4]) + 1, 4] ⊻ t[Int(data[i + 5]) + 1, 3] ⊻
+              t[Int(data[i + 6]) + 1, 2] ⊻ t[Int(data[i + 7]) + 1, 1]
+        i += 8
+    end
+    @inbounds while i <= last
+        crc = t[((crc ⊻ data[i]) & 0xff) + 1, 1] ⊻ (crc >> 8)
+        i += 1
+    end
+    return crc
+end
+
 function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
-    c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
-    data_start <= data_stop &&
-        (c = _crc32_update(c, @view bytes[data_start:data_stop]))
+    c = _crc32_update_range(UInt32(0xffffffff), bytes, ctype_start, ctype_start + 3)
+    c = _crc32_update_range(c, bytes, data_start, data_stop)
     return _crc32_finish(c) == expected
 end
 
@@ -589,10 +650,12 @@ function _png_unfilter_row!(raw::Vector{UInt8}, p::Int, q::Int, stride::Int,
     return raw
 end
 
+# Paeth predictor (PNG §9.4) with p = a + b - c, so |p - a| = |b - c|,
+# |p - b| = |a - c| and |p - c| = |a + b - 2c|; selects avoid branches.
 @inline function _paeth(a::UInt8, b::UInt8, c::UInt8)
-    p = Int(a) + Int(b) - Int(c)
-    pa = abs(p - Int(a)); pb = abs(p - Int(b)); pc = abs(p - Int(c))
-    return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
+    ia = Int(a); ib = Int(b); ic = Int(c)
+    pa = abs(ib - ic); pb = abs(ia - ic); pc = abs(ia + ib - 2ic)
+    return ifelse((pa <= pb) & (pa <= pc), a, ifelse(pb <= pc, b, c))
 end
 
 # Unfilter `rows` scanlines of `stride` bytes stored from `raw[start]` (each
