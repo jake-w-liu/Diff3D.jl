@@ -2449,7 +2449,9 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
             z1 = zs[l]; z2 = zs[l + 1]
             n = if offsets[l] == offsets[l + 1]
                 ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
-                Vec3(ey, -ex, 0.0)
+                # Follow the quad winding like three.js computeVertexNormals: a
+                # negative depth turns the wall inside out, normal included.
+                z2 < z1 ? Vec3(-ey, ex, 0.0) : Vec3(ey, -ex, 0.0)
             else
                 # Planar bevel trapezoid: its diagonals span the face plane.
                 normalize(cross(Vec3(q2.x - p1.x, q2.y - p1.y, z2 - z1),
@@ -2618,7 +2620,8 @@ end
             record_id = edge_record_ids[idx]
             count = edge_counts[record_id]
             if count == UInt8(1)
-                edge_features[record_id] = dot(edge_normals[record_id], n) < cosT
+                # three.js EdgesGeometry.js keeps an edge when dot <= thresholdDot.
+                edge_features[record_id] = dot(edge_normals[record_id], n) <= cosT
                 edge_counts[record_id] = UInt8(2)
             else
                 # More than two incident faces make this a non-manifold edge.
@@ -2822,6 +2825,10 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
         c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
                                                cpos_len, geo, anchor,
                                                weld_scale, i3)
+        # three.js EdgesGeometry skips triangles with two welded corners: they
+        # have no area and would add a zero-length segment and a spurious
+        # extra face on their remaining edge.
+        (c1 == c2 || c2 == c3 || c3 == c1) && continue
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
                            edge_counts, edge_features, c1, c2, n, cosT)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
