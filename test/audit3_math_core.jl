@@ -97,3 +97,32 @@ end
     @test (@inferred mat4_look_at(Vec3(1, 2, 3), Vec3(1, 2, 3), Vec3(0, 1, 0))) ==
           mat4_look_at(Vec3(1.0, 2.0, 3.0), Vec3(1.0, 2.0, 3.0), Vec3(0.0, 1.0, 0.0))
 end
+
+function _audit3_view_allocations(camera)
+    view_matrix(camera)
+    return @allocated view_matrix(camera)
+end
+
+@testset "audit3 math-core: parented camera views do not allocate" begin
+    for Camera in (PerspectiveCamera, OrthographicCamera),
+        rotation_driven in (false, true), ignore_parent_scale in (false, true),
+        Parent in (Group, Object3D, Bone)
+        root = Group()
+        root.rotation = Euler(0.3, -0.2, 0.1)
+        parent = Parent()
+        parent.position = Vec3(1.0, -2.0, 0.5)
+        parent.rotation = Euler(0.1, 0.2, 0.3, :ZYX)
+        parent.scale = Vec3(2.0, 0.5, -1.5)
+        add!(root, parent)
+        camera = Camera(; rotation_driven)
+        camera.ignore_parent_scale = ignore_parent_scale
+        camera.rotation = Euler(-0.4, 0.25, 0.05)
+        add!(parent, camera)
+        view = view_matrix(camera)
+        @test view isa Mat4{Float64} && all(isfinite, view.e)
+        if Base.JLOptions().opt_level > 0
+            # Ancestor world matrices and rotations dispatch statically.
+            @test _audit3_view_allocations(camera) == 0
+        end
+    end
+end
