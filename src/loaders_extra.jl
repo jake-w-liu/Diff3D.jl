@@ -2674,23 +2674,11 @@ function _mtl_texture_path(tokens::Vector{SubString{String}})
     return ""
 end
 
-function _mtl_require_values(tokens, count::Int, label::String)
-    length(tokens) >= count + 1 ||
-        error("MTL $label requires $count $(count == 1 ? "value" : "values")")
-end
-
 function _mtl_parse_float(tok, label::String)
     value = tryparse(Float64, tok)
     value === nothing && error("MTL $label must be a number")
     isfinite(value) || error("MTL $label must be finite")
     return value
-end
-
-function _mtl_parse_color(tokens, label::String)
-    _mtl_require_values(tokens, 3, label)
-    return Color3(_mtl_parse_float(tokens[2], "$label red"),
-                  _mtl_parse_float(tokens[3], "$label green"),
-                  _mtl_parse_float(tokens[4], "$label blue"))
 end
 
 @noinline function _mtl_require_values_error(count::Int, label::String)
@@ -2714,19 +2702,9 @@ function _mtl_parse_color_tokens(parts, state, label::String,
                   _mtl_parse_float(b_state[1], blue_label))
 end
 
-_mtl_parse_color_tokens(parts, state, label::String) =
-    _mtl_parse_color_tokens(parts, state, label, string(label, " red"),
-                            string(label, " green"), string(label, " blue"))
-
 function _mtl_parse_scalar_token(parts, state, label::String)
     value_state = _mtl_required_token(parts, state, 1, label)
     return _mtl_parse_float(value_state[1], label)
-end
-
-@inline function _mtl_required_arg(parts, state, message::String)
-    token_state = iterate(parts, state)
-    token_state === nothing && error(message)
-    return token_state
 end
 
 function _mtl_key_is(tag::AbstractString, key::String)
