@@ -991,13 +991,6 @@ function _render_cache_wire_stamp!(cache::RenderCache, H::Int, W::Int, edges::In
     return cache.wire_stamp, first_id
 end
 
-# Collect into a reused vector (clears then refills), avoiding per-frame allocation.
-function _collect_into!(out::Vector, root, pred)
-    empty!(out)
-    traverse(root, o -> pred(o) && push!(out, o))
-    return out
-end
-
 function _collect_meshes_into!(out::Vector{Mesh}, root::AbstractObject3D)
     empty!(out)
     _collect_meshes!(out, root)
@@ -1222,26 +1215,6 @@ function _collect_instanced_worlds_into!(out::Vector{InstancedMesh},
         push!(worlds, compute_world_matrix(obj))
     end
     return out
-end
-
-function _collect_instanced_worlds_visit!(out::Vector{InstancedMesh},
-                                          worlds::Vector{Mat4{Float64}},
-                                          obj::AbstractObject3D,
-                                          parent_world::Mat4{Float64})
-    is_visible(obj) || return nothing
-    children = get_children(obj)
-    if !(obj isa InstancedMesh) && isempty(children)
-        return nothing
-    end
-    world = parent_world * compute_local_matrix(obj)
-    if obj isa InstancedMesh
-        push!(out, obj)
-        push!(worlds, world)
-    end
-    @inbounds for child in children
-        _collect_instanced_worlds_visit!(out, worlds, child, world)
-    end
-    return nothing
 end
 
 function _collect_instanced_into_visit!(out::Vector{InstancedMesh}, obj::AbstractObject3D)
@@ -2317,15 +2290,6 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
     return nothing
 end
 
-function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
-                                 world::Mat4, proj::Mat4, view::Mat4, near;
-                                 xlo::Int=1, xhi::Int=rt.width,
-                                 ylo::Int=1, yhi::Int=rt.height,
-                                 cache::Union{Nothing,RenderCache}=nothing)
-    _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
-                                   xlo, xhi, ylo, yhi, cache)
-end
-
 function _render_wireframe_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
                                            proj::Mat4, view::Mat4, near,
                                            xlo::Int, xhi::Int, ylo::Int, yhi::Int,
@@ -3074,35 +3038,6 @@ function _gaussian_kernel(radius::Integer)
     inv = 1.0 / s
     @inbounds for t in eachindex(k); k[t] *= inv; end
     return k
-end
-
-# Separable Gaussian blur of an H×W×3 image with the given radius. Edges are
-# handled by clamping the sample index (replicate border). Uses one scratch
-# buffer for the horizontal pass, then writes the vertical pass into `out`.
-function _blur_separable(img::AbstractArray, radius::Int)
-    H, W = _rgb_image_size(img, "blur")
-    r = max(radius, 0)
-    r == 0 && return Float64.(img)
-    k = _gaussian_kernel(r)
-    tmp = Array{Float64}(undef, H, W, 3)
-    out = Array{Float64}(undef, H, W, 3)
-    @inbounds for c in 1:3, j in 1:W, i in 1:H           # horizontal
-        acc = 0.0
-        for t in -r:r
-            jj = clamp(j + t, 1, W)
-            acc += k[t + r + 1] * img[i, jj, c]
-        end
-        tmp[i, j, c] = acc
-    end
-    @inbounds for c in 1:3, j in 1:W, i in 1:H           # vertical
-        acc = 0.0
-        for t in -r:r
-            ii = clamp(i + t, 1, H)
-            acc += k[t + r + 1] * tmp[ii, j, c]
-        end
-        out[i, j, c] = acc
-    end
-    return out
 end
 
 """
