@@ -186,3 +186,34 @@ end
     @test all(isfinite, tiny_p.positions)
     @test all(vi -> abs(norm(get_normal(tiny_p, vi)) - 1) < 1e-12, 1:tiny_p.n_vertices)
 end
+
+@testset "audit3 low segment counts are kept as in three.js" begin
+    # CylinderGeometry.js, TorusGeometry.js and TorusKnotGeometry.js only
+    # Math.floor their segment counts, so 1 and 2 are valid; only 0 (0/0 = NaN in
+    # three.js) is raised to 1. Counts below from three.js r186 in node.
+    # new THREE.TorusGeometry(1, 0.4, 1, 2): 6 vertices, 4 triangles.
+    t = TorusGeometry(radius=1.0, tube=0.4, radial_segments=1, tubular_segments=2)
+    @test (t.n_vertices, t.n_faces) == (6, 4)
+    @test _audit3_close(get_vertex(t, 2), Vec3(-1.4, 1.4 * sin(π), 0.0))   # TorusGeometry.js:83-85
+    # new THREE.TorusGeometry(1, 0.4, 3, 2): 12 vertices, 12 triangles.
+    t32 = TorusGeometry(radius=1.0, tube=0.4, radial_segments=3, tubular_segments=2)
+    @test (t32.n_vertices, t32.n_faces) == (12, 12)
+    # new THREE.TorusKnotGeometry(1, 0.4, 2, 2): 9 vertices, 8 triangles.
+    k = TorusKnotGeometry(radius=1.0, tube=0.4, tubular_segments=2, radial_segments=2)
+    @test (k.n_vertices, k.n_faces) == (9, 8)
+    @test (TorusKnotGeometry(tubular_segments=1, radial_segments=1).n_faces) == 2
+    # new THREE.CylinderGeometry(1, 1, 1, 1): 4 side vertices + 2 caps of one
+    # segment (three.js: 3 vertices each, Diff3D: the same since one center).
+    c = CylinderGeometry(radial_segments=1)
+    @test (c.n_vertices, c.n_faces) == (10, 4)
+    # new THREE.CylinderGeometry(1, 0.5, 1, 2, 2): 12 triangles; Diff3D shares one
+    # cap center, so 17 vertices instead of three.js's 19.
+    c2 = CylinderGeometry(radius_top=1.0, radius_bottom=0.5, radial_segments=2,
+                          height_segments=2)
+    @test (c2.n_vertices, c2.n_faces) == (17, 12)
+    # new THREE.ConeGeometry(1, 1, 2): 4 triangles.
+    @test ConeGeometry(radius=1.0, height=1.0, radial_segments=2).n_faces == 4
+    # Zero still clamps to one segment rather than producing NaN geometry.
+    @test TorusGeometry(radial_segments=0).n_faces == 2 * 48
+    @test !any(isnan, CylinderGeometry(radial_segments=0).positions)
+end

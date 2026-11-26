@@ -1273,8 +1273,9 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     radius_top = _geometry_finite_float(radius_top, "CylinderGeometry radius_top")
     radius_bottom = _geometry_finite_float(radius_bottom, "CylinderGeometry radius_bottom")
     height = _geometry_finite_float(height, "CylinderGeometry height")
-    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 3, "CylinderGeometry radial_segments")
+    # CylinderGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so it cannot produce 0/0 = NaN geometry (see PlaneGeometry).
+    radial_segments = _clamp_seg(radial_segments, 1, "CylinderGeometry radial_segments")
     height_segments = _clamp_seg(height_segments, 1, "CylinderGeometry height_segments")
     side_vertices = (height_segments + 1) * (radial_segments + 1)
     top_cap = !open_ended && radius_top > 0
@@ -1450,9 +1451,10 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segme
     theta_start = _geometry_finite_float(theta_start, "TorusGeometry theta_start")
     theta_length = _geometry_finite_float(theta_length, "TorusGeometry theta_length")
     _geometry_check_abs_sum(radius, tube, "TorusGeometry")
-    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
-    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
+    # TorusGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so it cannot produce 0/0 = NaN geometry (see PlaneGeometry).
+    radial_segments = _clamp_seg(radial_segments, 1, "TorusGeometry radial_segments")
+    tubular_segments = _clamp_seg(tubular_segments, 1, "TorusGeometry tubular_segments")
     n_verts = (radial_segments + 1) * (tubular_segments + 1)
     n_faces = 2 * radial_segments * tubular_segments
     position_len, uv_len, index_len =
@@ -1649,10 +1651,10 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     q_val = _geometry_finite_float(
         _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val"),
         "TorusKnotGeometry q_val")
-    # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
-    # a 0/0 = NaN, matching every sibling generator in this file.
-    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusKnotGeometry tubular_segments")
-    radial_segments = _clamp_seg(radial_segments, 3, "TorusKnotGeometry radial_segments")
+    # TorusKnotGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so i/tubular_segments or j/radial_segments cannot be 0/0 = NaN.
+    tubular_segments = _clamp_seg(tubular_segments, 1, "TorusKnotGeometry tubular_segments")
+    radial_segments = _clamp_seg(radial_segments, 1, "TorusKnotGeometry radial_segments")
     n_verts = (tubular_segments + 1) * (radial_segments + 1)
     n_faces = 2 * tubular_segments * radial_segments
     position_len, uv_len, index_len =
