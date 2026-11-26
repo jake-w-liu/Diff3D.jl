@@ -859,10 +859,69 @@ function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
     return _apply_morph_tangents_validated!(out, g, influences, base_attr)
 end
 
+const _MORPH_POSITION_PREFIX = "morphPosition"
+
+# Whether `name` is a `morphPosition<k>` target. The interned symbol's bytes are
+# read in place so bounding volumes on the render path stay allocation-free; a
+# shorter name stops at its NUL terminator, which never matches the prefix.
+function _is_morph_position_name(name::Symbol)
+    ptr = Base.unsafe_convert(Ptr{UInt8}, name)
+    prefix_length = ncodeunits(_MORPH_POSITION_PREFIX)
+    for i in 1:prefix_length
+        unsafe_load(ptr, i) == codeunit(_MORPH_POSITION_PREFIX, i) || return false
+    end
+    i = prefix_length + 1
+    unsafe_load(ptr, i) == 0x00 && return false
+    while true
+        c = unsafe_load(ptr, i)
+        c == 0x00 && return true
+        UInt8('0') <= c <= UInt8('9') || return false
+        i += 1
+    end
+end
+
+function _morph_delta_bounds(attr::BufferAttribute, name::Symbol, n_vertices::Int)
+    _validate_morph_position_attribute(attr, name, n_vertices)
+    delta_box = Box3()::Box3{Float64}
+    @inbounds for vi in 1:n_vertices
+        base = 3vi - 2
+        delta_box = box3_expand_by_point(delta_box, Vec3(
+            _morph_attribute_value(attr, base, name),
+            _morph_attribute_value(attr, base + 1, name),
+            _morph_attribute_value(attr, base + 2, name)))
+    end
+    return delta_box
+end
+
+function _morph_bounding_radius(radius::Float64, center::Vec3{Float64},
+                                g::BufferGeometry, attr::BufferAttribute,
+                                name::Symbol)
+    @inbounds for vi in 1:g.n_vertices
+        base = 3vi - 2
+        p = get_vertex(g, vi) + Vec3(_morph_attribute_value(attr, base, name),
+                                     _morph_attribute_value(attr, base + 1, name),
+                                     _morph_attribute_value(attr, base + 2, name))
+        radius = max(radius, norm(p - center))
+    end
+    return radius
+end
+
 function _compute_bounding_box_validated(g::BufferGeometry)
     box = Box3()
     @inbounds for vi in 1:g.n_vertices
         box = box3_expand_by_point(box, get_vertex(g, vi))
+    end
+    # BufferGeometry.js:671-695 with morphTargetsRelative: Diff3D morph
+    # position targets are deltas, so each one grows the box by the extent of
+    # its deltas.
+    for (name, attr) in g.attributes
+        _is_morph_position_name(name) || continue
+        # Assert per branch so the concrete result is never boxed.
+        delta_box = attr isa BufferAttribute{Float64} ?
+            _morph_delta_bounds(attr, name, g.n_vertices)::Box3{Float64} :
+            _morph_delta_bounds(attr, name, g.n_vertices)::Box3{Float64}
+        box = box3_expand_by_point(box, box.min + delta_box.min)
+        box = box3_expand_by_point(box, box.max + delta_box.max)
     end
     return box
 end
@@ -872,14 +931,26 @@ end
     return _stable_midpoint(a, b)
 end
 
-"""Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
+"""
+    compute_bounding_box(geo)
+
+Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`). Like
+three.js with relative morph targets, each `morphPosition<k>` attribute grows
+the box by the extent of its deltas so every morphed pose stays inside it.
+"""
 function compute_bounding_box(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_box")
     g.n_vertices == 0 && return Box3()
     return _compute_bounding_box_validated(g)
 end
 
-"""Bounding sphere centred on the box centre (three.js `computeBoundingSphere`)."""
+"""
+    compute_bounding_sphere(geo)
+
+Bounding sphere centred on the bounding-box centre (three.js
+`computeBoundingSphere`). Its radius covers every vertex and, for each
+`morphPosition<k>` attribute, every vertex displaced by its full delta.
+"""
 function compute_bounding_sphere(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_sphere")
     g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
@@ -893,6 +964,13 @@ function compute_bounding_sphere(g::BufferGeometry)
     @inbounds for vi in 1:g.n_vertices
         d = get_vertex(g, vi) - center
         radius = max(radius, norm(d))
+    end
+    # BufferGeometry.js:747-773 (box) and 790-816 (radius)
+    for (name, attr) in g.attributes
+        _is_morph_position_name(name) || continue
+        radius = attr isa BufferAttribute{Float64} ?
+            _morph_bounding_radius(radius, center, g, attr, name)::Float64 :
+            _morph_bounding_radius(radius, center, g, attr, name)::Float64
     end
     return BoundingSphere(center, radius)
 end

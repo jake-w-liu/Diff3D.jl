@@ -6,6 +6,20 @@ _audit3_indices(geo) = geo.indices[1:3geo.n_faces]
 _audit3_close(a::Vec3, b::Vec3; atol=1e-12) =
     abs(a.x - b.x) <= atol && abs(a.y - b.y) <= atol && abs(a.z - b.z) <= atol
 
+function _audit3_morph_bounds_fixture()
+    g = BufferGeometry([0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0.5, 2.0], Float64[], Float64[],
+                       [1, 2, 3, 1, 2, 4], 4, 2)
+    set_attribute!(g, :morphPosition0, [0, 0, 0, 0, 0, 0, 0, 3, 0, -0.25, 0, 0.0], 3)
+    set_attribute!(g, :morphPosition1, Float32[-2, 0.5, 0, 0.75, -1, 0, 0, 0, -4, 0, 0, 1.5], 3)
+    # Other morph and generic attributes do not move positions.
+    set_attribute!(g, :morphNormal0, fill(100.0, 12), 3)
+    set_attribute!(g, :color, fill(100.0, 12), 3)
+    return g
+end
+
+_audit3_bounding_sphere_allocations(g) = @allocated compute_bounding_sphere(g)
+_audit3_bounding_box_allocations(g) = @allocated compute_bounding_box(g)
+
 @testset "audit3 primitive triangulation matches three.js" begin
     # PlaneGeometry.js:85-95 emits (a, b, d), (b, c, d): each cell is split along
     # its (ix, iy+1)-(ix+1, iy) diagonal. The previous (a, d, b), (a, c, d)
@@ -297,4 +311,52 @@ end
     @test_throws ArgumentError Diff3D.compute_tangents!(bad_group)
     bad_index = _audit3_tangent_fixture(); bad_index.indices[1] = 99
     @test_throws ArgumentError Diff3D.compute_tangents!(bad_index)
+end
+
+@testset "audit3 bounding volumes include morph position targets" begin
+    # BufferGeometry.js:671-695 and 747-816 with morphTargetsRelative = true
+    # (Diff3D morph positions are deltas). three.js r186 in node, same data:
+    # boundingBox (-2.25, -1, -4)-(1.75, 4.5, 3.5),
+    # boundingSphere center (-0.25, 1.75, -0.25), radius 4.02336923485777.
+    g = _audit3_morph_bounds_fixture()
+    box = compute_bounding_box(g)
+    @test box.min == Vec3(-2.25, -1.0, -4.0)
+    @test box.max == Vec3(1.75, 4.5, 3.5)
+    sphere = compute_bounding_sphere(g)
+    @test sphere.center == Vec3(-0.25, 1.75, -0.25)
+    @test sphere.radius ≈ 4.02336923485777 rtol=1e-15
+    # The box accumulates every target's delta extent, so it holds every pose
+    # with weights in [0, 1]; the sphere, like three.js, covers each target
+    # applied alone at full weight.
+    for weights in ([1.0, 0.0], [0.0, 1.0], [1.0, 1.0])
+        for p in apply_morph_targets(g, weights)
+            @test box.min.x <= p.x <= box.max.x && box.min.y <= p.y <= box.max.y &&
+                  box.min.z <= p.z <= box.max.z
+            sum(weights) == 1 && @test norm(p - sphere.center) <= sphere.radius + 1e-12
+        end
+    end
+    # A malformed morph position target is an error rather than a silently
+    # smaller volume.
+    bad = _audit3_morph_bounds_fixture()
+    set_attribute!(bad, :morphPosition2, [1.0, 2.0, 3.0], 3)
+    @test_throws ArgumentError compute_bounding_box(bad)
+    @test_throws ArgumentError compute_bounding_sphere(bad)
+    # Names that only resemble a morph position target are ignored.
+    plain = BufferGeometry([0, 0, 0, 1, 1, 1.0], Float64[], Float64[], Int[], 2, 0)
+    set_attribute!(plain, :morphPositionX, fill(9.0, 6), 3)
+    set_attribute!(plain, :morphPosition, fill(9.0, 6), 3)
+    @test compute_bounding_box(plain).max == Vec3(1.0, 1.0, 1.0)
+    if Base.JLOptions().opt_level > 0
+        plain_sphere = SphereGeometry()
+        _audit3_bounding_sphere_allocations(plain_sphere)
+        @test _audit3_bounding_sphere_allocations(plain_sphere) == 0
+        # Float64 morph targets take the concrete path.
+        morph = SphereGeometry(width_segments=8, height_segments=4)
+        set_attribute!(morph, :morphPosition0, 0.5 .* morph.positions, 3)
+        set_attribute!(morph, :morphNormal0, zeros(length(morph.positions)), 3)
+        _audit3_bounding_sphere_allocations(morph)
+        @test _audit3_bounding_sphere_allocations(morph) == 0
+        _audit3_bounding_box_allocations(morph)
+        @test _audit3_bounding_box_allocations(morph) == 0
+    end
 end
