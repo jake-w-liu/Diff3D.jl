@@ -181,3 +181,50 @@ end
     @test (@inferred triangle_barycentric(triangle, Vec3(1, 1, 0))) ===
           Vec3(0.0, 0.5, 0.5)
 end
+
+function _audit3_matrix_allocations(a, b, v, p)
+    a * b
+    mat4_transform_vec4(a, v)
+    mat4_transform_point(a, p)
+    return (@allocated a * b) + (@allocated mat4_transform_vec4(a, v)) +
+           (@allocated mat4_transform_point(a, p))
+end
+
+@testset "audit3 math-core: Mat4 fast paths match the checked row products" begin
+    # mat4_multiply/mat4_transform_vec4 skip the per-row cancellation checks
+    # only when every row sum is clearly accurate or an exact structural zero.
+    # Underflowed, cancelling, and non-finite rows must take the checked path.
+    rotation = quat_normalize(Quaternion(0.1, 0.2, 0.3, 0.9))
+    affine = mat4_compose(Vec3(1.0, -2.0, 3.0), rotation, Vec3(1.0, 2.0, 3.0))
+    tiny = mat4_compose(Vec3(0.5, 0.25, -1.0), rotation, Vec3(1e-200, 1e-200, 1e-200))
+    projective = mat4_perspective(0.8, 1.5, 0.1, 100.0) *
+                 mat4_look_at(Vec3(1.0, 2.0, 5.0), Vec3(0.0, 0.0, 0.0),
+                              Vec3(0.0, 1.0, 0.0))
+    cancelling = Mat4((1.0, 1.0, 0.0, 0.0, 1e16, -1e16, 0.0, 0.0,
+                       0.0, 0.0, 1.0, 0.0, -1e16, 1e16, 0.0, 1.0))
+    huge = Mat4(ntuple(i -> i in (1, 6, 11) ? 1e300 : i == 16 ? 1.0 : 0.0, 16))
+    nonfinite = Mat4(Base.setindex(affine.e, Inf, 13))
+    matrices = (affine, tiny, projective, cancelling, huge, nonfinite, Mat4())
+    vectors = (Vec4(1.0, 2.0, 3.0, 1.0), Vec4(1.0, 2.0, 3.0, 0.0),
+               Vec4(1e-200, 1e-200, 1e-200, 0.0), Vec4(1.0, 1.0, 1e-30, 1.0),
+               Vec4(1e300, -1e300, 0.0, 1.0))
+    for a in matrices, b in matrices
+        @test isequal((a * b).e, Diff3D._mat4_multiply_checked(a, b).e)
+    end
+    for m in matrices, v in vectors
+        fast = mat4_transform_vec4(m, v)
+        checked = Diff3D._mat4_transform_vec4_checked(m, v)
+        @test isequal((fast.x, fast.y, fast.z, fast.w),
+                      (checked.x, checked.y, checked.z, checked.w))
+    end
+    # tiny*tiny forms 1e-400 products that underflow to zero although both
+    # factors are nonzero, so it must not be treated as a structural zero.
+    @test !last(Diff3D._mat4_transform_vec4_fast(
+        tiny, Vec4(tiny.e[1], tiny.e[2], tiny.e[3], tiny.e[4])))
+    @test isequal((tiny * tiny).e, Diff3D._mat4_multiply_checked(tiny, tiny).e)
+    if Base.JLOptions().opt_level > 0
+        @test _audit3_matrix_allocations(affine, projective,
+                                         Vec4(1.0, 2.0, 3.0, 1.0),
+                                         Vec3(1.0, 2.0, 3.0)) == 0
+    end
+end

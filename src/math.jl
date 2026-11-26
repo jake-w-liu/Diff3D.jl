@@ -61,6 +61,8 @@ function dot(a::Vec3, b::Vec3)
     product_z = a.z * b.z
     result = product_x + product_y + product_z
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(max(abs(product_x), abs(product_y)), abs(product_z)), 3) &&
        isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
        isfinite(b.x) && isfinite(b.y) && isfinite(b.z) &&
        _float_dot_needs_fallback(
@@ -150,6 +152,8 @@ function dot(a::Vec2, b::Vec2)
     product_y = a.y * b.y
     result = product_x + product_y
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(product_x), abs(product_y)), 2) &&
        isfinite(a.x) && isfinite(a.y) &&
        isfinite(b.x) && isfinite(b.y) &&
        _float_dot_needs_fallback(
@@ -261,13 +265,31 @@ end
 end
 
 function mat4_multiply(a::Mat4, b::Mat4)
+    be = b.e
+    column1 = Vec4(be[1], be[2], be[3], be[4])
+    column2 = Vec4(be[5], be[6], be[7], be[8])
+    column3 = Vec4(be[9], be[10], be[11], be[12])
+    column4 = Vec4(be[13], be[14], be[15], be[16])
+    # Branch-free products first; any entry that is not clearly accurate sends
+    # the whole product through the per-entry cancellation checks.
+    c1, ok1 = _mat4_transform_vec4_fast(a, column1)
+    c2, ok2 = _mat4_transform_vec4_fast(a, column2)
+    c3, ok3 = _mat4_transform_vec4_fast(a, column3)
+    c4, ok4 = _mat4_transform_vec4_fast(a, column4)
+    (ok1 & ok2 & ok3 & ok4) || return _mat4_multiply_checked(a, b)
+    T = promote_type(eltype(a.e), eltype(b.e))
+    # Build the tuple directly so repeated products remain allocation-free.
+    return Mat4{T}((c1.x, c1.y, c1.z, c1.w, c2.x, c2.y, c2.z, c2.w,
+                    c3.x, c3.y, c3.z, c3.w, c4.x, c4.y, c4.z, c4.w))
+end
+
+@noinline function _mat4_multiply_checked(a::Mat4, b::Mat4)
     T = promote_type(eltype(a.e), eltype(b.e))
     be = b.e
     column1 = Vec4(be[1], be[2], be[3], be[4])
     column2 = Vec4(be[5], be[6], be[7], be[8])
     column3 = Vec4(be[9], be[10], be[11], be[12])
     column4 = Vec4(be[13], be[14], be[15], be[16])
-    # Build the tuple directly so repeated products remain allocation-free.
     return Mat4{T}((
         _mat4_row_dot(a, 1, column1),
         _mat4_row_dot(a, 2, column1),
@@ -290,12 +312,53 @@ end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
 function mat4_transform_vec4(m::Mat4, v::Vec4)
+    result, accurate = _mat4_transform_vec4_fast(m, v)
+    accurate && return result
+    return _mat4_transform_vec4_checked(m, v)
+end
+
+@noinline function _mat4_transform_vec4_checked(m::Mat4, v::Vec4)
     return Vec4(
         _mat4_row_dot(m, 1, v),
         _mat4_row_dot(m, 2, v),
         _mat4_row_dot(m, 3, v),
         _mat4_row_dot(m, 4, v),
     )
+end
+
+# The four row sums of `_mat4_row_dot`, evaluated identically, plus whether
+# every float sum passes `_float_dot_clearly_accurate`. When it does,
+# `_mat4_row_dot` would return these same sums, so callers can skip its
+# per-row checks; otherwise they call it for the exact fallback decision.
+@inline function _mat4_transform_vec4_fast(m::Mat4, v::Vec4)
+    x, okx = _mat4_row_sum(m, 1, v)
+    y, oky = _mat4_row_sum(m, 2, v)
+    z, okz = _mat4_row_sum(m, 3, v)
+    w, okw = _mat4_row_sum(m, 4, v)
+    return Vec4(x, y, z, w), okx & oky & okz & okw
+end
+
+@inline function _mat4_row_sum(m::Mat4, row::Int, v::Vec4)
+    m1 = mat4_get(m, row, 1)
+    m2 = mat4_get(m, row, 2)
+    m3 = mat4_get(m, row, 3)
+    m4 = mat4_get(m, row, 4)
+    product1 = m1 * v.x
+    product2 = m2 * v.y
+    product3 = m3 * v.z
+    product4 = m4 * v.w
+    result = product1 + product2 + product3 + product4
+    result isa AbstractFloat || return result, true
+    largest = max(max(abs(product1), abs(product2)),
+                  max(abs(product3), abs(product4)))
+    # All-zero products need the fallback only when some factor pair is
+    # nonzero (an underflowed product); structural zeros such as the bottom
+    # row of an affine matrix are exact.
+    structural_zero = iszero(largest) &
+        !((!iszero(m1) & !iszero(v.x)) | (!iszero(m2) & !iszero(v.y)) |
+          (!iszero(m3) & !iszero(v.z)) | (!iszero(m4) & !iszero(v.w)))
+    return result,
+           _float_dot_clearly_accurate(result, largest, 4) | structural_zero
 end
 
 @inline function _mat4_row_dot(m::Mat4, row::Int, v::Vec4)
@@ -309,6 +372,9 @@ end
     product4 = m4 * v.w
     result = product1 + product2 + product3 + product4
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(max(abs(product1), abs(product2)),
+                       max(abs(product3), abs(product4))), 4) &&
        isfinite(m1) && isfinite(m2) &&
        isfinite(m3) && isfinite(m4) &&
        isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(v.w) &&
@@ -1135,6 +1201,8 @@ function plane_distance_to_point(p::Plane, pt::Vec3)
     projected = dot(p.normal, pt)
     result = projected + p.constant
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(projected), abs(p.constant)), 2) &&
        isfinite(p.normal.x) && isfinite(p.normal.y) &&
        isfinite(p.normal.z) && isfinite(p.constant) &&
        isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z) &&
@@ -1416,6 +1484,14 @@ end
     )
 end
 
+# Cheap sufficient test that `_float_dot_needs_fallback` is false: a finite
+# sum larger than its cancellation bound cannot need the fallback (when the
+# largest product is zero the sum is zero and this test fails). Evaluating it
+# before the input finiteness checks leaves each fallback decision unchanged.
+@inline _float_dot_clearly_accurate(result::T, largest_product,
+                                    term_count::Int) where {T<:AbstractFloat} =
+    isfinite(result) & (abs(result) > largest_product * ((2 * term_count) * eps(T)))
+
 @inline function _float_dot_needs_fallback(
         result::T, largest_product, has_nonzero_input_product::Bool,
         term_count::Int) where {T<:AbstractFloat}
@@ -1435,6 +1511,8 @@ end
     product2 = c * d
     result = product1 - product2
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(product1), abs(product2)), 2) &&
        isfinite(a) && isfinite(b) && isfinite(c) && isfinite(d) &&
        _float_dot_needs_fallback(
            result,
@@ -1448,7 +1526,7 @@ end
     return result
 end
 
-@inline function _stable_float_product_difference(a, b, c, d)
+@noinline function _stable_float_product_difference(a, b, c, d)
     a, b, c, d = promote(a, b, c, d)
     product1 = a * b
     product2 = c * d
@@ -1476,7 +1554,7 @@ end
     return _float_representation_value(difference)
 end
 
-@inline function _stable_float_dot(a::Vec3, b::Vec3)
+@noinline function _stable_float_dot(a::Vec3, b::Vec3)
     ax, ay, az, bx, by, bz = promote(
         a.x, a.y, a.z, b.x, b.y, b.z)
     product_x = ax * bx
@@ -1515,7 +1593,7 @@ end
             _float_zero_representation(typeof(ax))))
 end
 
-@inline function _stable_float_dot(a::Vec2, b::Vec2)
+@noinline function _stable_float_dot(a::Vec2, b::Vec2)
     ax, ay, bx, by = promote(a.x, a.y, b.x, b.y)
     product_x = ax * bx
     product_y = ay * by
@@ -1565,12 +1643,12 @@ end
     return _float_representation_dot4(matrix_row, vector)
 end
 
-@inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
+@noinline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
     return _float_representation_value(
         _stable_float_mat4_row_representation(m, row, v))
 end
 
-@inline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)
+@noinline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)
     homogeneous = Vec4(p.x, p.y, p.z, one(p.x))
     x = _stable_float_mat4_row_representation(m, 1, homogeneous)
     y = _stable_float_mat4_row_representation(m, 2, homogeneous)
@@ -1584,7 +1662,7 @@ end
     return result, w.nonzero
 end
 
-@inline function _stable_float_plane_distance(p::Plane, pt::Vec3)
+@noinline function _stable_float_plane_distance(p::Plane, pt::Vec3)
     nx, ny, nz, constant, x, y, z = promote(
         p.normal.x, p.normal.y, p.normal.z, p.constant,
         pt.x, pt.y, pt.z,
