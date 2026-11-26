@@ -7388,10 +7388,24 @@ function _svg_transform_from_attrs(attrs::AbstractDict)
     return transform
 end
 
-function _svg_arc_flag(value::Float64, name)
-    value == 0.0 && return false
-    value == 1.0 && return true
-    error("SVG arc $name flag must be 0 or 1")
+const _SVG_NUMBER_TOKEN_RE =
+    r"^[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?$"
+
+# The path grammar makes each arc flag the single character `0` or `1`, so
+# a flag may run straight into the next value ("a1 1 0 0110 10" has flags 0
+# and 1 and endpoint (10, 10)). Consume the flag character and leave any
+# remaining characters of the lexed number as the next token.
+function _svg_take_arc_flag!(tokens::Vector{String}, i::Int, name)
+    i <= length(tokens) && !_svg_is_command(tokens[i]) ||
+        error("SVG path command A is missing numbers")
+    token = tokens[i]
+    flag = token[1]
+    (flag == '0' || flag == '1') || error("SVG arc $name flag must be 0 or 1")
+    ncodeunits(token) == 1 && return flag == '1', i + 1
+    rest = token[2:end]
+    occursin(_SVG_NUMBER_TOKEN_RE, rest) || error("SVG arc $name flag must be 0 or 1")
+    tokens[i] = rest
+    return flag == '1', i
 end
 
 function _svg_arc_parameters(
@@ -7691,8 +7705,8 @@ function _svg_path_points(raw::AbstractString, segments::Int)
                 rx = read_number(cmd)
                 ry = read_number(cmd)
                 rotation = read_number(cmd)
-                large_arc = _svg_arc_flag(read_number(cmd), "large-arc")
-                sweep = _svg_arc_flag(read_number(cmd), "sweep")
+                large_arc, i = _svg_take_arc_flag!(tokens, i, "large-arc")
+                sweep, i = _svg_take_arc_flag!(tokens, i, "sweep")
                 stop = read_point(relative, cmd)
                 append!(active, _svg_arc_points(current, rx, ry, rotation,
                                                 large_arc, sweep, stop,
