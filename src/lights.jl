@@ -136,21 +136,36 @@ function _ies_profile_from_owned(a::Vector{Float64}, c::Vector{Float64})
     return IESProfile(a, c, Val(:owned))
 end
 
+# Plain real angles are evaluated in Float64. Other `Real` subtypes (ForwardDiff
+# duals, reverse-mode `ADVar`) stay in their own type so derivatives with respect
+# to the angle flow through the interpolation instead of being truncated by a
+# `Float64` conversion.
+@inline _ies_angle(x::Union{AbstractFloat,Integer,Rational,AbstractIrrational}) =
+    Float64(x)
+@inline _ies_angle(x::Real) = x
+
+# Tabulated constants returned for a differentiable angle keep the angle's type
+# (with a zero derivative) so callers receive one scalar type on every branch.
+@inline _ies_value(::Float64, value::Float64) = value
+@inline _ies_value(θ, value::Float64) = value + zero(θ)
+
 """
-    ies_candela(profile, angle_deg) -> Float64
+    ies_candela(profile, angle_deg)
 
 Linearly interpolate the candela value at a vertical angle (degrees), clamping
-to the tabulated endpoints outside `[angles[1], angles[end]]`.
+to the tabulated endpoints outside `[angles[1], angles[end]]`. Plain real angles
+return a `Float64`; differentiable angle types (ForwardDiff duals, `ADVar`)
+return the same type, carrying the derivative of the interpolation.
 """
 function ies_candela(profile::IESProfile, angle_deg::Real)
     a = getfield(profile, :angles)
     c = getfield(profile, :candela)
     n = length(a)
-    n == 1 && return c[1]
-    θ = Float64(angle_deg)
-    θ <= a[1] && return c[1]
-    θ >= a[n] && return c[n]
-    isnan(θ) && return c[n]
+    θ = _ies_angle(angle_deg)
+    n == 1 && return _ies_value(θ, c[1])
+    θ <= a[1] && return _ies_value(θ, c[1])
+    θ >= a[n] && return _ies_value(θ, c[n])
+    isnan(θ) && return _ies_value(θ, c[n])
     # Angles are strictly ascending; binary search keeps per-shading IES lookups
     # logarithmic for dense measured profiles.
     i = searchsortedfirst(a, θ)
@@ -161,15 +176,16 @@ function ies_candela(profile::IESProfile, angle_deg::Real)
 end
 
 """
-    ies_intensity(profile, angle_deg) -> Float64
+    ies_intensity(profile, angle_deg)
 
 Normalized luminous-intensity multiplier in `[0,1]` (candela divided by the
 profile peak) at a vertical angle in degrees. Used to modulate a light's
-intensity by its measured photometric distribution.
+intensity by its measured photometric distribution. The result type follows
+[`ies_candela`](@ref).
 """
 function ies_intensity(profile::IESProfile, angle_deg::Real)
     max_candela = getfield(profile, :max_candela)
-    max_candela <= 0 && return 0.0
+    max_candela <= 0 && return _ies_value(_ies_angle(angle_deg), 0.0)
     return ies_candela(profile, angle_deg) / max_candela
 end
 
