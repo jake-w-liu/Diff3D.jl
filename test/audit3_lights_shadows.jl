@@ -195,3 +195,48 @@ end
     json = Diff3D._web_shadow_json(scene, point)
     @test occursin("\"type\":\"pointStatic\",\"size\":64,", json)
 end
+
+function _audit3_shadow_query_allocations(maps, depths, light, meshes)
+    Diff3D._build_shadow_query_from_drawables!(maps, depths, [light], meshes,
+                                               InstancedMesh[]; resolution=32)
+    return @allocated Diff3D._build_shadow_query_from_drawables!(
+        maps, depths, [light], meshes, InstancedMesh[]; resolution=32)
+end
+
+function _audit3_lookup_allocations(query, light, points)
+    total = 0.0
+    for p in points
+        total += query(light, p)
+    end
+    return @allocated for p in points
+        total += query(light, p)
+    end
+end
+
+@testset "Cached shadow passes keep per-mesh allocation independent of cube faces" begin
+    scene = Scene()
+    for index in 1:12
+        sphere = Mesh(SphereGeometry(radius=0.4, width_segments=8, height_segments=6),
+                      MeshStandardMaterial(); cast_shadow=true)
+        sphere.position = Vec3(3cos(index), 0.5, 3sin(index))
+        add!(scene, sphere)
+    end
+    meshes = collect_meshes(scene)
+    point = PointLight(position=Vec3(0.0, 1.0, 0.0), cast_shadow=true)
+    directional = DirectionalLight(position=Vec3(1.0, 4.0, 2.0), cast_shadow=true)
+    points = [Vec3(0.3i - 3.0, 0.2, 0.1i - 1.0) for i in 1:50]
+    if Base.JLOptions().opt_level > 0
+        maps = IdDict{Diff3D.AbstractLight,ShadowMap}()
+        depths = Matrix{Float64}[]
+        directional_bytes = _audit3_shadow_query_allocations(maps, depths, directional,
+                                                             meshes)
+        point_bytes = _audit3_shadow_query_allocations(maps, depths, point, meshes)
+        # One dynamic dispatch per mesh renders all six faces; dispatching once
+        # per mesh and face allocated about 6x the directional pass (>35 kB).
+        @test point_bytes <= directional_bytes + 2048
+        @test directional_bytes <= 8192
+        query = Diff3D._build_shadow_query_from_drawables!(maps, depths, [point], meshes,
+                                                           InstancedMesh[]; resolution=32)
+        @test _audit3_lookup_allocations(query, point, points) == 0
+    end
+end

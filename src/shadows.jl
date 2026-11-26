@@ -16,9 +16,11 @@ const _POINT_SHADOW_UPS = (
     Vec3(0.0, 0.0, -1.0), Vec3(0.0, -1.0, 0.0), Vec3(0.0, -1.0, 0.0))
 
 # Light origin and the six face view-projections of a point-light cube map.
-struct _PointShadowCube
-    origin::Vec3{Float64}
-    face_vps::NTuple{6, Mat4{Float64}}
+# Heap-allocated so `ShadowMap` stores a pointer rather than inlining ~800 bytes
+# into every directional and spot map.
+mutable struct _PointShadowCube
+    const origin::Vec3{Float64}
+    const face_vps::NTuple{6, Mat4{Float64}}
 end
 
 """
@@ -477,31 +479,41 @@ end
 @inline _shadow_depth_columns(light, res::Int, cube::Bool) =
     cube && light isa PointLight ? 6res : res
 
-function _raster_shadow_casters!(depth::AbstractMatrix{Float64}, res::Int,
-                                 meshes, instanced, vp::Mat4, clipping_planes)
+# Mesh geometry and material fields are untyped, so each drawable costs one
+# dynamic call. Rendering every view of the light (one map, or the six cube
+# faces stored side by side in `depth`) behind that single call keeps the cube
+# from multiplying the per-mesh dispatch work and allocation by six.
+function _raster_shadow_casters!(depth::Matrix{Float64}, res::Int, meshes, instanced,
+                                 vps::Vector{Mat4{Float64}}, clipping_planes)
     for mesh in meshes
         is_visible(mesh) || continue
         object_casts_shadow(mesh) || continue
-        wm = compute_world_matrix(mesh); geo = mesh.geometry
-        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                         material_clipping_planes(mesh.material))
-        _raster_shadow_geometry!(depth, res, res, geo, wm, vp * wm, mesh.material;
-                                 clipping_planes=mesh_clipping_planes)
+        _raster_shadow_views!(depth, res, vps, mesh.geometry, compute_world_matrix(mesh),
+                              mesh.material, clipping_planes)
     end
     for im in instanced
         _visible_in_tree(im) || continue
         _instanced_triangle_drawable(im) || continue
         object_casts_shadow(im) || continue
         base = compute_world_matrix(im)
-        mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
-                                                         material_clipping_planes(im.material))
         for M in im.instance_matrices
-            world = base * M
-            _raster_shadow_geometry!(depth, res, res, im.geometry, world, vp * world, im.material;
-                                     clipping_planes=mesh_clipping_planes)
+            _raster_shadow_views!(depth, res, vps, im.geometry, base * M, im.material,
+                                  clipping_planes)
         end
     end
     return depth
+end
+
+function _raster_shadow_views!(depth::Matrix{Float64}, res::Int, vps::Vector{Mat4{Float64}},
+                               geo, world::Mat4{Float64}, mat, clipping_planes)
+    mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
+                                                     material_clipping_planes(mat))
+    for (view_index, vp) in enumerate(vps)
+        columns = ((view_index - 1) * res + 1):(view_index * res)
+        _raster_shadow_geometry!(view(depth, :, columns), res, res, geo, world, vp * world, mat;
+                                 clipping_planes=mesh_clipping_planes)
+    end
+    return nothing
 end
 
 # `cube=false` renders a point light into one frustum aimed at the scene centre
@@ -540,15 +552,12 @@ function _compute_shadow_map_from_drawables(meshes, instanced, light,
     center, radius = _scene_bounds(meshes, instanced)
     if point_cube
         faces = _point_shadow_cube(light, center, radius)
-        for face in 1:6
-            columns = ((face - 1) * res + 1):(face * res)
-            _raster_shadow_casters!(view(depth, :, columns), res, meshes, instanced,
-                                    faces.face_vps[face], clipping_planes)
-        end
+        _raster_shadow_casters!(depth, res, meshes, instanced, collect(faces.face_vps),
+                                clipping_planes)
         return ShadowMap(depth, faces, shadow_bias, pcf, Val(:cube))
     end
     vp = _light_view_proj(light, center, radius)
-    _raster_shadow_casters!(depth, res, meshes, instanced, vp, clipping_planes)
+    _raster_shadow_casters!(depth, res, meshes, instanced, [vp], clipping_planes)
     return ShadowMap(depth, vp, shadow_bias, pcf)
 end
 
