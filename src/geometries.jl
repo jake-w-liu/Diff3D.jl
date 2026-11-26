@@ -982,6 +982,15 @@ function _box_add_quad_face!(positions::Vector{Float64}, normals_arr::Vector{Flo
     return vi + 4, out + 6
 end
 
+# Grid points of a side, `a + (b - a) * t` as in BoxGeometry.js:111-115
+# (`iy * segmentHeight - heightHalf`). A constant coordinate stays exact and
+# t == 1 returns `b`, so subdivided sides share their edge vertices exactly
+# with the neighbouring sides.
+@inline _box_lerp(a::Float64, b::Float64, t::Float64) =
+    t == 1.0 ? b : a + (b - a) * t
+@inline _box_lerp(a::Vec3, b::Vec3, t::Float64) =
+    Vec3(_box_lerp(a.x, b.x, t), _box_lerp(a.y, b.y, t), _box_lerp(a.z, b.z, t))
+
 function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
                              uvs_arr::Vector{Float64}, indices::Vector{Int},
                              vi::Int, out::Int, p1, p2, p3, p4, n,
@@ -990,11 +999,11 @@ function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Flo
     row = u_segments + 1
     for j in 0:v_segments
         tv = j / v_segments
-        left = p1 * (1 - tv) + p4 * tv
-        right = p2 * (1 - tv) + p3 * tv
+        left = _box_lerp(p1, p4, tv)
+        right = _box_lerp(p2, p3, tv)
         for i in 0:u_segments
             tu = i / u_segments
-            p = left * (1 - tu) + right * tu
+            p = _box_lerp(left, right, tu)
             _box_write_vertex!(positions, normals_arr, uvs_arr,
                                base + j * row + i, p, n, tu, tv)
         end
@@ -1035,6 +1044,10 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
     w, h, d = width/2, height/2, depth/2
+    # BoxGeometry.js:131 orients each side by the sign of its signed offset
+    # (`depth > 0 ? 1 : -1`), so a negative dimension keeps the normals
+    # pointing away from the center and a zero one gives both sides -1.
+    side(offset) = offset > 0 ? 1.0 : -1.0
 
     # Vertices are duplicated per face so each face keeps flat normals and UVs.
     n_verts = 2 * ((ws + 1) * (hs + 1) +
@@ -1055,27 +1068,27 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     # +Z face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,d), Vec3(w,-h,d),
-                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0,0,1), ws, hs)
+                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0.0, 0.0, side(depth)), ws, hs)
     # -Z face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(w,-h,-d), Vec3(-w,-h,-d),
-                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0,0,-1), ws, hs)
+                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0.0, 0.0, side(-depth)), ws, hs)
     # +Y face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,h,d), Vec3(w,h,d),
-                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0,1,0), ws, ds)
+                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0.0, side(height), 0.0), ws, ds)
     # -Y face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,-d), Vec3(w,-h,-d),
-                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0,-1,0), ws, ds)
+                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0.0, side(-height), 0.0), ws, ds)
     # +X face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(w,-h,d), Vec3(w,-h,-d),
-                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(1,0,0), ds, hs)
+                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(side(width), 0.0, 0.0), ds, hs)
     # -X face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,-d), Vec3(-w,-h,d),
-                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(-1,0,0), ds, hs)
+                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(side(-width), 0.0, 0.0), ds, hs)
 
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end

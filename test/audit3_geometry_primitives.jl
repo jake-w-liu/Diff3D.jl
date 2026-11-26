@@ -56,3 +56,43 @@ _audit3_indices(geo) = geo.indices[1:3geo.n_faces]
     @test _audit3_indices(CircleGeometry(radius=1.0, segments=3)) ==
           [1, 2, 0, 2, 3, 0, 3, 4, 0] .+ 1
 end
+
+# Per-side normals of a one-segment box in Diff3D's side order
+# (+Z, -Z, +Y, -Y, +X, -X; four vertices each).
+_audit3_box_side_normals(geo) =
+    [Tuple(geo.normals[3(4side - 3) - 2:3(4side - 3)]) for side in 1:6]
+
+@testset "audit3 BoxGeometry signed-size normals match three.js" begin
+    # BoxGeometry.js:131 sets each side's normal to `depth > 0 ? 1 : -1`, where
+    # `depth` is the signed offset passed to buildPlane (BoxGeometry.js:76-81:
+    # width for px, -width for nx, and so on). Printed by three.js r186:
+    # new THREE.BoxGeometry(-1, 2, 3).attributes.normal per side is
+    # px (-1,0,0), nx (1,0,0), py (0,1,0), ny (0,-1,0), pz (0,0,1), nz (0,0,-1):
+    # the mirrored x sides keep pointing away from the center.
+    @test _audit3_box_side_normals(BoxGeometry(width=-1.0, height=2.0, depth=3.0)) ==
+          [(0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0), (-1, 0, 0), (1, 0, 0)]
+    @test _audit3_box_side_normals(BoxGeometry(width=1.0, height=-2.0, depth=-3.0)) ==
+          [(0, 0, -1), (0, 0, 1), (0, -1, 0), (0, 1, 0), (1, 0, 0), (-1, 0, 0)]
+    # new THREE.BoxGeometry(1, 1, 0).attributes.normal: pz and nz are both
+    # (0, 0, -1) because neither 0 nor -0 is > 0.
+    @test _audit3_box_side_normals(BoxGeometry(width=1.0, height=1.0, depth=0.0)) ==
+          [(0, 0, -1), (0, 0, -1), (0, 1, 0), (0, -1, 0), (1, 0, 0), (-1, 0, 0)]
+    # Subdivided sides use the same rule. The +X side follows 2 * 12 (z sides)
+    # and 2 * 9 (y sides) vertices and has 3 * 4 vertices of its own.
+    seg = BoxGeometry(width=-2.0, height=1.0, depth=1.0, width_segments=2,
+                      height_segments=3, depth_segments=2)
+    plus_x = 43:54
+    @test all(vi -> get_normal(seg, vi) == Vec3(-1.0, 0.0, 0.0), plus_x)
+    @test all(vi -> get_vertex(seg, vi).x == -1.0, plus_x)
+
+    # Edge vertices of subdivided sides land exactly on +/- half of each
+    # dimension (BoxGeometry.js:111-115 places iy = gridY at
+    # gridY * segmentHeight - heightHalf), so neighbouring sides share their
+    # edges without sub-ulp cracks.
+    sub = BoxGeometry(width=0.3, height=0.7, depth=1.1, width_segments=3,
+                      height_segments=7, depth_segments=11)
+    for (axis, half) in ((1, 0.15), (2, 0.35), (3, 0.55))
+        coords = sub.positions[axis:3:end]
+        @test all(c -> abs(abs(c) - half) > 1e-9 || abs(c) == half, coords)
+    end
+end
