@@ -1171,10 +1171,12 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             c = a + (width_segments + 1)
             d = c + 1
 
+            # SphereGeometry.js:134-140 names these b, a, c, d and emits
+            # (a, b, d), (b, c, d).
             if j != 0 || !top_pole
-                indices[out] = a
-                indices[out + 1] = d
-                indices[out + 2] = b
+                indices[out] = b
+                indices[out + 1] = a
+                indices[out + 2] = d
                 out += 3
             end
             if j != height_segments - 1 || !bottom_pole
@@ -1228,17 +1230,20 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
         end
     end
 
+    # PlaneGeometry.js:85-95 splits each cell along its (ix, iy+1)-(ix+1, iy)
+    # diagonal: (a, b, d), (b, c, d). The diagonal decides the surface shape
+    # once vertices are displaced out of the plane (terrain, morph targets).
     out = 1
     for iy in 0:height_segments-1
         for ix in 0:width_segments-1
             a = iy * (width_segments + 1) + ix + 1
-            b = a + 1
-            c = a + (width_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (width_segments + 1)
+            c = b + 1
             indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = b
             indices[out + 4] = c
             indices[out + 5] = d
             out += 6
@@ -1327,21 +1332,23 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
         end
     end
 
+    # CylinderGeometry.js:156-178 walks columns outermost and splits each
+    # quad along its lower-left/upper-right diagonal: (a, b, d), (b, c, d).
     out = 1
-    for y_seg in 0:height_segments-1
-        for x_seg in 0:radial_segments-1
+    for x_seg in 0:radial_segments-1
+        for y_seg in 0:height_segments-1
             a = y_seg * (radial_segments + 1) + x_seg + 1
-            b = a + 1
-            c = a + (radial_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (radial_segments + 1)
+            c = b + 1
             if top_side || y_seg != 0
                 indices[out] = a
-                indices[out + 1] = d
-                indices[out + 2] = b
+                indices[out + 1] = b
+                indices[out + 2] = d
                 out += 3
             end
             if bottom_side || y_seg != height_segments - 1
-                indices[out] = a
+                indices[out] = b
                 indices[out + 1] = c
                 indices[out + 2] = d
                 out += 3
@@ -1390,18 +1397,19 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                 uvs_arr[ubase + 1] = sinθ * 0.5 * cap_ny + 0.5
             end
 
+            # CylinderGeometry.js:272-287: (i, i + 1, c) on top, (i + 1, i, c)
+            # on the bottom, with this generator's single shared center c.
             for x_seg in 0:radial_segments-1
                 curr = center_idx + 1 + x_seg
                 next_v = curr + 1
                 if cap_ny > 0
-                    indices[out] = center_idx
-                    indices[out + 1] = curr
-                    indices[out + 2] = next_v
-                else
-                    indices[out] = center_idx
+                    indices[out] = curr
                     indices[out + 1] = next_v
-                    indices[out + 2] = curr
+                else
+                    indices[out] = next_v
+                    indices[out + 1] = curr
                 end
+                indices[out + 2] = center_idx
                 out += 3
             end
         end
@@ -1489,16 +1497,17 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segme
     out = 1
     for j in 1:radial_segments
         for i in 1:tubular_segments
-            a = (j - 1) * (tubular_segments + 1) + i
-            b = a + 1
-            c = j * (tubular_segments + 1) + i
-            d = c + 1
+            # TorusGeometry.js:113-121: (a, b, d), (b, c, d) with a/d on ring j.
+            a = j * (tubular_segments + 1) + i
+            b = (j - 1) * (tubular_segments + 1) + i
+            c = b + 1
+            d = a + 1
             indices[out] = a
             indices[out + 1] = b
             indices[out + 2] = d
-            indices[out + 3] = a
-            indices[out + 4] = d
-            indices[out + 5] = c
+            indices[out + 3] = b
+            indices[out + 4] = c
+            indices[out + 5] = d
             out += 6
         end
     end
@@ -1721,17 +1730,18 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
         end
     end
 
+    # RingGeometry.js:108-124: (a, b, d), (b, c, d) with b/c on the next ring.
     out = 1
     for j in 0:phi_segments-1
         for i in 0:theta_segments-1
             a = j * (theta_segments + 1) + i + 1
-            b = a + 1
-            c = a + (theta_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (theta_segments + 1)
+            c = b + 1
             indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = b
             indices[out + 4] = c
             indices[out + 5] = d
             out += 6
@@ -1785,9 +1795,10 @@ function CircleGeometry(; radius=1.0, segments=32, theta_start=0.0, theta_length
 
     out = 1
     for i in 1:segments
-        indices[out] = 1
-        indices[out + 1] = i + 1
-        indices[out + 2] = i + 2
+        # CircleGeometry.js:101-103: (i, i + 1, 0) in zero-based indices.
+        indices[out] = i + 1
+        indices[out + 1] = i + 2
+        indices[out + 2] = 1
         out += 3
     end
 
