@@ -384,23 +384,31 @@ function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
           p.x,        p.y,        p.z,        1.0))
 end
 
+# Quad corners in world space, ordered (0,0), (1,0), (1,1), (0,1) in sprite UV.
+# Like three.js Sprite.raycast (transformVertex) and the sprite vertex shader,
+# each centered corner is scaled by the world scale first and then rotated in
+# the view plane, so non-uniform scale stays aligned with the screen axes.
 @inline function _sprite_quad_corners(sprite::Sprite, material,
                                        camera::AbstractCamera, world::Mat4, view::Mat4)
-    matrix = sprite_world_matrix(sprite, camera, world)
+    world64 = convert(Mat4{Float64}, world)
+    camera_view = view_matrix(camera)
+    # Rows 1 and 2 of the view matrix are the camera right/up axes in world space.
+    right = Vec3(mat4_get(camera_view,1,1), mat4_get(camera_view,1,2), mat4_get(camera_view,1,3))
+    up    = Vec3(mat4_get(camera_view,2,1), mat4_get(camera_view,2,2), mat4_get(camera_view,2,3))
     rotation = _material_field(material, :rotation)
     rotation === nothing && (rotation = 0.0)
     size_attenuation = _material_field(material, :size_attenuation)
-    center = Vec3(mat4_get(matrix,1,4),mat4_get(matrix,2,4),mat4_get(matrix,3,4))
+    center = Vec3(mat4_get(world64,1,4),mat4_get(world64,2,4),mat4_get(world64,3,4))
     center_view = mat4_transform_vec4(view,Vec4(center.x,center.y,center.z,1.0))
     attenuation = size_attenuation === false && camera isa PerspectiveCamera ?
                   max(0.0001,-center_view.z) : 1.0
+    scale_x = _mat4_linear_column_norm(world64, 1) * attenuation
+    scale_y = _mat4_linear_column_norm(world64, 2) * attenuation
     cosine, sine = cos(rotation), sin(rotation)
     return ntuple(4) do index
-        x = (index in (2,3) ? 1.0 : 0.0)-sprite.center.x
-        y = (index in (3,4) ? 1.0 : 0.0)-sprite.center.y
-        lx = (cosine*x-sine*y)*attenuation
-        ly = (sine*x+cosine*y)*attenuation
-        mat4_transform_point(matrix,Vec3(lx,ly,0.0))
+        x = ((index in (2,3) ? 1.0 : 0.0)-sprite.center.x)*scale_x
+        y = ((index in (3,4) ? 1.0 : 0.0)-sprite.center.y)*scale_y
+        center + right*(cosine*x-sine*y) + up*(sine*x+cosine*y)
     end
 end
 

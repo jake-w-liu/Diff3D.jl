@@ -65,3 +65,43 @@ end
         @test [hit.distance for hit in raycast(rc, skin)] ≈ expected[side] atol = 1e-12
     end
 end
+
+@testset "Sprites scale before rotating, like three.js" begin
+    # three.js Sprite.raycast transformVertex (src/objects/Sprite.js:233-239)
+    # and the sprite vertex shader scale the centered corner by the world scale
+    # and then rotate it. Oracle: PerspectiveCamera(90, 1, 0.1, 30) at the
+    # origin looking down -Z, Sprite scale (0.8,0.3,1), rotation pi/2 at
+    # (0,0,-4); rays from the origin toward (x, y, -4).
+    camera = PerspectiveCamera(fov=pi / 2, aspect=1.0, near=0.1, far=30.0)
+    camera.position = Vec3()
+    camera.target = Vec3(0.0, 0.0, -1.0)
+    sprite = Sprite(SpriteMaterial(rotation=pi / 2))
+    sprite.scale = Vec3(0.8, 0.3, 1.0)
+    sprite.position = Vec3(0.0, 0.0, -4.0)
+    oracle = ((0.3, 0.0, nothing), (0.0, 0.3, 4.011234224026316),
+              (0.1, 0.35, 4.016528351698765), (0.35, 0.1, nothing))
+    for (x, y, distance) in oracle
+        hits = raycast(Raycaster(Vec3(), Vec3(x, y, -4.0); camera=camera), sprite)
+        if distance === nothing
+            @test isempty(hits)
+        else
+            @test only(hits).distance ≈ distance rtol = 1e-14
+            @test norm(only(hits).point - Vec3(x, y, -4.0)) < 1e-12
+        end
+    end
+
+    # The rasterizer draws the same quad: tall (0.8) and narrow (0.3).
+    view = OrthographicCamera(left=-1.0, right=1.0, bottom=-1.0, top=1.0,
+                              near=0.1, far=10.0)
+    view.position = Vec3()
+    view.target = Vec3(0.0, 0.0, -1.0)
+    scene = Scene()
+    add!(scene, sprite)
+    target = RenderTarget(40, 40)
+    render!(target, scene, view)
+    covered = [sum(target.color[i, j, :]) > 0 for i in 1:40, j in 1:40]
+    rows = findall(vec(any(covered; dims=2)))
+    cols = findall(vec(any(covered; dims=1)))
+    @test length(rows) == 16   # 0.8 of a 2.0-unit, 40-pixel frustum
+    @test length(cols) == 6    # 0.3 of a 2.0-unit, 40-pixel frustum
+end
