@@ -2527,38 +2527,6 @@ function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     return target
 end
 
-function _copy_morph_track_values!(target, property::Symbol, v::Vector{Float64})
-    values = getproperty(target, property)
-    values === v && return target
-    if length(values) == length(v)
-        length(v) > 0 && copyto!(values, 1, v, 1, length(v))
-    else
-        setproperty!(target, property, copy(v))
-    end
-    return target
-end
-
-function _write_morph_track_values_tree!(target, property::Symbol, v::Vector{Float64})
-    wrote = false
-    if hasproperty(target, property)
-        _copy_morph_track_values!(target, property, v)
-        wrote = true
-    end
-    for child in get_children(target)
-        wrote |= _write_morph_track_values_tree!(child, property, v)
-    end
-    return wrote
-end
-
-function _write_track_value!(target, property::Symbol, v::Vector{Float64})
-    if property === :morph_target_influences
-        wrote = _write_morph_track_values_tree!(target, property, v)
-        wrote || setproperty!(target, property, copy(v))
-    else
-        setproperty!(target, property, copy(v))
-    end
-    return target
-end
 
 function _write_track_value!(target, property::Symbol, v::Quaternion)
     if property === :rotation || property === :quaternion
