@@ -82,7 +82,7 @@ norm(a::Vec3) = _norm3(a.x, a.y, a.z)
 
 function normalize(a::Vec3)
     l = norm(a)
-    iszero(_primal_value(l)) && return Vec3(zero(a.x), zero(a.y), zero(a.z))
+    iszero(_primal_value(l)) && (z = zero(a.x) / one(l); return Vec3(z, z, z))
     !_normal_length_needs_scaling(l) && return a / l
 
     # Scaling preserves direction when the length overflows or its subnormal
@@ -386,13 +386,20 @@ function mat4_rotation_z(θ)
              zero(T), zero(T), zero(T), one(T)))
 end
 
+# three.js lookAt uses +z when eye == target. Dividing keeps the floating type
+# that normalize(d) returns for integer input.
+@inline function _look_at_default_z(d::Vec3)
+    zero_component = zero(d.x) / one(d.x)
+    return Vec3(zero_component, zero_component, one(d.z) / one(d.z))
+end
+
 function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     d = eye - target
     # Guard the degenerate eye==target case before normalising (three.js lookAt):
     # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
     z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
         iszero(_primal_value(d.x)) && iszero(_primal_value(d.y)) && iszero(_primal_value(d.z)) ?
-            Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
+            _look_at_default_z(d) : normalize(d)
     else
         # Finite endpoints with opposite extreme signs can overflow during the
         # subtraction even though their direction is well-defined. Recover it
@@ -400,15 +407,22 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
         scaled, _, nonzero =
             _difference_direction_and_logscale(target, eye)
         nonzero ? normalize(scaled) :
-            Vec3(zero(d.x), zero(d.y), one(d.z))
+            _look_at_default_z(d)
     end
     up_direction = normalize(up)
     xc = cross(up_direction, z)
-    if dot(xc, xc) < 1e-12          # up parallel to view dir: perturb z (three.js lookAt)
-        if abs(z.z) > one(z.z) - 1e-4
-            z = normalize(Vec3(z.x + 1e-4, z.y, z.z))
+    # three.js Matrix4.lookAt (src/math/Matrix4.js:498-517) perturbs z only
+    # when up × z is exactly zero. A tolerance would discard the azimuth of
+    # nearly vertical views such as OrbitControls at its 1e-6 polar clamp.
+    if iszero(_primal_value(xc.x)) && iszero(_primal_value(xc.y)) &&
+       iszero(_primal_value(xc.z))
+        # Keep the component type: a Float64 literal would widen Float32 input
+        # in this branch only and make the returned matrix type unstable.
+        Z = typeof(z.x)
+        if abs(up_direction.z) == one(up_direction.z)
+            z = normalize(Vec3(convert(Z, z.x + 1e-4), z.y, z.z))
         else
-            z = normalize(Vec3(z.x, z.y, z.z + 1e-4))
+            z = normalize(Vec3(z.x, z.y, convert(Z, z.z + 1e-4)))
         end
         xc = cross(up_direction, z)
     end
