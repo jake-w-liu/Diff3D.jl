@@ -2821,7 +2821,6 @@ end
     return (UInt128(lo) << 64) | UInt128(hi)
 end
 
-@inline _edge_key(a::Int, b::Int)::UInt128 = _edge_key(UInt128, a, b)
 @inline _edge_key_first(key::UInt64) = Int(key >> 32)
 @inline _edge_key_second(key::UInt64) = Int(key & UInt64(0xffffffff))
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
