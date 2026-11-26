@@ -418,12 +418,6 @@ end
     return tex
 end
 
-"""
-    sample_texture(tex, u, v) -> Color3
-
-Sample the texture at UV `(u,v)` ∈ [0,1]² (outside handled by the wrap modes),
-using nearest or bilinear filtering. `v=0` is the bottom row.
-"""
 # Sanitize a non-finite UV from procedural or loaded geometry before sampling.
 # Finite coordinates are reduced exactly according to their wrap mode below,
 # before any conversion to an integer texel coordinate.
@@ -514,6 +508,16 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     return _stable_color_lerp(top, bottom, ty)
 end
 
+"""
+    sample_texture(tex, u, v) -> Color3
+
+Sample the texture at UV `(u,v)` after its UV transform (`tex.matrix`), with
+coordinates outside `[0,1]²` handled by the wrap modes. `v=0` is the bottom
+row. Filtering follows the WebGL rules: `:nearest` reads texel
+`(floor(u·W), floor(v·H))`, and `:bilinear` blends the four texels around
+`(u·W − ½, v·H − ½)`. Returns the raw stored values; see
+[`sample_texture_linear`](@ref) for color-space decoding.
+"""
 function sample_texture(tex::Texture, u, v)
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, tex.filter, tu, tv,

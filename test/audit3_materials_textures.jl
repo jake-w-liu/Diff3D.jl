@@ -183,6 +183,14 @@ end
     end
 end
 
+@testset "sample_texture documents its own method" begin
+    # The docstring was attached to an internal helper, leaving the generic
+    # docs.jl summary on the exported function.
+    text = string(@doc sample_texture)
+    @test occursin("sample_texture(tex, u, v)", text)
+    @test occursin("floor(u·W)", text)
+end
+
 @testset "Physical attenuation distance accepts the three.js Infinity default" begin
     # MeshPhysicalMaterial.js: `this.attenuationDistance = Infinity` means no
     # absorption; Diff3D stores that volume as distance 0 (attenuation off).
