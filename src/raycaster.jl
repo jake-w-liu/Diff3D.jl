@@ -434,6 +434,15 @@ function _ray_segment_distance(
     return (ray_parameter, distance, segment_point)
 end
 
+# three.js Mesh.raycast culls in the object's local space. Triangles are tested
+# here in world space, where a mirroring (negative-determinant) transform
+# reverses the winding, so the culled side must be swapped to match.
+@inline function _raycast_world_side(side::Symbol, world::Mat4)
+    side === :double && return side
+    _mat4_linear_orientation_sign(world) < 0 || return side
+    return side === :front ? :back : :front
+end
+
 @inline function _raycast_morph_positions(rc::Raycaster, obj, geo::BufferGeometry)
     return _object_morph_positions(obj, geo, rc.morph_positions)
 end
@@ -600,7 +609,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         _validate_triangle_geometry_indices(geo, "raycast")
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         # Cull by material side like three.js Mesh.raycast (default :front).
-        side = material_side(_mesh_material(obj))
+        side = _raycast_world_side(material_side(_mesh_material(obj)), wm)
         _raycast_bounds_miss(rc, geo, morphed_positions, wm, 0.0) && return hits
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
@@ -626,12 +635,13 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             m = wm*im
             if triangle_mode
                 _raycast_bounds_miss(rc, bounds, m, 0.0) && continue
+                instance_side = _raycast_world_side(side, m)
                 for fi in _draw_face_range(geo)
                     i1, i2, i3 = get_face(geo, fi)
                     a = mat4_transform_point(m, get_vertex(geo, i1))
                     b = mat4_transform_point(m, get_vertex(geo, i2))
                     c = mat4_transform_point(m, get_vertex(geo, i3))
-                    t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
+                    t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, instance_side)
                     if t !== nothing && rc.near <= t <= rc.far
                         push!(hits, Intersection(t, o + d * t, obj, fi, instance_index))
                     end
@@ -650,7 +660,7 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         _validate_skinned_mesh(obj, "SkinnedMesh")
         mats = _skinning_matrices!(rc.skinning_matrices, obj, :world)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        side = material_side(obj.material)
+        side = _raycast_world_side(material_side(obj.material), wm)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
             a = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1)
