@@ -151,3 +151,51 @@ end
                             Float64[], Float64[], collect(1:6), 6, 2)
     @test wireframe_geometry(signed).n_vertices ÷ 2 == 3
 end
+
+function _audit3_fibonacci_sphere(n)
+    golden = π * (3 - sqrt(5))
+    return [let y = 1 - 2 * (i + 0.5) / n, r = sqrt(1 - y * y), t = golden * i
+                Vec3(r * cos(t), y, r * sin(t))
+            end for i in 0:(n - 1)]
+end
+
+function _audit3_volume_area(geometry)
+    volume = 0.0
+    area = 0.0
+    for face in 1:geometry.n_faces
+        a = get_vertex(geometry, geometry.indices[3face - 2])
+        b = get_vertex(geometry, geometry.indices[3face - 1])
+        c = get_vertex(geometry, geometry.indices[3face])
+        volume += dot(a, cross(b, c)) / 6
+        area += norm(cross(b - a, c - a)) / 2
+    end
+    return volume, area
+end
+
+@testset "ConvexGeometry wraps large hulls and matches the reference search" begin
+    # The gift-wrapping search must report exactly the faces (coplanar sets,
+    # outward normals, order) of the exhaustive support-plane enumeration.
+    inputs = Vector{Vector{Vec3{Float64}}}()
+    push!(inputs, _audit3_fibonacci_sphere(60))
+    push!(inputs, [Vec3(Float64(x), Float64(y), Float64(z)) for x in 0:3, y in 0:2, z in 0:1][:])
+    push!(inputs, [Vec3(cos(2π * k / 40), sin(2π * k / 40), Float64(k % 3)) for k in 1:40])
+    sphere = SphereGeometry(radius=1.0, width_segments=8, height_segments=6)
+    push!(inputs, [get_vertex(sphere, i) for i in 1:sphere.n_vertices])
+    for points in inputs
+        _, normalized, eps = Diff3D._convex_clean_points(points)
+        wrapped = Diff3D._convex_wrapped_support_faces(normalized, eps)
+        @test wrapped !== nothing
+        reference = Diff3D._convex_support_faces(normalized, eps)
+        @test length(wrapped) == length(reference)
+        @test all(w[1] == r[1] && w[2] === r[2] for (w, r) in zip(wrapped, reference))
+    end
+
+    # node: three.js ConvexGeometry of the same 1000-point Fibonacci sphere
+    # gives 1996 triangles, volume 4.164674768977892 and area
+    # 12.527317847976624 (Float32 positions).
+    hull = ConvexGeometry(_audit3_fibonacci_sphere(1000))
+    @test hull.n_faces == 1996
+    volume, area = _audit3_volume_area(hull)
+    @test volume ≈ 4.164674768977892 rtol=1e-7
+    @test area ≈ 12.527317847976624 rtol=1e-7
+end

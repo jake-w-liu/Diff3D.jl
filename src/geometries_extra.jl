@@ -228,41 +228,183 @@ function _convex_has_volume(points::Vector{Vec3{Float64}}, eps::Float64)
     return false
 end
 
+# Support-plane test for the triangle (i, j, k): returns the outward unit
+# normal, or `nothing` when the triangle is degenerate or points lie on both
+# sides of its plane beyond `plane_eps`.
+@inline function _convex_triple_normal(points::Vector{Vec3{Float64}}, i::Int, j::Int,
+                                       k::Int, plane_eps::Float64)
+    normal = cross(points[j] - points[i], points[k] - points[i])
+    len = norm(normal)
+    len > plane_eps || return nothing
+    normal = normal * (1 / len)
+    pos = false
+    neg = false
+    @inbounds for p in points
+        side = dot(normal, p - points[i])
+        pos |= side > plane_eps
+        neg |= side < -plane_eps
+        pos && neg && break
+    end
+    pos && neg && return nothing
+    pos && (normal = -normal)
+    return normal
+end
+
+function _convex_coplanar(points::Vector{Vec3{Float64}}, origin::Int,
+                          normal::Vec3{Float64}, plane_eps::Float64)
+    coplanar = Int[]
+    @inbounds for idx in eachindex(points)
+        abs(dot(normal, points[idx] - points[origin])) <= plane_eps &&
+            push!(coplanar, idx)
+    end
+    return coplanar
+end
+
+# Reference enumeration: every triple whose plane supports the point set, in
+# lexicographic triple order, deduplicated by coplanar point set. O(n^4); the
+# gift-wrapping search below reproduces its faces and order and falls back to
+# this when it cannot certify a closed hull.
 function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     faces = Tuple{Vector{Int},Vec3{Float64}}[]
     sizehint!(faces, n)
-    seen = Set{Tuple{Vararg{Int}}}()
+    seen = Set{Vector{Int}}()
     sizehint!(seen, n)
     plane_eps = 64 * eps
     for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
-        normal = cross(points[j] - points[i], points[k] - points[i])
-        len = norm(normal)
-        len > plane_eps || continue
-        normal = normal * (1 / len)
-        pos = false
-        neg = false
-        for p in points
-            side = dot(normal, p - points[i])
-            pos |= side > plane_eps
-            neg |= side < -plane_eps
-            pos && neg && break
-        end
-        pos && neg && continue
-        pos && (normal = -normal)
-        coplanar = Int[]
-        sizehint!(coplanar, n)
-        for idx in eachindex(points)
-            abs(dot(normal, points[idx] - points[i])) <= plane_eps &&
-                push!(coplanar, idx)
-        end
-        key = Tuple(coplanar)
-        if !(key in seen)
-            push!(seen, key)
+        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal === nothing && continue
+        coplanar = _convex_coplanar(points, i, normal, plane_eps)
+        if !(coplanar in seen)
+            push!(seen, coplanar)
             push!(faces, (coplanar, normal))
         end
     end
     return faces
+end
+
+# The face that the reference enumeration reports for the support plane
+# containing `candidates` (sorted): its first valid triple in lexicographic
+# order, that triple's outward normal and its coplanar set.
+function _convex_canonical_face(points::Vector{Vec3{Float64}}, candidates::Vector{Int},
+                                plane_eps::Float64)
+    m = length(candidates)
+    @inbounds for a in 1:(m - 2), b in (a + 1):(m - 1), c in (b + 1):m
+        i = candidates[a]; j = candidates[b]; k = candidates[c]
+        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal === nothing && continue
+        return (i, j, k), _convex_coplanar(points, i, normal, plane_eps), normal
+    end
+    return nothing
+end
+
+# Gift wrapping across the edge u -> v of a face (counter-clockwise about that
+# face's outward normal): the neighbouring face lists the edge as v -> u, so
+# its outward normal is cross(u - v, w - v) for the point w that leaves every
+# point behind the plane. Returns the support plane's points (sorted).
+function _convex_wrap_edge(points::Vector{Vec3{Float64}}, u::Int, v::Int,
+                           plane_eps::Float64)
+    pu = points[u]
+    pv = points[v]
+    edge = pu - pv
+    best = 0
+    normal = Vec3(0.0, 0.0, 0.0)
+    @inbounds for idx in eachindex(points)
+        (idx == u || idx == v) && continue
+        candidate = cross(edge, points[idx] - pv)
+        len = norm(candidate)
+        len > plane_eps || continue
+        if best == 0 || dot(normal, points[idx] - pv) > plane_eps
+            best = idx
+            normal = candidate * (1 / len)
+        end
+    end
+    best == 0 && return nothing
+    return _convex_coplanar(points, v, normal, plane_eps)
+end
+
+function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
+                                   edges::Set{Tuple{Int,Int}}, open_edges::Vector{Tuple{Int,Int}},
+                                   points::Vector{Vec3{Float64}}, candidates::Vector{Int},
+                                   eps::Float64, plane_eps::Float64)
+    canonical = _convex_canonical_face(points, candidates, plane_eps)
+    canonical === nothing && return false
+    triple, coplanar, normal = canonical
+    coplanar in seen && return true
+    push!(seen, coplanar)
+    hull = _convex_face_hull(points, coplanar, normal, eps)
+    length(hull) >= 3 || return false
+    push!(faces, (triple, coplanar, normal))
+    m = length(hull)
+    @inbounds for k in 1:m
+        edge = (hull[k], hull[k == m ? 1 : k + 1])
+        edge in edges && return false     # an edge already bounds another face
+        push!(edges, edge)
+        push!(open_edges, edge)
+    end
+    return true
+end
+
+# Output-sensitive search for the reference enumeration's faces: wrap from one
+# support plane across every hull edge. Returns `nothing` unless the faces
+# close up into a consistently oriented surface, in which case the caller uses
+# the reference enumeration instead.
+function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
+    n = length(points)
+    plane_eps = 64 * eps
+    # Start from the lowest point in (x, y, z) order and the next counter-
+    # clockwise point of the xy-projected hull; the vertical plane through
+    # them supports every point, so wrapping about that segment reaches a face.
+    a = 1
+    @inbounds for idx in 2:n
+        points[idx].x < points[a].x ||
+            (points[idx].x == points[a].x && (points[idx].y, points[idx].z) <
+                                             (points[a].y, points[a].z)) || continue
+        a = idx
+    end
+    b = 0
+    @inbounds for idx in eachindex(points)
+        idx == a && continue
+        d = points[idx] - points[a]
+        hypot(d.x, d.y) > plane_eps || continue
+        if b == 0
+            b = idx
+            continue
+        end
+        db = points[b] - points[a]
+        turn = db.x * d.y - db.y * d.x
+        if turn < 0 || (turn == 0 && hypot(d.x, d.y) > hypot(db.x, db.y))
+            b = idx
+        end
+    end
+    b == 0 && return nothing
+    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64}}[]
+    seen = Set{Vector{Int}}()
+    edges = Set{Tuple{Int,Int}}()
+    open_edges = Tuple{Int,Int}[]
+    started = false
+    for (u, v) in ((a, b), (b, a))
+        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates === nothing && continue
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+                                  candidates, eps, plane_eps) || return nothing
+        started = !isempty(faces)
+        started && break
+    end
+    started || return nothing
+    while !isempty(open_edges)
+        u, v = pop!(open_edges)
+        (v, u) in edges && continue
+        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates === nothing && return nothing
+        before = length(faces)
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+                                  candidates, eps, plane_eps) || return nothing
+        # The neighbour must be new and must close the edge it was found from.
+        length(faces) > before && (v, u) in edges || return nothing
+    end
+    sort!(faces; by=first)
+    return [(coplanar, normal) for (_, coplanar, normal) in faces]
 end
 
 function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{Int},
@@ -346,7 +488,11 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     clean, normalized, eps = _convex_clean_points(points)
     _convex_has_volume(normalized, eps) ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    support_faces = _convex_support_faces(normalized, eps)
+    # Below this size the reference enumeration is as fast as wrapping.
+    support_faces = length(normalized) <= 16 ? nothing :
+                    _convex_wrapped_support_faces(normalized, eps)
+    support_faces === nothing &&
+        (support_faces = _convex_support_faces(normalized, eps))
     isempty(support_faces) &&
         throw(ArgumentError("ConvexGeometry could not find hull support faces"))
 
