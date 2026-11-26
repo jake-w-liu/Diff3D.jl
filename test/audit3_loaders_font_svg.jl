@@ -246,3 +246,40 @@ end
     @test all(isfinite, thin.normals)
     @test thin.n_faces == 2 * 2 + 2 * 4 * 2
 end
+
+@testset "Text layout breaks lines and falls back to the ? glyph" begin
+    # three.js FontLoader.js createPaths: "\n" resets x and lowers y by
+    # (boundingBox.yMax - yMin + underlineThickness) * scale; a character
+    # without a glyph uses glyphs["?"]. Oracle: Font.generateShapes(text, 1)
+    # first loop points for this font.
+    font = Diff3D._font_data(Dict(
+        "resolution" => 1000,
+        "boundingBox" => Dict("yMin" => -100, "yMax" => 900),
+        "underlineThickness" => 50,
+        "glyphs" => Dict(
+            "A" => Dict("ha" => 1200, "o" => "m 0 0 l 1000 0 l 1000 1000 l 0 1000"),
+            "?" => Dict("ha" => 700, "o" => "m 100 0 l 600 0 l 600 500 l 100 500"))))
+    @test font.line_height == 1050.0
+    starts(text) = [(loop[1].x, loop[1].y) for loop in font_text_shapes(font, text)]
+    # "A\nA" -> [[0,0],...], [[0,-1.05],...]
+    lines = starts("A\nA")
+    @test length(lines) == 2
+    @test lines[1] == (0.0, 0.0)
+    @test lines[2][1] == 0.0 && lines[2][2] ≈ -1.05
+    # "\n\nA" -> [[0,-2.1],...]
+    @test only(starts("\n\nA"))[2] ≈ -2.1
+    # "AzA" -> A at 0, "?" at 1.2 (first point 1.3), A at 1.9.
+    fallback = starts("AzA")
+    @test length(fallback) == 3
+    @test fallback[2][1] ≈ 1.3 && fallback[2][2] == 0.0
+    @test fallback[3][1] ≈ 1.9
+    geometry = TextGeometry(font, "A\nA")
+    box = compute_bounding_box(geometry)
+    @test box.min.y ≈ -1.05 && box.max.y == 1.0
+    # Without the line-height fields a line break cannot be placed.
+    bare = Diff3D._font_data(Dict("glyphs" => Dict("A" => Dict("ha" => 1200,
+        "o" => "m 0 0 l 1000 0 l 1000 1000 l 0 1000"))))
+    @test isnan(bare.line_height)
+    @test_throws ErrorException font_text_shapes(bare, "A\nA")
+    @test length(font_text_shapes(bare, "AzA")) == 2
+end

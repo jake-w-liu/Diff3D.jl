@@ -3121,7 +3121,13 @@ struct FontGlyph
     commands::Vector{FontCommand}
 end
 
-"""Decoded three.js typeface JSON font data."""
+"""
+Decoded three.js typeface JSON font data.
+
+`line_height` is the line advance in font units used for `\\n` in text,
+`boundingBox.yMax - boundingBox.yMin + underlineThickness` as in three.js
+`Font.generateShapes`; it is `NaN` when the JSON lacks those fields.
+"""
 struct FontData
     family_name::String
     resolution::Float64
@@ -3129,11 +3135,16 @@ struct FontData
     descender::Float64
     glyphs::Dict{String,FontGlyph}
     kernings::Dict{Tuple{String,String},Float64}
+    line_height::Float64
 end
 
 FontData(family_name, resolution, ascender, descender, glyphs) =
     FontData(String(family_name), Float64(resolution), Float64(ascender),
-             Float64(descender), glyphs, Dict{Tuple{String,String},Float64}())
+             Float64(descender), glyphs, Dict{Tuple{String,String},Float64}(), NaN)
+
+FontData(family_name, resolution, ascender, descender, glyphs, kernings) =
+    FontData(String(family_name), Float64(resolution), Float64(ascender),
+             Float64(descender), glyphs, kernings, NaN)
 
 _font_float(d::AbstractDict, key::String, default::Real=0.0) =
     haskey(d, key) && d[key] !== nothing ? Float64(d[key]) : Float64(default)
@@ -3255,7 +3266,24 @@ function _font_data(raw)
                     _font_float(raw, "ascender", 0.0),
                     _font_float(raw, "descender", 0.0),
                     glyphs,
-                    _font_kernings(get(raw, "kernings", get(raw, "kerning", nothing))))
+                    _font_kernings(get(raw, "kernings", get(raw, "kerning", nothing))),
+                    _font_line_height(raw))
+end
+
+_font_json_number(value) = value isa Real && !(value isa Bool)
+
+# three.js FontLoader.js createPaths: line_height = (boundingBox.yMax -
+# boundingBox.yMin + underlineThickness) * scale. NaN when the JSON lacks them.
+function _font_line_height(raw::AbstractDict)
+    box = get(raw, "boundingBox", nothing)
+    thickness = get(raw, "underlineThickness", nothing)
+    (box isa AbstractDict && _font_json_number(thickness)) || return NaN
+    y_max = get(box, "yMax", nothing)
+    y_min = get(box, "yMin", nothing)
+    (_font_json_number(y_max) && _font_json_number(y_min)) || return NaN
+    height = Float64(y_max) - Float64(y_min) + Float64(thickness)
+    isfinite(height) || error("font line height must be finite")
+    return height
 end
 
 """Load a three.js typeface JSON font."""
@@ -3280,8 +3308,8 @@ function _font_bezier(p0::Vec2, c1::Vec2, c2::Vec2, p1::Vec2, t::Float64)
 end
 
 function _font_push_scaled!(shape::Vector{Vec2{Float64}}, p::Vec2, scale::Float64,
-                            offset_x::Float64)
-    push!(shape, Vec2(offset_x + p.x * scale, p.y * scale))
+                            offset_x::Float64, offset_y::Float64)
+    push!(shape, Vec2(offset_x + p.x * scale, offset_y + p.y * scale))
 end
 
 function _font_scale(font::FontData, size::Real)
@@ -3296,6 +3324,44 @@ function _font_curve_segments(curve_segments::Integer)
     curve_segments <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError("curve_segments is too large"))
     return Int(curve_segments)
+end
+
+function _font_glyph_loops(glyph::FontGlyph, segments::Int, scale::Float64,
+                           xoff::Float64, yoff::Float64)
+    shapes = Vector{Vec2{Float64}}[]
+    current = Vec2(0.0, 0.0)
+    active = Vec2{Float64}[]
+    for cmd in glyph.commands
+        if cmd.kind === :move
+            length(active) >= 2 && push!(shapes, active)
+            active = Vec2{Float64}[]
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff, yoff)
+        elseif cmd.kind === :line
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff, yoff)
+        elseif cmd.kind === :quadratic
+            start = current
+            control, stop = cmd.points
+            for step in 1:segments
+                p = _font_quadratic(start, control, stop, step / Float64(segments))
+                _font_push_scaled!(active, p, scale, xoff, yoff)
+            end
+            current = stop
+        elseif cmd.kind === :bezier
+            start = current
+            c1, c2, stop = cmd.points
+            for step in 1:segments
+                p = _font_bezier(start, c1, c2, stop, step / Float64(segments))
+                _font_push_scaled!(active, p, scale, xoff, yoff)
+            end
+            current = stop
+        else
+            error("unsupported font command $(cmd.kind)")
+        end
+    end
+    length(active) >= 2 && push!(shapes, active)
+    return shapes
 end
 
 """
@@ -3314,72 +3380,63 @@ function font_glyph_shapes(font::FontData, char::AbstractString;
     scale = _font_scale(font, size)
     xoff = Float64(offset_x)
     isfinite(xoff) || throw(ArgumentError("offset_x must be finite"))
-    glyph = font.glyphs[String(char)]
-    shapes = Vector{Vec2{Float64}}[]
-    current = Vec2(0.0, 0.0)
-    active = Vec2{Float64}[]
-    for cmd in glyph.commands
-        if cmd.kind === :move
-            length(active) >= 2 && push!(shapes, active)
-            active = Vec2{Float64}[]
-            current = cmd.points[1]
-            _font_push_scaled!(active, current, scale, xoff)
-        elseif cmd.kind === :line
-            current = cmd.points[1]
-            _font_push_scaled!(active, current, scale, xoff)
-        elseif cmd.kind === :quadratic
-            start = current
-            control, stop = cmd.points
-            for step in 1:segments
-                p = _font_quadratic(start, control, stop, step / Float64(segments))
-                _font_push_scaled!(active, p, scale, xoff)
-            end
-            current = stop
-        elseif cmd.kind === :bezier
-            start = current
-            c1, c2, stop = cmd.points
-            for step in 1:segments
-                p = _font_bezier(start, c1, c2, stop, step / Float64(segments))
-                _font_push_scaled!(active, p, scale, xoff)
-            end
-            current = stop
-        else
-            error("unsupported font command $(cmd.kind)")
+    return _font_glyph_loops(font.glyphs[String(char)], segments, scale, xoff, 0.0)
+end
+
+# Lay out `text` like three.js Font.generateShapes (FontLoader.js createPaths
+# and createPath): `\n` returns to x = 0 one line height lower, a character
+# without a glyph is drawn with the `?` glyph, and each glyph advances by its
+# `ha`. Characters with neither glyph are skipped. Kerning pairs from the JSON
+# are applied between consecutive drawn glyphs. Calls `emit(loops)` per glyph.
+function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
+                      scale::Float64)
+    cursor_x = 0.0
+    cursor_y = 0.0
+    previous_key = nothing
+    for ch in text
+        if ch == '\n'
+            isfinite(font.line_height) ||
+                error("font JSON lacks boundingBox and underlineThickness, " *
+                      "which define the line height for line breaks")
+            cursor_x = 0.0
+            cursor_y -= font.line_height * scale
+            previous_key = nothing
+            continue
         end
+        key = string(ch)
+        glyph = get(font.glyphs, key, nothing)
+        if glyph === nothing
+            key = "?"
+            glyph = get(font.glyphs, key, nothing)
+        end
+        if glyph === nothing
+            previous_key = nothing
+            continue
+        end
+        previous_key !== nothing &&
+            (cursor_x += font_kerning(font, previous_key, key) * scale)
+        emit(_font_glyph_loops(glyph, segments, scale, cursor_x, cursor_y))
+        cursor_x += glyph.advance_width * scale
+        previous_key = key
     end
-    length(active) >= 2 && push!(shapes, active)
-    return shapes
+    return nothing
 end
 
 """
     font_text_shapes(font, text; size=1.0, curve_segments=8)
 
-Flatten all available glyph outlines for `text` into point loops. Horizontal
-advance uses each glyph's `ha` metric plus any parsed kerning pair adjustment
-from the typeface JSON data.
+Flatten the glyph outlines for `text` into point loops, laid out as three.js
+`Font.generateShapes` does: each glyph advances by its `ha` metric plus any
+kerning pair adjustment parsed from the typeface JSON, `\\n` starts a new line
+`font.line_height` lower, and a character missing from the font is drawn with
+its `?` glyph (or skipped when the font has none).
 """
 function font_text_shapes(font::FontData, text::AbstractString;
                           size::Real=1.0, curve_segments::Integer=8)
     shapes = Vector{Vec2{Float64}}[]
-    cursor = 0.0
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    previous_key = nothing
-    for ch in text
-        key = string(ch)
-        glyph = get(font.glyphs, key, nothing)
-        if glyph !== nothing
-            previous_key !== nothing &&
-                (cursor += font_kerning(font, previous_key, key) * scale)
-            append!(shapes, font_glyph_shapes(font, key; size=size,
-                                              curve_segments=segments,
-                                              offset_x=cursor))
-            cursor += glyph.advance_width * scale
-            previous_key = key
-        else
-            previous_key = nothing
-        end
-    end
+    _font_layout(loops -> append!(shapes, loops), font, text, segments, scale)
     return shapes
 end
 
@@ -3730,28 +3787,12 @@ end
 function _font_text_shape_groups(font::FontData, text::AbstractString;
                                  size::Real=1.0,
                                  curve_segments::Integer=8)
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    cursor = 0.0
+    groups = _FontFillGroup[]
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    previous_key = nothing
-    for ch in text
-        key = string(ch)
-        glyph = get(font.glyphs, key, nothing)
-        if glyph !== nothing
-            previous_key !== nothing &&
-                (cursor += font_kerning(font, previous_key, key) * scale)
-            loops = font_glyph_shapes(font, key; size=size,
-                                      curve_segments=segments,
-                                      offset_x=cursor)
-            append!(groups, _font_fill_groups(loops, :nonzero))
-            cursor += glyph.advance_width * scale
-            previous_key = key
-        else
-            previous_key = nothing
-        end
-    end
+    # Each glyph is its own ShapePath in three.js, so loops never group across glyphs.
+    _font_layout(loops -> append!(groups, _font_fill_groups(loops, :nonzero)),
+                 font, text, segments, scale)
     return groups
 end
 
