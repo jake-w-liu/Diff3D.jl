@@ -454,7 +454,10 @@ end
 @testset "geometry audit: torus knot tube phase" begin
     # TorusKnotGeometry.js: cx = -tube*cos(v), so the v = 0 seam faces the knot's inside.
     k = TorusKnotGeometry(radius=1.0, tube=0.4, tubular_segments=32, radial_segments=6)
-    @test _geometry_audit_close(get_vertex(k, 1), Vec3(1.1, 0.0, 0.0))
+    # The tube frame is three.js's secant frame (TorusKnotGeometry.js:87-100), so the
+    # seam starts slightly off (1.1, 0, 0): Float64 three.js r186 vertex math in node.
+    @test _geometry_audit_close(get_vertex(k, 1),
+        Vec3(1.1000122498441418, -0.0027999514172262416, -0.0013999990414200576))
     @test _geometry_audit_degenerate_faces(k) == 0
     for f in 1:k.n_faces
         i1, i2, i3 = get_face(k, f)

@@ -1606,6 +1606,44 @@ function _torus_knot_frame(tangent::Vec3{Float64}, center::Vec3{Float64})
     return normal, binormal
 end
 
+@inline function _torus_knot_unit_point(p_phase::Float64, q_phase::Float64)
+    radial = 0.5 * (2.0 + cos(q_phase))
+    return Vec3(radial * cos(p_phase), radial * sin(p_phase), 0.5 * sin(q_phase))
+end
+
+# TorusKnotGeometry.js:87-100 builds the tube frame from a secant of the curve:
+# T = P2 - P1 and N = P2 + P1 with P2 0.01 further along `u = p * phase`, then
+# B = T x N and N = B x T. The frame is evaluated on the unit-radius curve
+# (it only depends on the sign of `radius`) so a large radius cannot overflow
+# P1 + P2. When three.js's construction is not finite or degenerates, the
+# analytic tangent frame is used instead.
+function _torus_knot_secant_frame(radius::Float64, p_val::Float64,
+                                  q_val::Float64, p_phase::Float64,
+                                  q_phase::Float64, center::Vec3{Float64})
+    zero_vec = Vec3(0.0, 0.0, 0.0)
+    # three.js normalizes the all-zero frame of a zero-radius knot to zeros.
+    iszero(radius) && return zero_vec, zero_vec
+    dq = (q_val / p_val) * 0.01
+    if isfinite(dq)
+        a = _torus_knot_unit_point(p_phase, q_phase)
+        b = _torus_knot_unit_point(p_phase + 0.01, q_phase + dq)
+        tangent = b - a
+        binormal = cross(tangent, b + a)
+        normal = cross(binormal, tangent)
+        binormal_length = norm(binormal)
+        normal_length = norm(normal)
+        if binormal_length > 0.0 && normal_length > 0.0 &&
+           isfinite(binormal_length) && isfinite(normal_length)
+            # Negating the curve negates T and N + P but leaves B unchanged.
+            normal_sign = radius > 0.0 ? 1.0 : -1.0
+            return normal * (normal_sign / normal_length),
+                   binormal / binormal_length
+        end
+    end
+    tangent = _torus_knot_tangent(radius, p_val, q_val, p_phase, q_phase)
+    return _torus_knot_frame(tangent, center)
+end
+
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
     radius = _geometry_finite_float(radius, "TorusKnotGeometry radius")
@@ -1640,9 +1678,8 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
         ui = i / tubular_segments
         p1, p_phase, q_phase = _torus_knot_point(
             radius, p_val, q_val, ui)
-        T_vec = _torus_knot_tangent(
-            radius, p_val, q_val, p_phase, q_phase)
-        N_vec, B_vec = _torus_knot_frame(T_vec, p1)
+        N_vec, B_vec = _torus_knot_secant_frame(
+            radius, p_val, q_val, p_phase, q_phase, p1)
 
         for j in 0:radial_segments
             vj = j / radial_segments

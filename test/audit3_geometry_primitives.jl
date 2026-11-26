@@ -133,3 +133,56 @@ end
     # `length() || 1`).
     @test all(iszero, SphereGeometry(radius=0.0, width_segments=3, height_segments=2).normals)
 end
+
+@testset "audit3 TorusKnotGeometry uses three.js's secant tube frame" begin
+    # TorusKnotGeometry.js:87-100: T = P2 - P1, N = P2 + P1 with P2 at u + 0.01,
+    # B = T x N, N = B x T. Expected (vertex, normal) pairs are three.js r186's
+    # vertex math evaluated in Float64 in node (the module stores Float32).
+    function check(geo, expected)
+        for (vi, pos, nrm) in expected
+            @test _audit3_close(get_vertex(geo, vi), Vec3(pos...))
+            @test _audit3_close(get_normal(geo, vi), Vec3(nrm...))
+        end
+    end
+    # new TorusKnotGeometry(1, 0.4, 32, 6), vertices 0, 1, 9, 100
+    check(TorusKnotGeometry(radius=1.0, tube=0.4, tubular_segments=32, radial_segments=6), [
+        (1, (1.1000122498441418, -0.0027999514172262416, -0.0013999990414200576),
+            (-0.9999693753896455, -0.006999878543065604, -0.003499997603550144)),
+        (2, (1.300006124922071, 0.15352142370971414, -0.3105376344236816),
+            (-0.49998468769482274, 0.38380355927428533, -0.776344086059204)),
+        (10, (1.4672143894224339, 0.8092237583836515, 0.02656087205890395),
+             (0.3981149463885975, 0.6686137586173936, -0.628060611127243)),
+        (101, (0.900341108040821, -0.654069285265329, 0.24910443666257887),
+              (0.8213333797270571, -0.2056538227883267, -0.5320883239826611))])
+    # A negative p walks u backwards, which reverses the secant and mirrors the
+    # tube: new TorusKnotGeometry(1, 0.4, 16, 4, -2, 3), vertices 0, 1, 7, 40.
+    check(TorusKnotGeometry(radius=1.0, tube=0.4, tubular_segments=16, radial_segments=4,
+                            p_val=-2, q_val=3), [
+        (1, (1.1000122498441418, -0.0027999514172262416, 0.0013999990414200576),
+            (-0.9999693753896455, -0.006999878543065604, 0.003499997603550144)),
+        (2, (1.5, -0.17888782331480954, -0.35776968383261526),
+            (0.0, -0.44721955828702387, -0.8944242095815381)),
+        (8, (0.9732159415413203, -1.1692077031930521, 0.6519114184431913),
+            (0.32702533829555874, -0.8170047424248885, 0.4749291304688699)),
+        (41, (0.1000024032446894, 0.0007692043665694896, 0.0011536527287093195),
+             (-0.9999939918882763, 0.0019230109164234174, 0.002884131821772839))])
+    # A negative radius negates the curve: new TorusKnotGeometry(-1.5, 0.4, 12, 5),
+    # vertices 0, 2, 20.
+    check(TorusKnotGeometry(radius=-1.5, tube=0.4, tubular_segments=12, radial_segments=5), [
+        (1, (-1.8500122498441418, 0.002799951417224663, 0.0013999990414192685),
+            (0.9999693753896455, 0.0069998785430616575, 0.003499997603548171)),
+        (3, (-2.5735968874178896, 0.10288241607918774, -0.211424366890769),
+            (-0.8089922185447241, 0.2572060401979694, -0.5285609172269226)),
+        (21, (1.8207755333558806, -0.23733725595501112, 0.7221776324516422),
+             (0.8019388333897017, -0.5933431398875271, -0.06955591887089438))])
+    # A zero radius collapses every vertex onto the origin with zero normals.
+    zero = TorusKnotGeometry(radius=0.0, tube=0.4, tubular_segments=8, radial_segments=4)
+    @test all(iszero, zero.positions)
+    @test all(iszero, zero.normals)
+    # Where three.js's secant is not finite (q / p overflows) the analytic frame
+    # keeps the tube finite and unit-normal.
+    tiny_p = TorusKnotGeometry(p_val=nextfloat(0.0), q_val=1.0, tubular_segments=8,
+                               radial_segments=3)
+    @test all(isfinite, tiny_p.positions)
+    @test all(vi -> abs(norm(get_normal(tiny_p, vi)) - 1) < 1e-12, 1:tiny_p.n_vertices)
+end
