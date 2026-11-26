@@ -1408,8 +1408,13 @@ function _jpeg_render_planes!(st::_JpegState, planes::Vector{Matrix{UInt8}},
                     _jpeg_smooth_block!(ws16, q, @view(latch[:, ci]), DC)
                     _jpeg_idct_block!(plane, (br - 1) * 8, bnum * 8,
                                       ws16, 0, q, ws32)
-                    for i in 1:20
-                        DC[i] = DC[i + 1]
+                    # Slide each row of the 5x5 window left by one block
+                    # (jdcoefct.c "Advance for next column"): the rightmost
+                    # entry of a row keeps its value, so the right image edge
+                    # replicates the last block instead of reading the first
+                    # entry of the next row.
+                    for rowbase in (0, 5, 10, 15, 20), i in 1:4
+                        DC[rowbase + i] = DC[rowbase + i + 1]
                     end
                 end
             end
