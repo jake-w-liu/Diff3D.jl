@@ -1808,6 +1808,19 @@ function interpolate_catmull_rom(times::AbstractVector, values::AbstractVector, 
     return _cubic_interpolant_sample(times, values, t)
 end
 
+# interpolate_linear (math.jl) without its per-call O(n) validation of the
+# key times: tracks validate their keys once at construction, and callers
+# reject a NaN `t`. Same interval choice and lerp, so results are identical.
+function _linear_track_sample(times::AbstractVector, values::AbstractVector, t)
+    n = length(times)
+    t <= times[1] && return values[1]
+    t >= times[n] && return values[n]
+    hi = searchsortedfirst(times, t)
+    lo = hi - 1
+    α = (t - times[lo]) / (times[hi] - times[lo])
+    return _lerp_value(values[lo], values[hi], α)
+end
+
 # Sample a single track value at absolute time `t` according to its mode.
 function _track_value(tr::KeyframeTrack, t)
     if tr.interpolation === :cubic
@@ -1819,7 +1832,7 @@ function _track_value(tr::KeyframeTrack, t)
         t >= tr.times[n] && return tr.values[n]
         return tr.values[searchsortedlast(tr.times, t)]
     else
-        return interpolate_linear(tr.times, tr.values, t)
+        return _linear_track_sample(tr.times, tr.values, t)
     end
 end
 
@@ -1833,7 +1846,7 @@ function _track_value(tr::NumberKeyframeTrack, t)
         t >= tr.times[n] && return tr.values[n]
         return tr.values[searchsortedlast(tr.times, t)]
     else
-        return interpolate_linear(tr.times, tr.values, t)
+        return _linear_track_sample(tr.times, tr.values, t)
     end
 end
 
@@ -2101,7 +2114,13 @@ mutable struct AnimationMixer
     repetitions::Int
     clamp_when_finished::Bool
     time_scale::Float64
+    # Internal: clip-local time of the update being applied. Track writers
+    # read it from the mixer, so dispatching on a track's target type passes
+    # only heap references and the per-frame update does not box the time.
+    sample_time::Float64
 end
+AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale) =
+    AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale, 0.0)
 function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing,
                         repetitions::Union{Integer,Nothing}=nothing,
                         clamp_when_finished::Union{Bool,Nothing}=nothing,
@@ -2196,7 +2215,39 @@ function _with_component(v::Color3, component::Int, x::Real)
     throw(ArgumentError("Color3 animation component must be r/g/b"))
 end
 
+struct _UnhandledField end
+
+# `_replace_field_value` unrolled over the fields of `x` whose declared type
+# is exactly the replacement type (`value`, or `value >= 0.5` for a `Bool`
+# field and a real value), so the rebuild is a statically typed positional
+# constructor call. Any other field name returns `_UnhandledField()`.
+@generated function _replace_typed_field(x, property::Symbol, value)
+    names = fieldnames(x)
+    types = fieldtypes(x)
+    replacement(i) = types[i] === Bool && value <: Real && value !== Bool ?
+        :(value >= 0.5) : :value
+    handled(i) = types[i] === value || (types[i] === Bool && value <: Real)
+    checks = [:(if property === $(QuoteNode(names[i]))
+                    matched = true
+                    unchanged = isequal($(replacement(i)), getfield(x, $i))
+                end) for i in eachindex(names) if handled(i)]
+    isempty(checks) && return :(_UnhandledField())
+    args = [handled(i) ?
+            :(property === $(QuoteNode(names[i])) ? $(replacement(i)) : getfield(x, $i)) :
+            :(getfield(x, $i)) for i in eachindex(names)]
+    return quote
+        matched = false
+        unchanged = false
+        $(checks...)
+        matched || return _UnhandledField()
+        unchanged && return x
+        return $x($(args...))
+    end
+end
+
 function _replace_field_value(x, property::Symbol, value)
+    typed = _replace_typed_field(x, property, value)
+    typed isa _UnhandledField || return typed
     hasproperty(x, property) || return nothing
     current = getproperty(x, property)
     replacement = current isa Bool && value isa Real ? value >= 0.5 : value
@@ -2255,42 +2306,81 @@ end
 _material_animation_property(property::Symbol) =
     property === :material_rotation ? :rotation : property
 
+# `target.material` is untyped; the helpers below take it as an argument so
+# the material work is specialized on the concrete material type.
 function _write_material_track_value!(target, property::Symbol, value)
     hasproperty(target, :material) || return false
-    mat = getproperty(target, :material)
-    property = _material_animation_property(property)
+    return _write_material_value!(target, getproperty(target, :material),
+                                  _material_animation_property(property), value)
+end
+
+function _write_material_value!(target, mat, property::Symbol, value)
     _material_noop_update(mat, property, value) && return true
+    return _write_material_replacement!(target, mat, property, value)
+end
+
+function _write_material_replacement!(target, mat, property::Symbol, value)
     newmat = _replace_field_value(mat, property, value)
     newmat === nothing && return false
     setproperty!(target, :material, newmat)
     return true
 end
 
+# The current value of the component-addressable field `property` of `x`
+# with one component replaced, or `_UnhandledField()` when `property` names
+# no field of a type `_with_component` accepts.
+@generated function _with_typed_field_component(x, property::Symbol, component::Int,
+                                               value::Real)
+    names = fieldnames(x)
+    types = fieldtypes(x)
+    branches = [:(property === $(QuoteNode(names[i])) &&
+                  return _with_component(getfield(x, $i), component, value))
+                for i in eachindex(names)
+                if types[i] <: Union{Vec2, Vec3, Euler, Quaternion, Color3} &&
+                   isconcretetype(types[i])]
+    return Expr(:block, branches..., :(return _UnhandledField()))
+end
+
 function _write_material_track_value!(target, property::Symbol, component::Int, value::Real)
     hasproperty(target, :material) || return false
-    mat = getproperty(target, :material)
-    property = _material_animation_property(property)
+    return _write_material_component!(target, getproperty(target, :material),
+                                      _material_animation_property(property),
+                                      component, value)
+end
+
+function _write_material_component!(target, mat, property::Symbol, component::Int,
+                                    value::Real)
     _material_component_noop_update(mat, property, component, value) && return true
     hasproperty(mat, property) || return false
-    current = getproperty(mat, property)
-    newmat = _replace_field_value(mat, property, _with_component(current, component, value))
-    newmat === nothing && return false
-    setproperty!(target, :material, newmat)
-    return true
+    replacement = _with_typed_field_component(mat, property, component, value)
+    replacement isa _UnhandledField &&
+        return _write_material_replacement!(
+            target, mat, property,
+            _with_component(getproperty(mat, property), component, value))
+    return _write_material_replacement!(target, mat, property, replacement)
 end
 
-function _split_texture_track_property(property::Symbol)
-    return get(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property, nothing)
+# Field `name` of a material, unrolled over its non-isbits fields (where
+# texture slots live) so a runtime name does not box the material.
+@generated function _material_slot(mat, name::Symbol)
+    branches = [:(name === $(QuoteNode(field)) && return getfield(mat, $(QuoteNode(field))))
+                for (field, type) in zip(fieldnames(mat), fieldtypes(mat))
+                if !isbitstype(type)]
+    return Expr(:block, branches..., :(return getproperty(mat, name)))
 end
 
-function _material_texture_for_track(target, property::Symbol)
-    split = _split_texture_track_property(property)
-    split === nothing && return nothing
+_material_texture_slot(mat, field::Symbol) =
+    hasproperty(mat, field) ? _material_slot(mat, field) : _UnhandledField()
+
+# The texture addressed by a texture-transform track property such as
+# :map_offset, with its texture property; `nothing` when `property` is not a
+# texture property or the target's material has no such slot.
+@inline function _material_texture_for_track(target, property::Symbol)
+    haskey(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property) || return nothing
     hasproperty(target, :material) || return nothing
-    field, texture_property = split
-    mat = getproperty(target, :material)
-    hasproperty(mat, field) || return nothing
-    tex = getproperty(mat, field)
+    field, texture_property = _TEXTURE_ANIMATION_TRACK_PROPERTIES[property]
+    tex = _material_texture_slot(getproperty(target, :material), field)
+    tex isa _UnhandledField && return nothing
     tex isa Texture || throw(ArgumentError("material.$field is not a Texture"))
     return tex, texture_property
 end
@@ -2298,6 +2388,31 @@ end
 function _refresh_texture_track_matrix!(tex::Texture)
     tex.matrix_auto_update && texture_update_matrix!(tex)
     return tex
+end
+
+# Constant-name access to the Vec2 texture transforms (offset/repeat/center
+# are the only Vec2 entries of _TEXTURE_ANIMATION_TRACK_PROPERTIES).
+@noinline _throw_texture_vec2(texture_property::Symbol) =
+    throw(ArgumentError("texture $texture_property is not a Vec2 animation property"))
+
+@inline function _set_texture_vec2!(tex::Texture, texture_property::Symbol, value::Vec2)
+    if texture_property === :offset
+        tex.offset = value
+    elseif texture_property === :repeat
+        tex.repeat = value
+    elseif texture_property === :center
+        tex.center = value
+    else
+        _throw_texture_vec2(texture_property)
+    end
+    return tex
+end
+
+@inline function _texture_vec2(tex::Texture, texture_property::Symbol)
+    texture_property === :offset && return tex.offset
+    texture_property === :repeat && return tex.repeat
+    texture_property === :center && return tex.center
+    _throw_texture_vec2(texture_property)
 end
 
 function _write_texture_track_value!(target, property::Symbol, component::Int, value::Real)
@@ -2311,8 +2426,8 @@ function _write_texture_track_value!(target, property::Symbol, component::Int, v
         component == 0 || throw(ArgumentError("texture rotation is a scalar animation property"))
         tex.rotation = Float64(value)
     else
-        current = getproperty(tex, texture_property)
-        setproperty!(tex, texture_property, _with_component(current, component, value))
+        current = _texture_vec2(tex, texture_property)
+        _set_texture_vec2!(tex, texture_property, _with_component(current, component, value))
     end
     _refresh_texture_track_matrix!(tex)
     return true
@@ -2338,7 +2453,7 @@ function _write_texture_track_value!(target, property::Symbol, value::Vec3)
     resolved === nothing && return false
     tex, texture_property = resolved
     if texture_property in (:offset, :repeat, :center)
-        setproperty!(tex, texture_property, Vec2(value.x, value.y))
+        _set_texture_vec2!(tex, texture_property, Vec2(value.x, value.y))
     elseif texture_property === :rotation
         tex.rotation = value.x
     elseif texture_property === :matrix_auto_update
@@ -2350,33 +2465,52 @@ function _write_texture_track_value!(target, property::Symbol, value::Vec3)
     return true
 end
 
-function _write_morph_component_tree!(obj, property::Symbol, component::Int,
-                                      value::Float64)
-    wrote = false
-    if hasproperty(obj, property)
-        values = getproperty(obj, property)
-        1 <= component <= length(values) ||
-            throw(ArgumentError("morph influence component $(component - 1) is out of range"))
-        values[component] = value
-        wrote = true
-    end
-    for child in get_children(obj)
-        wrote |= _write_morph_component_tree!(child, property, component, value)
-    end
-    return wrote
+function _write_morph_component_value!(values::AbstractVector, component::Int,
+                                       value::Float64)
+    1 <= component <= length(values) ||
+        throw(ArgumentError("morph influence component $(component - 1) is out of range"))
+    values[component] = value
+    return values
 end
 
-function _write_morph_component!(target, property::Symbol, component::Int, v::Real)
-    wrote = _write_morph_component_tree!(target, property, component, Float64(v))
-    wrote || throw(ArgumentError("target does not expose morph target influences"))
-    return target
+# Stores into the target type's `Vec3{Float64}`/`Color3{Float64}` fields,
+# and component stores into its vector-like fields, unrolled with constant
+# field names: the generic runtime-Symbol getproperty/setproperty! path boxes
+# the value on every frame. Each returns false for any other property.
+@generated function _set_vec3_track_field!(target, property::Symbol, v::Vec3)
+    stmts = Any[]
+    for (name, type) in zip(fieldnames(target), fieldtypes(target))
+        value = type === Vec3{Float64} ? :v :
+                type === Color3{Float64} ? :(Color3(v.x, v.y, v.z)) : nothing
+        value === nothing && continue
+        push!(stmts, :(property === $(QuoteNode(name)) &&
+                       (setproperty!(target, $(QuoteNode(name)), $value); return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
 end
+
+@generated function _set_component_track_field!(target, property::Symbol,
+                                                component::Int, v::Real)
+    stmts = Any[]
+    for (name, type) in zip(fieldnames(target), fieldtypes(target))
+        type in (Vec2{Float64}, Vec3{Float64}, Euler{Float64}, Color3{Float64}) || continue
+        field = QuoteNode(name)
+        push!(stmts, :(property === $field &&
+                       (setproperty!(target, $field,
+                                     _with_component(getproperty(target, $field),
+                                                     component, v));
+                        return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
+end
+
+# Morph-influence components are written by `_apply_track!` across the
+# target's subtree before this generic path is reached.
 function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     component == 0 && return _write_track_value!(target, property, Float64(v))
     property === :quaternion &&
         return _write_quaternion_component!(target, component, v)
-    property === :morph_target_influences &&
-        return _write_morph_component!(target, property, component, v)
+    _set_component_track_field!(target, property, component, v) && return target
     _write_texture_track_value!(target, property, component, Float64(v)) &&
         return target
     if !hasproperty(target, property) &&
@@ -2420,8 +2554,6 @@ function _write_track_value!(target, property::Symbol, v::Vector{Float64})
     end
     return target
 end
-_write_track!(tr::AbstractKeyframeTrack, v) = _write_track_value!(tr.target, tr.property, v)
-_write_track!(tr::NumberKeyframeTrack, v) = _write_track_value!(tr.target, tr.property, tr.component, v)
 
 function _write_track_value!(target, property::Symbol, v::Quaternion)
     if property === :rotation || property === :quaternion
@@ -2440,6 +2572,7 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
         setproperty!(target, :rotation, Euler(v.x, v.y, v.z, current.order))
         return target
     end
+    _set_vec3_track_field!(target, property, v) && return target
     if hasproperty(target, property)
         current = getproperty(target, property)
         setproperty!(target, property,
@@ -2454,7 +2587,22 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
     return target
 end
 
+# Unrolled constant-name stores for the target type's `Float64` and `Bool`
+# fields (Bool thresholds at 0.5 like the generic path below); the generic
+# runtime-Symbol `setproperty!` boxes the value on every frame.
+@generated function _set_scalar_track_field!(target, property::Symbol, v::Float64)
+    stmts = Any[]
+    for (name, field_type) in zip(fieldnames(target), fieldtypes(target))
+        (field_type === Float64 || field_type === Bool) || continue
+        value = field_type === Bool ? :(v >= 0.5) : :v
+        push!(stmts, :(property === $(QuoteNode(name)) &&
+                       (setproperty!(target, $(QuoteNode(name)), $value); return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
+end
+
 function _write_track_value!(target, property::Symbol, v::Float64)
+    _set_scalar_track_field!(target, property, v) && return target
     if hasproperty(target, property)
         current = getproperty(target, property)
         setproperty!(target, property, current isa Bool ? v >= 0.5 : v)
@@ -2490,8 +2638,14 @@ function _morph_buffer_aliases_track(values::Vector{Float64},
     return false
 end
 
-const _MorphInfluenceObject =
-    Union{Mesh, LineObject, PointsObject, LineSegments, LineLoop, SkinnedMesh}
+# Track application. `_apply_track!` is called with the track's target as a
+# separate argument so one dynamic dispatch selects code specialized on both
+# the concrete target and track types; the sample time travels inside the
+# mixer, so that dispatch boxes nothing. The morph-influence subtree walks
+# below are not specialized on the node type: their recursive calls then
+# resolve statically, and the immutable track is not re-boxed per node.
+const _MorphWeightsTrack =
+    Union{MorphWeightsKeyframeTrack, CubicSplineMorphWeightsKeyframeTrack}
 
 function _generic_morph_track_output_buffer!(target, property::Symbol, tr)
     width = length(tr.values[1])
@@ -2503,72 +2657,98 @@ function _generic_morph_track_output_buffer!(target, property::Symbol, tr)
     return values
 end
 
-_morph_track_output_buffer!(target, property::Symbol, tr) =
-    _generic_morph_track_output_buffer!(target, property, tr)
-
-function _morph_track_output_buffer!(
-    target::_MorphInfluenceObject, property::Symbol, tr,
-)
-    property === :morph_target_influences ||
-        return _generic_morph_track_output_buffer!(target, property, tr)
+# The node's influence vector when it already has the track's width and does
+# not alias a keyframe; otherwise a fresh vector stored on the node.
+function _morph_track_output_buffer!(@nospecialize(node), property::Symbol,
+                                     tr::_MorphWeightsTrack)
+    values = getproperty(node, property)
+    values isa Vector{Float64} ||
+        return _generic_morph_track_output_buffer!(node, property, tr)
     width = length(tr.values[1])
-    values = target.morph_target_influences
     if length(values) != width || _morph_buffer_aliases_track(values, tr)
         values = Vector{Float64}(undef, width)
-        target.morph_target_influences = values
+        setproperty!(node, property, values)
     end
     return values
 end
 
-function _write_morph_track_at_time_tree!(target, property::Symbol, tr, t)
+function _write_morph_track_at_time_tree!(@nospecialize(node), property::Symbol,
+                                          tr::_MorphWeightsTrack,
+                                          mixer::AnimationMixer)
     wrote = false
-    if hasproperty(target, property)
-        out = _morph_track_output_buffer!(target, property, tr)
-        _sample_morph_weights!(out, tr, t)
+    if hasproperty(node, property)
+        out = _morph_track_output_buffer!(node, property, tr)
+        _sample_morph_weights!(out, tr, mixer.sample_time)
         wrote = true
     end
-    for child in get_children(target)
-        wrote |= _write_morph_track_at_time_tree!(child, property, tr, t)
+    children = get_children(node)
+    if children isa Vector{AbstractObject3D}
+        for child in children
+            wrote |= _write_morph_track_at_time_tree!(child, property, tr, mixer)
+        end
+    else
+        for child in children
+            wrote |= _write_morph_track_at_time_tree!(child, property, tr, mixer)
+        end
     end
     return wrote
 end
 
-function _write_track_at_time!(tr::AbstractKeyframeTrack, t)
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyframeTrack,
+                                            mixer::AnimationMixer)
+    wrote = false
+    if hasproperty(node, :morph_target_influences)
+        values = getproperty(node, :morph_target_influences)
+        value = Float64(_track_value(tr, mixer.sample_time))
+        if values isa Vector{Float64}
+            _write_morph_component_value!(values, tr.component, value)
+        else
+            _write_morph_component_value!(values, tr.component, value)
+        end
+        wrote = true
+    end
+    children = get_children(node)
+    if children isa Vector{AbstractObject3D}
+        for child in children
+            wrote |= _write_morph_component_track_tree!(child, tr, mixer)
+        end
+    else
+        for child in children
+            wrote |= _write_morph_component_track_tree!(child, tr, mixer)
+        end
+    end
+    return wrote
 end
 
-function _write_track_at_time!(tr::MorphWeightsKeyframeTrack, t)
-    if tr.property === :morph_target_influences
-        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
-        wrote || _write_track!(tr, _track_value(tr, t))
-        return tr
+_apply_track!(target, tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
+    _write_track_value!(target, tr.property, _track_value(tr, mixer.sample_time))
+
+function _apply_track!(target, tr::NumberKeyframeTrack, mixer::AnimationMixer)
+    if tr.property === :morph_target_influences && tr.component != 0
+        _write_morph_component_track_tree!(target, tr, mixer) ||
+            throw(ArgumentError("target does not expose morph target influences"))
+        return target
     end
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+    return _write_track_value!(target, tr.property, tr.component,
+                               _track_value(tr, mixer.sample_time))
 end
 
-function _write_track_at_time!(tr::CubicSplineMorphWeightsKeyframeTrack, t)
-    if tr.property === :morph_target_influences
-        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
-        wrote || _write_track!(tr, _track_value(tr, t))
-        return tr
+function _apply_track!(target, tr::_MorphWeightsTrack, mixer::AnimationMixer)
+    if tr.property === :morph_target_influences &&
+       _write_morph_track_at_time_tree!(target, tr.property, tr, mixer)
+        return target
     end
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+    return _write_track_value!(target, tr.property, _track_value(tr, mixer.sample_time))
 end
 
 function _mixer_apply_time!(mixer::AnimationMixer, time::Float64)
-    sample_time = _animation_loop_time(time,
-                                       mixer.clip.duration,
-                                       mixer.loop,
-                                       mixer.repetitions,
-                                       mixer.clamp_when_finished)
+    mixer.sample_time = _animation_loop_time(time,
+                                             mixer.clip.duration,
+                                             mixer.loop,
+                                             mixer.repetitions,
+                                             mixer.clamp_when_finished)
     for tr in mixer.clip.tracks
-        _write_track_at_time!(tr, sample_time)
+        _apply_track!(tr.target, tr, mixer)
     end
     mixer.time = time
     return mixer

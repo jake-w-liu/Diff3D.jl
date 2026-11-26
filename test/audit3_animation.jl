@@ -90,3 +90,55 @@ end
     @test AnimationClip("partial", AbstractKeyframeTrack[
         NumberKeyframeTrack(obj, "position[y]", [-1.0, 0.75], [0.0, 1.0])]).duration == 0.75
 end
+
+function _audit3_mixer_update_allocations(mixer)
+    mixer_update!(mixer, 0.016)
+    return @allocated mixer_update!(mixer, 0.016)
+end
+
+@testset "audit3 animation: mixer updates do not allocate" begin
+    times = collect(range(0.0, 2.0; length=24))
+    vectors = [Vec3(sin(t), cos(t), t) for t in times]
+    rotations = [quat_from_euler(0.1t, 0.2t, 0.3t) for t in times]
+    weights = [[sin(t), cos(t), t] for t in times]
+    texture = Texture(ones(Float64, 2, 2, 3))
+    mesh = Mesh(BoxGeometry(), MeshStandardMaterial(map=texture);
+                morph_target_influences=[0.0, 0.0, 0.0])
+    group = Group()
+    add!(group, mesh)
+    bone = Bone()
+    camera = PerspectiveCamera()
+    light = PointLight()
+    tracks = AbstractKeyframeTrack[
+        KeyframeTrack(group, :position, times, vectors),
+        KeyframeTrack(group, :scale, times, vectors; interpolation=:cubic),
+        KeyframeTrack(mesh, :rotation, times, vectors; interpolation=:step),
+        QuaternionKeyframeTrack(bone, :quaternion, times, rotations),
+        QuaternionKeyframeTrack(mesh, :quaternion, times, rotations; interpolation=:step),
+        NumberKeyframeTrack(bone, "position[y]", times, sin.(times)),
+        NumberKeyframeTrack(group, "visible", times, sin.(times)),
+        NumberKeyframeTrack(camera, :fov, times, 0.8 .+ 0.1 .* sin.(times)),
+        NumberKeyframeTrack(light, "color[g]", times, 0.5 .+ 0.1 .* sin.(times)),
+        KeyframeTrack(light, "color", times, [Vec3(0.5, 0.5 + 0.1sin(t), 0.5) for t in times]),
+        NumberKeyframeTrack(mesh, "quaternion.y", times, 0.1 .* sin.(times)),
+        NumberKeyframeTrack(group, "morphTargetInfluences[1]", times, sin.(times)),
+        NumberKeyframeTrack(mesh, "material.map.offset.x", times, sin.(times)),
+        MorphWeightsKeyframeTrack(group, :morph_target_influences, times, weights),
+        CubicSplineKeyframeTrack(bone, :scale, times, vectors, vectors, vectors),
+        CubicSplineQuaternionKeyframeTrack(bone, :quaternion, times, rotations,
+                                           rotations, rotations),
+        CubicSplineMorphWeightsKeyframeTrack(mesh, :morph_target_influences, times,
+                                             weights, weights, weights),
+    ]
+    for track in tracks
+        mixer = AnimationMixer(AnimationClip("one", AbstractKeyframeTrack[track]))
+        if Base.JLOptions().opt_level > 0
+            @test _audit3_mixer_update_allocations(mixer) == 0
+        end
+    end
+    mixer = AnimationMixer(AnimationClip("all", tracks); loop=:pingpong)
+    if Base.JLOptions().opt_level > 0
+        @test _audit3_mixer_update_allocations(mixer) == 0
+    end
+    @test mesh.material.map.offset.x == sample_track(tracks[13], mixer.sample_time)
+end
