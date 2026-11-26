@@ -6,138 +6,238 @@
 
 # ========================== DEFLATE / INFLATE ==========================
 
+# LSB-first DEFLATE bit reader (RFC 1951 §3.1.1). `bitbuf` holds `bitcnt`
+# unconsumed bits that were read, whole bytes at a time, from `data[..pos-1]`.
 mutable struct _BitReader{D<:AbstractVector{UInt8}}
     data::D
     pos::Int
-    bitbuf::UInt32
+    bitbuf::UInt64
     bitcnt::Int
 end
-_BitReader(d::AbstractVector{UInt8}) = _BitReader{typeof(d)}(d, 1, UInt32(0), 0)
+_BitReader(d::AbstractVector{UInt8}) =
+    _BitReader{typeof(d)}(d, firstindex(d), UInt64(0), 0)
 
-@inline function _getbit(br::_BitReader)
-    if br.bitcnt == 0
-        br.pos <= length(br.data) || error("DEFLATE stream is truncated")
-        br.bitbuf = UInt32(br.data[br.pos]); br.pos += 1; br.bitcnt = 8
+# Top up the bit buffer to at least 57 bits, or with all remaining input.
+@inline function _inflate_refill(data::AbstractVector{UInt8}, pos::Int, stop::Int,
+                                 bitbuf::UInt64, bitcnt::Int)
+    while bitcnt <= 56 && pos <= stop
+        @inbounds bitbuf |= UInt64(data[pos]) << bitcnt
+        pos += 1
+        bitcnt += 8
     end
-    b = br.bitbuf & 0x1
-    br.bitbuf >>= 1; br.bitcnt -= 1
-    return Int(b)
+    return pos, bitbuf, bitcnt
 end
+
+@noinline _inflate_truncated() = error("DEFLATE stream is truncated")
+
 @inline function _getbits(br::_BitReader, n::Int)
-    v = 0
-    for i in 0:n-1
-        v |= _getbit(br) << i
+    if br.bitcnt < n
+        br.pos, br.bitbuf, br.bitcnt =
+            _inflate_refill(br.data, br.pos, lastindex(br.data), br.bitbuf, br.bitcnt)
+        br.bitcnt < n && _inflate_truncated()
     end
+    v = Int(br.bitbuf & ((UInt64(1) << n) - UInt64(1)))
+    br.bitbuf >>= n
+    br.bitcnt -= n
     return v
 end
 
-# Canonical Huffman decode table (RFC 1951). Decoding walks MSB-first one bit at
-# a time, but each length check is O(1) instead of scanning all symbols.
-#
-# Fields, indexed by code length `len` (1..maxbits):
-#   first_code[len]   smallest canonical code of that length
-#   first_index[len]  offset into `symbols` where that length's symbols start
-#   count[len]        number of symbols of that length
-#   symbols           symbol values (0-based) sorted by (length, code), i.e. by
-#                     ascending symbol index within each length — exactly the
-#                     order `_build_huff` assigns consecutive codes, so
-#                     symbol = symbols[first_index[len] + (code - first_code[len])].
+# Return the reader to the next byte boundary: drop the partial byte and hand
+# buffered whole bytes back to the input (stored blocks and the zlib trailer
+# are byte-aligned).
+@inline function _bitreader_align!(br::_BitReader)
+    br.pos -= br.bitcnt >> 3
+    br.bitbuf = UInt64(0)
+    br.bitcnt = 0
+    return br
+end
+
+# Canonical Huffman decoder (RFC 1951 §3.2.2). Codes of up to `_HUFF_FAST_BITS`
+# bits resolve with one lookup of the next input bits in `fast`, whose entries
+# are `length << 9 | symbol` (0 = longer code or unused prefix). Longer codes
+# use the canonical bounds: for code length `len`, `maxcode[len]` is one past
+# that length's last code left-aligned to 16 bits, and a code's position in the
+# (length, symbol)-sorted `size`/`value` tables is
+# `code - firstcode[len] + firstsymbol[len]`.
+const _HUFF_FAST_BITS = 10
+const _HUFF_FAST_MASK = (UInt64(1) << _HUFF_FAST_BITS) - UInt64(1)
+
 struct _Huff
-    maxbits::Int
-    first_code::Vector{Int}
-    first_index::Vector{Int}
+    fast::Vector{UInt16}
+    maxcode::Vector{Int}
+    firstcode::Vector{Int}
+    firstsymbol::Vector{Int}
+    size::Vector{UInt8}
+    value::Vector{UInt16}
     count::Vector{Int}
-    symbols::Vector{Int}
+    next_code::Vector{Int}
 end
 
-# Build the canonical-Huffman fast-decode table from per-symbol code lengths.
-# Produces the identical canonical code assignment as the previous (lengths,
-# codes) form: within a length, codes increase in symbol-index order.
-function _build_huff(lengths::AbstractVector{Int})
-    maxbits = isempty(lengths) ? 0 : maximum(lengths)
-    if maxbits == 0
-        return _Huff(0, Int[], Int[], Int[], Int[])
+_Huff() = _Huff(zeros(UInt16, 1 << _HUFF_FAST_BITS), zeros(Int, 16), zeros(Int, 16),
+                zeros(Int, 16), UInt8[], UInt16[], zeros(Int, 16), zeros(Int, 16))
+
+# Unused code space of a code with `count[len]` codes per length, in units of
+# 15-bit codes; negative when the lengths are over-subscribed.
+function _huff_code_space_left(count::Vector{Int})
+    left = 1
+    @inbounds for len in 1:15
+        left = (left << 1) - count[len]
+        left < 0 && return left
     end
-    # Count codes per length and derive the first canonical code per length.
-    blcount = zeros(Int, maxbits + 1)        # blcount[len+1] = #codes of length len
+    return left
+end
+
+function _huff_check_complete(count::Vector{Int}, left::Int, allow_single::Bool)
+    left == 0 && return nothing
+    maxlen = something(findlast(!iszero, count), 0)
+    (maxlen == 0 || (allow_single && maxlen == 1)) && return nothing
+    error("corrupt DEFLATE Huffman code (incomplete code lengths)")
+end
+
+# Build `h` from per-symbol code lengths (0 = unused). Rejects code sets that
+# are not prefix codes (over-subscribed) and incomplete sets, except a set with
+# no codes or a single one-bit code, which RFC 1951 §3.2.7 permits for
+# distances; zlib applies the same rule to every table (inflate_table).
+function _build_huff!(h::_Huff, lengths::AbstractVector{<:Integer},
+                      allow_single::Bool=true; check_complete::Bool=true)
+    count = h.count
+    fill!(count, 0)
+    nsym = 0
     @inbounds for l in lengths
-        l > 0 && (blcount[l + 1] += 1)
-    end
-    first_code = zeros(Int, maxbits)         # first_code[len]
-    count = zeros(Int, maxbits)              # count[len]
-    code = 0
-    @inbounds for len in 1:maxbits
-        code = (code + blcount[len]) << 1    # matches _build_huff(prev) recurrence
-        first_code[len] = code
-        count[len] = blcount[len + 1]
-    end
-    # `symbols` holds symbol values grouped by length, in ascending symbol order.
-    first_index = zeros(Int, maxbits)        # offset (0-based) into symbols per length
-    acc = 0
-    @inbounds for len in 1:maxbits
-        first_index[len] = acc
-        acc += count[len]
-    end
-    symbols = Vector{Int}(undef, acc)
-    fill_pos = copy(first_index)             # running write cursor per length
-    n = 0
-    @inbounds for l in lengths
-        n += 1
+        0 <= l <= 15 || error("invalid DEFLATE Huffman code length $l")
         if l > 0
-            symbols[fill_pos[l] + 1] = n - 1 # 0-based symbol value
-            fill_pos[l] += 1
+            count[l] += 1
+            nsym += 1
         end
     end
-    return _Huff(maxbits, first_code, first_index, count, symbols)
-end
-
-# Decode one symbol. O(code length) bit reads with O(1) work per bit.
-@inline function _decode_sym(br::_BitReader, huff::_Huff)
+    left = _huff_code_space_left(count)
+    left < 0 && error("corrupt DEFLATE Huffman code (over-subscribed code lengths)")
+    check_complete && _huff_check_complete(count, left, allow_single)
+    fast = h.fast
+    fill!(fast, 0x0000)
+    maxcode = h.maxcode
+    firstcode = h.firstcode
+    firstsymbol = h.firstsymbol
+    next_code = h.next_code
     code = 0
-    @inbounds for len in 1:huff.maxbits
-        code = (code << 1) | _getbit(br)
-        cnt = huff.count[len]
-        if cnt > 0
-            off = code - huff.first_code[len]
-            if 0 <= off < cnt
-                return huff.symbols[huff.first_index[len] + off + 1]
+    k = 0
+    @inbounds for len in 1:15
+        next_code[len] = code
+        firstcode[len] = code
+        firstsymbol[len] = k
+        code += count[len]
+        maxcode[len] = code << (16 - len)
+        code <<= 1
+        k += count[len]
+    end
+    @inbounds maxcode[16] = 1 << 16                  # sentinel: ends the slow scan
+    size = resize!(h.size, nsym)
+    value = resize!(h.value, nsym)
+    sym = 0
+    @inbounds for l in lengths
+        if l > 0
+            c = next_code[l]
+            position = c - firstcode[l] + firstsymbol[l] + 1
+            size[position] = UInt8(l)
+            value[position] = UInt16(sym)
+            if l <= _HUFF_FAST_BITS
+                entry = UInt16((l << 9) | sym)
+                j = Int(bitreverse(UInt16(c)) >> (16 - l))
+                while j < (1 << _HUFF_FAST_BITS)
+                    fast[j + 1] = entry
+                    j += 1 << l
+                end
             end
+            next_code[l] = c + 1
         end
+        sym += 1
     end
-    error("invalid Huffman code")
+    return h
 end
 
-const _LEN_BASE   = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258]
-const _LEN_EXTRA  = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]
-const _DIST_BASE  = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577]
-const _DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]
+_build_huff(lengths::AbstractVector{<:Integer}, allow_single::Bool=true) =
+    _build_huff!(_Huff(), lengths, allow_single)
 
-const _FIXED_LITLEN_HUFF = let
-    litlen = Vector{Int}(undef, 288)
-    for i in 1:288
-        litlen[i] = i <= 144 ? 8 : i <= 256 ? 9 : i <= 280 ? 7 : 8
-    end
-    _build_huff(litlen)
+# Decode the symbol at the front of `bitbuf`. Returns `(symbol, code_length)`;
+# a code length of 0 marks an invalid code. The caller checks that the code
+# length does not exceed the bits actually buffered.
+@inline function _huff_decode(h::_Huff, bitbuf::UInt64)
+    @inbounds entry = h.fast[Int(bitbuf & _HUFF_FAST_MASK) + 1]
+    entry != 0x0000 && return Int(entry & 0x01ff), Int(entry >> 9)
+    return _huff_decode_slow(h, bitbuf)
 end
-const _FIXED_DIST_HUFF = _build_huff(fill(5, 30))
+
+@noinline function _huff_decode_slow(h::_Huff, bitbuf::UInt64)
+    k = Int(bitreverse(UInt16(bitbuf & 0xffff)))
+    s = _HUFF_FAST_BITS + 1
+    @inbounds while k >= h.maxcode[s]
+        s += 1
+    end
+    s >= 16 && return 0, 0
+    @inbounds position = (k >> (16 - s)) - h.firstcode[s] + h.firstsymbol[s] + 1
+    (1 <= position <= length(h.size) && @inbounds(h.size[position]) == s) ||
+        return 0, 0
+    return Int(@inbounds h.value[position]), s
+end
+
+function _decode_sym(br::_BitReader, huff::_Huff)
+    if br.bitcnt < 15
+        br.pos, br.bitbuf, br.bitcnt =
+            _inflate_refill(br.data, br.pos, lastindex(br.data), br.bitbuf, br.bitcnt)
+    end
+    sym, len = _huff_decode(huff, br.bitbuf)
+    len == 0 && error("invalid Huffman code")
+    len > br.bitcnt && _inflate_truncated()
+    br.bitbuf >>= len
+    br.bitcnt -= len
+    return sym
+end
+
+const _LEN_BASE   = (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258)
+const _LEN_EXTRA  = (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0)
+const _DIST_BASE  = (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577)
+const _DIST_EXTRA = (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13)
+
+# Fixed Huffman codes (RFC 1951 §3.2.6). The distance code has all 32 five-bit
+# codes; symbols 30 and 31 are rejected when decoded.
+const _FIXED_LITLEN_HUFF = _build_huff(
+    [i <= 144 ? 8 : i <= 256 ? 9 : i <= 280 ? 7 : 8 for i in 1:288])
+const _FIXED_DIST_HUFF = _build_huff(fill(5, 32))
 const _DEFLATE_CODELEN_ORDER = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
 const _INFLATE_MIN_SIZEHINT = 1024
 
-@inline function _fixed_huffs()
-    return _FIXED_LITLEN_HUFF, _FIXED_DIST_HUFF
+# Per-stream tables for dynamic blocks, rebuilt in place for every block.
+struct _InflateTables
+    codelen::_Huff
+    lit::_Huff
+    dist::_Huff
+    lengths::Vector{Int}
+    codelen_lengths::Vector{Int}
 end
 
-function _read_dynamic(br::_BitReader)
+_InflateTables() = _InflateTables(_Huff(), _Huff(), _Huff(), zeros(Int, 320), zeros(Int, 19))
+
+@noinline _inflate_repeat_error() =
+    error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+
+function _read_dynamic!(tables::_InflateTables, br::_BitReader)
     hlit = _getbits(br, 5) + 257
     hdist = _getbits(br, 5) + 1
     hclen = _getbits(br, 4) + 4
-    cl_lengths = zeros(Int, 19)
+    # RFC 1951 §3.2.7: HLIT is 257-286. HDIST may name 32 codes; symbols 30
+    # and 31 are rejected if they are ever decoded.
+    hlit <= 286 ||
+        error("corrupt DEFLATE dynamic Huffman (HLIT $hlit exceeds 286 literal/length codes)")
+    cl_lengths = tables.codelen_lengths
+    fill!(cl_lengths, 0)
     for i in 1:hclen
         cl_lengths[_DEFLATE_CODELEN_ORDER[i] + 1] = _getbits(br, 3)
     end
-    cl_huff = _build_huff(cl_lengths)
+    # Completeness of the code-length code is checked after the lengths are
+    # read, so a repeat that overruns the table reports that defect first.
+    cl_huff = _build_huff!(tables.codelen, cl_lengths, false; check_complete=false)
     target = hlit + hdist
-    all_lengths = Vector{Int}(undef, target)
+    all_lengths = tables.lengths
     pos = 1
     while pos <= target
         sym = _decode_sym(br, cl_huff)
@@ -147,135 +247,237 @@ function _read_dynamic(br::_BitReader)
         elseif sym == 16
             pos == 1 && error("corrupt DEFLATE dynamic Huffman (repeat code with no previous length)")
             rep = _getbits(br, 2) + 3
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            pos + rep - 1 <= target || _inflate_repeat_error()
             prev = all_lengths[pos - 1]
             @inbounds for _ in 1:rep
                 all_lengths[pos] = prev
                 pos += 1
             end
-        elseif sym == 17
-            rep = _getbits(br, 3) + 3
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
-            @inbounds for _ in 1:rep
-                all_lengths[pos] = 0
-                pos += 1
-            end
         else
-            rep = _getbits(br, 7) + 11
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            rep = sym == 17 ? _getbits(br, 3) + 3 : _getbits(br, 7) + 11
+            pos + rep - 1 <= target || _inflate_repeat_error()
             @inbounds for _ in 1:rep
                 all_lengths[pos] = 0
                 pos += 1
             end
         end
     end
-    lit = _build_huff(@view all_lengths[1:hlit])
-    dist = _build_huff(@view all_lengths[hlit+1:hlit+hdist])
-    return (lit, dist)
+    _huff_check_complete(cl_huff.count, _huff_code_space_left(cl_huff.count), false)
+    all_lengths[257] != 0 ||
+        error("corrupt DEFLATE dynamic Huffman (missing end-of-block code)")
+    lit = _build_huff!(tables.lit, view(all_lengths, 1:hlit))
+    dist = _build_huff!(tables.dist, view(all_lengths, (hlit + 1):target))
+    return lit, dist
 end
 
-@inline function _inflate_push!(out::Vector{UInt8}, b::UInt8, max_output::Int)
-    max_output >= 0 && length(out) >= max_output &&
-        error("DEFLATE output exceeds expected size")
-    push!(out, b)
-    return nothing
+@noinline _inflate_output_limit() = error("DEFLATE output exceeds expected size")
+
+# Grow `out` so that it holds at least `need` bytes, geometrically and never
+# beyond a non-negative `limit`.
+@noinline function _inflate_grow!(out::Vector{UInt8}, need::Int, limit::Int)
+    limit >= 0 && need > limit && _inflate_output_limit()
+    current = length(out)
+    target = max(need, current > typemax(Int) ÷ 2 ? typemax(Int) : 2 * current,
+                 _INFLATE_MIN_SIZEHINT)
+    limit >= 0 && (target = min(target, limit))
+    resize!(out, target)
+    return out
 end
 
-@inline function _inflate_reserve!(out::Vector{UInt8}, n::Int, max_output::Int)
-    max_output >= 0 && length(out) + n > max_output &&
-        error("DEFLATE output exceeds expected size")
-    return nothing
-end
+@noinline _inflate_bad_code() = error("invalid Huffman code")
+@noinline _inflate_bad_litlen(sym::Int) =
+    error("invalid DEFLATE literal/length symbol $sym")
+@noinline _inflate_bad_distance(sym::Int) =
+    error("invalid DEFLATE distance symbol $sym")
+@noinline _inflate_far_distance() =
+    error("DEFLATE back-reference distance exceeds output (corrupt stream)")
 
-function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist,
-                         max_output::Int)
-    while true
-        sym = _decode_sym(br, lit)
+# Decode one Huffman-coded block into `out[olen+1:end]`; returns the new
+# output length. Bit-reader state lives in locals for the duration of the block.
+function _inflate_codes!(out::Vector{UInt8}, olen::Int, br::_BitReader,
+                         lit::_Huff, dist::_Huff, limit::Int)
+    data = br.data
+    stop = lastindex(data)
+    pos = br.pos
+    bitbuf = br.bitbuf
+    bitcnt = br.bitcnt
+    @inbounds while true
+        # 48 bits cover the longest length/distance pair (15+5+15+13).
+        bitcnt < 48 && ((pos, bitbuf, bitcnt) = _inflate_refill(data, pos, stop, bitbuf, bitcnt))
+        sym, len = _huff_decode(lit, bitbuf)
+        len == 0 && _inflate_bad_code()
+        len > bitcnt && _inflate_truncated()
+        bitbuf >>= len
+        bitcnt -= len
         if sym < 256
-            _inflate_push!(out, UInt8(sym), max_output)
+            olen == length(out) && _inflate_grow!(out, olen + 1, limit)
+            olen += 1
+            out[olen] = sym % UInt8
         elseif sym == 256
             break
         else
-            257 <= sym <= 285 ||
-                error("invalid DEFLATE literal/length symbol $sym")
+            sym <= 285 || _inflate_bad_litlen(sym)
             li = sym - 256
-            len = _LEN_BASE[li] + _getbits(br, _LEN_EXTRA[li])
-            dsym = _decode_sym(br, dist)
-            0 <= dsym <= 29 ||
-                error("invalid DEFLATE distance symbol $dsym")
-            d = _DIST_BASE[dsym + 1] + _getbits(br, _DIST_EXTRA[dsym + 1])
-            start = length(out) - d
-            start >= 0 || error("DEFLATE back-reference distance exceeds output (corrupt stream)")
-            _inflate_reserve!(out, len, max_output)
-            for k in 1:len
-                push!(out, out[start + k])
+            eb = _LEN_EXTRA[li]
+            eb > bitcnt && _inflate_truncated()
+            n = _LEN_BASE[li] + Int(bitbuf & ((UInt64(1) << eb) - UInt64(1)))
+            bitbuf >>= eb
+            bitcnt -= eb
+            dsym, dlen = _huff_decode(dist, bitbuf)
+            dlen == 0 && _inflate_bad_code()
+            dlen > bitcnt && _inflate_truncated()
+            bitbuf >>= dlen
+            bitcnt -= dlen
+            dsym <= 29 || _inflate_bad_distance(dsym)
+            de = _DIST_EXTRA[dsym + 1]
+            de > bitcnt && _inflate_truncated()
+            d = _DIST_BASE[dsym + 1] + Int(bitbuf & ((UInt64(1) << de) - UInt64(1)))
+            bitbuf >>= de
+            bitcnt -= de
+            d <= olen || _inflate_far_distance()
+            olen + n > length(out) && _inflate_grow!(out, olen + n, limit)
+            src = olen - d
+            if d == 1
+                b = out[olen]
+                for k in 1:n
+                    out[olen + k] = b
+                end
+            else
+                for k in 1:n                      # byte order handles overlap
+                    out[olen + k] = out[src + k]
+                end
             end
+            olen += n
         end
     end
+    br.pos = pos
+    br.bitbuf = bitbuf
+    br.bitcnt = bitcnt
+    return olen
 end
 
-"""Inflate a raw DEFLATE stream (no zlib header) to bytes."""
+# Append one Huffman-coded block to `out`.
+function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit::_Huff, dist::_Huff,
+                         max_output::Int)
+    olen = _inflate_codes!(out, length(out), br, lit, dist, max_output)
+    resize!(out, olen)
+    return out
+end
+
+function _inflate_stored!(out::Vector{UInt8}, olen::Int, br::_BitReader, limit::Int)
+    _bitreader_align!(br)
+    data = br.data
+    p = br.pos
+    p + 3 <= lastindex(data) || error("DEFLATE stored block is truncated")
+    len = Int(data[p]) | (Int(data[p + 1]) << 8)
+    nlen = Int(data[p + 2]) | (Int(data[p + 3]) << 8)
+    nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
+    p += 4
+    p + len - 1 <= lastindex(data) || error("DEFLATE stored block is truncated")
+    olen + len > length(out) && _inflate_grow!(out, olen + len, limit)
+    copyto!(out, olen + 1, data, p, len)
+    br.pos = p + len
+    return olen + len
+end
+
+# Preallocation for a bounded stream. `max_output` can be attacker-controlled
+# through image dimensions, so do not reserve far more than the compressed
+# size before the stream has proven it can produce that much output.
 @inline function _inflate_sizehint(input_len::Int, limit::Int)
     limit < 0 && return 0
-    # Bound preallocation by compressed size. `max_output` can be attacker-controlled
-    # through image dimensions; do not reserve an implausibly large buffer before the
-    # stream has proven it can produce that much output.
     doubled = input_len > typemax(Int) ÷ 2 ? typemax(Int) : 2 * input_len
     return min(limit, max(_INFLATE_MIN_SIZEHINT, doubled))
 end
 
-function inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
+# Decode the DEFLATE stream at the reader's position through its final block.
+function _inflate_stream!(br::_BitReader, max_output::Union{Nothing,Int})
     max_output === nothing || max_output >= 0 ||
         throw(ArgumentError("max_output must be non-negative"))
     limit = max_output === nothing ? -1 : max_output
-    br = _BitReader(data)
-    out = UInt8[]
-    hint = _inflate_sizehint(length(data), limit)
-    hint > 0 && sizehint!(out, hint)
+    out = Vector{UInt8}(undef, _inflate_sizehint(length(br.data), limit))
+    olen = 0
+    tables = nothing
     while true
-        bfinal = _getbit(br); btype = _getbits(br, 2)
+        bfinal = _getbits(br, 1)
+        btype = _getbits(br, 2)
         if btype == 0
-            br.bitcnt = 0                       # align to byte boundary
-            br.pos + 3 <= length(br.data) || error("DEFLATE stored block is truncated")
-            len = Int(br.data[br.pos]) | (Int(br.data[br.pos + 1]) << 8)
-            nlen = Int(br.data[br.pos + 2]) | (Int(br.data[br.pos + 3]) << 8)
-            nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
-            br.pos += 4                         # skip LEN(2) + NLEN(2)
-            br.pos + len - 1 <= length(br.data) || error("DEFLATE stored block is truncated")
-            _inflate_reserve!(out, len, limit)
-            for _ in 1:len
-                push!(out, br.data[br.pos]); br.pos += 1
-            end
+            olen = _inflate_stored!(out, olen, br, limit)
         elseif btype == 1
-            lit, dist = _fixed_huffs(); _inflate_block!(out, br, lit, dist, limit)
+            olen = _inflate_codes!(out, olen, br, _FIXED_LITLEN_HUFF,
+                                   _FIXED_DIST_HUFF, limit)
         elseif btype == 2
-            lit, dist = _read_dynamic(br); _inflate_block!(out, br, lit, dist, limit)
+            tables === nothing && (tables = _InflateTables())
+            lit, dist = _read_dynamic!(tables, br)
+            olen = _inflate_codes!(out, olen, br, lit, dist, limit)
         else
             error("invalid DEFLATE block type 3")
         end
         bfinal == 1 && break
     end
-    return out
+    return resize!(out, olen)
 end
 
+"""
+    inflate(data; max_output=nothing) -> Vector{UInt8}
+
+Decompress a raw DEFLATE stream (RFC 1951, no zlib header). Decoding stops
+after the final block; bytes after it are ignored. Malformed streams, including
+Huffman code sets that are over-subscribed or incomplete, raise an error. A
+non-negative `max_output` bounds the decompressed size: a stream that would
+produce more bytes raises an error.
+"""
+inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing) =
+    _inflate_stream!(_BitReader(data), max_output)
+
+# zlib Adler-32 (RFC 1950 §8.2). 5552 is the largest n for which the sums of n
+# bytes cannot overflow 32 bits before reduction (zlib's NMAX).
+function _zlib_adler32(data::AbstractVector{UInt8})
+    a = UInt32(1)
+    b = UInt32(0)
+    i = firstindex(data)
+    stop = lastindex(data)
+    @inbounds while i <= stop
+        chunk_stop = min(stop, i + 5551)
+        while i <= chunk_stop
+            a += data[i]
+            b += a
+            i += 1
+        end
+        a %= UInt32(65521)
+        b %= UInt32(65521)
+    end
+    return (b << 16) | a
+end
+
+"""
+    zlib_inflate(data; max_output=nothing) -> Vector{UInt8}
+
+Decompress a zlib stream (RFC 1950): validate the two-byte header, inflate the
+DEFLATE payload, and verify the Adler-32 checksum that immediately follows it.
+Preset dictionaries, a bad header, a checksum mismatch, and bytes after the
+checksum raise an error. `max_output` behaves as for [`inflate`](@ref).
+"""
 function zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
     length(data) >= 6 || error("zlib stream is truncated")
-    cmf = data[1]
-    flg = data[2]
+    first = firstindex(data)
+    cmf = data[first]
+    flg = data[first + 1]
     (cmf & 0x0f) == 0x08 || error("zlib stream uses unsupported compression method")
     (cmf >> 4) <= 0x07 || error("zlib stream uses an invalid window size")
     ((UInt16(cmf) << 8) | UInt16(flg)) % 31 == 0 ||
         error("zlib stream has an invalid header check")
     (flg & 0x20) == 0x00 || error("zlib streams with preset dictionaries are not supported")
 
-    out = inflate(@view data[3:end - 4]; max_output=max_output)
-    expected = (UInt32(data[end - 3]) << 24) | (UInt32(data[end - 2]) << 16) |
-               (UInt32(data[end - 1]) << 8) | UInt32(data[end])
-    actual = _adler32(out)
-    actual == expected || error("zlib Adler-32 checksum mismatch")
+    br = _BitReader(data)
+    br.pos = first + 2
+    out = _inflate_stream!(br, max_output)
+    _bitreader_align!(br)
+    p = br.pos
+    p + 3 <= lastindex(data) || error("zlib Adler-32 checksum is truncated")
+    expected = (UInt32(data[p]) << 24) | (UInt32(data[p + 1]) << 16) |
+               (UInt32(data[p + 2]) << 8) | UInt32(data[p + 3])
+    _zlib_adler32(out) == expected || error("zlib Adler-32 checksum mismatch")
+    p + 3 == lastindex(data) || error("zlib stream has trailing data after its checksum")
     return out
 end
 
@@ -1275,55 +1477,59 @@ function _rgbe_parse_resolution(line::AbstractString)
     return (height=n1, width=n2, y_sign=a1.sign, x_sign=a2.sign)
 end
 
-@inline _rgbe_value(c::UInt8, e::UInt8) =
-    e == 0x00 ? 0.0 : ldexp(Float64(c), Int(e) - 136)
+# RGBE -> linear (Greg Ward's rgbe.c `rgbe2float`): mantissa * 2^(e - 136),
+# with e == 0 meaning black. Scales are powers of two, so multiplying by the
+# tabulated scale is exact.
+const _RGBE_SCALE = ntuple(i -> i == 1 ? 0.0 : ldexp(1.0, i - 1 - 136), 256)
+const _RGBE_BAND_ROWS = 16
 
-function _rgbe_flat_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
-    needed = _checked_mul_int(4, width, "RGBE scanline data")
-    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
-    channels = Matrix{UInt8}(undef, 4, width)
-    @inbounds for x in 1:width
-        base = pos + 4 * (x - 1)
-        channels[1, x] = bytes[base]
-        channels[2, x] = bytes[base + 1]
-        channels[3, x] = bytes[base + 2]
-        channels[4, x] = bytes[base + 3]
-    end
-    return channels, pos + needed
-end
+# Whether pixel data begins with a new-style RLE scanline header: two 2-bytes
+# then a width whose top bit is clear (rgbe.c RGBE_ReadPixels_RLE). Otherwise
+# the image is stored flat, as rgbe.c and three.js HDRLoader decide from the
+# first scanline for the whole image.
+@inline _rgbe_has_rle_header(bytes::Vector{UInt8}, pos::Int) =
+    pos + 3 <= length(bytes) && bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 &&
+    (bytes[pos + 2] & 0x80) == 0x00
 
-function _rgbe_flat_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
-    needed = _checked_mul_int(4, width, "RGBE scanline data")
-    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
-    return pos + needed
-end
-
-function _rgbe_rle_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
-    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
-    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
-        return _rgbe_flat_scanline_end(bytes, pos, width)
-    (bytes[pos + 2] & 0x80) == 0x00 ||
-        error("unsupported old-style RGBE run-length encoding")
+# Decode (when `buf !== nothing`) or only validate one RLE scanline starting at
+# `pos`; returns the position after it. `buf` receives the 4 x width
+# component planes.
+function _rgbe_rle_scanline!(buf::Union{Nothing,AbstractMatrix{UInt8}}, bytes::Vector{UInt8},
+                             pos::Int, width::Int)
+    n = length(bytes)
+    pos + 3 <= n || error("RGBE RLE scanline header is truncated")
+    (bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 && (bytes[pos + 2] & 0x80) == 0x00) ||
+        error("RGBE RLE image has a scanline without an RLE header")
     encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
     encoded_width == width ||
         error("RGBE RLE scanline width $encoded_width does not match header width $width")
     pos += 4
-    @inbounds for _ in 1:4
+    @inbounds for c in 1:4
         x = 1
         while x <= width
-            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
+            pos <= n || error("RGBE RLE scanline is truncated")
             count = Int(bytes[pos])
             pos += 1
             if count > 128
                 run = count - 128
-                run > 0 || error("RGBE RLE run length must be positive")
                 x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
-                pos <= length(bytes) || error("RGBE RLE run value is truncated")
+                pos <= n || error("RGBE RLE run value is truncated")
+                if buf !== nothing
+                    value = bytes[pos]
+                    for i in x:(x + run - 1)
+                        buf[c, i] = value
+                    end
+                end
                 pos += 1
                 x += run
             elseif count > 0
                 x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
-                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
+                pos + count - 1 <= n || error("RGBE RLE literal is truncated")
+                if buf !== nothing
+                    for i in 0:(count - 1)
+                        buf[c, x + i] = bytes[pos + i]
+                    end
+                end
                 pos += count
                 x += count
             else
@@ -1334,63 +1540,10 @@ function _rgbe_rle_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
     return pos
 end
 
-function _rgbe_validate_scanlines(bytes::Vector{UInt8}, pos::Int, width::Int,
-                                  height::Int, use_rle::Bool)
-    p = pos
-    for _ in 1:height
-        p = use_rle ? _rgbe_rle_scanline_end(bytes, p, width) :
-                      _rgbe_flat_scanline_end(bytes, p, width)
-    end
-    return p
-end
-
-function _rgbe_rle_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
-    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
-    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
-        return _rgbe_flat_scanline(bytes, pos, width)
-    (bytes[pos + 2] & 0x80) == 0x00 ||
-        error("unsupported old-style RGBE run-length encoding")
-    encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
-    encoded_width == width ||
-        error("RGBE RLE scanline width $encoded_width does not match header width $width")
-    pos += 4
-    channels = Matrix{UInt8}(undef, 4, width)
-    @inbounds for c in 1:4
-        x = 1
-        while x <= width
-            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
-            count = Int(bytes[pos])
-            pos += 1
-            if count > 128
-                run = count - 128
-                run > 0 || error("RGBE RLE run length must be positive")
-                x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
-                pos <= length(bytes) || error("RGBE RLE run value is truncated")
-                value = bytes[pos]
-                pos += 1
-                for i in x:(x + run - 1)
-                    channels[c, i] = value
-                end
-                x += run
-            elseif count > 0
-                x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
-                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
-                for i in x:(x + count - 1)
-                    channels[c, i] = bytes[pos]
-                    pos += 1
-                end
-                x += count
-            else
-                error("RGBE RLE packet length must be positive")
-            end
-        end
-    end
-    return channels, pos
-end
-
 function _decode_rgbe(bytes::Vector{UInt8})
     line, pos = _rgbe_read_line(bytes, 1)
-    (startswith(line, "#?RADIANCE") || startswith(line, "#?RGBE")) ||
+    # rgbe.c / three.js HDRLoader: the magic token is "#?" plus a program name.
+    (ncodeunits(line) >= 3 && startswith(line, "#?") && !isspace(line[3])) ||
         error("not a Radiance RGBE/HDR file")
     have_format = false
     resolution = nothing
@@ -1413,19 +1566,46 @@ function _decode_rgbe(bytes::Vector{UInt8})
 
     height = resolution.height
     width = resolution.width
-    use_rle = 8 <= width <= 0x7fff
-    _rgbe_validate_scanlines(bytes, pos, width, height, use_rle)
+    use_rle = 8 <= width <= 0x7fff && _rgbe_has_rle_header(bytes, pos)
+    # Validate every scanline before allocating the image, so a small file
+    # cannot claim a huge resolution.
+    if use_rle
+        p = pos
+        for _ in 1:height
+            p = _rgbe_rle_scanline!(nothing, bytes, p, width)
+        end
+    else
+        needed = _checked_mul_int(_checked_mul_int(4, width, "RGBE scanline data"),
+                                  height, "RGBE scanline data")
+        needed <= length(bytes) - pos + 1 || error("RGBE flat scanline is truncated")
+    end
     img = Array{Float64}(undef, height, width, 3)
-    @inbounds for sy in 1:height
-        channels, pos = use_rle ? _rgbe_rle_scanline(bytes, pos, width) :
-                                  _rgbe_flat_scanline(bytes, pos, width)
-        row = resolution.y_sign == '-' ? sy : height - sy + 1
-        for sx in 1:width
-            col = resolution.x_sign == '+' ? sx : width - sx + 1
-            e = channels[4, sx]
-            img[row, col, 1] = _rgbe_value(channels[1, sx], e)
-            img[row, col, 2] = _rgbe_value(channels[2, sx], e)
-            img[row, col, 3] = _rgbe_value(channels[3, sx], e)
+    # Decode a band of scanlines, then store it column by column: the image
+    # is column-major, so writing whole rows would stride through memory.
+    band = min(height, _RGBE_BAND_ROWS)
+    buf = Array{UInt8}(undef, 4, width, band)
+    flip_x = resolution.x_sign != '+'
+    flip_y = resolution.y_sign != '-'
+    for sy0 in 1:band:height
+        rows = min(band, height - sy0 + 1)
+        for k in 1:rows
+            if use_rle
+                pos = _rgbe_rle_scanline!(view(buf, :, :, k), bytes, pos, width)
+            else
+                copyto!(buf, 4 * width * (k - 1) + 1, bytes, pos, 4 * width)
+                pos += 4 * width
+            end
+        end
+        @inbounds for sx in 1:width
+            col = flip_x ? width - sx + 1 : sx
+            for k in 1:rows
+                sy = sy0 + k - 1
+                row = flip_y ? height - sy + 1 : sy
+                scale = _RGBE_SCALE[Int(buf[4, sx, k]) + 1]
+                img[row, col, 1] = Float64(buf[1, sx, k]) * scale
+                img[row, col, 2] = Float64(buf[2, sx, k]) * scale
+                img[row, col, 3] = Float64(buf[3, sx, k]) * scale
+            end
         end
     end
     return img

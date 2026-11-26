@@ -1,0 +1,306 @@
+using Test, Diff3D, SHA
+
+# ---------------------------------------------------------------------------
+# DEFLATE stream writer for hand-built test streams (RFC 1951). Bits are packed
+# LSB-first; Huffman codes are packed starting from their most significant bit.
+# ---------------------------------------------------------------------------
+mutable struct Audit3BitWriter
+    bytes::Vector{UInt8}
+    acc::UInt64
+    n::Int
+end
+Audit3BitWriter() = Audit3BitWriter(UInt8[], UInt64(0), 0)
+
+function audit3_put!(w::Audit3BitWriter, value::Integer, nbits::Integer)
+    for i in 0:(nbits - 1)
+        w.acc |= UInt64((value >> i) & 1) << w.n
+        w.n += 1
+        if w.n == 8
+            push!(w.bytes, UInt8(w.acc))
+            w.acc = 0
+            w.n = 0
+        end
+    end
+    return w
+end
+
+audit3_put_code!(w::Audit3BitWriter, code::Integer, len::Integer) =
+    audit3_put!(w, bitreverse(UInt16(code)) >> (16 - len), len)
+
+function audit3_finish(w::Audit3BitWriter)
+    w.n > 0 && push!(w.bytes, UInt8(w.acc))
+    return w.bytes
+end
+
+# Canonical codes for per-symbol lengths (RFC 1951 §3.2.2).
+function audit3_canonical(lengths::Vector{Int})
+    bl_count = zeros(Int, 16)
+    for l in lengths
+        l > 0 && (bl_count[l] += 1)
+    end
+    next = zeros(Int, 16)
+    code = 0
+    for bits in 1:15
+        code = (code + (bits == 1 ? 0 : bl_count[bits - 1])) << 1
+        next[bits] = code
+    end
+    codes = zeros(Int, length(lengths))
+    for (i, l) in enumerate(lengths)
+        if l > 0
+            codes[i] = next[l]
+            next[l] += 1
+        end
+    end
+    return codes
+end
+
+const AUDIT3_LEN_BASE = (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258)
+const AUDIT3_LEN_EXTRA = (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0)
+const AUDIT3_DIST_BASE = (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577)
+const AUDIT3_DIST_EXTRA = (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13)
+
+# One dynamic-Huffman block. `items` are byte literals or `(length, distance)`
+# pairs; the end-of-block code is appended. The code-length code gives the 16
+# literal lengths 0-15 four bits each (a complete code) and no repeat codes.
+function audit3_dynamic_block!(w::Audit3BitWriter, lit_lengths::Vector{Int},
+                               dist_lengths::Vector{Int}, items; final::Bool=true,
+                               emit_eob::Bool=true)
+    audit3_put!(w, final ? 1 : 0, 1)
+    audit3_put!(w, 2, 2)
+    audit3_put!(w, length(lit_lengths) - 257, 5)
+    audit3_put!(w, length(dist_lengths) - 1, 5)
+    audit3_put!(w, 19 - 4, 4)
+    order = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
+    cl_lengths = [s <= 15 ? 4 : 0 for s in 0:18]
+    for s in order
+        audit3_put!(w, cl_lengths[s + 1], 3)
+    end
+    cl_codes = audit3_canonical(cl_lengths)
+    for l in vcat(lit_lengths, dist_lengths)
+        audit3_put_code!(w, cl_codes[l + 1], 4)
+    end
+    lit_codes = audit3_canonical(lit_lengths)
+    dist_codes = audit3_canonical(dist_lengths)
+    for item in items
+        if item isa Integer
+            audit3_put_code!(w, lit_codes[item + 1], lit_lengths[item + 1])
+        else
+            n, d = item
+            li = findlast(<=(n), AUDIT3_LEN_BASE)
+            n == 258 && (li = 29)
+            sym = 256 + li
+            audit3_put_code!(w, lit_codes[sym + 1], lit_lengths[sym + 1])
+            audit3_put!(w, n - AUDIT3_LEN_BASE[li], AUDIT3_LEN_EXTRA[li])
+            di = findlast(<=(d), AUDIT3_DIST_BASE)
+            audit3_put_code!(w, dist_codes[di], dist_lengths[di])
+            audit3_put!(w, d - AUDIT3_DIST_BASE[di], AUDIT3_DIST_EXTRA[di])
+        end
+    end
+    emit_eob && audit3_put_code!(w, lit_codes[257], lit_lengths[257])
+    return w
+end
+
+function audit3_dynamic_stream(lit_lengths, dist_lengths, items; kwargs...)
+    w = Audit3BitWriter()
+    audit3_dynamic_block!(w, lit_lengths, dist_lengths, items; kwargs...)
+    return audit3_finish(w)
+end
+
+function audit3_zlib_wrap(raw::Vector{UInt8}, payload::Vector{UInt8})
+    a = UInt32(1); b = UInt32(0)
+    for byte in payload
+        a = (a + byte) % 65521
+        b = (b + a) % 65521
+    end
+    adler = (b << 16) | a
+    return vcat(UInt8[0x78, 0x01], raw,
+                UInt8[adler >> 24, (adler >> 16) & 0xff, (adler >> 8) & 0xff, adler & 0xff])
+end
+
+# A literal/length code whose codes for 'A'..'N' have lengths 1..14 and whose
+# 'O' and end-of-block codes have length 15 (a complete code). Codes longer
+# than the decoder's 10-bit lookup exercise its canonical slow path.
+function audit3_skewed_lit_lengths()
+    lit = zeros(Int, 257)
+    for (i, c) in enumerate(Int('A'):Int('N'))
+        lit[c + 1] = i
+    end
+    lit[Int('O') + 1] = 15
+    lit[257] = 15
+    return lit
+end
+
+@testset "inflate rejects invalid Huffman code sets" begin
+    # Streams found by differential fuzzing against CPython zlib 1.3
+    # (zlib.decompressobj(-15)). zlib inflate_table rejects them with the
+    # quoted messages; the previous decoder returned 22, 50, and 42 bytes.
+    bad_litlen = UInt8[0xe5,0xc1,0x21,0x01,0x00,0x00,0x00,0x00,0x90,0xc1,0xfe,0x77,
+                       0x00,0x00,0x00,0x00,0x00,0x00,0x10]   # "invalid literal/lengths set"
+    bad_codelen = UInt8[0x05,0xc1,0x81,0xe0,0x00,0x00,0x00,0x00,0x90,0x49,0xff,0x2d,
+                        0x00,0x00,0x00,0x00,0x00,0x00,0x20]  # "invalid code lengths set"
+    bad_dist = UInt8[0x05,0xc9,0x21,0x01,0x00,0x00,0x00,0x00,0x90,0xc1,0xfe,0x77,
+                     0x00,0x00,0x00,0x00,0x00,0x00,0x10]     # "invalid distances set"
+    @test_throws "corrupt DEFLATE Huffman code" inflate(bad_litlen)
+    @test_throws "corrupt DEFLATE Huffman code" inflate(bad_codelen)
+    @test_throws "corrupt DEFLATE Huffman code" inflate(bad_dist)
+
+    # Hand-built tables: over-subscribed (three 1-bit codes) and incomplete
+    # (two 2-bit codes) literal/length sets are not prefix codes (RFC 1951
+    # §3.2.2); zlib reports "invalid literal/lengths set" for both.
+    over = zeros(Int, 257); over[Int('A') + 1] = 1; over[Int('B') + 1] = 1; over[257] = 1
+    @test_throws "over-subscribed" inflate(audit3_dynamic_stream(over, [1], UInt8[]))
+    incomplete = zeros(Int, 257); incomplete[Int('A') + 1] = 2; incomplete[257] = 2
+    @test_throws "incomplete" inflate(audit3_dynamic_stream(incomplete, [1], UInt8[]))
+    # RFC 1951 §3.2.7 allows one distance code of one bit, and a distance
+    # code with no codes at all when the block has no matches.
+    single = zeros(Int, 257); single[Int('A') + 1] = 1; single[257] = 1
+    @test inflate(audit3_dynamic_stream(single, [1], [Int('A'), Int('A')])) ==
+          UInt8['A', 'A']
+    @test inflate(audit3_dynamic_stream(single, [0], [Int('A')])) == UInt8['A']
+    # HLIT above 286 and a missing end-of-block code are invalid (RFC 1951
+    # §3.2.7; zlib: "too many length or distance symbols", "invalid code --
+    # missing end-of-block").
+    wide = zeros(Int, 288); wide[Int('A') + 1] = 1; wide[257] = 1
+    @test_throws "HLIT 288 exceeds 286" inflate(audit3_dynamic_stream(wide, [1], [Int('A')]))
+    no_eob = zeros(Int, 257); no_eob[Int('A') + 1] = 1; no_eob[Int('B') + 1] = 1
+    @test_throws "missing end-of-block" inflate(
+        audit3_dynamic_stream(no_eob, [1], [Int('A')]; emit_eob=false))
+end
+
+@testset "inflate decodes codes longer than the lookup table" begin
+    lit = audit3_skewed_lit_lengths()
+    text = Int.(collect("ABCDEFGHIJKLMNOONMLKJIHGFEDCBA"))
+    stream = audit3_dynamic_stream(lit, [1], text)
+    @test inflate(stream) == UInt8.(text)
+    # The same stream truncated anywhere is an error, never a short result.
+    for cut in 0:(length(stream) - 1)
+        @test_throws ErrorException inflate(stream[1:cut])
+    end
+    # Back-references, including overlapping copies (distance < length) and
+    # the maximum length 258, across two blocks sharing the output window.
+    lit2 = zeros(Int, 286)
+    for c in Int('a'):Int('d')
+        lit2[c + 1] = 3
+    end
+    lit2[257] = 3
+    for sym in (257, 258, 259, 265, 284, 285)
+        lit2[sym + 1] = 4
+    end
+    dist2 = zeros(Int, 30)       # symbols 0, 1, 3 (2 bits) and 4, 10 (3 bits)
+    dist2[1] = 2; dist2[2] = 2; dist2[4] = 2; dist2[5] = 3; dist2[11] = 3
+    w = Audit3BitWriter()
+    items1 = [Int('a'), Int('b'), Int('c'), Int('d'), (3, 4), (11, 1), (258, 2)]
+    audit3_dynamic_block!(w, lit2, dist2, items1; final=false)
+    items2 = [(227, 34), Int('a'), (4, 5)]
+    audit3_dynamic_block!(w, lit2, dist2, items2; final=true)
+    raw = audit3_finish(w)
+    expected = UInt8[]
+    function apply!(out, items)
+        for item in items
+            if item isa Integer
+                push!(out, UInt8(item))
+            else
+                n, d = item
+                for _ in 1:n
+                    push!(out, out[end - d + 1])
+                end
+            end
+        end
+        return out
+    end
+    apply!(expected, items1); apply!(expected, items2)
+    @test inflate(raw) == expected
+    @test zlib_inflate(audit3_zlib_wrap(raw, expected)) == expected
+    # max_output bounds the result exactly.
+    @test inflate(raw; max_output=length(expected)) == expected
+    @test_throws "DEFLATE output exceeds expected size" inflate(
+        raw; max_output=length(expected) - 1)
+end
+
+@testset "zlib_inflate reads the Adler-32 right after the DEFLATE stream" begin
+    # RFC 1950 §2.2: ADLER32 immediately follows the compressed data. Bytes
+    # between the final block and the checksum were silently skipped before.
+    payload = UInt8['A', 'B', 'C']
+    stored = UInt8[0x01, 0x03, 0x00, 0xfc, 0xff, 0x41, 0x42, 0x43]
+    good = audit3_zlib_wrap(stored, payload)
+    @test zlib_inflate(good) == payload
+    junk = vcat(good[1:end - 4], UInt8[0x00], good[end - 3:end])
+    @test_throws "zlib Adler-32 checksum mismatch" zlib_inflate(junk)
+    @test_throws "trailing data" zlib_inflate(vcat(good, UInt8[0x00]))
+    @test_throws "checksum is truncated" zlib_inflate(good[1:end - 1])
+end
+
+@testset "inflate and zlib_inflate document their contracts" begin
+    # The raw-DEFLATE docstring was attached to an internal helper, leaving
+    # `inflate` with only the generic one-line summary.
+    @test occursin("max_output", string(@doc inflate))
+    @test occursin("Adler-32", string(@doc zlib_inflate))
+end
+
+audit3_hdr(header::String, pixels::Vector{UInt8}) = vcat(Vector{UInt8}(codeunits(header)), pixels)
+# rgbe.c rgbe2float: mantissa * 2^(exponent - 136), exponent 0 is black.
+audit3_rgbe(c, e) = e == 0 ? 0.0 : c * 2.0^(Int(e) - 136)
+
+@testset "RGBE decoding follows rgbe.c / three.js HDRLoader scanline rules" begin
+    # A flat 8-pixel scanline whose first pixel is (2, 2, 200, 130). Its blue
+    # byte has the top bit set, so it is not an RLE header (HDRLoader.js:243
+    # treats the image as flat); it used to raise "old-style RLE".
+    px = UInt8[]
+    for x in 1:8
+        append!(px, x == 1 ? UInt8[2, 2, 200, 130] : UInt8[10x, 20, 30, 129])
+    end
+    img = Diff3D._decode_rgbe(audit3_hdr("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 8\n", px))
+    @test img[1, 1, :] == [audit3_rgbe(2, 130), audit3_rgbe(2, 130), audit3_rgbe(200, 130)]
+    @test img[1, 8, :] == [audit3_rgbe(80, 129), audit3_rgbe(20, 129), audit3_rgbe(30, 129)]
+    # The first scanline decides RLE versus flat for the whole image
+    # (HDRLoader.js:239-248). A flat image whose second scanline happens to
+    # start with (2, 2, 0, 9) is still flat; it used to fail as an RLE width
+    # mismatch. three.js decodes that pixel as 2 * 2^-119 / 255.
+    px = UInt8[]
+    for y in 1:2, x in 1:8
+        append!(px, (y == 2 && x == 1) ? UInt8[2, 2, 0, 9] : UInt8[10x, 20y, 30, 129])
+    end
+    img = Diff3D._decode_rgbe(audit3_hdr("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 8\n", px))
+    @test img[2, 1, :] == [audit3_rgbe(2, 9), audit3_rgbe(2, 9), 0.0]
+    @test img[2, 2, :] == [audit3_rgbe(20, 129), audit3_rgbe(40, 129), audit3_rgbe(30, 129)]
+    # An RLE image may not switch to a flat scanline (HDRLoader.js:286-289
+    # "bad rgbe scanline format").
+    rle_line = UInt8[2, 2, 0, 8, 136, 1, 136, 2, 136, 3, 136, 129]
+    @test size(Diff3D._decode_rgbe(audit3_hdr(
+        "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 8\n", vcat(rle_line, rle_line)))) == (2, 8, 3)
+    @test_throws "without an RLE header" Diff3D._decode_rgbe(audit3_hdr(
+        "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 8\n", vcat(rle_line, fill(0x05, 32))))
+    # The magic line is "#?" plus any program name (HDRLoader.js:129,165).
+    img = Diff3D._decode_rgbe(audit3_hdr("#?PFSTOOLS\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n",
+                                         UInt8[128, 64, 32, 129, 1, 2, 3, 140]))
+    @test img[1, :, 1] == [1.0, 16.0]
+    @test_throws "not a Radiance" Diff3D._decode_rgbe(audit3_hdr(
+        "#? RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n", UInt8[1, 1, 1, 129]))
+    @test_throws "not a Radiance" Diff3D._decode_rgbe(audit3_hdr(
+        "#?\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n", UInt8[1, 1, 1, 129]))
+end
+
+@testset "RGBE banded store matches per-pixel decoding" begin
+    # Heights that are not multiples of the 16-row band, in all four
+    # orientations, against a direct per-pixel decode of flat data.
+    for (H, W) in ((37, 9), (16, 8), (1, 3)), ysign in ("-", "+"), xsign in ("+", "-")
+        px = UInt8[]
+        for y in 1:H, x in 1:W
+            append!(px, UInt8[(7y + 3x) % 256, (5y * x) % 256, (y + 11x) % 251,
+                              y == x ? 0 : 120 + (x + y) % 20])
+        end
+        W >= 8 && (px[1] = 0x09)   # first pixel must not read as an RLE header
+        img = Diff3D._decode_rgbe(audit3_hdr(
+            "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n$(ysign)Y $H $(xsign)X $W\n", px))
+        expected = zeros(H, W, 3)
+        for sy in 1:H, sx in 1:W
+            base = 4 * ((sy - 1) * W + (sx - 1))
+            row = ysign == "-" ? sy : H - sy + 1
+            col = xsign == "+" ? sx : W - sx + 1
+            for c in 1:3
+                expected[row, col, c] = audit3_rgbe(px[base + c], px[base + 4])
+            end
+        end
+        @test img == expected
+    end
+end
