@@ -37,9 +37,14 @@ Base.convert(::Type{Vec4{T}}, v::Vec4) where {T<:Real} =
     Vec4{T}(convert(T, v.x), convert(T, v.y), convert(T, v.z), convert(T, v.w))
 
 @inline _vec3_eltype(::Vec3{T}) where {T} = T
-@inline function _promote_vec3s(vectors::Vec3...)
-    T = promote_type(map(_vec3_eltype, vectors)...)
-    return map(v -> convert(Vec3{T}, v), vectors)
+# Fixed arities (no varargs closure) so Julia 1.10 infers the promoted type.
+@inline function _promote_vec3s(a::Vec3, b::Vec3)
+    T = promote_type(_vec3_eltype(a), _vec3_eltype(b))
+    return convert(Vec3{T}, a), convert(Vec3{T}, b)
+end
+@inline function _promote_vec3s(a::Vec3, b::Vec3, c::Vec3)
+    T = promote_type(_vec3_eltype(a), _vec3_eltype(b), _vec3_eltype(c))
+    return convert(Vec3{T}, a), convert(Vec3{T}, b), convert(Vec3{T}, c)
 end
 
 # Vec3 arithmetic
