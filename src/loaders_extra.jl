@@ -2959,29 +2959,22 @@ function load_obj_groups(path::String)
 end
 
 # ========================== Minimal JSON parser ==========================
-# Supports objects, arrays, strings, numbers, true/false/null — enough for glTF.
-
-mutable struct _JSONParser
-    s::String
-    i::Int
-end
+# RFC 8259 JSON with ECMAScript JSON.parse results: numbers are Float64
+# (correctly rounded, underflow to ±0), objects are Dict{String,Any} keeping the
+# last duplicate key, arrays are Vector{Any}, null is `nothing`. Unlike
+# JSON.parse, numbers that round to ±Inf and unpaired \u surrogates (which
+# UTF-8 cannot hold) are errors. Containers are tracked on an explicit stack,
+# so nesting depth is limited only by memory.
 
 mutable struct _JSONByteParser{B<:AbstractVector{UInt8}}
     s::B
     i::Int
 end
 
-function _json_parse(s::String)
-    p = _JSONParser(s, 1)
-    _json_ws(p)
-    p.i <= ncodeunits(p.s) || error("empty JSON input")
-    v = _json_value(p)
-    _json_ws(p)
-    p.i > ncodeunits(p.s) || error("unexpected trailing JSON content")
-    return v
-end
+_json_parse(s::String) = _json_parse(codeunits(s))
 
 function _json_parse(bytes::AbstractVector{UInt8})
+    Base.require_one_based_indexing(bytes)
     p = _JSONByteParser(bytes, 1)
     _jsonb_ws(p)
     p.i <= length(p.s) || error("empty JSON input")
@@ -2989,27 +2982,6 @@ function _json_parse(bytes::AbstractVector{UInt8})
     _jsonb_ws(p)
     p.i > length(p.s) || error("unexpected trailing JSON content")
     return v
-end
-
-@inline function _json_ws(p)
-    n = ncodeunits(p.s)
-    while p.i <= n && (p.s[p.i] in (' ', '\t', '\n', '\r'))
-        p.i += 1
-    end
-end
-
-function _json_current(p, context::String)
-    p.i <= ncodeunits(p.s) || error("unexpected end of JSON $context")
-    return p.s[p.i]
-end
-
-function _json_literal(p, literal::String, value)
-    n = ncodeunits(p.s)
-    last = p.i + ncodeunits(literal) - 1
-    last <= n && p.s[p.i:last] == literal ||
-        error("invalid JSON literal at byte $(p.i)")
-    p.i = last + 1
-    return value
 end
 
 @inline function _jsonb_ws(p)
@@ -3038,59 +3010,91 @@ function _jsonb_literal(p, literal::String, value)
     return value
 end
 
-function _jsonb_value(p)
-    c = _jsonb_current(p, "value")
-    if c == UInt8('{'); return _jsonb_object(p)
-    elseif c == UInt8('['); return _jsonb_array(p)
-    elseif c == UInt8('"'); return _jsonb_string(p)
-    elseif c == UInt8('t'); return _jsonb_literal(p, "true", true)
-    elseif c == UInt8('f'); return _jsonb_literal(p, "false", false)
-    elseif c == UInt8('n'); return _jsonb_literal(p, "null", nothing)
-    else; return _jsonb_number(p)
-    end
+# Read `"key" :` of an object entry, leaving `p` at the entry's value.
+function _jsonb_key(p)
+    _jsonb_ws(p)
+    _jsonb_current(p, "object key") == UInt8('"') ||
+        error("JSON object key must be a string")
+    key = _jsonb_string(p)
+    _jsonb_ws(p)
+    _jsonb_current(p, "object entry") == UInt8(':') ||
+        error("JSON object entry is missing ':'")
+    p.i += 1
+    return key
 end
 
-function _jsonb_object(p)
-    d = Dict{String, Any}(); p.i += 1; _jsonb_ws(p)
-    _jsonb_current(p, "object") == UInt8('}') && (p.i += 1; return d)
+# Parse one value. Open arrays and objects wait on `stack`; each open object
+# has the key of the value being parsed for it on `keys`.
+function _jsonb_value(p)
+    stack = Any[]
+    keys = String[]
     while true
         _jsonb_ws(p)
-        _jsonb_current(p, "object key") == UInt8('"') ||
-            error("JSON object key must be a string")
-        key = _jsonb_string(p); _jsonb_ws(p)
-        _jsonb_current(p, "object entry") == UInt8(':') ||
-            error("JSON object entry is missing ':'")
-        p.i += 1
-        _jsonb_ws(p); d[key] = _jsonb_value(p); _jsonb_ws(p)
-        c = _jsonb_current(p, "object entry")
-        if c == UInt8(',')
+        c = _jsonb_current(p, "value")
+        if c == UInt8('{')
             p.i += 1
-        elseif c == UInt8('}')
+            _jsonb_ws(p)
+            if _jsonb_current(p, "object") != UInt8('}')
+                push!(stack, Dict{String,Any}())
+                push!(keys, _jsonb_key(p))
+                continue
+            end
             p.i += 1
-            break
+            v = Dict{String,Any}()
+        elseif c == UInt8('[')
+            p.i += 1
+            _jsonb_ws(p)
+            if _jsonb_current(p, "array") != UInt8(']')
+                push!(stack, Any[])
+                continue
+            end
+            p.i += 1
+            v = Any[]
+        elseif c == UInt8('"')
+            v = _jsonb_string(p)
+        elseif c == UInt8('t')
+            v = _jsonb_literal(p, "true", true)
+        elseif c == UInt8('f')
+            v = _jsonb_literal(p, "false", false)
+        elseif c == UInt8('n')
+            v = _jsonb_literal(p, "null", nothing)
         else
-            error("JSON object entry must end with ',' or '}'")
+            v = _jsonb_number(p)
+        end
+        # Give `v` to the innermost open container; a closing bracket makes
+        # that container the next value to hand outwards.
+        while true
+            isempty(stack) && return v
+            top = stack[end]
+            _jsonb_ws(p)
+            if top isa Dict{String,Any}
+                top[pop!(keys)] = v
+                c = _jsonb_current(p, "object entry")
+                if c == UInt8(',')
+                    p.i += 1
+                    push!(keys, _jsonb_key(p))
+                    break
+                elseif c == UInt8('}')
+                    p.i += 1
+                    v = pop!(stack)
+                else
+                    error("JSON object entry must end with ',' or '}'")
+                end
+            else
+                push!(top::Vector{Any}, v)
+                c = _jsonb_current(p, "array entry")
+                if c == UInt8(',')
+                    p.i += 1
+                    break
+                elseif c == UInt8(']')
+                    p.i += 1
+                    v = pop!(stack)
+                else
+                    error("JSON array entry must end with ',' or ']'")
+                end
+            end
         end
     end
-    return d
-end
-
-function _jsonb_array(p)
-    a = Any[]; p.i += 1; _jsonb_ws(p)
-    _jsonb_current(p, "array") == UInt8(']') && (p.i += 1; return a)
-    while true
-        _jsonb_ws(p); push!(a, _jsonb_value(p)); _jsonb_ws(p)
-        c = _jsonb_current(p, "array entry")
-        if c == UInt8(',')
-            p.i += 1
-        elseif c == UInt8(']')
-            p.i += 1
-            break
-        else
-            error("JSON array entry must end with ',' or ']'")
-        end
-    end
-    return a
 end
 
 function _jsonb_hex_value(c::UInt8)
@@ -3111,26 +3115,46 @@ function _jsonb_hex4!(p)
     return v
 end
 
+function _jsonb_utf8_string(bytes::Vector{UInt8})
+    s = String(bytes)
+    isvalid(s) || error("invalid UTF-8 in JSON string")
+    return s
+end
+
 function _jsonb_string(p)
-    p.i += 1
+    s = p.s
+    n = length(s)
+    start = p.i + 1
+    i = start
+    # Fast path: no escapes, so the string is the bytes up to the closing quote.
+    @inbounds while i <= n
+        c = s[i]
+        if c == UInt8('"')
+            p.i = i + 1
+            return _jsonb_utf8_string(s[start:(i - 1)])
+        end
+        c == UInt8('\\') && break
+        c >= 0x20 || error("JSON string contains an unescaped control character")
+        i += 1
+    end
+    i <= n || error("unterminated JSON string")
     io = IOBuffer()
-    n = length(p.s)
+    write(io, @view s[start:(i - 1)])
+    p.i = i
     while p.i <= n
-        c = p.s[p.i]
+        c = s[p.i]
         if c == UInt8('"')
             p.i += 1
-            s = String(take!(io))
-            isvalid(s) || error("invalid UTF-8 in JSON string")
-            return s
+            return _jsonb_utf8_string(take!(io))
         elseif c == UInt8('\\')
             p.i += 1
             p.i <= n || error("unterminated JSON escape")
-            e = p.s[p.i]
+            e = s[p.i]
             if e == UInt8('u')
                 p.i += 1
                 cp = _jsonb_hex4!(p)
                 if 0xD800 <= cp <= 0xDBFF
-                    (p.i + 1 <= n && p.s[p.i] == UInt8('\\') && p.s[p.i + 1] == UInt8('u')) ||
+                    (p.i + 1 <= n && s[p.i] == UInt8('\\') && s[p.i + 1] == UInt8('u')) ||
                         error("JSON unicode high surrogate without low surrogate")
                     p.i += 2
                     lo = _jsonb_hex4!(p)
@@ -3173,190 +3197,105 @@ end
 
 @inline _jsonb_digit(c::UInt8) = UInt8('0') <= c <= UInt8('9')
 
+@inline _jsonb_number_char(c::UInt8) =
+    _jsonb_digit(c) || c == UInt8('-') || c == UInt8('+') || c == UInt8('.') ||
+    c == UInt8('e') || c == UInt8('E')
+
+# Name the number-like text at `start` (at most 40 bytes) in the error.
+@noinline function _jsonb_bad_number(s, start::Int)
+    stop = start
+    while stop <= length(s) && stop - start < 40 && _jsonb_number_char(s[stop])
+        stop += 1
+    end
+    stop == start && error("invalid JSON value at byte $start")
+    error("invalid JSON number $(String(s[start:(stop - 1)])) at byte $start")
+end
+
+# Powers of ten that Float64 holds exactly (5^22 < 2^53).
+const _JSON_POW10 = (1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22)
+
 function _jsonb_number(p)
+    s = p.s
+    n = length(s)
     start = p.i
-    n = length(p.s)
-    p.i <= n || error("invalid JSON value at byte $start")
-    c = p.s[p.i]
-    c == UInt8('-') && (p.i += 1)
-    p.i <= n || error("invalid JSON number at byte $start")
-    c = p.s[p.i]
+    i = start
+    negative = i <= n && s[i] == UInt8('-')
+    negative && (i += 1)
+    i <= n || _jsonb_bad_number(s, start)
+    # The value is m * 10^scale with m holding at most 19 significant digits
+    # (m < 10^19 < 2^64); `dropped` marks nonzero digits beyond the 19th.
+    m = UInt64(0)
+    ndigits = 0
+    scale = 0
+    dropped = false
+    c = s[i]
     if c == UInt8('0')
-        p.i += 1
+        i += 1
     elseif UInt8('1') <= c <= UInt8('9')
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
+        while i <= n && _jsonb_digit(s[i])
+            if ndigits < 19
+                m = 10m + (s[i] - UInt8('0'))
+                ndigits += 1
+            else
+                scale += 1
+                dropped |= s[i] != UInt8('0')
+            end
+            i += 1
         end
     else
-        error("invalid JSON value at byte $start")
+        _jsonb_bad_number(s, start)
     end
-    if p.i <= n && p.s[p.i] == UInt8('.')
-        p.i += 1
-        frac_start = p.i
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
-        end
-        p.i > frac_start || error("invalid JSON number at byte $start")
-    end
-    if p.i <= n && (p.s[p.i] == UInt8('e') || p.s[p.i] == UInt8('E'))
-        p.i += 1
-        if p.i <= n && (p.s[p.i] == UInt8('+') || p.s[p.i] == UInt8('-'))
-            p.i += 1
-        end
-        exp_start = p.i
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
-        end
-        p.i > exp_start || error("invalid JSON number at byte $start")
-    end
-    raw = @view p.s[start:(p.i - 1)]
-    value = tryparse(Float64, String(raw))
-    value === nothing && error("invalid JSON number at byte $start")
-    isfinite(value) || error("JSON number at byte $start must be finite")
-    return value
-end
-
-function _json_value(p)
-    c = _json_current(p, "value")
-    if c == '{'; return _json_object(p)
-    elseif c == '['; return _json_array(p)
-    elseif c == '"'; return _json_string(p)
-    elseif c == 't'; return _json_literal(p, "true", true)
-    elseif c == 'f'; return _json_literal(p, "false", false)
-    elseif c == 'n'; return _json_literal(p, "null", nothing)
-    else; return _json_number(p)
-    end
-end
-
-function _json_object(p)
-    d = Dict{String, Any}(); p.i += 1; _json_ws(p)
-    _json_current(p, "object") == '}' && (p.i += 1; return d)
-    while true
-        _json_ws(p)
-        _json_current(p, "object key") == '"' ||
-            error("JSON object key must be a string")
-        key = _json_string(p); _json_ws(p)
-        _json_current(p, "object entry") == ':' ||
-            error("JSON object entry is missing ':'")
-        p.i += 1
-        _json_ws(p); d[key] = _json_value(p); _json_ws(p)
-        c = _json_current(p, "object entry")
-        if c == ','
-            p.i += 1
-        elseif c == '}'
-            p.i += 1
-            break
-        else
-            error("JSON object entry must end with ',' or '}'")
-        end
-    end
-    return d
-end
-
-function _json_array(p)
-    a = Any[]; p.i += 1; _json_ws(p)
-    _json_current(p, "array") == ']' && (p.i += 1; return a)
-    while true
-        _json_ws(p); push!(a, _json_value(p)); _json_ws(p)
-        c = _json_current(p, "array entry")
-        if c == ','
-            p.i += 1
-        elseif c == ']'
-            p.i += 1
-            break
-        else
-            error("JSON array entry must end with ',' or ']'")
-        end
-    end
-    return a
-end
-
-function _json_hex_value(c)
-    '0' <= c <= '9' && return Int(c - '0')
-    'a' <= c <= 'f' && return Int(c - 'a') + 10
-    'A' <= c <= 'F' && return Int(c - 'A') + 10
-    error("invalid JSON unicode escape")
-end
-
-function _json_hex4!(p)
-    n = ncodeunits(p.s)
-    p.i + 3 <= n || error("incomplete JSON unicode escape")
-    v = 0
-    for _ in 1:4
-        v = (v << 4) | _json_hex_value(p.s[p.i])
-        p.i += 1
-    end
-    return v
-end
-
-function _json_string(p)
-    p.i += 1; io = IOBuffer()
-    n = ncodeunits(p.s)
-    while p.i <= n && p.s[p.i] != '"'
-        c = p.s[p.i]
-        if c == '\\'
-            p.i += 1
-            p.i <= n || error("unterminated JSON escape")
-            e = p.s[p.i]
-            if e == 'u'
-                p.i += 1
-                cp = _json_hex4!(p)
-                if 0xD800 <= cp <= 0xDBFF
-                    (p.i + 1 <= n && p.s[p.i] == '\\' && p.s[p.i + 1] == 'u') ||
-                        error("JSON unicode high surrogate without low surrogate")
-                    p.i += 2
-                    lo = _json_hex4!(p)
-                    0xDC00 <= lo <= 0xDFFF ||
-                        error("JSON unicode high surrogate without low surrogate")
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
-                elseif 0xDC00 <= cp <= 0xDFFF
-                    error("JSON unicode low surrogate without high surrogate")
-                end
-                print(io, Char(cp))
-                continue
-            elseif e == '"'
-                print(io, '"')
-            elseif e == '\\'
-                print(io, '\\')
-            elseif e == '/'
-                print(io, '/')
-            elseif e == 'b'
-                print(io, '\b')
-            elseif e == 'f'
-                print(io, '\f')
-            elseif e == 'n'
-                print(io, '\n')
-            elseif e == 'r'
-                print(io, '\r')
-            elseif e == 't'
-                print(io, '\t')
+    if i <= n && s[i] == UInt8('.')
+        i += 1
+        frac_start = i
+        while i <= n && _jsonb_digit(s[i])
+            d = s[i] - UInt8('0')
+            if m == 0 && d == 0
+                scale -= 1
+            elseif ndigits < 19
+                m = 10m + d
+                ndigits += 1
+                scale -= 1
             else
-                error("unsupported JSON escape: \\$e")
+                dropped |= d != 0
             end
-            p.i += 1
-        else
-            c >= '\x20' ||
-                error("JSON string contains an unescaped control character")
-            print(io, c)
-            p.i = nextind(p.s, p.i)             # skip full (possibly multibyte) char
+            i += 1
         end
+        i > frac_start || _jsonb_bad_number(s, start)
     end
-    p.i <= n || error("unterminated JSON string")
-    p.i += 1
-    return String(take!(io))
-end
-
-function _json_number(p)
-    start = p.i; n = ncodeunits(p.s)
-    while p.i <= n && (p.s[p.i] in ('-','+','.','e','E','0','1','2','3','4','5','6','7','8','9'))
-        p.i += 1
+    if i <= n && (s[i] == UInt8('e') || s[i] == UInt8('E'))
+        i += 1
+        exp_negative = i <= n && s[i] == UInt8('-')
+        (i <= n && (s[i] == UInt8('+') || s[i] == UInt8('-'))) && (i += 1)
+        exp_start = i
+        e = 0
+        while i <= n && _jsonb_digit(s[i])
+            # Saturate far beyond the Float64 range so huge exponents cannot overflow.
+            e = min(10e + Int(s[i] - UInt8('0')), 1_000_000)
+            i += 1
+        end
+        i > exp_start || _jsonb_bad_number(s, start)
+        scale += exp_negative ? -e : e
     end
-    p.i > start || error("invalid JSON value at byte $start")
-    raw = p.s[start:p.i-1]
-    occursin(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$", raw) ||
-        error("invalid JSON number $raw")
+    # JSON.parse rejects "01", "1.2.3" and "1-2": the number must end here.
+    i <= n && _jsonb_number_char(s[i]) && _jsonb_bad_number(s, start)
+    p.i = i
+    # Clinger's fast path: m and 10^|scale| are exact, so one IEEE multiply
+    # or divide gives the correctly rounded value.
+    if !dropped && m <= UInt64(1) << 53 && -22 <= scale <= 22
+        x = Float64(m)
+        x = scale >= 0 ? x * _JSON_POW10[scale + 1] : x / _JSON_POW10[1 - scale]
+        return negative ? -x : x
+    end
+    raw = String(s[start:(i - 1)])
     value = tryparse(Float64, raw)
-    value === nothing && error("invalid JSON number $raw")
+    if value === nothing
+        # tryparse returns nothing only when the correctly rounded value is
+        # ±0 (underflow, which JSON.parse returns) or ±Inf (overflow).
+        abs(parse(BigFloat, raw)) < 1 || error("JSON number $raw must be finite")
+        value = negative ? -0.0 : 0.0
+    end
     isfinite(value) || error("JSON number $raw must be finite")
     return value
 end

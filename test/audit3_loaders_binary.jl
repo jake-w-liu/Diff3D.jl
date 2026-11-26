@@ -448,3 +448,49 @@ end
     @test_throws "PNG palette index 3 is out of range" Diff3D._decode_png(
         audit3_png(idx, 3, 8; plte=UInt8[1, 2, 3, 4, 5, 6]))
 end
+
+@testset "JSON parser follows JSON.parse on valid input" begin
+    # ECMA-262 JSON.parse rounds numbers to the nearest double, so values
+    # below half the least subnormal become ±0 (node: JSON.parse("1e-400") === 0,
+    # Object.is(JSON.parse("-1e-400"), -0)).
+    @test Diff3D._json_parse("1e-400") === 0.0
+    @test only(Diff3D._json_parse("[2.4703282292062327e-324]")) === 0.0
+    @test Diff3D._json_parse("-1e-400") === -0.0
+    @test Diff3D._json_parse(Vector{UInt8}("-1e-400")) === -0.0
+    @test Diff3D._json_parse("2.4703282292062328e-324") === 5.0e-324
+    # Correct rounding, including halfway cases (node JSON.parse values).
+    @test Diff3D._json_parse("9007199254740993") === 9.007199254740992e15
+    @test Diff3D._json_parse("9007199254740995") === 9.007199254740996e15
+    @test Diff3D._json_parse("123456789012345678901234567890") === 1.2345678901234568e29
+    @test Diff3D._json_parse("0.1") === 0.1
+    @test Diff3D._json_parse("-0") === -0.0
+    @test Diff3D._json_parse("1.7976931348623157e308") === 1.7976931348623157e308
+    @test Diff3D._json_parse("4.35e-21") === 4.35e-21
+    # Nesting depth is limited by memory, not the call stack (JSON.parse
+    # accepts 10^6 nested arrays).
+    depth = 200_000
+    nested = Diff3D._json_parse("["^depth * "{\"k\":1}" * "]"^depth)
+    levels = 0
+    while nested isa Vector{Any}
+        nested = only(nested)
+        levels += 1
+    end
+    @test levels == depth && nested == Dict{String,Any}("k" => 1.0)
+end
+
+@testset "JSON parser rejects invalid input with an ErrorException" begin
+    # Multibyte text after a literal prefix used to throw StringIndexError.
+    @test_throws ErrorException("invalid JSON literal at byte 1") Diff3D._json_parse("tr€")
+    @test_throws ErrorException("invalid JSON literal at byte 2") Diff3D._json_parse("[nul€]")
+    # String and byte input share one parser: same errors for the same bytes.
+    for input in ("01", "1.", "+1", "1.2.3", "[1-2]", "\"\\ud800\"", "1e400", "{\"a\" 1}")
+        e1 = try Diff3D._json_parse(input); nothing catch e; e end
+        e2 = try Diff3D._json_parse(Vector{UInt8}(input)); nothing catch e; e end
+        @test e1 isa ErrorException && e2 isa ErrorException && e1.msg == e2.msg
+    end
+    @test_throws "invalid JSON number 01" Diff3D._json_parse("01")
+    @test_throws "JSON number 1e400 must be finite" Diff3D._json_parse("1e400")
+    @test_throws "invalid UTF-8" Diff3D._json_parse(String(UInt8[0x22, 0xff, 0x22]))
+    # Unclosed deep nesting ends with an error, not a stack overflow.
+    @test_throws "unexpected end of JSON" Diff3D._json_parse("["^200_000)
+end
