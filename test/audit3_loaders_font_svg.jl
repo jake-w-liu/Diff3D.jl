@@ -179,3 +179,70 @@ end
     @test length(second_geos) == 3
     @test sum(_audit3_cap_area, second_geos) ≈ 880.0
 end
+
+@testset "TextGeometry bevel follows ExtrudeGeometry's layer schedule" begin
+    # three.js TextGeometry is ExtrudeGeometry over the glyph shapes
+    # (examples/jsm/geometries/TextGeometry.js:47-75). Its bevel layers
+    # (src/geometries/ExtrudeGeometry.js:380-470) put the lids on the glyph
+    # outline at z = -thickness and depth + thickness and grow the outline by
+    # size*sin(t*pi/2) at z = -thickness*cos(t*pi/2). Oracle for a unit square
+    # glyph, size 0.1, thickness 0.05, depth 0.4: 28 triangles; x range
+    # [-0.1, 1.1] for bevel_segments=1 and 2; z range [-0.05, 0.45].
+    font = Diff3D._font_data(Dict("resolution" => 1000, "glyphs" => Dict(
+        "A" => Dict("ha" => 1200, "o" => "m 0 0 l 1000 0 l 1000 1000 l 0 1000"),
+        "O" => Dict("ha" => 1200, "o" => "m 0 0 l 1000 0 l 1000 1000 l 0 1000 " *
+                                         "m 250 250 l 250 750 l 750 750 l 750 250"))))
+    function x_extent_by_z(geometry)
+        out = Dict{Float64,Tuple{Float64,Float64}}()
+        for i in 1:geometry.n_vertices
+            v = get_vertex(geometry, i)
+            lo, hi = get(out, v.z, (Inf, -Inf))
+            out[v.z] = (min(lo, v.x), max(hi, v.x))
+        end
+        return out
+    end
+    for segments in (1, 2)
+        geometry = TextGeometry(font, "A"; depth=0.4, bevel_enabled=true, bevel_size=0.1,
+                                bevel_thickness=0.05, bevel_segments=segments)
+        @test geometry.n_faces == 2 * 2 + 2 * 4 * (2 * segments + 1)
+        extents = x_extent_by_z(geometry)
+        @test extents[-0.05] == (0.0, 1.0)
+        @test extents[maximum(keys(extents))] == (0.0, 1.0)
+        @test extents[0.0] == (-0.1, 1.1)
+        @test extents[0.4] == (-0.1, 1.1)
+        if segments == 2
+            # t = 1/2: z = -0.05 cos(pi/4), offset 0.1 sin(pi/4) per axis.
+            z = -0.05 * cos(π / 4)
+            lo, hi = extents[z]
+            @test lo ≈ -0.1 * sin(π / 4) atol=1e-15
+            @test hi ≈ 1 + 0.1 * sin(π / 4) atol=1e-15
+        end
+        # Side normals of the lower bevel face outward and down.
+        for face in 1:geometry.n_faces
+            a, b, c = get_face(geometry, face)
+            p, q, r = get_vertex(geometry, a), get_vertex(geometry, b), get_vertex(geometry, c)
+            maximum((p.z, q.z, r.z)) <= 0.0 && minimum((p.z, q.z, r.z)) < 0.0 || continue
+            n = cross(q - p, r - p)
+            centroid = (p + q + r) / 3
+            outward = Vec3(centroid.x - 0.5, centroid.y - 0.5, 0.0)
+            @test dot(n, outward) > 0 || n.z < 0
+        end
+    end
+    # The solid also grows into the counter, so the hole body ring shrinks
+    # from 0.25..0.75 to 0.3..0.7 (oracle; outer x range [-0.05, 1.05]).
+    hole = TextGeometry(font, "O"; depth=0.4, bevel_enabled=true, bevel_size=0.05,
+                        bevel_thickness=0.05, bevel_segments=1)
+    @test hole.n_faces == 66
+    box = compute_bounding_box(hole)
+    @test (box.min.x, box.max.x) == (-0.05, 1.05)
+    @test box.min.z == -0.05
+    @test box.max.z ≈ 0.45
+    inner_body = [get_vertex(hole, i) for i in 1:hole.n_vertices
+                  if get_vertex(hole, i).z == 0.0 && 0.1 < get_vertex(hole, i).x < 0.9]
+    @test extrema(v.x for v in inner_body) == (0.3, 0.7)
+    # Zero depth still produces the two bevel bands.
+    thin = TextGeometry(font, "A"; depth=0.0, bevel_enabled=true, bevel_size=0.1,
+                        bevel_thickness=0.05, bevel_segments=1)
+    @test all(isfinite, thin.normals)
+    @test thin.n_faces == 2 * 2 + 2 * 4 * 2
+end

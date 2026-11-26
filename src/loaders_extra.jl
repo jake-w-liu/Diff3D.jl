@@ -3755,52 +3755,6 @@ function _font_text_shape_groups(font::FontData, text::AbstractString;
     return groups
 end
 
-function _font_line_intersection(p1::Vec2{Float64}, d1, p2::Vec2{Float64}, d2)
-    denom = d1[1] * d2[2] - d1[2] * d2[1]
-    abs(denom) > 1e-12 || return nothing
-    qx = p2.x - p1.x
-    qy = p2.y - p1.y
-    t = (qx * d2[2] - qy * d2[1]) / denom
-    return Vec2(p1.x + d1[1] * t, p1.y + d1[2] * t)
-end
-
-function _font_inward_normal(a::Vec2{Float64}, b::Vec2{Float64}, ccw::Bool)
-    dx = b.x - a.x
-    dy = b.y - a.y
-    len = hypot(dx, dy)
-    len > 0.0 || return (0.0, 0.0)
-    return ccw ? (-dy / len, dx / len) : (dy / len, -dx / len)
-end
-
-function _font_offset_loop(shape::Vector{Vec2{Float64}}, amount::Float64)
-    amount == 0.0 && return copy(shape)
-    n = length(shape)
-    n >= 3 || return copy(shape)
-    ccw = _font_polygon_area(shape) >= 0.0
-    out = Vec2{Float64}[]
-    for i in 1:n
-        prev = shape[i == 1 ? n : i - 1]
-        p = shape[i]
-        next = shape[i == n ? 1 : i + 1]
-        dprev = (p.x - prev.x, p.y - prev.y)
-        dnext = (next.x - p.x, next.y - p.y)
-        nprev = _font_inward_normal(prev, p, ccw)
-        nnext = _font_inward_normal(p, next, ccw)
-        l1 = Vec2(p.x + nprev[1] * amount, p.y + nprev[2] * amount)
-        l2 = Vec2(p.x + nnext[1] * amount, p.y + nnext[2] * amount)
-        hit = _font_line_intersection(l1, dprev, l2, dnext)
-        if hit === nothing || !isfinite(hit.x) || !isfinite(hit.y)
-            nx = nprev[1] + nnext[1]
-            ny = nprev[2] + nnext[2]
-            len = hypot(nx, ny)
-            hit = len > 0.0 ? Vec2(p.x + nx / len * amount,
-                                   p.y + ny / len * amount) : p
-        end
-        push!(out, hit)
-    end
-    return out
-end
-
 function _font_clean_group(outer::Vector{Vec2{Float64}},
                            holes::Vector{Vector{Vec2{Float64}}})
     clean_outer = _font_loop_points(outer)
@@ -3914,17 +3868,13 @@ function _font_extrude_geometry_with_holes(outer::Vector{Vec2{Float64}},
                           length(positions) ÷ 3, length(indices) ÷ 3)
 end
 
-function _font_offset_group(outer::Vector{Vec2{Float64}},
-                            holes::Vector{Vector{Vec2{Float64}}},
-                            amount::Float64)
-    offset_outer = _font_offset_loop(outer, amount)
-    offset_holes = Vector{Vec2{Float64}}[]
-    for hole in holes
-        push!(offset_holes, _font_offset_loop(hole, -amount))
-    end
-    return (outer=offset_outer, holes=offset_holes)
-end
-
+# Bevelled extrusion of one glyph group with three.js ExtrudeGeometry's layer
+# schedule (src/geometries/ExtrudeGeometry.js:380-470): `bevel_segments`
+# layers rise from the original outline at z = -bevel_thickness to the outline
+# grown by `bevel_size` at z = 0 along the quarter-circle profile
+# (z = -thickness*cos(t*pi/2), offset = size*sin(t*pi/2)), the body spans
+# z = 0..depth at the full offset, and the top mirrors the bottom up to
+# z = depth + bevel_thickness. Points move along three.js `getBevelVec`.
 function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                                         holes::Vector{Vector{Vec2{Float64}}};
                                         depth::Float64,
@@ -3933,79 +3883,69 @@ function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                                         bevel_segments::Int)
     base_outer, base_holes = _font_clean_group(outer, holes)
     length(base_outer) >= 3 || return BufferGeometry()
-    depth > 0.0 || return _font_shape_geometry_with_holes(base_outer, base_holes)
-    actual_thickness = min(bevel_thickness, depth / 2.0)
-    if bevel_size <= 0.0 || actual_thickness <= 0.0
-        return _font_extrude_geometry_with_holes(base_outer, base_holes;
-                                                depth=depth)
+    if bevel_size == 0.0 && bevel_thickness == 0.0
+        return depth > 0.0 ?
+               _font_extrude_geometry_with_holes(base_outer, base_holes; depth=depth) :
+               _font_shape_geometry_with_holes(base_outer, base_holes)
     end
-    layers = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
+    loops = vcat([base_outer], base_holes)
+    # Outer loops are counter-clockwise and holes clockwise here, the reverse
+    # of three.js, so swapping prev/next keeps each move pointing out of the
+    # solid (as in ExtrudeGeometry's `_extrude_bevel_vectors`).
+    moves = [[_extrude_bevel_vec(loop[i], loop[i == length(loop) ? 1 : i + 1],
+                                 loop[i == 1 ? length(loop) : i - 1])
+              for i in eachindex(loop)] for loop in loops]
     zs = Float64[]
-    for step in 0:bevel_segments
-        t = step / Float64(bevel_segments)
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
-        push!(zs, actual_thickness * t)
+    offsets = Float64[]
+    for b in 0:(bevel_segments - 1)
+        t = b / bevel_segments
+        push!(zs, -bevel_thickness * cos(t * π / 2))
+        push!(offsets, bevel_size * sin(t * π / 2))
     end
-    if depth > 2actual_thickness + 1e-9
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size))
-        push!(zs, depth - actual_thickness)
-    end
-    for step in (bevel_segments - 1):-1:0
-        t = step / Float64(bevel_segments)
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
-        push!(zs, depth - actual_thickness * t)
+    push!(zs, 0.0, depth)
+    push!(offsets, bevel_size, bevel_size)
+    for b in (bevel_segments - 1):-1:0
+        t = b / bevel_segments
+        push!(zs, depth + bevel_thickness * cos(t * π / 2))
+        push!(offsets, bevel_size * sin(t * π / 2))
     end
 
     positions = Float64[]
     normals = Float64[]
     uvs = Float64[]
     indices = Int[]
+    # Both lids lie on the original outline (offset 0), so one triangulation
+    # serves the bottom and the top.
+    points, tris = _font_triangulate_group(base_outer, base_holes)
     bottom = Int[]
     top = Int[]
-    bottom_points, bottom_tris = _font_triangulate_group(layers[1].outer,
-                                                         layers[1].holes)
-    top_points, top_tris = _font_triangulate_group(layers[end].outer,
-                                                   layers[end].holes)
-    for p in bottom_points
+    for p in points
         push!(bottom, _font_push_geo_vertex!(positions, normals, uvs, p, zs[1],
                                              Vec3(0.0, 0.0, -1.0)))
     end
-    for p in top_points
+    for p in points
         push!(top, _font_push_geo_vertex!(positions, normals, uvs, p, zs[end],
                                           Vec3(0.0, 0.0, 1.0)))
     end
-    for (a, b, c) in bottom_tris
+    for (a, b, c) in tris
         push!(indices, bottom[a], bottom[c], bottom[b])
     end
-    for (a, b, c) in top_tris
+    for (a, b, c) in tris
         push!(indices, top[a], top[b], top[c])
     end
-    for ri in 1:(length(layers) - 1)
-        lo = layers[ri]
-        hi = layers[ri + 1]
-        _font_push_ring_sides!(positions, normals, uvs, indices,
-                               lo.outer, hi.outer, zs[ri], zs[ri + 1])
-        for i in eachindex(lo.holes)
+    ring(k, layer) = [loops[k][i] + moves[k][i] * offsets[layer]
+                      for i in eachindex(loops[k])]
+    for layer in 1:(length(zs) - 1)
+        # A zero-depth body joins two identical rings; it has no side area.
+        zs[layer] == zs[layer + 1] && offsets[layer] == offsets[layer + 1] && continue
+        for k in eachindex(loops)
             _font_push_ring_sides!(positions, normals, uvs, indices,
-                                   lo.holes[i], hi.holes[i], zs[ri],
-                                   zs[ri + 1])
+                                   ring(k, layer), ring(k, layer + 1),
+                                   zs[layer], zs[layer + 1])
         end
     end
     return BufferGeometry(positions, normals, uvs, indices,
                           length(positions) ÷ 3, length(indices) ÷ 3)
-end
-
-function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
-                                        depth::Float64,
-                                        bevel_size::Float64,
-                                        bevel_thickness::Float64,
-                                        bevel_segments::Int)
-    return _font_beveled_extrude_geometry(shape, Vector{Vec2{Float64}}[];
-                                          depth=depth,
-                                          bevel_size=bevel_size,
-                                          bevel_thickness=bevel_thickness,
-                                          bevel_segments=bevel_segments)
 end
 
 """
@@ -4014,9 +3954,11 @@ end
                  bevel_thickness=bevel_size, bevel_segments=1)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
-Glyph contours are grouped into outer loops and simple holes before
-triangulation. With beveling enabled, closed contour groups are offset into
-bevel rings and extruded with chamfered side bands.
+Glyph contours are grouped into outer loops and holes by the nonzero rule
+before triangulation. With beveling enabled the bevel follows three.js
+`ExtrudeGeometry`: the lids keep the glyph outline at `z = -bevel_thickness`
+and `z = depth + bevel_thickness`, and `bevel_segments` rings per side grow the
+outline by up to `bevel_size` towards the body, which spans `z = 0` to `depth`.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
