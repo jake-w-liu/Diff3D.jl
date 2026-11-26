@@ -265,11 +265,48 @@ end
     @test_throws ArgumentError OrbitControls(PerspectiveCamera(); max_zoom=NaN)
 end
 
+@testset "audit3 OrbitControls auto-rotation" begin
+    # OrbitControls.js update(): when autoRotate, _rotateLeft of
+    # _getAutoRotationAngle(deltaTime) = 2pi/60*speed*deltaTime, or
+    # 2pi/60/60*speed per frame without deltaTime.
+    oc = _a3_orbit(Vec3(0.0, 1.0, 5.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0);
+                   auto_rotate=true, auto_rotate_speed=3.0)
+    @test oc.auto_rotate && oc.auto_rotate_speed == 3.0
+    orbit_update!(oc)
+    @test _a3_vec(oc.camera.position) ≈
+        [-0.026179819157097894, 0.9999999999999997, 4.999931461237133] atol=1e-12
+    orbit_update!(oc, 0.5)
+    @test _a3_vec(oc.camera.position) ≈
+        [-0.8080191055168056, 0.9999999999999997, 4.934278582034035] atol=1e-12
+    # Interactions do not auto-rotate (three.js only auto-rotates in state NONE).
+    before = oc.camera.position
+    orbit_pan!(oc, 0.0, 0.0)
+    @test oc.camera.position == before
+
+    # Damped: the turn is queued into the azimuth velocity, z-up camera.
+    damped = _a3_orbit(Vec3(0.0, 1.0, 5.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0);
+                       auto_rotate=true, auto_rotate_speed=-2.0,
+                       enable_damping=true, damping_factor=0.1)
+    for (dt, position) in (
+            (0.25, [-0.005235963831419596, 0.9999862922474314, 4.9999999999999964]),
+            (0.25, [-0.015183781002100182, 0.9998847197524761, 4.999999999999994]),
+            (nothing, [-0.0244845223667391, 0.9997002091449616, 4.999999999999992]))
+        dt === nothing ? orbit_update!(damped) : orbit_update!(damped, dt)
+        @test _a3_vec(damped.camera.position) ≈ position atol=1e-12
+    end
+    # Defaults match three.js (autoRotate false, autoRotateSpeed 2).
+    plain = OrbitControls(PerspectiveCamera())
+    @test !plain.auto_rotate && plain.auto_rotate_speed == 2.0
+    @test_throws ArgumentError OrbitControls(PerspectiveCamera(); auto_rotate_speed=Inf)
+    @test_throws ArgumentError orbit_update!(oc, NaN)
+end
+
 function _a3_orbit_step!(oc)
     orbit_rotate!(oc, 0.01, 0.01)
     orbit_zoom!(oc, 1.001)
     orbit_pan!(oc, 0.01, 0.01)
     orbit_update!(oc)
+    orbit_update!(oc, 1 / 60)
     return oc
 end
 
@@ -282,11 +319,13 @@ end
     # Allocation counts are only meaningful for optimized code.
     if Base.JLOptions().opt_level > 0
         for camera in (PerspectiveCamera(), OrthographicCamera()),
-            up in (Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)), damping in (false, true)
+            up in (Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)), damping in (false, true),
+            auto_rotate in (false, true)
             camera.up = up
             camera.position = Vec3(1.0, 2.0, 3.0)
             camera.target = Vec3(0.0, 0.0, 0.0)
-            oc = OrbitControls(camera; enable_damping=damping, max_distance=10.0)
+            oc = OrbitControls(camera; enable_damping=damping, max_distance=10.0,
+                               auto_rotate=auto_rotate)
             @test _a3_orbit_step_bytes(oc) == 0
         end
     end

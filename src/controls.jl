@@ -65,6 +65,10 @@ mutable struct OrbitControls
     max_zoom::Float64
     # Camera zoom saved by `orbit_save_state!` (three.js `zoom0`).
     zoom0::Float64
+    # three.js autoRotate / autoRotateSpeed: `orbit_update!` turns the camera
+    # about camera.up; speed 2.0 is one orbit per 30 s at 60 frames/s.
+    auto_rotate::Bool
+    auto_rotate_speed::Float64
 end
 
 function _checked_orbit_zoom_limits(min_zoom, max_zoom)
@@ -139,6 +143,8 @@ end
 function _validate_orbit_runtime(oc::OrbitControls)
     _validated_camera_view_vectors(oc.camera, _orbit_camera_kind(oc.camera))
     _checked_orbit_zoom_limits(oc.min_zoom, oc.max_zoom)
+    _checked_control_scalar(oc.auto_rotate_speed,
+                            "OrbitControls auto_rotate_speed")
     _checked_control_vec3(oc.target, "OrbitControls target")
     _checked_orbit_distances(oc.min_distance, oc.max_distance)
     _checked_polar_limits(oc.min_polar_angle, oc.max_polar_angle,
@@ -158,14 +164,16 @@ end
                   damping_factor=0.05, min_distance=0.0, max_distance=Inf,
                   min_polar_angle=0.0, max_polar_angle=π,
                   min_azimuth_angle=-Inf, max_azimuth_angle=Inf,
-                  screen_space_panning=true, min_zoom=0.0, max_zoom=Inf)
+                  screen_space_panning=true, min_zoom=0.0, max_zoom=Inf,
+                  auto_rotate=false, auto_rotate_speed=2.0)
 
 Orbit/pan/zoom camera control state matching three.js `OrbitControls` for a
 `PerspectiveCamera` or an `OrthographicCamera`. The camera orbits the target
 about `camera.up`. Dollying a perspective camera scales its distance to the
 target; dollying an orthographic camera divides `camera.zoom` by the factor,
 clamped to `[min_zoom, max_zoom]`, and leaves the camera in place (three.js
-`minZoom`/`maxZoom`).
+`minZoom`/`maxZoom`). With `auto_rotate=true`, `orbit_update!` also turns
+the camera about `camera.up` at `auto_rotate_speed` (three.js `autoRotate`).
 """
 function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        enabled::Bool=true, enable_rotate::Bool=true,
@@ -175,10 +183,13 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
                        screen_space_panning::Bool=true,
-                       min_zoom::Real=0.0, max_zoom::Real=Inf)
+                       min_zoom::Real=0.0, max_zoom::Real=Inf,
+                       auto_rotate::Bool=false, auto_rotate_speed::Real=2.0)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, _orbit_camera_kind(cam))
     minimum_zoom, maximum_zoom = _checked_orbit_zoom_limits(min_zoom, max_zoom)
+    rotate_speed = _checked_control_scalar(
+        auto_rotate_speed, "OrbitControls auto_rotate_speed")
     checked_target = _checked_control_vec3(target, "OrbitControls target")
     minimum_distance, maximum_distance =
         _checked_orbit_distances(min_distance, max_distance)
@@ -195,7 +206,8 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                   minimum_azimuth, maximum_azimuth,
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
                   checked_target, screen_space_panning,
-                  minimum_zoom, maximum_zoom, cam.zoom)
+                  minimum_zoom, maximum_zoom, cam.zoom,
+                  auto_rotate, rotate_speed)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -231,7 +243,7 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
                                         "OrbitControls saved target"),
-                  true, 0.0, Inf, camera.zoom)
+                  true, 0.0, Inf, camera.zoom, false, 2.0)
 end
 
 OrbitControls(cam::_OrbitCamera; kwargs...) =
@@ -511,7 +523,7 @@ function orbit_pan!(oc::OrbitControls, dx, dy)
 end
 
 """
-    orbit_update!(oc)
+    orbit_update!(oc[, delta_time])
 
 Advance the orbit by one frame. Like three.js `OrbitControls.update`, every
 call re-applies the distance, polar, and azimuth limits, so a camera that
@@ -522,10 +534,26 @@ already inside them is not moved. With damping disabled nothing else happens
 decays them by `(1 - damping_factor)` so motion eases to a stop after the last
 interaction and the total converges to the queued deltas. Velocity components
 below a small threshold are zeroed to avoid endless drift.
+
+With `oc.auto_rotate` set, each call first turns the camera about `camera.up`
+by `2π/60 * auto_rotate_speed * delta_time` radians, or by
+`2π/3600 * auto_rotate_speed` when `delta_time` (seconds) is omitted, as
+three.js does per frame (`_getAutoRotationAngle`); with damping enabled that
+turn is added to the residual azimuth velocity instead.
 """
-function orbit_update!(oc::OrbitControls)
+function orbit_update!(oc::OrbitControls, delta_time=nothing)
     oc.enabled || return oc
     _validate_orbit_runtime(oc)
+    if oc.auto_rotate
+        # three.js _rotateLeft(angle): sphericalDelta.theta -= angle.
+        angle = _orbit_auto_rotation_angle(oc, delta_time)
+        if !oc.enable_damping
+            s = _orbit_spherical(oc)
+            return _orbit_apply!(oc, Spherical(s.radius, s.phi, s.theta - angle))
+        end
+        oc.v_azimuth = _checked_control_scalar(
+            oc.v_azimuth - angle, "OrbitControls azimuth velocity")
+    end
     oc.enable_damping || return _orbit_enforce_limits!(oc)
     f = oc.damping_factor
     decay = 1.0 - f
@@ -563,6 +591,15 @@ function orbit_update!(oc::OrbitControls)
     oc.v_pan = (abs(pan.x) < thresh && abs(pan.y) < thresh && abs(pan.z) < thresh) ?
         Vec3(0.0, 0.0, 0.0) : pan
     return oc
+end
+
+# OrbitControls.js _getAutoRotationAngle.
+function _orbit_auto_rotation_angle(oc::OrbitControls, delta_time)
+    speed = oc.auto_rotate_speed
+    delta_time === nothing && return 2π / 60 / 60 * speed
+    dt = _checked_control_scalar(delta_time, "OrbitControls delta_time")
+    return _checked_control_scalar((2π / 60 * speed) * dt,
+                                   "OrbitControls auto-rotation angle")
 end
 
 # TrackballControls: free rotation about the target via screen-space deltas.
