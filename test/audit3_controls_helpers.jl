@@ -301,6 +301,35 @@ end
     @test_throws ArgumentError orbit_update!(oc, NaN)
 end
 
+@testset "audit3 OrbitControls target radius about the cursor" begin
+    # OrbitControls.js:768-771: target.sub(cursor).clampLength(minTargetRadius,
+    # maxTargetRadius).add(cursor) on every update, before placing the camera.
+    oc = _a3_orbit(Vec3(0.0, 2.0, 6.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0);
+                   cursor=Vec3(1.0, 0.0, 0.0), min_target_radius=0.2,
+                   max_target_radius=0.5)
+    @test oc.cursor == Vec3(1.0, 0.0, 0.0)
+    orbit_update!(oc)
+    @test _a3_vec(oc.target) ≈ [0.5, 0.0, 0.0] atol=1e-14
+    @test _a3_vec(oc.camera.position) ≈ [0.5, 2.0, 6.0] atol=1e-14
+    orbit_pan!(oc, 1.3, 0.0)
+    @test _a3_vec(oc.target) ≈ [1.5, 0.0, 0.0] atol=1e-12
+    @test _a3_vec(oc.camera.position) ≈ [1.5, 2.0, 6.0] atol=1e-12
+    orbit_pan!(oc, -0.5, 0.1)
+    @test _a3_vec(oc.target) ≈
+        [1.0, 0.18973665961010278, -0.0632455532033676] atol=1e-12
+    @test _a3_vec(oc.camera.position) ≈
+        [1.0, 2.189736659610103, 5.936754446796632] atol=1e-12
+    orbit_rotate!(oc, 0.3, 0.1)
+    @test _a3_vec(oc.camera.position) ≈
+        [2.823268603149492, 1.580744490285185, 5.830886173842602] atol=1e-12
+    plain = OrbitControls(PerspectiveCamera())
+    @test plain.cursor == Vec3(0.0, 0.0, 0.0)
+    @test plain.min_target_radius == 0.0 && plain.max_target_radius == Inf
+    @test_throws ArgumentError OrbitControls(PerspectiveCamera(); min_target_radius=2.0,
+                                             max_target_radius=1.0)
+    @test_throws ArgumentError OrbitControls(PerspectiveCamera(); cursor=Vec3(NaN, 0.0, 0.0))
+end
+
 function _a3_orbit_step!(oc)
     orbit_rotate!(oc, 0.01, 0.01)
     orbit_zoom!(oc, 1.001)

@@ -69,6 +69,22 @@ mutable struct OrbitControls
     # about camera.up; speed 2.0 is one orbit per 30 s at 60 frames/s.
     auto_rotate::Bool
     auto_rotate_speed::Float64
+    # three.js cursor / minTargetRadius / maxTargetRadius: every update keeps
+    # the target within this distance range of `cursor`.
+    cursor::Vec3{Float64}
+    min_target_radius::Float64
+    max_target_radius::Float64
+end
+
+function _checked_orbit_target_radii(min_radius, max_radius)
+    min_radius isa Real && !(min_radius isa Bool) &&
+        max_radius isa Real && !(max_radius isa Bool) ||
+        throw(ArgumentError("OrbitControls target radii must satisfy 0 <= min_target_radius <= max_target_radius"))
+    minimum = Float64(min_radius)
+    maximum = Float64(max_radius)
+    isfinite(minimum) && 0.0 <= minimum <= maximum && !isnan(maximum) ||
+        throw(ArgumentError("OrbitControls target radii must satisfy 0 <= min_target_radius <= max_target_radius"))
+    return minimum, maximum
 end
 
 function _checked_orbit_zoom_limits(min_zoom, max_zoom)
@@ -145,6 +161,8 @@ function _validate_orbit_runtime(oc::OrbitControls)
     _checked_orbit_zoom_limits(oc.min_zoom, oc.max_zoom)
     _checked_control_scalar(oc.auto_rotate_speed,
                             "OrbitControls auto_rotate_speed")
+    _checked_control_vec3(oc.cursor, "OrbitControls cursor")
+    _checked_orbit_target_radii(oc.min_target_radius, oc.max_target_radius)
     _checked_control_vec3(oc.target, "OrbitControls target")
     _checked_orbit_distances(oc.min_distance, oc.max_distance)
     _checked_polar_limits(oc.min_polar_angle, oc.max_polar_angle,
@@ -165,7 +183,9 @@ end
                   min_polar_angle=0.0, max_polar_angle=π,
                   min_azimuth_angle=-Inf, max_azimuth_angle=Inf,
                   screen_space_panning=true, min_zoom=0.0, max_zoom=Inf,
-                  auto_rotate=false, auto_rotate_speed=2.0)
+                  auto_rotate=false, auto_rotate_speed=2.0,
+                  cursor=Vec3(0.0, 0.0, 0.0), min_target_radius=0.0,
+                  max_target_radius=Inf)
 
 Orbit/pan/zoom camera control state matching three.js `OrbitControls` for a
 `PerspectiveCamera` or an `OrthographicCamera`. The camera orbits the target
@@ -174,6 +194,9 @@ target; dollying an orthographic camera divides `camera.zoom` by the factor,
 clamped to `[min_zoom, max_zoom]`, and leaves the camera in place (three.js
 `minZoom`/`maxZoom`). With `auto_rotate=true`, `orbit_update!` also turns
 the camera about `camera.up` at `auto_rotate_speed` (three.js `autoRotate`).
+Every interaction and update keeps the target between `min_target_radius` and
+`max_target_radius` from `cursor` (three.js `minTargetRadius`,
+`maxTargetRadius`, `cursor`).
 """
 function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        enabled::Bool=true, enable_rotate::Bool=true,
@@ -184,12 +207,18 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
                        screen_space_panning::Bool=true,
                        min_zoom::Real=0.0, max_zoom::Real=Inf,
-                       auto_rotate::Bool=false, auto_rotate_speed::Real=2.0)
+                       auto_rotate::Bool=false, auto_rotate_speed::Real=2.0,
+                       cursor::Vec3=Vec3(0.0, 0.0, 0.0),
+                       min_target_radius::Real=0.0,
+                       max_target_radius::Real=Inf)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, _orbit_camera_kind(cam))
     minimum_zoom, maximum_zoom = _checked_orbit_zoom_limits(min_zoom, max_zoom)
     rotate_speed = _checked_control_scalar(
         auto_rotate_speed, "OrbitControls auto_rotate_speed")
+    checked_cursor = _checked_control_vec3(cursor, "OrbitControls cursor")
+    minimum_target_radius, maximum_target_radius =
+        _checked_orbit_target_radii(min_target_radius, max_target_radius)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
     minimum_distance, maximum_distance =
         _checked_orbit_distances(min_distance, max_distance)
@@ -207,7 +236,8 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
                   checked_target, screen_space_panning,
                   minimum_zoom, maximum_zoom, cam.zoom,
-                  auto_rotate, rotate_speed)
+                  auto_rotate, rotate_speed, checked_cursor,
+                  minimum_target_radius, maximum_target_radius)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -243,7 +273,8 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
                                         "OrbitControls saved target"),
-                  true, 0.0, Inf, camera.zoom, false, 2.0)
+                  true, 0.0, Inf, camera.zoom, false, 2.0,
+                  Vec3(0.0, 0.0, 0.0), 0.0, Inf)
 end
 
 OrbitControls(cam::_OrbitCamera; kwargs...) =
@@ -315,10 +346,24 @@ function _orbit_constrained(oc::OrbitControls, s::Spherical)
     return Spherical(radius, phi, theta)
 end
 
+# three.js update(): target.sub(cursor).clampLength(minTargetRadius,
+# maxTargetRadius).add(cursor) (OrbitControls.js:768-771). A target already in
+# range is returned unchanged; a target on the cursor has no direction and stays.
+function _orbit_limited_target(oc::OrbitControls, target::Vec3{Float64})
+    offset = target - oc.cursor
+    distance = norm(offset)
+    limited = clamp(distance, oc.min_target_radius, oc.max_target_radius)
+    (limited == distance || iszero(distance)) && return target
+    return _checked_control_vec3(
+        oc.cursor + offset * (limited / distance), "OrbitControls target")
+end
+
 # Place the camera at the constrained spherical offset `s` from `target`
-# (default: the current target), which becomes the orbit target.
+# (default: the current target), which becomes the orbit target after the
+# target-radius limit.
 function _orbit_apply!(oc::OrbitControls, s::Spherical,
                        target::Vec3{Float64}=oc.target)
+    target = _orbit_limited_target(oc, target)
     q = _orbit_up_quaternion(oc)
     offset = spherical_to_cartesian(_orbit_constrained(oc, s))
     position = target + _orbit_rotate_vector(
@@ -343,7 +388,8 @@ function _orbit_enforce_limits!(oc::OrbitControls)
     clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
         clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
         _clamp_azimuth(s.theta, oc.min_azimuth_angle,
-                       oc.max_azimuth_angle) == s.theta && return oc
+                       oc.max_azimuth_angle) == s.theta &&
+        _orbit_limited_target(oc, oc.target) === oc.target && return oc
     return _orbit_apply!(oc, s)
 end
 
