@@ -93,3 +93,48 @@ end
     @test_throws ArgumentError Diff3D.output_pass(output_color_space=:display_p3)
     @test_throws ArgumentError Diff3D.output_pass(exposure=NaN)
 end
+
+function _audit3_wire_scene(order)
+    scene = Scene(); scene.background = Color3(0.0, 0.0, 0.0)
+    wire = Mesh(PlaneGeometry(width=1.5, height=1.5, width_segments=3, height_segments=3),
+                MeshBasicMaterial(color=Color3(1.0, 1.0, 0.0), wireframe=true,
+                                  transparent=true, opacity=0.5))
+    wire.position = Vec3(0.0, 0.0, 1.0)
+    opaque_wire = Mesh(PlaneGeometry(width=2.0, height=2.0),
+                       MeshBasicMaterial(color=Color3(1.0, 0.0, 1.0), wireframe=true))
+    opaque_wire.position = Vec3(0.2, 0.1, -0.5)
+    plane = Mesh(PlaneGeometry(width=2.0, height=2.0), MeshBasicMaterial(color=Color3(0.0, 1.0, 0.0)))
+    plane.position = Vec3(0.2, 0.1, -0.5)
+    back = Mesh(PlaneGeometry(width=3.0, height=3.0), MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0)))
+    back.position = Vec3(0.0, 0.0, -1.0)
+    instances = InstancedMesh(BoxGeometry(width=0.4, height=0.4, depth=0.4),
+                              MeshBasicMaterial(color=Color3(1.0, 0.5, 0.0), wireframe=true,
+                                                transparent=true, opacity=0.4), 3)
+    for i in 1:3
+        set_instance_matrix!(instances, i, mat4_translation(0.5 * (i - 2), -0.3, 1.5 - 0.3i))
+        set_instance_color!(instances, i, Color3(1.0, i / 3, 0.2))
+    end
+    objects = (wire, opaque_wire, plane, back, instances)
+    for k in order
+        add!(scene, objects[k])
+    end
+    return scene
+end
+
+@testset "render_tiled! draws wireframes in render! order" begin
+    # rasterizer.jl render!: opaque wireframes are drawn after the opaque and
+    # smooth mesh passes; blended wireframes (mesh and instanced) are drawn in
+    # the back-to-front transparent pass. Scene order must not matter.
+    camera = PerspectiveCamera(); camera.position = Vec3(0.0, 0.0, 4.0)
+    for order in ([1, 2, 3, 4], [5, 1, 2, 3, 4], [2, 1, 4, 3, 5], [4, 3, 2, 1])
+        scene = _audit3_wire_scene(order)
+        expected = RenderTarget(40, 40); render!(expected, scene, camera)
+        for tiles in (1, 3)
+            target = RenderTarget(40, 40)
+            render_tiled!(target, scene, camera; tiles=tiles,
+                          cache=[RenderCache() for _ in 1:min(tiles, Threads.nthreads())])
+            @test target.color == expected.color
+            @test isequal(target.depth, expected.depth)
+        end
+    end
+end

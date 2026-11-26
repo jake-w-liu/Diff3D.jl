@@ -3479,7 +3479,8 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                              lights,
                              camera_position::Vec3, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
-                             cache_idx::Int, ylo::Int, yhi::Int)
+                             cache_idx::Int, ylo::Int, yhi::Int,
+                             wireframe_items::Vector{_TransparentRenderItem})
     ylo > yhi && return nothing
     thread_cache = thread_caches[cache_idx]
     tri = thread_cache.tri
@@ -3492,12 +3493,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     for i in eachindex(meshes)
         mesh = meshes[i]
         mat = _mesh_material(mesh)
-        if material_wireframe(mat)
-            _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
-                                              proj, view, near, 1, rt.width,
-                                              ylo, yhi, thread_cache)
-            continue
-        end
+        material_wireframe(mat) && continue
         (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera_position,
@@ -3533,7 +3529,67 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     end
     _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
                                   camera_position, ortho_dir, thread_cache, ylo, yhi)
+    # Same order as `render!`: opaque mesh wireframes after the smooth pass,
+    # then blended wireframes back to front.
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        mat = _mesh_material(mesh)
+        (material_wireframe(mat) && !_primitive_transparent(mat)) || continue
+        _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
+                                          proj, view, near, 1, rt.width,
+                                          ylo, yhi, thread_cache)
+    end
+    for item in wireframe_items
+        if item.kind == _TRANSPARENT_WIREFRAME_ITEM
+            _render_wireframe_mesh_from_mesh!(rt, meshes[item.object_index],
+                                              mesh_worlds[item.object_index],
+                                              proj, view, near, 1, rt.width,
+                                              ylo, yhi, thread_cache)
+        else
+            im = instanced[item.object_index]
+            mat = _instanced_material(im)
+            _render_wireframe_mesh_cached!(
+                rt, _instanced_geometry(im),
+                _cached_instanced_material_at(instanced_material_states,
+                                              item.object_index,
+                                              item.instance_index, mat),
+                instanced_worlds[item.object_index] *
+                im.instance_matrices[item.instance_index],
+                proj, view, near, 1, rt.width, ylo, yhi, thread_cache)
+        end
+    end
     return nothing
+end
+
+# Blended wireframes, pushed in `render!`'s order (instances, then meshes) and
+# sorted back to front by the same routine.
+function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderItem},
+                                             meshes::Vector{Mesh},
+                                             mesh_worlds::Vector{Mat4{Float64}},
+                                             instanced::Vector{InstancedMesh},
+                                             instanced_worlds::Vector{Mat4{Float64}},
+                                             view::Mat4)
+    empty!(items)
+    @inbounds for (instanced_slot, im) in pairs(instanced)
+        _instanced_triangle_drawable(im) || continue
+        mat = _instanced_material(im)
+        (material_wireframe(mat) && _primitive_transparent(mat)) || continue
+        base = instanced_worlds[instanced_slot]
+        for instance_index in eachindex(im.instance_matrices)
+            push!(items, _TransparentRenderItem(
+                _mesh_view_depth_world(base * im.instance_matrices[instance_index], view),
+                _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot, instance_index))
+        end
+    end
+    @inbounds for index in eachindex(meshes)
+        mat = _mesh_material(meshes[index])
+        (material_wireframe(mat) && _primitive_transparent(mat)) || continue
+        push!(items, _TransparentRenderItem(
+            _mesh_view_depth_world(mesh_worlds[index], view),
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0))
+    end
+    isempty(items) || _sort_transparent_items!(items)
+    return items
 end
 
 """
@@ -3619,10 +3675,13 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _validate_instanced_mesh(im, "render_tiled!")
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
         mat = _instanced_material(im)
-        is_transparent_material(mat) && continue
+        (is_transparent_material(mat) && !material_wireframe(mat)) && continue
         _instanced_materials!(instanced_material_states, instanced_slot, im,
                               mat, im.instance_colors)
     end
+    wireframe_items = _tiled_transparent_wireframe_items!(
+        shared_cache.transparent_items, meshes, mesh_worlds, instanced,
+        instanced_worlds, view)
     band = cld(H, active_tiles)
     if thread_count == 1
         for t in 1:active_tiles
@@ -3632,7 +3691,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
                                 lights, camera_position, proj, view,
-                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
+                                wireframe_items)
         end
     else
         # Each iteration owns a cache even if a shader yields and its task migrates.
@@ -3648,7 +3708,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                     instanced_material_states,
                                     lights, camera_position, proj, view,
-                                    near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+                                    near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
+                                    wireframe_items)
             end
         end
     end
