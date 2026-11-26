@@ -1,4 +1,4 @@
-using Test, Diff3D
+using Test, Diff3D, ForwardDiff
 
 # Regression tests for the audit-3 math-core pass. Expected values are taken
 # from three.js r186 (0.186.0) executed under node, or derived analytically as
@@ -227,4 +227,67 @@ end
                                          Vec4(1.0, 2.0, 3.0, 1.0),
                                          Vec3(1.0, 2.0, 3.0)) == 0
     end
+end
+
+_audit3_close(actual, expected; atol=4e-16) =
+    length(actual) == length(expected) &&
+    all(isapprox(x, y; atol=atol) for (x, y) in zip(actual, expected))
+
+@testset "audit3 math-core: quaternion and Euler conversions match three.js" begin
+    a = Quaternion(0.1, 0.2, 0.3, 0.9273618495495703)
+    b = Quaternion(-0.4193139346887673, 0.5241424183609591,
+                   0.10482848367219183, 0.7337993857053428)
+    # node: new Quaternion().setFromAxisAngle(new Vector3(0.6,0,0.8), 1.2)
+    # (src/math/Quaternion.js:378-391)
+    @test _audit3_close(_audit3_quat_vector(
+              Diff3D.quat_from_axis_angle(Vec3(0.6, 0.0, 0.8), 1.2)),
+          (0.3387854840370212, 0.0, 0.4517139787160283, 0.8253356149096783))
+    @test Diff3D.quat_from_axis_angle(Vec3(0.0, 1.0, 0.0), 0.0) === Quaternion()
+    # Quaternion.conjugate/invert (src/math/Quaternion.js:558-581).
+    @test Diff3D.quat_conjugate(b) === Quaternion(-b.x, -b.y, -b.z, b.w)
+    @test Diff3D.quat_invert(b) === Diff3D.quat_conjugate(b)
+    # a.angleTo(b) = 1.36865865010236 (src/math/Quaternion.js:512-516).
+    @test isapprox(Diff3D.quat_angle_to(a, b), 1.36865865010236; atol=4e-16)
+    @test Diff3D.quat_angle_to(b, Quaternion(-b.x, -b.y, -b.z, -b.w)) == 0.0
+    # a.clone().rotateTowards(b, 0.3) and (b, 10) (src/math/Quaternion.js:526-538).
+    @test _audit3_close(_audit3_quat_vector(Diff3D.quat_rotate_towards(a, b, 0.3)),
+          (-0.018563679809720623, 0.28502517352515255,
+           0.26646149371543193, 0.9205510918008952))
+    @test _audit3_close(_audit3_quat_vector(Diff3D.quat_rotate_towards(a, b, 10.0)),
+                        _audit3_quat_vector(b))
+    @test Diff3D.quat_rotate_towards(a, a, 0.3) === a
+    # new Vector3(1,-2,0.5).applyQuaternion(b) (src/math/Vector3.js:471-490).
+    @test _audit3_close(_audit3_vec_vector(
+              Diff3D.quat_rotate_vector(b, Vec3(1.0, -2.0, 0.5))),
+          (1.956043956043956, -1.1758241758241756, 0.20329670329670335))
+    # new Euler().setFromQuaternion(b, order) (src/math/Euler.js:189-317).
+    zyx = Diff3D.euler_from_quaternion(b, :ZYX)
+    @test zyx.order === :ZYX
+    @test _audit3_close((zyx.x, zyx.y, zyx.z),
+          (-1.3775848429470905, 1.0296968008377505, -0.5880026035475675);
+          atol=1e-15)
+    xyz = Diff3D.euler_from_rotation_matrix(quat_to_mat4(b))
+    @test xyz.order === :XYZ
+    @test _audit3_close((xyz.x, xyz.y, xyz.z),
+          (-1.4352686128093957, 0.74956263716122, 0.9453112865556675);
+          atol=1e-15)
+    # The angles round-trip through quat_from_euler for every order.
+    for order in (:XYZ, :YXZ, :ZXY, :ZYX, :YZX, :XZY)
+        e = Diff3D.euler_from_quaternion(a, order)
+        q = quat_from_euler(e.x, e.y, e.z; order)
+        @test abs(quat_dot(q, a)) ≈ 1.0 atol = 1e-15
+    end
+    # Generic in the scalar type; d/dθ cos(θ/2) = -sin(θ/2)/2 and the rotated
+    # vector's derivative is the angular velocity cross product.
+    @test ForwardDiff.derivative(
+        θ -> Diff3D.quat_from_axis_angle(Vec3(0.0, 0.0, 1.0), θ).w, 0.8) ≈
+        -sin(0.4) / 2
+    @test ForwardDiff.derivative(
+        θ -> Diff3D.quat_rotate_vector(
+            Diff3D.quat_from_axis_angle(Vec3(0.0, 0.0, 1.0), θ),
+            Vec3(1.0, 0.0, 0.0)).y, 0.0) ≈ 1.0
+    @test Diff3D.quat_rotate_vector(Quaternion(0f0, 0f0, 0f0, 1f0),
+                                    Vec3(1f0, 2f0, 3f0)) === Vec3(1f0, 2f0, 3f0)
+    @test (@inferred Diff3D.quat_from_axis_angle(Vec3(1f0, 0f0, 0f0), 0.5f0)) isa
+          Quaternion{Float32}
 end

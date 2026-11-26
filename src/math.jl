@@ -475,8 +475,8 @@ end
 
 function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     d = eye - target
-    # Guard the degenerate eye==target case before normalising (three.js lookAt):
-    # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
+    # eye == target looks along +z like three.js lookAt; normalize(0) would
+    # return the zero vector and collapse the whole view basis.
     z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
         iszero(_primal_value(d.x)) && iszero(_primal_value(d.y)) && iszero(_primal_value(d.z)) ?
             _look_at_default_z(d) : normalize(d)
@@ -1141,6 +1141,28 @@ function _rotation_matrix_to_euler(matrix::Mat4, order::Symbol=:XYZ)
     return Euler(angles...,order)
 end
 
+"""
+    euler_from_rotation_matrix(m, order=:XYZ)
+
+Intrinsic Euler angles, in the given order, of the pure rotation in the
+upper-left 3×3 block of `m` (three.js `Euler.setFromRotationMatrix`). Within
+about 1e-7 of gimbal lock three.js sets the third angle to zero; this function
+instead returns coupled angles that reproduce `m`, so the angles can differ
+there while describing the same rotation.
+"""
+euler_from_rotation_matrix(m::Mat4, order::Symbol=:XYZ) =
+    _rotation_matrix_to_euler(m, order)
+
+"""
+    euler_from_quaternion(q, order=:XYZ)
+
+Intrinsic Euler angles of the unit quaternion `q` (three.js
+`Euler.setFromQuaternion`), with the gimbal-lock behaviour of
+[`euler_from_rotation_matrix`](@ref).
+"""
+euler_from_quaternion(q::Quaternion, order::Symbol=:XYZ) =
+    _rotation_matrix_to_euler(quat_to_mat4(q), order)
+
 # Orthonormal basis (u, v) spanning the plane perpendicular to unit vector w.
 function _perp_basis(w::Vec3)
     ref = abs(w.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -1265,6 +1287,74 @@ function quat_from_unit_vectors(from::Vec3, to::Vec3)
         q = Quaternion(c.x, c.y, c.z, r)
     end
     quat_normalize(q)
+end
+
+"""
+    quat_from_axis_angle(axis, angle)
+
+Quaternion rotating by `angle` radians about `axis` (three.js
+`Quaternion.setFromAxisAngle`). As in three.js, `axis` is used as given and
+should have unit length.
+"""
+function quat_from_axis_angle(axis::Vec3, angle::Real)
+    half_angle = angle / 2
+    s = sin(half_angle)
+    return Quaternion(axis.x * s, axis.y * s, axis.z * s, cos(half_angle))
+end
+
+"""
+    quat_conjugate(q)
+
+Quaternion with the vector part negated (three.js `Quaternion.conjugate`). For
+a unit quaternion this is the inverse rotation.
+"""
+quat_conjugate(q::Quaternion) = Quaternion(-q.x, -q.y, -q.z, q.w)
+
+"""
+    quat_invert(q)
+
+Inverse rotation of the unit quaternion `q` (three.js `Quaternion.invert`,
+which returns the conjugate and assumes unit length).
+"""
+quat_invert(q::Quaternion) = quat_conjugate(q)
+
+"""
+    quat_angle_to(a, b)
+
+Angle in radians, in `[0, π]`, of the rotation between unit quaternions `a`
+and `b` (three.js `Quaternion.angleTo`).
+"""
+function quat_angle_to(a::Quaternion, b::Quaternion)
+    d = quat_dot(a, b)
+    return 2 * acos(abs(clamp(d, -one(d), one(d))))
+end
+
+"""
+    quat_rotate_towards(a, b, step)
+
+Rotate unit quaternion `a` towards `b` by at most `step` radians, reaching `b`
+when the remaining angle is not larger than `step` (three.js
+`Quaternion.rotateTowards`).
+"""
+function quat_rotate_towards(a::Quaternion, b::Quaternion, step::Real)
+    angle = quat_angle_to(a, b)
+    iszero(angle) && return a
+    return quat_slerp(a, b, min(one(angle), step / angle))
+end
+
+"""
+    quat_rotate_vector(q, v)
+
+Rotate `v` by the unit quaternion `q` (three.js `Vector3.applyQuaternion`).
+"""
+function quat_rotate_vector(q::Quaternion, v::Vec3)
+    # t = 2 q.xyz × v; v' = v + q.w t + q.xyz × t, in three.js's order.
+    tx = 2 * (q.y * v.z - q.z * v.y)
+    ty = 2 * (q.z * v.x - q.x * v.z)
+    tz = 2 * (q.x * v.y - q.y * v.x)
+    return Vec3(v.x + q.w * tx + q.y * tz - q.z * ty,
+                v.y + q.w * ty + q.z * tx - q.x * tz,
+                v.z + q.w * tz + q.x * ty - q.y * tx)
 end
 
 # ========================== Triangle ==========================
