@@ -1260,17 +1260,22 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    uv2_attr, color_attr,
                                    use_vertex_colors::Bool) where {M<:AbstractMaterial}
     blend = material_transparent(mat)
-    for fi in _draw_face_range(geo)
+    # three.js draws a transparent double-sided material in two passes, back
+    # faces then front faces (WebGLRenderer.js:2165-2175), so the far side is
+    # blended first whatever the face order.
+    passes = blend && side === :double ? (1:2) : (0:0)
+    for pass in passes, fi in _draw_face_range(geo)
+        pass_side = pass == 1 ? :back : pass == 2 ? :front : side
         i1, i2, i3 = get_face(geo, fi)
         front_facing = true
-        if side !== :double
+        if pass_side !== :double
             w1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
             w2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
             w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
                 w1, w2, w3, wc, cam_pos, ortho_dir) != mirrored
-            (side === :front ? !front_facing : front_facing) && continue
+            (pass_side === :front ? !front_facing : front_facing) && continue
         end
         # Geometry without authored normals: fall back to the local-space
         # winding normal once per face (matching `_flat_face_normal`'s
@@ -1293,7 +1298,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    has_normals, fallback_n, has_uvs, uv2_attr,
                                    use_vertex_colors, color_attr)
         end
-        if side === :double
+        if pass_side === :double
             wc = _mean3_vec3(tri[1].wp, tri[2].wp, tri[3].wp)
             front_facing = _face_front_facing(
                 tri[1].wp, tri[2].wp, tri[3].wp,
@@ -2627,18 +2632,23 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     view_inv = needs_world ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
-    for fi in _draw_face_range(geo)
+    # three.js draws a transparent double-sided material in two passes, back
+    # faces then front faces (WebGLRenderer.js:2165-2175), so the far side is
+    # blended first whatever the face order.
+    passes = material_transparent(mat) && side === :double ? (1:2) : (0:0)
+    for pass in passes, fi in _draw_face_range(geo)
+        pass_side = pass == 1 ? :back : pass == 2 ? :front : side
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
         # Back-face culling (skipped for double-sided materials).
-        if side !== :double
+        if pass_side !== :double
             w1 = mat4_transform_point(world_mat, v1)
             w2 = mat4_transform_point(world_mat, v2)
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
                 w1, w2, w3, wc, cam_pos, ortho_dir) != face_flip
-            (side === :front ? !front_facing : front_facing) && continue
+            (pass_side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
         tri[2] = mat4_transform_vec4(modelview, Vec4(v2.x, v2.y, v2.z, 1.0))

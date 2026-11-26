@@ -308,3 +308,25 @@ end
         end
     end
 end
+
+@testset "Transparent double-sided meshes draw back faces before front faces" begin
+    # WebGLRenderer.js:2165-2175 renders a transparent DoubleSide material as a
+    # BackSide pass followed by a FrontSide pass. With depth_write=true (the
+    # three.js default) the far hemisphere must still be blended first:
+    # 0.5 * red over black, then 0.5 * red over that, giving 0.75 inside the
+    # silhouette (sphere radius 1 at distance 4 spans ~8.9 px from the centre).
+    camera = audit3_front_camera()
+    for shading in (:flat, :smooth), depth_write in (true, false), cache in (nothing, RenderCache())
+        scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene, Mesh(SphereGeometry(radius=1.0, width_segments=16, height_segments=12),
+                         MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0), transparent=true,
+                                           opacity=0.5, side=:double,
+                                           depth_write=depth_write)))
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera; shading=shading, cache=cache)
+        core = [target.color[py, px, 1] for px in 1:32, py in 1:32
+                if hypot(px - 0.5 - 16, py - 0.5 - 16) < 6]
+        @test length(core) > 100
+        @test all(≈(0.75; atol=1e-12), core)
+    end
+end
