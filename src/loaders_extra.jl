@@ -485,12 +485,6 @@ end
 
 @inline _rd_be32(b, i) = (Int(b[i]) << 24) | (Int(b[i+1]) << 16) | (Int(b[i+2]) << 8) | Int(b[i+3])
 
-@inline function _paeth(a, b, c)
-    p = a + b - c
-    pa = abs(p - a); pb = abs(p - b); pc = abs(p - c)
-    return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
-end
-
 const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
 function _is_png_bytes(bytes::AbstractVector{UInt8})
     length(bytes) >= length(_PNG_SIGNATURE) || return false
@@ -550,55 +544,121 @@ const _PNG_ADAM7_PASSES = (
 @inline _png_pass_size(n::Int, start::Int, step::Int) =
     n <= start ? 0 : ((n - start + step - 1) ÷ step)
 
-function _png_unfilter_scanline!(cur::Vector{UInt8}, prev::Vector{UInt8},
-                                 bpp::Int, ftype::UInt8)
-    stride = length(cur)
-    length(prev) == stride || error("PNG previous scanline length mismatch")
-    @inbounds for i in 1:stride
-        a = i > bpp ? cur[i-bpp] : 0x00
-        b = prev[i]
-        c = i > bpp ? prev[i-bpp] : 0x00
-        x = cur[i]
-        cur[i] = if ftype == 0; x
-                 elseif ftype == 1; x + a
-                 elseif ftype == 2; x + b
-                 elseif ftype == 3; x + UInt8((Int(a) + Int(b)) ÷ 2)
-                 elseif ftype == 4; x + UInt8(_paeth(Int(a), Int(b), Int(c)))
-                 else error("bad PNG filter $ftype") end
+# Undo the filter of one `stride`-byte scanline in place (PNG §9.2). The row's
+# bytes start at `raw[p]`; `q` is the start of the previous row of the same
+# pass, or 0 for a pass's first row, whose previous row is all zeros.
+function _png_unfilter_row!(raw::Vector{UInt8}, p::Int, q::Int, stride::Int,
+                            bpp::Int, ftype::UInt8)
+    last = p + stride - 1
+    @inbounds if ftype == 0x00
+        return raw
+    elseif ftype == 0x01 || (ftype == 0x04 && q == 0)
+        # Sub; Paeth with a zero previous row predicts the left byte.
+        for i in (p + bpp):last
+            raw[i] += raw[i - bpp]
+        end
+    elseif ftype == 0x02
+        q == 0 && return raw
+        for i in 0:(stride - 1)
+            raw[p + i] += raw[q + i]
+        end
+    elseif ftype == 0x03
+        if q == 0
+            for i in (p + bpp):last
+                raw[i] += raw[i - bpp] >> 1
+            end
+        else
+            for i in 0:(min(bpp, stride) - 1)
+                raw[p + i] += raw[q + i] >> 1
+            end
+            for i in bpp:(stride - 1)
+                raw[p + i] += ((UInt16(raw[p + i - bpp]) + UInt16(raw[q + i])) >> 1) % UInt8
+            end
+        end
+    elseif ftype == 0x04
+        # Paeth with a zero left byte predicts the byte above.
+        for i in 0:(min(bpp, stride) - 1)
+            raw[p + i] += raw[q + i]
+        end
+        for i in bpp:(stride - 1)
+            raw[p + i] += _paeth(raw[p + i - bpp], raw[q + i], raw[q + i - bpp])
+        end
+    else
+        error("bad PNG filter $ftype")
     end
-    return cur
+    return raw
 end
 
-@inline function _png_channel_value(cur::Vector{UInt8}, base::Int,
-                                   bps::Int, norm::Float64)
-    return bps == 2 ? ((Int(cur[base]) << 8) | Int(cur[base + 1])) / norm :
-                      cur[base] / norm
+@inline function _paeth(a::UInt8, b::UInt8, c::UInt8)
+    p = Int(a) + Int(b) - Int(c)
+    pa = abs(p - Int(a)); pb = abs(p - Int(b)); pc = abs(p - Int(c))
+    return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
 end
 
-@inline function _png_sample_integer(cur::Vector{UInt8}, base::Int, bps::Int)
-    return bps == 2 ? (Int(cur[base]) << 8) | Int(cur[base + 1]) :
-                      Int(cur[base])
+# Unfilter `rows` scanlines of `stride` bytes stored from `raw[start]` (each
+# preceded by its filter-type byte); returns the index after the last one.
+function _png_unfilter_pass!(raw::Vector{UInt8}, start::Int, rows::Int,
+                             stride::Int, bpp::Int)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    p = start
+    q = 0
+    for _ in 1:rows
+        ftype = @inbounds raw[p]
+        _png_unfilter_row!(raw, p + 1, q, stride, bpp, ftype)
+        q = p + 1
+        p += stride + 1
+    end
+    return p
+end
+
+# Scanlines are unfiltered in place and then stored a band of rows at a time,
+# column by column, because the H×W×C output is column-major.
+const _PNG_BAND_ROWS = 16
+
+@inline _png_sample_integer(raw::Vector{UInt8}, i::Int, bps::Int) =
+    @inbounds bps == 2 ? (Int(raw[i]) << 8) | Int(raw[i + 1]) : Int(raw[i])
+
+# Store an unfiltered 8/16-bit pass whose rows start at `raw[start]` into
+# rows y0+1, y0+1+ystep, ... and columns x0+1, x0+1+xstep, ... of `img`.
+function _png_store_pass!(img::Array{Float64,3}, raw::Vector{UInt8}, start::Int,
+                          rows::Int, cols::Int, stride::Int, x0::Int, y0::Int,
+                          xstep::Int, ystep::Int, channels::Int, bps::Int, bpp::Int,
+                          norm::Float64, transparent_samples)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    (cols - 1) * bpp + bpp <= stride || error("PNG scanline is shorter than its pixels")
+    for r0 in 1:_PNG_BAND_ROWS:rows
+        r1 = min(rows, r0 + _PNG_BAND_ROWS - 1)
+        @inbounds for pc in 1:cols
+            col = x0 + (pc - 1) * xstep + 1
+            for pr in r0:r1
+                row = y0 + (pr - 1) * ystep + 1
+                base = start + (pr - 1) * (stride + 1) + 1 + (pc - 1) * bpp
+                _png_store_pixel!(img, row, col, raw, base, channels, bps, norm,
+                                  transparent_samples)
+            end
+        end
+    end
+    return img
 end
 
 @inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   cur::Vector{UInt8}, pixel_base::Int,
-                                   channels::Int, bps::Int, norm::Float64,
-                                   ::Nothing)
+                                   raw::Vector{UInt8}, base::Int, channels::Int,
+                                   bps::Int, norm::Float64, ::Nothing)
     @inbounds for channel in 1:channels
-        base = pixel_base + (channel - 1) * bps + 1
-        img[row, col, channel] = _png_channel_value(cur, base, bps, norm)
+        img[row, col, channel] =
+            _png_sample_integer(raw, base + (channel - 1) * bps, bps) / norm
     end
     return nothing
 end
 
 @inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   cur::Vector{UInt8}, pixel_base::Int,
-                                   channels::Int, bps::Int, norm::Float64,
-                                   transparent_samples::Tuple)
+                                   raw::Vector{UInt8}, base::Int, channels::Int,
+                                   bps::Int, norm::Float64, transparent_samples::Tuple)
     transparent = true
     @inbounds for channel in 1:channels
-        base = pixel_base + (channel - 1) * bps + 1
-        sample = _png_sample_integer(cur, base, bps)
+        sample = _png_sample_integer(raw, base + (channel - 1) * bps, bps)
         img[row, col, channel] = sample / norm
         transparent &= sample == transparent_samples[channel]
     end
@@ -606,166 +666,105 @@ end
     return nothing
 end
 
-function _png_store_scanline!(img::Array{Float64,3}, row::Int, cur::Vector{UInt8},
-                              W::Int, channels::Int, bps::Int, bpp::Int,
-                              norm::Float64, transparent_samples=nothing)
-    @inbounds for col in 1:W
-        _png_store_pixel!(img, row, col, cur, (col - 1) * bpp,
-                          channels, bps, norm, transparent_samples)
-    end
-    return img
-end
-
-function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                    W::Int, H::Int, channels::Int, bps::Int,
-                                    bpp::Int, norm::Float64,
-                                    transparent_samples=nothing)
-    stride = W * bpp
-    prev = zeros(UInt8, stride)
-    cur = Vector{UInt8}(undef, stride)
-    p = 1
-    for row in 1:H
-        p <= length(raw) || error("PNG image data is truncated")
-        ftype = raw[p]; p += 1
-        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        copyto!(cur, 1, raw, p, stride); p += stride
-        _png_unfilter_scanline!(cur, prev, bpp, ftype)
-        _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm,
-                             transparent_samples)
-        cur, prev = prev, cur
-    end
-    return img
-end
-
-function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
-                            W::Int, H::Int, channels::Int, bps::Int,
-                            bpp::Int, norm::Float64,
-                            transparent_samples=nothing)
-    p = 1
-    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
-        pass_w = _png_pass_size(W, x0, xstep)
-        pass_h = _png_pass_size(H, y0, ystep)
-        (pass_w == 0 || pass_h == 0) && continue
-        stride = pass_w * bpp
-        prev = zeros(UInt8, stride)
-        cur = Vector{UInt8}(undef, stride)
-        for prow in 0:(pass_h - 1)
-            p <= length(raw) || error("PNG image data is truncated")
-            ftype = raw[p]; p += 1
-            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            copyto!(cur, 1, raw, p, stride); p += stride
-            _png_unfilter_scanline!(cur, prev, bpp, ftype)
-            row = y0 + prow * ystep + 1
-            for pcol in 0:(pass_w - 1)
-                col = x0 + pcol * xstep + 1
-                _png_store_pixel!(img, row, col, cur, pcol * bpp,
-                                  channels, bps, norm, transparent_samples)
-            end
-            cur, prev = prev, cur
-        end
-    end
-    return img
-end
-
-@inline function _png_packed_index(cur::Vector{UInt8}, pcol::Int, bitdepth::Int)
-    if bitdepth == 8
-        return Int(cur[pcol + 1])
+# Sample `pcol` (0-based) of a packed 1/2/4/8-bit row whose bytes start at `p`.
+@inline function _png_packed_index(raw::Vector{UInt8}, p::Int, pcol::Int, bitdepth::Int)
+    @inbounds if bitdepth == 8
+        return Int(raw[p + pcol])
     elseif bitdepth == 4
-        byte = cur[(pcol ÷ 2) + 1]
+        byte = raw[p + (pcol >> 1)]
         return iseven(pcol) ? Int(byte >> 4) : Int(byte & 0x0f)
     elseif bitdepth == 2
-        byte = cur[(pcol ÷ 4) + 1]
-        shift = 6 - 2 * (pcol % 4)
-        return Int((byte >> shift) & 0x03)
+        byte = raw[p + (pcol >> 2)]
+        return Int((byte >> (6 - 2 * (pcol & 3))) & 0x03)
     else # bitdepth == 1
-        byte = cur[(pcol ÷ 8) + 1]
-        shift = 7 - (pcol % 8)
-        return Int((byte >> shift) & 0x01)
+        byte = raw[p + (pcol >> 3)]
+        return Int((byte >> (7 - (pcol & 7))) & 0x01)
     end
 end
 
-function _png_store_palette_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   idx::Int, palette::Vector{UInt8},
-                                   trns::Vector{UInt8}, channels::Int)
-    entry = 3idx + 1
-    entry + 2 <= length(palette) || error("PNG palette index $idx is out of range")
-    img[row, col, 1] = palette[entry] / 255
-    img[row, col, 2] = palette[entry + 1] / 255
-    img[row, col, 3] = palette[entry + 2] / 255
-    if channels == 4
-        alpha = idx + 1 <= length(trns) ? trns[idx + 1] : UInt8(255)
-        img[row, col, 4] = alpha / 255
+# Packed-sample conversion: a palette with optional tRNS alphas, or a 1/2/4-bit
+# grayscale level with an optional tRNS gray level.
+struct _PngPaletteLUT
+    rgba::Matrix{Float64}         # 4 x entries: palette RGB / 255 and alpha / 255
+    entries::Int
+    alpha::Bool
+end
+
+function _PngPaletteLUT(palette::Vector{UInt8}, trns::Vector{UInt8})
+    entries = length(palette) ÷ 3
+    rgba = Matrix{Float64}(undef, 4, entries)
+    for i in 1:entries
+        rgba[1, i] = palette[3i - 2] / 255
+        rgba[2, i] = palette[3i - 1] / 255
+        rgba[3, i] = palette[3i] / 255
+        rgba[4, i] = (i <= length(trns) ? trns[i] : UInt8(255)) / 255
     end
-    return img
+    return _PngPaletteLUT(rgba, entries, !isempty(trns))
 end
 
-@inline function _png_store_packed_pixel!(img, row, col, sample,
-                                          palette::Vector{UInt8}, transparency::Vector{UInt8},
-                                          channels::Int, maximum_sample::Float64)
-    return _png_store_palette_pixel!(img,row,col,sample,palette,transparency,channels)
-end
+@noinline _png_palette_range_error(idx::Int) =
+    error("PNG palette index $idx is out of range")
 
-@inline function _png_store_packed_pixel!(img, row, col, sample,
-                                          ::Nothing, transparency,
-                                          channels::Int, maximum_sample::Float64)
-    img[row,col,1] = sample/maximum_sample
-    if transparency !== nothing
-        img[row,col,2] = sample == transparency[1] ? 0.0 : 1.0
+@inline function _png_store_packed_pixel!(img, row, col, sample::Int,
+                                          lut::_PngPaletteLUT, ::Float64)
+    sample < lut.entries || _png_palette_range_error(sample)
+    @inbounds begin
+        img[row, col, 1] = lut.rgba[1, sample + 1]
+        img[row, col, 2] = lut.rgba[2, sample + 1]
+        img[row, col, 3] = lut.rgba[3, sample + 1]
+        lut.alpha && (img[row, col, 4] = lut.rgba[4, sample + 1])
     end
     return nothing
 end
 
-function _png_decode_packed_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                            W::Int, H::Int, bitdepth::Int,
-                                            palette,
-                                            transparency, channels::Int)
-    maximum_sample = Float64((1<<bitdepth)-1)
-    stride = cld(W * bitdepth, 8)
-    prev = zeros(UInt8, stride)
-    cur = Vector{UInt8}(undef, stride)
-    p = 1
-    for row in 1:H
-        p <= length(raw) || error("PNG image data is truncated")
-        ftype = raw[p]; p += 1
-        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        copyto!(cur, 1, raw, p, stride); p += stride
-        _png_unfilter_scanline!(cur, prev, 1, ftype)
-        for pcol in 0:(W - 1)
-            idx = _png_packed_index(cur, pcol, bitdepth)
-            _png_store_packed_pixel!(img, row, pcol + 1, idx, palette, transparency, channels, maximum_sample)
+@inline function _png_store_packed_pixel!(img, row, col, sample::Int,
+                                          transparency::Union{Nothing,Tuple},
+                                          maximum_sample::Float64)
+    @inbounds img[row, col, 1] = sample / maximum_sample
+    if transparency !== nothing
+        @inbounds img[row, col, 2] = sample == transparency[1] ? 0.0 : 1.0
+    end
+    return nothing
+end
+
+# Store an unfiltered packed (1/2/4/8-bit palette or 1/2/4-bit gray) pass.
+function _png_store_packed_pass!(img::Array{Float64,3}, raw::Vector{UInt8}, start::Int,
+                                 rows::Int, cols::Int, stride::Int, x0::Int, y0::Int,
+                                 xstep::Int, ystep::Int, bitdepth::Int, conversion)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    cld(cols * bitdepth, 8) <= stride || error("PNG scanline is shorter than its pixels")
+    maximum_sample = Float64((1 << bitdepth) - 1)
+    for r0 in 1:_PNG_BAND_ROWS:rows
+        r1 = min(rows, r0 + _PNG_BAND_ROWS - 1)
+        for pc in 1:cols
+            col = x0 + (pc - 1) * xstep + 1
+            for pr in r0:r1
+                row = y0 + (pr - 1) * ystep + 1
+                p = start + (pr - 1) * (stride + 1) + 1
+                sample = _png_packed_index(raw, p, pc - 1, bitdepth)
+                _png_store_packed_pixel!(img, row, col, sample, conversion, maximum_sample)
+            end
         end
-        cur, prev = prev, cur
     end
     return img
 end
 
-function _png_decode_packed_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                    W::Int, H::Int, bitdepth::Int,
-                                    palette,
-                                    transparency, channels::Int)
-    maximum_sample = Float64((1<<bitdepth)-1)
+# Unfilter and store every pass: the whole image (interlace 0) or the seven
+# Adam7 passes, skipping empty ones (PNG §8.2).
+function _png_decode_passes!(img::Array{Float64,3}, raw::Vector{UInt8}, W::Int, H::Int,
+                             interlace, bits_per_pixel::Int, store!)
+    bpp = max(1, bits_per_pixel >> 3)
     p = 1
-    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
+    passes = interlace == 0 ? ((0, 0, 1, 1),) : _PNG_ADAM7_PASSES
+    for (x0, y0, xstep, ystep) in passes
         pass_w = _png_pass_size(W, x0, xstep)
         pass_h = _png_pass_size(H, y0, ystep)
         (pass_w == 0 || pass_h == 0) && continue
-        stride = cld(pass_w * bitdepth, 8)
-        prev = zeros(UInt8, stride)
-        cur = Vector{UInt8}(undef, stride)
-        for prow in 0:(pass_h - 1)
-            p <= length(raw) || error("PNG image data is truncated")
-            ftype = raw[p]; p += 1
-            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            copyto!(cur, 1, raw, p, stride); p += stride
-            _png_unfilter_scanline!(cur, prev, 1, ftype)
-            row = y0 + prow * ystep + 1
-            for pcol in 0:(pass_w - 1)
-                col = x0 + pcol * xstep + 1
-                idx = _png_packed_index(cur, pcol, bitdepth)
-                _png_store_packed_pixel!(img, row, col, idx, palette, transparency, channels, maximum_sample)
-            end
-            cur, prev = prev, cur
-        end
+        stride = cld(pass_w * bits_per_pixel, 8)
+        next = _png_unfilter_pass!(raw, p, pass_h, stride, bpp)
+        store!(img, raw, p, pass_h, pass_w, stride, x0, y0, xstep, ystep)
+        p = next
     end
     return img
 end
@@ -979,9 +978,12 @@ function _decode_png(bytes::AbstractVector{UInt8})
         idat_payload = _png_idat_payload(bytes,idat,idat_start,idat_len)
         raw = _png_inflate_exact_scanlines(idat_payload,expected)
         img = Array{Float64}(undef,H,W,channels)
-        return interlace == 0 ?
-               _png_decode_packed_noninterlaced!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels) :
-               _png_decode_packed_adam7!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels)
+        conversion = pixel_palette === nothing ? transparency :
+                     _PngPaletteLUT(pixel_palette, transparency)
+        return _png_decode_passes!(img, raw, W, H, interlace, packed_depth,
+            (img, raw, p, rows, cols, stride, x0, y0, xstep, ystep) ->
+                _png_store_packed_pass!(img, raw, p, rows, cols, stride, x0, y0,
+                                        xstep, ystep, packed_depth, conversion))
     end
     (bitdepth == 8 || bitdepth == 16) ||
         error("unsupported PNG bit depth $bitdepth for color type $colortype")
@@ -998,11 +1000,10 @@ function _decode_png(bytes::AbstractVector{UInt8})
     output_channels = channels + (transparent_samples === nothing ? 0 : 1)
     img = Array{Float64}(undef, H, W, output_channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
-    return interlace == 0 ?
-           _png_decode_noninterlaced!(img, raw, W, H, channels, bps, bpp, norm,
-                                      transparent_samples) :
-           _png_decode_adam7!(img, raw, W, H, channels, bps, bpp, norm,
-                              transparent_samples)
+    return _png_decode_passes!(img, raw, W, H, interlace, Int(bitdepth) * channels,
+        (img, raw, p, rows, cols, stride, x0, y0, xstep, ystep) ->
+            _png_store_pass!(img, raw, p, rows, cols, stride, x0, y0, xstep, ystep,
+                             channels, bps, bpp, norm, transparent_samples))
 end
 
 function load_png(path::String)

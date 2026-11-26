@@ -357,3 +357,91 @@ end
     @test_throws "EXR PIZ Huffman data length" Diff3D._decode_exr(long)
     @test isequal(Diff3D._decode_exr(copy(fixture)), good)
 end
+
+# PNG encoder for tests (PNG §8-§10): every filter type cycles across rows so
+# Sub/Up/Average/Paeth reconstruction is exercised; Adam7 when `interlace`.
+function audit3_png(samples::Array{Int,3}, colortype::Int, bitdepth::Int;
+                    interlace::Bool=false, plte::Vector{UInt8}=UInt8[],
+                    trns::Vector{UInt8}=UInt8[])
+    H, W, C = size(samples)
+    function pack(row)
+        bitdepth == 16 && return reduce(vcat, [UInt8[v >> 8, v & 0xff] for v in row]; init=UInt8[])
+        bitdepth == 8 && return UInt8.(row)
+        out = UInt8[]; acc = 0; n = 0
+        for v in row
+            acc = (acc << bitdepth) | v; n += bitdepth
+            n == 8 && (push!(out, UInt8(acc)); acc = 0; n = 0)
+        end
+        n > 0 && push!(out, UInt8(acc << (8 - n)))
+        return out
+    end
+    paeth(a, b, c) = (p = a + b - c; pa = abs(p - a); pb = abs(p - b); pc = abs(p - c);
+                      pa <= pb && pa <= pc ? a : pb <= pc ? b : c)
+    bpp = max(1, C * bitdepth ÷ 8)
+    raw = UInt8[]
+    passes = interlace ? ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+                          (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)) : ((0, 0, 1, 1),)
+    rowcount = 0
+    for (x0, y0, dx, dy) in passes
+        ys = (y0 + 1):dy:H; xs = (x0 + 1):dx:W
+        (isempty(ys) || isempty(xs)) && continue
+        prev = nothing
+        for y in ys
+            cur = pack(vec(permutedims(samples[y, xs, :])))
+            prev === nothing && (prev = zeros(UInt8, length(cur)))
+            ft = rowcount % 5; rowcount += 1
+            push!(raw, UInt8(ft))
+            for i in eachindex(cur)
+                a = i > bpp ? Int(cur[i - bpp]) : 0
+                b = Int(prev[i]); c = i > bpp ? Int(prev[i - bpp]) : 0
+                pred = (0, a, b, (a + b) ÷ 2, paeth(a, b, c))[ft + 1]
+                push!(raw, UInt8(mod(Int(cur[i]) - pred, 256)))
+            end
+            prev = cur
+        end
+    end
+    chunk(t, d) = (td = vcat(Vector{UInt8}(codeunits(t)), d);
+                   vcat(reinterpret(UInt8, [hton(UInt32(length(d)))]), td,
+                        reinterpret(UInt8, [hton(Diff3D._crc32(td))])))
+    ihdr = vcat(reinterpret(UInt8, [hton(UInt32(W)), hton(UInt32(H))]),
+                UInt8[bitdepth, colortype, 0, 0, interlace ? 1 : 0])
+    out = UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    append!(out, chunk("IHDR", ihdr))
+    isempty(plte) || append!(out, chunk("PLTE", plte))
+    isempty(trns) || append!(out, chunk("tRNS", trns))
+    append!(out, chunk("IDAT", Diff3D._zlib_store(raw)))
+    append!(out, chunk("IEND", UInt8[]))
+    return out
+end
+
+@testset "PNG in-place unfiltering and banded store" begin
+    # 37 rows span several 16-row store bands; all five filters occur in
+    # every pass. Expected values are the encoded samples / (2^depth - 1).
+    H, W = 37, 13
+    for interlace in (false, true)
+        rgb = [(31y + 17x + 5c) % 256 for y in 1:H, x in 1:W, c in 1:3]
+        @test Diff3D._decode_png(audit3_png(rgb, 2, 8; interlace)) == rgb ./ 255
+        ga = [(977y + 131x + 4099c) % 65536 for y in 1:H, x in 1:W, c in 1:2]
+        @test Diff3D._decode_png(audit3_png(ga, 4, 16; interlace)) == ga ./ 65535
+        gray2 = [(y + 2x) % 4 for y in 1:H, x in 1:W, c in 1:1]
+        @test Diff3D._decode_png(audit3_png(gray2, 0, 2; interlace)) == gray2 ./ 3
+        # Palette with tRNS alpha for the first entries only.
+        plte = UInt8[(7i) % 256 for i in 1:18]
+        idx = [(y * x) % 6 for y in 1:H, x in 1:W, c in 1:1]
+        img = Diff3D._decode_png(audit3_png(idx, 3, 4; interlace, plte,
+                                             trns=UInt8[0, 128]))
+        @test size(img) == (H, W, 4)
+        @test img[:, :, 1] == [plte[3i + 1] / 255 for i in idx[:, :, 1]]
+        @test img[:, :, 3] == [plte[3i + 3] / 255 for i in idx[:, :, 1]]
+        @test img[:, :, 4] == [(i == 0 ? 0 : i == 1 ? 128 : 255) / 255 for i in idx[:, :, 1]]
+        # RGB tRNS marks exactly the matching pixels transparent.
+        key = rgb[5, 6, :]
+        img = Diff3D._decode_png(audit3_png(rgb, 2, 8; interlace,
+                                             trns=UInt8[0, key[1], 0, key[2], 0, key[3]]))
+        @test img[:, :, 4] == [rgb[y, x, :] == key ? 0.0 : 1.0 for y in 1:H, x in 1:W]
+    end
+    # A palette index past the PLTE entries is an error, not a read past it.
+    idx = fill(0, 2, 2, 1); idx[2, 2, 1] = 3
+    @test_throws "PNG palette index 3 is out of range" Diff3D._decode_png(
+        audit3_png(idx, 3, 8; plte=UInt8[1, 2, 3, 4, 5, 6]))
+end
