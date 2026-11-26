@@ -304,3 +304,56 @@ end
         @test img == expected
     end
 end
+
+# Byte positions of the first PIZ block's Huffman fields in an OpenEXR file:
+# the length field after the bitmap, and nBits (OpenEXR ImfPizCompressor.cpp,
+# ImfHuf.cpp hufUncompress: im, iM, table length, nBits, reserved).
+function audit3_piz_fields(bytes::Vector{UInt8})
+    le32(p) = Int(bytes[p]) | Int(bytes[p + 1]) << 8 | Int(bytes[p + 2]) << 16 |
+              Int(bytes[p + 3]) << 24
+    pos = 9
+    while bytes[pos] != 0x00
+        for _ in 1:2                       # attribute name and type
+            while bytes[pos] != 0x00
+                pos += 1
+            end
+            pos += 1
+        end
+        pos += 4 + le32(pos)
+    end
+    offsets = pos + 1
+    block = le32(offsets) + 1              # first scanline block (y, size)
+    piz = block + 8
+    minnz = Int(bytes[piz]) | Int(bytes[piz + 1]) << 8
+    maxnz = Int(bytes[piz + 2]) | Int(bytes[piz + 3]) << 8
+    length_pos = piz + 4 + (minnz <= maxnz ? maxnz - minnz + 1 : 0)
+    return (block_size=le32(block + 4), length_pos=length_pos,
+            length=le32(length_pos), nbits_pos=length_pos + 16,
+            nbits=le32(length_pos + 16))
+end
+
+function audit3_put_le32!(bytes::Vector{UInt8}, pos::Int, value::Integer)
+    for k in 0:3
+        bytes[pos + k] = UInt8((value >> (8k)) & 0xff)
+    end
+    return bytes
+end
+
+@testset "EXR PIZ Huffman sizes are validated" begin
+    fixture = read(joinpath(@__DIR__, "fixtures", "AllHalfValues.exr"))
+    good = Diff3D._decode_exr(fixture)
+    f = audit3_piz_fields(fixture)
+    # three.js EXRLoader.js:785 and OpenEXR hufUncompress reject an nBits
+    # beyond the Huffman payload. The decoder used to read 512 MiB of
+    # virtual zero bytes (seconds per block) and return an image.
+    huge = audit3_put_le32!(copy(fixture), f.nbits_pos, 0xffffffff)
+    @test_throws "EXR PIZ Huffman bit count 4294967295 exceeds its data" Diff3D._decode_exr(huge)
+    # Too few coded bits leave part of the block undecoded; OpenEXR raises
+    # notEnoughData. The old decoder returned zeros for the missing values.
+    short = audit3_put_le32!(copy(fixture), f.nbits_pos, f.nbits ÷ 2)
+    @test_throws "EXR PIZ Huffman data decoded to" Diff3D._decode_exr(short)
+    # OpenEXR PizCompressor::uncompress: the length cannot exceed the block.
+    long = audit3_put_le32!(copy(fixture), f.length_pos, 4 * f.block_size)
+    @test_throws "EXR PIZ Huffman data length" Diff3D._decode_exr(long)
+    @test isequal(Diff3D._decode_exr(copy(fixture)), good)
+end

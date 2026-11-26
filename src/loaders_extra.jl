@@ -2080,7 +2080,7 @@ function _piz_getcode!(po::Integer, rlc::Integer, r::_PizBR, out::Vector{T},
         end
         r.lc -= 8
         cs = Int((r.c >> r.lc) & 0xff)
-        (ooff[] + cs > oend) && return false
+        (ooff[] + cs > oend) && _piz_overrun()
         # Prior value (0-based ooff-1 -> Julia ooff). When nothing is written yet
         # (a run as the first symbol, only on malformed data) three.js reads
         # undefined -> 0; mirror that instead of indexing out[0].
@@ -2091,10 +2091,13 @@ function _piz_getcode!(po::Integer, rlc::Integer, r::_PizBR, out::Vector{T},
     elseif ooff[] < oend
         out[ooff[] + 1] = po; ooff[] += 1
     else
-        return false
+        _piz_overrun()
     end
     return true
 end
+
+@noinline _piz_overrun() =
+    error("EXR PIZ Huffman data decodes past the end of the block")
 
 function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
                          long_codes::Vector{T}, r::_PizBR, ni::Int,
@@ -2228,7 +2231,9 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     lut = _piz_workspace_buffer!(workspace.lut, _PIZ_USHORT_RANGE, 0x0000)
     maxValue = _piz_reverse_lut!(bitmap, lut)
     nComp = _piz_ru32le(r)                  # Huffman payload length field
-
+    # OpenEXR PizCompressor::uncompress rejects a length beyond the block.
+    nComp <= length(r.data) - r.off ||
+        error("EXR PIZ Huffman data length $nComp exceeds the block")
     initial = r.off
     im = _piz_ru32le(r); iM = _piz_ru32le(r); r.off += 4
     nBits = _piz_ru32le(r); r.off += 4
@@ -2239,9 +2244,18 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     empty!(long_codes)
     prefix_counts = _piz_workspace_buffer!(workspace.prefix_counts, _PIZ_HUF_DECSIZE, 0)
     _piz_unpack_enc_table!(r, im, iM, freq)
+    # The code table and the nBits of coded data must lie inside the
+    # Huffman payload (three.js hufUncompress, OpenEXR hufUncompress).
+    consumed = r.off - initial
+    consumed <= nComp || error("EXR PIZ Huffman code table exceeds its data")
+    nBits <= 8 * (nComp - consumed) ||
+        error("EXR PIZ Huffman bit count $nBits exceeds its data")
     _piz_build_dec_table!(freq, im, iM, hdec, long_codes, prefix_counts)
     ooff = Ref(0)
     _piz_hufdecode!(freq, hdec, long_codes, r, nBits, iM, outend, outbuf, ooff)
+    # OpenEXR hufDecode: the coded data must produce exactly the block's values.
+    ooff[] == outend ||
+        error("EXR PIZ Huffman data decoded to $(ooff[]) values, expected $outend")
 
     for (ci, t) in enumerate(types)
         for jj in 0:(t - 1)
