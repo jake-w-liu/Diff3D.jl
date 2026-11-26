@@ -514,3 +514,67 @@ end
         end
     end
 end
+
+# Uncompressed EXR (OpenEXR file layout: magic, version, header attributes,
+# offset table, blocks) with FLOAT channels; `values[name]` is H×W.
+function audit3_exr(values::Vector{Pair{String,Matrix{Float32}}}; tile=nothing,
+                    compression::UInt8=0x03)
+    le32(x) = reinterpret(UInt8, [htol(UInt32(x))])
+    attr(name, typ, val) = vcat(Vector{UInt8}(name), 0x00, Vector{UInt8}(typ), 0x00,
+                                le32(length(val)), val)
+    H, W = size(last(first(values)))
+    chlist = UInt8[]
+    for (name, _) in values
+        append!(chlist, Vector{UInt8}(name), 0x00, le32(2), zeros(UInt8, 4), le32(1), le32(1))
+    end
+    push!(chlist, 0x00)
+    header = vcat(attr("channels", "chlist", chlist),
+                  attr("compression", "compression", UInt8[compression]),
+                  attr("dataWindow", "box2i", vcat(le32(0), le32(0), le32(W - 1), le32(H - 1))),
+                  attr("lineOrder", "lineOrder", UInt8[0]))
+    tile === nothing ||
+        append!(header, attr("tiles", "tiledesc", vcat(le32(tile[1]), le32(tile[2]), 0x00)))
+    push!(header, 0x00)
+    pixels(rows, cols) = reduce(vcat, [reinterpret(UInt8, htol.(m[y, cols]))
+                                       for y in rows for (_, m) in values])
+    blocks = Vector{UInt8}[]
+    if tile === nothing
+        # ZIP blocks of 16 lines, stored raw: OpenEXR keeps a block uncompressed
+        # when compression would not make it smaller.
+        for y0 in 0:16:(H - 1)
+            data = pixels((y0 + 1):min(H, y0 + 16), 1:W)
+            push!(blocks, vcat(le32(y0), le32(length(data)), data))
+        end
+    else
+        tx, ty = tile
+        for j in 0:(cld(H, ty) - 1), i in 0:(cld(W, tx) - 1)
+            data = pixels((j * ty + 1):min(H, (j + 1) * ty), (i * tx + 1):min(W, (i + 1) * tx))
+            push!(blocks, vcat(le32(i), le32(j), le32(0), le32(0), le32(length(data)), data))
+        end
+    end
+    head = vcat(le32(20000630), le32(tile === nothing ? 2 : 0x202), header)
+    offset = length(head) + 8 * length(blocks)
+    table = UInt8[]
+    for block in blocks
+        append!(table, reinterpret(UInt8, [htol(UInt64(offset))]))
+        offset += length(block)
+    end
+    return vcat(head, table, reduce(vcat, blocks))
+end
+
+@testset "EXR multi-line blocks are placed column by column" begin
+    # 37 rows cross ZIP's 16-line blocks; 7x9 tiles leave partial edge tiles.
+    H, W = 37, 23
+    plane(k) = Float32[k + y / 64 + x / 4096 for y in 1:H, x in 1:W]
+    r, g, b = plane(1), plane(2), plane(3)
+    for tile in (nothing, (7, 9))
+        img = Diff3D._decode_exr(audit3_exr(["B" => b, "A" => plane(9), "G" => g, "R" => r]; tile))
+        @test img == cat(Float64.(r), Float64.(g), Float64.(b); dims=3)
+        # A repeated channel name: the later channel's samples win.
+        img = Diff3D._decode_exr(audit3_exr(["R" => r, "G" => g, "B" => b, "R" => plane(5)]; tile))
+        @test img[:, :, 1] == Float64.(plane(5))
+        # Y alone is replicated into R, G and B (load_exr docstring).
+        img = Diff3D._decode_exr(audit3_exr(["Y" => r]; tile))
+        @test img == cat(Float64.(r), Float64.(r), Float64.(r); dims=3)
+    end
+end

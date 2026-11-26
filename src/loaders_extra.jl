@@ -2416,31 +2416,39 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
 end
 
 # Place a decoded block's pixels into the output image at (startX, startY).
-# `raw` is laid out per line, then per channel, then `cols` samples.
-function _exr_place_block!(img, raw::AbstractVector{UInt8}, startX::Int, startY::Int,
-                          cols::Int, lines::Int, channels, is_y::Bool)
-    rp = 1
-    for ln in 0:(lines - 1)
-        yrow = startY + ln + 1
-        for (cname, pt) in channels
-            csz = _exr_chan_size(pt)
-            targets = is_y ? (cname == "Y" ? (1, 2, 3) : ()) :
-                      cname == "R" ? (1,) : cname == "G" ? (2,) :
-                      cname == "B" ? (3,) : ()
-            if !isempty(targets)
-                @inbounds for x in 1:cols
-                    base = rp + (x - 1) * csz
-                    v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
-                        pt == 2 ? Float64(_rd_f32(raw, base)) :
-                                  Float64(_rd_le32(raw, base))      # UINT
-                    for t in targets
-                        img[yrow, startX + x, t] = v
-                    end
+# `raw` is laid out per line, then per channel, then `cols` samples; it holds
+# at least `lines` full lines (checked by `_exr_decode_block`). Each channel
+# is written column by column to follow the column-major image.
+function _exr_place_block!(img::Array{Float64,3}, raw::AbstractVector{UInt8},
+                           startX::Int, startY::Int, cols::Int, lines::Int,
+                           channels, is_y::Bool)
+    line_bytes = 0
+    for (_, pt) in channels
+        line_bytes += cols * _exr_chan_size(pt)
+    end
+    checkbounds(raw, 1:(lines * line_bytes))
+    checkbounds(img, (startY + 1):(startY + lines), (startX + 1):(startX + cols), 1:3)
+    channel_offset = 0
+    for (cname, pt) in channels
+        csz = _exr_chan_size(pt)
+        # Output planes this channel fills: Y feeds R, G and B.
+        t1, t2 = is_y ? (cname == "Y" ? (1, 3) : (1, 0)) :
+                 cname == "R" ? (1, 1) : cname == "G" ? (2, 2) :
+                 cname == "B" ? (3, 3) : (1, 0)
+        if t1 <= t2
+            @inbounds for x in 1:cols, ln in 0:(lines - 1)
+                base = 1 + ln * line_bytes + channel_offset + (x - 1) * csz
+                v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
+                    pt == 2 ? Float64(_rd_f32(raw, base)) :
+                              Float64(_rd_le32(raw, base))      # UINT
+                for t in t1:t2
+                    img[startY + ln + 1, startX + x, t] = v
                 end
             end
-            rp += cols * csz
         end
+        channel_offset += cols * csz
     end
+    return img
 end
 
 function _decode_exr(bytes::Vector{UInt8})
