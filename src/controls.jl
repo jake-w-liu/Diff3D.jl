@@ -25,8 +25,13 @@ end
     return result
 end
 
+const _OrbitCamera = Union{PerspectiveCamera, OrthographicCamera}
+
+_orbit_camera_kind(::PerspectiveCamera) = :PerspectiveCamera
+_orbit_camera_kind(::OrthographicCamera) = :OrthographicCamera
+
 mutable struct OrbitControls
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     target::Vec3{Float64}
     enabled::Bool
     enable_rotate::Bool
@@ -54,6 +59,23 @@ mutable struct OrbitControls
     # three.js OrbitControls.screenSpacePanning: vertical pan follows the
     # camera up (true) or moves across the plane orthogonal to `camera.up`.
     screen_space_panning::Bool
+    # three.js minZoom / maxZoom: an orthographic camera dollies by changing
+    # `camera.zoom` within this range instead of moving.
+    min_zoom::Float64
+    max_zoom::Float64
+    # Camera zoom saved by `orbit_save_state!` (three.js `zoom0`).
+    zoom0::Float64
+end
+
+function _checked_orbit_zoom_limits(min_zoom, max_zoom)
+    min_zoom isa Real && !(min_zoom isa Bool) &&
+        max_zoom isa Real && !(max_zoom isa Bool) ||
+        throw(ArgumentError("OrbitControls zoom limits must satisfy 0 <= min_zoom <= max_zoom"))
+    minimum = Float64(min_zoom)
+    maximum = Float64(max_zoom)
+    isfinite(minimum) && 0.0 <= minimum <= maximum && !isnan(maximum) ||
+        throw(ArgumentError("OrbitControls zoom limits must satisfy 0 <= min_zoom <= max_zoom"))
+    return minimum, maximum
 end
 
 # Damping is a decay factor. Non-finite or >1 values either poison camera state
@@ -115,7 +137,8 @@ function _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
 end
 
 function _validate_orbit_runtime(oc::OrbitControls)
-    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(oc.camera, _orbit_camera_kind(oc.camera))
+    _checked_orbit_zoom_limits(oc.min_zoom, oc.max_zoom)
     _checked_control_vec3(oc.target, "OrbitControls target")
     _checked_orbit_distances(oc.min_distance, oc.max_distance)
     _checked_polar_limits(oc.min_polar_angle, oc.max_polar_angle,
@@ -129,18 +152,33 @@ function _validate_orbit_runtime(oc::OrbitControls)
     return nothing
 end
 
-# Positional/keyword constructors. The two original positional forms still work;
-# damping and constraint fields are keyword-only with three.js-matching defaults.
-function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
+"""
+    OrbitControls(camera[, target]; enabled=true, enable_rotate=true,
+                  enable_zoom=true, enable_pan=true, enable_damping=false,
+                  damping_factor=0.05, min_distance=0.0, max_distance=Inf,
+                  min_polar_angle=0.0, max_polar_angle=π,
+                  min_azimuth_angle=-Inf, max_azimuth_angle=Inf,
+                  screen_space_panning=true, min_zoom=0.0, max_zoom=Inf)
+
+Orbit/pan/zoom camera control state matching three.js `OrbitControls` for a
+`PerspectiveCamera` or an `OrthographicCamera`. The camera orbits the target
+about `camera.up`. Dollying a perspective camera scales its distance to the
+target; dollying an orthographic camera divides `camera.zoom` by the factor,
+clamped to `[min_zoom, max_zoom]`, and leaves the camera in place (three.js
+`minZoom`/`maxZoom`).
+"""
+function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        enabled::Bool=true, enable_rotate::Bool=true,
                        enable_zoom::Bool=true, enable_pan::Bool=true,
                        enable_damping::Bool=false, damping_factor::Real=0.05,
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
-                       screen_space_panning::Bool=true)
+                       screen_space_panning::Bool=true,
+                       min_zoom::Real=0.0, max_zoom::Real=Inf)
     _prepare_camera_control_up!(cam)
-    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    _validated_camera_view_vectors(cam, _orbit_camera_kind(cam))
+    minimum_zoom, maximum_zoom = _checked_orbit_zoom_limits(min_zoom, max_zoom)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
     minimum_distance, maximum_distance =
         _checked_orbit_distances(min_distance, max_distance)
@@ -156,7 +194,8 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                   minimum_polar, maximum_polar,
                   minimum_azimuth, maximum_azimuth,
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
-                  checked_target, screen_space_panning)
+                  checked_target, screen_space_panning,
+                  minimum_zoom, maximum_zoom, cam.zoom)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -192,10 +231,10 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
                                         "OrbitControls saved target"),
-                  true)
+                  true, 0.0, Inf, camera.zoom)
 end
 
-OrbitControls(cam::PerspectiveCamera; kwargs...) =
+OrbitControls(cam::_OrbitCamera; kwargs...) =
     OrbitControls(cam, _camera_control_target(cam); kwargs...)
 
 """
@@ -206,10 +245,10 @@ move the target across the plane orthogonal to `camera.up` (the ground for a
 y-up scene) instead of along the screen's up axis. All other keywords are the
 `OrbitControls` ones.
 """
-MapControls(cam::PerspectiveCamera, target::Vec3{Float64};
+MapControls(cam::_OrbitCamera, target::Vec3{Float64};
             screen_space_panning::Bool=false, kwargs...) =
     OrbitControls(cam, target; screen_space_panning=screen_space_panning, kwargs...)
-MapControls(cam::PerspectiveCamera; kwargs...) =
+MapControls(cam::_OrbitCamera; kwargs...) =
     MapControls(cam, _camera_control_target(cam); kwargs...)
 
 # three.js OrbitControls orbits about `camera.up`: it rotates the camera offset
@@ -307,20 +346,25 @@ function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
     _orbit_apply!(oc, Spherical(checked_radius, checked_polar, checked_azimuth))
 end
 
-"""Save the current camera position and target as the reset state."""
+"""Save the current camera position, zoom, and target as the reset state."""
 function orbit_save_state!(oc::OrbitControls)
-    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(oc.camera, _orbit_camera_kind(oc.camera))
     _checked_control_vec3(oc.target, "OrbitControls target")
     oc.position0 = oc.camera.position
     oc.target0 = oc.target
+    oc.zoom0 = oc.camera.zoom
     return oc
 end
 
-"""Restore the saved orbit state and clear any damped residual motion."""
+"""
+Restore the saved orbit state (camera position, zoom, and target) and clear
+any damped residual motion.
+"""
 function orbit_reset!(oc::OrbitControls)
     position = _checked_control_vec3(
         oc.position0, "OrbitControls saved position")
     target = _checked_control_vec3(oc.target0, "OrbitControls saved target")
+    oc.camera.zoom = _validated_camera_zoom(oc.zoom0)
     oc.camera.position = position
     oc.target = target
     oc.camera.target = target
@@ -329,7 +373,8 @@ function orbit_reset!(oc::OrbitControls)
     oc.v_polar = 0.0
     oc.v_zoom = 0.0
     oc.v_pan = Vec3(0.0, 0.0, 0.0)
-    return oc
+    # three.js reset() ends with update(), which applies the limits.
+    return _orbit_enforce_limits!(oc)
 end
 
 # Immediate (non-damped) primitives that always apply their deltas at once.
@@ -337,11 +382,26 @@ function _orbit_rotate_now!(oc::OrbitControls, d_azimuth, d_polar)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius, s.phi + d_polar, s.theta + d_azimuth))
 end
+# three.js update() for an orthographic camera: `zoom / scale` clamped to
+# [minZoom, maxZoom] (OrbitControls.js:892-895).
+function _orbit_ortho_zoom(oc::OrbitControls, scale)
+    zoom = clamp(oc.camera.zoom / scale, oc.min_zoom, oc.max_zoom)
+    (isfinite(zoom) && zoom > 0.0) || throw(ArgumentError(
+        "OrbitControls orthographic zoom must stay positive and finite"))
+    return zoom
+end
 function _orbit_zoom_now!(oc::OrbitControls, factor)
+    camera = oc.camera
+    if camera isa OrthographicCamera
+        zoom = _orbit_ortho_zoom(oc, factor)
+        _orbit_enforce_limits!(oc)
+        camera.zoom = zoom
+        return oc
+    end
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
-function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
+function _camera_pan_basis(camera::AbstractCamera, target::Vec3{Float64})
     fwd = _direction_between(camera.position, target)
     raw_right = cross(fwd, camera.up)
     if norm(raw_right) <= 1e-12
@@ -476,12 +536,17 @@ function orbit_update!(oc::OrbitControls)
         # target moves by the damped share of the world-space pan, and the
         # camera is placed at the limited offset from the moved target.
         s = _orbit_spherical(oc)
-        stepped = Spherical(s.radius * exp(oc.v_zoom * f),
+        scale = exp(oc.v_zoom * f)
+        camera = oc.camera
+        ortho = camera isa OrthographicCamera
+        zoom = ortho ? _orbit_ortho_zoom(oc, scale) : camera.zoom
+        stepped = Spherical(ortho ? s.radius : s.radius * scale,
                             s.phi + oc.v_polar * f,
                             s.theta + oc.v_azimuth * f)
         target = _checked_control_vec3(
             oc.target + oc.v_pan * f, "OrbitControls target")
         _orbit_apply!(oc, stepped, target)
+        ortho && (camera.zoom = zoom)
     elseif oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
         # A pure pan keeps the offset, so limiting before or after the move is
         # the same; this path leaves an in-limit offset bit-for-bit unchanged.

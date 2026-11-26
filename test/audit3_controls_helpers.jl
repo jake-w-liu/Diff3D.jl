@@ -209,3 +209,85 @@ end
     @test_throws ArgumentError _a3_trackball(min_distance=3.0, max_distance=2.0)
     @test_throws ArgumentError _a3_trackball(min_distance=NaN)
 end
+
+@testset "audit3 OrbitControls drives an OrthographicCamera" begin
+    # three.js update() for orthographic cameras (OrbitControls.js:778-779,
+    # 892-895): the radius is only clamped and zoom = clamp(zoom / scale,
+    # minZoom, maxZoom); reset() restores zoom0 and runs update().
+    camera = OrthographicCamera(left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+                                near=0.1, far=100.0)
+    camera.position = Vec3(1.0, 2.0, 3.0)
+    camera.target = Vec3(0.0, 0.0, 0.0)
+    oc = OrbitControls(camera; min_zoom=0.5, max_zoom=3.0, max_distance=3.0)
+    @test oc.camera === camera
+    orbit_save_state!(oc)
+    orbit_zoom!(oc, 0.5)
+    @test camera.zoom == 2.0
+    @test _a3_vec(camera.position) ≈
+        [0.8017837257372733, 1.6035674514745464, 2.4053511772118195] atol=1e-12
+    orbit_zoom!(oc, 0.25)
+    @test camera.zoom == 3.0
+    orbit_rotate!(oc, 0.4, 0.1)
+    @test _a3_vec(camera.position) ≈
+        [1.7725818314839605, 1.342432382991987, 2.0139088727614816] atol=1e-12
+    orbit_pan!(oc, 0.2, 0.3)
+    @test _a3_vec(oc.target) ≈
+        [0.06143558546651249, 0.268288562877631, -0.23290967319422845] atol=1e-12
+    @test _a3_vec(camera.position) ≈
+        [1.8340174169504726, 1.610720945869618, 1.7809991995672527] atol=1e-12
+    orbit_zoom!(oc, 4.0)
+    @test camera.zoom == 0.75
+    @test _a3_vec(camera.position) ≈
+        [1.8340174169504724, 1.6107209458696183, 1.7809991995672523] atol=1e-12
+    orbit_reset!(oc)
+    @test camera.zoom == 1.0
+    @test _a3_vec(camera.position) ≈
+        [0.8017837257372733, 1.6035674514745464, 2.4053511772118195] atol=1e-12
+
+    # MapControls accepts an orthographic camera too; damped dolly eases zoom.
+    map_camera = OrthographicCamera()
+    map_camera.position = Vec3(0.0, 5.0, 5.0)
+    map_camera.target = Vec3(0.0, 0.0, 0.0)
+    mc = MapControls(map_camera; enable_damping=true, damping_factor=0.5)
+    orbit_zoom!(mc, 0.5)
+    for _ in 1:200
+        orbit_update!(mc)
+    end
+    # orbit_update! zeroes residual log-zoom velocities below 1e-9, so the
+    # converged zoom is within ~2e-9 of 1/0.5.
+    @test map_camera.zoom ≈ 2.0 atol=1e-8
+    @test _a3_vec(map_camera.position) ≈ [0.0, 5.0, 5.0] atol=1e-12
+
+    # A zoom that cannot stay positive and finite is rejected, not applied.
+    @test_throws ArgumentError orbit_zoom!(OrbitControls(OrthographicCamera()), -1.0)
+    @test_throws ArgumentError OrbitControls(OrthographicCamera(); min_zoom=2.0, max_zoom=1.0)
+    @test_throws ArgumentError OrbitControls(OrthographicCamera(); min_zoom=-1.0)
+    @test_throws ArgumentError OrbitControls(PerspectiveCamera(); max_zoom=NaN)
+end
+
+function _a3_orbit_step!(oc)
+    orbit_rotate!(oc, 0.01, 0.01)
+    orbit_zoom!(oc, 1.001)
+    orbit_pan!(oc, 0.01, 0.01)
+    orbit_update!(oc)
+    return oc
+end
+
+function _a3_orbit_step_bytes(oc)
+    _a3_orbit_step!(oc)
+    return @allocated _a3_orbit_step!(oc)
+end
+
+@testset "audit3 OrbitControls steps do not allocate" begin
+    # Allocation counts are only meaningful for optimized code.
+    if Base.JLOptions().opt_level > 0
+        for camera in (PerspectiveCamera(), OrthographicCamera()),
+            up in (Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)), damping in (false, true)
+            camera.up = up
+            camera.position = Vec3(1.0, 2.0, 3.0)
+            camera.target = Vec3(0.0, 0.0, 0.0)
+            oc = OrbitControls(camera; enable_damping=damping, max_distance=10.0)
+            @test _a3_orbit_step_bytes(oc) == 0
+        end
+    end
+end
