@@ -198,11 +198,17 @@ function _ies_parse_numeric_token(tok::AbstractString, line_no::Int)
     return value
 end
 
-function _ies_positive_integer_count(value::Real, label::String)
+# Every listed value occupies at least one code unit of the text, so a count
+# larger than the text cannot be satisfied; rejecting it up front keeps a
+# malformed header from requesting an unbounded buffer.
+function _ies_positive_integer_count(value::Real, label::String, text_units::Int)
     f = Float64(value)
-    (f >= 1.0 && f == floor(f) && f <= Float64(typemax(Int))) ||
+    (f >= 1.0 && f == floor(f) && f < 0x1p63) ||
         throw(ArgumentError("parse_ies: $label count must be a positive integer"))
-    return Int(f)
+    count = Int(f)
+    count <= text_units ||
+        throw(ArgumentError("parse_ies: $label count $count exceeds the photometric data"))
+    return count
 end
 
 function _ies_line_bounds(s::String, i::Int)
@@ -381,8 +387,8 @@ function parse_ies(text::AbstractString)
     #  11: ballast_factor    12: future_use       13: input_watts
     # The vertical-angle vector starts at token 14.
     cand_mult = control[3]
-    num_vert = _ies_positive_integer_count(control[4], "vertical-angle")
-    num_horiz = _ies_positive_integer_count(control[5], "horizontal-angle")
+    num_vert = _ies_positive_integer_count(control[4], "vertical-angle", ncodeunits(s))
+    num_horiz = _ies_positive_integer_count(control[5], "horizontal-angle", ncodeunits(s))
     vangles = Vector{Float64}(undef, num_vert)
     for i in 1:num_vert
         value = _ies_next_number!(scanner)

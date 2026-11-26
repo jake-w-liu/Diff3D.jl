@@ -243,3 +243,17 @@ end
         @test _audit3_lookup_allocations(query, point, points) == 0
     end
 end
+
+@testset "parse_ies rejects unsatisfiable angle counts with ArgumentError" begin
+    # A header count can never exceed the number of values the text holds; the
+    # old parser raised InexactError (count 2^63) or tried to allocate the
+    # buffer and died with OutOfMemoryError (count 1e15).
+    header(n) = "TILT=NONE\n1 1000 1 $n 1 1 2 0 0 0\n1 1 1\n0\n0\n1\n"
+    @test_throws "vertical-angle count must be a positive integer" parse_ies(
+        header("9223372036854775807"))
+    @test_throws "vertical-angle count 1000000000000000 exceeds the photometric data" parse_ies(
+        header("1e15"))
+    @test_throws "horizontal-angle count 100000 exceeds the photometric data" parse_ies(
+        "TILT=NONE\n1 1000 1 1 1e5 1 2 0 0 0\n1 1 1\n0\n0\n1\n")
+    @test parse_ies(header("1")).candela == [1.0]
+end
