@@ -7732,41 +7732,114 @@ function _svg_path_points(raw::AbstractString, segments::Int)
     return paths
 end
 
-function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
-                    circle_segments::Integer=32)
-    segments = _svg_curve_segments(curve_segments)
-    circle_n = _svg_circle_segments(circle_segments)
-    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
-    root === nothing && error("SVG document is missing <svg> root")
-    root_attrs = _svg_attrs(root.captures[1])
-    width, height = _svg_root_size(root_attrs)
-    root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
-    paths = SVGPath[]
-    transform_stack = [_svg_identity_transform()]
-    style_stack = [_SVG_DEFAULT_STYLE]
-    display_stack = [true]
-    visibility_stack = [:visible]
-    clip_stack = [_SVGClipApplication[]]
-    mask_stack = [_SVGClipApplication[]]
-    ancestor_stack = _SVGAncestorStack()
-    sibling_stack = _SVGSiblingStack([_SVGSiblingState()])
-    css_rules = _svg_css_rules(raw)
-    definitions = Dict{String,Vector{SVGPath}}()
-    clip_definitions = Dict{String,_SVGClipDefinition}()
-    mask_definitions = Dict{String,_SVGClipDefinition}()
-    container_definition_stack = Union{Nothing,_SVGContainerDefinition}[nothing]
-    container_paths_stack = [SVGPath[]]
-    next_element_id = 0
+struct _SVGTag
+    closing::Bool
+    name::String
+    attrs::Dict{String,String}
+    self_closing::Bool
+end
 
+_svg_is_container_tag(name::String) =
+    name == "svg" || name == "g" || name == "defs" || name == "clippath" ||
+    name == "mask"
+
+mutable struct _SVGParseState
+    tags::Vector{_SVGTag}
+    # Selector-matching context of every opening tag in document order.
+    contexts::Vector{Union{Nothing,_SVGElementContext}}
+    # Index of the tag that closes each opening tag's element.
+    closers::Vector{Int}
+    ids::Dict{String,Int}
+    css_rules::Vector{_SVGStyleRule}
+    segments::Int
+    circle_n::Int
+    root_reference_bbox::NTuple{4,Float64}
+    clip_definitions::Dict{String,_SVGClipDefinition}
+    mask_definitions::Dict{String,_SVGClipDefinition}
+    next_element_id::Int
+    # Elements currently instantiated by `use`, to reject circular references.
+    active_uses::Vector{Int}
+end
+
+function _svg_tags(raw::AbstractString)
+    tags = _SVGTag[]
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
                        raw)
-        closing = m.captures[1] !== nothing
-        tag = lowercase(m.captures[2])
-        attrs = _svg_attrs(m.captures[3])
-        self_closing = occursin(r"/\s*>$", m.match)
+        push!(tags, _SVGTag(m.captures[1] !== nothing, lowercase(m.captures[2]),
+                            _svg_attrs(m.captures[3]),
+                            occursin(r"/\s*>$", m.match)))
+    end
+    return tags
+end
 
-        if tag == "svg" || tag == "g" || tag == "defs" ||
-           tag == "clippath" || tag == "mask"
+# Selector contexts and element extents depend only on document structure, so
+# they are resolved once; `use` instantiation reuses them, matching CSS
+# selectors against the referenced element's original position in the tree.
+function _svg_tag_structure(tags::Vector{_SVGTag})
+    contexts = Vector{Union{Nothing,_SVGElementContext}}(nothing, length(tags))
+    closers = collect(eachindex(tags))
+    ids = Dict{String,Int}()
+    ancestors = _SVGAncestorStack()
+    siblings = _SVGSiblingStack([_SVGSiblingState()])
+    open_containers = Int[]
+    for (k, tag) in enumerate(tags)
+        container = _svg_is_container_tag(tag.name)
+        if tag.closing
+            container || continue
+            !isempty(open_containers) && (closers[pop!(open_containers)] = k)
+            !isempty(ancestors) && pop!(ancestors)
+            length(siblings) > 1 && pop!(siblings)
+            continue
+        end
+        context = _svg_element_context(tag.name, tag.attrs, ancestors, siblings[end])
+        _svg_record_sibling!(siblings[end], context)
+        contexts[k] = context
+        haskey(tag.attrs, "id") && get!(ids, tag.attrs["id"], k)
+        if container && !tag.self_closing
+            push!(open_containers, k)
+            push!(ancestors, context)
+            push!(siblings, _SVGSiblingState())
+        end
+    end
+    # An unclosed container extends to the end of the document.
+    for k in open_containers
+        closers[k] = length(tags)
+    end
+    return contexts, closers, ids
+end
+
+# Render the tags `first:last` into `out`, starting from the given inherited
+# transform, style, display and visibility. The top-level parse registers
+# clip-path and mask definitions; `use` instantiation re-renders referenced
+# content without registering them again.
+function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
+                           out::Vector{SVGPath}, transform0, style0::SVGStyle,
+                           display0::Bool, visibility0::Symbol, register::Bool)
+    segments = state.segments
+    circle_n = state.circle_n
+    css_rules = state.css_rules
+    root_reference_bbox = state.root_reference_bbox
+    clip_definitions = state.clip_definitions
+    mask_definitions = state.mask_definitions
+    paths = out
+    transform_stack = [transform0]
+    style_stack = [style0]
+    display_stack = [display0]
+    visibility_stack = [visibility0]
+    clip_stack = [_SVGClipApplication[]]
+    mask_stack = [_SVGClipApplication[]]
+    container_definition_stack = Union{Nothing,_SVGContainerDefinition}[nothing]
+    container_paths_stack = [SVGPath[]]
+
+    for k in first:last
+        parsed = state.tags[k]
+        closing = parsed.closing
+        tag = parsed.name
+        attrs = parsed.attrs
+        self_closing = parsed.self_closing
+        context = state.contexts[k]
+
+        if _svg_is_container_tag(tag)
             if closing
                 if length(container_paths_stack) > 1
                     collected_paths = pop!(container_paths_stack)
@@ -7804,23 +7877,19 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                                                   mask_definitions)
                     end
                     if definition !== nothing && definition.kind === :clip
-                        definition.id !== nothing &&
+                        register && definition.id !== nothing &&
                             (clip_definitions[definition.id] =
                                 _SVGClipDefinition(copy(collected_paths),
                                                    definition.units,
                                                    :luminance))
                     elseif definition !== nothing && definition.kind === :mask
-                        definition.id !== nothing &&
+                        register && definition.id !== nothing &&
                             (mask_definitions[definition.id] =
                                 _SVGClipDefinition(_svg_mask_definition_paths(collected_paths,
                                                                               definition.mask_type),
                                                    definition.units,
                                                    definition.mask_type))
-                    elseif definition !== nothing && !isempty(collected_paths)
-                        definition.id !== nothing &&
-                            (definitions[definition.id] = copy(collected_paths))
-                        append!(container_paths_stack[end], collected_paths)
-                    elseif definition === nothing || definition.kind !== :clip
+                    else
                         append!(container_paths_stack[end], collected_paths)
                     end
                 end
@@ -7830,19 +7899,14 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                 length(visibility_stack) > 1 && pop!(visibility_stack)
                 length(clip_stack) > 1 && pop!(clip_stack)
                 length(mask_stack) > 1 && pop!(mask_stack)
-                !isempty(ancestor_stack) && pop!(ancestor_stack)
-                length(sibling_stack) > 1 && pop!(sibling_stack)
             else
-                context = _svg_element_context(tag, attrs, ancestor_stack,
-                                               sibling_stack[end])
-                _svg_record_sibling!(sibling_stack[end], context)
-                if self_closing && tag == "clippath" && haskey(attrs, "id")
+                if register && self_closing && tag == "clippath" && haskey(attrs, "id")
                     clip_definitions[attrs["id"]] =
                         _SVGClipDefinition(SVGPath[],
                                            _svg_clip_path_units(attrs),
                                            :luminance)
                 end
-                if self_closing && tag == "mask" && haskey(attrs, "id")
+                if register && self_closing && tag == "mask" && haskey(attrs, "id")
                     mask_definitions[attrs["id"]] =
                         _SVGClipDefinition(SVGPath[],
                                            _svg_mask_content_units(attrs),
@@ -7909,8 +7973,6 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                     push!(visibility_stack, visibility)
                     push!(clip_stack, child_clip_ids)
                     push!(mask_stack, child_mask_ids)
-                    push!(ancestor_stack, context)
-                    push!(sibling_stack, _SVGSiblingState())
                     definition = if tag == "clippath"
                         _SVGContainerDefinition(:clip, get(attrs, "id", nothing),
                                                 _svg_clip_path_units(attrs),
@@ -7938,8 +8000,6 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         end
         closing && continue
 
-        context = _svg_element_context(tag, attrs, ancestor_stack,
-                                       sibling_stack[end])
         local_transform = _svg_transform_from_attrs(attrs)
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
@@ -7948,10 +8008,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         display_ok, visibility =
             _svg_display_visibility(display_stack[end], visibility_stack[end],
                                     attrs, css_rules, tag, context)
-        if tag == "use" && (!display_ok || visibility !== :visible)
-            _svg_record_sibling!(sibling_stack[end], context)
-            continue
-        end
+        tag == "use" && (!display_ok || visibility !== :visible) && continue
         clip_applications = copy(clip_stack[end])
         mask_applications = copy(mask_stack[end])
         local_clip_spec = _svg_clip_spec_from_attrs(attrs, css_rules, tag,
@@ -7970,19 +8027,28 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         if tag == "use"
             href_id = _svg_local_href_id(attrs)
             if href_id !== nothing
-                haskey(definitions, href_id) ||
-                    error("SVG use references unknown id $href_id")
+                target = get(state.ids, href_id, 0)
+                target == 0 && error("SVG use references unknown id $href_id")
+                target_tag = state.tags[target].name
+                (target_tag == "clippath" || target_tag == "mask") &&
+                    error("SVG use cannot reference $(target_tag == "mask" ? "mask" : "clipPath") $href_id")
+                (target in state.active_uses || target <= k <= state.closers[target]) &&
+                    error("SVG use creates a circular reference to $href_id")
                 x = _svg_length(attrs, "x", 0.0)
                 y = _svg_length(attrs, "y", 0.0)
                 use_transform = _svg_compose_transform(
                     total_transform, (1.0, 0.0, 0.0, 1.0, x, y))
-                for template in definitions[href_id]
-                    use_style = _svg_style_from_attrs(template.style, attrs,
-                                                      css_rules, tag, context)
-                    push!(raw_paths,
-                          _svg_transform_path(_svg_style_path(template,
-                                                              use_style),
-                                              use_transform))
+                # SVG 1.1 section 5.6 (three.js SVGLoader.js:218-226): the
+                # referenced content is rendered as a child of `use`; it
+                # inherits from `use`, not from its original ancestors, and its
+                # own presentation attributes take precedence.
+                push!(state.active_uses, target)
+                try
+                    _svg_parse_range!(state, target, state.closers[target],
+                                      raw_paths, use_transform, style, true,
+                                      :visible, false)
+                finally
+                    pop!(state.active_uses)
                 end
             end
         elseif tag == "path"
@@ -8013,6 +8079,8 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             length(points) >= 2 &&
                 push!(raw_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
+        # Instantiated `use` content is already transformed and styled, and
+        # each referenced element keeps its own element id.
         element_paths = tag == "use" ? raw_paths :
                         [_svg_transform_path(_svg_style_path(path, style),
                                              total_transform)
@@ -8025,23 +8093,37 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             (element_paths = _svg_apply_mask_paths(element_paths,
                                                    mask_applications,
                                                    mask_definitions))
-        if !isempty(element_paths)
-            next_element_id += 1
-            element_paths = [_svg_element_path(path, next_element_id)
+        if tag != "use" && !isempty(element_paths)
+            state.next_element_id += 1
+            element_paths = [_svg_element_path(path, state.next_element_id)
                              for path in element_paths]
         end
-        if tag != "use" && haskey(attrs, "id") && !isempty(element_paths)
-            definitions[attrs["id"]] = copy(element_paths)
-        end
         append!(container_paths_stack[end], element_paths)
-        if !display_ok || visibility !== :visible
-            _svg_record_sibling!(sibling_stack[end], context)
-            continue
-        end
+        (display_ok && visibility === :visible) || continue
         append!(paths, element_paths)
-        _svg_record_sibling!(sibling_stack[end], context)
     end
+    return out
+end
 
+function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
+                    circle_segments::Integer=32)
+    segments = _svg_curve_segments(curve_segments)
+    circle_n = _svg_circle_segments(circle_segments)
+    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
+    root === nothing && error("SVG document is missing <svg> root")
+    root_attrs = _svg_attrs(root.captures[1])
+    width, height = _svg_root_size(root_attrs)
+    root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
+    css_rules = _svg_css_rules(raw)
+    tags = _svg_tags(raw)
+    contexts, closers, ids = _svg_tag_structure(tags)
+    state = _SVGParseState(tags, contexts, closers, ids, css_rules, segments,
+                           circle_n, root_reference_bbox,
+                           Dict{String,_SVGClipDefinition}(),
+                           Dict{String,_SVGClipDefinition}(), 0, Int[])
+    paths = _svg_parse_range!(state, 1, length(tags), SVGPath[],
+                              _svg_identity_transform(), _SVG_DEFAULT_STYLE,
+                              true, :visible, true)
     return SVGDocument(width, height, paths)
 end
 
