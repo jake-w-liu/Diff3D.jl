@@ -2375,10 +2375,15 @@ _material_texture_slot(mat, field::Symbol) =
 # The texture addressed by a texture-transform track property such as
 # :map_offset, with its texture property; `nothing` when `property` is not a
 # texture property or the target's material has no such slot.
+@inline _split_texture_track_property(property::Symbol) =
+    haskey(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property) ?
+        _TEXTURE_ANIMATION_TRACK_PROPERTIES[property] : nothing
+
 @inline function _material_texture_for_track(target, property::Symbol)
-    haskey(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property) || return nothing
+    split = _split_texture_track_property(property)
+    split === nothing && return nothing
     hasproperty(target, :material) || return nothing
-    field, texture_property = _TEXTURE_ANIMATION_TRACK_PROPERTIES[property]
+    field, texture_property = split
     tex = _material_texture_slot(getproperty(target, :material), field)
     tex isa _UnhandledField && return nothing
     tex isa Texture || throw(ArgumentError("material.$field is not a Texture"))
