@@ -212,8 +212,30 @@ MapControls(cam::PerspectiveCamera, target::Vec3{Float64};
 MapControls(cam::PerspectiveCamera; kwargs...) =
     MapControls(cam, _camera_control_target(cam); kwargs...)
 
-# Current spherical (radius, polar from +y, azimuth) of the camera about target.
-_orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
+# three.js OrbitControls orbits about `camera.up`: it rotates the camera offset
+# by `_quat = setFromUnitVectors(camera.up, +y)` into a y-up frame, works in
+# spherical coordinates there, and rotates back with the inverse
+# (OrbitControls.js:406-407, 703-704, 794-795). Diff3D reads `camera.up` live.
+@inline _orbit_up_quaternion(oc::OrbitControls) =
+    quat_from_unit_vectors(oc.camera.up, Vec3(0.0, 1.0, 0.0))
+
+# three.js Vector3.applyQuaternion. The identity (a y-up camera) returns `v`
+# unchanged, so the default frame stays exact even for overflowing offsets.
+@inline function _orbit_rotate_vector(q::Quaternion, v::Vec3)
+    iszero(q.x) && iszero(q.y) && iszero(q.z) && return v
+    tx = 2 * (q.y * v.z - q.z * v.y)
+    ty = 2 * (q.z * v.x - q.x * v.z)
+    tz = 2 * (q.x * v.y - q.y * v.x)
+    return Vec3(v.x + q.w * tx + q.y * tz - q.z * ty,
+                v.y + q.w * ty + q.z * tx - q.x * tz,
+                v.z + q.w * tz + q.x * ty - q.y * tx)
+end
+
+# Current spherical (radius, polar from camera.up, azimuth) of the camera
+# about the target.
+_orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(
+    _orbit_rotate_vector(_orbit_up_quaternion(oc),
+                         oc.camera.position - oc.target))
 
 # Clamp an azimuth (read back from cartesian_to_spherical, hence in (-π, π]) to
 # the configured window, matching three.js OrbitControls. The bounds are first
@@ -242,14 +264,36 @@ function _orbit_constrained(oc::OrbitControls, s::Spherical)
     return Spherical(radius, phi, theta)
 end
 
-function _orbit_apply!(oc::OrbitControls, s::Spherical)
-    position = oc.target + spherical_to_cartesian(_orbit_constrained(oc, s))
+# Place the camera at the constrained spherical offset `s` from `target`
+# (default: the current target), which becomes the orbit target.
+function _orbit_apply!(oc::OrbitControls, s::Spherical,
+                       target::Vec3{Float64}=oc.target)
+    q = _orbit_up_quaternion(oc)
+    offset = spherical_to_cartesian(_orbit_constrained(oc, s))
+    position = target + _orbit_rotate_vector(
+        Quaternion(-q.x, -q.y, -q.z, q.w), offset)
     position = _checked_control_vec3(
         position, "OrbitControls camera position")
+    oc.target = target
     oc.camera.position = position
-    oc.camera.target = oc.target
+    oc.camera.target = target
     _sync_camera_rotation_from_view!(oc.camera)
     return oc
+end
+
+# three.js re-applies every limit on each update(), so a pan, or an update
+# after the camera started (or a limit was changed) outside the configured
+# window, moves the camera back inside it (OrbitControls.js:729-786). A camera
+# already inside every configured limit is left untouched, keeping such updates
+# exact; this includes a camera placed exactly on the pole, which only the
+# Spherical.makeSafe epsilon (1e-6 rad) would move.
+function _orbit_enforce_limits!(oc::OrbitControls)
+    s = _orbit_spherical(oc)
+    clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
+        clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
+        _clamp_azimuth(s.theta, oc.min_azimuth_angle,
+                       oc.max_azimuth_angle) == s.theta && return oc
+    return _orbit_apply!(oc, s)
 end
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
@@ -313,9 +357,9 @@ function _orbit_pan_basis(oc::OrbitControls)
     oc.screen_space_panning && return right, up
     return right, normalize(cross(oc.camera.up, right))
 end
-function _orbit_pan_now!(oc::OrbitControls, dx, dy)
-    right, up = _orbit_pan_basis(oc)
-    shift = right * dx + up * dy
+# Move the target and camera together by a world-space offset, then apply the
+# limits as three.js update() does after `target.add(panOffset)`.
+function _orbit_shift!(oc::OrbitControls, shift::Vec3)
     target = _checked_control_vec3(
         oc.target + shift, "OrbitControls target")
     position = _checked_control_vec3(
@@ -324,7 +368,11 @@ function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     oc.camera.position = position
     oc.camera.target = target
     _sync_camera_rotation_from_view!(oc.camera)
-    return oc
+    return _orbit_enforce_limits!(oc)
+end
+function _orbit_pan_now!(oc::OrbitControls, dx, dy)
+    right, up = _orbit_pan_basis(oc)
+    return _orbit_shift!(oc, right * dx + up * dy)
 end
 
 """
@@ -405,39 +453,41 @@ end
 """
     orbit_update!(oc)
 
-Advance the orbit by one frame. With damping disabled this is a no-op (state is
-already current). With damping enabled it applies `damping_factor` of the
-residual rotation, dolly, and pan velocities, then decays them by
-`(1 - damping_factor)` so motion eases to a stop after the last interaction and
-the total converges to the queued deltas (three.js `OrbitControls.update`).
-Velocity components below a small threshold are zeroed to avoid endless drift.
+Advance the orbit by one frame. Like three.js `OrbitControls.update`, every
+call re-applies the distance, polar, and azimuth limits, so a camera that
+starts (or is left by a changed limit) outside them moves back inside; a camera
+already inside them is not moved. With damping disabled nothing else happens
+(interactions apply immediately). With damping enabled it applies
+`damping_factor` of the residual rotation, dolly, and pan velocities, then
+decays them by `(1 - damping_factor)` so motion eases to a stop after the last
+interaction and the total converges to the queued deltas. Velocity components
+below a small threshold are zeroed to avoid endless drift.
 """
 function orbit_update!(oc::OrbitControls)
     oc.enabled || return oc
-    oc.enable_damping || return oc
     _validate_orbit_runtime(oc)
-    decay = 1.0 - oc.damping_factor
-    # Apply `damping_factor` of the residual velocities for this frame, so the
-    # total motion converges to exactly the queued deltas (three.js applies
-    # `sphericalDelta * dampingFactor` per frame before decaying).
-    if oc.v_azimuth != 0.0 || oc.v_polar != 0.0
-        _orbit_rotate_now!(oc, oc.v_azimuth * oc.damping_factor,
-                           oc.v_polar * oc.damping_factor)
-    end
-    if oc.v_zoom != 0.0
-        _orbit_zoom_now!(oc, exp(oc.v_zoom * oc.damping_factor))
-    end
-    if oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
-        # Pan velocity is already a world-space offset; apply its damped share.
-        step = oc.v_pan * oc.damping_factor
+    oc.enable_damping || return _orbit_enforce_limits!(oc)
+    f = oc.damping_factor
+    decay = 1.0 - f
+    if oc.v_azimuth != 0.0 || oc.v_polar != 0.0 || oc.v_zoom != 0.0
+        # Apply `damping_factor` of the residual velocities in one pass, like
+        # three.js update() (OrbitControls.js:706-797): the spherical offset
+        # about the current target plus the damped deltas is limited once, the
+        # target moves by the damped share of the world-space pan, and the
+        # camera is placed at the limited offset from the moved target.
+        s = _orbit_spherical(oc)
+        stepped = Spherical(s.radius * exp(oc.v_zoom * f),
+                            s.phi + oc.v_polar * f,
+                            s.theta + oc.v_azimuth * f)
         target = _checked_control_vec3(
-            oc.target + step, "OrbitControls target")
-        position = _checked_control_vec3(
-            oc.camera.position + step, "OrbitControls camera position")
-        oc.target = target
-        oc.camera.position = position
-        oc.camera.target = target
-        _sync_camera_rotation_from_view!(oc.camera)
+            oc.target + oc.v_pan * f, "OrbitControls target")
+        _orbit_apply!(oc, stepped, target)
+    elseif oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
+        # A pure pan keeps the offset, so limiting before or after the move is
+        # the same; this path leaves an in-limit offset bit-for-bit unchanged.
+        _orbit_shift!(oc, oc.v_pan * f)
+    else
+        _orbit_enforce_limits!(oc)
     end
     # Decay residual velocities; snap tiny remnants to zero.
     thresh = 1e-9
