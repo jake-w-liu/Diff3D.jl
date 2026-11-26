@@ -283,3 +283,60 @@ end
     @test_throws ErrorException font_text_shapes(bare, "A\nA")
     @test length(font_text_shapes(bare, "AzA")) == 2
 end
+
+@testset "SVG paint accepts every CSS keyword, hsl() and rgba()" begin
+    # three.js Color.setStyle (src/math/Color.js:6-30 keywords, 296-440
+    # parsing, 248-272 setHSL), read back in sRGB with getRGB(SRGBColorSpace).
+    # Oracle values; three.js stores linear channels and its rounded transfer
+    # constants (ColorManagement.js:205-215) shift the sRGB read-back by < 1e-5:
+    oracle = [
+        "orange" => (1.0, 0.6470633984755783, 0.0),
+        "rebeccapurple" => (0.40000612249739637, 0.20000579378002176, 0.6000049954151406),
+        "navy" => (0.0, 0.0, 0.5019664769269617),
+        "lightgoldenrodyellow" => (0.9803924676542063, 0.9803924676542063, 0.8235319847543978),
+        "hsl(120,50%,50%)" => (0.2500060560461081, 0.7500034834463251, 0.25000605604610776),
+        "hsl(30, 100%, 25%)" => (0.5000057038898478, 0.25000605604610754, 0.0),
+        "hsla(300,40%,80%,0.5)" => (0.8800018064117537, 0.7200038245724022, 0.8800018064117535),
+        "hsl(0,0%,40%)" => (0.40000612249739637, 0.40000612249739637, 0.40000612249739637),
+        "hsl(390,100%,50%)" => (1.0, 0.5000057038898473, 0.0),
+        "hsl(200,60%,70%)" => (0.5200055837353184, 0.7600033657288716, 0.8800018064117535),
+        "rgba(255,128,0,0.25)" => (1.0, 0.5019664769269617, 0.0),
+        "rgb(10%,50%,100%)" => (0.10000475637218043, 0.5000057038898478, 1.0),
+        "#abc" => (0.6666710513191617, 0.7333370085461912, 0.8000028754620484),
+    ]
+    for (style, (r, g, b)) in oracle
+        color = Diff3D._svg_color(style)
+        @test isapprox(color.r, r; atol=1e-5) && isapprox(color.g, g; atol=1e-5) &&
+              isapprox(color.b, b; atol=1e-5)
+    end
+    # Exact values for the forms Diff3D already parsed are unchanged.
+    @test Diff3D._svg_color("gray") == Color3(128 / 255, 128 / 255, 128 / 255)
+    @test Diff3D._svg_color("#abc") == Color3(10 / 15, 11 / 15, 12 / 15)
+    # The keyword table has all 148 entries of Color.NAMES.
+    @test length(Diff3D._SVG_COLOR_KEYWORDS) == 148
+    doc = _audit3_svg_document("""<svg><rect width="1" height="1" fill="Orange" stroke="hsl(240, 100%, 50%)"/></svg>""")
+    @test doc.paths[1].style.fill == Color3(1.0, 165 / 255, 0.0)
+    @test doc.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+    @test_throws "unsupported SVG color" Diff3D._svg_color("hsl(120,50,50)")
+    @test_throws "alpha must be between 0 and 1" Diff3D._svg_color("rgba(1,2,3,2)")
+    @test_throws "three channels" Diff3D._svg_color("rgb(1,2)")
+end
+
+@testset "SVG lengths accept absolute units at 90 DPI" begin
+    # three.js SVGLoader.js:83 (defaultDPI 90) and 1527-1622
+    # (parseFloatWithUnits). Oracle rect x=3mm y=4pt width=1in height=2cm,
+    # stroke-width 2mm: corners (10.629921259842519, 5) and
+    # (100.62992125984252, 75.86614173228345), strokeWidth 7.086614173228346;
+    # circle cx=1pc r=0.5cm: first point (32.71653543307086, 10).
+    doc = _audit3_svg_document("""
+        <svg>
+          <rect x="3mm" y="4pt" width="1in" height="2cm" stroke="black" stroke-width="2mm"/>
+          <circle cx="1pc" cy="10" r="0.5cm"/>
+        </svg>"""; circle_segments=8)
+    rect = doc.paths[1]
+    @test rect.points[1] == Vec2(10.629921259842519, 5.0)
+    @test rect.points[3] == Vec2(100.62992125984252, 75.86614173228345)
+    @test rect.style.stroke_width == 7.086614173228346
+    @test doc.paths[2].points[1] == Vec2(32.71653543307086, 10.0)
+    @test_throws "unsupported SVG length" _audit3_svg_document("""<svg><rect width="1em" height="1"/></svg>""")
+end

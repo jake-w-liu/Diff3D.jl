@@ -4930,60 +4930,143 @@ function _svg_unit_interval(raw::AbstractString, key::String)
     return value
 end
 
+# CSS color keywords, as three.js Color.NAMES (src/math/Color.js:6-30); 148 entries.
+const _SVG_COLOR_KEYWORDS = Dict{String,UInt32}(
+    "aliceblue" => 0xF0F8FF, "antiquewhite" => 0xFAEBD7, "aqua" => 0x00FFFF,
+    "aquamarine" => 0x7FFFD4, "azure" => 0xF0FFFF, "beige" => 0xF5F5DC,
+    "bisque" => 0xFFE4C4, "black" => 0x000000, "blanchedalmond" => 0xFFEBCD,
+    "blue" => 0x0000FF, "blueviolet" => 0x8A2BE2, "brown" => 0xA52A2A,
+    "burlywood" => 0xDEB887, "cadetblue" => 0x5F9EA0, "chartreuse" => 0x7FFF00,
+    "chocolate" => 0xD2691E, "coral" => 0xFF7F50, "cornflowerblue" => 0x6495ED,
+    "cornsilk" => 0xFFF8DC, "crimson" => 0xDC143C, "cyan" => 0x00FFFF,
+    "darkblue" => 0x00008B, "darkcyan" => 0x008B8B, "darkgoldenrod" => 0xB8860B,
+    "darkgray" => 0xA9A9A9, "darkgreen" => 0x006400, "darkgrey" => 0xA9A9A9,
+    "darkkhaki" => 0xBDB76B, "darkmagenta" => 0x8B008B,
+    "darkolivegreen" => 0x556B2F, "darkorange" => 0xFF8C00,
+    "darkorchid" => 0x9932CC, "darkred" => 0x8B0000, "darksalmon" => 0xE9967A,
+    "darkseagreen" => 0x8FBC8F, "darkslateblue" => 0x483D8B,
+    "darkslategray" => 0x2F4F4F, "darkslategrey" => 0x2F4F4F,
+    "darkturquoise" => 0x00CED1, "darkviolet" => 0x9400D3, "deeppink" => 0xFF1493,
+    "deepskyblue" => 0x00BFFF, "dimgray" => 0x696969, "dimgrey" => 0x696969,
+    "dodgerblue" => 0x1E90FF, "firebrick" => 0xB22222, "floralwhite" => 0xFFFAF0,
+    "forestgreen" => 0x228B22, "fuchsia" => 0xFF00FF, "gainsboro" => 0xDCDCDC,
+    "ghostwhite" => 0xF8F8FF, "gold" => 0xFFD700, "goldenrod" => 0xDAA520,
+    "gray" => 0x808080, "green" => 0x008000, "greenyellow" => 0xADFF2F,
+    "grey" => 0x808080, "honeydew" => 0xF0FFF0, "hotpink" => 0xFF69B4,
+    "indianred" => 0xCD5C5C, "indigo" => 0x4B0082, "ivory" => 0xFFFFF0,
+    "khaki" => 0xF0E68C, "lavender" => 0xE6E6FA, "lavenderblush" => 0xFFF0F5,
+    "lawngreen" => 0x7CFC00, "lemonchiffon" => 0xFFFACD, "lightblue" => 0xADD8E6,
+    "lightcoral" => 0xF08080, "lightcyan" => 0xE0FFFF,
+    "lightgoldenrodyellow" => 0xFAFAD2, "lightgray" => 0xD3D3D3,
+    "lightgreen" => 0x90EE90, "lightgrey" => 0xD3D3D3, "lightpink" => 0xFFB6C1,
+    "lightsalmon" => 0xFFA07A, "lightseagreen" => 0x20B2AA,
+    "lightskyblue" => 0x87CEFA, "lightslategray" => 0x778899,
+    "lightslategrey" => 0x778899, "lightsteelblue" => 0xB0C4DE,
+    "lightyellow" => 0xFFFFE0, "lime" => 0x00FF00, "limegreen" => 0x32CD32,
+    "linen" => 0xFAF0E6, "magenta" => 0xFF00FF, "maroon" => 0x800000,
+    "mediumaquamarine" => 0x66CDAA, "mediumblue" => 0x0000CD,
+    "mediumorchid" => 0xBA55D3, "mediumpurple" => 0x9370DB,
+    "mediumseagreen" => 0x3CB371, "mediumslateblue" => 0x7B68EE,
+    "mediumspringgreen" => 0x00FA9A, "mediumturquoise" => 0x48D1CC,
+    "mediumvioletred" => 0xC71585, "midnightblue" => 0x191970,
+    "mintcream" => 0xF5FFFA, "mistyrose" => 0xFFE4E1, "moccasin" => 0xFFE4B5,
+    "navajowhite" => 0xFFDEAD, "navy" => 0x000080, "oldlace" => 0xFDF5E6,
+    "olive" => 0x808000, "olivedrab" => 0x6B8E23, "orange" => 0xFFA500,
+    "orangered" => 0xFF4500, "orchid" => 0xDA70D6, "palegoldenrod" => 0xEEE8AA,
+    "palegreen" => 0x98FB98, "paleturquoise" => 0xAFEEEE,
+    "palevioletred" => 0xDB7093, "papayawhip" => 0xFFEFD5, "peachpuff" => 0xFFDAB9,
+    "peru" => 0xCD853F, "pink" => 0xFFC0CB, "plum" => 0xDDA0DD,
+    "powderblue" => 0xB0E0E6, "purple" => 0x800080, "rebeccapurple" => 0x663399,
+    "red" => 0xFF0000, "rosybrown" => 0xBC8F8F, "royalblue" => 0x4169E1,
+    "saddlebrown" => 0x8B4513, "salmon" => 0xFA8072, "sandybrown" => 0xF4A460,
+    "seagreen" => 0x2E8B57, "seashell" => 0xFFF5EE, "sienna" => 0xA0522D,
+    "silver" => 0xC0C0C0, "skyblue" => 0x87CEEB, "slateblue" => 0x6A5ACD,
+    "slategray" => 0x708090, "slategrey" => 0x708090, "snow" => 0xFFFAFA,
+    "springgreen" => 0x00FF7F, "steelblue" => 0x4682B4, "tan" => 0xD2B48C,
+    "teal" => 0x008080, "thistle" => 0xD8BFD8, "tomato" => 0xFF6347,
+    "turquoise" => 0x40E0D0, "violet" => 0xEE82EE, "wheat" => 0xF5DEB3,
+    "white" => 0xFFFFFF, "whitesmoke" => 0xF5F5F5, "yellow" => 0xFFFF00,
+    "yellowgreen" => 0x9ACD32
+)
+
+_svg_hex_color(hex::UInt32) =
+    Color3(Float64((hex >> 16) & 0xff) / 255, Float64((hex >> 8) & 0xff) / 255,
+           Float64(hex & 0xff) / 255)
+
+function _svg_color_number(part::AbstractString, raw::AbstractString)
+    value = tryparse(Float64, part)
+    value === nothing && error("unsupported SVG color $raw")
+    isfinite(value) || error("SVG color channel must be finite")
+    return value
+end
+
+function _svg_color_percent(part::AbstractString, raw::AbstractString)
+    endswith(part, "%") || error("unsupported SVG color $raw")
+    return _svg_color_number(part[1:prevind(part, lastindex(part))], raw) / 100
+end
+
+# three.js Color.setHSL (src/math/Color.js:248-272) with its hue2rgb helper.
+function _svg_hsl_color(h::Float64, s::Float64, l::Float64)
+    h = mod(h, 1.0)
+    s = clamp(s, 0.0, 1.0)
+    l = clamp(l, 0.0, 1.0)
+    s == 0.0 && return Color3(l, l, l)
+    p = l <= 0.5 ? l * (1 + s) : l + s - l * s
+    q = 2 * l - p
+    function hue(t)
+        t < 0 && (t += 1)
+        t > 1 && (t -= 1)
+        t < 1 / 6 && return q + (p - q) * 6 * t
+        t < 1 / 2 && return p
+        t < 2 / 3 && return q + (p - q) * 6 * (2 / 3 - t)
+        return q
+    end
+    return Color3(hue(h + 1 / 3), hue(h), hue(h - 1 / 3))
+end
+
+# Parse an SVG paint color the way three.js Color.setStyle does for SVGLoader
+# (src/math/Color.js:296-440): CSS keywords, #rgb / #rrggbb, rgb()/rgba() with
+# numbers or percentages, and hsl()/hsla(). As in three.js, the alpha of
+# rgba()/hsla() does not change the color; opacity comes from the opacity
+# properties. Channels are kept in sRGB like the hex forms.
 function _svg_color(raw::AbstractString)
     s = lowercase(strip(String(raw)))
     s == "none" && return nothing
     s == "transparent" && return nothing
-    named = Dict(
-        "black" => Color3(0.0, 0.0, 0.0),
-        "white" => Color3(1.0, 1.0, 1.0),
-        "red" => Color3(1.0, 0.0, 0.0),
-        "green" => Color3(0.0, 0.5019607843137255, 0.0),
-        "blue" => Color3(0.0, 0.0, 1.0),
-        "yellow" => Color3(1.0, 1.0, 0.0),
-        "cyan" => Color3(0.0, 1.0, 1.0),
-        "magenta" => Color3(1.0, 0.0, 1.0),
-        "gray" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
-        "grey" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
-    )
-    haskey(named, s) && return named[s]
+    keyword = get(_SVG_COLOR_KEYWORDS, s, nothing)
+    keyword === nothing || return _svg_hex_color(keyword)
     if startswith(s, "#")
         hex = s[2:end]
-        hex_channel(part) = begin
-            value = tryparse(Int, part; base=16)
-            value === nothing && error("unsupported SVG color $raw")
-            value / 255
-        end
+        all(isxdigit, hex) || error("unsupported SVG color $raw")
         if ncodeunits(hex) == 3
-            vals = [hex_channel(string(ch, ch)) for ch in hex]
+            return Color3((parse(Int, string(ch); base=16) / 15 for ch in hex)...)
         elseif ncodeunits(hex) == 6
-            vals = [hex_channel(hex[i:i+1]) for i in (1, 3, 5)]
-        else
-            error("unsupported SVG color $raw")
+            return _svg_hex_color(parse(UInt32, hex; base=16))
         end
-        return Color3(vals[1], vals[2], vals[3])
+        error("unsupported SVG color $raw")
     end
-    m = match(r"^rgb\((.*)\)$", s)
-    if m !== nothing
-        parts = strip.(split(m.captures[1], ','))
-        length(parts) == 3 || error("SVG rgb() color needs three channels")
-        values = Float64[]
-        for part in parts
-            if endswith(part, "%")
-                parsed = tryparse(Float64, part[1:prevind(part, lastindex(part))])
-                parsed === nothing && error("unsupported SVG color $raw")
-                v = parsed / 100
-            else
-                parsed = tryparse(Float64, part)
-                parsed === nothing && error("unsupported SVG color $raw")
-                v = parsed / 255
-            end
-            isfinite(v) || error("SVG rgb() channel must be finite")
-            push!(values, clamp(v, 0.0, 1.0))
+    m = match(r"^(rgba?|hsla?)\((.*)\)$", s)
+    m === nothing && error("unsupported SVG color $raw")
+    model = m.captures[1]
+    parts = strip.(split(m.captures[2], ','))
+    length(parts) == 3 || length(parts) == 4 ||
+        error("SVG $(model)() color needs three channels and an optional alpha")
+    if length(parts) == 4
+        alpha = _svg_color_number(parts[4], raw)
+        0.0 <= alpha <= 1.0 || error("SVG $(model)() alpha must be between 0 and 1")
+    end
+    if startswith(model, "rgb")
+        channels = ntuple(3) do i
+            part = parts[i]
+            v = endswith(part, "%") ? _svg_color_percent(part, raw) :
+                _svg_color_number(part, raw) / 255
+            clamp(v, 0.0, 1.0)
         end
-        return Color3(values[1], values[2], values[3])
+        return Color3(channels...)
     end
-    error("unsupported SVG color $raw")
+    return _svg_hsl_color(_svg_color_number(parts[1], raw) / 360,
+                          _svg_color_percent(parts[2], raw),
+                          _svg_color_percent(parts[3], raw))
 end
 
 function _svg_cascaded_style_attrs(attrs::AbstractDict,
@@ -5073,13 +5156,26 @@ function _svg_display_visibility(parent_display::Bool, parent_visibility::Symbol
     return display_ok, visibility
 end
 
+# Pixels per absolute unit at three.js SVGLoader's default 90 DPI
+# (SVGLoader.js:83, 1527-1622: unitConversion[unit]["in"] * defaultDPI).
+_svg_unit_scale(unit::Nothing) = 1.0
+function _svg_unit_scale(unit::AbstractString)
+    unit == "px" && return 1.0
+    unit == "in" && return 90.0
+    unit == "mm" && return (1 / 25.4) * 90.0
+    unit == "cm" && return (1 / 2.54) * 90.0
+    unit == "pt" && return (1 / 72) * 90.0
+    unit == "pc" && return (1 / 6) * 90.0
+    error("unsupported SVG length unit $unit")
+end
+
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
     raw = get(attrs, key, nothing)
     raw === nothing && return Float64(default)
-    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px)?\s*$",
+    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px|mm|cm|in|pt|pc)?\s*$",
               raw)
     m === nothing && error("unsupported SVG length for $key")
-    v = parse(Float64, m.captures[1])
+    v = parse(Float64, m.captures[1]) * _svg_unit_scale(m.captures[2])
     isfinite(v) || error("SVG length for $key must be finite")
     return v
 end
