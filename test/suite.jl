@@ -7220,7 +7220,9 @@ end
         @test_opt_alloc 9500 edges_geometry(box_for_lines)
         # WireframeGeometry shows all triangle edges including the quad diagonal.
         wf = wireframe_geometry(box_for_lines)
-        @test wf.n_vertices ÷ 2 == 30                     # 6 faces × (4 border + 1 diagonal)
+        # three.js WireframeGeometry.js isUniqueEdge hashes edges by position,
+        # so the 12 cube edges shared by two faces appear once: 12 + 6 diagonals.
+        @test wf.n_vertices ÷ 2 == 18
         @test isempty(wf.indices)
         @test_opt_alloc 4096 wireframe_geometry(box_for_lines)
         # Flat quad: 4 boundary edges (edges) vs 5 triangle edges (wireframe).

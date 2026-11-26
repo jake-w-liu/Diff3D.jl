@@ -2767,6 +2767,8 @@ end
 end
 
 """All unique triangle edges as line segments (three.js `WireframeGeometry`).
+Like three.js, an edge is emitted once however many triangles share its two
+end positions, even when those triangles use separate vertices.
 Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
 function wireframe_geometry(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
@@ -2776,13 +2778,20 @@ function wireframe_geometry(geo::BufferGeometry)
 end
 
 function _wireframe_edge_keys(geo::BufferGeometry, faces,
-                               ::Type{K}) where {K<:Union{UInt64,UInt128}}
+                               ::Type{K},
+                               vertex_ids::Union{Nothing,Vector{Int}}=nothing,
+                               ) where {K<:Union{UInt64,UInt128}}
     max_edges = 3 * length(faces)
     seen = zeros(K, _edge_table_capacity(max_edges))
     ordered_edges = Vector{K}()
     sizehint!(ordered_edges, _edge_record_hint(geo, max_edges))
     @inbounds for fi in faces
         i1, i2, i3 = get_face(geo, fi)
+        if vertex_ids !== nothing
+            i1 = vertex_ids[i1]
+            i2 = vertex_ids[i2]
+            i3 = vertex_ids[i3]
+        end
         _record_wireframe_edge!(seen, ordered_edges, i1, i2)
         _record_wireframe_edge!(seen, ordered_edges, i2, i3)
         _record_wireframe_edge!(seen, ordered_edges, i3, i1)
@@ -2790,8 +2799,44 @@ function _wireframe_edge_keys(geo::BufferGeometry, faces,
     return ordered_edges
 end
 
+# Exact position of a vertex as a hash key; `+ 0.0` folds -0.0 into 0.0, as
+# three.js's `${x}` string hashes do.
+@inline function _wireframe_position_key(geo::BufferGeometry, vi::Int)
+    base = 3vi - 2
+    @inbounds return (geo.positions[base] + 0.0, geo.positions[base + 1] + 0.0,
+                      geo.positions[base + 2] + 0.0)
+end
+
+# Map every vertex to the first vertex with exactly the same position
+# (three.js WireframeGeometry `isUniqueEdge` hashes edges by position).
+function _wireframe_position_ids(geo::BufferGeometry)
+    n = geo.n_vertices
+    ids = Vector{Int}(undef, n)
+    table = zeros(Int, _edge_table_capacity(n))
+    last_slot = length(table)
+    mask = last_slot - 1
+    @inbounds for vi in 1:n
+        key = _wireframe_position_key(geo, vi)
+        slot = Int(hash(key) & UInt(mask)) + 1
+        while true
+            existing = table[slot]
+            if existing == 0
+                table[slot] = vi
+                ids[vi] = vi
+                break
+            elseif isequal(_wireframe_position_key(geo, existing), key)
+                ids[vi] = existing
+                break
+            end
+            slot = slot == last_slot ? 1 : slot + 1
+        end
+    end
+    return ids
+end
+
 function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K)
+    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K,
+                                         _wireframe_position_ids(geo))
     positions = Vector{Float64}(undef, 6 * length(ordered_edges))
     vi = 0
     pout = 1

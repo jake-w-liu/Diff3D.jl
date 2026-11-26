@@ -133,3 +133,21 @@ end
     @test catmull_rom_point(uniform_chord, 0.25) == Vec3(-largest / 2, 0.0, 0.0)
     @test catmull_rom_point(uniform_chord, 0.75) == Vec3(largest / 2, 0.0, 0.0)
 end
+
+@testset "wireframe_geometry deduplicates edges by position" begin
+    # three.js WireframeGeometry.js isUniqueEdge hashes each edge by its end
+    # positions, so faces with separate vertices share an edge line. node:
+    # BoxGeometry(1,1,1) -> 18 segments; IcosahedronGeometry(1,1) (non-indexed)
+    # -> 120; BoxGeometry(2,3,4,2,2,2) -> 72.
+    @test wireframe_geometry(BoxGeometry()).n_vertices ÷ 2 == 18
+    @test wireframe_geometry(IcosahedronGeometry(radius=1.0, detail=1)).n_vertices ÷ 2 == 120
+    @test wireframe_geometry(BoxGeometry(width=2.0, height=3.0, depth=4.0, width_segments=2,
+                                         height_segments=2, depth_segments=2)).n_vertices ÷ 2 == 72
+    segments = _audit3_segments(wireframe_geometry(BoxGeometry()))
+    @test allunique(segments)
+    # Signed zeros hash alike in three.js (`${-0}` is "0").
+    signed = BufferGeometry([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                             -0.0, -0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -0.0],
+                            Float64[], Float64[], collect(1:6), 6, 2)
+    @test wireframe_geometry(signed).n_vertices ÷ 2 == 3
+end
