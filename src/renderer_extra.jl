@@ -60,6 +60,200 @@ function srgb_encode(img::AbstractArray)
     return out
 end
 
+# ------------- three.js tone mapping operators (tonemapping_pars_fragment) -------------
+# Literal ports of three.js r186
+# src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js. GLSL
+# `mat3(c0, c1, c2)` takes columns, so each product below sums column-scaled
+# components. Scalars stay generic for ForwardDiff and `ADVar` inputs.
+
+@inline _tm_saturate(x) = min(max(x, 0.0), 1.0)
+
+@inline _tm_mat3(c0::NTuple{3,Float64}, c1::NTuple{3,Float64},
+                 c2::NTuple{3,Float64}, r, g, b) =
+    (c0[1] * r + c1[1] * g + c2[1] * b,
+     c0[2] * r + c1[2] * g + c2[2] * b,
+     c0[3] * r + c1[3] * g + c2[3] * b)
+
+# LinearToneMapping, line 9.
+@inline _tm_linear(r, g, b, e) =
+    (_tm_saturate(e * r), _tm_saturate(e * g), _tm_saturate(e * b))
+
+# ReinhardToneMapping, line 16.
+@inline function _tm_reinhard(r, g, b, e)
+    r, g, b = r * e, g * e, b * e
+    return (_tm_saturate(r / (1.0 + r)), _tm_saturate(g / (1.0 + g)),
+            _tm_saturate(b / (1.0 + b)))
+end
+
+# CineonToneMapping, line 24.
+@inline function _tm_cineon_channel(x, e)
+    x = max(0.0, x * e - 0.004)
+    return ((x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06))^2.2
+end
+@inline _tm_cineon(r, g, b, e) =
+    (_tm_cineon_channel(r, e), _tm_cineon_channel(g, e), _tm_cineon_channel(b, e))
+
+# RRTAndODTFit, line 34.
+@inline _tm_rrt_odt(v) =
+    (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.4329510) + 0.238081)
+
+# ACESFilmicToneMapping, line 45 (including three.js's 1/0.6 exposure scale).
+@inline function _tm_aces_filmic(r, g, b, e)
+    s = e / 0.6
+    r, g, b = _tm_mat3((0.59719, 0.07600, 0.02840),
+                       (0.35458, 0.90834, 0.13383),
+                       (0.04823, 0.01566, 0.83777), r * s, g * s, b * s)
+    r, g, b = _tm_rrt_odt(r), _tm_rrt_odt(g), _tm_rrt_odt(b)
+    r, g, b = _tm_mat3((1.60475, -0.10208, -0.00327),
+                       (-0.53108, 1.10813, -0.07276),
+                       (-0.07367, -0.00605, 1.07602), r, g, b)
+    return (_tm_saturate(r), _tm_saturate(g), _tm_saturate(b))
+end
+
+# agxDefaultContrastApprox, line 92.
+@inline function _tm_agx_contrast(x)
+    x2 = x * x
+    x4 = x2 * x2
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x +
+           0.4298 * x2 + 0.1191 * x - 0.00232
+end
+
+@inline function _tm_agx_encode(x)
+    # Log2 encoding between AgxMinEv = -12.47393 and AgxMaxEv = 4.026069.
+    x = (log2(max(x, 1e-10)) - -12.47393) / (4.026069 - -12.47393)
+    return _tm_agx_contrast(min(max(x, 0.0), 1.0))
+end
+
+# AgXToneMapping, line 112.
+@inline function _tm_agx(r, g, b, e)
+    r, g, b = _tm_mat3((0.6274, 0.0691, 0.0164), (0.3293, 0.9195, 0.0880),
+                       (0.0433, 0.0113, 0.8956), r * e, g * e, b * e)
+    r, g, b = _tm_mat3((0.856627153315983, 0.137318972929847, 0.11189821299995),
+                       (0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+                       (0.0482516061458583, 0.101439036467562, 0.811302368396859),
+                       r, g, b)
+    r, g, b = _tm_agx_encode(r), _tm_agx_encode(g), _tm_agx_encode(b)
+    r, g, b = _tm_mat3((1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+                       (-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
+                       (-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
+                       r, g, b)
+    r, g, b = max(0.0, r)^2.2, max(0.0, g)^2.2, max(0.0, b)^2.2
+    r, g, b = _tm_mat3((1.6605, -0.1246, -0.0182), (-0.5876, 1.1329, -0.1006),
+                       (-0.0728, -0.0083, 1.1187), r, g, b)
+    return (_tm_saturate(r), _tm_saturate(g), _tm_saturate(b))
+end
+
+# NeutralToneMapping, line 174.
+@inline function _tm_neutral(r, g, b, e)
+    start_compression = 0.8 - 0.04
+    desaturation = 0.15
+    r, g, b = r * e, g * e, b * e
+    x = min(r, min(g, b))
+    offset = x < 0.08 ? x - 6.25 * x * x : 0.04
+    r, g, b = r - offset, g - offset, b - offset
+    peak = max(r, max(g, b))
+    peak < start_compression && return (r, g, b)
+    d = 1.0 - start_compression
+    new_peak = 1.0 - d * d / (peak + d - start_compression)
+    scale = new_peak / peak
+    r, g, b = r * scale, g * scale, b * scale
+    w = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0)
+    # GLSL mix(x, y, a) = x * (1 - a) + y * a.
+    return (r * (1.0 - w) + new_peak * w, g * (1.0 - w) + new_peak * w,
+            b * (1.0 - w) + new_peak * w)
+end
+
+@inline function _tone_map_rgb(mode::Symbol, r, g, b, exposure)
+    mode === :linear && return _tm_linear(r, g, b, exposure)
+    mode === :reinhard && return _tm_reinhard(r, g, b, exposure)
+    mode === :cineon && return _tm_cineon(r, g, b, exposure)
+    mode === :aces_filmic && return _tm_aces_filmic(r, g, b, exposure)
+    mode === :agx && return _tm_agx(r, g, b, exposure)
+    mode === :neutral && return _tm_neutral(r, g, b, exposure)
+    return (r, g, b)   # :none (three.js NoToneMapping)
+end
+
+const _TONE_MAPPING_MODES = (:none, :linear, :reinhard, :cineon, :aces_filmic, :agx, :neutral)
+
+function _validated_tone_mapping(mode::Symbol, exposure::Real, label::AbstractString)
+    mode in _TONE_MAPPING_MODES || throw(ArgumentError(
+        "$label tone mapping must be one of $(join(_TONE_MAPPING_MODES, ", ")); got :$mode"))
+    exposure isa Bool && throw(ArgumentError("$label exposure must be a finite real number"))
+    isfinite(exposure) || throw(ArgumentError("$label exposure must be finite"))
+    return nothing
+end
+
+"""
+    tone_map(img, mode::Symbol; exposure=1.0)
+    tone_map(color::Color3, mode::Symbol; exposure=1.0)
+
+Apply a three.js tone mapping operator to a linear-light H×W×3 image (or one
+colour) and return a new image (or `Color3`). `mode` selects the r186 shader
+function of the same name in `tonemapping_pars_fragment`:
+
+| `mode` | three.js constant |
+|---|---|
+| `:none` | `NoToneMapping` (copy) |
+| `:linear` | `LinearToneMapping` |
+| `:reinhard` | `ReinhardToneMapping` |
+| `:cineon` | `CineonToneMapping` |
+| `:aces_filmic` | `ACESFilmicToneMapping` |
+| `:agx` | `AgXToneMapping` |
+| `:neutral` | `NeutralToneMapping` |
+
+`exposure` is `renderer.toneMappingExposure` and must be finite. ACES Filmic,
+AgX, and Neutral mix the colour channels, so the input must have three channels.
+The operators are the shader formulas evaluated in the input's precision; they
+are generic, so ForwardDiff duals and `ADVar` values propagate through them.
+[`tone_map_aces`](@ref) remains the separate Narkowicz ACES fit.
+"""
+function tone_map(img::AbstractArray{<:Real}, mode::Symbol; exposure::Real=1.0)
+    _validated_tone_mapping(mode, exposure, "tone_map")
+    H, W = _rgb_image_size(img, "tone_map")
+    T = promote_type(eltype(img), typeof(exposure), Float64)
+    out = Array{T}(undef, H, W, 3)
+    @inbounds for j in 1:W, i in 1:H
+        r, g, b = _tone_map_rgb(mode, img[i, j, 1], img[i, j, 2], img[i, j, 3], exposure)
+        out[i, j, 1] = r; out[i, j, 2] = g; out[i, j, 3] = b
+    end
+    return out
+end
+
+function tone_map(color::Color3, mode::Symbol; exposure::Real=1.0)
+    _validated_tone_mapping(mode, exposure, "tone_map")
+    r, g, b = _tone_map_rgb(mode, color.r, color.g, color.b, exposure)
+    T = promote_type(typeof(r), typeof(g), typeof(b))
+    return Color3{T}(r, g, b)
+end
+
+"""
+    output_pass(; tone_mapping=:none, exposure=1.0, output_color_space=:srgb)
+
+[`EffectComposer`](@ref) pass equivalent to three.js `OutputPass`
+(`examples/jsm/shaders/OutputShader.js`): apply [`tone_map`](@ref) with
+`tone_mapping` and `exposure`, then, for `output_color_space=:srgb`, the sRGB
+transfer function [`linear_to_srgb`](@ref) per channel. `:linear` output skips
+the transfer. Like the shader, the pass does not clamp values that the selected
+operator leaves outside `[0, 1]`; [`render_to_rgb8`](@ref) clamps on
+quantization. Returns an `img -> img` closure producing a new H×W×3 array.
+"""
+function output_pass(; tone_mapping::Symbol=:none, exposure::Real=1.0,
+                     output_color_space::Symbol=:srgb)
+    _validated_tone_mapping(tone_mapping, exposure, "output_pass")
+    (output_color_space === :srgb || output_color_space === :linear) ||
+        throw(ArgumentError("output_pass output_color_space must be :srgb or :linear"))
+    srgb = output_color_space === :srgb
+    return function (img::AbstractArray)
+        out = tone_map(img, tone_mapping; exposure=exposure)
+        if srgb
+            @inbounds for i in eachindex(out)
+                out[i] = linear_to_srgb(out[i])
+            end
+        end
+        return out
+    end
+end
+
 # ========================== Supersample (MSAA) ==========================
 
 """Box-average downsample an H·ss × W·ss image to H × W."""
