@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# Shading models: Phong, Lambert, PBR (simplified Cook-Torrance).
+# Shading models: Lambert, Phong, Toon and three.js physically based shading.
 # Pure Julia, AD-compatible — no branching on types in hot path.
 # --------------------------------------------------------------------------
 
@@ -54,74 +54,29 @@ function shade_phong(normal::Vec3, light_dir::Vec3, view_dir::Vec3,
 end
 
 """
-Simplified PBR shading (Cook-Torrance with GGX distribution).
+    shade_pbr(normal, light_dir, view_dir, light_color, light_intensity,
+              albedo, metalness, roughness, specular_intensity=1.0,
+              specular_color=Color3(1.0, 1.0, 1.0)) -> Color3
+
+Physically based response to one light, following three.js
+`RE_Direct_Physical` for a metallic-roughness surface with an index of
+refraction of 1.5: GGX distribution (`D_GGX`), height-correlated Smith
+visibility (`V_GGX_SmithCorrelated`), Schlick Fresnel (`F_Schlick`), the
+DFG-table multiple-scattering compensation and a `BRDF_Lambert` diffuse term
+weighted by `1 - F`, all scaled by the irradiance `N·L · light`. `roughness` is
+clamped to `[0.0525, 1]` like three.js; `specular_intensity` and
+`specular_color` act as in `KHR_materials_specular`. `view_dir` points from the
+surface toward the camera and `light_dir` from the surface toward the light.
 """
 function shade_pbr(normal::Vec3, light_dir::Vec3, view_dir::Vec3,
                    light_color::Color3, light_intensity,
                    albedo::Color3, metalness, roughness,
                    specular_intensity=1.0,
                    specular_color::Color3=Color3(1.0, 1.0, 1.0))
-    α = roughness * roughness
-    α2 = α * α
-
-    ndotl = max(dot(normal, light_dir), zero(α))
-    ndotv = max(dot(normal, view_dir), zero(α))
-
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), zero(α))
-    vdoth = max(dot(view_dir, h), zero(α))
-
-    # GGX/Trowbridge-Reitz normal distribution
-    denom_d = ndoth * ndoth * (α2 - 1) + 1
-    D = α2 / (π * denom_d * denom_d + 1e-7)
-
-    # Schlick-GGX geometry (Smith model)
-    k = (roughness + 1)^2 / 8
-    G1_l = ndotl / (ndotl * (1 - k) + k + 1e-7)
-    G1_v = ndotv / (ndotv * (1 - k) + k + 1e-7)
-    G = G1_l * G1_v
-
-    # Schlick Fresnel. KHR_materials_specular modulates only the dielectric F0;
-    # metals continue to use base-color F0.
-    F0 = Color3(
-        lerp_scalar(0.04 * specular_intensity * specular_color.r, albedo.r, metalness),
-        lerp_scalar(0.04 * specular_intensity * specular_color.g, albedo.g, metalness),
-        lerp_scalar(0.04 * specular_intensity * specular_color.b, albedo.b, metalness)
-    )
-    F = Color3(
-        F0.r + (1 - F0.r) * (1 - vdoth)^5,
-        F0.g + (1 - F0.g) * (1 - vdoth)^5,
-        F0.b + (1 - F0.b) * (1 - vdoth)^5
-    )
-
-    # Specular BRDF
-    spec_num = D * G
-    spec_den = 4 * ndotv * ndotl + 1e-7
-    spec = Color3(
-        F.r * spec_num / spec_den,
-        F.g * spec_num / spec_den,
-        F.b * spec_num / spec_den
-    )
-
-    # Diffuse BRDF (energy-conserving Lambert)
-    kD = Color3(
-        (1 - F.r) * (1 - metalness),
-        (1 - F.g) * (1 - metalness),
-        (1 - F.b) * (1 - metalness)
-    )
-    diffuse = Color3(
-        kD.r * albedo.r / π,
-        kD.g * albedo.g / π,
-        kD.b * albedo.b / π
-    )
-
-    # Final
-    result = Color3(
-        (diffuse.r + spec.r) * light_color.r * light_intensity * ndotl,
-        (diffuse.g + spec.g) * light_color.g * light_intensity * ndotl,
-        (diffuse.b + spec.b) * light_color.b * light_intensity * ndotl
-    )
-    return result
+    surface = _standard_surface(normal, view_dir, albedo, metalness, roughness,
+                                specular_intensity, specular_color)
+    return _direct_response(surface, normal, view_dir, light_color,
+                            light_intensity, light_dir)
 end
 
 lerp_scalar(a, b, t) = a + (b - a) * t
@@ -799,6 +754,9 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
                          clipping_planes=m.clipping_planes)
 end
 
+# MeshPhysicalMaterial scalars after their texture maps (or the material's own
+# values, see `_physical_terms`). `sheen_roughness` is already clamped as
+# lights_physical_fragment.glsl.js resolves it.
 struct _PhysicalMappedTerms
     metalness::Float64
     roughness::Float64
@@ -848,7 +806,10 @@ function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
         c = sample_texture_linear(m.sheen_color_map, scu, scv)
         Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
     end
-    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
+    sheen_roughness = _sheen_roughness(
+        m.sheen_roughness,
+        m.sheen_roughness_map === nothing ? 1.0 :
+            _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4))
     iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
     iridescence_thickness = _mapped_iridescence_thickness(m,itu,itv)
     specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
@@ -1555,22 +1516,6 @@ function _fill_color(normal::Vec3, light::LightProbe)
     ) * light.intensity
 end
 
-# Environment (ambient/IBL) response of a metallic-roughness surface. Without
-# this term metals (low diffuse, narrow specular) render black under directional
-# light alone. Diffuse scales by (1-metalness); specular uses Schlick F0 (≈albedo
-# for metals) attenuated by roughness. Fill irradiance is reflected through the
-# same 1/π (`BRDF_Lambert`/cosine-weighted irradiance) as three.js.
-function _pbr_ambient(normal::Vec3, albedo::Color3, metalness, roughness, fill::Color3)
-    kd = one(metalness) - metalness
-    F0r = lerp_scalar(0.04, albedo.r, metalness)
-    F0g = lerp_scalar(0.04, albedo.g, metalness)
-    F0b = lerp_scalar(0.04, albedo.b, metalness)
-    spec_scale = one(roughness) - roughness * 0.7
-    Color3((albedo.r * kd + F0r * spec_scale) * fill.r / π,
-           (albedo.g * kd + F0g * spec_scale) * fill.g / π,
-           (albedo.b * kd + F0b * spec_scale) * fill.b / π)
-end
-
 # Environment-map (basic IBL) specular reflection. Reflect the view direction
 # about the shading normal, sample the cube map along that mirror direction, and
 # weight by a Schlick-Fresnel F0 (≈albedo for metals, ≈0.04 for dielectrics).
@@ -1608,123 +1553,212 @@ end
 # Dispatch helper: only MeshStandardMaterial / MeshPhysicalMaterial carry envmap.
 @inline _envmap_field(m) = hasfield(typeof(m), :envmap) ? getfield(m, :envmap) : nothing
 
-# Dielectric clearcoat highlight: Schlick-Fresnel-weighted Blinn-Phong lobe (F0 = 0.04).
-@inline function _clearcoat_spec(normal::Vec3, light_dir::Vec3, view_dir::Vec3, cc_roughness)
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), zero(cc_roughness))
-    vdoth = max(dot(view_dir, h), zero(cc_roughness))
-    shininess = 2 / max((cc_roughness*cc_roughness)^2, 1e-4) + 2   # roughness → exponent
-    fresnel = 0.04 + 0.96 * (1 - vdoth)^5
-    return fresnel * ndoth^shininess
+# --------------------------------------------------------------------------
+# three.js r186 physically based direct lighting for MeshStandardMaterial and
+# MeshPhysicalMaterial. The functions below mirror the GLSL in
+# ShaderChunk/{common,lights_physical_pars_fragment,lights_physical_fragment,
+# lights_fragment_begin,iridescence_fragment}.glsl.js and the clearcoat/sheen
+# composition in ShaderLib/meshphysical.glsl.js.
+# --------------------------------------------------------------------------
+
+# three.js DFGLUTData.js: 16x16 RG half-float table of the split-sum scale and
+# bias, indexed by (roughness, N·V), sampled with LinearFilter/ClampToEdge.
+const _DFG_LUT_BITS = UInt16[
+    0x30b5, 0x3ad1, 0x314c, 0x3a4d, 0x33d2, 0x391c, 0x35ef, 0x3828, 0x37f3, 0x36a6, 0x38d1, 0x3539, 0x3979, 0x3410, 0x39f8, 0x3252,
+    0x3a53, 0x30f0, 0x3a94, 0x2fc9, 0x3abf, 0x2e35, 0x3ada, 0x2d05, 0x3ae8, 0x2c1f, 0x3aed, 0x2ae0, 0x3aea, 0x29d1, 0x3ae1, 0x28ff,
+    0x3638, 0x38e4, 0x364a, 0x38ce, 0x3699, 0x385e, 0x374e, 0x372c, 0x3839, 0x35a4, 0x38dc, 0x3462, 0x396e, 0x32c4, 0x39de, 0x3134,
+    0x3a2b, 0x3003, 0x3a59, 0x2e3a, 0x3a6d, 0x2ce1, 0x3a6e, 0x2bba, 0x3a5f, 0x2a33, 0x3a49, 0x290a, 0x3a2d, 0x2826, 0x3a0a, 0x26e8,
+    0x3894, 0x36d7, 0x3897, 0x36c9, 0x38a3, 0x3675, 0x38bc, 0x35ac, 0x38ee, 0x349c, 0x393e, 0x3332, 0x3997, 0x3186, 0x39e2, 0x3038,
+    0x3a13, 0x2e75, 0x3a29, 0x2cf5, 0x3a2d, 0x2bac, 0x3a21, 0x29ff, 0x3a04, 0x28bc, 0x39dc, 0x2790, 0x39ad, 0x261a, 0x3978, 0x24fa,
+    0x39ac, 0x34a8, 0x39ac, 0x34a3, 0x39ae, 0x3480, 0x39ae, 0x3423, 0x39b1, 0x330e, 0x39c2, 0x31a9, 0x39e0, 0x3063, 0x39fc, 0x2eb5,
+    0x3a0c, 0x2d1d, 0x3a14, 0x2bcf, 0x3a07, 0x29ff, 0x39e9, 0x28a3, 0x39be, 0x273c, 0x3989, 0x25b3, 0x394a, 0x2488, 0x3907, 0x2345,
+    0x3a77, 0x3223, 0x3a76, 0x321f, 0x3a73, 0x3204, 0x3a6a, 0x31b3, 0x3a58, 0x3114, 0x3a45, 0x303b, 0x3a34, 0x2eb6, 0x3a26, 0x2d31,
+    0x3a1e, 0x2bef, 0x3a0b, 0x2a0d, 0x39ec, 0x28a1, 0x39c0, 0x271b, 0x3987, 0x2580, 0x3944, 0x2449, 0x38fa, 0x22bd, 0x38ac, 0x2155,
+    0x3b07, 0x2fca, 0x3b06, 0x2fca, 0x3b00, 0x2fb8, 0x3af4, 0x2f7c, 0x3adb, 0x2eea, 0x3ab4, 0x2e00, 0x3a85, 0x2cec, 0x3a5e, 0x2bc5,
+    0x3a36, 0x2a00, 0x3a0d, 0x2899, 0x39dc, 0x2707, 0x39a0, 0x2562, 0x395a, 0x2424, 0x390b, 0x2268, 0x38b7, 0x20fd, 0x385f, 0x1fd1,
+    0x3b69, 0x2cb9, 0x3b68, 0x2cbb, 0x3b62, 0x2cbb, 0x3b56, 0x2cae, 0x3b3b, 0x2c78, 0x3b0d, 0x2c0a, 0x3acf, 0x2ae3, 0x3a92, 0x2998,
+    0x3a54, 0x2867, 0x3a17, 0x26d0, 0x39d3, 0x253c, 0x3989, 0x2402, 0x3935, 0x2226, 0x38dc, 0x20bd, 0x387d, 0x1f54, 0x381d, 0x1db3,
+    0x3ba9, 0x296b, 0x3ba8, 0x296f, 0x3ba3, 0x297b, 0x3b98, 0x2987, 0x3b7f, 0x2976, 0x3b4e, 0x2927, 0x3b0e, 0x2895, 0x3ac2, 0x27b7,
+    0x3a73, 0x263b, 0x3a23, 0x24e7, 0x39d0, 0x239b, 0x3976, 0x21d9, 0x3917, 0x207e, 0x38b2, 0x1ee7, 0x384b, 0x1d53, 0x37c7, 0x1c1e,
+    0x3bd2, 0x25cb, 0x3bd1, 0x25d3, 0x3bcd, 0x25f0, 0x3bc2, 0x261f, 0x3bad, 0x2645, 0x3b7d, 0x262d, 0x3b3e, 0x25c4, 0x3aec, 0x250f,
+    0x3a93, 0x243a, 0x3a32, 0x22ce, 0x39d0, 0x215b, 0x3969, 0x202a, 0x38fe, 0x1e6e, 0x388f, 0x1cf1, 0x381f, 0x1b9b, 0x3762, 0x19dd,
+    0x3be9, 0x21ab, 0x3be9, 0x21b7, 0x3be5, 0x21e5, 0x3bdd, 0x2241, 0x3bc9, 0x22a7, 0x3ba0, 0x22ec, 0x3b62, 0x22cd, 0x3b0f, 0x2247,
+    0x3aae, 0x2175, 0x3a44, 0x2088, 0x39d4, 0x1f49, 0x3960, 0x1dbe, 0x38e9, 0x1c77, 0x3870, 0x1ae8, 0x37f1, 0x1953, 0x3708, 0x181b,
+    0x3bf6, 0x1cea, 0x3bf6, 0x1cfb, 0x3bf3, 0x1d38, 0x3bec, 0x1dbd, 0x3bda, 0x1e7c, 0x3bb7, 0x1f25, 0x3b7d, 0x1f79, 0x3b2c, 0x1f4c,
+    0x3ac6, 0x1ea6, 0x3a55, 0x1dbb, 0x39da, 0x1cbd, 0x395a, 0x1b9d, 0x38d8, 0x1a00, 0x3855, 0x18ac, 0x37ab, 0x173c, 0x36b7, 0x1598,
+    0x3bfc, 0x1736, 0x3bfc, 0x1759, 0x3bf9, 0x17e7, 0x3bf4, 0x1896, 0x3be4, 0x1997, 0x3bc6, 0x1aa8, 0x3b91, 0x1b84, 0x3b43, 0x1bd2,
+    0x3ade, 0x1b8a, 0x3a65, 0x1acd, 0x39e2, 0x19d3, 0x3957, 0x18cd, 0x38ca, 0x17b3, 0x383e, 0x1613, 0x376d, 0x14bf, 0x366f, 0x135e,
+    0x3bff, 0x101b, 0x3bff, 0x1039, 0x3bfc, 0x10c8, 0x3bf9, 0x1226, 0x3bea, 0x1428, 0x3bcf, 0x1584, 0x3b9f, 0x16c5, 0x3b54, 0x179a,
+    0x3af0, 0x17ce, 0x3a76, 0x1771, 0x39ea, 0x16a4, 0x3956, 0x15a7, 0x38bf, 0x14a7, 0x3829, 0x1379, 0x3735, 0x11ea, 0x362d, 0x10a1,
+    0x3c00, 0x061b, 0x3c00, 0x066a, 0x3bfe, 0x081c, 0x3bfa, 0x0a4c, 0x3bed, 0x0d16, 0x3bd5, 0x0fb3, 0x3ba9, 0x114d, 0x3b63, 0x127c,
+    0x3b01, 0x132f, 0x3a85, 0x1344, 0x39f4, 0x12d2, 0x3957, 0x120d, 0x38b5, 0x1122, 0x3817, 0x103c, 0x3703, 0x0ed3, 0x35f0, 0x0d6d,
+    0x3c00, 0x007a, 0x3c00, 0x0089, 0x3bfe, 0x011d, 0x3bfb, 0x027c, 0x3bf0, 0x04fa, 0x3bda, 0x0881, 0x3bb1, 0x0acd, 0x3b6f, 0x0c97,
+    0x3b10, 0x0d7b, 0x3a93, 0x0df1, 0x39fe, 0x0def, 0x3959, 0x0d8a, 0x38af, 0x0ce9, 0x3808, 0x0c31, 0x36d5, 0x0af0, 0x35b9, 0x09a3,
+    0x3c00, 0x0000, 0x3c00, 0x0001, 0x3bff, 0x0015, 0x3bfb, 0x0059, 0x3bf2, 0x00fd, 0x3bdd, 0x01df, 0x3bb7, 0x031c, 0x3b79, 0x047c,
+    0x3b1d, 0x05d4, 0x3aa0, 0x06d5, 0x3a08, 0x075a, 0x395d, 0x075e, 0x38aa, 0x06f7, 0x37f4, 0x0648, 0x36ac, 0x0576, 0x3586, 0x049f,
+]
+const _DFG_LUT = Float64.(reinterpret(Float16, _DFG_LUT_BITS))
+
+@inline _saturate(x) = clamp(x, zero(x), one(x))
+
+# Bilinear clamp-to-edge texel coordinate of a 16-texel axis: the lower texel
+# index (0-based) and the interpolation weight. A NaN coordinate selects texel 0
+# and keeps propagating through the weight.
+@inline function _dfg_lut_axis(t)
+    x = t * 16 - 0.5
+    x = clamp(x, zero(x), 15 * one(x))
+    p = _primal_value(x)
+    i = p >= 15 ? 15 : p >= 0 ? trunc(Int, p) : 0
+    return i, x - i
 end
 
-# Charlie/Ashikhmin sheen distribution (the inverted-Gaussian "fabric" lobe used
-# by three.js' sheen model). `c = N·H`, `r = sheen_roughness`. With a = max(r²,ε)
-# this peaks at grazing half-angles (retroreflective rim glow on cloth/velvet).
-@inline function _d_charlie(c, r)
-    a = max(r * r, 1e-3)
-    inv_a = one(a) / a
-    s = sin(acos(clamp(c, -one(c), one(c))))         # sinθ_h, finite at c=±1
-    return (2 + inv_a) * s^inv_a / (2 * π)
-end
-
-# Sheen lobe contribution for one light: f = sheen·sheen_color·D_charlie(N·H,r)·(N·L).
-# Returned as a Color3 (before the light colour/intensity scaling applied by the caller).
-@inline function _sheen_lobe(m::MeshPhysicalMaterial, normal::Vec3, light_dir::Vec3, view_dir::Vec3)
-    ndotl = max(dot(normal, light_dir), 0.0)
-    ndotl <= 0.0 && return Color3(0.0, 0.0, 0.0)
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), 0.0)
-    d = _d_charlie(ndoth, m.sheen_roughness)
-    return m.sheen_color * (m.sheen * d * ndotl)
-end
-
-# Iridescence tint of the dielectric Fresnel F0. A thin film of index
-# `iridescence_ior` and thickness `thickness` (nm) produces an optical path
-# difference Δ = 2·n·d·cosθ_t (θ_t the refraction angle inside the film). The
-# per-wavelength reflectance modulation is taken as a cosine interference term
-# I(λ) = 0.5·(1 + cos(2π·Δ/λ)) evaluated at red/green/blue reference wavelengths
-# (650/550/450 nm), giving an RGB hue that shifts with viewing angle. We blend
-# the base F0 toward this hue by `iridescence`. This is a compact 3-wavelength
-# approximation of three.js' full Airy/thin-film model, kept finite at θ=0 and
-# grazing by clamping cosθ.
-@inline function _iridescent_f0(base_f0::Color3, ndotv, film_ior, thickness, blend)
-    cti = clamp(ndotv, 0.0, 1.0)                      # cosθ_i (view vs normal)
-    # Snell refraction into the film (n_outside ≈ 1). sinθ_t = sinθ_i / n_film.
-    sti = sqrt(max(1.0 - cti * cti, 0.0)) / max(film_ior, 1e-3)
-    ctt = sqrt(max(1.0 - sti * sti, 0.0))             # cosθ_t, finite at all angles
-    opd = 2.0 * film_ior * thickness * ctt            # optical path difference (nm)
-    ir = 0.5 * (1 + cos(2π * opd / 650.0))
-    ig = 0.5 * (1 + cos(2π * opd / 550.0))
-    ib = 0.5 * (1 + cos(2π * opd / 450.0))
-    tint = Color3(ir, ig, ib)
-    b = clamp(blend, 0.0, 1.0)
-    return Color3(base_f0.r * (1 - b) + tint.r * b,
-                  base_f0.g * (1 - b) + tint.g * b,
-                  base_f0.b * (1 - b) + tint.b * b)
-end
-
-# Iridescent specular boost added on top of the base PBR specular. We recompute a
-# Schlick specular highlight whose Fresnel uses the thin-film-tinted F0 and blend
-# in only the *difference* from the untinted dielectric F0 (≈0.04), so a material
-# with iridescence=0 is byte-identical to before and metals/albedo are untouched.
-@inline function _iridescence_spec(m::MeshPhysicalMaterial, normal::Vec3,
-                                   light_dir::Vec3, view_dir::Vec3)
-    ndotl = max(dot(normal, light_dir), 0.0)
-    ndotv = max(dot(normal, view_dir), 0.0)
-    (ndotl <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), 0.0)
-    vdoth = max(dot(view_dir, h), 0.0)
-    base_f0 = Color3(0.04, 0.04, 0.04)
-    tinted = _iridescent_f0(base_f0, ndotv, m.iridescence_ior, m.iridescence_thickness, m.iridescence)
-    # Schlick Fresnel of the tinted vs base F0, masked by a Blinn-Phong lobe so
-    # the tint shows up in the highlight rather than as a flat colour shift.
-    fres = (1 - vdoth)^5
-    Ft = Color3(tinted.r + (1 - tinted.r) * fres,
-                tinted.g + (1 - tinted.g) * fres,
-                tinted.b + (1 - tinted.b) * fres)
-    Fb = Color3(base_f0.r + (1 - base_f0.r) * fres,
-                base_f0.g + (1 - base_f0.g) * fres,
-                base_f0.b + (1 - base_f0.b) * fres)
-    roughness = _physical_roughness(m)
-    α = roughness * roughness
-    α2 = α * α
-    denom_d = ndoth * ndoth * (α2 - 1) + 1
-    D = α2 / (π * denom_d * denom_d + 1e-7)
-    lobe = D / (4 * ndotv * ndotl + 1e-7) * ndotl
-    Color3((Ft.r - Fb.r) * lobe, (Ft.g - Fb.g) * lobe, (Ft.b - Fb.b) * lobe)
-end
-
-# APPROXIMATE transmission/refraction fill. A CPU rasterizer cannot ray-trace
-# true refraction (no screen-space colour buffer to refract through and no scene
-# ray queries), so genuine `transmission` is not physically reproducible here.
-# This is a Fresnel-tint approximation: at near-grazing angles the surface
-# reflects (low transmittance) and near normal incidence it transmits, revealing
-# a tinted background. The transmitted radiance is attenuated by the material
-# colour (a single-sample Beer-Lambert-style tint, treating `color` as the per-
-# unit transmittance) and weighted by transmission·(1-Fresnel). `background` is
-# the ambient/environment fill irradiance; the ray sees its radiance, `background/π`.
-@inline function _transmission_fill(m::MeshPhysicalMaterial, normal::Vec3, view_dir::Vec3,
-                                    background::Color3)
-    m.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
-    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
-    # Schlick reflectance from the IOR-derived F0; transmittance = 1 - reflectance.
-    r0 = ((m.ior - 1) / (m.ior + 1))^2
-    refl = r0 + (1 - r0) * (1 - ndotv)^5
-    transmit = (1 - refl) * m.transmission
-    # Beer-Lambert tint: longer optical path near grazing darkens/colours more.
-    path = 1.0 / max(ndotv, 1e-3)
-    att = Color3(m.color.r^path, m.color.g^path, m.color.b^path)
-    if m.thickness > 0.0 && m.attenuation_distance > 0.0
-        volume_path = path * m.thickness / m.attenuation_distance
-        att = att * Color3(m.attenuation_color.r^volume_path,
-                           m.attenuation_color.g^volume_path,
-                           m.attenuation_color.b^volume_path)
+# `texture2D(dfgLUT, vec2(roughness, dotNV)).rg`.
+@inline function _dfg_lut(roughness, dot_nv)
+    ix, fx = _dfg_lut_axis(roughness)
+    iy, fy = _dfg_lut_axis(dot_nv)
+    ix1 = min(ix + 1, 15)
+    iy1 = min(iy + 1, 15)
+    lut = _DFG_LUT
+    @inbounds begin
+        b00 = (iy * 16 + ix) * 2
+        b10 = (iy * 16 + ix1) * 2
+        b01 = (iy1 * 16 + ix) * 2
+        b11 = (iy1 * 16 + ix1) * 2
+        x0 = lut[b00 + 1] * (1 - fx) + lut[b10 + 1] * fx
+        x1 = lut[b01 + 1] * (1 - fx) + lut[b11 + 1] * fx
+        y0 = lut[b00 + 2] * (1 - fx) + lut[b10 + 2] * fx
+        y1 = lut[b01 + 2] * (1 - fx) + lut[b11 + 2] * fx
     end
-    Color3(background.r * att.r * transmit / π,
-           background.g * att.g * transmit / π,
-           background.b * att.b * transmit / π)
+    return x0 * (1 - fy) + x1 * fy, y0 * (1 - fy) + y1 * fy
+end
+
+# common.glsl.js F_Schlick: the spherical-Gaussian Schlick weight and its blend.
+@inline _schlick_weight(dot_vh) = exp2((-5.55473 * dot_vh - 6.98316) * dot_vh)
+@inline _f_schlick(f0::Color3, f90, w) =
+    Color3(f0.r * (1 - w) + f90 * w, f0.g * (1 - w) + f90 * w,
+           f0.b * (1 - w) + f90 * w)
+
+# lights_physical_pars_fragment.glsl.js V_GGX_SmithCorrelated and D_GGX.
+@inline function _v_ggx_smith_correlated(alpha, dot_nl, dot_nv)
+    a2 = alpha * alpha
+    gv = dot_nl * sqrt(a2 + (1 - a2) * (dot_nv * dot_nv))
+    gl = dot_nv * sqrt(a2 + (1 - a2) * (dot_nl * dot_nl))
+    return 0.5 / max(gv + gl, 1e-6)
+end
+
+@inline function _d_ggx(alpha, dot_nh)
+    a2 = alpha * alpha
+    denom = dot_nh * dot_nh * (a2 - 1) + 1
+    return a2 / (π * denom * denom)
+end
+
+# Estevez-Kulla "Charlie" sheen distribution and Neubelt visibility
+# (lights_physical_pars_fragment.glsl.js D_Charlie / V_Neubelt).
+@inline function _d_charlie(roughness, dot_nh)
+    alpha = roughness * roughness
+    inv_alpha = 1 / alpha
+    sin2h = max(1 - dot_nh * dot_nh, 0.0078125)
+    return (2 + inv_alpha) * sin2h^(inv_alpha * 0.5) / (2 * π)
+end
+
+@inline _v_neubelt(dot_nv, dot_nl) =
+    _saturate(1 / (4 * (dot_nl + dot_nv - dot_nl * dot_nv)))
+
+# IBLSheenBRDF: directional albedo fit of the Charlie sheen lobe.
+@inline function _ibl_sheen_brdf(dot_nv, roughness)
+    r2 = roughness * roughness
+    r_inv = 1 / (roughness + 0.1)
+    a = -1.9362 + 1.0678 * roughness + 0.4573 * r2 - 0.8469 * r_inv
+    b = -0.6014 + 0.5538 * roughness - 0.4670 * r2 - 0.1255 * r_inv
+    return _saturate(exp(a * dot_nv + b))
+end
+
+@inline _max3(c::Color3) = max(max(c.r, c.g), c.b)
+
+# Sheen roughness as three.js resolves it: `clamp(sheenRoughness, 1e-4, 1)`,
+# then scaled by the roughness-map texel. A zero texel would make D_Charlie
+# evaluate `∞·0`; the product keeps the same 1e-4 floor instead.
+@inline _sheen_roughness(roughness, map_scale) =
+    max(clamp(roughness, 1e-4, 1.0) * map_scale, 1e-4)
+
+# iridescence_fragment.glsl.js evalSensitivity: Fourier-space XYZ response of
+# the optical path difference `opd` (nm) and phase `shift`, in linear sRGB.
+@inline function _eval_sensitivity(opd, shift_r, shift_g, shift_b)
+    phase = 2 * π * opd * 1.0e-9
+    p2 = phase * phase
+    x = 5.4856e-13 * sqrt(2 * π * 4.3278e9) * cos(1.6810e6 * phase + shift_r) *
+        exp(-p2 * 4.3278e9)
+    y = 4.4201e-13 * sqrt(2 * π * 9.3046e9) * cos(1.7953e6 * phase + shift_g) *
+        exp(-p2 * 9.3046e9)
+    z = 5.2481e-13 * sqrt(2 * π * 6.6121e9) * cos(2.2084e6 * phase + shift_b) *
+        exp(-p2 * 6.6121e9)
+    x += 9.7470e-14 * sqrt(2 * π * 4.5282e9) * cos(2.2399e6 * phase + shift_r) *
+         exp(-4.5282e9 * p2)
+    x /= 1.0685e-7
+    y /= 1.0685e-7
+    z /= 1.0685e-7
+    return Color3(3.2404542 * x - 1.5371385 * y - 0.4985314 * z,
+                  -0.9692660 * x + 1.8760108 * y + 0.0415560 * z,
+                  0.0556434 * x - 0.2040259 * y + 1.0572252 * z)
+end
+
+# Second-interface reflectance of one base-layer channel (iridescence_fragment
+# Fresnel0ToIor / IorToFresnel0 / F_Schlick, with the phase flip φ23).
+@inline function _iridescence_base_channel(base_f0, film_ior, cos_theta2)
+    f0 = clamp(base_f0, zero(base_f0), 0.9999 * one(base_f0))
+    s = sqrt(f0)
+    base_ior = (1 + s) / (1 - s)
+    r1 = ((base_ior - film_ior) / (base_ior + film_ior))^2
+    w = _schlick_weight(cos_theta2)
+    r23 = r1 * (1 - w) + w
+    phi23 = base_ior < film_ior ? float(π) : 0.0
+    return r23, phi23
+end
+
+# evalIridescence(outsideIOR = 1): Belcour-Barla thin-film Airy reflectance of
+# a film of index `eta2` and thickness `thickness` (nm) over a base with
+# Fresnel reflectance `base_f0`, seen at `cos_theta1 = N·V`.
+function _eval_iridescence(eta2, cos_theta1, thickness, base_f0::Color3)
+    outside_ior = 1.0
+    t = clamp(thickness / 0.03, zero(thickness), one(thickness))
+    film_ior = outside_ior * (1 - t * t * (3 - 2 * t)) + eta2 * (t * t * (3 - 2 * t))
+    sin_theta2_sq = (outside_ior / film_ior)^2 * (1 - cos_theta1 * cos_theta1)
+    cos_theta2_sq = 1 - sin_theta2_sq
+    if cos_theta2_sq < 0
+        o = one(cos_theta2_sq)
+        return Color3(o, o, o)
+    end
+    cos_theta2 = sqrt(cos_theta2_sq)
+    r0 = ((film_ior - outside_ior) / (film_ior + outside_ior))^2
+    w1 = _schlick_weight(cos_theta1)
+    r12 = r0 * (1 - w1) + w1
+    t121 = 1 - r12
+    phi12 = film_ior < outside_ior ? float(π) : 0.0
+    phi21 = π - phi12
+    r23r, p23r = _iridescence_base_channel(base_f0.r, film_ior, cos_theta2)
+    r23g, p23g = _iridescence_base_channel(base_f0.g, film_ior, cos_theta2)
+    r23b, p23b = _iridescence_base_channel(base_f0.b, film_ior, cos_theta2)
+    opd = 2 * film_ior * thickness * cos_theta2
+    phir = phi21 + p23r
+    phig = phi21 + p23g
+    phib = phi21 + p23b
+    r123r = clamp(r12 * r23r, 1e-5, 0.9999)
+    r123g = clamp(r12 * r23g, 1e-5, 0.9999)
+    r123b = clamp(r12 * r23b, 1e-5, 0.9999)
+    sr, sg, sb = sqrt(r123r), sqrt(r123g), sqrt(r123b)
+    rsr = t121 * t121 * r23r / (1 - r123r)
+    rsg = t121 * t121 * r23g / (1 - r123g)
+    rsb = t121 * t121 * r23b / (1 - r123b)
+    ir, ig, ib = r12 + rsr, r12 + rsg, r12 + rsb
+    cr, cg, cb = rsr - t121, rsg - t121, rsb - t121
+    # Reflectance terms m = 1, 2 (pairs of Diracs).
+    cr *= sr; cg *= sg; cb *= sb
+    s1 = _eval_sensitivity(opd, phir, phig, phib)
+    ir += cr * 2 * s1.r; ig += cg * 2 * s1.g; ib += cb * 2 * s1.b
+    cr *= sr; cg *= sg; cb *= sb
+    s2 = _eval_sensitivity(2 * opd, 2 * phir, 2 * phig, 2 * phib)
+    ir += cr * 2 * s2.r; ig += cg * 2 * s2.g; ib += cb * 2 * s2.b
+    return Color3(max(ir, zero(ir)), max(ig, zero(ig)), max(ib, zero(ib)))
 end
 
 # Lit materials share one accumulation loop so direct lighting can be modulated
@@ -1733,45 +1767,316 @@ end
 const LitMaterial = Union{MeshLambertMaterial, MeshPhongMaterial, MeshStandardMaterial,
                           MeshPhysicalMaterial, MeshToonMaterial}
 
-_fill_response(m::MeshLambertMaterial,  n, fc) = _brdf_lambert(m.color * fc)
-_fill_response(m::MeshPhongMaterial,    n, fc) = _brdf_lambert(m.color * fc)
-_fill_response(m::MeshToonMaterial,     n, fc) = _brdf_lambert(m.color * fc)
-_fill_response(m::MeshStandardMaterial, n, fc) = _pbr_ambient(n, m.color, m.metalness, m.roughness, fc)
 @inline function _anisotropic_effective_roughness(roughness, anisotropy)
     strength = clamp(anisotropy, 0.0, 1.0)
     alpha = clamp(roughness * roughness, 0.0, 1.0)
     return sqrt(alpha + (1.0 - alpha) * strength * strength)
 end
 
+# KHR_materials_anisotropy is reduced to an isotropic lobe whose roughness is
+# the broadened tangent roughness `sqrt(alphaT)` of three.js'
+# `material.alphaT = mix(roughness², 1, anisotropy²)`.
 @inline _physical_roughness(m::MeshPhysicalMaterial) =
     _anisotropic_effective_roughness(m.roughness, m.anisotropy)
 
-function _fill_response(m::MeshPhysicalMaterial, n, fc)
-    _pbr_ambient(n, m.color, m.metalness, _physical_roughness(m), fc)
+# Per-fragment PBR surface: the three.js `PhysicalMaterial` struct
+# (lights_physical_fragment.glsl.js) after lights_fragment_begin, with every
+# view-dependent quantity resolved once so each light only evaluates its own
+# half-vector terms. `fill_*` fields carry the package's fill-light response.
+struct _PBRSurface{T<:Real}
+    diffuse_contribution::Color3{T}  # diffuseColor · (1 - metalness)
+    specular_color::Color3{T}        # dielectric F0
+    specular_blended::Color3{T}      # mix(F0, diffuseColor, metalness)
+    specular_f90::T
+    alpha::T                         # roughness², roughness clamped to [0.0525, 1]
+    multiscatter::Color3{T}          # direct multi-scattering compensation
+    diffuse_weight::T                # 1 - transmission
+    clearcoat::T
+    clearcoat_alpha::T
+    layer::T                         # 1 - clearcoat · Fcc(N·V)
+    sheen_color::Color3{T}           # sheenColor · sheen
+    sheen_roughness::T
+    sheen_albedo_v::T                # IBLSheenBRDF(N·V)
+    iridescence::T
+    iridescence_fresnel::Color3{T}
+    fill_albedo::Color3{T}
+    fill_metalness::T
+    fill_roughness::T
+    transmitted::Color3{T}           # transmitted fill radiance per unit irradiance
 end
+
+@inline _color_as(::Type{T}, c::Color3) where {T} =
+    Color3(convert(T, c.r), convert(T, c.g), convert(T, c.b))
+
+@inline function _pbr_roughness(roughness)
+    return min(max(roughness, 0.0525), one(roughness))
+end
+
+# Shared constructor. `specular_color` is the dielectric F0 and `specular_f90`
+# its grazing reflectance (`lights_physical_fragment`'s `specularColor` and
+# `specularF90`).
+@inline function _pbr_surface(::Type{T}, dot_nv, albedo::Color3, metalness,
+                              roughness, specular_color::Color3, specular_f90,
+                              clearcoat, clearcoat_roughness, sheen_color::Color3,
+                              sheen_roughness, iridescence, iridescence_fresnel::Color3,
+                              transmission, fill_roughness,
+                              transmitted::Color3) where {T}
+    r = _pbr_roughness(roughness)
+    blended = Color3(specular_color.r + (albedo.r - specular_color.r) * metalness,
+                     specular_color.g + (albedo.g - specular_color.g) * metalness,
+                     specular_color.b + (albedo.b - specular_color.b) * metalness)
+    # lights_fragment_begin.glsl.js: multi-scattering energy compensation
+    # `1 + specularColorBlended · (1/Ess - 1)` with Ess = dfg.x + dfg.y.
+    dfg_x, dfg_y = _dfg_lut(r, dot_nv)
+    gain = 1 / (dfg_x + dfg_y) - 1
+    ms = Color3(1 + blended.r * gain, 1 + blended.g * gain, 1 + blended.b * gain)
+    kd = 1 - metalness
+    cc = _saturate(clearcoat)
+    layer = if cc > 0
+        # meshphysical.glsl.js: outgoingLight · (1 - clearcoat · Fcc).
+        w = _schlick_weight(dot_nv)
+        1 - cc * (0.04 * (1 - w) + w)
+    else
+        one(cc)
+    end
+    sheen_albedo = _max3(sheen_color) > 0 ?
+        _ibl_sheen_brdf(dot_nv, sheen_roughness) : zero(sheen_roughness)
+    return _PBRSurface{T}(
+        _color_as(T, Color3(albedo.r * kd, albedo.g * kd, albedo.b * kd)),
+        _color_as(T, specular_color), _color_as(T, blended),
+        convert(T, specular_f90), convert(T, r * r), _color_as(T, ms),
+        convert(T, 1 - transmission), convert(T, cc),
+        convert(T, _pbr_roughness(clearcoat_roughness)^2), convert(T, layer),
+        _color_as(T, sheen_color), convert(T, sheen_roughness),
+        convert(T, sheen_albedo), convert(T, iridescence),
+        _color_as(T, iridescence_fresnel), _color_as(T, albedo),
+        convert(T, metalness), convert(T, fill_roughness),
+        _color_as(T, transmitted))
+end
+
+@inline _pbr_scalar_type(n::Vec3, v::Vec3, values...) =
+    promote_type(typeof(n.x), typeof(v.x), map(typeof, values)..., Float64)
+
+# MeshStandardMaterial (`specularColor = 0.04`, `specularF90 = 1`) and the
+# `KHR_materials_specular` form used by `shade_pbr`.
+@inline function _standard_surface(n::Vec3, v::Vec3, albedo::Color3, metalness,
+                                   roughness, specular_intensity=1.0,
+                                   specular_color::Color3=Color3(1.0, 1.0, 1.0))
+    T = _pbr_scalar_type(n, v, albedo.r, metalness, roughness,
+                         specular_intensity, specular_color.r)
+    dot_nv = _saturate(dot(n, v))
+    f0 = Color3(min(0.04 * specular_color.r, 1.0) * specular_intensity,
+                min(0.04 * specular_color.g, 1.0) * specular_intensity,
+                min(0.04 * specular_color.b, 1.0) * specular_intensity)
+    f90 = specular_intensity + (1 - specular_intensity) * metalness
+    z = zero(T)
+    zc = Color3(z, z, z)
+    return _pbr_surface(T, dot_nv, albedo, metalness, roughness, f0, f90,
+                        z, z, zc, one(T), z, zc, z, roughness, zc)
+end
+
+# Physical terms of a material without texture maps.
+@inline _physical_terms(m::MeshPhysicalMaterial) =
+    _PhysicalMappedTerms(m.metalness, m.roughness, m.clearcoat,
+                         m.clearcoat_roughness, m.transmission, m.thickness,
+                         m.sheen_color, _sheen_roughness(m.sheen_roughness, 1.0),
+                         m.iridescence, m.iridescence_thickness,
+                         m.specular_intensity, m.specular_color, m.anisotropy)
+
+@inline _physical_mapped_roughness(t::_PhysicalMappedTerms) =
+    _anisotropic_effective_roughness(t.roughness, t.anisotropy)
+
+# Transmission fill. A CPU rasterizer has no transmission render target to
+# refract through, so the fill irradiance stands in for the background the
+# refracted ray would reveal (its radiance is `background/π`). The transmitted
+# radiance is attenuated by the surface colour (a single-sample Beer-Lambert
+# tint along the view path, treating `color` as per-unit transmittance), by the
+# optional attenuation colour over `thickness`, and weighted by
+# transmission·(1 - Schlick reflectance). three.js replaces the diffuse lobe by
+# this transmitted light (`totalDiffuse = mix(totalDiffuse, transmitted,
+# transmission)`); the `1 - transmission` diffuse weight lives in `_PBRSurface`.
+@inline function _transmission_factor(ior, transmission, thickness,
+                                      attenuation_distance,
+                                      attenuation_color::Color3,
+                                      albedo::Color3, normal::Vec3,
+                                      view_dir::Vec3)
+    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
+    r0 = ((ior - 1) / (ior + 1))^2
+    refl = r0 + (1 - r0) * (1 - ndotv)^5
+    transmit = (1 - refl) * transmission
+    path = 1.0 / max(ndotv, 1e-3)
+    att = Color3(albedo.r^path, albedo.g^path, albedo.b^path)
+    if thickness > 0.0 && attenuation_distance > 0.0
+        volume_path = path * thickness / attenuation_distance
+        att = att * Color3(attenuation_color.r^volume_path,
+                           attenuation_color.g^volume_path,
+                           attenuation_color.b^volume_path)
+    end
+    return att * (transmit / π)
+end
+
+@inline function _transmission_fill(m::MeshPhysicalMaterial, normal::Vec3,
+                                    view_dir::Vec3, background::Color3)
+    m.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
+    return background * _transmission_factor(
+        m.ior, m.transmission, m.thickness, m.attenuation_distance,
+        m.attenuation_color, m.color, normal, view_dir)
+end
+
+@inline _transmission_response(m, n::Vec3, v::Vec3, fc::Color3) = Color3(0.0, 0.0, 0.0)
+@inline _transmission_response(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, fc::Color3) =
+    m.transmission > 0.0 ? _transmission_fill(m, n, v, fc) : Color3(0.0, 0.0, 0.0)
+
+# MeshPhysicalMaterial surface from resolved (possibly texture-mapped) terms.
+function _physical_surface(m::MeshPhysicalMaterial, t::_PhysicalMappedTerms,
+                           n::Vec3, v::Vec3, albedo::Color3)
+    T = _pbr_scalar_type(n, v, albedo.r)
+    dot_nv = _saturate(dot(n, v))
+    metalness = t.metalness
+    # lights_physical_fragment.glsl.js (IOR, USE_SPECULAR):
+    # specularF90 = mix(specularIntensity, 1, metalness) and
+    # specularColor = min(((ior-1)/(ior+1))² · specularColor, 1) · intensity.
+    si = t.specular_intensity
+    f0_ior = ((m.ior - 1) / (m.ior + 1))^2
+    sc = t.specular_color
+    f0 = Color3(min(f0_ior * sc.r, 1.0) * si, min(f0_ior * sc.g, 1.0) * si,
+                min(f0_ior * sc.b, 1.0) * si)
+    f90 = si + (1 - si) * metalness
+    roughness = t.anisotropy > 0 ?
+        _anisotropic_effective_roughness(_pbr_roughness(t.roughness), t.anisotropy) :
+        t.roughness
+    # WebGLMaterials.js: the sheen uniform is sheenColor · sheen, and USE_SHEEN
+    # is only defined for sheen > 0.
+    sheen_color = m.sheen > 0 ? t.sheen_color * m.sheen : Color3(0.0, 0.0, 0.0)
+    # lights_fragment_begin.glsl.js: a zero film thickness disables iridescence;
+    # the Fresnel term mixes the dielectric and metallic film responses.
+    iridescence = t.iridescence_thickness == 0 ? 0.0 : _saturate(t.iridescence)
+    irid_fresnel = if iridescence > 0
+        d = _eval_iridescence(m.iridescence_ior, dot_nv, t.iridescence_thickness, f0)
+        mm = _eval_iridescence(m.iridescence_ior, dot_nv, t.iridescence_thickness, albedo)
+        Color3(d.r + (mm.r - d.r) * metalness, d.g + (mm.g - d.g) * metalness,
+               d.b + (mm.b - d.b) * metalness)
+    else
+        z = zero(dot_nv)
+        Color3(z, z, z)
+    end
+    transmitted = t.transmission > 0 ?
+        _transmission_factor(m.ior, t.transmission, t.thickness,
+                             m.attenuation_distance, m.attenuation_color,
+                             albedo, n, v) :
+        Color3(0.0, 0.0, 0.0)
+    return _pbr_surface(T, dot_nv, albedo, metalness, roughness, f0, f90,
+                        t.clearcoat, t.clearcoat_roughness, sheen_color,
+                        t.sheen_roughness, iridescence, irid_fresnel,
+                        t.transmission, _physical_mapped_roughness(t),
+                        transmitted)
+end
+
+@inline _lit_surface(m::MeshStandardMaterial, n::Vec3, v::Vec3, albedo::Color3) =
+    _standard_surface(n, v, albedo, m.metalness, m.roughness)
+@inline _lit_surface(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, albedo::Color3) =
+    _physical_surface(m, _physical_terms(m), n, v, albedo)
+@inline _lit_surface(m, n::Vec3, v::Vec3, albedo::Color3) = m
+
+# RE_Direct_Physical with the clearcoat, sheen and iridescence lobes and the
+# meshphysical.glsl.js clearcoat layering, for one light of colour `lc`,
+# intensity `li` and unit direction `ldir` (surface → light).
+@inline function _direct_response(s::_PBRSurface, n::Vec3, v::Vec3,
+                                  lc::Color3, li, ldir::Vec3)
+    dot_nl = _saturate(dot(n, ldir))
+    if !(dot_nl > 0)
+        # Every lobe is scaled by the irradiance N·L (clearcoat shares the normal).
+        z = zero(dot_nl * li * s.alpha * lc.r)
+        return Color3(z, z, z)
+    end
+    h = _half_vec(ldir, v)
+    dot_nv = _saturate(dot(n, v))
+    dot_nh = _saturate(dot(n, h))
+    dot_vh = _saturate(dot(v, h))
+    w = _schlick_weight(dot_vh)
+    irradiance = dot_nl * li
+    sheen = Color3(zero(irradiance), zero(irradiance), zero(irradiance))
+    base_irradiance = irradiance
+    sheen_peak = _max3(s.sheen_color)
+    if sheen_peak > 0
+        sheen = s.sheen_color * (irradiance * _d_charlie(s.sheen_roughness, dot_nh) *
+                                 _v_neubelt(dot_nv, dot_nl))
+        albedo_l = _ibl_sheen_brdf(dot_nl, s.sheen_roughness)
+        base_irradiance = irradiance * (1 - sheen_peak * max(s.sheen_albedo_v, albedo_l))
+    end
+    F = _f_schlick(s.specular_blended, s.specular_f90, w)
+    if s.iridescence > 0
+        k = s.iridescence
+        F = Color3(F.r + (s.iridescence_fresnel.r - F.r) * k,
+                   F.g + (s.iridescence_fresnel.g - F.g) * k,
+                   F.b + (s.iridescence_fresnel.b - F.b) * k)
+    end
+    lobe = _v_ggx_smith_correlated(s.alpha, dot_nl, dot_nv) * _d_ggx(s.alpha, dot_nh)
+    spec_scale = base_irradiance * lobe
+    Fd = _f_schlick(s.specular_color, s.specular_f90, w)
+    diffuse_scale = base_irradiance * s.diffuse_weight / π
+    dc = s.diffuse_contribution
+    ms = s.multiscatter
+    r = (F.r * ms.r * spec_scale + dc.r * (1 - Fd.r) * diffuse_scale + sheen.r) * s.layer
+    g = (F.g * ms.g * spec_scale + dc.g * (1 - Fd.g) * diffuse_scale + sheen.g) * s.layer
+    b = (F.b * ms.b * spec_scale + dc.b * (1 - Fd.b) * diffuse_scale + sheen.b) * s.layer
+    if s.clearcoat > 0
+        # BRDF_GGX_Clearcoat (F0 = 0.04, F90 = 1) weighted by clearcoat.
+        coat = (0.04 * (1 - w) + w) *
+               _v_ggx_smith_correlated(s.clearcoat_alpha, dot_nl, dot_nv) *
+               _d_ggx(s.clearcoat_alpha, dot_nh) * irradiance * s.clearcoat
+        r += coat; g += coat; b += coat
+    end
+    return Color3(r * lc.r, g * lc.g, b * lc.b)
+end
+
+# Fill (ambient/hemisphere/probe) response of a PBR surface: the package's
+# metallic-roughness fill model, reduced by the sheen energy compensation of
+# RE_IndirectDiffuse/IndirectSpecular_Physical, with three.js' indirect sheen
+# lobe, the transmission mix of the diffuse part, and the clearcoat layering.
+@inline function _fill_response(s::_PBRSurface, n::Vec3, fc::Color3)
+    diffuse, specular = _pbr_ambient_terms(s.fill_albedo, s.fill_metalness,
+                                           s.fill_roughness, fc)
+    sheen_peak = _max3(s.sheen_color)
+    sheen = Color3(zero(s.layer), zero(s.layer), zero(s.layer))
+    if sheen_peak > 0
+        comp = 1 - sheen_peak * s.sheen_albedo_v
+        diffuse = diffuse * comp
+        specular = specular * comp
+        sheen = s.sheen_color * fc * (s.sheen_albedo_v / π)
+    end
+    return (diffuse * s.diffuse_weight + fc * s.transmitted + specular + sheen) *
+           s.layer
+end
+
+# Environment (ambient/IBL) response of a metallic-roughness surface. Without
+# this term metals (low diffuse, narrow specular) render black under fill light
+# alone, which three.js only avoids with an environment map. Diffuse scales by
+# (1-metalness); specular uses Schlick F0 (≈albedo for metals) attenuated by
+# roughness. Fill irradiance is reflected through the same 1/π
+# (`BRDF_Lambert`/cosine-weighted irradiance) as three.js.
+@inline function _pbr_ambient_terms(albedo::Color3, metalness, roughness, fill::Color3)
+    kd = one(metalness) - metalness
+    F0r = lerp_scalar(0.04, albedo.r, metalness)
+    F0g = lerp_scalar(0.04, albedo.g, metalness)
+    F0b = lerp_scalar(0.04, albedo.b, metalness)
+    spec_scale = one(roughness) - roughness * 0.7
+    return Color3(albedo.r * kd * fill.r / π, albedo.g * kd * fill.g / π,
+                  albedo.b * kd * fill.b / π),
+           Color3(F0r * spec_scale * fill.r / π, F0g * spec_scale * fill.g / π,
+                  F0b * spec_scale * fill.b / π)
+end
+
+_fill_response(m::MeshLambertMaterial,  n, fc) = _brdf_lambert(m.color * fc)
+_fill_response(m::MeshPhongMaterial,    n, fc) = _brdf_lambert(m.color * fc)
+_fill_response(m::MeshToonMaterial,     n, fc) = _brdf_lambert(m.color * fc)
 
 _direct_response(m::MeshLambertMaterial, n, v, lc, li, ldir) =
     shade_lambert(n, ldir, lc, li, m.color)
 _direct_response(m::MeshPhongMaterial, n, v, lc, li, ldir) =
     shade_phong(n, ldir, v, lc, li, m.color, m.specular, m.shininess)
-_direct_response(m::MeshStandardMaterial, n, v, lc, li, ldir) =
-    shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, m.roughness)
-function _direct_response(m::MeshPhysicalMaterial, n, v, lc, li, ldir)
-    roughness = _physical_roughness(m)
-    base = shade_pbr(n, ldir, v, lc, li, m.color, m.metalness, roughness,
-                     m.specular_intensity, m.specular_color)
-    cc = m.clearcoat * _clearcoat_spec(n, ldir, v, m.clearcoat_roughness) * max(dot(n, ldir), 0.0)
-    result = base + lc * (cc * li)
-    # Retroreflective sheen lobe (Charlie distribution), scaled by the light.
-    if m.sheen > 0.0
-        result = result + _sheen_lobe(m, n, ldir, v) * lc * li
-    end
-    # Thin-film iridescence shifts the dielectric specular hue with view angle.
-    if m.iridescence > 0.0
-        result = result + _iridescence_spec(m, n, ldir, v) * lc * li
-    end
-    return result
-end
+_direct_response(m::Union{MeshStandardMaterial,MeshPhysicalMaterial}, n, v, lc, li, ldir) =
+    _direct_response(_lit_surface(m, n, v, m.color), n, v, lc, li, ldir)
 function _direct_response(m::MeshToonMaterial, n, v, lc, li, ldir)
     dotnl = dot(n, ldir)
     irradiance = if m.gradient_map isa Texture
@@ -1784,16 +2089,25 @@ function _direct_response(m::MeshToonMaterial, n, v, lc, li, ldir)
     m.color * lc * (irradiance * li / π)
 end
 
+# three.js BRDF_Sheen scaled by the irradiance N·L for a material's own sheen
+# parameters (sheenColor · sheen, clamped sheen roughness).
+@inline function _sheen_lobe(m::MeshPhysicalMaterial, normal::Vec3, light_dir::Vec3,
+                             view_dir::Vec3)
+    dot_nl = _saturate(dot(normal, light_dir))
+    (m.sheen > 0 && dot_nl > 0) || return Color3(0.0, 0.0, 0.0)
+    h = _half_vec(light_dir, view_dir)
+    dot_nv = _saturate(dot(normal, view_dir))
+    dot_nh = _saturate(dot(normal, h))
+    d = _d_charlie(_sheen_roughness(m.sheen_roughness, 1.0), dot_nh)
+    return m.sheen_color * (m.sheen * d * _v_neubelt(dot_nv, dot_nl) * dot_nl)
+end
+
 _fill_response_vertex_color(m::MeshLambertMaterial,  n, fc, albedo::Color3) =
     _brdf_lambert(albedo * fc)
 _fill_response_vertex_color(m::MeshPhongMaterial,    n, fc, albedo::Color3) =
     _brdf_lambert(albedo * fc)
 _fill_response_vertex_color(m::MeshToonMaterial,     n, fc, albedo::Color3) =
     _brdf_lambert(albedo * fc)
-_fill_response_vertex_color(m::MeshStandardMaterial, n, fc, albedo::Color3) =
-    _pbr_ambient(n, albedo, m.metalness, m.roughness, fc)
-_fill_response_vertex_color(m::MeshPhysicalMaterial, n, fc, albedo::Color3) =
-    _pbr_ambient(n, albedo, m.metalness, _physical_roughness(m), fc)
 
 _direct_response_vertex_color(m::MeshLambertMaterial, n, v, lc, li, ldir,
                               albedo::Color3) =
@@ -1801,24 +2115,6 @@ _direct_response_vertex_color(m::MeshLambertMaterial, n, v, lc, li, ldir,
 _direct_response_vertex_color(m::MeshPhongMaterial, n, v, lc, li, ldir,
                               albedo::Color3) =
     shade_phong(n, ldir, v, lc, li, albedo, m.specular, m.shininess)
-_direct_response_vertex_color(m::MeshStandardMaterial, n, v, lc, li, ldir,
-                              albedo::Color3) =
-    shade_pbr(n, ldir, v, lc, li, albedo, m.metalness, m.roughness)
-function _direct_response_vertex_color(m::MeshPhysicalMaterial, n, v, lc, li, ldir,
-                                       albedo::Color3)
-    roughness = _physical_roughness(m)
-    base = shade_pbr(n, ldir, v, lc, li, albedo, m.metalness, roughness,
-                     m.specular_intensity, m.specular_color)
-    cc = m.clearcoat * _clearcoat_spec(n, ldir, v, m.clearcoat_roughness) * max(dot(n, ldir), 0.0)
-    result = base + lc * (cc * li)
-    if m.sheen > 0.0
-        result = result + _sheen_lobe(m, n, ldir, v) * lc * li
-    end
-    if m.iridescence > 0.0
-        result = result + _iridescence_spec(m, n, ldir, v) * lc * li
-    end
-    return result
-end
 function _direct_response_vertex_color(m::MeshToonMaterial, n, v, lc, li, ldir,
                                        albedo::Color3)
     dotnl = dot(n, ldir)
@@ -1830,119 +2126,6 @@ function _direct_response_vertex_color(m::MeshToonMaterial, n, v, lc, li, ldir,
         ceil(ndotl * m.gradient_steps) / m.gradient_steps
     end
     albedo * lc * (irradiance * li / π)
-end
-
-# Per-light accumulation, factored into a function barrier so that once a light
-# is dispatched to its concrete type the inner work (light_contribution, fill
-# response, direct response) stays type-stable when called from the concrete
-# `collect_lights`/`RenderCache` scene-light vectors. The arithmetic and
-# accumulation order are byte-identical to the inlined loop:
-# `light_contribution` is queried only for non-fill lights, and a non-positive
-# visibility leaves `result` unchanged (the previous loop `continue` skipped
-# the addition).
-# Transmission contribution is gated to MeshPhysicalMaterial and treats the
-# fill irradiance as the background radiance the refracted ray would reveal. A
-# CPU rasterizer cannot ray-trace true refraction, so this is the documented
-# Fresnel-tint approximation in `_transmission_fill` (no screen-space refraction).
-@inline _transmission_response(m, n::Vec3, v::Vec3, fc::Color3) = Color3(0.0, 0.0, 0.0)
-@inline _transmission_response(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, fc::Color3) =
-    m.transmission > 0.0 ? _transmission_fill(m, n, v, fc) : Color3(0.0, 0.0, 0.0)
-
-@inline function _transmission_fill_color(m::MeshPhysicalMaterial, albedo::Color3,
-                                          normal::Vec3, view_dir::Vec3,
-                                          background::Color3)
-    m.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
-    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
-    r0 = ((m.ior - 1) / (m.ior + 1))^2
-    refl = r0 + (1 - r0) * (1 - ndotv)^5
-    transmit = (1 - refl) * m.transmission
-    path = 1.0 / max(ndotv, 1e-3)
-    att = Color3(albedo.r^path, albedo.g^path, albedo.b^path)
-    if m.thickness > 0.0 && m.attenuation_distance > 0.0
-        volume_path = path * m.thickness / m.attenuation_distance
-        att = att * Color3(m.attenuation_color.r^volume_path,
-                           m.attenuation_color.g^volume_path,
-                           m.attenuation_color.b^volume_path)
-    end
-    Color3(background.r * att.r * transmit / π,
-           background.g * att.g * transmit / π,
-           background.b * att.b * transmit / π)
-end
-
-@inline _transmission_response_vertex_color(m, n::Vec3, v::Vec3, fc::Color3,
-                                            albedo::Color3) = Color3(0.0, 0.0, 0.0)
-@inline _transmission_response_vertex_color(m::MeshPhysicalMaterial, n::Vec3,
-                                            v::Vec3, fc::Color3,
-                                            albedo::Color3) =
-    m.transmission > 0.0 ? _transmission_fill_color(m, albedo, n, v, fc) :
-    Color3(0.0, 0.0, 0.0)
-
-@inline _physical_mapped_roughness(t::_PhysicalMappedTerms) =
-    _anisotropic_effective_roughness(t.roughness, t.anisotropy)
-
-@inline function _transmission_fill_terms(m::MeshPhysicalMaterial,
-                                          t::_PhysicalMappedTerms,
-                                          albedo::Color3,
-                                          normal::Vec3, view_dir::Vec3,
-                                          background::Color3)
-    t.transmission <= 0.0 && return Color3(0.0, 0.0, 0.0)
-    ndotv = clamp(dot(normal, view_dir), 0.0, 1.0)
-    r0 = ((m.ior - 1) / (m.ior + 1))^2
-    refl = r0 + (1 - r0) * (1 - ndotv)^5
-    transmit = (1 - refl) * t.transmission
-    path = 1.0 / max(ndotv, 1e-3)
-    att = Color3(albedo.r^path, albedo.g^path, albedo.b^path)
-    if t.thickness > 0.0 && m.attenuation_distance > 0.0
-        volume_path = path * t.thickness / m.attenuation_distance
-        att = att * Color3(m.attenuation_color.r^volume_path,
-                           m.attenuation_color.g^volume_path,
-                           m.attenuation_color.b^volume_path)
-    end
-    Color3(background.r * att.r * transmit / π,
-           background.g * att.g * transmit / π,
-           background.b * att.b * transmit / π)
-end
-
-@inline function _sheen_lobe_terms(m::MeshPhysicalMaterial,
-                                   t::_PhysicalMappedTerms,
-                                   normal::Vec3, light_dir::Vec3,
-                                   view_dir::Vec3)
-    ndotl = max(dot(normal, light_dir), 0.0)
-    ndotl <= 0.0 && return Color3(0.0, 0.0, 0.0)
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), 0.0)
-    d = _d_charlie(ndoth, t.sheen_roughness)
-    return t.sheen_color * (m.sheen * d * ndotl)
-end
-
-@inline function _iridescence_spec_terms(m::MeshPhysicalMaterial,
-                                         t::_PhysicalMappedTerms,
-                                         normal::Vec3, light_dir::Vec3,
-                                         view_dir::Vec3)
-    ndotl = max(dot(normal, light_dir), 0.0)
-    ndotv = max(dot(normal, view_dir), 0.0)
-    (ndotl <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    h = _half_vec(light_dir, view_dir)
-    ndoth = max(dot(normal, h), 0.0)
-    vdoth = max(dot(view_dir, h), 0.0)
-    base_f0 = Color3(0.04, 0.04, 0.04)
-    tinted = _iridescent_f0(base_f0, ndotv, m.iridescence_ior,
-                            t.iridescence_thickness, t.iridescence)
-    fres = (1 - vdoth)^5
-    Ft = Color3(tinted.r + (1 - tinted.r) * fres,
-                tinted.g + (1 - tinted.g) * fres,
-                tinted.b + (1 - tinted.b) * fres)
-    Fb = Color3(base_f0.r + (1 - base_f0.r) * fres,
-                base_f0.g + (1 - base_f0.g) * fres,
-                base_f0.b + (1 - base_f0.b) * fres)
-    roughness = _physical_mapped_roughness(t)
-    α = roughness * roughness
-    α2 = α * α
-    denom_d = ndoth * ndoth * (α2 - 1) + 1
-    D = α2 / (π * denom_d * denom_d + 1e-7)
-    lobe = D / (4 * ndotv * ndotl + 1e-7) * ndotl
-    Color3((Ft.r - Fb.r) * lobe, (Ft.g - Fb.g) * lobe,
-           (Ft.b - Fb.b) * lobe)
 end
 
 @inline function _rect_area_frame(light::RectAreaLight)
@@ -2009,198 +2192,96 @@ function _rect_area_response(m, normal::Vec3, view_dir::Vec3, position::Vec3,
     return result
 end
 
-function _rect_area_response_vertex_color(m, normal::Vec3, view_dir::Vec3,
-                                          position::Vec3, light::RectAreaLight,
-                                          albedo::Color3)
-    f, u, v, light_position = _rect_area_frame(light)
-    hx = max(light.width, 0.0) * 0.5
-    hy = max(light.height, 0.0) * 0.5
-    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
-    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
-    area_scale = hx * hy
-    result = Color3(0.0, 0.0, 0.0)
-    @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        ldir, dist2 =
-            _rect_area_sample_direction(position, sample_pos)
-        emit = max(dot(-ldir, f), 0.0)
-        emit <= 0.0 && continue
-        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
-        result = result + _direct_response_vertex_color(m, normal, view_dir,
-                                                        light.color, li, ldir,
-                                                        albedo)
-    end
-    return result
+# A lit material whose base colour is replaced per fragment (vertex colours or
+# a base-colour map) for the Lambert, Phong and Toon models.
+struct _AlbedoOverride{M,C<:Color3}
+    material::M
+    albedo::C
 end
 
-function _rect_area_standard_response(m::MeshStandardMaterial, normal::Vec3,
-                                      view_dir::Vec3, position::Vec3,
-                                      light::RectAreaLight,
-                                      metalness::Float64, roughness::Float64)
-    f, u, v, light_position = _rect_area_frame(light)
-    hx = max(light.width, 0.0) * 0.5
-    hy = max(light.height, 0.0) * 0.5
-    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
-    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
-    area_scale = hx * hy
-    result = Color3(0.0, 0.0, 0.0)
-    @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        ldir, dist2 =
-            _rect_area_sample_direction(position, sample_pos)
-        emit = max(dot(-ldir, f), 0.0)
-        emit <= 0.0 && continue
-        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
-        result = result + shade_pbr(normal, ldir, view_dir, light.color, li,
-                                    m.color, metalness, roughness)
-    end
-    return result
+@inline _fill_response(o::_AlbedoOverride, n, fc) =
+    _fill_response_vertex_color(o.material, n, fc, o.albedo)
+@inline _direct_response(o::_AlbedoOverride, n, v, lc, li, ldir) =
+    _direct_response_vertex_color(o.material, n, v, lc, li, ldir, o.albedo)
+
+# Blinn-Phong with texture-resolved specular colour and shininess.
+struct _PhongMapped{C<:Color3,S<:Color3}
+    albedo::C
+    specular::S
+    shininess::Float64
 end
 
-function _rect_area_standard_response_color(m::MeshStandardMaterial,
-                                            normal::Vec3, view_dir::Vec3,
-                                            position::Vec3,
-                                            light::RectAreaLight,
-                                            metalness::Float64,
-                                            roughness::Float64,
-                                            albedo::Color3)
-    f, u, v, light_position = _rect_area_frame(light)
-    hx = max(light.width, 0.0) * 0.5
-    hy = max(light.height, 0.0) * 0.5
-    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
-    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
-    area_scale = hx * hy
-    result = Color3(0.0, 0.0, 0.0)
-    @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        ldir, dist2 =
-            _rect_area_sample_direction(position, sample_pos)
-        emit = max(dot(-ldir, f), 0.0)
-        emit <= 0.0 && continue
-        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
-        result = result + shade_pbr(normal, ldir, view_dir, light.color, li,
-                                    albedo, metalness, roughness)
-    end
-    return result
-end
+@inline _fill_response(p::_PhongMapped, n, fc) = _brdf_lambert(p.albedo * fc)
+@inline _direct_response(p::_PhongMapped, n, v, lc, li, ldir) =
+    shade_phong(n, ldir, v, lc, li, p.albedo, p.specular, p.shininess)
 
-function _rect_area_phong_response_color(normal::Vec3, view_dir::Vec3,
-                                         position::Vec3,
-                                         light::RectAreaLight,
-                                         albedo::Color3,
-                                         specular::Color3,
-                                         shininess::Float64)
-    f, u, v, light_position = _rect_area_frame(light)
-    hx = max(light.width, 0.0) * 0.5
-    hy = max(light.height, 0.0) * 0.5
-    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
-    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
-    area_scale = hx * hy
-    result = Color3(0.0, 0.0, 0.0)
-    @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        ldir, dist2 =
-            _rect_area_sample_direction(position, sample_pos)
-        emit = max(dot(-ldir, f), 0.0)
-        emit <= 0.0 && continue
-        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
-        result = result + shade_phong(normal, ldir, view_dir, light.color, li,
-                                      albedo, specular, shininess)
-    end
-    return result
-end
-
-function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
-                                    normal::Vec3, view_dir::Vec3, position::Vec3,
-                                    light::RectAreaLight, shadow_fn,
-                                    metalness::Float64, roughness::Float64)
+function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
+                           position::Vec3, light::RectAreaLight, shadow_fn)
     vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
     vis <= 0.0 && return result
-    return result + _rect_area_standard_response(m, normal, view_dir, position,
-                                                 light, metalness, roughness) * vis
+    return result + _rect_area_response(m, normal, view_dir, position, light) * vis
 end
 
-function _accumulate_standard_light(result::Color3, m::MeshStandardMaterial,
-                                    normal::Vec3, view_dir::Vec3, position::Vec3,
-                                    light, shadow_fn,
-                                    metalness::Float64, roughness::Float64)
+function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
+                           position::Vec3, light, shadow_fn)
     if _is_fill_light(light)
-        fc = _fill_color(normal, light)
-        return result + _pbr_ambient(normal, m.color, metalness, roughness, fc)
+        return result + _fill_response(m, normal, _fill_color(normal, light))
     else
         lc, li, ldir = light_contribution(light, position)
         vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
         vis <= 0.0 && return result
-        return result + shade_pbr(normal, ldir, view_dir, lc, li, m.color,
-                                  metalness, roughness) * vis
+        return result + _direct_response(m, normal, view_dir, lc, li, ldir) * vis
     end
 end
 
-function _accumulate_phong_mapped_color(result::Color3, normal::Vec3,
-                                        view_dir::Vec3, position::Vec3,
-                                        material::MeshPhongMaterial,
-                                        light::RectAreaLight, shadow_fn,
-                                        specular::Color3, shininess::Float64,
-                                        albedo::Color3)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _rect_area_phong_response_color(normal, view_dir, position,
-                                                    light, albedo, specular,
-                                                    shininess) * vis
-end
+@inline _dispatch_accumulate_light(light, result, m, normal, view_dir, position,
+                                   shadow_fn) =
+    _accumulate_light(result, m, normal, view_dir, position, light, shadow_fn)
 
-function _accumulate_phong_mapped_color(result::Color3, normal::Vec3,
-                                        view_dir::Vec3, position::Vec3,
-                                        material::MeshPhongMaterial, light,
-                                        shadow_fn, specular::Color3,
-                                        shininess::Float64, albedo::Color3)
-    if _is_fill_light(light)
-        return result + _brdf_lambert(albedo * _fill_color(normal, light))
-    end
-    lc, li, ldir = light_contribution(light, position)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + shade_phong(normal, ldir, view_dir, lc, li, albedo,
-                                specular, shininess) * vis
-end
-
-@inline _dispatch_accumulate_phong_mapped_color(
-        light, result, normal, view_dir, position, material, shadow_fn,
-        specular, shininess, albedo) =
-    _accumulate_phong_mapped_color(result, normal, view_dir, position, material,
-                                   light, shadow_fn, specular, shininess, albedo)
-
-function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
-                                   position::Vec3,
-                                   material::MeshPhongMaterial,
-                                   lights::Vector{SceneLight}, shadow_fn,
-                                   specular::Color3, shininess::Float64,
-                                   albedo::Color3)
-    result = material.emissive * material.emissive_intensity
+# Light loop of a prepared lit model (a material, `_AlbedoOverride`,
+# `_PhongMapped` or `_PBRSurface`) starting from the emitted radiance `result`.
+# Built-in scene-light vectors are narrowed per light so the accumulation stays
+# unboxed; `_DirectLightView` skips fill lights.
+function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                      lights::Vector{SceneLight}, shadow_fn)
     @inbounds for i in eachindex(lights)
-        result = _dispatch_scene_light(
-            _dispatch_accumulate_phong_mapped_color, lights[i], result, normal,
-            view_dir, position, material, shadow_fn, specular, shininess, albedo)
+        result = _dispatch_scene_light(_dispatch_accumulate_light, lights[i], result,
+                                       model, normal, view_dir, position, shadow_fn)
     end
     return result
 end
+
+function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                      lights::_DirectLightView{Vector{SceneLight}}, shadow_fn)
+    source = lights.lights
+    @inbounds for i in eachindex(source)
+        light = source[i]
+        _is_fill_light(light) && continue
+        result = _dispatch_scene_light(_dispatch_accumulate_light, light, result,
+                                       model, normal, view_dir, position, shadow_fn)
+    end
+    return result
+end
+
+function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                      lights, shadow_fn)
+    for light in lights
+        result = _accumulate_light(result, model, normal, view_dir, position, light,
+                                   shadow_fn)
+    end
+    return result
+end
+
+@inline _emitted(m) = m.emissive * _material_scalar(m, :emissive_intensity)
+@inline _emitted(s::_PBRSurface{T}, m) where {T} = _color_as(T, _emitted(m))
 
 function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
                                    position::Vec3,
                                    material::MeshPhongMaterial, lights, shadow_fn,
                                    specular::Color3, shininess::Float64,
                                    albedo::Color3)
-    result = material.emissive * material.emissive_intensity
-    for light in lights
-        result = _accumulate_phong_mapped_color(
-            result, normal, view_dir, position, material, light, shadow_fn,
-            specular, shininess, albedo)
-    end
-    return result
+    return _shade_model(_PhongMapped(albedo, specular, shininess), _emitted(material),
+                        normal, view_dir, position, lights, shadow_fn)
 end
 
 function _shade_phong_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
@@ -2222,114 +2303,15 @@ function _shade_phong_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
                               shadow_fn, specular, shininess, albedo)
 end
 
-function _direct_response_physical_terms(m::MeshPhysicalMaterial,
-                                         t::_PhysicalMappedTerms,
-                                         n::Vec3, v::Vec3, lc::Color3, li,
-                                         ldir::Vec3, albedo::Color3)
-    roughness = _physical_mapped_roughness(t)
-    base = shade_pbr(n, ldir, v, lc, li, albedo, t.metalness, roughness,
-                     t.specular_intensity, t.specular_color)
-    cc = t.clearcoat * _clearcoat_spec(n, ldir, v, t.clearcoat_roughness) * max(dot(n, ldir), 0.0)
-    result = base + lc * (cc * li)
-    if m.sheen > 0.0
-        result = result + _sheen_lobe_terms(m, t, n, ldir, v) * lc * li
-    end
-    if t.iridescence > 0.0
-        result = result + _iridescence_spec_terms(m, t, n, ldir, v) * lc * li
-    end
-    return result
-end
-
-function _rect_area_physical_response_color(m::MeshPhysicalMaterial,
-                                            t::_PhysicalMappedTerms,
-                                            normal::Vec3, view_dir::Vec3,
-                                            position::Vec3,
-                                            light::RectAreaLight,
-                                            albedo::Color3)
-    f, u, v, light_position = _rect_area_frame(light)
-    hx = max(light.width, 0.0) * 0.5
-    hy = max(light.height, 0.0) * 0.5
-    (hx <= 0.0 || hy <= 0.0) && return Color3(0.0, 0.0, 0.0)
-    nodes = (-0.7745966692414834, 0.0, 0.7745966692414834)
-    weights = (0.5555555555555556, 0.8888888888888888, 0.5555555555555556)
-    area_scale = hx * hy
-    result = Color3(0.0, 0.0, 0.0)
-    @inbounds for ix in 1:3, iy in 1:3
-        sample_pos = light_position + u * (hx * nodes[ix]) + v * (hy * nodes[iy])
-        ldir, dist2 =
-            _rect_area_sample_direction(position, sample_pos)
-        emit = max(dot(-ldir, f), 0.0)
-        emit <= 0.0 && continue
-        li = light.intensity * area_scale * weights[ix] * weights[iy] * emit / dist2
-        result = result + _direct_response_physical_terms(
-            m, t, normal, view_dir, light.color, li, ldir, albedo)
-    end
-    return result
-end
-
-function _accumulate_physical_mapped_color(
-        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshPhysicalMaterial, light::RectAreaLight, shadow_fn,
-        terms::_PhysicalMappedTerms, albedo::Color3)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _rect_area_physical_response_color(
-        material, terms, normal, view_dir, position, light, albedo) * vis
-end
-
-function _accumulate_physical_mapped_color(
-        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshPhysicalMaterial, light, shadow_fn,
-        terms::_PhysicalMappedTerms, albedo::Color3)
-    roughness = _physical_mapped_roughness(terms)
-    if _is_fill_light(light)
-        fc = _fill_color(normal, light)
-        return result + _pbr_ambient(normal, albedo, terms.metalness,
-                                     roughness, fc) +
-               _transmission_fill_terms(material, terms, albedo, normal,
-                                        view_dir, fc)
-    end
-    lc, li, ldir = light_contribution(light, position)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _direct_response_physical_terms(
-        material, terms, normal, view_dir, lc, li, ldir, albedo) * vis
-end
-
-@inline _dispatch_accumulate_physical_mapped_color(
-        light, result, normal, view_dir, position, material, shadow_fn, terms,
-        albedo) =
-    _accumulate_physical_mapped_color(result, normal, view_dir, position,
-                                      material, light, shadow_fn, terms, albedo)
-
-function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
-                                      position::Vec3,
-                                      material::MeshPhysicalMaterial,
-                                      lights::Vector{SceneLight}, shadow_fn,
-                                      terms::_PhysicalMappedTerms,
-                                      albedo::Color3)
-    result = material.emissive * material.emissive_intensity
-    @inbounds for i in eachindex(lights)
-        result = _dispatch_scene_light(
-            _dispatch_accumulate_physical_mapped_color, lights[i], result,
-            normal, view_dir, position, material, shadow_fn, terms, albedo)
-    end
-    return result
-end
-
 function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
                                       position::Vec3,
                                       material::MeshPhysicalMaterial,
                                       lights, shadow_fn,
                                       terms::_PhysicalMappedTerms,
                                       albedo::Color3)
-    result = material.emissive * material.emissive_intensity
-    for light in lights
-        result = _accumulate_physical_mapped_color(
-            result, normal, view_dir, position, material, light, shadow_fn,
-            terms, albedo)
-    end
-    return result
+    s = _physical_surface(material, terms, normal, view_dir, albedo)
+    return _shade_model(s, _emitted(s, material), normal, view_dir, position,
+                        lights, shadow_fn)
 end
 
 function _shade_physical_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
@@ -2350,91 +2332,12 @@ function _shade_physical_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
                                  shadow_fn, terms, albedo)
 end
 
-@inline _dispatch_accumulate_standard_light(
-        light, result, material, normal, view_dir, position, shadow_fn,
-        metalness, roughness) =
-    _accumulate_standard_light(result, material, normal, view_dir, position,
-                               light, shadow_fn, metalness, roughness)
-
-function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
-                                material::MeshStandardMaterial,
-                                lights::Union{Vector{SceneLight},_DirectLightView{Vector{SceneLight}}},
-                                shadow_fn,
-                                metalness::Float64, roughness::Float64)
-    result = material.emissive * material.emissive_intensity
-    source = lights isa _DirectLightView ? lights.lights : lights
-    @inbounds for i in eachindex(source)
-        light = source[i]
-        lights isa _DirectLightView && _is_fill_light(light) && continue
-        result = _dispatch_scene_light(
-            _dispatch_accumulate_standard_light, light, result, material,
-            normal, view_dir, position, shadow_fn, metalness, roughness)
-    end
-    return result
-end
-
 function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
                                 material::MeshStandardMaterial, lights, shadow_fn,
                                 metalness::Float64, roughness::Float64)
-    result = material.emissive * material.emissive_intensity
-    for light in lights
-        result = _accumulate_standard_light(result, material, normal, view_dir,
-                                            position, light, shadow_fn,
-                                            metalness, roughness)
-    end
-    return result
-end
-
-function _accumulate_standard_mapped_vertex_color(
-        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshStandardMaterial, light::RectAreaLight, shadow_fn,
-        metalness::Float64, roughness::Float64, albedo::Color3)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _rect_area_standard_response_color(
-        material, normal, view_dir, position, light, metalness, roughness,
-        albedo) * vis
-end
-
-function _accumulate_standard_mapped_vertex_color(
-        result::Color3, normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshStandardMaterial, light, shadow_fn,
-        metalness::Float64, roughness::Float64, albedo::Color3)
-    if _is_fill_light(light)
-        fc = _fill_color(normal, light)
-        return result + _pbr_ambient(normal, albedo, metalness, roughness, fc)
-    end
-    lc, li, ldir = light_contribution(light, position)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + shade_pbr(normal, ldir, view_dir, lc, li, albedo,
-                              metalness, roughness) * vis
-end
-
-@inline _dispatch_accumulate_standard_mapped_vertex_color(
-        light, result, normal, view_dir, position, material, shadow_fn,
-        metalness, roughness, albedo) =
-    _accumulate_standard_mapped_vertex_color(
-        result, normal, view_dir, position, material, light, shadow_fn,
-        metalness, roughness, albedo)
-
-function _shade_standard_mapped_vertex_color(
-        normal::Vec3, view_dir::Vec3, position::Vec3,
-        material::MeshStandardMaterial,
-        lights::Union{Vector{SceneLight},_DirectLightView{Vector{SceneLight}}}, shadow_fn,
-        metalness::Float64, roughness::Float64, vertex_color::Color3)
-    albedo = _modulate(material.color, vertex_color)
-    result = material.emissive * material.emissive_intensity
-    source = lights isa _DirectLightView ? lights.lights : lights
-    @inbounds for i in eachindex(source)
-        light = source[i]
-        lights isa _DirectLightView && _is_fill_light(light) && continue
-        result = _dispatch_scene_light(
-            _dispatch_accumulate_standard_mapped_vertex_color, light,
-            result, normal, view_dir, position, material, shadow_fn, metalness,
-            roughness, albedo)
-    end
-    return result
+    s = _standard_surface(normal, view_dir, material.color, metalness, roughness)
+    return _shade_model(s, _emitted(s, material), normal, view_dir, position,
+                        lights, shadow_fn)
 end
 
 function _shade_standard_mapped_vertex_color(
@@ -2442,122 +2345,44 @@ function _shade_standard_mapped_vertex_color(
         material::MeshStandardMaterial, lights, shadow_fn,
         metalness::Float64, roughness::Float64, vertex_color::Color3)
     albedo = _modulate(material.color, vertex_color)
-    result = material.emissive * material.emissive_intensity
-    for light in lights
-        result = _accumulate_standard_mapped_vertex_color(
-            result, normal, view_dir, position, material, light, shadow_fn,
-            metalness, roughness, albedo)
-    end
-    return result
-end
-
-function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
-                           position::Vec3, light::RectAreaLight, shadow_fn)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _rect_area_response(m, normal, view_dir, position, light) * vis
-end
-
-function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
-                           position::Vec3, light, shadow_fn)
-    if _is_fill_light(light)
-        fc = _fill_color(normal, light)
-        return result + _fill_response(m, normal, fc) +
-               _transmission_response(m, normal, view_dir, fc)
-    else
-        lc, li, ldir = light_contribution(light, position)
-        vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-        vis <= 0.0 && return result
-        return result + _direct_response(m, normal, view_dir, lc, li, ldir) * vis
-    end
-end
-
-function _accumulate_light_vertex_color(result, m, normal::Vec3, view_dir::Vec3,
-                                        position::Vec3, light::RectAreaLight,
-                                        shadow_fn, albedo::Color3)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-    vis <= 0.0 && return result
-    return result + _rect_area_response_vertex_color(m, normal, view_dir,
-                                                     position, light, albedo) * vis
-end
-
-function _accumulate_light_vertex_color(result, m, normal::Vec3, view_dir::Vec3,
-                                        position::Vec3, light, shadow_fn,
-                                        albedo::Color3)
-    if _is_fill_light(light)
-        fc = _fill_color(normal, light)
-        return result + _fill_response_vertex_color(m, normal, fc, albedo) +
-               _transmission_response_vertex_color(m, normal, view_dir, fc, albedo)
-    else
-        lc, li, ldir = light_contribution(light, position)
-        vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
-        vis <= 0.0 && return result
-        return result + _direct_response_vertex_color(m, normal, view_dir, lc,
-                                                      li, ldir, albedo) * vis
-    end
-end
-
-@inline _dispatch_accumulate_light(light, result, m, normal, view_dir, position,
-                                   shadow_fn) =
-    _accumulate_light(result, m, normal, view_dir, position, light, shadow_fn)
-
-@inline _dispatch_accumulate_light_vertex_color(
-        light, result, m, normal, view_dir, position, shadow_fn, albedo) =
-    _accumulate_light_vertex_color(result, m, normal, view_dir, position, light,
-                                   shadow_fn, albedo)
-
-function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3,
-                    lights::Vector{SceneLight}, shadow_fn)
-    _validate_material_parameters(m)
-    result = m.emissive * _material_scalar(m, :emissive_intensity)
-    @inbounds for i in eachindex(lights)
-        light = lights[i]
-        result = _dispatch_scene_light(_dispatch_accumulate_light, light, result,
-                                       m, normal, view_dir, position, shadow_fn)
-    end
-    return result
+    s = _standard_surface(normal, view_dir, albedo, metalness, roughness)
+    return _shade_model(s, _emitted(s, material), normal, view_dir, position,
+                        lights, shadow_fn)
 end
 
 function _shade_lit(m, normal::Vec3, view_dir::Vec3, position::Vec3, lights,
                     shadow_fn)
     _validate_material_parameters(m)
-    result = m.emissive * _material_scalar(m, :emissive_intensity)
-    for light in lights
-        result = _accumulate_light(result, m, normal, view_dir, position, light,
-                                   shadow_fn)
-    end
-    return result
+    return _shade_model(m, _emitted(m), normal, view_dir, position, lights,
+                        shadow_fn)
+end
+
+function _shade_lit(m::Union{MeshStandardMaterial,MeshPhysicalMaterial},
+                    normal::Vec3, view_dir::Vec3, position::Vec3, lights,
+                    shadow_fn)
+    _validate_material_parameters(m)
+    s = _lit_surface(m, normal, view_dir, m.color)
+    return _shade_model(s, _emitted(s, m), normal, view_dir, position, lights,
+                        shadow_fn)
 end
 
 shade_face(normal::Vec3, view_dir::Vec3, position::Vec3, material::LitMaterial, lights;
            shadow_fn=nothing) = _shade_lit(material, normal, view_dir, position, lights, shadow_fn)
 
 function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
-                                 lights::Vector{SceneLight}, shadow_fn,
-                                 vertex_color::Color3)
-    _validate_material_parameters(m)
-    albedo = _modulate(m.color, vertex_color)
-    result = m.emissive * _material_scalar(m, :emissive_intensity)
-    @inbounds for i in eachindex(lights)
-        light = lights[i]
-        result = _dispatch_scene_light(_dispatch_accumulate_light_vertex_color,
-                                       light, result, m, normal, view_dir,
-                                       position, shadow_fn, albedo)
-    end
-    return result
-end
-
-function _shade_lit_vertex_color(m, normal::Vec3, view_dir::Vec3, position::Vec3,
                                  lights, shadow_fn, vertex_color::Color3)
     _validate_material_parameters(m)
-    albedo = _modulate(m.color, vertex_color)
-    result = m.emissive * _material_scalar(m, :emissive_intensity)
-    for light in lights
-        result = _accumulate_light_vertex_color(result, m, normal, view_dir,
-                                                position, light, shadow_fn,
-                                                albedo)
-    end
-    return result
+    return _shade_model(_AlbedoOverride(m, _modulate(m.color, vertex_color)),
+                        _emitted(m), normal, view_dir, position, lights, shadow_fn)
+end
+
+function _shade_lit_vertex_color(m::Union{MeshStandardMaterial,MeshPhysicalMaterial},
+                                 normal::Vec3, view_dir::Vec3, position::Vec3,
+                                 lights, shadow_fn, vertex_color::Color3)
+    _validate_material_parameters(m)
+    s = _lit_surface(m, normal, view_dir, _modulate(m.color, vertex_color))
+    return _shade_model(s, _emitted(s, m), normal, view_dir, position, lights,
+                        shadow_fn)
 end
 
 @inline function _shade_face_vertex_color(normal::Vec3, view_dir::Vec3,
