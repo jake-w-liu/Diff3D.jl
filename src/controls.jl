@@ -1479,6 +1479,23 @@ function _resolved_animation_property(target::AbstractObject3D,
     throw(ArgumentError("animation target has no property path: $requested"))
 end
 
+# 1-based index of the morph target called `name`, looked up like three.js
+# PropertyBinding.bind (morphTargetDictionary, before any numeric reading of
+# the index): on the target, else on the first descendant that names it, as
+# morph tracks bound to a parent drive its descendants. With duplicate names
+# the last one wins, as in Mesh.updateMorphTargets.
+function _morph_target_name_index(obj, name::AbstractString)
+    if hasproperty(obj, :morph_target_names)
+        index = findlast(==(name), getproperty(obj, :morph_target_names))
+        index === nothing || return index
+    end
+    for child in get_children(obj)
+        index = _morph_target_name_index(child, name)
+        index === nothing || return index
+    end
+    return nothing
+end
+
 function _parse_animation_property_path(target::AbstractObject3D,
                                         path::AbstractString)
     p = startswith(path, ".") ? path[2:end] : String(path)
@@ -1488,8 +1505,13 @@ function _parse_animation_property_path(target::AbstractObject3D,
     isempty(p) && throw(ArgumentError("animation material property path must not be empty"))
     bracket = match(r"^(.+)\[([^\]]+)\]$", p)
     if bracket !== nothing
-        return _resolved_animation_property(target, bracket.captures[1], material_path),
-               _animation_component_index(bracket.captures[2])
+        property = _resolved_animation_property(target, bracket.captures[1], material_path)
+        index = bracket.captures[2]
+        if property === :morph_target_influences
+            named = _morph_target_name_index(target, index)
+            named === nothing || return property, named
+        end
+        return property, _animation_component_index(index)
     end
     dot = match(r"^(.+)\.([A-Za-z])$", p)
     if dot !== nothing

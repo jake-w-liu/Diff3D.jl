@@ -142,3 +142,32 @@ end
     end
     @test mesh.material.map.offset.x == sample_track(tracks[13], mixer.sample_time)
 end
+
+@testset "audit3 animation: morph influence paths resolve target names" begin
+    # three.js PropertyBinding.bind (PropertyBinding.js:661-684) maps the index
+    # of morphTargetInfluences[...] through morphTargetDictionary before using
+    # it as a number. node, dictionary {smile: 0, frown: 1, "0": 2}, keys
+    # [0, 1] -> [0, 0.8], update(0.5):
+    #   [frown] -> [0, 0.4, 0]; [0] -> [0, 0, 0.4]; [1] -> [0, 0.4, 0].
+    mesh = Mesh(BoxGeometry(), MeshBasicMaterial();
+                morph_target_influences=[0.0, 0.0, 0.0],
+                morph_target_names=["smile", "frown", "0"])
+    for (path, expected) in (("morphTargetInfluences[frown]", [0.0, 0.4, 0.0]),
+                             ("morphTargetInfluences[0]", [0.0, 0.0, 0.4]),
+                             ("morphTargetInfluences[1]", [0.0, 0.4, 0.0]))
+        mesh.morph_target_influences = [0.0, 0.0, 0.0]
+        track = NumberKeyframeTrack(mesh, path, [0.0, 1.0], [0.0, 0.8])
+        mixer_set_time!(AnimationMixer(AnimationClip("m", AbstractKeyframeTrack[track])), 0.5)
+        @test mesh.morph_target_influences ≈ expected atol=1e-15
+    end
+    # A track bound to a parent resolves the name on the descendant that has it.
+    parent = Group()
+    add!(parent, mesh)
+    mesh.morph_target_influences = [0.0, 0.0, 0.0]
+    track = NumberKeyframeTrack(parent, "morphTargetInfluences[smile]", [0.0, 1.0], [0.0, 0.8])
+    @test track.component == 1
+    mixer_set_time!(AnimationMixer(AnimationClip("p", AbstractKeyframeTrack[track])), 0.5)
+    @test mesh.morph_target_influences ≈ [0.4, 0.0, 0.0] atol=1e-15
+    @test_throws ArgumentError NumberKeyframeTrack(mesh, "morphTargetInfluences[blink]",
+                                                   [0.0, 1.0], [0.0, 1.0])
+end
