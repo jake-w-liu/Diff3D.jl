@@ -578,3 +578,37 @@ end
         @test img == cat(Float64.(r), Float64.(r), Float64.(r); dims=3)
     end
 end
+
+@testset "binary16 decoding is exact for every half value" begin
+    # IEEE 754 binary16 -> binary64 is exact; Julia's Float16 conversion is
+    # the independent reference (NaNs compared as NaN).
+    mismatches = count(0x0000:0xffff) do h
+        got = Diff3D._half_to_float(h)
+        want = Float64(reinterpret(Float16, h))
+        isnan(want) ? !isnan(got) : reinterpret(UInt64, got) != reinterpret(UInt64, want)
+    end
+    @test mismatches == 0
+end
+
+@testset "KTX2 rows are stored in bands with orientation flips" begin
+    # KTX 2.0 §3: 80-byte header, one level-index entry, key/value data with
+    # KTXorientation, then level 0 in row-major order. 37 rows span three
+    # 16-row bands.
+    le32(x) = reinterpret(UInt8, [htol(UInt32(x))])
+    le64(x) = reinterpret(UInt8, [htol(UInt64(x))])
+    H, W = 37, 6
+    data = UInt8[(7y + 3x + 50c) % 256 for c in 1:4, x in 1:W, y in 1:H][:]
+    for orient in ("rd", "lu", "ru", "ld")
+        kv = vcat(Vector{UInt8}("KTXorientation"), 0x00, Vector{UInt8}(orient), 0x00)
+        kvd = vcat(le32(length(kv)), kv, zeros(UInt8, (4 - length(kv) % 4) % 4))
+        bytes = vcat(UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A],
+                     le32(37), le32(1), le32(W), le32(H), le32(0), le32(0), le32(1), le32(1),
+                     le32(0), le32(0), le32(0), le32(104), le32(length(kvd)), le64(0), le64(0),
+                     le64(104 + length(kvd)), le64(length(data)), le64(length(data)), kvd, data)
+        img = Diff3D._decode_ktx2(bytes)
+        flip_x = orient[1] == 'l'; flip_y = orient[2] == 'u'
+        want = [(7 * (flip_y ? H - y + 1 : y) + 3 * (flip_x ? W - x + 1 : x) + 50c) % 256 / 255
+                for y in 1:H, x in 1:W, c in 1:4]
+        @test img == want
+    end
+end

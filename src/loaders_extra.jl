@@ -1223,23 +1223,30 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     flip_x = orient !== nothing && codeunit(orient, 1) == UInt8('l')
     flip_y = orient !== nothing && codeunit(orient, 2) == UInt8('u')
 
+    # The level data (in bounds, checked above) is row-major; the H×W×C image
+    # is column-major, so rows are stored a band at a time, column by column.
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
-    @inbounds for y in 1:pixelHeight
-        srow = flip_y ? (pixelHeight - y + 1) : y
-        rowbase = byteOffset + (srow - 1) * pixelWidth * pixel_bytes   # 0-based
+    row_bytes = pixelWidth * pixel_bytes
+    @inbounds for y0 in 1:_KTX2_BAND_ROWS:pixelHeight
+        y1 = min(pixelHeight, y0 + _KTX2_BAND_ROWS - 1)
         for x in 1:pixelWidth
             scol = flip_x ? (pixelWidth - x + 1) : x
-            px = rowbase + (scol - 1) * pixel_bytes                    # 0-based pixel start
-            for c in 1:channels
-                b1 = px + (c - 1) * cbytes + 1                         # 1-based component byte
-                img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
-                               kind === :sfloat16 ? _half_to_float(_rd_le16(bytes, b1)) :
-                               Float64(_rd_f32(bytes, b1))
+            for y in y0:y1
+                srow = flip_y ? (pixelHeight - y + 1) : y
+                px = byteOffset + (srow - 1) * row_bytes + (scol - 1) * pixel_bytes  # 0-based
+                for c in 1:channels
+                    b1 = px + (c - 1) * cbytes + 1                     # 1-based component byte
+                    img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
+                                   kind === :sfloat16 ? _half_to_float(_rd_le16(bytes, b1)) :
+                                   Float64(_rd_f32(bytes, b1))
+                end
             end
         end
     end
     return img
 end
+
+const _KTX2_BAND_ROWS = 16
 
 """
     load_ktx2(path) -> Array{Float64,3}
@@ -1713,12 +1720,15 @@ end
     s = (h >> 15) & 0x0001
     e = (h >> 10) & 0x001f
     m = h & 0x03ff
-    if e == 0x0000
-        val = m == 0x0000 ? 0.0 : ldexp(Float64(m), -24)        # subnormal: m * 2^-24
-    elseif e == 0x001f
-        val = m == 0x0000 ? Inf : NaN
+    if 0x0000 < e < 0x001f
+        # Normal: (1 + m/2^10) * 2^(e-15) is exact in binary64, so build its
+        # bits directly (exponent bias 1023 - 15 = 1008, mantissa 52 - 10 bits).
+        return reinterpret(Float64, (UInt64(s) << 63) | (UInt64(e + 0x03f0) << 52) |
+                                    (UInt64(m) << 42))
+    elseif e == 0x0000
+        val = Float64(m) * 0x1p-24                              # subnormal: m * 2^-24, exact
     else
-        val = ldexp(Float64(Int(m) + 1024), Int(e) - 25)        # (1024+m) * 2^(e-25)
+        val = m == 0x0000 ? Inf : NaN
     end
     return s == 0x0001 ? -val : val
 end
