@@ -220,6 +220,9 @@ end
 # Sutherland–Hodgman clip of a convex view-space polygon against the near plane,
 # keeping the half-space z ≤ -near (in front of the camera's near plane). Writes
 # the clipped vertices into `out` (reused buffer) and returns its length.
+# Crossing points are always interpolated from the kept vertex toward the
+# clipped one, so the two triangles sharing an edge produce the bitwise same
+# vertex there and their clipped edges meet without a crack or overlap.
 function _clip_near!(out::Vector{Vec4{T}}, verts::Vector{Vec4{T}}, n::Int, near) where T
     empty!(out)
     @inbounds for i in 1:n
@@ -228,7 +231,7 @@ function _clip_near!(out::Vector{Vec4{T}}, verts::Vector{Vec4{T}}, n::Int, near)
         cur_in = cur.z <= -near
         prv_in = prv.z <= -near
         if cur_in
-            prv_in || push!(out, _clip_intersect_near(prv, cur, near))
+            prv_in || push!(out, _clip_intersect_near(cur, prv, near))
             push!(out, cur)
         elseif prv_in
             push!(out, _clip_intersect_near(prv, cur, near))
@@ -298,6 +301,9 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    edge0 = _canonical_edge(s2x, s2y, s3x, s3y)
+    edge1 = _canonical_edge(s3x, s3y, s1x, s1y)
+    edge2 = _canonical_edge(s1x, s1y, s2x, s2y)
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
@@ -309,9 +315,9 @@ end
         for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
-            w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
-            w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
-            w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            w0 = _canonical_edge_value(edge0, cx, cy) * inv_area
+            w1 = _canonical_edge_value(edge1, cx, cy) * inv_area
+            w2 = _canonical_edge_value(edge2, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
                 fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
@@ -364,6 +370,9 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    edge0 = _canonical_edge(s2x, s2y, s3x, s3y)
+    edge1 = _canonical_edge(s3x, s3y, s1x, s1y)
+    edge2 = _canonical_edge(s1x, s1y, s2x, s2y)
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
     min_y = max(floor(Int, clamp(min(s1y, s2y, s3y), 1.0, fH)), 1, ylo)
@@ -374,9 +383,9 @@ end
         for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
-            w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
-            w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
-            w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            w0 = _canonical_edge_value(edge0, cx, cy) * inv_area
+            w1 = _canonical_edge_value(edge1, cx, cy) * inv_area
+            w2 = _canonical_edge_value(edge2, cx, cy) * inv_area
             if w0 >= 0 && w1 >= 0 && w2 >= 0
                 fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
@@ -468,8 +477,9 @@ function _clip_near_attr!(out::Vector{ShadeVtx}, verts::Vector{ShadeVtx}, n::Int
         prv_in = prv.vp.z <= -near
         if cur_in
             if !prv_in
-                t = (-near - prv.vp.z) / (cur.vp.z - prv.vp.z)
-                push!(out, _lerp_shadevtx(prv, cur, t))
+                # Interpolate from the kept vertex (see `_clip_near!`).
+                t = (-near - cur.vp.z) / (prv.vp.z - cur.vp.z)
+                push!(out, _lerp_shadevtx(cur, prv, t))
             end
             push!(out, cur)
         elseif prv_in
@@ -479,6 +489,21 @@ function _clip_near_attr!(out::Vector{ShadeVtx}, verts::Vector{ShadeVtx}, n::Int
     end
     return length(out)
 end
+
+# Two triangles sharing an edge traverse it in opposite directions. Evaluating
+# `edge_function` from each end rounds differently, so a sample within rounding
+# of the edge can test outside both triangles (a crack) or inside both (a double
+# blend). Each edge is therefore evaluated from its lexicographically smaller
+# endpoint and negated when the triangle runs the other way, which makes the
+# two evaluations of a shared edge exactly opposite. Exact zeros then go to the
+# fill rule (WebGL: a sample on a shared edge belongs to exactly one triangle).
+@inline function _canonical_edge(ax, ay, bx, by)
+    (ax < bx || (ax == bx && ay <= by)) && return (ax, ay, bx, by, 1.0)
+    return (bx, by, ax, ay, -1.0)
+end
+
+@inline _canonical_edge_value(edge, px, py) =
+    edge[5] * edge_function(edge[1], edge[2], edge[3], edge[4], px, py)
 
 # Transparent triangles use a half-open top-left fill rule. Screen y increases
 # downward, so a canonically oriented edge owns its boundary when it points down,
@@ -578,6 +603,9 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    edge0 = _canonical_edge(s2x, s2y, s3x, s3y)
+    edge1 = _canonical_edge(s3x, s3y, s1x, s1y)
+    edge2 = _canonical_edge(s1x, s1y, s2x, s2y)
     positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
@@ -618,9 +646,9 @@ end
         for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
-            b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
-            b1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
-            b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            b0 = _canonical_edge_value(edge0, cx, cy) * inv_area
+            b1 = _canonical_edge_value(edge1, cx, cy) * inv_area
+            b2 = _canonical_edge_value(edge2, cx, cy) * inv_area
             if blend
                 _half_open_triangle_contains(
                     b0, b1, b2, s1x, s1y, s2x, s2y, s3x, s3y,
@@ -975,6 +1003,9 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    edge0 = _canonical_edge(s2x, s2y, s3x, s3y)
+    edge1 = _canonical_edge(s3x, s3y, s1x, s1y)
+    edge2 = _canonical_edge(s1x, s1y, s2x, s2y)
     positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
@@ -987,9 +1018,9 @@ end
         for py in min_y:max_y
             cx = px - 0.5
             cy = py - 0.5
-            b0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
-            b1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
-            b2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            b0 = _canonical_edge_value(edge0, cx, cy) * inv_area
+            b1 = _canonical_edge_value(edge1, cx, cy) * inv_area
+            b2 = _canonical_edge_value(edge2, cx, cy) * inv_area
             if blend
                 _half_open_triangle_contains(
                     b0, b1, b2, s1x, s1y, s2x, s2y, s3x, s3y,
@@ -1062,7 +1093,8 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                   xlo::Int, xhi::Int, ylo::Int, yhi::Int,
                                   log_depth::Bool, inv_log_far::Float64,
                                   ortho_dir, stamp,
-                                  stamp_id::Int) where {M<:AbstractMaterial}
+                                  stamp_id::Int;
+                                  mirrored::Bool=_world_mirrors_faces(world_mat)) where {M<:AbstractMaterial}
     _validate_material_parameters(mat)
     _validate_depth_material(mat)
     W, H = rt.width, rt.height
@@ -1111,7 +1143,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, has_normals,
+                                         depth_test, depth_write, side, mirrored, has_normals,
                                          has_uvs, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, normal_scale, false,
@@ -1128,7 +1160,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, has_normals,
+                                         depth_test, depth_write, side, mirrored, has_normals,
                                          has_uvs, albedo_map, nothing, nothing,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, normal_scale,
@@ -1145,7 +1177,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, has_normals,
+                                         depth_test, depth_write, side, mirrored, has_normals,
                                          has_uvs, nothing, nothing, normal_map,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, normal_scale,
@@ -1162,7 +1194,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, has_normals,
+                                         depth_test, depth_write, side, mirrored, has_normals,
                                          has_uvs, nothing, nothing, nothing,
                                          roughness_map, metalness_map, nothing,
                                          nothing, nothing, ao_map, nothing, nothing,
@@ -1173,7 +1205,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                      xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                      ortho_dir, stamp, stamp_id, W, H, world_mat,
                                      modelview, normal_mat, mesh_clipping_planes,
-                                     depth_test, depth_write, side, has_normals,
+                                     depth_test, depth_write, side, mirrored, has_normals,
                                      has_uvs, albedo_map, alpha_map, normal_map,
                                      roughness_map, metalness_map, specular_map,
                                      glossiness_map, physical_pbr_map, ao_map,
@@ -1218,7 +1250,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    world_mat::Mat4, modelview::Mat4,
                                    normal_mat::Mat4, mesh_clipping_planes,
                                    depth_test::Bool, depth_write::Bool,
-                                   side::Symbol, has_normals::Bool,
+                                   side::Symbol, mirrored::Bool, has_normals::Bool,
                                    has_uvs::Bool, albedo_map, alpha_map,
                                    normal_map, roughness_map, metalness_map,
                                    specular_map, glossiness_map, physical_pbr_map,
@@ -1227,7 +1259,6 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    uv2_attr, color_attr,
                                    use_vertex_colors::Bool) where {M<:AbstractMaterial}
     blend = material_transparent(mat)
-    mirrored = _world_mirrors_faces(world_mat)
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         front_facing = true
@@ -1429,6 +1460,7 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_mater
     flat_attr_tri = stamp_cache === nothing ? nothing : stamp_cache.smooth_tri
     flat_attr_clipped = stamp_cache === nothing ? nothing : stamp_cache.smooth_clipped
     flat_iw = stamp_cache === nothing ? nothing : stamp_cache.smooth_iw
+    mirrored = _world_mirrors_faces(base)
     @inbounds for instance_index in eachindex(instance_matrices)
         world = base * instance_matrices[instance_index]
         if frustum !== nothing
@@ -1449,7 +1481,7 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_mater
                                         ortho_dir=ortho_dir,
                                         flat_attr_tri=flat_attr_tri,
                                         flat_attr_clipped=flat_attr_clipped,
-                                        flat_iw=flat_iw)
+                                        flat_iw=flat_iw, mirrored=mirrored)
         else
             _rasterize_geo_flat!(rt, geo, world, instance_material,
                                  lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
@@ -1460,7 +1492,7 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_mater
                                  ortho_dir=ortho_dir,
                                  flat_attr_tri=flat_attr_tri,
                                  flat_attr_clipped=flat_attr_clipped,
-                                 flat_iw=flat_iw)
+                                 flat_iw=flat_iw, mirrored=mirrored)
         end
     end
     return nothing
@@ -1661,9 +1693,8 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
 
     # View-projection frustum for culling whole meshes that fall offscreen.
     frustum = frustum_cull ? frustum_from_matrix(proj * view) : nothing
-    bounds_cache = if frustum === nothing
-        nothing
-    elseif cache === nothing
+    # Local bounding spheres serve both culling and draw-order depths.
+    bounds_cache = if cache === nothing
         (BufferGeometry[], BoundingSphere{Float64}[])
     else
         empty!(cache.bound_geometries)
@@ -1746,8 +1777,10 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     # negative view-space z). Pure draw-order optimisation; pixels are unchanged.
     if sort_objects
         depth_scratch = cache === nothing ? nothing : cache.mesh_depths
-        _sort_meshes_by_depth!(opaque_flat, opaque_flat_worlds, view, true, depth_scratch)
-        _sort_meshes_by_depth!(smooth_meshes, smooth_worlds, view, true, depth_scratch)
+        _sort_meshes_by_depth!(opaque_flat, opaque_flat_worlds, view, true,
+                               depth_scratch, bounds_cache)
+        _sort_meshes_by_depth!(smooth_meshes, smooth_worlds, view, true,
+                               depth_scratch, bounds_cache)
     end
 
     for i in eachindex(opaque_flat)
@@ -1819,7 +1852,8 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                     sx, sy, sz,
                     smooth_instance_iw::Vector{Float64},
                     clipping_planes, xlo, xhi, ylo, yhi,
-                    log_depth, inv_log_far, ortho_dir, nothing, 0)
+                    log_depth, inv_log_far, ortho_dir, nothing, 0;
+                    mirrored=_world_mirrors_faces(base))
             end
             continue
         end
@@ -1909,9 +1943,12 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     empty!(transparent_items)
     sizehint!(transparent_items, length(transparent))
     @inbounds for index in eachindex(transparent)
+        mesh = transparent[index]
         push!(transparent_items, _TransparentRenderItem(
-            _mesh_view_depth_world(transparent_worlds[index], view),
-            _TRANSPARENT_MESH_ITEM, index, 0))
+            _render_sort_depth(
+                transparent_worlds[index], view,
+                _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
+            _TRANSPARENT_MESH_ITEM, index, 0, mesh.id))
     end
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
@@ -1922,6 +1959,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             cache.instanced_materials, instanced_slot, im, mat,
             im.instance_colors)
         base = instanced_worlds[instanced_slot]
+        center = _render_sort_center(_instanced_geometry(im), bounds_cache)
         for instance_index in eachindex(im.instance_matrices)
             world = base * im.instance_matrices[instance_index]
             if frustum !== nothing
@@ -1933,22 +1971,26 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                    _TRANSPARENT_INSTANCED_WIREFRAME_ITEM :
                    _TRANSPARENT_INSTANCE_ITEM
             push!(transparent_items, _TransparentRenderItem(
-                _mesh_view_depth_world(world, view),
+                _render_sort_depth(world, view, center),
                 kind, instanced_slot,
-                instance_index))
+                instance_index, im.id))
         end
     end
     @inbounds for index in eachindex(wireframe_meshes)
         _primitive_transparent(
             _mesh_material(wireframe_meshes[index])) || continue
+        mesh = wireframe_meshes[index]
         push!(transparent_items, _TransparentRenderItem(
-            _mesh_view_depth_world(wireframe_worlds[index], view),
-            _TRANSPARENT_WIREFRAME_ITEM, index, 0))
+            _render_sort_depth(
+                wireframe_worlds[index], view,
+                _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id))
     end
     @inbounds for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
         _render_primitive_blends(object) || continue
         base = primitive_worlds[primitive_index]
+        center = _render_primitive_sort_center(object, bounds_cache)
         if object isa InstancedMesh
             for instance_index in eachindex(object.instance_matrices)
                 world = base * object.instance_matrices[instance_index]
@@ -1956,13 +1998,14 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                        _TRANSPARENT_INSTANCED_LINE_ITEM :
                        _TRANSPARENT_INSTANCED_POINT_ITEM
                 push!(transparent_items, _TransparentRenderItem(
-                    _mesh_view_depth_world(world, view), kind,
-                    primitive_index, instance_index))
+                    _render_sort_depth(world, view, center), kind,
+                    primitive_index, instance_index, object.id))
             end
         else
             push!(transparent_items, _TransparentRenderItem(
-                _mesh_view_depth_world(base, view),
-                _render_primitive_item_kind(object), primitive_index, 0))
+                _render_sort_depth(base, view, center),
+                _render_primitive_item_kind(object), primitive_index, 0,
+                object.id))
         end
     end
     if !isempty(transparent_items)
@@ -2031,7 +2074,9 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                         sx, sy, sz,
                         smooth_instance_iw::Vector{Float64},
                         clipping_planes, xlo, xhi, ylo, yhi,
-                        log_depth, inv_log_far, ortho_dir, stamp, sid)
+                        log_depth, inv_log_far, ortho_dir, stamp, sid;
+                        mirrored=_world_mirrors_faces(
+                            instanced_worlds[instanced_slot]))
                 else
                     _rasterize_geo_flat!(
                         rt, geo, world, instance_material, lights, proj, view,
@@ -2048,7 +2093,9 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                       cache.smooth_tri,
                         flat_attr_clipped=cache === nothing ? nothing :
                                          cache.smooth_clipped,
-                        flat_iw=cache === nothing ? nothing : cache.smooth_iw)
+                        flat_iw=cache === nothing ? nothing : cache.smooth_iw,
+                        mirrored=_world_mirrors_faces(
+                            instanced_worlds[instanced_slot]))
                 end
             elseif item.kind == _TRANSPARENT_WIREFRAME_ITEM
                 mesh = wireframe_meshes[item.object_index]
@@ -2221,9 +2268,11 @@ material_side(m::AbstractMaterial) =
 # with clockwise front faces (WebGLRenderer.js:1200 `frontFaceCW`, applied by
 # WebGLState.js:761). Mirroring reverses the transformed winding, so XOR-ing
 # this flag into the winding test keeps the faces whose transformed normals face
-# the camera front-facing. Entries are normalized by their largest magnitude so
-# tiny or huge scales cannot underflow or overflow the determinant's sign;
-# singular and non-finite matrices keep the unflipped winding.
+# the camera front-facing. three.js tests the object's matrixWorld only, so an
+# InstancedMesh passes its base world matrix, not each instance's. Entries are
+# normalized by their largest magnitude so tiny or huge scales cannot underflow
+# or overflow the determinant's sign; singular and non-finite matrices keep the
+# unflipped winding.
 @inline function _world_mirrors_faces(world::Mat4)
     e = world.e
     scale = max(abs(e[1]), abs(e[2]), abs(e[3]), abs(e[5]), abs(e[6]),
@@ -2238,19 +2287,31 @@ material_side(m::AbstractMaterial) =
     return determinant < 0
 end
 
-# View-space z of a mesh's world origin (more negative = farther from camera).
-function _mesh_view_depth(mesh, view::Mat4)
-    w = compute_world_matrix(mesh)
-    o = mat4_transform_point(w, Vec3(0.0, 0.0, 0.0))
+# Draw-order depth: the view-space z (more negative = farther) of a drawable's
+# world bounding-sphere centre, the point three.js projectObject projects for
+# its sort z (WebGLRenderer.js:1919-1935); sprites use their origin
+# (:1894-1899). three.js compares clip-space z, whose projection row depends
+# only on view z and decreases with it, so view z gives the same order.
+@inline function _render_sort_depth(world::Mat4, view::Mat4, center::Vec3)
+    o = mat4_transform_point(world, center)
     v = mat4_transform_vec4(view, Vec4(o.x, o.y, o.z, 1.0))
     return v.z
 end
 
-function _mesh_view_depth_world(world::Mat4, view::Mat4)
-    o = mat4_transform_point(world, Vec3(0.0, 0.0, 0.0))
-    v = mat4_transform_vec4(view, Vec4(o.x, o.y, o.z, 1.0))
-    return v.z
+@inline _render_sort_center(geo::BufferGeometry, bounds_cache) =
+    _mesh_local_bounding_sphere(geo, bounds_cache).center
+@inline _render_sort_center(::Any, bounds_cache) = _ZERO_V3
+
+function _render_primitive_sort_center(object::AbstractObject3D, bounds_cache)
+    object isa Sprite && return _ZERO_V3
+    object isa InstancedMesh &&
+        return _render_sort_center(_instanced_geometry(object), bounds_cache)
+    return _render_sort_center(object.geometry, bounds_cache)
 end
+
+_mesh_view_depth(mesh::Mesh, view::Mat4, bounds_cache=nothing) =
+    _render_sort_depth(compute_world_matrix(mesh), view,
+                       _render_sort_center(_mesh_geometry(mesh), bounds_cache))
 
 const _TRANSPARENT_MESH_ITEM = UInt8(0)
 const _TRANSPARENT_INSTANCE_ITEM = UInt8(1)
@@ -2267,6 +2328,18 @@ struct _TransparentRenderItem
     kind::UInt8
     object_index::Int
     instance_index::Int
+    id::Int
+end
+
+# three.js reversePainterSortStable (WebGLRenderLists.js:31-51): farther items
+# first, equal depths in ascending object id. Instances of one InstancedMesh
+# share its id and keep their index order, as in its single draw call. The key
+# is a total order, so the result does not depend on the sorting algorithm.
+@inline function _transparent_item_before(a::_TransparentRenderItem,
+                                          b::_TransparentRenderItem)
+    a.depth != b.depth && return a.depth < b.depth
+    a.id != b.id && return a.id < b.id
+    return a.instance_index < b.instance_index
 end
 
 function _sort_transparent_items!(items::Vector{_TransparentRenderItem})
@@ -2275,7 +2348,8 @@ function _sort_transparent_items!(items::Vector{_TransparentRenderItem})
         for index in (gap + 1):length(items)
             item = items[index]
             position = index
-            while position > gap && items[position - gap].depth > item.depth
+            while position > gap &&
+                  _transparent_item_before(item, items[position - gap])
                 items[position] = items[position - gap]
                 position -= gap
             end
@@ -2286,13 +2360,26 @@ function _sort_transparent_items!(items::Vector{_TransparentRenderItem})
     return items
 end
 
+# three.js painterSortStable (WebGLRenderLists.js:1-29) draws opaque items
+# nearest first and breaks depth ties by ascending object id. Opaque depth ties
+# decide which coplanar surface keeps a pixel, so the order must be total.
+@inline function _mesh_draw_before(depth_a::Float64, id_a::Int,
+                                   depth_b::Float64, id_b::Int,
+                                   nearest_first::Bool)
+    if depth_a != depth_b
+        return nearest_first ? depth_a > depth_b : depth_a < depth_b
+    end
+    return id_a < id_b
+end
+
 function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Float64},
-                                       view::Mat4, nearest_first::Bool)
+                                       view::Mat4, nearest_first::Bool,
+                                       bounds_cache=nothing)
     n = length(meshes)
     n <= 1 && return meshes
     resize!(depths, n)
     @inbounds for i in 1:n
-        depths[i] = _mesh_view_depth(meshes[i], view)
+        depths[i] = _mesh_view_depth(meshes[i], view, bounds_cache)
     end
     gap = n >>> 1
     @inbounds while gap > 0
@@ -2302,8 +2389,8 @@ function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh}, depths::Vector{Floa
             j = i
             while j > gap
                 prev_depth = depths[j - gap]
-                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
-                should_shift || break
+                _mesh_draw_before(depth, mesh.id, prev_depth,
+                                  meshes[j - gap].id, nearest_first) || break
                 meshes[j] = meshes[j - gap]
                 depths[j] = prev_depth
                 j -= gap
@@ -2319,12 +2406,15 @@ end
 function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh},
                                        worlds::Vector{Mat4{Float64}},
                                        depths::Vector{Float64},
-                                       view::Mat4, nearest_first::Bool)
+                                       view::Mat4, nearest_first::Bool,
+                                       bounds_cache=nothing)
     n = length(meshes)
     n <= 1 && return meshes
     resize!(depths, n)
     @inbounds for i in 1:n
-        depths[i] = _mesh_view_depth_world(worlds[i], view)
+        depths[i] = _render_sort_depth(
+            worlds[i], view,
+            _render_sort_center(_mesh_geometry(meshes[i]), bounds_cache))
     end
     gap = n >>> 1
     @inbounds while gap > 0
@@ -2335,8 +2425,8 @@ function _sort_meshes_by_cached_depth!(meshes::Vector{Mesh},
             j = i
             while j > gap
                 prev_depth = depths[j - gap]
-                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
-                should_shift || break
+                _mesh_draw_before(depth, mesh.id, prev_depth,
+                                  meshes[j - gap].id, nearest_first) || break
                 meshes[j] = meshes[j - gap]
                 worlds[j] = worlds[j - gap]
                 depths[j] = prev_depth
@@ -2354,61 +2444,20 @@ end
 function _sort_meshes_by_depth!(meshes::Vector{Mesh}, view::Mat4,
                                 nearest_first::Bool,
                                 depths::Union{Nothing,Vector{Float64}}=nothing)
-    n = length(meshes)
-    n <= 1 && return meshes
-    if depths !== nothing
-        return _sort_meshes_by_cached_depth!(meshes, depths, view, nearest_first)
-    elseif n <= 32
-        @inbounds for i in 2:n
-            mesh = meshes[i]
-            depth = _mesh_view_depth(mesh, view)
-            j = i - 1
-            while j >= 1
-                prev_depth = _mesh_view_depth(meshes[j], view)
-                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
-                should_shift || break
-                meshes[j + 1] = meshes[j]
-                j -= 1
-            end
-            meshes[j + 1] = mesh
-        end
-    elseif n > 32
-        local_depths = Vector{Float64}(undef, n)
-        return _sort_meshes_by_cached_depth!(meshes, local_depths, view, nearest_first)
-    end
-    return meshes
+    length(meshes) <= 1 && return meshes
+    return _sort_meshes_by_cached_depth!(
+        meshes, depths === nothing ? Float64[] : depths, view, nearest_first)
 end
 
 function _sort_meshes_by_depth!(meshes::Vector{Mesh},
                                 worlds::Vector{Mat4{Float64}},
                                 view::Mat4, nearest_first::Bool,
-                                depths::Union{Nothing,Vector{Float64}}=nothing)
-    n = length(meshes)
-    n <= 1 && return meshes
-    if depths !== nothing
-        return _sort_meshes_by_cached_depth!(meshes, worlds, depths, view, nearest_first)
-    elseif n <= 32
-        @inbounds for i in 2:n
-            mesh = meshes[i]
-            world = worlds[i]
-            depth = _mesh_view_depth_world(world, view)
-            j = i - 1
-            while j >= 1
-                prev_depth = _mesh_view_depth_world(worlds[j], view)
-                should_shift = nearest_first ? prev_depth < depth : prev_depth > depth
-                should_shift || break
-                meshes[j + 1] = meshes[j]
-                worlds[j + 1] = worlds[j]
-                j -= 1
-            end
-            meshes[j + 1] = mesh
-            worlds[j + 1] = world
-        end
-    else
-        local_depths = Vector{Float64}(undef, n)
-        return _sort_meshes_by_cached_depth!(meshes, worlds, local_depths, view, nearest_first)
-    end
-    return meshes
+                                depths::Union{Nothing,Vector{Float64}}=nothing,
+                                bounds_cache=nothing)
+    length(meshes) <= 1 && return meshes
+    return _sort_meshes_by_cached_depth!(
+        meshes, worlds, depths === nothing ? Float64[] : depths, view,
+        nearest_first, bounds_cache)
 end
 
 # Material transparency helpers (some materials lack these fields).
@@ -2447,7 +2496,8 @@ end
                                          mat::ShaderMaterial, lights,
                                          cam_pos::Vec3, normal_mat::Mat4,
                                          has_normals::Bool; shadow_fn=nothing,
-                                         ortho_dir=nothing)
+                                         ortho_dir=nothing,
+                                         mirrored::Bool=_world_mirrors_faces(world_mat))
     i1, i2, i3 = get_face(geo, fi)
     v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
     v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
@@ -2458,8 +2508,7 @@ end
         geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
     if side !== :front
         front_facing = _face_front_facing(
-            v1, v2, v3, center, cam_pos, ortho_dir) !=
-            _world_mirrors_faces(world_mat)
+            v1, v2, v3, center, cam_pos, ortho_dir) != mirrored
         face_n = _side_oriented_normal(face_n, side, front_facing)
     end
     return clamp_color(shade_face(
@@ -2510,7 +2559,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                               ortho_dir=nothing,
                               flat_attr_tri=nothing,
                               flat_attr_clipped=nothing,
-                              flat_iw=nothing)
+                              flat_iw=nothing,
+                              mirrored::Bool=_world_mirrors_faces(world_mat))
     W, H = rt.width, rt.height
     modelview = view * world_mat
     blend = material_transparent(mat) || alpha < 1.0
@@ -2574,7 +2624,6 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     view_inv = needs_world ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
-    mirrored = _world_mirrors_faces(world_mat)
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
@@ -2644,7 +2693,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                  _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
                                          normal_mat, has_normals;
                                          shadow_fn=shadow_fn,
-                                         ortho_dir=ortho_dir) :
+                                         ortho_dir=ortho_dir,
+                                         mirrored=mirrored) :
                  face_colors[fi]
             @inbounds for k in 2:(m - 1)
                 if blend
@@ -2709,7 +2759,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
                                      normal_mat, has_normals;
                                      shadow_fn=shadow_fn,
-                                     ortho_dir=ortho_dir) :
+                                     ortho_dir=ortho_dir,
+                                     mirrored=mirrored) :
              face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
             if needs_world
@@ -2777,6 +2828,9 @@ end
      isfinite(s3x) && isfinite(s3y)) || return nothing
     fW, fH = Float64(W), Float64(H)
     inv_area = 1.0 / area
+    edge0 = _canonical_edge(s2x, s2y, s3x, s3y)
+    edge1 = _canonical_edge(s3x, s3y, s1x, s1y)
+    edge2 = _canonical_edge(s1x, s1y, s2x, s2y)
     positive_area = area > 0
     min_x = max(floor(Int, clamp(min(s1x, s2x, s3x), 1.0, fW)), 1, xlo)
     max_x = min(ceil(Int, clamp(max(s1x, s2x, s3x), 1.0, fW)), W, xhi)
@@ -2788,9 +2842,9 @@ end
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
             cx = px - 0.5; cy = py - 0.5
-            w0 = edge_function(s2x, s2y, s3x, s3y, cx, cy) * inv_area
-            w1 = edge_function(s3x, s3y, s1x, s1y, cx, cy) * inv_area
-            w2 = edge_function(s1x, s1y, s2x, s2y, cx, cy) * inv_area
+            w0 = _canonical_edge_value(edge0, cx, cy) * inv_area
+            w1 = _canonical_edge_value(edge1, cx, cy) * inv_area
+            w2 = _canonical_edge_value(edge2, cx, cy) * inv_area
             if _half_open_triangle_contains(
                     w0, w1, w2, s1x, s1y, s2x, s2y, s3x, s3y,
                     positive_area)
