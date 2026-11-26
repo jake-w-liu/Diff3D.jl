@@ -1737,11 +1737,6 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
                                              "CubicSplineMorphWeightsKeyframeTrack"),
                                          times, values, in_tangents, out_tangents)
 
-# Catmull-Rom spline tangent: derivative estimated from the neighbouring
-# keyframes, clamped at the endpoints (matches three.js CubicInterpolant on a
-# uniform-Catmull-Rom basis). Works for Real and Vec3 values.
-@inline _cr_sub(a::Real, b::Real) = a - b
-@inline _cr_sub(a::Vec3, b::Vec3) = a - b
 @inline _cr_scale(a::Real, s) = a * s
 @inline _cr_scale(a::Vec3, s) = a * s
 @inline _cr_add(a::Real, b::Real) = a + b
@@ -1760,47 +1755,63 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
             _cr_add(_cr_scale(p2, h01), _cr_scale(m2, h11)))
 end
 
+# three.js CubicInterpolant (InterpolateSmooth) with its default
+# ZeroCurvatureEnding at both ends (src/math/interpolants/CubicInterpolant.js:
+# intervalChanged_ picks the neighbours and weights, interpolate_ evaluates the
+# polynomials in the same operation order). Inputs are already validated; `t`
+# is not NaN. `lo` is the key at or before `t` (three.js `i1 - 1`), so a query
+# on a key evaluates the interval that starts there.
+function _cubic_interpolant_sample(times::AbstractVector, values::AbstractVector, t)
+    n = length(times)
+    t <= times[1] && return values[1]
+    t >= times[n] && return values[n]
+    lo = searchsortedlast(times, t)
+    hi = lo + 1
+    t0 = times[lo]
+    t1 = times[hi]
+    # f''(t0) = 0 / f''(tN) = 0: mirror through the neighbouring key.
+    iprev, tprev = lo > 1 ? (lo - 1, times[lo - 1]) : (hi, t1)
+    inext, tnext = hi < n ? (hi + 1, times[hi + 1]) : (lo, t0)
+    half_dt = (t1 - t0) / 2
+    wp = half_dt / (t0 - tprev)
+    wn = half_dt / (tnext - t1)
+    p = (t - t0) / (t1 - t0)
+    pp = p * p
+    ppp = pp * p
+    half = oftype(wp, 0.5)
+    three_halves = oftype(wp, 1.5)
+    sp = -wp * ppp + 2 * wp * pp - wp * p
+    s0 = (1 + wp) * ppp + (-three_halves - 2 * wp) * pp + (-half + wp) * p + 1
+    s1 = (-1 - wn) * ppp + (three_halves + wn) * pp + half * p
+    sn = wn * ppp - wn * pp
+    return _cr_add(_cr_add(_cr_add(_cr_scale(values[iprev], sp),
+                                   _cr_scale(values[lo], s0)),
+                           _cr_scale(values[hi], s1)),
+                   _cr_scale(values[inext], sn))
+end
+
 """
     interpolate_catmull_rom(times, values, t)
 
-Catmull-Rom spline sample of `values` at sorted `times`, evaluated at `t`,
-clamped to the endpoints. Tangents use the centripetal/uniform Catmull-Rom rule
-on possibly non-uniform `times`; endpoint tangents are one-sided. `values` may be
-reals or `Vec3`.
+Smooth cubic sample of `values` at strictly increasing `times`, evaluated at
+`t` and clamped to the endpoints. This is three.js `CubicInterpolant`
+(`InterpolateSmooth`) with its default zero-curvature endings: interior
+tangents average the slopes of the two adjacent intervals, which reduces to
+uniform Catmull-Rom on evenly spaced keys. `values` may be reals or `Vec3`.
 """
 function interpolate_catmull_rom(times::AbstractVector, values::AbstractVector, t)
-    n = _validate_interpolant_inputs("interpolate_catmull_rom", times, values)
+    _validate_interpolant_inputs("interpolate_catmull_rom", times, values)
     # A NaN time passes both endpoint checks (all NaN comparisons are false) and
-    # then indexes one past the end via searchsortedfirst; reject it cleanly, as
+    # then indexes one past the end via searchsortedlast; reject it cleanly, as
     # interpolate_linear does, instead of leaking a BoundsError.
     isnan(t) && throw(ArgumentError("interpolate_catmull_rom: query time t must not be NaN"))
-    t <= times[1] && return values[1]
-    t >= times[n] && return values[n]
-    n == 1 && return values[1]
-    hi = searchsortedfirst(times, t)
-    lo = hi - 1
-    h = times[hi] - times[lo]
-    α = (t - times[lo]) / h
-    p1 = values[lo]; p2 = values[hi]
-    # One-sided tangents at the ends, central tangents in the interior, scaled by
-    # the local interval h so the Hermite basis matches the parameter spacing.
-    if lo > 1
-        m1 = _cr_scale(_cr_sub(values[hi], values[lo-1]), h / (times[hi] - times[lo-1]))
-    else
-        m1 = _cr_sub(values[hi], values[lo])           # forward difference
-    end
-    if hi < n
-        m2 = _cr_scale(_cr_sub(values[hi+1], values[lo]), h / (times[hi+1] - times[lo]))
-    else
-        m2 = _cr_sub(values[hi], values[lo])           # backward difference
-    end
-    return _hermite(p1, p2, m1, m2, α)
+    return _cubic_interpolant_sample(times, values, t)
 end
 
 # Sample a single track value at absolute time `t` according to its mode.
 function _track_value(tr::KeyframeTrack, t)
     if tr.interpolation === :cubic
-        return interpolate_catmull_rom(tr.times, tr.values, t)
+        return _cubic_interpolant_sample(tr.times, tr.values, t)
     elseif tr.interpolation === :step
         n = length(tr.times)
         n == 0 && error("cannot sample an empty KeyframeTrack")
@@ -1814,7 +1825,7 @@ end
 
 function _track_value(tr::NumberKeyframeTrack, t)
     if tr.interpolation === :cubic
-        return interpolate_catmull_rom(tr.times, tr.values, t)
+        return _cubic_interpolant_sample(tr.times, tr.values, t)
     elseif tr.interpolation === :step
         n = length(tr.times)
         n == 0 && error("cannot sample an empty NumberKeyframeTrack")
@@ -1861,10 +1872,13 @@ function _track_value(tr::CubicSplineQuaternionKeyframeTrack, t)
     times = tr.times
     n = length(times)
     n == 0 && error("cannot sample an empty CubicSplineQuaternionKeyframeTrack")
-    t <= times[1] && return tr.values[1]
+    # three.js GLTFCubicSplineQuaternionInterpolant copies the raw key only
+    # outside the keyed range; at the first key Interpolant.evaluate still
+    # interpolates (p = 0) and the result is normalized.
+    t < times[1] && return tr.values[1]
     t >= times[n] && return tr.values[n]
-    hi = searchsortedfirst(times, t)
-    lo = hi - 1
+    lo = searchsortedlast(times, t)
+    hi = lo + 1
     h = times[hi] - times[lo]
     α = (t - times[lo]) / h
     return _quat_hermite(tr.values[lo], tr.values[hi],
@@ -1879,12 +1893,13 @@ function _track_value(tr::QuaternionKeyframeTrack, t)
     n == 0 && error("cannot sample an empty QuaternionKeyframeTrack")
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
-    hi = searchsortedfirst(times, t)
-    lo = hi - 1
-    # STEP holds the value of the keyframe AT or before t; at an exact interior
-    # keyframe time searchsortedfirst lands on that key, so use searchsortedlast
-    # (the previous-keyframe `lo` above is correct only for the slerp interval).
-    tr.interpolation === :step && return values[searchsortedlast(times, t)]
+    # Both modes use the interval starting at the key at or before t, like
+    # three.js Interpolant.evaluate. On an interior key slerp then runs with
+    # alpha = 0 and returns that key itself, not its negation from the
+    # previous key's hemisphere (QuaternionLinearInterpolant.interpolate_).
+    lo = searchsortedlast(times, t)
+    tr.interpolation === :step && return values[lo]
+    hi = lo + 1
     α = (t - times[lo]) / (times[hi] - times[lo])
     return quat_slerp(values[lo], values[hi], α)
 end
