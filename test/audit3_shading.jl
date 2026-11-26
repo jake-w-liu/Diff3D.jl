@@ -237,7 +237,22 @@ end
     @test isnan(nan.r)
 end
 
-audit3_bytes(f::F, args...) where {F} = (f(args...); @allocated f(args...))
+# Explicit-argument wrappers: Julia 1.10 reports a spurious allocation when
+# `@allocated` measures a splatted call.
+audit3_shade_bytes(n, v, p, m, lights) =
+    (shade_face(n, v, p, m, lights); @allocated shade_face(n, v, p, m, lights))
+audit3_vertex_bytes(m, n, v, p, lights, c) =
+    (Diff3D._shade_lit_vertex_color(m, n, v, p, lights, nothing, c);
+     @allocated Diff3D._shade_lit_vertex_color(m, n, v, p, lights, nothing, c))
+audit3_direct_view_bytes(m, n, v, p, lights) =
+    (Diff3D._shade_lit(m, n, v, p, lights, nothing);
+     @allocated Diff3D._shade_lit(m, n, v, p, lights, nothing))
+audit3_mapped_bytes(n, v, p, m, lights, terms) =
+    (Diff3D._shade_physical_mapped(n, v, p, m, lights, nothing, terms);
+     @allocated Diff3D._shade_physical_mapped(n, v, p, m, lights, nothing, terms))
+audit3_pbr_bytes(n, l, v, albedo) =
+    (shade_pbr(n, l, v, Color3(1.0, 1.0, 1.0), 1.0, albedo, 0.3, 0.4);
+     @allocated shade_pbr(n, l, v, Color3(1.0, 1.0, 1.0), 1.0, albedo, 0.3, 0.4))
 
 @testset "Per-fragment PBR shading does not allocate" begin
     if Base.JLOptions().opt_level > 0
@@ -255,17 +270,13 @@ audit3_bytes(f::F, args...) where {F} = (f(args...); @allocated f(args...))
                                    attenuation_distance=1.0, anisotropy=0.3)
         for m in (MeshStandardMaterial(color=AUDIT3_ALBEDO, roughness=0.4), physical,
                   MeshPhongMaterial(), MeshLambertMaterial(), MeshToonMaterial())
-            @test audit3_bytes(shade_face, n, v, p, m, lights) == 0
-            @test audit3_bytes(Diff3D._shade_lit_vertex_color, m, n, v, p, lights, nothing,
-                               Color3(0.5, 0.6, 0.7)) == 0
-            @test audit3_bytes(Diff3D._shade_lit, m, n, v, p,
-                               Diff3D._DirectLightView(lights), nothing) == 0
+            @test audit3_shade_bytes(n, v, p, m, lights) == 0
+            @test audit3_vertex_bytes(m, n, v, p, lights, Color3(0.5, 0.6, 0.7)) == 0
+            @test audit3_direct_view_bytes(m, n, v, p, Diff3D._DirectLightView(lights)) == 0
             @test @inferred(shade_face(n, v, p, m, lights)) isa Color3{Float64}
         end
         terms = Diff3D._physical_mapped_terms(physical, nothing, nothing, 0.5, 0.5, 0.5, 0.5)
-        @test audit3_bytes(Diff3D._shade_physical_mapped, n, v, p, physical, lights,
-                           nothing, terms) == 0
-        @test audit3_bytes(shade_pbr, n, normalize(Vec3(1.0, 2.0, 3.0)), v,
-                           Color3(1.0, 1.0, 1.0), 1.0, AUDIT3_ALBEDO, 0.3, 0.4) == 0
+        @test audit3_mapped_bytes(n, v, p, physical, lights, terms) == 0
+        @test audit3_pbr_bytes(n, normalize(Vec3(1.0, 2.0, 3.0)), v, AUDIT3_ALBEDO) == 0
     end
 end

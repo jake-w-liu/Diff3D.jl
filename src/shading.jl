@@ -1737,9 +1737,12 @@ end
     opd = 2 * film_ior * thickness * cos_theta2
     s1 = _iridescence_sensitivity_xyz(opd)
     s2 = _iridescence_sensitivity_xyz(2 * opd)
-    T = promote_type(typeof(film_ior), typeof(cos_theta2), typeof(r12), typeof(s1[1]))
-    return _IridescenceFilm{T}(tir, film_ior, cos_theta2, r12, 1 - r12, phi21_is_pi,
-                               map(x -> convert(T, x), s1), map(x -> convert(T, x), s2))
+    T = promote_type(typeof(film_ior), typeof(cos_theta2), typeof(r12),
+                     typeof(s1[1]), typeof(s2[1]))
+    return _IridescenceFilm{T}(
+        tir, film_ior, cos_theta2, r12, 1 - r12, phi21_is_pi,
+        (convert(T, s1[1]), convert(T, s1[2]), convert(T, s1[3])),
+        (convert(T, s2[1]), convert(T, s2[2]), convert(T, s2[3])))
 end
 
 # Second-interface reflectance of one base-layer channel (iridescence_fragment
