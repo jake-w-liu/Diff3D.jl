@@ -134,3 +134,67 @@ end
     @test relabelled > 0
     @test_throws "bad Huffman code in AC refinement" Diff3D._jpeg_decode_rgb8(bad)
 end
+
+# Binary STL, 2 facets. Header bytes 0-9 hold "COLOR=" ff 80 00 ff and bytes
+# 10-19 hold "COLOR=" 10 20 40 c8. Facet 1 has attribute 0x8000 (use the
+# header colour), facet 2 has 0x168a (r=10, g=20, b=5 in 5-bit fields).
+const _AUDIT3_STL_COLOR = base64decode(
+    "Q09MT1I9/4AA/0NPTE9SPRAgQMgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" *
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAACAPwAAgD8AAABAAACAPwAAgD8AAIA/" *
+    "AAAAQAAAgD8AAIA/AACAPwAAAEAAAIA/AIAAAABAAAAAQAAAQEAAAABAAAAAQAAAAEAAAEBA" *
+    "AAAAQAAAAEAAAABAAABAQAAAAECKFg==")
+
+@testset "binary STL COLOR= header and per-facet colours" begin
+    geo = load_stl(_audit3_file(_AUDIT3_STL_COLOR, ".stl"))
+    @test geo.n_faces == 2
+    # Facet k stores normal (k, k, k+1) and vertices (k, k, k), (k+1, k, k),
+    # (k, k+1, k): the pattern 0,0,1 | 0,0,0 | 1,0,0 | 0,1,0 plus k.
+    @test geo.normals[1:3] == [1.0, 1.0, 2.0]
+    @test geo.positions[1:3] == [1.0, 1.0, 1.0]
+    @test has_attribute(geo, :color)
+    color = get_attribute(geo, :color)
+    @test color.item_size == 3
+    # three.js r186 STLLoader.parse of the same bytes (Float32 color
+    # attribute). STLLoader.js parseBinary scans header offsets 0..69 and
+    # keeps the last "COLOR=" match, so facet 1 takes (16, 32, 64)/255; facet
+    # 2 takes (10, 20, 5)/31. Both go through setRGB(..., SRGBColorSpace).
+    face1 = [0.005181516520678997, 0.014443843625485897, 0.05126945674419403]
+    face2 = [0.0849214568734169, 0.3738260269165039, 0.02229888364672661]
+    @test isapprox(color.data, vcat(face1, face1, face1, face2, face2, face2); atol=1e-7)
+    # Without a COLOR= header the attribute word is ignored (STLLoader.js
+    # hasColors stays false).
+    plain = copy(_AUDIT3_STL_COLOR)
+    plain[1:20] .= 0x00
+    @test !has_attribute(load_stl(_audit3_file(plain, ".stl")), :color)
+end
+
+@testset "ASCII STL tokens accept any whitespace" begin
+    # STLLoader.js parseASCII matches /normal[\s]+.../ and /vertex[\s]+.../
+    # inside /facet([\s\S]*?)endfacet/, so CR-only line ends, tabs, repeated
+    # spaces and a normal continued on the next line all parse.
+    facet = "facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\n" *
+            "vertex 0 1 0\nendloop\nendfacet\n"
+    base = "solid s\n" * facet * "endsolid s\n"
+    ref = load_stl(_audit3_file(base, ".stl"))
+    @test ref.n_faces == 1
+    @test ref.positions == [0.0, 0, 0, 1, 0, 0, 0, 1, 0]
+    @test ref.normals == repeat([0.0, 0, 1], 3)
+    for text in (replace(base, "\n" => "\r"),
+                 replace(base, "facet normal" => "facet  normal"),
+                 replace(replace(base, "facet normal" => "facet\tnormal"),
+                         "vertex 1 0 0" => "vertex\t1\t0 0"),
+                 replace(base, "facet normal 0 0 1" => "facet normal\n 0 0 1"),
+                 "﻿" * replace(base, "\n" => "\r\n"))
+        geo = load_stl(_audit3_file(text, ".stl"))
+        @test geo.n_faces == 1
+        @test geo.positions == ref.positions
+        @test geo.normals == ref.normals
+    end
+    # The solid name runs to the end of its line, even when it is a keyword.
+    named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid vertex 1 2\n"), ".stl"))
+    @test named.positions == ref.positions
+    @test_throws "ASCII STL facet must be followed by normal" load_stl(
+        _audit3_file(replace(base, "facet normal" => "facet"), ".stl"))
+    @test_throws "ASCII STL vertex requires 3 coordinates" load_stl(
+        _audit3_file(replace(base, "vertex 0 1 0" => "vertex 0 1"), ".stl"))
+end

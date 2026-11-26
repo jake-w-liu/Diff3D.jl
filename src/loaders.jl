@@ -286,6 +286,12 @@ end
 Load an STL mesh, auto-detecting binary vs ASCII.  Each triangle contributes
 three independent vertices; call [`compute_vertex_normals!`](@ref) afterward
 for smooth shading.
+
+A binary file whose header contains a `COLOR=rgba` sequence gets a per-vertex
+`:color` attribute, as in three.js `STLLoader`: each facet uses its own 5-bit
+RGB from the attribute word when bit 15 is clear, and the header colour
+otherwise. Colours are converted from sRGB to linear. The header alpha byte is
+not stored.
 """
 function load_stl(path::String)
     _looks_binary_stl(path) && return _load_stl_binary(path)
@@ -303,9 +309,28 @@ end
     return ncodeunits(line) == n || isspace(line[nextind(line, n)])
 end
 
+# Default facet colour from a Materialise-style "COLOR=rgba" header sequence,
+# as STLLoader.js parseBinary scans it: every start offset 0..69 is tested and
+# the last match wins. Returns `nothing` when the header has no such sequence.
+function _stl_header_default_color(head::Vector{UInt8})
+    found = nothing
+    @inbounds for off in 0:69
+        head[off + 1] == UInt8('C') && head[off + 2] == UInt8('O') &&
+            head[off + 3] == UInt8('L') && head[off + 4] == UInt8('O') &&
+            head[off + 5] == UInt8('R') && head[off + 6] == UInt8('=') || continue
+        found = (head[off + 7], head[off + 8], head[off + 9])
+    end
+    return found
+end
+
+@inline _stl_f32_le(rec::Vector{UInt8}, off::Int) =
+    @inbounds Float64(reinterpret(Float32,
+        UInt32(rec[off]) | (UInt32(rec[off + 1]) << 8) |
+        (UInt32(rec[off + 2]) << 16) | (UInt32(rec[off + 3]) << 24)))
+
 function _load_stl_binary(path::String)
     open(path, "r") do io
-        seek(io, 80)
+        head = read(io, 80)
         ntri = Int(read(io, UInt32))
         # A binary STL is exactly 84 + 50*ntri bytes; reject a truncated/corrupt
         # file (or absurd count) before allocating ntri*9 floats / reading past EOF.
@@ -314,14 +339,21 @@ function _load_stl_binary(path::String)
         positions = Vector{Float64}(undef, ntri * 9)
         normals = Vector{Float64}(undef, ntri * 9)
         indices = Vector{Int}(undef, ntri * 3)
+        default_color = _stl_header_default_color(head)
+        colors = default_color === nothing ? Float64[] : Vector{Float64}(undef, ntri * 9)
+        rec = Vector{UInt8}(undef, _STL_BINARY_FACET_BYTES)
         p = 1; vi = 0
         for _ in 1:ntri
-            nx = Float64(read(io, Float32)); ny = Float64(read(io, Float32)); nz = Float64(read(io, Float32))
+            readbytes!(io, rec, _STL_BINARY_FACET_BYTES) == _STL_BINARY_FACET_BYTES ||
+                error("binary STL ended inside a facet record")
+            nx = _stl_f32_le(rec, 1); ny = _stl_f32_le(rec, 5); nz = _stl_f32_le(rec, 9)
             isfinite(nx) || error("binary STL facet normal x must be finite")
             isfinite(ny) || error("binary STL facet normal y must be finite")
             isfinite(nz) || error("binary STL facet normal z must be finite")
-            for _v in 1:3
-                x = Float64(read(io, Float32)); y = Float64(read(io, Float32)); z = Float64(read(io, Float32))
+            for v in 0:2
+                x = _stl_f32_le(rec, 13 + 12v)
+                y = _stl_f32_le(rec, 17 + 12v)
+                z = _stl_f32_le(rec, 21 + 12v)
                 isfinite(x) || error("binary STL vertex x must be finite")
                 isfinite(y) || error("binary STL vertex y must be finite")
                 isfinite(z) || error("binary STL vertex z must be finite")
@@ -329,106 +361,121 @@ function _load_stl_binary(path::String)
                 normals[p] = nx; normals[p+1] = ny; normals[p+2] = nz
                 p += 3; vi += 1; indices[vi] = vi
             end
-            read(io, UInt16)                         # attribute byte count
+            if default_color !== nothing
+                # STLLoader.js parseBinary: attribute bit 15 clear means the facet
+                # carries its own 5-bit RGB (red in bits 0-4); set means the header
+                # default. Channels are sRGB and stored linear, like setRGB(...,
+                # SRGBColorSpace).
+                packed = UInt16(rec[49]) | (UInt16(rec[50]) << 8)
+                r, g, b = if packed & 0x8000 == 0
+                    ((packed & 0x1f) / 31, ((packed >> 5) & 0x1f) / 31,
+                     ((packed >> 10) & 0x1f) / 31)
+                else
+                    (default_color[1] / 255, default_color[2] / 255,
+                     default_color[3] / 255)
+                end
+                lr = srgb_to_linear(r); lg = srgb_to_linear(g); lb = srgb_to_linear(b)
+                for c in (p - 9):3:(p - 3)
+                    colors[c] = lr; colors[c + 1] = lg; colors[c + 2] = lb
+                end
+            end
         end
-        return BufferGeometry(positions, normals, Float64[], indices, ntri * 3, ntri)
+        geo = BufferGeometry(positions, normals, Float64[], indices, ntri * 3, ntri)
+        default_color === nothing || set_attribute!(geo, :color, colors, 3)
+        return geo
     end
 end
 
-function _stl_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, tok)
-    value === nothing && error("ASCII STL $context must be a number")
-    isfinite(value) || error("ASCII STL $context must be finite")
-    return value
-end
-
-@inline function _stl_next_token_bounds(line::AbstractString, state::Int)
-    i = state
-    last_i = lastindex(line)
-    while i <= last_i && isspace(line[i])
-        i = nextind(line, i)
+@inline function _stl_token_is(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                               word::String)
+    last - first + 1 == ncodeunits(word) || return false
+    @inbounds for j in 1:ncodeunits(word)
+        bytes[first + j - 1] == codeunit(word, j) || return false
     end
-    i <= last_i || return nothing
-    first_i = i
-    while i <= last_i && !isspace(line[i])
-        i = nextind(line, i)
+    return true
+end
+
+# Keywords of the ASCII STL grammar. A number slot that holds one of these (or
+# the end of the file) means the record is short of components.
+@inline function _stl_is_keyword(bytes::AbstractVector{UInt8}, first::Int, last::Int)
+    for word in ("solid", "endsolid", "facet", "normal", "outer", "loop",
+                 "vertex", "endloop", "endfacet")
+        _stl_token_is(bytes, first, last, word) && return true
     end
-    return (first_i, prevind(line, i), i)
+    return false
 end
 
-@inline function _stl_required_token_bounds(line::AbstractString, state::Int,
-                                            message::String)
-    token = _stl_next_token_bounds(line, state)
-    token === nothing && error(message)
-    return token
+@noinline function _stl_ascii_float_error(context::String, status::UInt8)
+    status == UInt8(2) ? error("ASCII STL $context must be finite") :
+                         error("ASCII STL $context must be a number")
 end
 
-@inline function _stl_parse_ascii_float_range(line::AbstractString,
-                                              first_i::Int, last_i::Int,
-                                              context::String)
-    return _stl_parse_ascii_float(SubString(line, first_i, last_i), context)
+# Read the next whitespace-separated token as a finite number. `short` is the
+# error raised when the file ends or a keyword appears instead.
+@inline function _stl_ascii_component(bytes::AbstractVector{UInt8}, p::Int, n::Int,
+                                      short::String, context::String)
+    first, last, p = _ply_next_ascii_token(bytes, p, n)
+    (first == 0 || _stl_is_keyword(bytes, first, last)) && error(short)
+    value, status = _try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) || _stl_ascii_float_error(context, status)
+    return value, p
 end
 
+# ASCII STL is parsed as a stream of whitespace-separated tokens, like the
+# regular expressions in three.js STLLoader.js parseASCII (`facet`, `normal`
+# and `vertex` followed by `\s+` and numbers): any mix of spaces, tabs, CR, LF
+# or CRLF separates tokens, and a record may span lines. The text after
+# `solid`/`endsolid` up to the end of that line is the solid name.
 function _load_stl_ascii(path::String)
+    text = read(path, String)
+    bytes = codeunits(text)
+    n = length(bytes)
     positions = Float64[]; normals = Float64[]; indices = Int[]
-    cur_n = (0.0, 0.0, 0.0); vi = 0; vertices_in_facet = 0; in_facet = false
-    open(path, "r") do io
-    for raw in eachline(io)
-        line = strip(raw)
-        if _stl_keyword(line, "facet normal")
+    nx = ny = nz = 0.0; vi = 0; vertices_in_facet = 0; in_facet = false
+    p = 1
+    if n >= 3 && bytes[1] == 0xef && bytes[2] == 0xbb && bytes[3] == 0xbf
+        p = 4                                     # UTF-8 byte-order mark
+    end
+    while true
+        first, last, p = _ply_next_ascii_token(bytes, p, n)
+        first == 0 && break
+        if _stl_token_is(bytes, first, last, "facet")
             !in_facet || error("ASCII STL nested facet is invalid")
-            first_state = _stl_required_token_bounds(
-                line, firstindex(line), "ASCII STL facet normal requires 3 components")
-            second_state = _stl_required_token_bounds(
-                line, first_state[3], "ASCII STL facet normal requires 3 components")
-            nx_state = _stl_required_token_bounds(
-                line, second_state[3], "ASCII STL facet normal requires 3 components")
-            ny_state = _stl_required_token_bounds(
-                line, nx_state[3], "ASCII STL facet normal requires 3 components")
-            nz_state = _stl_required_token_bounds(
-                line, ny_state[3], "ASCII STL facet normal requires 3 components")
-            cur_n = (
-                _stl_parse_ascii_float_range(line, nx_state[1], nx_state[2],
-                                             "facet normal x"),
-                _stl_parse_ascii_float_range(line, ny_state[1], ny_state[2],
-                                             "facet normal y"),
-                _stl_parse_ascii_float_range(line, nz_state[1], nz_state[2],
-                                             "facet normal z"),
-            )
+            f2, l2, p = _ply_next_ascii_token(bytes, p, n)
+            f2 != 0 && _stl_token_is(bytes, f2, l2, "normal") ||
+                error("ASCII STL facet must be followed by normal")
+            short = "ASCII STL facet normal requires 3 components"
+            nx, p = _stl_ascii_component(bytes, p, n, short, "facet normal x")
+            ny, p = _stl_ascii_component(bytes, p, n, short, "facet normal y")
+            nz, p = _stl_ascii_component(bytes, p, n, short, "facet normal z")
             in_facet = true
             vertices_in_facet = 0
-        elseif _stl_keyword(line, "vertex")
+        elseif _stl_token_is(bytes, first, last, "vertex")
             in_facet || error("ASCII STL vertex appears outside a facet")
-            first_state = _stl_required_token_bounds(
-                line, firstindex(line), "ASCII STL vertex requires 3 coordinates")
-            x_state = _stl_required_token_bounds(
-                line, first_state[3], "ASCII STL vertex requires 3 coordinates")
-            y_state = _stl_required_token_bounds(
-                line, x_state[3], "ASCII STL vertex requires 3 coordinates")
-            z_state = _stl_required_token_bounds(
-                line, y_state[3], "ASCII STL vertex requires 3 coordinates")
             vertices_in_facet < 3 || error("ASCII STL facet has more than 3 vertices")
-            push!(positions,
-                  _stl_parse_ascii_float_range(line, x_state[1], x_state[2], "vertex x"),
-                  _stl_parse_ascii_float_range(line, y_state[1], y_state[2], "vertex y"),
-                  _stl_parse_ascii_float_range(line, z_state[1], z_state[2], "vertex z"))
-            push!(normals, cur_n[1], cur_n[2], cur_n[3])
+            short = "ASCII STL vertex requires 3 coordinates"
+            x, p = _stl_ascii_component(bytes, p, n, short, "vertex x")
+            y, p = _stl_ascii_component(bytes, p, n, short, "vertex y")
+            z, p = _stl_ascii_component(bytes, p, n, short, "vertex z")
+            push!(positions, x, y, z)
+            push!(normals, nx, ny, nz)
             vi += 1; push!(indices, vi)
             vertices_in_facet += 1
-        elseif _stl_keyword(line, "endfacet")
+        elseif _stl_token_is(bytes, first, last, "endfacet")
             in_facet || error("ASCII STL endfacet appears outside a facet")
             vertices_in_facet == 3 ||
                 error("ASCII STL facet has $vertices_in_facet vertices; expected 3")
             in_facet = false
             vertices_in_facet = 0
+        elseif _stl_token_is(bytes, first, last, "solid") ||
+               _stl_token_is(bytes, first, last, "endsolid")
+            while p <= n && bytes[p] != UInt8('\n') && bytes[p] != UInt8('\r')
+                p += 1
+            end
         end
     end
-    end
     !in_facet || error("ASCII STL facet is missing endfacet")
-    rem(length(indices), 3) == 0 ||
-        error("ASCII STL vertex count $(length(indices)) is not divisible by 3")
-    nfaces = length(indices) ÷ 3
-    return BufferGeometry(positions, normals, Float64[], indices, vi, nfaces)
+    return BufferGeometry(positions, normals, Float64[], indices, vi, vi ÷ 3)
 end
 
 # ========================== OBJ ==========================
