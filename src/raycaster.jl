@@ -158,6 +158,11 @@ end
 
 function _raycaster_direction(dir::Vec3)
     d = _raycaster_vec3(dir, "direction")
+    # Normalizing an already normalized vector can move it by an ulp, so a
+    # raycaster revalidated on every `raycast` would drift between calls. A
+    # direction whose squared length is within rounding of one (normalized
+    # output is within 3 ulps) is kept as is, which makes this idempotent.
+    abs(d.x * d.x + d.y * d.y + d.z * d.z - 1.0) <= 8 * eps(Float64) && return d
     scale = max(abs(d.x), abs(d.y), abs(d.z))
     scale > 0.0 || throw(ArgumentError("Raycaster direction must be finite and non-zero"))
     scaled = d / scale

@@ -165,3 +165,23 @@ end
     end
     @test length(rc.vertex_codes) >= geometry.n_vertices
 end
+
+@testset "Repeated raycasts with one raycaster agree" begin
+    # raycast revalidates rc.ray each call; renormalizing a unit direction
+    # used to move it by an ulp, so a second identical cast could differ.
+    # Reproducer: direction (0.3sin(4), 0.3cos(6.8), -1.4) at a unit sphere.
+    mesh = Mesh(SphereGeometry(radius=1.0), MeshBasicMaterial(side=:double))
+    for i in 1:200
+        rc = Raycaster(Vec3(0.0, 0.0, 3.0),
+                       Vec3(0.3sin(i), 0.3cos(1.7i), -1.0 - 0.1 * (i % 7)))
+        direction = rc.ray.direction
+        first_hits = [hit.distance for hit in raycast(rc, mesh)]
+        @test rc.ray.direction === direction
+        @test [hit.distance for hit in raycast(rc, mesh)] == first_hits
+    end
+    # Unnormalized directions assigned later are still normalized.
+    rc = Raycaster(Vec3(0.0, 0.0, 3.0), Vec3(0.0, 0.0, -1.0))
+    rc.ray = Ray(Vec3(0.1, 0.3, 3.0), Vec3(0.0, 0.0, -2.0))
+    @test only(raycast(rc, Mesh(PlaneGeometry(), MeshBasicMaterial()))).distance == 3.0
+    @test rc.ray.direction == Vec3(0.0, 0.0, -1.0)
+end
