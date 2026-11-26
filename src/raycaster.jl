@@ -121,12 +121,20 @@ mutable struct Raycaster
     morph_positions::Vector{Vec3{Float64}}
     worlds::Vector{Mat4{Float64}}  # per-depth world-matrix traversal stack
     camera::Union{Nothing,AbstractCamera}
+    vertex_codes::Vector{UInt8}             # lateral pre-filter scratch, one per vertex
+    skinned_positions::Vector{Vec3{Float64}} # posed skin vertices, one per vertex
 end
 
 Raycaster(ray,near,far,layers,point_threshold,line_threshold,
           skinning_matrices,morph_positions) =
     Raycaster(ray,near,far,layers,point_threshold,line_threshold,
               skinning_matrices,morph_positions,Mat4{Float64}[],nothing)
+
+Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+          skinning_matrices,morph_positions,worlds,camera) =
+    Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+              skinning_matrices,morph_positions,worlds,camera,
+              UInt8[],Vec3{Float64}[])
 
 function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
                    layers::Layers, point_threshold::Float64,
@@ -453,6 +461,85 @@ end
     return _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
 end
 
+# Lateral pre-filter. Two orthogonal planes contain the ray; a primitive whose
+# vertices all lie beyond the same plane by more than `pad` plus a rounding
+# margin cannot meet the ray, so the exact test is skipped for it. The planes
+# are pulled back through the affine matrix `m` (u = (Mᵀn)·p + n·(t - o)), so
+# local vertices are classified without a world transform. The margin is 1e-9
+# relative to the coordinate magnitudes involved, many orders above the
+# rounding error of either computation, so the filter never rejects anything
+# the exact test could accept; non-finite values disable it.
+struct _RayLateralFilter
+    au::Vec3{Float64}
+    bu::Float64
+    av::Vec3{Float64}
+    bv::Float64
+    linear_scale::Float64   # largest |entry| of the linear part of `m`
+    offset_scale::Float64   # |translation|₁ + |ray origin|₁
+    pad::Float64            # pick radius for points and lines, zero for triangles
+end
+
+function _ray_lateral_filter(rc::Raycaster, m::Mat4{Float64}, pad::Float64)
+    e = m.e
+    (e[4] == 0.0 && e[8] == 0.0 && e[12] == 0.0 && e[16] == 1.0) || return nothing
+    o = rc.ray.origin
+    d = rc.ray.direction
+    ax, ay, az = abs(d.x), abs(d.y), abs(d.z)
+    helper = ax <= ay && ax <= az ? Vec3(1.0, 0.0, 0.0) :
+             ay <= az ? Vec3(0.0, 1.0, 0.0) : Vec3(0.0, 0.0, 1.0)
+    nu = normalize(cross(d, helper))
+    nv = cross(d, nu)
+    c1 = Vec3(e[1], e[2], e[3])
+    c2 = Vec3(e[5], e[6], e[7])
+    c3 = Vec3(e[9], e[10], e[11])
+    t = Vec3(e[13], e[14], e[15])
+    relative = t - o
+    au = Vec3(dot(c1, nu), dot(c2, nu), dot(c3, nu))
+    av = Vec3(dot(c1, nv), dot(c2, nv), dot(c3, nv))
+    bu = dot(relative, nu)
+    bv = dot(relative, nv)
+    linear_scale = max(abs(e[1]), abs(e[2]), abs(e[3]), abs(e[5]), abs(e[6]),
+                       abs(e[7]), abs(e[9]), abs(e[10]), abs(e[11]))
+    offset_scale = abs(t.x) + abs(t.y) + abs(t.z) + abs(o.x) + abs(o.y) + abs(o.z)
+    (_finite_vec3(au) && _finite_vec3(av) && isfinite(bu) && isfinite(bv) &&
+     isfinite(linear_scale) && isfinite(offset_scale)) || return nothing
+    return _RayLateralFilter(au, bu, av, bv, linear_scale, offset_scale, pad)
+end
+
+# Bit set of the half-spaces (u > s, u < -s, v > s, v < -s) holding `p`; a
+# primitive is beyond a plane when the codes of all its vertices share a bit.
+@inline function _ray_lateral_code(f::_RayLateralFilter, p::Vec3{Float64})
+    u = dot(f.au, p) + f.bu
+    v = dot(f.av, p) + f.bv
+    slack = f.pad + 1.0e-9 * (f.pad + f.offset_scale +
+                              f.linear_scale * (abs(p.x) + abs(p.y) + abs(p.z)))
+    (isfinite(u) && isfinite(v) && isfinite(slack)) || return 0x00
+    return (u > slack ? 0x01 : 0x00) | (u < -slack ? 0x02 : 0x00) |
+           (v > slack ? 0x04 : 0x00) | (v < -slack ? 0x08 : 0x00)
+end
+
+# Codes for every vertex of `geo` (optionally morphed); `nothing` when the
+# filter is unavailable for this matrix.
+function _ray_lateral_codes!(rc::Raycaster, geo::BufferGeometry, positions,
+                             m::Mat4{Float64}, pad::Float64)
+    filter = _ray_lateral_filter(rc, m, pad)
+    filter === nothing && return nothing
+    codes = rc.vertex_codes
+    n = geo.n_vertices
+    length(codes) < n && resize!(codes, n)
+    @inbounds for vi in 1:n
+        codes[vi] = _ray_lateral_code(filter, _geometry_vertex(geo, positions, vi))
+    end
+    return codes
+end
+
+@inline _ray_lateral_rejects(::Nothing, i1::Int, i2::Int, i3::Int) = false
+@inline _ray_lateral_rejects(codes::Vector{UInt8}, i1::Int, i2::Int, i3::Int) =
+    @inbounds((codes[i1] & codes[i2] & codes[i3]) != 0x00)
+@inline _ray_lateral_rejects(::Nothing, i1::Int, i2::Int) = false
+@inline _ray_lateral_rejects(codes::Vector{UInt8}, i1::Int, i2::Int) =
+    @inbounds((codes[i1] & codes[i2]) != 0x00)
+
 # Build the world-space ray through normalized device coords (x,y ∈ [-1,1]).
 function _camera_ray(camera::PerspectiveCamera, ndc_x, ndc_y)
     inv_vp = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
@@ -527,9 +614,12 @@ function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     o,d = rc.ray.origin,rc.ray.direction
     thr = rc.point_threshold
     _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
+    filter = _ray_lateral_filter(rc, wm, thr)
     @inbounds for entry in _draw_entry_range(geo)
         vi = _draw_vertex_index(geo, entry)
-        p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
+        local_point = _geometry_vertex(geo, morphed_positions, vi)
+        filter === nothing || _ray_lateral_code(filter, local_point) == 0x00 || continue
+        p = mat4_transform_point(wm, local_point)
         t, dist = _ray_point_distance(o, d, p)
         if dist < thr && rc.near <= t <= rc.far
             # Hit location is the closest ray point (three.js Points testPoint);
@@ -550,11 +640,13 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     entries = _draw_entry_range(geo)
     isempty(entries) && return hits
     _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
+    codes = _ray_lateral_codes!(rc, geo, morphed_positions, wm, thr)
     first_entry = first(entries)
     last_entry = last(entries)
     @inbounds for entry in first_entry:step:(last_entry - 1)
         vi1 = _draw_vertex_index(geo, entry)
         vi2 = _draw_vertex_index(geo, entry + 1)
+        _ray_lateral_rejects(codes, vi1, vi2) && continue
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
@@ -566,6 +658,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     if mode === :line_loop && last_entry - first_entry + 1 > 2
         vi1 = _draw_vertex_index(geo, last_entry)
         vi2 = _draw_vertex_index(geo, first_entry)
+        _ray_lateral_rejects(codes, vi1, vi2) && return hits
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
@@ -608,11 +701,13 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         geo = _mesh_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
+        _raycast_bounds_miss(rc, geo, morphed_positions, wm, 0.0) && return hits
         # Cull by material side like three.js Mesh.raycast (default :front).
         side = _raycast_world_side(material_side(_mesh_material(obj)), wm)
-        _raycast_bounds_miss(rc, geo, morphed_positions, wm, 0.0) && return hits
+        codes = _ray_lateral_codes!(rc, geo, morphed_positions, wm, 0.0)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
+            _ray_lateral_rejects(codes, i1, i2, i3) && continue
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
             c = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i3))
@@ -636,8 +731,10 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             if triangle_mode
                 _raycast_bounds_miss(rc, bounds, m, 0.0) && continue
                 instance_side = _raycast_world_side(side, m)
+                codes = _ray_lateral_codes!(rc, geo, nothing, m, 0.0)
                 for fi in _draw_face_range(geo)
                     i1, i2, i3 = get_face(geo, fi)
+                    _ray_lateral_rejects(codes, i1, i2, i3) && continue
                     a = mat4_transform_point(m, get_vertex(geo, i1))
                     b = mat4_transform_point(m, get_vertex(geo, i2))
                     c = mat4_transform_point(m, get_vertex(geo, i3))
@@ -661,11 +758,20 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         mats = _skinning_matrices!(rc.skinning_matrices, obj, :world)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
         side = _raycast_world_side(material_side(obj.material), wm)
+        # Pose each vertex once (faces share vertices); skinned positions are
+        # already in world space.
+        posed = rc.skinned_positions
+        resize!(posed, geo.n_vertices)
+        @inbounds for vi in 1:geo.n_vertices
+            posed[vi] = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, vi)
+        end
+        codes = _ray_lateral_codes!(rc, geo, posed, Mat4{Float64}(), 0.0)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
-            a = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1)
-            b = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i2)
-            c = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i3)
+            _ray_lateral_rejects(codes, i1, i2, i3) && continue
+            a = posed[i1]
+            b = posed[i2]
+            c = posed[i3]
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
                 push!(hits, Intersection(t, o + d * t, obj, fi))

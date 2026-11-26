@@ -105,3 +105,63 @@ end
     @test length(rows) == 16   # 0.8 of a 2.0-unit, 40-pixel frustum
     @test length(cols) == 6    # 0.3 of a 2.0-unit, 40-pixel frustum
 end
+
+# Brute-force reference: every drawn face against the world-space triangle with
+# the public Möller–Trumbore test (no bounding or lateral rejection).
+function audit3_bruteforce_hits(mesh::Mesh, rc::Raycaster)
+    geometry = mesh.geometry
+    world = compute_world_matrix(mesh)
+    hits = Tuple{Float64,Int}[]
+    for face in 1:geometry.n_faces
+        a, b, c = (mat4_transform_point(world, get_vertex(geometry, index))
+                   for index in Diff3D.get_face(geometry, face))
+        t = ray_triangle_intersect(rc.ray.origin, rc.ray.direction, a, b, c; side=:double)
+        t === nothing || push!(hits, (t, face))
+    end
+    return sort!(hits; by=first)
+end
+
+@testset "Raycast pruning keeps every exact hit" begin
+    # Faces are skipped only when all vertices lie beyond one plane through
+    # the ray; rays aimed exactly at shared vertices and edges, on grids and at
+    # extreme magnitudes, must still report every face the exact test accepts.
+    for magnitude in (1.0, 1.0e-150, 1.0e150), trial in 1:40
+        n = 9
+        positions = Float64[]
+        for i in 0:2, j in 0:2
+            append!(positions, (i * magnitude, j * magnitude, ((i + j) % 2) * magnitude))
+        end
+        indices = Int[]
+        for i in 0:1, j in 0:1
+            v = 3i + j + 1
+            append!(indices, (v, v + 3, v + 1, v + 1, v + 3, v + 4))
+        end
+        geometry = BufferGeometry(positions, Float64[], Float64[], indices, n, 8)
+        mesh = Mesh(geometry, MeshBasicMaterial(side=:double))
+        mesh.rotation = Euler(0.1 * trial, -0.05 * trial, 0.3)
+        mesh.scale = Vec3(1.0, -2.0, 0.5)
+        world = compute_world_matrix(mesh)
+        # Aim at a vertex (trial odd) or an edge midpoint (trial even).
+        a = get_vertex(geometry, 1 + trial % n)
+        b = get_vertex(geometry, 1 + (trial * 7) % n)
+        aim = mat4_transform_point(world, isodd(trial) ? a : (a + b) * 0.5)
+        direction = Vec3(sin(trial), cos(2trial), -1.0)
+        rc = Raycaster(aim - direction * (4magnitude), direction)
+        actual = raycast(rc, mesh)   # validates (renormalizes) rc.ray first
+        expected = audit3_bruteforce_hits(mesh, rc)
+        @test [(hit.distance, hit.face_index) for hit in actual] == expected
+    end
+end
+
+@testset "Raycast scratch buffers are reused across casts" begin
+    geometry = SphereGeometry(radius=1.0, width_segments=64, height_segments=32)
+    mesh = Mesh(geometry, MeshBasicMaterial())
+    rc = Raycaster(Vec3(0.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0))
+    raycast(rc, mesh)
+    if Base.JLOptions().opt_level > 0
+        # Only the returned hit vector is allocated; the per-vertex pruning
+        # codes live in the raycaster (2145 vertices would need >2 KB).
+        @test (@allocated raycast(rc, mesh)) < 1024
+    end
+    @test length(rc.vertex_codes) >= geometry.n_vertices
+end
