@@ -1141,8 +1141,18 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
     for j in 0:height_segments
         v = j / height_segments
         θ = theta_start + v * theta_length
-        sinθ = sin(θ)
+        # SphereGeometry.js:81-82 places each ring at y = radius * cos(theta)
+        # with ringRadius = sqrt(radius^2 - y^2) = |radius| * |sin(theta)|,
+        # which is never negative: sweeps outside [0, pi] fold back onto the
+        # sphere and a negative radius mirrors only y.
+        abs_sinθ = abs(sin(θ))
         cosθ = cos(θ)
+        ring_radius = abs(radius) * abs_sinθ
+        y = radius * cosθ
+        # SphereGeometry.js:113 normalizes the vertex, i.e. its direction
+        # from the center; a zero radius leaves zero normals.
+        ny_dir = radius > 0 ? cosθ : radius < 0 ? -cosθ : 0.0
+        ring_dir = iszero(radius) ? 0.0 : abs_sinθ
         # three.js centers each pole vertex's u between its ring neighbours.
         u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
                    j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
@@ -1152,11 +1162,10 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             sinϕ = sin(ϕ)
             cosϕ = cos(ϕ)
 
-            x = -radius * sinθ * cosϕ
-            y = radius * cosθ
-            z = radius * sinθ * sinϕ
+            x = -ring_radius * cosϕ
+            z = ring_radius * sinϕ
 
-            nx, ny, nz = -sinθ * cosϕ, cosθ, sinθ * sinϕ
+            nx, ny, nz = -ring_dir * cosϕ, ny_dir, ring_dir * sinϕ
             nl = hypot(nx, ny, nz)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl

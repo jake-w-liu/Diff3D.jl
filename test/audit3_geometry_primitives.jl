@@ -3,6 +3,8 @@ using Test, Diff3D
 # Index buffers below were printed by three.js r186 (`Array.from(geometry.index.array)`)
 # and are zero-based; `.+ 1` converts them to Diff3D's one-based faces.
 _audit3_indices(geo) = geo.indices[1:3geo.n_faces]
+_audit3_close(a::Vec3, b::Vec3; atol=1e-12) =
+    abs(a.x - b.x) <= atol && abs(a.y - b.y) <= atol && abs(a.z - b.z) <= atol
 
 @testset "audit3 primitive triangulation matches three.js" begin
     # PlaneGeometry.js:85-95 emits (a, b, d), (b, c, d): each cell is split along
@@ -95,4 +97,39 @@ _audit3_box_side_normals(geo) =
         coords = sub.positions[axis:3:end]
         @test all(c -> abs(abs(c) - half) > 1e-9 || abs(c) == half, coords)
     end
+end
+
+@testset "audit3 SphereGeometry ring radius is never negative (three.js)" begin
+    # SphereGeometry.js:81-82: y = radius * cos(theta) and
+    # ringRadius = sqrt(radius^2 - y^2) >= 0; SphereGeometry.js:113 normalizes
+    # the vertex for its normal. Expected values come from that Float64 vertex
+    # math evaluated in node for three.js r186 (the module itself stores Float32).
+    # A sweep starting above the north pole folds back onto the sphere instead of
+    # mirroring through the y axis.
+    a = SphereGeometry(radius=1.0, width_segments=4, height_segments=2,
+                       theta_start=-0.5, theta_length=1.5)
+    # first vertex of each ring (ix = 0, phi = 0) and ix = 1 (phi = pi/2)
+    @test _audit3_close(get_vertex(a, 1), Vec3(-0.47942553860420295, 0.8775825618903728, 0.0))
+    @test _audit3_close(get_vertex(a, 2), Vec3(0.0, 0.8775825618903728, 0.47942553860420295))
+    @test _audit3_close(get_vertex(a, 6), Vec3(-0.2474039592545231, 0.9689124217106447, 0.0))
+    @test _audit3_close(get_vertex(a, 11), Vec3(-0.8414709848078964, 0.5403023058681398, 0.0))
+    @test _audit3_close(get_normal(a, 1), Vec3(-0.47942553860420295, 0.8775825618903728, 0.0))
+
+    # A negative radius mirrors only y; normals still point from the center to
+    # the vertex: new SphereGeometry(-2, 4, 2) ring 1 is (-2, 0, 0), (0, 0, 2), ...
+    b = SphereGeometry(radius=-2.0, width_segments=4, height_segments=2)
+    @test _audit3_close(get_vertex(b, 1), Vec3(0.0, -2.0, 0.0))
+    @test _audit3_close(get_vertex(b, 6), Vec3(-2.0, 0.0, 0.0))
+    @test _audit3_close(get_vertex(b, 7), Vec3(0.0, 0.0, 2.0))
+    @test _audit3_close(get_vertex(b, 15), Vec3(0.0, 2.0, 0.0))
+    @test _audit3_close(get_normal(b, 1), Vec3(0.0, -1.0, 0.0))
+    @test _audit3_close(get_normal(b, 6), Vec3(-1.0, 0.0, 0.0))
+    for vi in 1:b.n_vertices
+        @test _audit3_close(get_normal(b, vi), get_vertex(b, vi) / 2)
+    end
+
+    # new THREE.SphereGeometry(0, 3, 2).attributes.normal is all zeros:
+    # normalizing a zero vertex leaves it zero (Vector3.normalize divides by
+    # `length() || 1`).
+    @test all(iszero, SphereGeometry(radius=0.0, width_segments=3, height_segments=2).normals)
 end
