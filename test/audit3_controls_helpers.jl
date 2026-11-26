@@ -155,3 +155,57 @@ end
     @test get_attribute(axes.geometry, :color).data ==
         [1, 0, 0, 1, 0.6, 0, 0, 1, 0, 0.6, 1, 0, 0, 0, 1, 0, 0.6, 1]
 end
+
+# TrackballControls oracle: three.js r186 with staticMoving=true, zoomSpeed=1,
+# trackball_rotate!(dx, dy) -> _moveCurr - _movePrev = (dx, dy); _rotateCamera(),
+# trackball_zoom!(f) -> _zoomEnd.y - _zoomStart.y = f - 1; _zoomCamera(),
+# each followed by the update() tail: position = target + eye,
+# _checkDistances(), lookAt(target).
+function _a3_trackball(; kwargs...)
+    camera = PerspectiveCamera()
+    camera.position = Vec3(1.0, 2.0, 5.0)
+    camera.target = Vec3(0.5, 0.0, -1.0)
+    return TrackballControls(camera; kwargs...)
+end
+
+@testset "audit3 TrackballControls ignores non-positive zoom factors" begin
+    # TrackballControls.js:632 scales the eye only when `factor > 0`.
+    tc = _a3_trackball()
+    trackball_zoom!(tc, -1.0)
+    @test tc.camera.position == Vec3(1.0, 2.0, 5.0)
+    trackball_zoom!(tc, 0.0)
+    @test tc.camera.position == Vec3(1.0, 2.0, 5.0)
+    @test view_matrix(tc.camera) == view_matrix(_a3_trackball().camera)
+    trackball_zoom!(tc, 0.5)
+    @test _a3_vec(tc.camera.position) ≈ [0.75, 1.0, 2.0] atol=1e-14
+end
+
+@testset "audit3 TrackballControls min/max distance" begin
+    tc = _a3_trackball(min_distance=2.0, max_distance=4.0)
+    @test tc.min_distance == 2.0 && tc.max_distance == 4.0
+    # _checkDistances (TrackballControls.js:738-756) after each operation.
+    trackball_rotate!(tc, 0.3, -0.2)
+    @test _a3_vec(tc.camera.position) ≈
+        [-0.4132015055232565, 1.8959168074889639, 2.401699938176633] atol=1e-12
+    @test _a3_vec(tc.camera.up) ≈
+        [-0.08299098377028535, 0.97705648722633, -0.1961456534868535] atol=1e-12
+    trackball_zoom!(tc, 0.1)
+    @test _a3_vec(tc.camera.position) ≈
+        [0.043399247238371685, 0.947958403744482, 0.7008499690883168] atol=1e-12
+    trackball_zoom!(tc, -1.0)
+    trackball_zoom!(tc, 0.0)
+    @test _a3_vec(tc.camera.position) ≈
+        [0.043399247238371685, 0.947958403744482, 0.7008499690883168] atol=1e-12
+    trackball_zoom!(tc, 3.0)
+    @test _a3_vec(tc.camera.position) ≈
+        [-0.41320150552325663, 1.8959168074889639, 2.401699938176633] atol=1e-12
+    # A pan keeps the eye but applies a limit tightened at runtime.
+    tc.max_distance = 3.0
+    trackball_pan!(tc, 0.0, 0.0)
+    @test sqrt(sum(abs2, _a3_vec(tc.camera.position - tc.target))) ≈ 3.0 atol=1e-12
+    # Defaults keep three.js minDistance = 0, maxDistance = Infinity.
+    @test _a3_trackball().min_distance == 0.0
+    @test _a3_trackball().max_distance == Inf
+    @test_throws ArgumentError _a3_trackball(min_distance=3.0, max_distance=2.0)
+    @test_throws ArgumentError _a3_trackball(min_distance=NaN)
+end

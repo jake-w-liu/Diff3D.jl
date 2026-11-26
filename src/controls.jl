@@ -508,16 +508,39 @@ mutable struct TrackballControls
     position0::Vec3{Float64}
     target0::Vec3{Float64}
     up0::Vec3{Float64}
+    # three.js TrackballControls.minDistance / maxDistance: every rotate, zoom
+    # and pan keeps the camera-to-target distance inside this range.
+    min_distance::Float64
+    max_distance::Float64
 end
 
+TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
+                  enabled::Bool, position0::Vec3{Float64},
+                  target0::Vec3{Float64}, up0::Vec3{Float64}) =
+    TrackballControls(camera, target, enabled, position0, target0, up0,
+                      0.0, Inf)
+
+"""
+    TrackballControls(camera[, target]; enabled=true, min_distance=0.0,
+                      max_distance=Inf)
+
+Trackball camera manipulator (three.js `TrackballControls`). `min_distance`
+and `max_distance` bound the camera-to-target distance after every
+`trackball_rotate!`, `trackball_zoom!`, and `trackball_pan!`, like three.js
+`minDistance`/`maxDistance`.
+"""
 function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=_camera_control_target(cam);
-                           enabled::Bool=true)
+                           enabled::Bool=true, min_distance::Real=0.0,
+                           max_distance::Real=Inf)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(
         target, "TrackballControls target")
+    minimum_distance, maximum_distance =
+        _checked_orbit_distances(min_distance, max_distance)
     TrackballControls(cam, checked_target, enabled, cam.position,
-                      checked_target, cam.up)
+                      checked_target, cam.up, minimum_distance,
+                      maximum_distance)
 end
 
 """Save the current camera position, up vector, and target as the reset state."""
@@ -545,6 +568,21 @@ function trackball_reset!(tc::TrackballControls)
     tc.camera.target = target
     _sync_camera_rotation_from_view!(tc.camera)
     return tc
+end
+
+# three.js TrackballControls._checkDistances (TrackballControls.js:738-756):
+# an eye longer than maxDistance, or shorter than minDistance, is rescaled to
+# that length along its direction. A zero eye has no direction and stays zero.
+function _trackball_limited_eye(tc::TrackballControls, eye::Vec3)
+    min_distance, max_distance =
+        _checked_orbit_distances(tc.min_distance, tc.max_distance)
+    distance = norm(eye)
+    if distance > max_distance
+        return normalize(eye) * max_distance
+    elseif distance < min_distance && distance > 0.0
+        return normalize(eye) * min_distance
+    end
+    return eye
 end
 
 function _trackball_set_eye!(tc::TrackballControls, eye::Vec3)
@@ -587,13 +625,17 @@ function trackball_rotate!(tc::TrackballControls, dx, dy)
     c, s = cos(angle), sin(angle)
     new_up = _checked_control_vec3(
         _rotate_about_unit_axis(up, axis, c, s), "TrackballControls camera up")
-    new_eye = _rotate_about_unit_axis(eye, axis, c, s)
+    new_eye = _trackball_limited_eye(tc, _rotate_about_unit_axis(eye, axis, c, s))
     _checked_control_vec3(target + new_eye, "TrackballControls camera position")
     cam.up = new_up
     return _trackball_set_eye!(tc, new_eye)
 end
 
-"""Scale the camera distance from the trackball target. `factor < 1` zooms in."""
+"""
+Scale the camera distance from the trackball target. `factor < 1` zooms in.
+A factor that is not positive leaves the distance unchanged, as three.js
+`TrackballControls` ignores such zoom steps.
+"""
 function trackball_zoom!(tc::TrackballControls, factor)
     tc.enabled || return tc
     _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
@@ -601,7 +643,9 @@ function trackball_zoom!(tc::TrackballControls, factor)
     checked_factor = _checked_control_scalar(
         factor, "TrackballControls zoom factor")
     eye = tc.camera.position - tc.target
-    return _trackball_set_eye!(tc, eye * max(checked_factor, 0.0))
+    # TrackballControls.js:632 only scales the eye when `factor > 0`.
+    scaled = checked_factor > 0.0 ? eye * checked_factor : eye
+    return _trackball_set_eye!(tc, _trackball_limited_eye(tc, scaled))
 end
 
 """Pan the trackball target and camera in the view plane."""
@@ -615,8 +659,11 @@ function trackball_pan!(tc::TrackballControls, dx, dy)
     shift = right * checked_dx + up * checked_dy
     target = _checked_control_vec3(
         tc.target + shift, "TrackballControls target")
+    eye = tc.camera.position - tc.target
+    limited = _trackball_limited_eye(tc, eye)
     position = _checked_control_vec3(
-        tc.camera.position + shift, "TrackballControls camera position")
+        limited === eye ? tc.camera.position + shift : target + limited,
+        "TrackballControls camera position")
     tc.target = target
     tc.camera.position = position
     tc.camera.target = target
