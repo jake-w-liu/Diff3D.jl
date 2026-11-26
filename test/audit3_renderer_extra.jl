@@ -138,3 +138,41 @@ end
         end
     end
 end
+
+# Screen-space corners (x, y) from three.js r186 src/renderers/shaders/ShaderLib/
+# sprite.glsl.js (vertex shader: scale the centred quad by the world column
+# lengths, then rotate by SpriteMaterial.rotation, then project), evaluated in
+# Node for a 64×48 target with the scene built below.
+const _SPRITE_ORACLE = Dict(
+    (true, true) => [(41.26108908103175, 33.1801883903417), (53.57932759358215, 24.75282800997375),
+                     (50.305242508038745, 19.96711111004609), (37.987003995488344, 28.394471490414038)],
+    (true, false) => [(35.849890748639005, 65.14236528945254), (110.10477284738369, 14.341867246628695),
+                      (90.36844433250836, -14.50664415376656), (16.11356223376367, 36.29385388905729)],
+    (false, true) => [(40.67740282368281, 32.60160095246773), (52.2192762163632, 24.705380527315477),
+                      (49.151542506246784, 20.22128659652344), (37.6096691135664, 28.1175070216757)])
+
+@testset "Sprite quads scale before rotating like three.js" begin
+    W, H = 64, 48
+    for ((perspective, attenuation), expected) in _SPRITE_ORACLE
+        camera = perspective ?
+            PerspectiveCamera(fov=deg2rad(50.0), aspect=W / H, near=0.1, far=100.0) :
+            OrthographicCamera(left=-4.0, right=4.0, top=3.0, bottom=-3.0, near=0.1, far=100.0)
+        camera.position = Vec3(1.0, 2.0, 6.0); camera.target = Vec3(0.0, 0.0, 0.0)
+        parent = Group(); parent.position = Vec3(0.3, -0.2, 0.5)
+        parent.rotation = Euler(0.2, -0.4, 0.3); parent.scale = Vec3(1.5, -0.7, 2.0)
+        sprite = Sprite(SpriteMaterial(rotation=0.6, size_attenuation=attenuation);
+                        center=Vec2(0.3, 0.8))
+        sprite.position = Vec3(0.5, 0.4, -0.3); sprite.scale = Vec3(1.2, 0.8, 1.0)
+        sprite.rotation = Euler(0.1, 0.2, 0.3)
+        add!(parent, sprite)
+        view = view_matrix(camera)
+        corners = Diff3D._sprite_quad_corners(sprite, sprite.material, camera,
+                                              compute_world_matrix(sprite), view)
+        vp = projection_matrix(camera) * view
+        for (corner, (x, y)) in zip(corners, expected)
+            sx, sy = Diff3D._sprite_corner(corner, vp, W, H)[1:2]
+            @test sx ≈ x atol=1e-9
+            @test sy ≈ y atol=1e-9
+        end
+    end
+end

@@ -386,21 +386,27 @@ end
 
 @inline function _sprite_quad_corners(sprite::Sprite, material,
                                        camera::AbstractCamera, world::Mat4, view::Mat4)
-    matrix = sprite_world_matrix(sprite, camera, world)
+    world64 = convert(Mat4{Float64},world)
     rotation = _material_field(material, :rotation)
     rotation === nothing && (rotation = 0.0)
     size_attenuation = _material_field(material, :size_attenuation)
-    center = Vec3(mat4_get(matrix,1,4),mat4_get(matrix,2,4),mat4_get(matrix,3,4))
+    center = Vec3(mat4_get(world64,1,4),mat4_get(world64,2,4),mat4_get(world64,3,4))
     center_view = mat4_transform_vec4(view,Vec4(center.x,center.y,center.z,1.0))
     attenuation = size_attenuation === false && camera isa PerspectiveCamera ?
                   max(0.0001,-center_view.z) : 1.0
     cosine, sine = cos(rotation), sin(rotation)
+    # three.js sprite.glsl.js scales the centred quad by the world scale, then
+    # rotates it in the view plane, so a non-square sprite stays rectangular.
+    sx = _mat4_linear_column_norm(world64,1)
+    sy = _mat4_linear_column_norm(world64,2)
+    right = Vec3(mat4_get(view,1,1),mat4_get(view,1,2),mat4_get(view,1,3))
+    up = Vec3(mat4_get(view,2,1),mat4_get(view,2,2),mat4_get(view,2,3))
     return ntuple(4) do index
-        x = (index in (2,3) ? 1.0 : 0.0)-sprite.center.x
-        y = (index in (3,4) ? 1.0 : 0.0)-sprite.center.y
+        x = ((index in (2,3) ? 1.0 : 0.0)-sprite.center.x)*sx
+        y = ((index in (3,4) ? 1.0 : 0.0)-sprite.center.y)*sy
         lx = (cosine*x-sine*y)*attenuation
         ly = (sine*x+cosine*y)*attenuation
-        mat4_transform_point(matrix,Vec3(lx,ly,0.0))
+        center+right*lx+up*ly
     end
 end
 
