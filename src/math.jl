@@ -36,6 +36,12 @@ Base.convert(::Type{Vec3{T}}, v::Vec3) where {T<:Real} =
 Base.convert(::Type{Vec4{T}}, v::Vec4) where {T<:Real} =
     Vec4{T}(convert(T, v.x), convert(T, v.y), convert(T, v.z), convert(T, v.w))
 
+@inline _vec3_eltype(::Vec3{T}) where {T} = T
+@inline function _promote_vec3s(vectors::Vec3...)
+    T = promote_type(map(_vec3_eltype, vectors)...)
+    return map(v -> convert(Vec3{T}, v), vectors)
+end
+
 # Vec3 arithmetic
 Base.:+(a::Vec3, b::Vec3) = Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 Base.:-(a::Vec3, b::Vec3) = Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
@@ -1067,6 +1073,8 @@ struct Box3{T<:Real}
     max::Vec3{T}
 end
 Box3() = Box3(Vec3(Inf, Inf, Inf), Vec3(-Inf, -Inf, -Inf))
+# Mixed element types promote like the Vec3 and Ray constructors.
+Box3(min::Vec3, max::Vec3) = Box3(_promote_vec3s(min, max)...)
 
 function box3_expand_by_point(box::Box3, p::Vec3)
     Box3(
@@ -1078,6 +1086,10 @@ end
 struct BoundingSphere{T<:Real}
     center::Vec3{T}
     radius::T
+end
+function BoundingSphere(center::Vec3, radius::Real)
+    T = promote_type(_vec3_eltype(center), typeof(radius))
+    return BoundingSphere{T}(convert(Vec3{T}, center), convert(T, radius))
 end
 
 struct Ray{T<:Real}
@@ -1095,6 +1107,10 @@ Ray(origin::Vec3, direction::Vec3) =
 struct Plane{T<:Real}
     normal::Vec3{T}
     constant::T
+end
+function Plane(normal::Vec3, constant::Real)
+    T = promote_type(_vec3_eltype(normal), typeof(constant))
+    return Plane{T}(convert(Vec3{T}, normal), convert(T, constant))
 end
 
 # Signed distance from a plane (a·x + d = 0) to a point; >0 on the normal side.
@@ -1173,6 +1189,7 @@ struct Triangle{T<:Real}
     b::Vec3{T}
     c::Vec3{T}
 end
+Triangle(a::Vec3, b::Vec3, c::Vec3) = Triangle(_promote_vec3s(a, b, c)...)
 
 @inline _vec3_max_abs(v::Vec3) =
     max(max(abs(v.x), abs(v.y)), abs(v.z))
@@ -1728,6 +1745,7 @@ struct Line3{T<:Real}
     start::Vec3{T}
     finish::Vec3{T}
 end
+Line3(start::Vec3, finish::Vec3) = Line3(_promote_vec3s(start, finish)...)
 
 line3_delta(l::Line3)  = l.finish - l.start
 line3_length(l::Line3) = norm(line3_delta(l))
@@ -1879,6 +1897,8 @@ struct Spherical{T<:Real}
     phi::T
     theta::T
 end
+Spherical(radius::Real, phi::Real, theta::Real) =
+    Spherical(promote(radius, phi, theta)...)
 
 function spherical_to_cartesian(s::Spherical)
     sinphi_r = sin(s.phi) * s.radius
@@ -1909,6 +1929,8 @@ struct Cylindrical{T<:Real}
     theta::T
     y::T
 end
+Cylindrical(radius::Real, theta::Real, y::Real) =
+    Cylindrical(promote(radius, theta, y)...)
 
 cylindrical_to_cartesian(c::Cylindrical) =
     Vec3(c.radius * sin(c.theta), c.y, c.radius * cos(c.theta))

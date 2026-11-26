@@ -126,3 +126,28 @@ end
         end
     end
 end
+
+@testset "audit3 math-core: math value types promote mixed numeric arguments" begin
+    # three.js Cylindrical.setFromCartesianCoords (src/math/Cylindrical.js:91-97):
+    # radius = sqrt(x*x + z*z), theta = atan2(x, z), y = y; node prints
+    # (3.1622776601683795, 0.3217505543966422, 2) for (1, 2, 3).
+    cylindrical = @inferred cartesian_to_cylindrical(Vec3(1, 2, 3))
+    @test cylindrical isa Cylindrical{Float64}
+    @test (cylindrical.radius, cylindrical.theta, cylindrical.y) ==
+          (3.1622776601683795, 0.3217505543966422, 2.0)
+    @test (@inferred Cylindrical(1.0, 0.5, 2)) === Cylindrical(1.0, 0.5, 2.0)
+    @test (@inferred Spherical(1, 0.5, 0.25)) === Spherical(1.0, 0.5, 0.25)
+    @test (@inferred Plane(Vec3(0.0, 1.0, 0.0), 2)) ===
+          Plane(Vec3(0.0, 1.0, 0.0), 2.0)
+    @test (@inferred BoundingSphere(Vec3(0.0, 0.0, 0.0), 1)) ===
+          BoundingSphere(Vec3(0.0, 0.0, 0.0), 1.0)
+    @test (@inferred Box3(Vec3(0, 0, 0), Vec3(1.0, 1.0, 1.0))) ===
+          Box3(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0))
+    @test (@inferred Triangle(Vec3(0, 0, 0), Vec3(1.0, 0.0, 0.0), Vec3(0, 1, 0))) ===
+          Triangle(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0))
+    @test (@inferred Line3(Vec3(0, 0, 0), Vec3(1.0, 0.0, 0.0))) ===
+          Line3(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0))
+    # Same-type construction keeps its element type.
+    @test Box3(Vec3(0, 0, 0), Vec3(1, 1, 1)) isa Box3{Int}
+    @test Plane(Vec3(0f0, 1f0, 0f0), 2f0) isa Plane{Float32}
+end
