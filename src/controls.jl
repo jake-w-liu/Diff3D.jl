@@ -1777,13 +1777,16 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
             _cr_add(_cr_scale(p2, h01), _cr_scale(m2, h11)))
 end
 
-# three.js CubicInterpolant (InterpolateSmooth) with its default
-# ZeroCurvatureEnding at both ends (src/math/interpolants/CubicInterpolant.js:
-# intervalChanged_ picks the neighbours and weights, interpolate_ evaluates the
-# polynomials in the same operation order). Inputs are already validated; `t`
-# is not NaN. `lo` is the key at or before `t` (three.js `i1 - 1`), so a query
-# on a key evaluates the interval that starts there.
-function _cubic_interpolant_sample(times::AbstractVector, values::AbstractVector, t)
+# three.js CubicInterpolant (InterpolateSmooth) (src/math/interpolants/
+# CubicInterpolant.js: intervalChanged_ picks the neighbours and weights,
+# interpolate_ evaluates the polynomials in the same operation order). The
+# endings are :zero_curvature (the interpolant default), :zero_slope or
+# :wrap_around. Inputs are already validated; `t` is not NaN. `lo` is the key
+# at or before `t` (three.js `i1 - 1`), so a query on a key evaluates the
+# interval that starts there.
+function _cubic_interpolant_sample(times::AbstractVector, values::AbstractVector, t,
+                                   ending_start::Symbol=:zero_curvature,
+                                   ending_end::Symbol=:zero_curvature)
     n = length(times)
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
@@ -1791,9 +1794,24 @@ function _cubic_interpolant_sample(times::AbstractVector, values::AbstractVector
     hi = lo + 1
     t0 = times[lo]
     t1 = times[hi]
-    # f''(t0) = 0 / f''(tN) = 0: mirror through the neighbouring key.
-    iprev, tprev = lo > 1 ? (lo - 1, times[lo - 1]) : (hi, t1)
-    inext, tnext = hi < n ? (hi + 1, times[hi + 1]) : (lo, t0)
+    iprev, tprev = if lo > 1
+        lo - 1, times[lo - 1]
+    elseif ending_start === :zero_slope         # f'(t0) = 0
+        hi, 2 * t0 - t1
+    elseif ending_start === :wrap_around        # continue from the other end
+        n - 1, t0 + times[n - 1] - times[n]
+    else                                        # f''(t0) = 0
+        hi, t1
+    end
+    inext, tnext = if hi < n
+        hi + 1, times[hi + 1]
+    elseif ending_end === :zero_slope           # f'(tN) = 0
+        hi, 2 * t1 - t0
+    elseif ending_end === :wrap_around
+        2, t1 + times[2] - times[1]
+    else                                        # f''(tN) = 0
+        lo, t0
+    end
     half_dt = (t1 - t0) / 2
     wp = half_dt / (t0 - tprev)
     wn = half_dt / (tnext - t1)
@@ -2140,9 +2158,13 @@ mutable struct AnimationMixer
     # read it from the mixer, so dispatching on a track's target type passes
     # only heap references and the per-frame update does not box the time.
     sample_time::Float64
+    # Internal: cubic-track endings for that update (see _animation_cubic_endings).
+    ending_start::Symbol
+    ending_end::Symbol
 end
 AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale) =
-    AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale, 0.0)
+    AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale, 0.0,
+                   :zero_slope, :zero_slope)
 function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing,
                         repetitions::Union{Integer,Nothing}=nothing,
                         clamp_when_finished::Union{Bool,Nothing}=nothing,
@@ -2193,6 +2215,31 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
         return y <= d ? y : 2d - y
     end
     return mod(x, d)
+end
+
+# Endings of :cubic tracks while the clip plays at unscaled time `time`, as
+# three.js AnimationAction._setEndings sets them (AnimationAction.js:742-917,
+# zeroSlopeAtStart/End at their default true): zero slope for :once and
+# :pingpong; for :repeat zero slope only at the clip start of the first loop
+# and the clip end of the last one (entered when one repetition is pending),
+# and wrap-around across every loop seam. Playing backward from zero, the
+# first wrap below zero leaves loop count 0 and only the start of the final
+# loop gets zero slope. three.js keeps a cached interval's weights until the
+# sample leaves it, so a track whose interval spans a loop seam (two keys)
+# can still use the previous loop's endings there; this follows the endings
+# of the loop being sampled.
+function _animation_cubic_endings(time::Float64, duration::Float64, loop::Symbol,
+                                  repetitions::Int)
+    (loop === :repeat && duration > 0.0) || return :zero_slope, :zero_slope
+    if time >= 0.0
+        k = floor(time / duration)
+        start = k == 0.0 ? :zero_slope : :wrap_around
+        last = repetitions == 0 || (repetitions >= 2 && k == repetitions - 1)
+        return start, last ? :zero_slope : :wrap_around
+    end
+    j = ceil(-time / duration) - 1.0
+    start = repetitions >= 1 && j == repetitions - 1 ? :zero_slope : :wrap_around
+    return start, :wrap_around
 end
 
 # Write an interpolated value to a track target. Quaternion samples targeting the
@@ -2694,7 +2741,7 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
     wrote = false
     if hasproperty(node, :morph_target_influences)
         values = getproperty(node, :morph_target_influences)
-        value = Float64(_track_value(tr, mixer.sample_time))
+        value = Float64(_mixer_track_value(tr, mixer))
         if values isa Vector{Float64}
             _write_morph_component_value!(values, tr.component, value)
         else
@@ -2715,8 +2762,19 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
     return wrote
 end
 
+# Sample `tr` at the mixer's clip time; :cubic tracks use the loop endings
+# chosen for this update.
+_mixer_track_value(tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
+    _track_value(tr, mixer.sample_time)
+function _mixer_track_value(tr::Union{KeyframeTrack,NumberKeyframeTrack},
+                            mixer::AnimationMixer)
+    tr.interpolation === :cubic || return _track_value(tr, mixer.sample_time)
+    return _cubic_interpolant_sample(tr.times, tr.values, mixer.sample_time,
+                                     mixer.ending_start, mixer.ending_end)
+end
+
 _apply_track!(target, tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
-    _write_track_value!(target, tr.property, _track_value(tr, mixer.sample_time))
+    _write_track_value!(target, tr.property, _mixer_track_value(tr, mixer))
 
 function _apply_track!(target, tr::NumberKeyframeTrack, mixer::AnimationMixer)
     if tr.property === :morph_target_influences && tr.component != 0
@@ -2725,7 +2783,7 @@ function _apply_track!(target, tr::NumberKeyframeTrack, mixer::AnimationMixer)
         return target
     end
     return _write_track_value!(target, tr.property, tr.component,
-                               _track_value(tr, mixer.sample_time))
+                               _mixer_track_value(tr, mixer))
 end
 
 function _apply_track!(target, tr::_MorphWeightsTrack, mixer::AnimationMixer)
@@ -2742,6 +2800,8 @@ function _mixer_apply_time!(mixer::AnimationMixer, time::Float64)
                                              mixer.loop,
                                              mixer.repetitions,
                                              mixer.clamp_when_finished)
+    mixer.ending_start, mixer.ending_end =
+        _animation_cubic_endings(time, mixer.clip.duration, mixer.loop, mixer.repetitions)
     for tr in mixer.clip.tracks
         _apply_track!(tr.target, tr, mixer)
     end

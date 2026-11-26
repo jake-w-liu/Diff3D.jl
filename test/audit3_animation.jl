@@ -33,8 +33,10 @@ _audit3_q(q::Quaternion) = [q.x, q.y, q.z, q.w]
         @test sample.z ≈ 2e atol=1e-14
     end
     mixer = AnimationMixer(AnimationClip("smooth", AbstractKeyframeTrack[number]; loop=:once))
-    mixer_set_time!(mixer, 0.1)
-    @test obj.position.y ≈ 0.417989417989418 atol=1e-14
+    # An interior interval has real neighbours, so the action endings
+    # (tested below) do not change it.
+    mixer_set_time!(mixer, 1.7)
+    @test obj.position.y ≈ 0.541333333333333 atol=1e-14
 
     # Evenly spaced keys keep the uniform Catmull-Rom curve: interior tangents
     # (v[k+1] - v[k-1]) / 2 = 2 and 4 around [1, 2] for keys 0, 1, 4, 9, and
@@ -141,6 +143,45 @@ end
         @test _audit3_mixer_update_allocations(mixer) == 0
     end
     @test mesh.material.map.offset.x == sample_track(tracks[13], mixer.sample_time)
+end
+
+function _audit3_smooth_mixer_x(loop, repetitions, dt, steps)
+    obj = Group()
+    track = NumberKeyframeTrack(obj, "position[x]", [0.0, 0.3, 1.0, 1.6, 2.0],
+                                [0.0, 1.0, -2.0, 4.0, 0.5]; interpolation=:cubic)
+    mixer = AnimationMixer(AnimationClip("smooth", AbstractKeyframeTrack[track]);
+                           loop=loop, repetitions=repetitions)
+    xs = Float64[]
+    for k in 1:maximum(steps)
+        mixer_update!(mixer, dt)
+        k in steps && push!(xs, obj.position.x)
+    end
+    return xs
+end
+
+@testset "audit3 animation: mixer cubic tracks use the action endings" begin
+    # AnimationAction._updateTime/_setEndings (AnimationAction.js:742-917) set
+    # the CubicInterpolant endings per loop (CubicInterpolant.js:40-118):
+    # ZeroSlope for LoopOnce and LoopPingPong, ZeroSlope at the first start and
+    # the last end of LoopRepeat, WrapAround across loop seams. Expected values
+    # are obj.position.x after k calls of mixer.update(dt) in node (r186),
+    # clip times [0, 0.3, 1, 1.6, 2], values [0, 1, -2, 4, 0.5].
+    @test _audit3_smooth_mixer_x(:once, -1, 0.07, [1, 3, 24, 27]) ≈
+          [0.14388888888888896, 0.8050000000000002, 3.723999999999993, 1.415148437499986] atol=1e-12
+    @test _audit3_smooth_mixer_x(:repeat, -1, 0.07, [1, 24, 31, 51, 55]) ≈
+          [0.14388888888888896, 3.7133333333333263, 0.5128783068783138, 3.943649553571435,
+           1.836914062499972] atol=1e-12
+    @test _audit3_smooth_mixer_x(:repeat, 2, 0.07, [31, 51, 55]) ≈
+          [0.5128783068783138, 3.943649553571435, 1.8857421874999725] atol=1e-12
+    @test _audit3_smooth_mixer_x(:repeat, 3, -0.07, [2, 10, 30, 40]) ≈
+          [1.7155208333333354, 1.1674107142857046, 1.257812500000015, -0.21825396825399535] atol=1e-12
+    @test _audit3_smooth_mixer_x(:pingpong, -1, 0.07, [1, 24, 31, 34]) ≈
+          [0.14388888888888896, 3.723999999999993, 2.1310703125000163, 3.990062500000002] atol=1e-12
+    # Sampling a track directly keeps the CubicInterpolant default
+    # (ZeroCurvatureEnding), as new CubicInterpolant(...).evaluate does.
+    track = NumberKeyframeTrack(Group(), "position[x]", [0.0, 0.3, 1.0, 1.6, 2.0],
+                                [0.0, 1.0, -2.0, 4.0, 0.5]; interpolation=:cubic)
+    @test sample_track(track, 0.1) == interpolate_catmull_rom(track.times, track.values, 0.1)
 end
 
 @testset "audit3 animation: morph influence paths resolve target names" begin
