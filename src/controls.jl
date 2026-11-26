@@ -2680,16 +2680,25 @@ end
     return nothing
 end
 
-"""Diff3D line segments along +x (red), +y (green), +z (blue)."""
+"""
+Diff3D line segments along +x (red), +y (green), +z (blue). As in three.js
+`AxesHelper`, each axis fades from its pure colour at the origin to a lighter
+tint at its tip (`:color` attribute).
+"""
 function AxesHelper(size=1.0)
     size = _geometry_finite_float(size, "AxesHelper size")
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
     geo = _line_geo(pos)
-    set_attribute!(geo, :color, Float64[1,0,0, 1,0,0,  0,1,0, 0,1,0,  0,0,1, 0,0,1], 3)
+    # three.js AxesHelper.js colors array.
+    set_attribute!(geo, :color, Float64[1,0,0, 1,0.6,0,  0,1,0, 0.6,1,0,  0,0,1, 0,0.6,1], 3)
     LineSegments(geo, LineBasicMaterial(color=Color3(1.0,1.0,1.0)); name="AxesHelper")
 end
 
-"""A `divisions`×`divisions` grid of size `size` on the xz-plane."""
+"""
+A `divisions`×`divisions` grid of size `size` on the xz-plane, with the
+vertex order of three.js `GridHelper`: for each offset `k` from `-size/2`, a
+line parallel to x and then one parallel to z.
+"""
 function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
     size = _geometry_finite_float(size, "GridHelper size")
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
@@ -2700,13 +2709,15 @@ function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
         undef, _helper_line_position_length(lines, "GridHelper"))
     step = size / divisions; half = size / 2
     vi = 1
-    for i in 0:divisions
-        c = -half + i*step
-        _write_line_vertex!(pos, vi, c, 0.0, -half)
-        _write_line_vertex!(pos, vi + 1, c, 0.0, half)      # parallel to z
-        _write_line_vertex!(pos, vi + 2, -half, 0.0, c)
-        _write_line_vertex!(pos, vi + 3, half, 0.0, c)      # parallel to x
+    k = -half
+    # GridHelper.js: `k` advances by `k += step`, not `-half + i*step`.
+    for _ in 0:divisions
+        _write_line_vertex!(pos, vi, -half, 0.0, k)
+        _write_line_vertex!(pos, vi + 1, half, 0.0, k)      # parallel to x
+        _write_line_vertex!(pos, vi + 2, k, 0.0, -half)
+        _write_line_vertex!(pos, vi + 3, k, 0.0, half)      # parallel to z
         vi += 4
+        k += step
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
 end
@@ -2812,12 +2823,6 @@ function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0)
                   p.x,p.y-size,p.z, p.x,p.y+size,p.z,
                   p.x,p.y,p.z-size, p.x,p.y,p.z+size]
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PointLightHelper")
-end
-
-# Append the two endpoints of a segment a→b to a flat position buffer.
-@inline function _push_seg!(pos::Vector{Float64}, a::Vec3, b::Vec3)
-    push!(pos, a.x, a.y, a.z, b.x, b.y, b.z)
-    return pos
 end
 
 """
@@ -3013,7 +3018,9 @@ end
 """
 Polar grid on the xz-plane: `rings` concentric circles out to `radius` and
 `sectors` evenly spaced radial spokes (three.js `PolarGridHelper`). Circles are
-approximated by `circle_segments` chords each.
+approximated by `circle_segments` chords each. As in three.js, spokes start on
++z and advance toward +x, a single sector draws no spoke, and rings are listed
+from the outermost inward.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                          circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
@@ -3022,29 +3029,30 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
     rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
     circle_segments = _geometry_nonnegative_int(
         circle_segments, "PolarGridHelper circle_segments")
+    # PolarGridHelper.js only draws sectors when `sectors > 1`.
+    spokes = sectors > 1 ? sectors : 0
     ring_segments = _geometry_checked_mul(
         rings, circle_segments, "PolarGridHelper segment count")
     n_segments = _geometry_checked_add(
-        sectors, ring_segments, "PolarGridHelper segment count")
+        spokes, ring_segments, "PolarGridHelper segment count")
     pos = Vector{Float64}(
         undef, _helper_line_position_length(
             n_segments, "PolarGridHelper"))
     vi = 1
-    # Radial spokes.
-    for k in 0:sectors-1
-        φ = 2π * k / sectors
-        x = radius * cos(φ); z = radius * sin(φ)
-        vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0), Vec3(x, 0.0, z))
+    # Radial spokes: angle v = (i / sectors) * 2pi, point (sin v, 0, cos v) * radius.
+    for i in 0:spokes-1
+        v = (i / sectors) * (2π)
+        vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0),
+                                  Vec3(sin(v) * radius, 0.0, cos(v) * radius))
     end
-    # Concentric rings.
-    for ri in 1:rings
-        r = radius * ri / rings
-        prev = Vec3(r, 0.0, 0.0)
-        for k in 1:circle_segments
-            φ = 2π * k / circle_segments
-            cur = Vec3(r * cos(φ), 0.0, r * sin(φ))
-            vi = _write_line_segment!(pos, vi, prev, cur)
-            prev = cur
+    # Rings from the outside in: r = radius - radius / rings * i.
+    for i in 0:rings-1
+        r = radius - (radius / rings * i)
+        for j in 0:circle_segments-1
+            v1 = (j / circle_segments) * (2π)
+            v2 = ((j + 1) / circle_segments) * (2π)
+            vi = _write_line_segment!(pos, vi, Vec3(sin(v1) * r, 0.0, cos(v1) * r),
+                                      Vec3(sin(v2) * r, 0.0, cos(v2) * r))
         end
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")

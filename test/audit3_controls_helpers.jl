@@ -110,3 +110,48 @@ end
         @test _a3_vec(oc.target) ≈ target atol=1e-12
     end
 end
+
+# three.js helpers store positions in Float32BufferAttributes, so the oracle
+# values below are float32; Diff3D's Float64 positions must round to them.
+_a3_f32(v) = Float32.(v)
+
+@testset "audit3 PolarGridHelper matches three.js placement" begin
+    # PolarGridHelper.js: spokes only when sectors > 1, at v = i/sectors*2pi
+    # with point (sin v, 0, cos v)*radius; rings r = radius - radius/rings*i
+    # from the outside in, chords between j/divisions*2pi and (j+1)/...
+    pg = PolarGridHelper(3.0, 3, 2; circle_segments=5)
+    @test _a3_f32(pg.geometry.positions) == Float32[
+        0, 0, 0, 0, 0, 3, 0, 0, 0, 2.598076105117798, 0, -1.5, 0, 0, 0,
+        -2.598076105117798, 0, -1.5, 0, 0, 3, 2.8531694412231445, 0,
+        0.9270510077476501, 2.8531694412231445, 0, 0.9270510077476501,
+        1.7633557319641113, 0, -2.427051067352295, 1.7633557319641113, 0,
+        -2.427051067352295, -1.7633557319641113, 0, -2.427051067352295,
+        -1.7633557319641113, 0, -2.427051067352295, -2.8531694412231445, 0,
+        0.9270510077476501, -2.8531694412231445, 0, 0.9270510077476501,
+        -7.347880586115415e-16, 0, 3, 0, 0, 1.5, 1.4265847206115723, 0,
+        0.4635255038738251, 1.4265847206115723, 0, 0.4635255038738251,
+        0.8816778659820557, 0, -1.2135255336761475, 0.8816778659820557, 0,
+        -1.2135255336761475, -0.8816778659820557, 0, -1.2135255336761475,
+        -0.8816778659820557, 0, -1.2135255336761475, -1.4265847206115723, 0,
+        0.4635255038738251, -1.4265847206115723, 0, 0.4635255038738251,
+        -3.6739402930577075e-16, 0, 1.5]
+    # A single sector draws no spoke: 1 ring x 7 chords = 14 vertices.
+    @test PolarGridHelper(2.5, 1, 1; circle_segments=7).geometry.n_vertices == 14
+end
+
+@testset "audit3 GridHelper and AxesHelper match three.js buffers" begin
+    # GridHelper.js: per k (k += step from -size/2), push the x-parallel line
+    # (-h,0,k)-(h,0,k) and then the z-parallel line (k,0,-h)-(k,0,h).
+    grid = GridHelper(5.0, 3)
+    @test _a3_f32(grid.geometry.positions) == Float32[
+        -2.5, 0, -2.5, 2.5, 0, -2.5, -2.5, 0, -2.5, -2.5, 0, 2.5,
+        -2.5, 0, -0.8333333134651184, 2.5, 0, -0.8333333134651184,
+        -0.8333333134651184, 0, -2.5, -0.8333333134651184, 0, 2.5,
+        -2.5, 0, 0.8333333134651184, 2.5, 0, 0.8333333134651184,
+        0.8333333134651184, 0, -2.5, 0.8333333134651184, 0, 2.5,
+        -2.5, 0, 2.5, 2.5, 0, 2.5, 2.5, 0, -2.5, 2.5, 0, 2.5]
+    # AxesHelper.js colors: each axis tip is a lighter tint of its colour.
+    axes = AxesHelper(2.0)
+    @test get_attribute(axes.geometry, :color).data ==
+        [1, 0, 0, 1, 0.6, 0, 0, 1, 0, 0.6, 1, 0, 0, 0, 1, 0, 0.6, 1]
+end
