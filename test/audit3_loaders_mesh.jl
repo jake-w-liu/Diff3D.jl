@@ -35,3 +35,102 @@ const _AUDIT3_JPEG_DC_ONLY = base64decode(
     @test _audit3_jpeg_digest(img) ==
           "0490e1ff73079e04aadf16aab216a251d04eae001fa95354f758bff2fcc1aeeb"
 end
+
+# JPEG segment walker for the marker tests: (marker, offset of its 0xFF,
+# length field). Entropy data after SOS is skipped to the next non-RST marker.
+function _audit3_jpeg_segments(b)
+    out = Tuple{UInt8,Int,Int}[]
+    p = 3
+    while p < length(b) && b[p] == 0xFF && b[p + 1] != 0xD9
+        m = b[p + 1]
+        len = (Int(b[p + 2]) << 8) | b[p + 3]
+        push!(out, (m, p, len))
+        p += 2 + len
+        if m == 0xDA
+            while p < length(b) && !(b[p] == 0xFF && b[p + 1] != 0x00 &&
+                                     !(0xD0 <= b[p + 1] <= 0xD7))
+                p += 1
+            end
+        end
+    end
+    return out
+end
+
+# 16x8 4:2:0 baseline JPEG (cjpeg -quality 75) with its DHT segments removed,
+# as Motion-JPEG frames are stored. cjpeg's unoptimized tables are the
+# T.81 Annex K.3 tables, so the file decodes identically to the original.
+const _AUDIT3_JPEG_NO_DHT = base64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRof" *
+    "Hh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwh" *
+    "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAAR" *
+    "CAAIABADASIAAhEBAxEB/9oADAMBAAIRAxEAPwDHtfEe2BE38sf0/wA4robbxH/qoxJ7kfy/" *
+    "rRRXXjcJSvONtuSPy0l+b+49fIsDR93Q/9k=")
+
+# 16x8 grayscale progressive JPEG (cjpeg -quality 90 -grayscale -progressive):
+# DC first/refine and AC first/refine scans.
+const _AUDIT3_JPEG_PROG_GRAY = base64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoM" *
+    "DAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/wgALCAAIABABAREA/8QAFAAB" *
+    "AAAAAAAAAAAAAAAAAAAABv/aAAgBAQAAAAE8t//EABcQAAMBAAAAAAAAAAAAAAAAAAADBRH/" *
+    "2gAIAQEAAQUCRaxabR//xAAaEAACAgMAAAAAAAAAAAAAAAAAAQIREjFh/9oACAEBAAY/Akr2" *
+    "Qjl0/8QAGRAAAgMBAAAAAAAAAAAAAAAAAAFBgaHw/9oACAEBAAE/IZ7ubQus/9oACAEBAAAA" *
+    "EP8A/8QAGhABAAIDAQAAAAAAAAAAAAAAAQARITGR8P/aAAgBAQABPxAhjQKV0ZXtdmk9ANx/" *
+    "/9k=")
+
+@testset "JPEG sequential frames default to the T.81 Annex K Huffman tables" begin
+    # jdhuff.c jinit_huff_decoder -> jstdhuff.c std_huff_tables: slots 0/1
+    # left undefined by the first scan get the standard tables.
+    @test isempty(filter(s -> s[1] == 0xC4,
+                         _audit3_jpeg_segments(_AUDIT3_JPEG_NO_DHT)))
+    img = Diff3D._jpeg_decode_rgb8(_AUDIT3_JPEG_NO_DHT)
+    @test size(img) == (8, 16, 3)
+    # djpeg 3.2.0 output for this exact file.
+    @test _audit3_jpeg_digest(img) ==
+          "17463a6df1dc1f1738a0bf4ebd904c63c7acb225568465be16bad49c29198774"
+    @test load_jpeg(_audit3_file(_AUDIT3_JPEG_NO_DHT, ".jpg")) ==
+          Float64.(img) ./ 255
+    # Progressive decoding has no default tables (jinit_phuff_decoder).
+    prog = copy(_AUDIT3_JPEG_PROG_GRAY)
+    m, p, len = first(filter(s -> s[1] == 0xC4, _audit3_jpeg_segments(prog)))
+    stripped = vcat(prog[1:p-1], prog[p+2+len:end])
+    @test_throws "missing DC Huffman table" Diff3D._jpeg_decode_rgb8(stripped)
+end
+
+@testset "JPEG marker parameters libjpeg rejects are errors" begin
+    @test _audit3_jpeg_digest(Diff3D._jpeg_decode_rgb8(_AUDIT3_JPEG_PROG_GRAY)) ==
+          "05915536155144b45a653d28e02688b66d80d4628388cf4510f7b1136f0b9261"
+    # get_dht (jdmarker.c): Tc/Th 0x20 is "Bogus DHT index 32", not slot 0.
+    bad = copy(_AUDIT3_JPEG_PROG_GRAY)
+    _, p, _ = first(filter(s -> s[1] == 0xC4, _audit3_jpeg_segments(bad)))
+    @test bad[p + 4] == 0x00
+    bad[p + 4] = 0x20
+    @test_throws "DHT index 32 is out of range" Diff3D._jpeg_decode_rgb8(bad)
+
+    # start_pass_phuff_decoder (jdphuff.c): a progressive DC scan needs Se=0.
+    bad = copy(_AUDIT3_JPEG_PROG_GRAY)
+    _, p, _ = first(filter(s -> s[1] == 0xDA, _audit3_jpeg_segments(bad)))
+    se = p + 5 + 2 * bad[p + 4] + 1
+    @test bad[se - 1] == 0x00 && bad[se] == 0x00
+    bad[se] = 0x05
+    @test_throws "progressive scan parameters (Ss=0 Se=5" Diff3D._jpeg_decode_rgb8(bad)
+
+    # decode_mcu_AC_refine (jdphuff.c): a newly nonzero coefficient has size
+    # 1; relabel the refinement table's size-1 symbols as size 2.
+    bad = copy(_AUDIT3_JPEG_PROG_GRAY)
+    segs = _audit3_jpeg_segments(bad)
+    k = findfirst(s -> s[1] == 0xDA && bad[s[2] + 5 + 2 * bad[s[2] + 4]] != 0 &&
+                       bad[s[2] + 7 + 2 * bad[s[2] + 4]] >> 4 != 0, segs)
+    @test k !== nothing
+    _, dp, _ = segs[findlast(i -> segs[i][1] == 0xC4, 1:k-1)]
+    count = sum(Int(bad[dp + 5 + i]) for i in 0:15)
+    relabelled = 0
+    for i in 0:count-1
+        v = bad[dp + 21 + i]
+        if v & 0x0f == 0x01
+            bad[dp + 21 + i] = (v & 0xf0) | 0x02
+            relabelled += 1
+        end
+    end
+    @test relabelled > 0
+    @test_throws "bad Huffman code in AC refinement" Diff3D._jpeg_decode_rgb8(bad)
+end

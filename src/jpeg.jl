@@ -345,6 +345,68 @@ function _jpeg_make_hufftbl(bits::Vector{UInt8}, huffval::Vector{UInt8},
     return _JpegHuffTbl(maxcode, valoffset, huffval, lookup)
 end
 
+# Standard Huffman tables of ITU T.81 Annex K.3 (Tables K.3-K.6), as listed in
+# libjpeg-turbo jstdhuff.c. bits[1] is the unused 0-length slot.
+const _JPEG_STD_DC_LUMA_BITS = UInt8[0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+const _JPEG_STD_DC_CHROMA_BITS = UInt8[0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+const _JPEG_STD_DC_VALS = UInt8[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+const _JPEG_STD_AC_LUMA_BITS =
+    UInt8[0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d]
+const _JPEG_STD_AC_LUMA_VALS = UInt8[
+    0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06,
+    0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+    0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72,
+    0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+    0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45,
+    0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+    0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+    0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3,
+    0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+    0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9,
+    0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4,
+    0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa]
+const _JPEG_STD_AC_CHROMA_BITS =
+    UInt8[0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77]
+const _JPEG_STD_AC_CHROMA_VALS = UInt8[
+    0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41,
+    0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+    0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1,
+    0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+    0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44,
+    0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+    0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
+    0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
+    0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+    0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+    0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+    0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4,
+    0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa]
+
+function _jpeg_std_hufftbl(bits::Vector{UInt8}, vals::Vector{UInt8}, isdc::Bool)
+    huffval = zeros(UInt8, 256)
+    copyto!(huffval, vals)
+    return _jpeg_make_hufftbl(bits, huffval, isdc)
+end
+
+# jinit_huff_decoder (jdhuff.c) -> std_huff_tables (jstdhuff.c): Motion-JPEG
+# frames omit DHT when they use the standard tables, so a sequential decoder
+# fills Huffman slots 0 and 1 that are still undefined at its first scan.
+# Progressive decoding has no such default.
+function _jpeg_default_huffman_tables!(st::_JpegState)
+    st.dcht[1] === nothing && (st.dcht[1] = _jpeg_std_hufftbl(
+        _JPEG_STD_DC_LUMA_BITS, _JPEG_STD_DC_VALS, true))
+    st.acht[1] === nothing && (st.acht[1] = _jpeg_std_hufftbl(
+        _JPEG_STD_AC_LUMA_BITS, _JPEG_STD_AC_LUMA_VALS, false))
+    st.dcht[2] === nothing && (st.dcht[2] = _jpeg_std_hufftbl(
+        _JPEG_STD_DC_CHROMA_BITS, _JPEG_STD_DC_VALS, true))
+    st.acht[2] === nothing && (st.acht[2] = _jpeg_std_hufftbl(
+        _JPEG_STD_AC_CHROMA_BITS, _JPEG_STD_AC_CHROMA_VALS, false))
+    return nothing
+end
+
 # Fill up to n bits without failing at a marker.  Used by the lookahead path,
 # where the request is a hint rather than a hard requirement.
 @inline function _jpeg_fill_soft(st::_JpegState, n::Int)
@@ -560,9 +622,12 @@ function _jpeg_get_dht!(st::_JpegState)
         end
         fill!(@view(huffval[count + 1:256]), UInt8(0))
         len -= count
+        # get_dht (jdmarker.c): Tc selects the AC class, and the remaining
+        # value must be a table slot 0..3; other high bits are an error, not
+        # an alias of slot (index & 15).
         isac = index & 0x10 != 0
-        t = Int(index & 0x0F)
-        t < 4 || error("JPEG DHT index is out of range")
+        t = Int(isac ? index - 0x10 : index)
+        t < 4 || error("JPEG DHT index $t is out of range")
         tbl = _jpeg_make_hufftbl(bits, huffval, !isac)
         if isac
             st.acht[t + 1] = tbl
@@ -754,9 +819,11 @@ const _JPEG_EMPTY_HUFF = _JpegHuffTbl(Int32[], Int32[], UInt8[], Int32[])
 # Entropy decoder start-of-scan (jdhuff.c / jdphuff.c start_pass).
 function _jpeg_start_scan!(st::_JpegState)
     if st.progressive
+        # start_pass_phuff_decoder (jdphuff.c): a DC band is exactly Ss=Se=0;
+        # an AC band has Ss <= Se < 64 and a single component.
         is_dc = st.Ss == 0
-        bad = st.Ss > st.Se || st.Se >= 64 ||
-              (!is_dc && length(st.scan_comps) != 1)
+        bad = is_dc ? st.Se != 0 :
+              (st.Ss > st.Se || st.Se >= 64 || length(st.scan_comps) != 1)
         if st.Ah != 0
             st.Al != st.Ah - 1 && (bad = true)
         end
@@ -1000,7 +1067,11 @@ function _jpeg_mcu_ac_refine!(st::_JpegState, imcu::Int, yoff::Int,
                 r = rs >> 4
                 s = rs & 15
                 if s != 0
-                    # size of a newly nonzero coefficient is always 1
+                    # The size of a newly nonzero coefficient is always 1;
+                    # libjpeg flags anything else as a bad Huffman code
+                    # (decode_mcu_AC_refine, jdphuff.c).
+                    s == 1 || error("JPEG entropy-coded data is corrupt " *
+                                    "(bad Huffman code in AC refinement)")
                     s = _jpeg_take_bits(st, 1) != 0 ? p1 : m1
                 else
                     if r != 15
@@ -1938,6 +2009,7 @@ function _jpeg_decode_impl(bytes::AbstractVector{UInt8},
             _jpeg_get_sos!(st)
             if st.input_scan_number == 1
                 _jpeg_initial_setup!(st)
+                st.progressive || _jpeg_default_huffman_tables!(st)
             end
             if st.streaming
                 if st.input_scan_number > 1
