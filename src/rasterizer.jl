@@ -1094,8 +1094,9 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                   log_depth::Bool, inv_log_far::Float64,
                                   ortho_dir, stamp,
                                   stamp_id::Int;
-                                  mirrored::Bool=_world_mirrors_faces(world_mat)) where {M<:AbstractMaterial}
+                                  mirrored::Union{Nothing,Bool}=nothing) where {M<:AbstractMaterial}
     _validate_material_parameters(mat)
+    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     _validate_depth_material(mat)
     W, H = rt.width, rt.height
     modelview = view * world_mat
@@ -1143,7 +1144,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, mirrored, has_normals,
+                                         depth_test, depth_write, side, face_flip, has_normals,
                                          has_uvs, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, normal_scale, false,
@@ -1160,7 +1161,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, mirrored, has_normals,
+                                         depth_test, depth_write, side, face_flip, has_normals,
                                          has_uvs, albedo_map, nothing, nothing,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, normal_scale,
@@ -1177,7 +1178,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, mirrored, has_normals,
+                                         depth_test, depth_write, side, face_flip, has_normals,
                                          has_uvs, nothing, nothing, normal_map,
                                          nothing, nothing, nothing, nothing, nothing,
                                          nothing, nothing, nothing, normal_scale,
@@ -1194,7 +1195,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                          xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                          ortho_dir, stamp, stamp_id, W, H, world_mat,
                                          modelview, normal_mat, mesh_clipping_planes,
-                                         depth_test, depth_write, side, mirrored, has_normals,
+                                         depth_test, depth_write, side, face_flip, has_normals,
                                          has_uvs, nothing, nothing, nothing,
                                          roughness_map, metalness_map, nothing,
                                          nothing, nothing, ao_map, nothing, nothing,
@@ -1205,7 +1206,7 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
                                      xlo, xhi, ylo, yhi, log_depth, inv_log_far,
                                      ortho_dir, stamp, stamp_id, W, H, world_mat,
                                      modelview, normal_mat, mesh_clipping_planes,
-                                     depth_test, depth_write, side, mirrored, has_normals,
+                                     depth_test, depth_write, side, face_flip, has_normals,
                                      has_uvs, albedo_map, alpha_map, normal_map,
                                      roughness_map, metalness_map, specular_map,
                                      glossiness_map, physical_pbr_map, ao_map,
@@ -2497,7 +2498,7 @@ end
                                          cam_pos::Vec3, normal_mat::Mat4,
                                          has_normals::Bool; shadow_fn=nothing,
                                          ortho_dir=nothing,
-                                         mirrored::Bool=_world_mirrors_faces(world_mat))
+                                         mirrored::Union{Nothing,Bool}=nothing)
     i1, i2, i3 = get_face(geo, fi)
     v1 = mat4_transform_point(world_mat, get_vertex(geo, i1))
     v2 = mat4_transform_point(world_mat, get_vertex(geo, i2))
@@ -2508,7 +2509,8 @@ end
         geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
     if side !== :front
         front_facing = _face_front_facing(
-            v1, v2, v3, center, cam_pos, ortho_dir) != mirrored
+            v1, v2, v3, center, cam_pos, ortho_dir) !=
+            (mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool)
         face_n = _side_oriented_normal(face_n, side, front_facing)
     end
     return clamp_color(shade_face(
@@ -2560,7 +2562,8 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                               flat_attr_tri=nothing,
                               flat_attr_clipped=nothing,
                               flat_iw=nothing,
-                              mirrored::Bool=_world_mirrors_faces(world_mat))
+                              mirrored::Union{Nothing,Bool}=nothing)
+    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     W, H = rt.width, rt.height
     modelview = view * world_mat
     blend = material_transparent(mat) || alpha < 1.0
@@ -2634,7 +2637,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir) != mirrored
+                w1, w2, w3, wc, cam_pos, ortho_dir) != face_flip
             (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
@@ -2694,7 +2697,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                          normal_mat, has_normals;
                                          shadow_fn=shadow_fn,
                                          ortho_dir=ortho_dir,
-                                         mirrored=mirrored) :
+                                         mirrored=face_flip) :
                  face_colors[fi]
             @inbounds for k in 2:(m - 1)
                 if blend
@@ -2760,7 +2763,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                                      normal_mat, has_normals;
                                      shadow_fn=shadow_fn,
                                      ortho_dir=ortho_dir,
-                                     mirrored=mirrored) :
+                                     mirrored=face_flip) :
              face_colors[fi]
         @inbounds for k in 2:(m - 1)        # fan-triangulate the clipped polygon
             if needs_world

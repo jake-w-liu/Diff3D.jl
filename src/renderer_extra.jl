@@ -1054,7 +1054,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                      flat_attr_tri=nothing,
                                      flat_attr_clipped=nothing,
                                      flat_iw=nothing,
-                                     mirrored::Bool=_world_mirrors_faces(world_mat))
+                                     mirrored::Union{Nothing,Bool}=nothing)
     if _has_render_fog(rt.view_state) || _render_pooled_uses_fragment_alpha(geo, mat)
         inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
         return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
@@ -1068,6 +1068,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     end
 
     side = material_side(mat)
+    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     has_normals = length(geo.normals) >= geo.n_vertices * 3
@@ -1090,7 +1091,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir) != mirrored
+                w1, w2, w3, wc, cam_pos, ortho_dir) != face_flip
             (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
@@ -1109,7 +1110,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
         fc = lazy_shader_faces ?
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
                                      normal_mat, has_normals;
-                                     ortho_dir=ortho_dir, mirrored=mirrored) :
+                                     ortho_dir=ortho_dir, mirrored=face_flip) :
              face_colors[fi]
         for k in 2:(m - 1)
             if depth_test && depth_write

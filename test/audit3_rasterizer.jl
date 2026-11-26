@@ -272,3 +272,39 @@ end
     @test checked > 1000
     @test defects == 0
 end
+
+function audit3_cached_frame_allocations(target, scene, camera, cache, shading)
+    render!(target, scene, camera; shading=shading, cache=cache)
+    return @allocated render!(target, scene, camera; shading=shading, cache=cache)
+end
+
+@testset "Cached frames with many meshes do not allocate per mesh" begin
+    # Mirror flags, bounding-sphere sort depths and id tie-breaks are computed
+    # without per-mesh heap work; a cached frame stays bounded as meshes grow.
+    for count in (1, 40), shading in (:flat, :smooth), transparent in (false, true)
+        scene = Scene()
+        add!(scene, AmbientLight(intensity=0.5))
+        light = DirectionalLight(intensity=1.0)
+        light.position = Vec3(1.0, 2.0, 3.0)
+        add!(scene, light)
+        for index in 1:count
+            mesh = Mesh(SphereGeometry(radius=0.1, width_segments=8, height_segments=6),
+                        MeshLambertMaterial(color=Color3(0.8, 0.5, 0.2),
+                                            transparent=transparent, opacity=0.6))
+            mesh.position = Vec3(0.3 * (index % 7) - 0.9, 0.3 * (index ÷ 7) - 0.9,
+                                 -0.01 * index)
+            index % 3 == 0 && (mesh.scale = Vec3(-1.0, 1.0, 1.0))
+            add!(scene, mesh)
+        end
+        camera = audit3_front_camera()
+        target = RenderTarget(48, 48)
+        cache = RenderCache()
+        render!(target, scene, camera; shading=shading, cache=cache)
+        @test any(>(0.0), target.color)
+        if Base.JLOptions().opt_level > 0
+            audit3_cached_frame_allocations(target, scene, camera, cache, shading)
+            @test audit3_cached_frame_allocations(
+                target, scene, camera, cache, shading) <= 512
+        end
+    end
+end
