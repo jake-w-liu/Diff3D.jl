@@ -386,18 +386,6 @@ function _geometry_attribute_for_components(geo::BufferGeometry, name::Symbol, m
     return attr
 end
 
-function _line_distance_write!(distances::Vector{Float64}, seen::Vector{Bool},
-                               vertex_index::Int, value::Float64)
-    if seen[vertex_index]
-        isapprox(distances[vertex_index], value; atol=1e-8, rtol=1e-8) ||
-            throw(ArgumentError("indexed dashed lines require one lineDistance per vertex; duplicate vertex $(vertex_index) needs conflicting distances"))
-    else
-        distances[vertex_index] = value
-        seen[vertex_index] = true
-    end
-    return nothing
-end
-
 @inline function _line_distance_checked_index(geo::BufferGeometry, idx::Int)
     1 <= idx <= geo.n_vertices ||
         throw(ArgumentError("geometry indices must be within 1:n_vertices"))
