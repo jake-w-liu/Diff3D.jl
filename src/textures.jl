@@ -452,6 +452,14 @@ end
     throw(ArgumentError("unsupported texture wrap mode: $mode"))
 end
 
+# NEAREST texel selection (GLES 3.0 §3.8.10, used by WebGL 2/three.js):
+# i = floor(u * W) and j = floor(v * H), with j counted from the bottom row
+# (three.js flipY image convention). Storage row 1 is the top row, so the
+# 0-based storage row is H - 1 - j. Out-of-range indices are wrapped by
+# `_wrap_coord`, whose clamp/mirror edges are symmetric under this reflection.
+@inline _nearest_texel_column(u, W::Int) = floor(Int, u * W)
+@inline _nearest_texel_row(v, H::Int) = H - 1 - floor(Int, v * H)
+
 @inline function _texture_sample_uv(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
     return _sanitize_uv(u), _sanitize_uv(v)
@@ -476,7 +484,8 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
     if filter === :nearest
-        return _texel_data(data, wrap_s, wrap_t, round(Int, fx), round(Int, fy))
+        return _texel_data(data, wrap_s, wrap_t, _nearest_texel_column(u, W),
+                           _nearest_texel_row(v, H))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
@@ -536,7 +545,8 @@ function _sample_texture_channel(tex::Texture, u, v, channel::Int, default,
     fy = (1 - v) * H - 0.5
     if filter === :nearest
         return transform(
-            _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default))
+            _texel_channel(tex, _nearest_texel_column(u, W),
+                           _nearest_texel_row(v, H), channel, default))
     end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
