@@ -248,6 +248,13 @@ const _ZERO_V2 = Vec2(0.0, 0.0)
 const _EMPTY_INT_STAMP = zeros(Int, 0, 0)
 
 @inline _inside_far_clip(z) = isfinite(z) && z <= one(z)
+
+# The depth test compares at the target's depth precision, as a GPU compares a
+# fragment depth quantized to its depth-buffer format. Without the conversion a
+# Float32 target would let a coplanar later surface win wherever rounding the
+# stored depth moved it beyond the unrounded incoming value.
+@inline _depth_passes(depth::AbstractMatrix{T}, z, py::Int, px::Int) where {T} =
+    convert(T, z) < @inbounds(depth[py, px])
 @inline _inside_near_clip(z) = isfinite(z) && z >= -one(z)
 
 struct _CombinedClippingPlanes{G,M}
@@ -322,7 +329,7 @@ end
                 fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
-                if !depth_test || z < rt.depth[py, px]
+                if !depth_test || _depth_passes(rt.depth, z, py, px)
                     if has_clip || has_alpha || has_fog
                         # Perspective-correct world position (weight by 1/w).
                         iw = w0*iw1 + w1*iw2 + w2*iw3
@@ -390,7 +397,7 @@ end
                 fragment_color = fc
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
-                if !depth_test || z < rt.depth[py, px]
+                if !depth_test || _depth_passes(rt.depth, z, py, px)
                     iw = w0*iw1 + w1*iw2 + w2*iw3
                     a0 = w0*iw1/iw; a1 = w1*iw2/iw; a2 = w2*iw3/iw
                     if has_clip || has_fog
@@ -658,7 +665,7 @@ end
             end
             z = b0 * z1 + b1 * z2 + b2 * z3
             _inside_far_clip(z) || continue
-            (!depth_test || z < rt.depth[py, px]) || continue
+            (!depth_test || _depth_passes(rt.depth, z, py, px)) || continue
             frag_alpha = alpha_base
             # Perspective-correct interpolation: weight by 1/w.
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
@@ -1030,7 +1037,7 @@ end
             end
             z = b0 * z1 + b1 * z2 + b2 * z3
             _inside_far_clip(z) || continue
-            (!depth_test || z < rt.depth[py, px]) || continue
+            (!depth_test || _depth_passes(rt.depth, z, py, px)) || continue
             alpha_base < alpha_test && continue
             iw = b0 * iw1 + b1 * iw2 + b2 * iw3
             a0 = b0 * iw1 / iw; a1 = b1 * iw2 / iw; a2 = b2 * iw3 / iw
@@ -2885,7 +2892,7 @@ end
                 end
                 z = w0 * z1 + w1 * z2 + w2 * z3
                 _inside_far_clip(z) || continue
-                if !depth_test || z < rt.depth[py, px]
+                if !depth_test || _depth_passes(rt.depth, z, py, px)
                     ia_frag = 1.0 - frag_alpha
                     rt.color[py, px, 1] = fragment_color.r * frag_alpha + rt.color[py, px, 1] * ia_frag
                     rt.color[py, px, 2] = fragment_color.g * frag_alpha + rt.color[py, px, 2] * ia_frag

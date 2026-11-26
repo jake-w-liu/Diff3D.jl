@@ -330,3 +330,29 @@ end
         @test all(≈(0.75; atol=1e-12), core)
     end
 end
+
+@testset "Float32 targets depth-test at their own precision" begin
+    # A GPU compares the fragment depth after quantizing it to the depth-buffer
+    # format (GLES 2.0 sec. 4.1.5). Two identical coplanar planes therefore
+    # tie exactly in a Float32 buffer too, and the strict test keeps the first
+    # drawn (red, lower id) everywhere, as in a Float64 target.
+    camera = PerspectiveCamera()
+    camera.position = Vec3(0.3, 0.2, 4.0)
+    camera.target = Vec3(0.0, 0.0, 0.0)
+    geometry = PlaneGeometry(width=3.0, height=3.0)
+    scene = Scene()
+    for color in (Color3(1.0, 0.0, 0.0), Color3(0.0, 1.0, 0.0))
+        plane = Mesh(geometry, MeshBasicMaterial(color=color))
+        plane.rotation = Euler(-0.7, 0.4, 0.0)
+        add!(scene, plane)
+    end
+    for shading in (:flat, :smooth), T in (Float64, Float32)
+        target = RenderTarget(64, 64; T=T)
+        render!(target, scene, camera; shading=shading)
+        @test count(>(0.5), target.color[:, :, 1]) > 2000
+        @test count(>(0.5), target.color[:, :, 2]) == 0
+    end
+    pooled = RenderTarget(64, 64; T=Float32)
+    render_pooled!(pooled, scene, camera, RenderCache())
+    @test count(>(0.5), pooled.color[:, :, 2]) == 0
+end
