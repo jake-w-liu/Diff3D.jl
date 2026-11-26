@@ -217,3 +217,84 @@ end
     @test TorusGeometry(radial_segments=0).n_faces == 2 * 48
     @test !any(isnan, CylinderGeometry(radial_segments=0).positions)
 end
+
+function _audit3_tangent_fixture()
+    # Mirrored UVs on face 1 (handedness -1), a zero-area UV face (3, 3, 5),
+    # an unreferenced vertex 6, and non-unit normals.
+    return BufferGeometry([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0.2, 2, 0.5, 0.3, 5, 5, 5.0],
+                          [0, 0, 1, 0, 0.1, 2, 0.1, 0, 1, 0, 0, 1, -0.2, 0, 1, 0, 1, 0.0],
+                          [1, 0, 0, 0, 0, 1, 1, 1, 0.5, 0.5, 0.3, 0.3],
+                          [0, 1, 2, 1, 4, 2, 0, 2, 3, 2, 2, 4] .+ 1, 6, 4)
+end
+
+@testset "audit3 compute_tangents! matches three.js computeTangents" begin
+    # Expected values: three.js r186 BufferGeometry.computeTangents
+    # (BufferGeometry.js:837-994) run in node on the same Float64 attributes,
+    # index [0,1,2, 1,4,2, 0,2,3, 2,2,4].
+    g = _audit3_tangent_fixture()
+    @test Diff3D.compute_tangents!(g) === g
+    t = get_attribute(g, :tangent)
+    @test t.item_size == 4
+    @test t.data == [-1, 0, 0, -1,
+                     0.48482034916712063, -0.05817844190005447, -0.8726766285008171, 1,
+                     -1, 0, 0, -1, -1, 0, 0, -1,
+                     0.9813137496771571, 0, 0.1924144607210112, 1,
+                     0, 0, 0, 0]
+
+    # Groups restrict the visited faces (BufferGeometry.js:923-944):
+    # addGroup(0, 3) and addGroup(6, 3) cover faces 1 and 3 only.
+    grouped = _audit3_tangent_fixture()
+    add_group!(grouped, 1, 1, 0)
+    add_group!(grouped, 3, 1, 0)
+    Diff3D.compute_tangents!(grouped)
+    @test get_attribute(grouped, :tangent).data ==
+          [-1, 0, 0, -1, -1, 0, 0, -1, -0.9950371902099893, 0, 0.09950371902099893, -1,
+           -1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    # A matching Float64 attribute is updated in place, so vertices no face
+    # references keep their previous tangent, as three.js reuses an attribute of
+    # the same count.
+    reuse = _audit3_tangent_fixture()
+    previous = fill(7.0, 24)
+    set_attribute!(reuse, :tangent, previous, 4)
+    Diff3D.compute_tangents!(reuse)
+    @test get_attribute(reuse, :tangent).data === previous
+    @test previous[21:24] == [7, 7, 7, 7]
+    @test previous[1:20] == get_attribute(g, :tangent).data[1:20]
+    # A tangent attribute of another shape is replaced.
+    wrong = _audit3_tangent_fixture()
+    set_attribute!(wrong, :tangent, ones(18), 3)
+    Diff3D.compute_tangents!(wrong)
+    @test get_attribute(wrong, :tangent).item_size == 4
+    @test get_attribute(wrong, :tangent).data == get_attribute(g, :tangent).data
+
+    # Generated geometry: three.js inputs are Float32, hence the tolerance.
+    # new SphereGeometry(1, 6, 4) tangents of vertices 7, 8, 9 (zero-based).
+    sphere = Diff3D.compute_tangents!(SphereGeometry(radius=1.0, width_segments=6,
+                                                     height_segments=4))
+    @test isapprox(get_attribute(sphere, :tangent).data[29:40],
+                   [0.26726124558335396, 0.2672612272874291, 0.9258201029347177, 1,
+                    0.8986320971091855, 0.07497795298998845, 0.43224837837819413, 1,
+                    0.8236541194119749, 0.0749780031163358, -0.5621140370284052, 1];
+                   atol=1e-6)
+    # new TorusGeometry(1, 0.4, 3, 5) tangents of vertices 6, 7.
+    torus = Diff3D.compute_tangents!(TorusGeometry(radius=1.0, tube=0.4, radial_segments=3,
+                                                   tubular_segments=5))
+    @test isapprox(get_attribute(torus, :tangent).data[25:32],
+                   [-0.46120655550920386, 0.8463951126703834, -0.26627772419604456, 1,
+                    -0.9300768532855077, 0.3657062793389924, 0.03487067872237613, 1];
+                   atol=1e-6)
+
+    # three.js logs and returns without index, normal or uv
+    # (BufferGeometry.js:845-855); Diff3D raises instead.
+    @test_throws ArgumentError Diff3D.compute_tangents!(BufferGeometry())
+    no_uv = _audit3_tangent_fixture(); empty!(no_uv.uvs)
+    @test_throws ArgumentError Diff3D.compute_tangents!(no_uv)
+    no_normal = _audit3_tangent_fixture(); empty!(no_normal.normals)
+    @test_throws ArgumentError Diff3D.compute_tangents!(no_normal)
+    bad_group = _audit3_tangent_fixture()
+    add_group!(bad_group, 4, 2, 0)
+    @test_throws ArgumentError Diff3D.compute_tangents!(bad_group)
+    bad_index = _audit3_tangent_fixture(); bad_index.indices[1] = 99
+    @test_throws ArgumentError Diff3D.compute_tangents!(bad_index)
+end

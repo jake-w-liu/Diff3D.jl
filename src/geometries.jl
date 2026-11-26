@@ -920,6 +920,107 @@ function compute_face_normal(g::BufferGeometry, face_idx::Int)
     triangle_normal(Triangle(v1, v2, v3))
 end
 
+# Faces visited by `compute_tangents!`: the draw groups when present
+# (BufferGeometry.js:923-944), otherwise every face.
+function _tangent_face_ranges(g::BufferGeometry)
+    isempty(g.groups) && return [1:g.n_faces]
+    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
+    for (k, (start, count, _)) in enumerate(g.groups)
+        last_face = _geometry_checked_add(start, count - 1,
+                                          "compute_tangents! group range")
+        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
+            throw(ArgumentError(
+                "compute_tangents! group $k must lie within the geometry's faces"))
+        ranges[k] = start:last_face
+    end
+    return ranges
+end
+
+@inline _tangent_vec3(data::Vector{Float64}, vi::Int) =
+    @inbounds Vec3(data[3vi - 2], data[3vi - 1], data[3vi])
+
+"""
+    compute_tangents!(geo)
+
+Compute per-vertex tangents from positions, normals, and UVs and store them as
+the 4-component `:tangent` attribute (`x, y, z, handedness`), following three.js
+`BufferGeometry.computeTangents`. Each face adds its UV-aligned `s` and `t`
+directions to its three vertices; a face whose UV determinant has no finite
+reciprocal is skipped. Each vertex tangent is then Gram-Schmidt orthogonalized
+against its normal and normalized (a zero result stays zero), and the
+handedness is `-1` when `cross(normal, tangent)` points against the summed `t`
+direction, else `1`. Only the faces of the draw groups are visited when `geo`
+has groups; vertices no visited face references keep the tangent they already
+had (zero for a newly created attribute).
+
+The geometry must be indexed and carry a normal and a UV for every vertex;
+otherwise an `ArgumentError` is thrown. An existing `Float64` tangent attribute
+with item size 4 and one entry per vertex is updated in place; any other
+`:tangent` attribute is replaced. Returns `geo`.
+"""
+function compute_tangents!(g::BufferGeometry)
+    _validate_triangle_geometry_indices(g, "compute_tangents!")
+    n = g.n_vertices
+    (g.n_faces > 0 && !isempty(g.indices)) ||
+        throw(ArgumentError("compute_tangents! requires an indexed triangle geometry"))
+    length(g.normals) >= 3n ||
+        throw(ArgumentError("compute_tangents! requires a normal for every vertex"))
+    length(g.uvs) >= 2n ||
+        throw(ArgumentError("compute_tangents! requires a UV for every vertex"))
+    face_ranges = _tangent_face_ranges(g)
+
+    positions, normals, uvs, indices = g.positions, g.normals, g.uvs, g.indices
+    zero_vec = Vec3(0.0, 0.0, 0.0)
+    tan1 = fill(zero_vec, n)
+    tan2 = fill(zero_vec, n)
+    # BufferGeometry.js:888-921 `handleTriangle`.
+    for faces in face_ranges, f in faces
+        a, b, c = indices[3f - 2], indices[3f - 1], indices[3f]
+        va = _tangent_vec3(positions, a)
+        vb = _tangent_vec3(positions, b) - va
+        vc = _tangent_vec3(positions, c) - va
+        @inbounds begin
+            uax, uay = uvs[2a - 1], uvs[2a]
+            ubx, uby = uvs[2b - 1] - uax, uvs[2b] - uay
+            ucx, ucy = uvs[2c - 1] - uax, uvs[2c] - uay
+        end
+        r = 1.0 / (ubx * ucy - ucx * uby)
+        # three.js silently ignores degenerate UV triangles.
+        isfinite(r) || continue
+        sdir = (vb * ucy + vc * (-uby)) * r
+        tdir = (vc * ubx + vb * (-ucx)) * r
+        @inbounds begin
+            tan1[a] += sdir; tan1[b] += sdir; tan1[c] += sdir
+            tan2[a] += tdir; tan2[b] += tdir; tan2[c] += tdir
+        end
+    end
+
+    existing = get(g.attributes, :tangent, nothing)
+    tangent = if existing isa BufferAttribute{Float64} && existing.item_size == 4 &&
+                 length(existing.data) == 4n
+        existing.data
+    else
+        data = zeros(Float64, 4n)
+        g.attributes[:tangent] = BufferAttribute(data, 4)
+        data
+    end
+    # BufferGeometry.js:956-994 `handleVertex`.
+    for faces in face_ranges, f in faces, corner in 0:2
+        v = indices[3f - 2 + corner]
+        nrm = _tangent_vec3(normals, v)
+        t = tan1[v]
+        tmp = normalize(t - nrm * dot(nrm, t))
+        w = dot(cross(nrm, t), tan2[v]) < 0.0 ? -1.0 : 1.0
+        @inbounds begin
+            tangent[4v - 3] = tmp.x
+            tangent[4v - 2] = tmp.y
+            tangent[4v - 1] = tmp.z
+            tangent[4v] = w
+        end
+    end
+    return g
+end
+
 # ========================== Box Geometry ==========================
 
 function _geometry_segment_count(name::String, value)
