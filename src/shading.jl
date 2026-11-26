@@ -751,8 +751,7 @@ function _apply_pbr_maps(m::MeshPhysicalMaterial, roughness_map, metalness_map, 
 end
 
 # MeshPhysicalMaterial scalars after their texture maps (or the material's own
-# values, see `_physical_terms`). `sheen_roughness` is already clamped as
-# lights_physical_fragment.glsl.js resolves it.
+# values, see `_physical_terms`).
 struct _PhysicalMappedTerms
     metalness::Float64
     roughness::Float64
@@ -802,10 +801,7 @@ function _physical_mapped_terms(m::MeshPhysicalMaterial, roughness_map,
         c = sample_texture_linear(m.sheen_color_map, scu, scv)
         Color3(m.sheen_color.r * c.r, m.sheen_color.g * c.g, m.sheen_color.b * c.b)
     end
-    sheen_roughness = _sheen_roughness(
-        m.sheen_roughness,
-        m.sheen_roughness_map === nothing ? 1.0 :
-            _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4))
+    sheen_roughness = m.sheen_roughness_map === nothing ? m.sheen_roughness : m.sheen_roughness * _sample_texture_unit_channel(m.sheen_roughness_map, sru, srv, 4)
     iridescence = m.iridescence_map === nothing ? m.iridescence : m.iridescence * _sample_texture_unit_channel(m.iridescence_map, iu, iv, 1)
     iridescence_thickness = _mapped_iridescence_thickness(m,itu,itv)
     specular_intensity = m.specular_intensity_map === nothing ? m.specular_intensity : m.specular_intensity * _sample_texture_unit_channel(m.specular_intensity_map, siu, siv, 4)
@@ -1671,11 +1667,12 @@ end
 
 @inline _max3(c::Color3) = max(max(c.r, c.g), c.b)
 
-# Sheen roughness as three.js resolves it: `clamp(sheenRoughness, 1e-4, 1)`,
-# then scaled by the roughness-map texel. A zero texel would make D_Charlie
-# evaluate `∞·0`; the product keeps the same 1e-4 floor instead.
-@inline _sheen_roughness(roughness, map_scale) =
-    max(clamp(roughness, 1e-4, 1.0) * map_scale, 1e-4)
+# Sheen roughness of the (material roughness × map texel) product. three.js
+# clamps the material value to [1e-4, 1] before the map multiplies it, which a
+# zero texel would turn into D_Charlie's `∞·0`; flooring the product at 1e-4
+# equals `max(clamp(roughness, 1e-4, 1) · texel, 1e-4)` for the validated
+# roughness and texel ranges [0, 1].
+@inline _sheen_roughness(product) = max(product, 1e-4)
 
 # iridescence_fragment.glsl.js evalSensitivity: Fourier-space XYZ response of
 # the optical path difference `opd` (nm) and phase `shift`, in linear sRGB.
@@ -1875,7 +1872,7 @@ end
 @inline _physical_terms(m::MeshPhysicalMaterial) =
     _PhysicalMappedTerms(m.metalness, m.roughness, m.clearcoat,
                          m.clearcoat_roughness, m.transmission, m.thickness,
-                         m.sheen_color, _sheen_roughness(m.sheen_roughness, 1.0),
+                         m.sheen_color, m.sheen_roughness,
                          m.iridescence, m.iridescence_thickness,
                          m.specular_intensity, m.specular_color, m.anisotropy)
 
@@ -1963,7 +1960,7 @@ function _physical_surface(m::MeshPhysicalMaterial, t::_PhysicalMappedTerms,
         Color3(0.0, 0.0, 0.0)
     return _pbr_surface(T, dot_nv, albedo, metalness, roughness, f0, f90,
                         t.clearcoat, t.clearcoat_roughness, sheen_color,
-                        t.sheen_roughness, iridescence, irid_fresnel,
+                        _sheen_roughness(t.sheen_roughness), iridescence, irid_fresnel,
                         t.transmission, _physical_mapped_roughness(t),
                         transmitted)
 end
@@ -2094,7 +2091,7 @@ end
     h = _half_vec(light_dir, view_dir)
     dot_nv = _saturate(dot(normal, view_dir))
     dot_nh = _saturate(dot(normal, h))
-    d = _d_charlie(_sheen_roughness(m.sheen_roughness, 1.0), dot_nh)
+    d = _d_charlie(_sheen_roughness(m.sheen_roughness), dot_nh)
     return m.sheen_color * (m.sheen * d * _v_neubelt(dot_nv, dot_nl) * dot_nl)
 end
 
