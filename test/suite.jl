@@ -28590,8 +28590,11 @@ end
 
     uniform = CatmullRomCurve(
         extreme_points; curve_type=:catmullrom, tension=0.5)
+    # three.js CatmullRomCurve3.js:203-224 reflects the missing end neighbours
+    # (p0 = 2a - b, p3 = 2b - a), so a two-point open curve is the straight
+    # chord: the quarter point is a + (b - a) / 4 = -largest / 2.
     expected_quarter = Float64(setprecision(BigFloat, 256) do
-        -BigFloat(largest) * BigFloat(19) / BigFloat(32)
+        -BigFloat(largest) / BigFloat(2)
     end)
     @test catmull_rom_point(uniform, 0.25).x == expected_quarter
     @test catmull_rom_point(uniform, 0.75).x == -expected_quarter

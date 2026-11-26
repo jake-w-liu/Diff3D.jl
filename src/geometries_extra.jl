@@ -780,6 +780,93 @@ function _catmull_rom_segment(curve::CatmullRomCurve, t::Real)
     return index, scaled - (index - 1)
 end
 
+@inline function _catmull_rom_evaluate(curve::CatmullRomCurve, p0::Vec3, p1::Vec3,
+                                       p2::Vec3, p3::Vec3, local_t::Float64)
+    curve.curve_type === :catmullrom &&
+        return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
+    alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
+    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+end
+
+# three.js CatmullRomCurve3.getPoint extrapolates the missing neighbour of an
+# open curve's first or last segment by reflecting the adjacent point:
+# `tmp.subVectors(points[0], points[1]).add(points[0])`.
+@inline _catmull_rom_phantom(endpoint::Vec3, neighbour::Vec3) =
+    (endpoint - neighbour) + endpoint
+
+@inline _catmull_rom_finite(p::Vec3) = isfinite(p.x) && isfinite(p.y) && isfinite(p.z)
+
+# Compensated dot product (Ogita, Rump & Oishi "Dot2"): the result is as
+# accurate as a twice-working-precision evaluation rounded once.
+@inline function _catmull_rom_dot2(w::NTuple{4,Float64}, x::NTuple{4,Float64})
+    p = w[1] * x[1]
+    s = fma(w[1], x[1], -p)
+    for k in 2:4
+        h = w[k] * x[k]
+        r = fma(w[k], x[k], -h)
+        sum = p + h
+        z = sum - p
+        q = (p - (sum - z)) + (h - z)
+        p = sum
+        s += q + r
+    end
+    return p + s
+end
+
+# Reflected neighbours that overflow Float64. The uniform (three.js
+# `initCatmullRom`) cubic is linear in its points, so substitute the
+# reflections p0 = 2p1 - p2 and p3 = 2p2 - p1 into the point weights and sum
+# the quarter-scaled points (power-of-two scaling is exact) with Dot2.
+function _catmull_rom_reflected_uniform(before, p1::Vec3, p2::Vec3, after,
+                                        t::Float64, tension::Float64)
+    t2 = t * t
+    t3 = t2 * t
+    w0 = -tension * (t3 - 2t2 + t)
+    w3 = tension * (t3 - t2)
+    w1 = 2t3 - 3t2 + 1.0 - w3
+    w2 = -2t3 + 3t2 - w0
+    if before === nothing
+        w1 += 2w0
+        w2 -= w0
+        w0 = 0.0
+    end
+    if after === nothing
+        w1 -= w3
+        w2 += 2w3
+        w3 = 0.0
+    end
+    weights = (w0, w1, w2, w3)
+    a = (before === nothing ? p1 : before) * 0.25
+    b = p1 * 0.25
+    c = p2 * 0.25
+    d = (after === nothing ? p2 : after) * 0.25
+    return Vec3(_catmull_rom_dot2(weights, (a.x, b.x, c.x, d.x)),
+                _catmull_rom_dot2(weights, (a.y, b.y, c.y, d.y)),
+                _catmull_rom_dot2(weights, (a.z, b.z, c.z, d.z))) * 4.0
+end
+
+function _catmull_rom_open_end_segment(curve::CatmullRomCurve, before, p1::Vec3,
+                                       p2::Vec3, after, local_t::Float64)
+    p0 = before === nothing ? _catmull_rom_phantom(p1, p2) : before
+    p3 = after === nothing ? _catmull_rom_phantom(p2, p1) : after
+    _catmull_rom_finite(p0) && _catmull_rom_finite(p3) &&
+        return _catmull_rom_evaluate(curve, p0, p1, p2, p3, local_t)
+    # A reflected point can overflow although the curve itself stays finite.
+    curve.curve_type === :catmullrom &&
+        return _catmull_rom_reflected_uniform(
+            before, p1, p2, after, local_t, curve.tension)
+    # The centripetal and chordal parameterizations are invariant under
+    # uniform scaling, and scaling by a power of two is exact, so evaluate a
+    # quarter-size copy (whose reflected points are bounded by 3/4 of
+    # floatmax) and scale the result back.
+    q = 0.25
+    s1 = p1 * q
+    s2 = p2 * q
+    s0 = before === nothing ? _catmull_rom_phantom(s1, s2) : before * q
+    s3 = after === nothing ? _catmull_rom_phantom(s2, s1) : after * q
+    return _catmull_rom_evaluate(curve, s0, s1, s2, s3, local_t) * 4.0
+end
+
 function catmull_rom_point(curve::CatmullRomCurve, t::Real)
     points = curve.points
     n = length(points)
@@ -789,16 +876,17 @@ function catmull_rom_point(curve::CatmullRomCurve, t::Real)
         p1 = points[mod1(segment, n)]
         p2 = points[mod1(segment + 1, n)]
         p3 = points[mod1(segment + 2, n)]
-    else
-        p0 = points[max(segment - 1, 1)]
-        p1 = points[segment]
-        p2 = points[segment + 1]
-        p3 = points[min(segment + 2, n)]
+        return _catmull_rom_evaluate(curve, p0, p1, p2, p3, local_t)
     end
-    curve.curve_type === :catmullrom &&
-        return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
-    alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
-    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+    p1 = points[segment]
+    p2 = points[segment + 1]
+    if segment > 1 && segment + 2 <= n
+        return _catmull_rom_evaluate(curve, points[segment - 1], p1, p2,
+                                     points[segment + 2], local_t)
+    end
+    before = segment > 1 ? points[segment - 1] : nothing
+    after = segment + 2 <= n ? points[segment + 2] : nothing
+    return _catmull_rom_open_end_segment(curve, before, p1, p2, after, local_t)
 end
 
 function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
