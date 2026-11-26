@@ -3463,44 +3463,113 @@ function _font_point_in_loop(p::Vec2{Float64}, loop::Vector{Vec2{Float64}})
     return inside
 end
 
-function _font_loop_groups(loops::Vector{Vector{Vec2{Float64}}})
-    clean = [_font_loop_points(loop) for loop in loops]
-    clean = [loop for loop in clean if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    isempty(clean) && return groups
-    areas = abs.(_font_polygon_area.(clean))
-    direct_parent = fill(0, length(clean))
-    for i in eachindex(clean)
-        p = clean[i][1]
-        best = 0
-        best_area = Inf
-        for j in eachindex(clean)
-            i == j && continue
-            areas[j] > areas[i] || continue
-            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
-                best = j
-                best_area = areas[j]
-            end
+const _FontFillGroup = NamedTuple{(:outer, :holes),
+                                  Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}
+
+# A point strictly inside a simple loop: the bounding-box center when it is
+# inside, otherwise the midpoint of the first two crossings of a horizontal
+# ray through it (three.js ShapePath.js getInteriorPoint).
+function _font_interior_point(loop::Vector{Vec2{Float64}}, bbox::NTuple{4,Float64})
+    center = Vec2((bbox[1] + bbox[3]) / 2, (bbox[2] + bbox[4]) / 2)
+    _font_point_in_loop(center, loop) && return center
+    y = center.y
+    first_x = Inf
+    second_x = Inf
+    n = length(loop)
+    for i in 1:n
+        a = loop[i]
+        b = loop[i == n ? 1 : i + 1]
+        (a.y > y) != (b.y > y) || continue
+        x = a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y)
+        if x < first_x
+            second_x = first_x
+            first_x = x
+        elseif x < second_x
+            second_x = x
         end
-        direct_parent[i] = best
     end
-    for i in eachindex(clean)
-        depth = 0
-        parent = direct_parent[i]
-        while parent != 0
-            depth += 1
-            parent = direct_parent[parent]
+    isfinite(second_x) || return center
+    return Vec2((first_x + second_x) / 2, y)
+end
+
+_font_bbox_contains(outer::NTuple{4,Float64}, inner::NTuple{4,Float64}) =
+    outer[1] <= inner[1] && inner[3] <= outer[3] &&
+    outer[2] <= inner[2] && inner[4] <= outer[4]
+
+_font_fill_inside(winding::Int, fill_rule::Symbol) =
+    fill_rule === :evenodd ? isodd(winding) : winding != 0
+
+# Group closed loops into filled outers and their holes under `fill_rule`, as
+# three.js r186 `ShapePath.toShapes` does (src/extras/core/ShapePath.js:146-366;
+# `SVGLoader.createShapes` forwards to it): loops are visited by decreasing
+# area, each takes the winding of the innermost larger loop whose bounding box
+# contains it and that contains its interior point, and a loop that does not
+# change the fill state under the rule is dropped. Outers are returned
+# counter-clockwise and holes clockwise, in input order.
+function _font_fill_groups(loops::Vector{Vector{Vec2{Float64}}}, fill_rule::Symbol)
+    fill_rule === :nonzero || fill_rule === :evenodd ||
+        error("unsupported fill rule $(fill_rule)")
+    groups = _FontFillGroup[]
+    clean = Vector{Vec2{Float64}}[]
+    areas = Float64[]
+    for loop in loops
+        points = _font_loop_points(loop)
+        length(points) >= 3 || continue
+        area = _font_polygon_area(points)
+        abs(area) > 1e-12 || continue
+        push!(clean, points)
+        push!(areas, area)
+    end
+    isempty(clean) && return groups
+    n = length(clean)
+    boxes = Vector{NTuple{4,Float64}}(undef, n)
+    for i in 1:n
+        xmin = ymin = Inf
+        xmax = ymax = -Inf
+        for p in clean[i]
+            xmin = min(xmin, p.x); xmax = max(xmax, p.x)
+            ymin = min(ymin, p.y); ymax = max(ymax, p.y)
         end
-        # A contour inside a hole is filled again and owns its own holes.
-        iseven(depth) || continue
-        outer = _font_orient_loop(clean[i], true)
-        holes = Vector{Vec2{Float64}}[]
-        for j in eachindex(clean)
-            direct_parent[j] == i || continue
-            push!(holes, _font_orient_loop(clean[j], false))
+        boxes[i] = (xmin, ymin, xmax, ymax)
+    end
+    # JavaScript's Array.prototype.sort is stable; keep equal areas in input order.
+    order = sortperm(abs.(areas); rev=true, alg=MergeSort)
+    winding = [area < 0.0 ? -1 : 1 for area in areas]
+    container = zeros(Int, n)
+    exclude = falses(n)
+    for (position, i) in enumerate(order)
+        interior = _font_interior_point(clean[i], boxes[i])
+        container_winding = 0
+        for back in (position - 1):-1:1
+            j = order[back]
+            _font_bbox_contains(boxes[j], boxes[i]) || continue
+            _font_point_in_loop(interior, clean[j]) || continue
+            container[i] = exclude[j] ? container[j] : j
+            container_winding = winding[j]
+            winding[i] += container_winding
+            break
         end
-        push!(groups, (outer=outer, holes=holes))
+        _font_fill_inside(winding[i], fill_rule) ==
+            _font_fill_inside(container_winding, fill_rule) && (exclude[i] = true)
+    end
+    # 0: excluded, 1: outer, 2: hole. A solid inside a hole starts a new shape.
+    role = zeros(Int, n)
+    for i in order
+        exclude[i] && continue
+        role[i] = container[i] == 0 || role[container[i]] == 2 ? 1 : 2
+    end
+    group_of = zeros(Int, n)
+    for i in 1:n
+        role[i] == 1 || continue
+        push!(groups, (outer=_font_orient_loop(clean[i], true),
+                       holes=Vector{Vec2{Float64}}[]))
+        group_of[i] = length(groups)
+    end
+    for i in 1:n
+        role[i] == 2 || continue
+        group = group_of[container[i]]
+        group == 0 && continue
+        push!(groups[group].holes, _font_orient_loop(clean[i], false))
     end
     return groups
 end
@@ -3676,7 +3745,7 @@ function _font_text_shape_groups(font::FontData, text::AbstractString;
             loops = font_glyph_shapes(font, key; size=size,
                                       curve_segments=segments,
                                       offset_x=cursor)
-            append!(groups, _font_loop_groups(loops))
+            append!(groups, _font_fill_groups(loops, :nonzero))
             cursor += glyph.advance_width * scale
             previous_key = key
         else
@@ -5910,7 +5979,7 @@ function _svg_clip_area_loop_pieces(loops::Vector{Vector{Vec2{Float64}}},
                                     fill_rule::Symbol,
                                     context::AbstractString)
     pieces = Vector{Vec2{Float64}}[]
-    for group in _svg_fill_loop_groups(loops, fill_rule)
+    for group in _font_fill_groups(loops, fill_rule)
         if isempty(group.holes) && _svg_is_convex_clip_loop(group.outer)
             push!(pieces, group.outer)
             continue
@@ -8168,88 +8237,12 @@ function _svg_element_path_groups(paths::Vector{SVGPath})
     return [buckets[key] for key in order]
 end
 
-function _svg_fill_loop_groups(loops::Vector{Vector{Vec2{Float64}}},
-                               fill_rule::Symbol)
-    fill_rule === :nonzero || fill_rule === :evenodd ||
-        error("unsupported SVG fill-rule $(fill_rule)")
-    clean = [_font_loop_points(loop) for loop in loops]
-    clean = [loop for loop in clean
-             if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    isempty(clean) && return groups
-
-    areas = abs.(_font_polygon_area.(clean))
-    signs = [_font_polygon_area(loop) >= 0.0 ? 1 : -1 for loop in clean]
-    direct_parent = fill(0, length(clean))
-    for i in eachindex(clean)
-        p = clean[i][1]
-        best = 0
-        best_area = Inf
-        for j in eachindex(clean)
-            i == j && continue
-            areas[j] > areas[i] || continue
-            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
-                best = j
-                best_area = areas[j]
-            end
-        end
-        direct_parent[i] = best
-    end
-
-    depths = zeros(Int, length(clean))
-    ancestor_winding = zeros(Int, length(clean))
-    for i in eachindex(clean)
-        parent = direct_parent[i]
-        while parent != 0
-            depths[i] += 1
-            ancestor_winding[i] += signs[parent]
-            parent = direct_parent[parent]
-        end
-    end
-
-    is_outer = falses(length(clean))
-    is_hole = falses(length(clean))
-    for i in eachindex(clean)
-        if fill_rule === :evenodd
-            outside_filled = isodd(depths[i])
-            inside_filled = !outside_filled
-        else
-            outside_filled = ancestor_winding[i] != 0
-            inside_filled = ancestor_winding[i] + signs[i] != 0
-        end
-        is_outer[i] = !outside_filled && inside_filled
-        is_hole[i] = outside_filled && !inside_filled
-    end
-
-    outer_group = Dict{Int,Int}()
-    for i in eachindex(clean)
-        is_outer[i] || continue
-        holes = Vector{Vec2{Float64}}[]
-        push!(groups, (outer=_font_orient_loop(clean[i], true), holes=holes))
-        outer_group[i] = length(groups)
-    end
-    for i in eachindex(clean)
-        is_hole[i] || continue
-        parent = direct_parent[i]
-        while parent != 0
-            group_idx = get(outer_group, parent, 0)
-            if group_idx != 0
-                push!(groups[group_idx].holes, _font_orient_loop(clean[i], false))
-                break
-            end
-            parent = direct_parent[parent]
-        end
-    end
-    return groups
-end
-
 function _svg_fill_geometries(paths::Vector{SVGPath})
     closed = [path for path in paths if path.closed && length(path.points) >= 3]
     isempty(closed) && return BufferGeometry[]
     fill_rule = closed[1].style.fill_rule
     geos = BufferGeometry[]
-    for group in _svg_fill_loop_groups([path.points for path in closed], fill_rule)
+    for group in _font_fill_groups([path.points for path in closed], fill_rule)
         geo = _font_shape_geometry_with_holes(group.outer, group.holes)
         geo.n_faces > 0 && push!(geos, geo)
     end

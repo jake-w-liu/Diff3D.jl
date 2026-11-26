@@ -121,3 +121,61 @@ end
     @test minimum(ys) == 17.0
     @test maximum(ys) == 23.0
 end
+
+function _audit3_cap_area(geometry)
+    area = 0.0
+    for face in 1:geometry.n_faces
+        a, b, c = get_face(geometry, face)
+        p, q, r = get_vertex(geometry, a), get_vertex(geometry, b), get_vertex(geometry, c)
+        area += abs((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)) / 2
+    end
+    return area
+end
+
+_audit3_square(x0, y0, x1, y1) = "m $x0 $y0 l $x1 $y0 l $x1 $y1 l $x0 $y1"
+
+@testset "Glyph contours fill by the nonzero rule like ShapePath.toShapes" begin
+    # three.js r186 Font.generateShapes -> ShapePath.toShapes (nonzero,
+    # src/extras/core/ShapePath.js:217-366). Oracle areas (node, curveSegments 4):
+    # same-winding nested squares 100 (inner contours excluded), alternating
+    # windings 56, partly overlapping squares 164 (two outers), and an island
+    # inside a hole 68.
+    ccw(x0, y0, x1, y1) = _audit3_square(x0, y0, x1, y1)
+    cw(x0, y0, x1, y1) = "m $x0 $y0 l $x0 $y1 l $x1 $y1 l $x1 $y0"
+    glyphs = Dict(
+        "I" => join([ccw(0, 0, 10, 10), ccw(1, 1, 9, 9), ccw(2, 2, 8, 8), ccw(3, 3, 7, 7)], " "),
+        "J" => join([cw(0, 0, 10, 10), ccw(1, 1, 9, 9), cw(2, 2, 8, 8), ccw(3, 3, 7, 7)], " "),
+        "L" => join([ccw(0, 0, 10, 10), ccw(5, 5, 13, 13)], " "),
+        "M" => join([cw(0, 0, 10, 10), ccw(5, 5, 13, 13)], " "),
+        "N" => join([ccw(0, 0, 10, 10), cw(2, 2, 8, 8), cw(4, 4, 6, 6)], " "))
+    font = Diff3D._font_data(Dict("resolution" => 1, "glyphs" => Dict(
+        key => Dict("ha" => 12, "o" => outline) for (key, outline) in glyphs)))
+    for (char, expected, outers) in (("I", 100.0, 1), ("J", 56.0, 2), ("L", 164.0, 2),
+                                      ("M", 164.0, 2), ("N", 68.0, 2))
+        groups = Diff3D._font_text_shape_groups(font, char; curve_segments=4)
+        @test length(groups) == outers
+        @test _audit3_cap_area(TextGeometry(font, char; curve_segments=4)) ≈ expected
+    end
+end
+
+@testset "SVG fill classification matches ShapePath.toShapes" begin
+    # SVGLoader.createShapes is ShapePath.toShapes in r186 (SVGLoader.js:2244-2250).
+    # A triangle whose first vertex lies inside a larger rectangle but which
+    # extends past it is a separate outer, not a hole: oracle fill area 787.5
+    # (three outers, no holes). The second path previously failed to
+    # triangulate; its oracle area is 880 (544.5 + 195.5 + 140, three outers).
+    doc = _audit3_svg_document("""
+        <svg width="100" height="100">
+          <path fill-rule="nonzero" d="M26 1 L36 37 L18 17 Z M10 17 L29 17 L29 38 L10 38 Z M24 15 L33 38 L43 27 Z"/>
+          <path fill-rule="evenodd" d="M49 25 L20 38 L21 0 Z M36 36 L11 47 L5 34 Z M33 22 L61 22 L61 27 L33 27 Z"/>
+        </svg>
+        """)
+    first_element = [p for p in doc.paths if p.element_id == doc.paths[1].element_id]
+    second_element = [p for p in doc.paths if p.element_id != doc.paths[1].element_id]
+    first_geos = Diff3D._svg_fill_geometries(first_element)
+    @test length(first_geos) == 3
+    @test sum(_audit3_cap_area, first_geos) ≈ 787.5
+    second_geos = Diff3D._svg_fill_geometries(second_element)
+    @test length(second_geos) == 3
+    @test sum(_audit3_cap_area, second_geos) ≈ 880.0
+end
