@@ -176,3 +176,40 @@ const _SPRITE_ORACLE = Dict(
         end
     end
 end
+
+function _audit3_tiled_wire_allocations(target, scene, camera, tiles, caches)
+    render_tiled!(target, scene, camera; tiles=tiles, cache=caches)
+    return @allocated render_tiled!(target, scene, camera; tiles=tiles, cache=caches)
+end
+
+@testset "Tiled instanced wireframes allocate a bounded amount per frame" begin
+    scene = Scene()
+    for (count, material) in ((40, MeshBasicMaterial(wireframe=true)),
+                              (40, MeshLambertMaterial(wireframe=true)),
+                              (30, MeshBasicMaterial(wireframe=true, transparent=true, opacity=0.5)))
+        instances = InstancedMesh(BoxGeometry(width=0.2, height=0.2, depth=0.2), material, count)
+        for index in 1:count
+            set_instance_matrix!(instances, index,
+                                 mat4_translation(0.1index - 2.0, 0.05index - 1.0, 0.1))
+        end
+        add!(scene, instances)
+    end
+    wire = Mesh(SphereGeometry(radius=0.5), MeshBasicMaterial(wireframe=true))
+    add!(scene, wire)
+    camera = PerspectiveCamera(); camera.position = Vec3(0.0, 0.0, 6.0)
+    expected = RenderTarget(96, 64); render!(expected, scene, camera)
+    for tiles in (1, 5)
+        caches = [RenderCache() for _ in 1:min(tiles, Threads.nthreads())]
+        target = RenderTarget(96, 64)
+        render_tiled!(target, scene, camera; tiles=tiles, cache=caches)
+        @test target.color == expected.color
+        @test isequal(target.depth, expected.depth)
+        if Base.JLOptions().opt_level > 0
+            # Previously every instance dispatched on an abstract material and
+            # allocated per instance and band (130 instances: > 40 KiB/frame).
+            # The remaining bound covers Threads.@threads task setup.
+            @test _audit3_tiled_wire_allocations(target, scene, camera, tiles, caches) <=
+                  (Threads.nthreads() > 1 && tiles > 1 ? 8192 : 1024)
+        end
+    end
+end

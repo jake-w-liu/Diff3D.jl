@@ -447,6 +447,8 @@ mutable struct RenderCache
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
     primitive_stamp::Matrix{Int}
+    wire_stamp::Matrix{Int}
+    wire_stamp_id::Int
     wire_edges::Set{Tuple{Int,Int}}
     sprite_state::_SpriteRenderState
     primitive_flags::_RenderPrimitiveFlags
@@ -475,6 +477,7 @@ function RenderCache()
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), zeros(Int, 0, 0),
+                zeros(Int, 0, 0), 0,
                 Set{Tuple{Int,Int}}(),
                 _SpriteRenderState(nothing, 0), _RenderPrimitiveFlags(),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
@@ -967,6 +970,25 @@ function _render_cache_primitive_stamp!(cache::RenderCache, H::Int, W::Int)
         fill!(cache.primitive_stamp, 0)
     end
     return cache.primitive_stamp
+end
+
+# Wireframe edge stamps take ids from a per-cache counter that only grows, so a
+# wireframe never matches an id written by an earlier one and the matrix needs
+# no per-draw clear. It is cleared only when resized or before the counter
+# could overflow.
+function _render_cache_wire_stamp!(cache::RenderCache, H::Int, W::Int, edges::Int)
+    if size(cache.wire_stamp) != (H, W)
+        cache.wire_stamp = zeros(Int, H, W)
+        cache.wire_stamp_id = 0
+    elseif cache.wire_stamp_id > typemax(Int) - edges
+        fill!(cache.wire_stamp, 0)
+        cache.wire_stamp_id = 0
+    end
+    # Reserve the whole id range up front, so a draw that throws part-way
+    # cannot leave ids that a later wireframe would reuse.
+    first_id = cache.wire_stamp_id
+    cache.wire_stamp_id = first_id + edges
+    return cache.wire_stamp, first_id
 end
 
 # Collect into a reused vector (clears then refills), avoiding per-frame allocation.
@@ -2270,12 +2292,12 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
     alpha = _primitive_blend_alpha(mat)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
-    stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-            _render_cache_primitive_stamp!(cache, rt.height, rt.width)
+    face_range = _draw_face_range(geo)
+    stamp, stamp_id = cache === nothing ? (zeros(Int, rt.height, rt.width), 0) :
+        _render_cache_wire_stamp!(cache, rt.height, rt.width, 3 * length(face_range))
     seen = cache === nothing ? Set{Tuple{Int,Int}}() : cache.wire_edges
     empty!(seen)
-    stamp_id = 0
-    for fi in _draw_face_range(geo)
+    for fi in face_range
         first_entry = 3fi - 2
         i1 = _draw_vertex_index(geo, first_entry)
         i2 = _draw_vertex_index(geo, first_entry + 1)
@@ -3509,16 +3531,9 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         is_transparent_material(mat) && continue
         base = instanced_worlds[instanced_slot]
         if material_wireframe(mat)
-            @inbounds for instance_index in eachindex(im.instance_matrices)
-                instance_material = _cached_instanced_material_at(
-                    instanced_material_states, instanced_slot,
-                    instance_index, mat)
-                world = base * im.instance_matrices[instance_index]
-                _render_wireframe_mesh_cached!(
-                    rt, _instanced_geometry(im), instance_material,
-                    world, proj, view, near, 1, rt.width, ylo, yhi,
-                    thread_cache)
-            end
+            _render_tiled_instanced_wireframes!(
+                rt, im, instanced_slot, base, instanced_material_states,
+                proj, view, near, ylo, yhi, thread_cache, 0)
             continue
         end
         _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
@@ -3546,17 +3561,62 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                                               proj, view, near, 1, rt.width,
                                               ylo, yhi, thread_cache)
         else
-            im = instanced[item.object_index]
-            mat = _instanced_material(im)
-            _render_wireframe_mesh_cached!(
-                rt, _instanced_geometry(im),
-                _cached_instanced_material_at(instanced_material_states,
-                                              item.object_index,
-                                              item.instance_index, mat),
-                instanced_worlds[item.object_index] *
-                im.instance_matrices[item.instance_index],
-                proj, view, near, 1, rt.width, ylo, yhi, thread_cache)
+            _render_tiled_instanced_wireframes!(
+                rt, instanced[item.object_index], item.object_index,
+                instanced_worlds[item.object_index], instanced_material_states,
+                proj, view, near, ylo, yhi, thread_cache, item.instance_index)
         end
+    end
+    return nothing
+end
+
+# Function barrier for instanced wireframes: resolve the concrete material type
+# once, then draw every instance (`instance == 0`) or one instance.
+function _render_tiled_instanced_wireframes_material!(
+        rt::RenderTarget, im::InstancedMesh, ::M, instanced_slot::Int, base::Mat4,
+        instanced_material_states, proj::Mat4, view::Mat4, near, ylo::Int,
+        yhi::Int, cache::RenderCache, instance::Int) where {M<:AbstractMaterial}
+    materials = instanced_material_states[instanced_slot].materials::Vector{M}
+    geo = _instanced_geometry(im)
+    matrices = im.instance_matrices
+    range = instance == 0 ? eachindex(matrices) : (instance:instance)
+    @inbounds for instance_index in range
+        _render_wireframe_mesh_cached!(rt, geo, materials[instance_index],
+                                       base * matrices[instance_index], proj, view,
+                                       near, 1, rt.width, ylo, yhi, cache)
+    end
+    return nothing
+end
+
+function _render_tiled_instanced_wireframes!(
+        rt::RenderTarget, im::InstancedMesh, instanced_slot::Int, base::Mat4,
+        instanced_material_states, proj::Mat4, view::Mat4, near, ylo::Int,
+        yhi::Int, cache::RenderCache, instance::Int)
+    mat = im.material
+    if mat isa MeshBasicMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshLambertMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshPhongMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshStandardMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshPhysicalMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    else
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, _instanced_material(im), instanced_slot, base,
+            instanced_material_states, proj, view, near, ylo, yhi, cache, instance)
     end
     return nothing
 end
