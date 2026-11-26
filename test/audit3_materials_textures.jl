@@ -94,6 +94,25 @@ end
     @test default_pixel[1] > 0.1 && default_pixel[3] > 0.1
 end
 
+@testset "DataTexture and DepthTexture default to nearest filtering" begin
+    # DataTexture.js:32 and DepthTexture.js:28 default magFilter and minFilter
+    # to NearestFilter.
+    data_texture = DataTexture(reshape([0.0, 1.0], 1, 2, 1))
+    @test data_texture.filter === :nearest
+    @test data_texture.min_filter === :nearest
+    @test data_texture.mag_filter === :nearest
+    # Halfway between the texels, nearest reads floor(0.5 * 2) = texel 1.
+    @test sample_texture(data_texture, 0.5, 0.5).r == 1.0
+    depth_texture = DepthTexture([0.25 0.75])
+    @test depth_texture.filter === :nearest
+    @test depth_texture.min_filter === :nearest && depth_texture.mag_filter === :nearest
+    @test sample_texture(depth_texture, 0.5, 0.5).r == 0.75
+    # Explicit filters still apply.
+    @test DataTexture(reshape([0.0, 1.0], 1, 2, 1); filter=:bilinear).filter === :bilinear
+    @test sample_texture(DepthTexture([0.25 0.75]; filter=:linear), 0.5, 0.5).r == 0.5
+    @test CanvasTexture(reshape([0.0, 1.0], 1, 2, 1)).filter === :bilinear
+end
+
 function _audit3_sampler_allocations(texture, mipmapped, cube)
     sample_texture(texture, 0.3, 0.7)
     sample_texture_linear(texture, 0.3, 0.7)

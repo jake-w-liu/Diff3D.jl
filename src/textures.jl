@@ -278,12 +278,15 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
             _TEXTURE_MATRIX_INVALID_KEY, _texture_tex_coord(tex_coord),
             _texture_max_anisotropy(max_anisotropy), false)
 end
-DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
+# three.js DataTexture and DepthTexture default to NearestFilter for both
+# magnification and minification (DataTexture.js, DepthTexture.js constructors).
+DataTexture(data::Array{Float64,3}; filter=:nearest, kwargs...) =
+    Texture(data; filter=filter, kwargs...)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 
 # Single-channel depth texture.
-DepthTexture(depth::Matrix{Float64}; kwargs...) =
-    Texture(reshape(depth, size(depth,1), size(depth,2), 1); kwargs...)
+DepthTexture(depth::Matrix{Float64}; filter=:nearest, kwargs...) =
+    Texture(reshape(depth, size(depth,1), size(depth,2), 1); filter=filter, kwargs...)
 
 # Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode.
 @inline function _wrap_coord(i::Int, n::Int, mode::Symbol)
