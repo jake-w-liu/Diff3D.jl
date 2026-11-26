@@ -126,6 +126,20 @@ function _audit3_sampler_allocations(texture, mipmapped, cube)
             @allocated(sample_cube(cube, Vec3(0.3, -0.7, 0.2))))
 end
 
+@testset "Per-pixel texture samplers do not allocate" begin
+    for filter in (:nearest, :bilinear), wrap in (:repeat, :clamp, :mirror)
+        texture = Texture(rand(16, 16, 3); filter, wrap_s=wrap, wrap_t=wrap,
+                          offset=Vec2(0.1, 0.2), repeat=Vec2(2.0, 3.0), rotation=0.3)
+        mipmapped = Texture(rand(16, 16, 3); filter, min_filter=:linear_mipmap_linear)
+        generate_mipmaps!(mipmapped)
+        cube = CubeTexture(ntuple(_ -> mipmapped, 6))
+        if Base.JLOptions().opt_level > 0
+            _audit3_sampler_allocations(texture, mipmapped, cube)
+            @test all(iszero, _audit3_sampler_allocations(texture, mipmapped, cube))
+        end
+    end
+end
+
 @testset "Physical attenuation distance accepts the three.js Infinity default" begin
     # MeshPhysicalMaterial.js: `this.attenuationDistance = Infinity` means no
     # absorption; Diff3D stores that volume as distance 0 (attenuation off).

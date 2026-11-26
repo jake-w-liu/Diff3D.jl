@@ -288,13 +288,16 @@ CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 DepthTexture(depth::Matrix{Float64}; filter=:nearest, kwargs...) =
     Texture(reshape(depth, size(depth,1), size(depth,2), 1); filter=filter, kwargs...)
 
-# Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode.
+# Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode (n >= 1).
+# Samplers reduce UVs to [0, 1] first, so almost every index is already in
+# range; returning it directly skips the integer divisions of `mod`.
 @inline function _wrap_coord(i::Int, n::Int, mode::Symbol)
     if mode === :repeat
-        return mod(i, n)
+        return 0 <= i < n ? i : mod(i, n)
     elseif mode === :clamp
         return clamp(i, 0, n - 1)
     elseif mode === :mirror
+        0 <= i < n && return i
         p = mod(i, 2n)
         return p < n ? p : (2n - 1 - p)
     else
@@ -302,30 +305,18 @@ DepthTexture(depth::Matrix{Float64}; filter=:nearest, kwargs...) =
     end
 end
 
-@inline function _texel(tex::Texture, ix::Int, iy::Int)
-    H, W, C = size(tex.data)
-    x = _wrap_coord(ix, W, tex.wrap_s) + 1
-    y = _wrap_coord(iy, H, tex.wrap_t) + 1
-    if C == 1
-        g = tex.data[y, x, 1]; return Color3(g, g, g)
-    elseif C == 2
-        g = tex.data[y, x, 1]; return Color3(g, g, g)   # treat channel 1 as luminance
-    end
-    # C >= 3: RGB
-    Color3(tex.data[y, x, 1], tex.data[y, x, 2], tex.data[y, x, 3])
-end
-
+# Callers validate that every dimension of `data` is positive, and
+# `_wrap_coord` returns an index in 0:n-1, so the reads below are in bounds.
 @inline function _texel_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
                             ix::Int, iy::Int)
     H, W, C = size(data)
     x = _wrap_coord(ix, W, wrap_s) + 1
     y = _wrap_coord(iy, H, wrap_t) + 1
-    if C == 1
-        g = data[y, x, 1]; return Color3(g, g, g)
-    elseif C == 2
-        g = data[y, x, 1]; return Color3(g, g, g)
+    @inbounds if C <= 2
+        g = data[y, x, 1]; return Color3(g, g, g)   # gray / gray-alpha
+    else
+        return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
     end
-    return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
 end
 
 @inline function texture_transform_uv(tex::Texture, u, v)
@@ -441,10 +432,16 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
     return x
 end
 
+# For finite Float64 x, `x - floor(x)` equals `mod(x, 1.0)` bit for bit: the
+# fractional part of x >= 0 is exactly representable, and for x < 0 both
+# round the same exact value `rem(x, 1.0) + 1` once. It avoids `rem`'s slow path.
+@inline _texture_unit_fract(x::Float64) = x - floor(x)
+@inline _texture_unit_fract(x) = mod(x, one(x))
+
 @inline function _sampling_uv(x, mode::Symbol)
     x = _sanitize_uv(x)
     if mode === :repeat
-        return mod(x, one(x))
+        return _texture_unit_fract(x)
     elseif mode === :clamp
         return clamp(x, zero(x), one(x))
     elseif mode === :mirror
@@ -508,19 +505,20 @@ function sample_texture(tex::Texture, u, v)
 end
 
 @inline function _texel_channel(tex::Texture, ix::Int, iy::Int, channel::Int, default=1.0)
-    H, W, C = size(tex.data)
+    data = tex.data
+    H, W, C = size(data)
     channel < 1 && return default
     x = _wrap_coord(ix, W, tex.wrap_s) + 1
     y = _wrap_coord(iy, H, tex.wrap_t) + 1
     if channel <= C
-        return tex.data[y, x, channel]
+        return @inbounds data[y, x, channel]
     elseif C == 1
         # Single-channel (grayscale / RedFormat) texture: broadcast its lone
-        # channel to any requested channel, matching _texel's luminance
+        # channel to any requested channel, matching _texel_data's luminance
         # broadcast and three.js's single-channel sampling. Otherwise a natural
         # grayscale alpha/roughness/etc. map sampled at channel 2/3/4 would be
         # silently ignored in favor of `default`.
-        return tex.data[y, x, 1]
+        return @inbounds data[y, x, 1]
     end
     return default
 end
