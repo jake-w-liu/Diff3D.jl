@@ -291,3 +291,47 @@ _audit3_close(actual, expected; atol=4e-16) =
     @test (@inferred Diff3D.quat_from_axis_angle(Vec3(1f0, 0f0, 0f0), 0.5f0)) isa
           Quaternion{Float32}
 end
+
+@testset "audit3 math-core: Box3 queries match three.js" begin
+    a = Box3(Vec3(-1.0, 0.0, 2.0), Vec3(1.0, 3.0, 2.5))
+    b = Box3(Vec3(0.5, -1.0, 2.25), Vec3(4.0, 0.5, 9.0))
+    disjoint = Box3(Vec3(2.0, -1.0, 2.25), Vec3(4.0, 0.5, 9.0))
+    m = Mat4((0.8600893382050472, 0.4064891350861861, 0.308241647677416, 0.0,
+              -0.9397378938990306, 1.7330682026363018, 0.3367006025851348, 0.0,
+              0.09933466539753061, 0.14481473881275778, -0.4681466817920996, 0.0,
+              1.0, -2.0, 0.5, 1.0))
+    # node, src/math/Box3.js: isEmpty, getCenter, getSize, union, intersect,
+    # containsPoint, intersectsBox and applyMatrix4 for these boxes.
+    @test !Diff3D.box3_is_empty(a) && Diff3D.box3_is_empty(Box3())
+    @test Diff3D.box3_center(a) === Vec3(0.0, 1.5, 2.25)
+    @test Diff3D.box3_size(a) === Vec3(2.0, 3.0, 0.5)
+    @test Diff3D.box3_union(a, b) ===
+          Box3(Vec3(-1.0, -1.0, 2.0), Vec3(4.0, 3.0, 9.0))
+    @test Diff3D.box3_intersect(a, b) ===
+          Box3(Vec3(0.5, 0.0, 2.25), Vec3(1.0, 0.5, 2.5))
+    @test Diff3D.box3_intersect(a, disjoint) === Box3()
+    @test Diff3D.box3_contains_point(a, Vec3(1.0, 3.0, 2.5))
+    @test !Diff3D.box3_contains_point(a, Vec3(1.0, 3.0, 2.6))
+    @test Diff3D.box3_intersects_box(a, b) && !Diff3D.box3_intersects_box(a, disjoint)
+    @test Diff3D.box3_intersects_box(a, Box3(Vec3(1.0, 3.0, 2.5), Vec3(2.0, 4.0, 3.0)))
+    transformed = Diff3D.box3_apply_matrix4(a, m)
+    @test _audit3_close((_audit3_vec_vector(transformed.min)...,
+                         _audit3_vec_vector(transformed.max)...),
+          (-2.480633689107078, -2.1168596574606706, -0.9786083521576652,
+           2.1084260016988736, 3.967730590026986, 0.8820500918486212); atol=1e-15)
+    # Empty boxes: center and size are zero, transforms leave them empty.
+    @test Diff3D.box3_center(Box3()) === Vec3(0.0, 0.0, 0.0)
+    @test Diff3D.box3_size(Box3()) === Vec3(0.0, 0.0, 0.0)
+    @test Diff3D.box3_apply_matrix4(Box3(), m) === Box3()
+    # Overflow-safe center; integer boxes keep a concrete result type.
+    @test Diff3D.box3_center(Box3(Vec3(1e308, 1e308, 1e308),
+                                  Vec3(1.5e308, 1.5e308, 1.5e308))).x == 1.25e308
+    @test (@inferred Diff3D.box3_center(Box3(Vec3(0, 0, 0), Vec3(1, 2, 3)))) ===
+          Vec3(0.5, 1.0, 1.5)
+    @test (@inferred Diff3D.box3_center(Box3(Vec3(1, 1, 1), Vec3(0, 0, 0)))) ===
+          Vec3(0.0, 0.0, 0.0)
+    @test (@inferred Diff3D.box3_apply_matrix4(Box3(Vec3(1, 1, 1), Vec3(0, 0, 0)), m)) isa
+          Box3{Float64}
+    @test Diff3D.box3_intersect(Box3(Vec3(0, 0, 0), Vec3(1, 1, 1)),
+                                Box3(Vec3(2, 2, 2), Vec3(3, 3, 3))) |> Diff3D.box3_is_empty
+end

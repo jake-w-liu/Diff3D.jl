@@ -1188,6 +1188,128 @@ function box3_expand_by_point(box::Box3, p::Vec3)
     )
 end
 
+"""
+    box3_is_empty(box)
+
+`true` when `box` contains no point, i.e. some `max` component is below the
+matching `min` component (three.js `Box3.isEmpty`). `Box3()` is empty.
+"""
+box3_is_empty(box::Box3) =
+    box.max.x < box.min.x || box.max.y < box.min.y || box.max.z < box.min.z
+
+# (a + b) / 2 as three.js computes it; halve first only when the sum overflows.
+@inline function _box3_midpoint(a, b)
+    sum = a + b
+    isfinite(_primal_value(sum)) && return sum / 2
+    return a / 2 + b / 2
+end
+
+"""
+    box3_center(box)
+
+Center of `box`, or the origin for an empty box (three.js `Box3.getCenter`).
+"""
+function box3_center(box::Box3)
+    if box3_is_empty(box)
+        z = zero(box.min.x) / 2
+        return Vec3(z, z, z)
+    end
+    return Vec3(_box3_midpoint(box.min.x, box.max.x),
+                _box3_midpoint(box.min.y, box.max.y),
+                _box3_midpoint(box.min.z, box.max.z))
+end
+
+"""
+    box3_size(box)
+
+Extent `max - min` of `box`, or the zero vector for an empty box (three.js
+`Box3.getSize`).
+"""
+function box3_size(box::Box3)
+    if box3_is_empty(box)
+        z = zero(box.min.x)
+        return Vec3(z, z, z)
+    end
+    return box.max - box.min
+end
+
+"""
+    box3_union(a, b)
+
+Smallest box containing both `a` and `b` (three.js `Box3.union`).
+"""
+function box3_union(a::Box3, b::Box3)
+    return Box3(
+        Vec3(min(a.min.x, b.min.x), min(a.min.y, b.min.y), min(a.min.z, b.min.z)),
+        Vec3(max(a.max.x, b.max.x), max(a.max.y, b.max.y), max(a.max.z, b.max.z)))
+end
+
+"""
+    box3_intersect(a, b)
+
+Overlap of `a` and `b` (three.js `Box3.intersect`). Disjoint boxes give the
+empty box with `+Inf` minimum and `-Inf` maximum, like three.js `makeEmpty`;
+integer boxes, which cannot hold infinities, return the empty overlap itself.
+"""
+function box3_intersect(a::Box3, b::Box3)
+    result = Box3(
+        Vec3(max(a.min.x, b.min.x), max(a.min.y, b.min.y), max(a.min.z, b.min.z)),
+        Vec3(min(a.max.x, b.max.x), min(a.max.y, b.max.y), min(a.max.z, b.max.z)))
+    box3_is_empty(result) || return result
+    # three.js makeEmpty() uses ±Infinity, which integers cannot hold; an
+    # integer box stays the (already empty) overlap.
+    result.min.x isa Integer && return result
+    inf = oftype(result.min.x, Inf)
+    return Box3(Vec3(inf, inf, inf), Vec3(-inf, -inf, -inf))
+end
+
+"""
+    box3_contains_point(box, p)
+
+`true` when `p` lies inside or on the boundary of `box` (three.js
+`Box3.containsPoint`).
+"""
+box3_contains_point(box::Box3, p::Vec3) =
+    !(p.x < box.min.x || p.x > box.max.x ||
+      p.y < box.min.y || p.y > box.max.y ||
+      p.z < box.min.z || p.z > box.max.z)
+
+"""
+    box3_intersects_box(a, b)
+
+`true` when `a` and `b` overlap, including touching faces (three.js
+`Box3.intersectsBox`).
+"""
+box3_intersects_box(a::Box3, b::Box3) =
+    !(a.max.x < b.min.x || a.min.x > b.max.x ||
+      a.max.y < b.min.y || a.min.y > b.max.y ||
+      a.max.z < b.min.z || a.min.z > b.max.z)
+
+"""
+    box3_apply_matrix4(box, m)
+
+Axis-aligned box around the eight corners of `box` transformed by `m` with
+`mat4_transform_point`; an empty box stays unchanged (three.js
+`Box3.applyMatrix4`).
+"""
+function box3_apply_matrix4(box::Box3, m::Mat4)
+    if box3_is_empty(box)
+        # Same element type as mat4_transform_point results.
+        R = typeof(zero(eltype(m.e)) * zero(box.min.x) / one(eltype(m.e)))
+        return Box3(convert(Vec3{R}, box.min), convert(Vec3{R}, box.max))
+    end
+    lo, hi = box.min, box.max
+    p = mat4_transform_point(m, lo)
+    result = Box3(p, p)
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, lo.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, hi.y, lo.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, hi.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, lo.y, lo.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, lo.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, hi.y, lo.z)))
+    return box3_expand_by_point(result, mat4_transform_point(m, hi))
+end
+
 struct BoundingSphere{T<:Real}
     center::Vec3{T}
     radius::T
