@@ -52,3 +52,75 @@ end
     end
 end
 
+@testset "Material defaults follow the three.js classes" begin
+    # MeshPhongMaterial.js:63 `this.specular = new Color( 0x111111 )`; Color
+    # stores the sRGB hex in the linear working space:
+    # node: new THREE.MeshPhongMaterial().specular.r === 0.005605391621829108
+    @test MeshPhongMaterial().specular ==
+          Color3(0.005605391621829108, 0.005605391621829108, 0.005605391621829108)
+    # ColorManagement.js SRGBToLinear uses rounded constants (0.9478672986,
+    # 0.0521327014), so the exact sRGB decode differs in the 10th digit.
+    @test MeshPhongMaterial().specular.r ≈ srgb_to_linear(17 / 255) atol=1e-11
+    # SpriteMaterial.js:107 `this.transparent = true`.
+    @test SpriteMaterial().transparent
+    @test !SpriteMaterial(transparent=false).transparent
+    # MeshPhysicalMaterial.js:225 `this.sheenColor = new Color( 0x000000 )`;
+    # WebGLMaterials.js:419 multiplies it by `sheen`, so `sheen = 1` alone adds
+    # no sheen lobe.
+    @test MeshPhysicalMaterial().sheen_color == Color3(0.0, 0.0, 0.0)
+    material = MeshPhysicalMaterial(sheen=1.0, sheen_roughness=0.8)
+    normal = Vec3(0.0, 0.0, 1.0)
+    light = normalize(Vec3(1.0, 0.0, 0.5)); view = normalize(Vec3(1.0, 0.25, 0.5))
+    @test Diff3D._sheen_lobe(material, normal, light, view) == Color3(0.0, 0.0, 0.0)
+end
+
+@testset "Default SpriteMaterial blends its opacity" begin
+    # three.js blends sprites by default (SpriteMaterial.js:107), so a
+    # half-opaque default sprite renders like an explicitly transparent one.
+    function render_sprite(material)
+        scene = Scene()
+        scene.background = Color3(1.0, 0.0, 0.0)
+        add!(scene, Sprite(material))
+        camera = PerspectiveCamera()
+        camera.position = Vec3(0.0, 0.0, 2.0)
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera)
+        return target.color[8, 8, :]
+    end
+    default_pixel = render_sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0), opacity=0.5))
+    @test default_pixel == render_sprite(SpriteMaterial(color=Color3(0.0, 0.0, 1.0),
+                                                        opacity=0.5, transparent=true))
+    # Blue at opacity 0.5 over a red background keeps half of the red.
+    @test default_pixel[1] > 0.1 && default_pixel[3] > 0.1
+end
+
+function _audit3_sampler_allocations(texture, mipmapped, cube)
+    sample_texture(texture, 0.3, 0.7)
+    sample_texture_linear(texture, 0.3, 0.7)
+    Diff3D._sample_texture_unit_channel(texture, 0.3, 0.7, 2)
+    sample_texture_auto(mipmapped, 0.3, 0.7, 0.2)
+    sample_cube(cube, Vec3(0.3, -0.7, 0.2))
+    return (@allocated(sample_texture(texture, 1.3, -0.7)),
+            @allocated(sample_texture_linear(texture, 0.3, 0.7)),
+            @allocated(Diff3D._sample_texture_unit_channel(texture, -2.3, 0.7, 2)),
+            @allocated(sample_texture_auto(mipmapped, 0.3, 0.7, 0.2)),
+            @allocated(sample_cube(cube, Vec3(0.3, -0.7, 0.2))))
+end
+
+@testset "Physical attenuation distance accepts the three.js Infinity default" begin
+    # MeshPhysicalMaterial.js: `this.attenuationDistance = Infinity` means no
+    # absorption; Diff3D stores that volume as distance 0 (attenuation off).
+    infinite = MeshPhysicalMaterial(transmission=1.0, thickness=0.5,
+                                    attenuation_color=Color3(0.2, 0.5, 0.9),
+                                    attenuation_distance=Inf)
+    @test infinite.attenuation_distance == 0.0
+    off = MeshPhysicalMaterial(transmission=1.0, thickness=0.5,
+                               attenuation_color=Color3(0.2, 0.5, 0.9))
+    @test Diff3D._web_material_attenuation_distance(infinite) == 0.0
+    @test MeshPhysicalMaterial(attenuation_distance=2.5).attenuation_distance == 2.5
+    for invalid in (-Inf, NaN, -1.0, true)
+        @test_throws ArgumentError MeshPhysicalMaterial(attenuation_distance=invalid)
+    end
+    @test getfield.(Ref(infinite), fieldnames(MeshPhysicalMaterial)) ==
+          getfield.(Ref(off), fieldnames(MeshPhysicalMaterial))
+end

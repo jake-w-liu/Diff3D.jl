@@ -178,8 +178,9 @@ function SpriteMaterial(color::Color3, opacity, transparent::Bool, map,
                    depth_test, depth_write)
 end
 
+# three.js SpriteMaterial blends by default (`this.transparent = true`).
 function SpriteMaterial(; color=Color3(1.0, 1.0, 1.0), opacity=1.0,
-                        transparent=false, map=nothing, alpha_map=nothing,
+                        transparent=true, map=nothing, alpha_map=nothing,
                         rotation=0.0, size_attenuation=true, alpha_test=0.0,
                         depth_test=true, depth_write=true)
     SpriteMaterial(_validated_material_color(color, :color),
@@ -428,7 +429,11 @@ struct MeshPhongMaterial <: AbstractMaterial
 end
 
 function MeshPhongMaterial(; color=Color3(1.0, 1.0, 1.0),
-                            specular=Color3(0.066, 0.066, 0.066),
+                            # three.js `new Color(0x111111)` in the linear
+                            # working space: srgb_to_linear(17 / 255).
+                            specular=Color3(0.005605391621829108,
+                                            0.005605391621829108,
+                                            0.005605391621829108),
                             emissive=Color3(0.0, 0.0, 0.0),
                             shininess=nothing,
                             glossiness=nothing,
@@ -940,7 +945,7 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                alpha_map=nothing, emissive_intensity=1.0, ao_map_intensity=1.0,
                                light_map_intensity=1.0, env_map_intensity=1.0,
                                alpha_test=0.0,
-                               sheen=0.0, sheen_color=Color3(1.0,1.0,1.0), sheen_roughness=1.0,
+                               sheen=0.0, sheen_color=Color3(0.0,0.0,0.0), sheen_roughness=1.0,
                                iridescence=0.0, iridescence_ior=1.3, iridescence_thickness=400.0,
                                iridescence_thickness_min=0.0,
                                light_map=nothing,
@@ -990,8 +995,7 @@ function MeshPhysicalMaterial(; color=Color3(1.0,1.0,1.0), emissive=Color3(0.0,0
                                                          :iridescence_thickness), light_map,
                          clearcoat_map, clearcoat_roughness_map, transmission_map,
                          _validated_material_nonnegative(thickness, :thickness), thickness_map,
-                         _validated_material_nonnegative(attenuation_distance,
-                                                         :attenuation_distance),
+                         _validated_material_attenuation_distance(attenuation_distance),
                          _validated_material_color(attenuation_color,
                                                    :attenuation_color),
                          sheen_color_map, sheen_roughness_map, iridescence_map,
@@ -1052,6 +1056,13 @@ MeshPhysicalMaterial(args::Vararg{Any,57}) =
     _validated_material_finite(material.anisotropy_rotation, :anisotropy_rotation)
     _validated_material_clearcoat_normal_scale(material.clearcoat_normal_scale)
     return nothing
+end
+
+# three.js uses `attenuationDistance = Infinity` (its default) for a volume
+# without absorption; Diff3D stores that case as 0, which disables attenuation.
+@inline function _validated_material_attenuation_distance(value)
+    value isa Real && !(value isa Bool) && value == Inf && return 0.0
+    return _validated_material_nonnegative(value, :attenuation_distance)
 end
 
 # ========================== MeshToonMaterial ==========================

@@ -3,7 +3,9 @@ using Diff3D, Test
 @testset "glTF sheen color is applied once" begin
     normal=Vec3(0.0,0.0,1.0)
     light=normalize(Vec3(1.0,0.0,0.5));view=normalize(Vec3(1.0,0.25,0.5))
-    unit=MeshPhysicalMaterial(sheen=1.0,sheen_roughness=0.8)
+    # three.js defaults sheenColor to black (MeshPhysicalMaterial.js:225), so
+    # the white unit-color reference lobe is requested explicitly.
+    unit=MeshPhysicalMaterial(sheen=1.0,sheen_color=Color3(1.0,1.0,1.0),sheen_roughness=0.8)
     unit_lobe=Diff3D._sheen_lobe(unit,normal,light,view)
     @test unit_lobe.r>0.01
     for factor in ([0.5,0.25,0.125],[0.0,0.0,0.0],[1.0,1.0,1.0],[1e-300,0.25,0.0])
