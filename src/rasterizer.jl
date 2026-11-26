@@ -1227,6 +1227,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
                                    uv2_attr, color_attr,
                                    use_vertex_colors::Bool) where {M<:AbstractMaterial}
     blend = material_transparent(mat)
+    mirrored = _world_mirrors_faces(world_mat)
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         front_facing = true
@@ -1236,7 +1237,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             w3 = mat4_transform_point(world_mat, get_vertex(geo, i3))
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir)
+                w1, w2, w3, wc, cam_pos, ortho_dir) != mirrored
             (side === :front ? !front_facing : front_facing) && continue
         end
         # Geometry without authored normals: fall back to the local-space
@@ -1264,7 +1265,7 @@ function _render_smooth_mesh_loop!(rt::RenderTarget, geo::BufferGeometry,
             wc = _mean3_vec3(tri[1].wp, tri[2].wp, tri[3].wp)
             front_facing = _face_front_facing(
                 tri[1].wp, tri[2].wp, tri[3].wp,
-                wc, cam_pos, ortho_dir)
+                wc, cam_pos, ortho_dir) != mirrored
         end
         normal_sign = front_facing ? 1.0 : -1.0
         m = _clip_near_attr!(clipped, tri, 3, near)
@@ -2216,6 +2217,27 @@ _mesh_is_flat(mesh::Mesh, default_shading::Symbol) =
 material_side(m::AbstractMaterial) =
     hasfield(typeof(m), :side) ? _validated_material_side(getfield(m, :side)) : :front
 
+# three.js draws a mesh whose world matrix has a negative affine determinant
+# with clockwise front faces (WebGLRenderer.js:1200 `frontFaceCW`, applied by
+# WebGLState.js:761). Mirroring reverses the transformed winding, so XOR-ing
+# this flag into the winding test keeps the faces whose transformed normals face
+# the camera front-facing. Entries are normalized by their largest magnitude so
+# tiny or huge scales cannot underflow or overflow the determinant's sign;
+# singular and non-finite matrices keep the unflipped winding.
+@inline function _world_mirrors_faces(world::Mat4)
+    e = world.e
+    scale = max(abs(e[1]), abs(e[2]), abs(e[3]), abs(e[5]), abs(e[6]),
+                abs(e[7]), abs(e[9]), abs(e[10]), abs(e[11]))
+    (iszero(scale) || !isfinite(scale)) && return false
+    n11 = e[1] / scale; n12 = e[5] / scale; n13 = e[9] / scale
+    n21 = e[2] / scale; n22 = e[6] / scale; n23 = e[10] / scale
+    n31 = e[3] / scale; n32 = e[7] / scale; n33 = e[11] / scale
+    determinant = n11 * (n22 * n33 - n23 * n32) -
+                  n12 * (n21 * n33 - n23 * n31) +
+                  n13 * (n21 * n32 - n22 * n31)
+    return determinant < 0
+end
+
 # View-space z of a mesh's world origin (more negative = farther from camera).
 function _mesh_view_depth(mesh, view::Mat4)
     w = compute_world_matrix(mesh)
@@ -2436,7 +2458,8 @@ end
         geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
     if side !== :front
         front_facing = _face_front_facing(
-            v1, v2, v3, center, cam_pos, ortho_dir)
+            v1, v2, v3, center, cam_pos, ortho_dir) !=
+            _world_mirrors_faces(world_mat)
         face_n = _side_oriented_normal(face_n, side, front_facing)
     end
     return clamp_color(shade_face(
@@ -2551,6 +2574,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
     view_inv = needs_world ? mat4_inverse(view) : view
     wp1 = _ZERO_V3; wp2 = _ZERO_V3; wp3 = _ZERO_V3
     iw1 = 1.0; iw2 = 1.0; iw3 = 1.0
+    mirrored = _world_mirrors_faces(world_mat)
     for fi in _draw_face_range(geo)
         i1, i2, i3 = get_face(geo, fi)
         v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
@@ -2561,7 +2585,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir)
+                w1, w2, w3, wc, cam_pos, ortho_dir) != mirrored
             (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))

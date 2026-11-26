@@ -1088,7 +1088,8 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
             geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         if side !== :front
             front_facing = _face_front_facing(
-                v1, v2, v3, center, cam_pos, ortho_dir)
+                v1, v2, v3, center, cam_pos, ortho_dir) !=
+                _world_mirrors_faces(world_mat)
             face_n = _side_oriented_normal(face_n, side, front_facing)
         end
         view_dir = _direction_between(center, cam_pos)
@@ -1309,7 +1310,8 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         if side !== :front
             front_facing = _face_front_facing(
-                v1, v2, v3, center, cam_pos, ortho_dir)
+                v1, v2, v3, center, cam_pos, ortho_dir) !=
+                _world_mirrors_faces(world_mat)
             face_n = _side_oriented_normal(face_n, side, front_facing)
         end
         view_dir = _direction_between(center, cam_pos)

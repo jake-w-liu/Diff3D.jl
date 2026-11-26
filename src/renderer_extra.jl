@@ -1089,7 +1089,8 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir)
+                w1, w2, w3, wc, cam_pos, ortho_dir) !=
+                _world_mirrors_faces(world_mat)
             (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
