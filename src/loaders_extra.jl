@@ -6744,66 +6744,6 @@ function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
     return out
 end
 
-function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
-                                   clip_loop::Vector{Vec2{Float64}})
-    p0 = a
-    p1 = b
-    ccw = _font_polygon_area(clip_loop) >= 0.0
-    for i in eachindex(clip_loop)
-        c = clip_loop[i]
-        d = clip_loop[i == length(clip_loop) ? 1 : i + 1]
-        d0 = _svg_clip_signed_distance(p0, c, d, ccw)
-        d1 = _svg_clip_signed_distance(p1, c, d, ccw)
-        in0 = d0 >= -1e-9
-        in1 = d1 >= -1e-9
-        in0 && in1 && continue
-        (!in0 && !in1) && return nothing
-        hit = _svg_clip_edge_intersection(p0, p1, d0, d1, c, d)
-        if in0
-            p1 = hit
-        else
-            p0 = hit
-        end
-    end
-    _font_same_point(p0, p1) && return nothing
-    return p0, p1
-end
-
-function _svg_clip_open_path_to_loop(path::SVGPath,
-                                     clip_loop::Vector{Vec2{Float64}})
-    fragments = SVGPath[]
-    current = Vec2{Float64}[]
-    function flush_current!()
-        if length(current) >= 2
-            push!(fragments, _svg_path_with_points(path, copy(current), false))
-        end
-        empty!(current)
-        return nothing
-    end
-
-    for i in 1:(length(path.points) - 1)
-        clipped = _svg_clip_segment_to_loop(path.points[i], path.points[i + 1],
-                                            clip_loop)
-        if clipped === nothing
-            flush_current!()
-            continue
-        end
-        a, b = clipped
-        if isempty(current)
-            push!(current, a)
-            push!(current, b)
-        elseif _font_same_point(current[end], a)
-            _svg_push_unique_point!(current, b)
-        else
-            flush_current!()
-            push!(current, a)
-            push!(current, b)
-        end
-    end
-    flush_current!()
-    return fragments
-end
-
 function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
     x = a.x + (b.x - a.x) * t
     y = a.y + (b.y - a.y) * t
