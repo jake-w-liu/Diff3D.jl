@@ -487,25 +487,11 @@ function _obj_index_count_label(kind::Symbol)
     return string(kind, "s")
 end
 
-function _obj_checked_index(tok, count::Int, kind::Symbol)
-    label = _obj_index_label(kind)
-    raw = _obj_parse_index_token(tok, kind)
-    raw == 0 && error("OBJ $label index 0 is invalid")
-    idx = raw < 0 ? count + raw + 1 : raw
-    1 <= idx <= count ||
-        error("OBJ $label index $raw out of bounds for $count $(_obj_index_count_label(kind))")
-    return idx
-end
-
 function _obj_index_label(kind::Symbol)
     kind === :vertex && return "vertex"
     kind === :uv && return "uv"
     kind === :normal && return "normal"
     return String(kind)
-end
-
-function _obj_parse_index_token(tok, kind::Symbol)
-    return _obj_parse_index_range(tok, firstindex(tok), lastindex(tok), kind)
 end
 
 function _obj_parse_index_range(tok::AbstractString, first_i::Int, last_i::Int, kind::Symbol)
@@ -716,11 +702,6 @@ function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{
     return out_vi, have_uvs, have_normals, missing_normals
 end
 
-function _obj_require_values(tokens, count::Int, label::String)
-    length(tokens) >= count + 1 ||
-        error("OBJ $label requires $count $(count == 1 ? "value" : "values")")
-end
-
 function _obj_parse_float(tok, label::String)
     value = tryparse(Float64, tok)
     value === nothing && error("OBJ $label must be a number")
@@ -858,13 +839,6 @@ function _obj_scan_counts(io::IO)
     n_triangles = skip_line ? n_triangles :
                   _obj_scan_finish_line(tag_code, face_corners, n_triangles)
     return n_vertices, n_uvs, n_normals, n_triangles
-end
-
-function _obj_parse_vec3(tokens, label::String)
-    _obj_require_values(tokens, 3, label)
-    return (_obj_parse_float(tokens[2], "$label x"),
-            _obj_parse_float(tokens[3], "$label y"),
-            _obj_parse_float(tokens[4], "$label z"))
 end
 
 @noinline function _obj_require_values_error(count::Int, label::String)
@@ -1299,13 +1273,6 @@ function _ply_parse_element_count(tok)
     return count
 end
 
-function _ply_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, tok)
-    value === nothing && error("PLY $context must be a number")
-    isfinite(value) || error("PLY $context must be finite")
-    return value
-end
-
 @inline _ply_ascii_space(b::UInt8) =
     b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') || b == UInt8('\n') ||
     b == UInt8('\v') || b == UInt8('\f')
@@ -1388,18 +1355,6 @@ end
     return value, UInt8(0)
 end
 
-@noinline function _ply_ascii_float_context_error(context::String, status::UInt8)
-    status == UInt8(2) ? error("PLY $context must be finite") :
-                         error("PLY $context must be a number")
-end
-
-function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
-                                context::String)
-    value, status = _try_parse_ascii_float(bytes, first, last)
-    status == UInt8(0) || _ply_ascii_float_context_error(context, status)
-    return value
-end
-
 @noinline function _ply_vertex_ascii_float_error(row::Int, col::Int, props, status::UInt8)
     reason = status == UInt8(2) ? "finite" : "a number"
     if col <= length(props)
@@ -1478,11 +1433,6 @@ function _ply_next_ascii_token(bytes::AbstractVector{UInt8}, p::Int, line_stop::
         p += 1
     end
     return first, p - 1, p
-end
-
-function _ply_checked_finite(value, context::String)
-    isfinite(value) || error("PLY $context must be finite")
-    return value
 end
 
 @noinline _ply_vertex_finite_error(row::Int, prop) =
