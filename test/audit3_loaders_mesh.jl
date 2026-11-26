@@ -285,3 +285,87 @@ end
     @test bin.indices == geo.indices
     @test get_attribute(bin, :color).data == get_attribute(geo, :color).data
 end
+
+# One triangle with uvs and (unnormalized) vertex normals.
+_audit3_export_tri() = BufferGeometry([0.0, 0, 0, 1, 0, 0, 0, 1, 0],
+                                      [0.0, 0, 2, 0, 0, 1, 0, 0, 1],
+                                      [0.0, 0, 1, 0, 0, 1], [1, 2, 3], 3, 1)
+
+@testset "ASCII STL and OBJ exporters follow three.js layouts" begin
+    tri = _audit3_export_tri()
+    # STLExporter.js (binary: false): 'solid exported\n', per face
+    # '\tfacet normal ...\n\t\touter loop\n', three '\t\t\tvertex ...\n',
+    # '\t\tendloop\n\tendfacet\n', then 'endsolid exported\n'. The normal is
+    # (C - B) x (A - B) normalized: (0, 0, 1) here.
+    path = Diff3D.save_stl_ascii(tempname() * ".stl", tri)
+    @test read(path, String) ==
+          "solid exported\n\tfacet normal 0.0 0.0 1.0\n\t\touter loop\n" *
+          "\t\t\tvertex 0.0 0.0 0.0\n\t\t\tvertex 1.0 0.0 0.0\n" *
+          "\t\t\tvertex 0.0 1.0 0.0\n\t\tendloop\n\tendfacet\nendsolid exported\n"
+    box = BoxGeometry(width=1.0, height=2.0, depth=3.0)
+    back = load_stl(Diff3D.save_stl_ascii(tempname() * ".stl", box))
+    @test back.n_faces == box.n_faces
+    @test back.positions == [box.positions[3(i - 1) + k] for i in box.indices for k in 1:3]
+
+    # OBJExporter.js parseMesh: 'o name', v, vt, vn (normalized), then
+    # 'f a/b/c' with the vt or vn part left empty when that attribute is absent.
+    path = Diff3D.save_obj(tempname() * ".obj", tri; name="tri")
+    @test read(path, String) ==
+          "o tri\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nv 0.0 1.0 0.0\nvt 0.0 0.0\n" *
+          "vt 1.0 0.0\nvt 0.0 1.0\nvn 0.0 0.0 1.0\nvn 0.0 0.0 1.0\n" *
+          "vn 0.0 0.0 1.0\nf 1/1/1 2/2/2 3/3/3\n"
+    nouv = BufferGeometry(tri.positions, tri.normals, Float64[], [1, 2, 3], 3, 1)
+    @test endswith(read(Diff3D.save_obj(tempname() * ".obj", nouv), String),
+                   "\nf 1//1 2//2 3//3\n")
+    nonrm = BufferGeometry(tri.positions, Float64[], tri.uvs, [1, 2, 3], 3, 1)
+    @test endswith(read(Diff3D.save_obj(tempname() * ".obj", nonrm), String),
+                   "\nf 1/1 2/2 3/3\n")
+    back = load_obj(Diff3D.save_obj(tempname() * ".obj", box))
+    @test back.positions == [box.positions[3(i - 1) + k] for i in box.indices for k in 1:3]
+    @test back.uvs == [box.uvs[2(i - 1) + k] for i in box.indices for k in 1:2]
+    @test_throws "save_obj name must not contain a line break" Diff3D.save_obj(
+        tempname() * ".obj", tri; name="a\nb")
+    @test_throws "save_obj positions must be finite" Diff3D.save_obj(
+        tempname() * ".obj", BufferGeometry([NaN, 0, 0, 1, 0, 0, 0, 1, 0], Float64[],
+                                            Float64[], [1, 2, 3], 3, 1))
+end
+
+@testset "PLY exporter matches three.js PLYExporter" begin
+    # three.js r186 PLYExporter.parse(mesh, null, {binary: true, littleEndian})
+    # of the BoxGeometry(width=1, height=2, depth=3) position/normal/uv/index
+    # buffers (Float64Array attributes, so every property is `double`).
+    box = BoxGeometry(width=1.0, height=2.0, depth=3.0)
+    le = read(Diff3D.save_ply(tempname() * ".ply", box; binary=true, little_endian=true))
+    be = read(Diff3D.save_ply(tempname() * ".ply", box; binary=true))
+    @test bytes2hex(sha256(le)) ==
+          "cc312e4406ac8f4cbb8151d189eb88eea4149ebbc78143d5ee9cb36ca8f298ae"
+    @test bytes2hex(sha256(be)) ==
+          "2629d8e5f5cc315285aaf93991e9e251fe1fcd65c0ff6866884565900ceec068"
+
+    # ASCII layout (PLYExporter.js): header, one row per vertex, '3 a b c'
+    # per face, then a final '\n'.
+    path = Diff3D.save_ply(tempname() * ".ply", _audit3_export_tri())
+    @test read(path, String) ==
+          "ply\nformat ascii 1.0\nelement vertex 3\nproperty double x\n" *
+          "property double y\nproperty double z\nproperty double nx\n" *
+          "property double ny\nproperty double nz\nproperty double s\n" *
+          "property double t\nelement face 1\n" *
+          "property list uchar int vertex_index\nend_header\n" *
+          "0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0\n1.0 0.0 0.0 0.0 0.0 1.0 1.0 0.0\n" *
+          "0.0 1.0 0.0 0.0 0.0 1.0 0.0 1.0\n3 0 1 2\n\n"
+    for kw in ((;), (binary=true,), (binary=true, little_endian=true))
+        back = load_ply(Diff3D.save_ply(tempname() * ".ply", box; kw...))
+        @test back.positions == box.positions
+        @test back.uvs == box.uvs
+        @test back.indices == box.indices
+    end
+    # Colours are written as sRGB (ColorManagement.workingToColorSpace).
+    col = _audit3_export_tri()
+    set_attribute!(col, :color, [0.0, 0.5, 1.0, 0.25, 0.0, 0.0, 1.0, 1.0, 1.0], 3)
+    text = read(Diff3D.save_ply(tempname() * ".ply", col), String)
+    @test occursin("property double red\nproperty double green\nproperty double blue\n", text)
+    # 1.055 * 1 - 0.055 rounds to 0.9999999999999999 in Float64, in three.js
+    # LinearToSRGB as here.
+    @test occursin(" 0.0 0.7353569830524495 0.9999999999999999\n", text)
+    @test linear_to_srgb(0.5) == 0.7353569830524495
+end

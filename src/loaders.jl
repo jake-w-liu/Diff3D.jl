@@ -263,6 +263,207 @@ function save_stl_binary(path::String, geo::BufferGeometry)
     return path
 end
 
+function _export_require_finite(data::AbstractVector, fname::String, what::String)
+    @inbounds for x in data
+        isfinite(x) || throw(ArgumentError("$fname $what must be finite"))
+    end
+    return nothing
+end
+
+# Per-vertex attribute vector for an exporter: `nothing` when absent, else
+# `data` after checking it holds `width` finite values per vertex.
+function _export_vertex_data(data::AbstractVector, width::Int, nv::Int,
+                             fname::String, what::String)
+    isempty(data) && return nothing
+    length(data) == width * nv ||
+        throw(ArgumentError("$fname $what must hold $width values per vertex"))
+    _export_require_finite(data, fname, what)
+    return data
+end
+
+# The `:color` attribute as `(data, item_size)`, or `nothing` without one.
+function _export_vertex_colors(geo::BufferGeometry, fname::String)
+    has_attribute(geo, :color) || return nothing
+    attr = get_attribute(geo, :color)
+    (attr.item_size >= 3 && length(attr.data) == attr.item_size * geo.n_vertices) ||
+        throw(ArgumentError("$fname :color must hold at least 3 values per vertex"))
+    _export_require_finite(attr.data, fname, ":color")
+    return attr.data, attr.item_size
+end
+
+"""
+    save_stl_ascii(path, geo) -> path
+
+Write `geo` as an ASCII STL file laid out like three.js `STLExporter` with
+`binary: false`: a `solid exported` block holding one `facet normal` record
+per triangle, the normal computed from the triangle (zero for a degenerate
+one). Coordinates are written at full `Float64` precision. Round-trips with
+[`load_stl`](@ref).
+"""
+function save_stl_ascii(path::String, geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "save_stl_ascii")
+    _export_require_finite(geo.positions, "save_stl_ascii", "positions")
+    for fi in 1:geo.n_faces
+        n, _, _, _ = _stl_facet_data(geo, fi)
+        isfinite(n.x) && isfinite(n.y) && isfinite(n.z) ||
+            throw(ArgumentError("save_stl_ascii face $fi normal must be finite"))
+    end
+    open(path, "w") do io
+        print(io, "solid exported\n")
+        for fi in 1:geo.n_faces
+            n, v1, v2, v3 = _stl_facet_data(geo, fi)
+            print(io, "\tfacet normal ", n.x, ' ', n.y, ' ', n.z, "\n\t\touter loop\n")
+            for v in (v1, v2, v3)
+                print(io, "\t\t\tvertex ", v.x, ' ', v.y, ' ', v.z, '\n')
+            end
+            print(io, "\t\tendloop\n\tendfacet\n")
+        end
+        print(io, "endsolid exported\n")
+    end
+    return path
+end
+
+"""
+    save_obj(path, geo; name="") -> path
+
+Write `geo` as a Wavefront OBJ file laid out like three.js `OBJExporter` for
+one mesh: `o name`, the `v` records, `vt` records when `geo.uvs` is set, `vn`
+records (normalized) when `geo.normals` is set, then one `f` record per
+triangle using the `v/vt/vn`, `v//vn` or `v/vt` form that matches. Values are
+written at full `Float64` precision. Round-trips with [`load_obj`](@ref).
+"""
+function save_obj(path::String, geo::BufferGeometry; name::AbstractString="")
+    _validate_triangle_geometry_indices(geo, "save_obj")
+    any(c -> c == '\n' || c == '\r', name) &&
+        throw(ArgumentError("save_obj name must not contain a line break"))
+    nv = geo.n_vertices
+    _export_require_finite(view(geo.positions, 1:3nv), "save_obj", "positions")
+    uvs = _export_vertex_data(geo.uvs, 2, nv, "save_obj", "uvs")
+    normals = _export_vertex_data(geo.normals, 3, nv, "save_obj", "normals")
+    open(path, "w") do io
+        print(io, "o ", name, '\n')
+        @inbounds for i in 1:nv
+            b = 3(i - 1)
+            print(io, "v ", geo.positions[b+1], ' ', geo.positions[b+2], ' ',
+                  geo.positions[b+3], '\n')
+        end
+        if uvs !== nothing
+            @inbounds for i in 1:nv
+                print(io, "vt ", uvs[2i-1], ' ', uvs[2i], '\n')
+            end
+        end
+        if normals !== nothing
+            @inbounds for i in 1:nv
+                n = normalize(Vec3(normals[3i-2], normals[3i-1], normals[3i]))
+                print(io, "vn ", n.x, ' ', n.y, ' ', n.z, '\n')
+            end
+        end
+        for fi in 1:geo.n_faces
+            print(io, 'f')
+            for j in get_face(geo, fi)
+                print(io, ' ', j)
+                if uvs !== nothing || normals !== nothing
+                    print(io, '/')
+                    uvs === nothing || print(io, j)
+                    normals === nothing || print(io, '/', j)
+                end
+            end
+            print(io, '\n')
+        end
+    end
+    return path
+end
+
+# Write one PLY vertex value: 8 bytes in binary, else the shortest decimal
+# preceded by a space unless it starts the row. Returns `false` (the next
+# value no longer starts the row).
+@inline function _ply_emit_value(io::IO, x::Float64, binary::Bool,
+                                 little_endian::Bool, starts_row::Bool)
+    if binary
+        write(io, little_endian ? htol(x) : hton(x))
+    else
+        starts_row || print(io, ' ')
+        print(io, x)
+    end
+    return false
+end
+
+"""
+    save_ply(path, geo; binary=false, little_endian=false) -> path
+
+Write `geo` as a Stanford PLY file laid out like three.js `PLYExporter`:
+`double` x/y/z, then nx/ny/nz (normalized) when `geo.normals` is set, s/t
+when `geo.uvs` is set, and red/green/blue when the geometry has a `:color`
+attribute, followed by a `vertex_index` list of 0-based triangle indices.
+Colours are converted from linear to sRGB, as `PLYExporter` does. `binary`
+selects `binary_little_endian` or `binary_big_endian` (the `PLYExporter`
+default) by `little_endian`.
+"""
+function save_ply(path::String, geo::BufferGeometry; binary::Bool=false,
+                  little_endian::Bool=false)
+    _validate_triangle_geometry_indices(geo, "save_ply")
+    nv = geo.n_vertices
+    _export_require_finite(view(geo.positions, 1:3nv), "save_ply", "positions")
+    uvs = _export_vertex_data(geo.uvs, 2, nv, "save_ply", "uvs")
+    normals = _export_vertex_data(geo.normals, 3, nv, "save_ply", "normals")
+    colors = _export_vertex_colors(geo, "save_ply")
+    for fi in 1:geo.n_faces, j in get_face(geo, fi)
+        j - 1 <= typemax(UInt32) ||
+            throw(ArgumentError("save_ply vertex index $j does not fit uint32"))
+    end
+    format = !binary ? "ascii" :
+             little_endian ? "binary_little_endian" : "binary_big_endian"
+    open(path, "w") do io
+        print(io, "ply\nformat ", format, " 1.0\nelement vertex ", nv, '\n',
+              "property double x\nproperty double y\nproperty double z\n")
+        normals === nothing ||
+            print(io, "property double nx\nproperty double ny\nproperty double nz\n")
+        uvs === nothing || print(io, "property double s\nproperty double t\n")
+        colors === nothing ||
+            print(io, "property double red\nproperty double green\nproperty double blue\n")
+        print(io, "element face ", geo.n_faces, '\n',
+              "property list uchar int vertex_index\nend_header\n")
+        for i in 1:nv
+            f = _ply_emit_value(io, geo.positions[3i-2], binary, little_endian, true)
+            f = _ply_emit_value(io, geo.positions[3i-1], binary, little_endian, f)
+            f = _ply_emit_value(io, geo.positions[3i], binary, little_endian, f)
+            if normals !== nothing
+                n = normalize(Vec3(normals[3i-2], normals[3i-1], normals[3i]))
+                f = _ply_emit_value(io, n.x, binary, little_endian, f)
+                f = _ply_emit_value(io, n.y, binary, little_endian, f)
+                f = _ply_emit_value(io, n.z, binary, little_endian, f)
+            end
+            if uvs !== nothing
+                f = _ply_emit_value(io, uvs[2i-1], binary, little_endian, f)
+                f = _ply_emit_value(io, uvs[2i], binary, little_endian, f)
+            end
+            if colors !== nothing
+                data, width = colors
+                b = width * (i - 1)
+                for k in 1:3
+                    f = _ply_emit_value(io, linear_to_srgb(Float64(data[b+k])),
+                                        binary, little_endian, f)
+                end
+            end
+            binary || print(io, '\n')
+        end
+        for fi in 1:geo.n_faces
+            a, b, c = get_face(geo, fi)
+            if binary
+                write(io, UInt8(3))
+                for j in (a, b, c)
+                    u = UInt32(j - 1)
+                    write(io, little_endian ? htol(u) : hton(u))
+                end
+            else
+                print(io, "3 ", a - 1, ' ', b - 1, ' ', c - 1, '\n')
+            end
+        end
+        binary || print(io, '\n')
+    end
+    return path
+end
+
 function _looks_binary_stl(path::String)
     sz = filesize(path)
     sz < 84 && return false
