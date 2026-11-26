@@ -189,24 +189,6 @@ function ies_intensity(profile::IESProfile, angle_deg::Real)
     return ies_candela(profile, angle_deg) / max_candela
 end
 
-"""
-    parse_ies(text) -> IESProfile
-
-Parse an IESNA LM-63 photometric data file (the `.ies` format emitted by lamp
-manufacturers and supported by three.js' IESLoader). The parser reads the
-`TILT=` line, the two numeric control lines, then the vertical-angle vector and
-the candela values, supporting the common single-horizontal-plane (rotationally
-symmetric) case. Multi-plane files are collapsed to their first horizontal
-plane. Keyword/label lines beginning with `[` are ignored.
-
-The numeric layout after `TILT=NONE` is:
-
-    <num_lamps> <lumens_per_lamp> <candela_multiplier> <num_vertical> <num_horizontal>
-    <ballast_factor> <future_use> <input_watts>
-    <vertical_angles...>      (num_vertical values)
-    <horizontal_angles...>    (num_horizontal values)
-    <candela values...>       (num_vertical × num_horizontal, plane-major)
-"""
 function _ies_parse_numeric_token(tok::AbstractString, line_no::Int)
     value = tryparse(Float64, tok)
     value === nothing &&
@@ -325,16 +307,8 @@ function _ies_find_payload_start(s::String)
         trimmed_first, trimmed_last = _ies_trim_bounds(s, first, last)
         if trimmed_first <= trimmed_last && _ies_line_contains_tilt(s, trimmed_first, trimmed_last)
             tilt_line = uppercase(String(SubString(s, trimmed_first, trimmed_last)))
-            payload_i = next_i
-            payload_line_no = line_no + 1
-            if endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
-                for _ in 1:4
-                    payload_i > n && break
-                    _, _, payload_i = _ies_line_bounds(s, payload_i)
-                    payload_line_no += 1
-                end
-            end
-            return payload_i, payload_line_no
+            include_tilt = endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
+            return next_i, line_no + 1, include_tilt
         end
         i = next_i
         line_no += 1
@@ -342,10 +316,54 @@ function _ies_find_payload_start(s::String)
     throw(ArgumentError("parse_ies: no TILT= line found"))
 end
 
+# `TILT=INCLUDE` embeds the lamp-tilt table before the control block: the
+# lamp-to-luminaire geometry code, the angle count N, then N tilt angles and N
+# multiplying factors. Like three.js IESLoader (`readTilt`), the table is read by
+# value count rather than by line, since LM-63 lets each vector wrap across lines.
+# The factors are not applied (three.js ignores them as well).
+function _ies_skip_tilt_data!(scanner::_IESNumericScanner)
+    _ies_next_number!(scanner) === nothing &&
+        throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    count = _ies_next_number!(scanner)
+    count === nothing && throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    (count >= 0.0 && count == floor(count) && count <= Float64(typemax(Int) ÷ 2)) ||
+        throw(ArgumentError("parse_ies: tilt-angle count must be a non-negative integer"))
+    for _ in 1:(2 * Int(count))
+        _ies_next_number!(scanner) === nothing &&
+            throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    end
+    return nothing
+end
+
+"""
+    parse_ies(text) -> IESProfile
+
+Parse an IESNA LM-63 photometric data file (the `.ies` format emitted by lamp
+manufacturers and supported by three.js' IESLoader). The parser reads the
+`TILT=` line, any `TILT=INCLUDE` tilt table (skipped, as in three.js), the
+13-value control block, then the vertical-angle vector and the candela values,
+supporting the common single-horizontal-plane (rotationally symmetric) case.
+Multi-plane files are collapsed to their first horizontal plane. Keyword/label
+lines beginning with `[` are ignored. Values may be separated by whitespace or
+commas and may wrap across lines.
+
+The numeric layout after the `TILT=` data is:
+
+    <num_lamps> <lumens_per_lamp> <candela_multiplier> <num_vertical> <num_horizontal>
+        <photometric_type> <units_type> <width> <length> <height>
+    <ballast_factor> <future_use> <input_watts>
+    <vertical_angles...>      (num_vertical values)
+    <horizontal_angles...>    (num_horizontal values)
+    <candela values...>       (num_vertical × num_horizontal, plane-major)
+
+Candela values are scaled by `candela_multiplier` when it is positive; a
+non-positive multiplier leaves them unscaled.
+"""
 function parse_ies(text::AbstractString)
     s = text isa String ? text : String(text)
-    payload_start, payload_line_no = _ies_find_payload_start(s)
+    payload_start, payload_line_no, include_tilt = _ies_find_payload_start(s)
     scanner = _ies_numeric_scanner(s, payload_start, payload_line_no)
+    include_tilt && _ies_skip_tilt_data!(scanner)
     control = Vector{Float64}(undef, 13)
     for i in 1:13
         value = _ies_next_number!(scanner)

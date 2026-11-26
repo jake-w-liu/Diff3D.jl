@@ -31,3 +31,30 @@ const _AUDIT3_IES_PROFILE = IESProfile([0.0, 30.0, 60.0, 90.0],
         @test reverse_gradient(v -> f(v[1]), [0.7])[1] ≈ fd rtol = 1e-6
     end
 end
+
+@testset "parse_ies reads TILT=INCLUDE tables by value count" begin
+    # LM-63 lets the tilt angle and factor vectors wrap across lines. three.js
+    # IESLoader `readTilt`/`readArray` (examples/jsm/loaders/IESLoader.js:223-259, called at :305)
+    # reads them by count; node r186 parses this file into vertical angles
+    # [0, 45, 90] with candela [100, 50, 10] (its texture holds the normalised
+    # squares 1, 0.25, 0.01 at phi = 0, 45, 90).
+    text = "IESNA:LM-63-2002\n[TEST] wrapped tilt\nTILT=INCLUDE\n1\n7\n" *
+           "0 15 30 45\n60 75 90\n1.0 0.95 0.9 0.85\n0.8 0.75 0.7\n" *
+           "1 1000 1 3 1 1 2 0 0 0\n1 1 100\n0 45 90\n0\n100 50 10\n"
+    profile = parse_ies(text)
+    @test profile.angles == [0.0, 45.0, 90.0]
+    @test profile.candela == [100.0, 50.0, 10.0]
+    # The same table on the conventional four lines parses identically.
+    compact = "IESNA:LM-63-2002\nTILT=INCLUDE\n1\n2\n0 90\n1 0.5\n" *
+              "1 1000 1 3 1 1 2 0 0 0\n1 1 100\n0 45 90\n0\n100 50 10\n"
+    @test parse_ies(compact).candela == [100.0, 50.0, 10.0]
+    # An empty tilt table (N = 0) has no angle or factor lines.
+    empty_tilt = "IESNA:LM-63-2002\nTILT=INCLUDE\n1\n0\n" *
+                 "1 1000 1 3 1 1 2 0 0 0\n1 1 100\n0 45 90\n0\n100 50 10\n"
+    @test parse_ies(empty_tilt).angles == [0.0, 45.0, 90.0]
+    @test_throws "tilt-angle count must be a non-negative integer" parse_ies(
+        "TILT=INCLUDE\n1\n2.5\n0 90\n1 1\n1 1000 1 1 1 1 2 0 0 0\n1 1 1\n0\n0\n1\n")
+    @test_throws "truncated TILT=INCLUDE data" parse_ies("TILT=INCLUDE\n1\n3\n0 45\n")
+    # The detailed docstring documents the public function itself.
+    @test occursin("TILT=INCLUDE", string(@doc parse_ies))
+end
