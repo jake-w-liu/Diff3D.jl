@@ -494,3 +494,23 @@ end
     # Unclosed deep nesting ends with an error, not a stack overflow.
     @test_throws "unexpected end of JSON" Diff3D._json_parse("["^200_000)
 end
+
+@testset "MTL d and Tr set opacity only as MTLLoader does" begin
+    # three.js MTLLoader.js:478-500 (r186): `d n` sets opacity only when
+    # n < 1, `Tr n` only when n > 0 (to 1 - n). Expected (opacity,
+    # transparent) pairs printed by MTLLoader.parse(...).create("m") in node.
+    cases = ("d 0.5\nTr 0\n" => (0.5, true), "Tr 0.25\nd 1\n" => (0.75, true),
+             "d 1.5\n" => (1.0, false), "Tr -0.5\n" => (1.0, false),
+             "d 0.25\n" => (0.25, true), "Tr 0.25\n" => (0.75, true),
+             "d 0\n" => (0.0, true))
+    for (body, (opacity, transparent)) in cases
+        path = tempname() * ".mtl"
+        write(path, "newmtl m\n" * body)
+        try
+            material = load_mtl(path)["m"]
+            @test (material.opacity, material.transparent) == (opacity, transparent)
+        finally
+            rm(path; force=true)
+        end
+    end
+end

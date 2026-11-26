@@ -2751,7 +2751,8 @@ end
 Parse a Wavefront .mtl file like three.js `MTLLoader`: keywords are
 case-insensitive and `newmtl` names are the rest of the line. Reads `Kd`
 (diffuse), `Ks` (specular), `Ns` (shininess), `Ke` (emissive), `d`/`Tr`
-(opacity), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
+(opacity: like MTLLoader, only `d` below 1 or `Tr` above 0 sets it, to `d`
+or `1 - Tr`), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
 `map_Ke` (`emissive_map`), `norm` (`normal_map`), and `map_d` (`alpha_map`,
 which also makes the material transparent). The first map of each kind wins;
 texture `-s` and `-o` options set the texture `repeat` and `offset`. Other
@@ -2802,9 +2803,13 @@ function load_mtl(path::String)
         elseif _mtl_key_is(tag, "ns")
             ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
         elseif _mtl_key_is(tag, "d")
-            d = _mtl_parse_scalar_token(parts, tag_state[2], "d")
+            # MTLLoader only lets `d` below 1 and `Tr` above 0 set the
+            # opacity, so `Tr 0` written next to `d 0.5` keeps 0.5.
+            dissolve = _mtl_parse_scalar_token(parts, tag_state[2], "d")
+            dissolve < 1.0 && (d = dissolve)
         elseif _mtl_key_is(tag, "tr")
-            d = 1.0 - _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
+            transmission = _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
+            transmission > 0.0 && (d = 1.0 - transmission)
         elseif _mtl_key_is(tag, "map_kd")
             diffuse_map === nothing &&
                 (diffuse_map = _mtl_texture(dir, line, "map_Kd", :srgb))
